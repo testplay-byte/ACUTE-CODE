@@ -20,8 +20,10 @@ click into `launcher/` → click each file → **Raw** button → right-click �
 
 ## Your GitHub token (asked once, on first run)
 
-The launcher needs a **GitHub token** (starts with `github_pat_`, read
-access to the private repo) to download the app. On the first run it asks
+The launcher asks for a **GitHub token** (starts with `github_pat_`, read
+access to this repository) to download the app. The repository is public,
+so the token is not a gate — it raises GitHub's rate limits and lets you
+see draft releases. On the first run it asks
 for it interactively and saves it in your **USER HOME** at
 `~/.acute/github.pat` (chmod 600 where supported) — later runs reuse it
 silently. That is exactly where the app's *Check for updates* looks
@@ -42,7 +44,7 @@ What you'll see, in order:
 1. A **rich terminal UI** with panels and progress — the launcher checks
    git, Node.js and pnpm. Anything missing is **installed automatically**
    (with your confirmation; pnpm needs no admin rights at all).
-2. First run only: the private repository is downloaded into a subfolder
+2. First run only: the repository is downloaded into a subfolder
    **`ACUTE-CODE/`** next to the launcher — your folder stays clean:
    ```
    C:\ACUTE\
@@ -101,6 +103,15 @@ desktop app automatically** — then asks app-or-site and launches. Your
 agents, sessions, projects and settings persist (the desktop app keeps them
 in `%APPDATA%\acute-code\`, the dev flow in `ACUTE-CODE\.dev\`) and are
 never touched by updates.
+
+The update itself is divergence-aware (round 94): if your local copy's
+history no longer matches GitHub's — it happens when the project rewrites
+its history, as it did when the repository went public — the launcher
+**realigns your copy to the published version** (a clean, guarded
+`git reset`; nothing outside `ACUTE-CODE/` is touched) instead of failing
+with "not possible to fast-forward". And **an update failure never blocks
+you** when an app is already installed: the launcher warns, boots your
+current version, and retries the update next run.
 
 ### How the DESKTOP app update is verified (round 63)
 

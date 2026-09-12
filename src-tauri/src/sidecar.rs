@@ -77,6 +77,30 @@
 //! TargetName never matched the launcher's cmdkey targets, so the packaged
 //! app's spawns found no provider keys — key reads now go through wincred.rs
 //! at the canonical `ACUTE-CODE/provider/<id>` targets (see keys.rs).
+//!
+//! ROUND-94 (R94-B) — THE ORPHAN-PROOF SIDECAR KILL (the owner's v0.91.0
+//! installer report). The NSIS update flow showed "ACUTE-CODE is running.
+//! Click OK to kill it", the installer killed the main exe — and then hit
+//! repeated "Error opening file for writing" on node.exe and friends: the
+//! node sidecar CHILD outlived its parent (the installer's kill list is the
+//! app's own binary only) and kept the install directory's files locked.
+//! Two complementary fixes, both belt-and-suspenders around the existing
+//! graceful paths (nothing here removes them):
+//!
+//!   1. THIS FILE — every spawned sidecar child is assigned, immediately
+//!      after spawn, to an app-lifetime Windows Job Object created with
+//!      JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (sidecar_job below). The job's
+//!      handle is deliberately NEVER closed: when the app process dies for
+//!      ANY reason — the installer's kill, `taskkill /F`, a crash — the
+//!      kernel closes that handle and Windows kills every process in the
+//!      job. kill_tree (§2.4 shutdown, handshake-failure cleanup) stays
+//!      the graceful path; the job covers exactly the deaths that never
+//!      run app code to clean up after themselves.
+//!   2. The NSIS side — src-tauri/installer-hooks.nsh (NSIS_HOOK_PREINSTALL,
+//!      wired via tauri.conf.json's installerHooks) kills ACUTE-CODE.exe
+//!      plus any node.exe whose executable lives under $INSTDIR, so an
+//!      orphan left by an OLDER build (one without the job leash) can never
+//!      lock the files the new install is about to replace.
 
 use std::{
     collections::VecDeque,
@@ -527,6 +551,22 @@ fn spawn_and_handshake(app: &AppHandle) -> Result<RunningSidecar, String> {
         .spawn()
         .map_err(|e| format!("spawning `{program}` in `{}`: {e}", cwd.display()))?;
 
+    // ROUND-94 (R94-B): the orphan-proof leash — BEFORE anything else can
+    // fail, tie the fresh child to the app-lifetime kill-on-close Job
+    // Object (Windows only; see sidecar_job + the module header's ROUND-94
+    // paragraph for the owner's installer file-lock report this answers).
+    // Best-effort by design: a failure is logged and swallowed — the
+    // graceful kill paths below still run without the job.
+    #[cfg(windows)]
+    {
+        if let Err(e) = sidecar_job::assign(&child) {
+            log_line(&format!(
+                "sidecar: job-object leash failed for the new child \
+                 (graceful kill paths still active): {e}"
+            ));
+        }
+    }
+
     // R54: drain stderr for the child's whole lifetime — the crash reason
     // (`sidecar failed to start: …`) lands in sidecar.log AND the in-memory
     // ring that enriches the Failed phase. Without this the packaged app's
@@ -913,6 +953,127 @@ fn kill_tree(child: &mut Child) {
     }
     #[cfg(not(windows))]
     let _ = child.kill();
+}
+
+// ── R94-B: the app-lifetime Job Object (Windows) ─────────────────────────
+//
+// The WHY is the module header's ROUND-94 paragraph: the installer's kill
+// prompt ends the app's own exe, not the node sidecar child — the orphan
+// then holds $INSTDIR\sidecar\* open and the install dies file-by-file on
+// "Error opening file for writing". A Job Object created with
+// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE inverts the ownership: the KERNEL ties
+// the child's life to the job's last open handle, and handles close
+// automatically at process death — whatever killed the app, the child dies
+// with it. No Rust code needs to run for that to happen; that is the whole
+// point, because the deaths this guards against (taskkill /F, the
+// installer's kill, a crash) never give us the chance to run code.
+//
+// Relationship to kill_tree above: kill_tree remains the GRACEFUL path for
+// every exit we control (§2.4 shutdown, handshake-failure cleanup,
+// restart_sidecar teardown). The job is the safety net for the exits we do
+// NOT control. Assigning a child to the job does not affect the graceful
+// paths at all — job members live and die like any process while the job
+// handle stays open.
+#[cfg(windows)]
+mod sidecar_job {
+    use std::os::windows::io::AsRawHandle;
+    use std::process::Child;
+    use std::sync::OnceLock;
+    use windows_sys::Win32::Foundation::{GetLastError, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    /// The app-lifetime Job Object's HANDLE, created once on the first spawn.
+    ///
+    /// Stored as the raw pointer's ADDRESS (usize) because HANDLE
+    /// (`*mut c_void`) is not `Sync` and a `static` requires Sync — the
+    /// value is never dereferenced and never closed, only kept alive.
+    /// Keeping the handle OPEN for the whole app life IS the mechanism:
+    /// with KILL_ON_JOB_CLOSE, the kernel terminates the job's processes
+    /// the moment the LAST handle to the job object closes — and process
+    /// death closes every handle. 0 means "creation failed once this
+    /// session" (logged below; the graceful kill_tree paths keep covering
+    /// orderly exits).
+    static JOB: OnceLock<usize> = OnceLock::new();
+
+    /// Assigns a freshly spawned sidecar child to the kill-on-close job.
+    ///
+    /// Best-effort by design: a failure is logged by the caller and
+    /// swallowed — kill_tree and the shutdown path remain fully functional
+    /// without the job, and an unassigned child is exactly as orphan-prone
+    /// as the pre-R94 world, never worse.
+    pub fn assign(child: &Child) -> Result<(), String> {
+        let job = job_object()?;
+        // The std Child's process handle (borrowed; the kernel just records
+        // the assignment — nothing outlives the call).
+        let process = child.as_raw_handle();
+        // SAFETY: plain kernel32 calls — `job` is the OnceLock-held handle,
+        // `process` is the live child's valid process handle. BOOL 0 = the
+        // assignment failed; the error path never invalidates either handle.
+        if unsafe { AssignProcessToJobObject(job, process) } == 0 {
+            let code = unsafe { GetLastError() };
+            return Err(format!("AssignProcessToJobObject failed (win32 error {code})"));
+        }
+        Ok(())
+    }
+
+    /// Creates (once) the kill-on-close job, or returns the cached handle.
+    /// Every later spawn (restart_sidecar re-runs the whole handshake)
+    /// joins the SAME job: one leash per app process, any number of
+    /// successive children.
+    fn job_object() -> Result<HANDLE, String> {
+        let cached = *JOB.get_or_init(|| match create_kill_on_close_job() {
+            Ok(handle) => handle as usize,
+            Err(e) => {
+                // Logged ONCE at first failure; later spawns get the short
+                // reason below. Never fatal — see `assign`.
+                super::log_line(&format!("sidecar: job-object leash unavailable: {e}"));
+                0
+            }
+        });
+        if cached == 0 {
+            return Err("job object creation failed earlier this session (see sidecar.log)".into());
+        }
+        Ok(cached as HANDLE)
+    }
+
+    /// A fresh unnamed Job Object configured to die with its (only ever
+    /// open) handle: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE makes the kernel
+    /// terminate every assigned process the moment the last handle closes —
+    /// which happens at app-process death, never before. The job carries no
+    /// resource limits: this is a lifetime leash, not a quota.
+    fn create_kill_on_close_job() -> Result<HANDLE, String> {
+        // SAFETY: plain kernel32 calls with no output buffers. Null
+        // SECURITY_ATTRIBUTES → a non-inheritable handle (the child must NOT
+        // keep the job alive on its own); null name → an unnamed, private
+        // job object.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                let code = GetLastError();
+                return Err(format!("CreateJobObjectW failed (win32 error {code})"));
+            }
+            // Zeroed then filled: every limit besides the kill flag stays
+            // 0 — no memory/CPU/process-count caps on the sidecar.
+            let mut info: JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let configured = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION
+                    as *const core::ffi::c_void,
+                std::mem::size_of::<JOB_OBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if configured == 0 {
+                let code = GetLastError();
+                return Err(format!("SetInformationJobObject failed (win32 error {code})"));
+            }
+            Ok(job)
+        }
+    }
 }
 
 /// Minimal loopback HTTP/1.1 request — we only ever need the status code for

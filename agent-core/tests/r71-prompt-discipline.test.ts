@@ -100,10 +100,15 @@ const PLAN_VOCAB: readonly string[] = [
 // ── D1: the ENGINEERING DISCIPLINE section ──────────────────────────────────
 
 describe("D1: the section exists, in the designed position", () => {
-  it("the registry lists engineering-discipline right after agentic-loop (before file-editing)", () => {
+  it("the registry lists engineering-discipline behind the recovery protocol, right after the agentic-loop pair (before file-editing)", () => {
     const i = PROMPT_SECTION_IDS.indexOf("engineering-discipline");
     expect(i).toBeGreaterThan(-1);
-    expect(PROMPT_SECTION_IDS[i - 1]).toBe("agentic-loop");
+    // ROUND-94 (R94-G): the RECOVERY PROTOCOL now sits directly after the
+    // agentic-loop (the loop's failure rule points at it) — discipline
+    // follows recovery, still before file-editing (the R71-d design
+    // position, one slot later than originally pinned).
+    expect(PROMPT_SECTION_IDS[i - 1]).toBe("recovery");
+    expect(PROMPT_SECTION_IDS[i - 2]).toBe("agentic-loop");
     expect(PROMPT_SECTION_IDS[i + 1]).toBe("file-editing");
   });
 
@@ -112,14 +117,16 @@ describe("D1: the section exists, in the designed position", () => {
     for (const entry of buildTaggedPromptLines(ctxFor())) {
       if (stamped[stamped.length - 1] !== entry.sectionId) stamped.push(entry.sectionId as string);
     }
-    expect(stamped.indexOf("engineering-discipline")).toBe(stamped.indexOf("agentic-loop") + 1);
+    expect(stamped.indexOf("engineering-discipline")).toBe(stamped.indexOf("recovery") + 1);
+    expect(stamped.indexOf("recovery")).toBe(stamped.indexOf("agentic-loop") + 1);
   });
 
-  it("the composed prompt orders AGENTIC LOOP → ENGINEERING DISCIPLINE → FILE EDITING RULES", () => {
+  it("the composed prompt orders AGENTIC LOOP → RECOVERY PROTOCOL → ENGINEERING DISCIPLINE → FILE EDITING RULES", () => {
     const composed = buildProjectSystemPrompt(ctxFor());
     const idx = (needle: string) => composed.indexOf(needle);
     expect(idx("## AGENTIC LOOP — MULTI-TURN COMPLETION")).toBeGreaterThan(-1);
-    expect(idx("## ENGINEERING DISCIPLINE")).toBeGreaterThan(idx("## AGENTIC LOOP — MULTI-TURN COMPLETION"));
+    expect(idx("## RECOVERY PROTOCOL (tool failures)")).toBeGreaterThan(idx("## AGENTIC LOOP — MULTI-TURN COMPLETION"));
+    expect(idx("## ENGINEERING DISCIPLINE")).toBeGreaterThan(idx("## RECOVERY PROTOCOL (tool failures)"));
     expect(idx("## FILE EDITING RULES")).toBeGreaterThan(idx("## ENGINEERING DISCIPLINE"));
   });
 
@@ -215,9 +222,13 @@ describe("D1: the red-flags anti-rationalization table", () => {
     }
   });
 
-  it("the agentic-loop's fix-retry rule still stands (the escalation gates it, does not replace it)", () => {
+  it("the agentic-loop's fix-retry rule still stands (R94-G folded it into the pointer form; the escalation gates it, does not replace it)", () => {
     const loop = buildSectionText(ctxFor(), "agentic-loop") ?? "";
-    expect(loop).toContain("If a tool call fails: read the error, fix the root cause, retry. Do not abort.");
+    // ROUND-94 (R94-G): the rule now POINTS at the RECOVERY PROTOCOL that
+    // immediately follows the loop — the read-error/fix-root-cause/retry
+    // core and the do-not-abort tail survive verbatim within the line.
+    expect(loop).toContain("If a tool call fails: read the error, fix the root cause, retry");
+    expect(loop).toContain("the RECOVERY PROTOCOL below governs. Do not abort.");
   });
 });
 
@@ -383,14 +394,15 @@ describe("D6: the size budget (the 22K hard bound + the section window)", () => 
     // (custom rules have their own 32K cap; the memory digest, index
     // summary, and skills list are budgeted separately). R70 baseline:
     // 14,757 chars; R71-e1 (this round's ~3.5K of discipline content):
-    // 18,220 — 3.8K of headroom for the skills-round descriptions (R71-e3).
-    // The MAXIMAL kitchen-sink composition (every gate open + project
-    // content: 23,447 chars) is byte-pinned by the golden fixture in
-    // prompt-registry.test.ts — the discipline content's mandated floor
-    // (~2.9K net additions: four mantras + self-tests + three tags + the
-    // verbatim 3-strike rule + five red flags + receipts/tags/anti-question
-    // + sub-agent lines) exceeds the ~1.8K headroom the maximal leaves
-    // under 22K, so the bound is pinned where it can honestly hold.
+    // 18,220 — R94-G (the recovery protocol, the browser wait/sequence
+    // discipline): ~20.0K. The MAXIMAL kitchen-sink composition (every
+    // gate open + project content: 23,447 chars pre-R94-G) is byte-pinned
+    // by the golden fixture in prompt-registry.test.ts — the discipline
+    // content's mandated floor (~2.9K net additions: four mantras +
+    // self-tests + three tags + the verbatim 3-strike rule + five red
+    // flags + receipts/tags/anti-question + sub-agent lines) exceeds the
+    // ~1.8K headroom the maximal leaves under 22K, so the bound is pinned
+    // where it can honestly hold.
     const composed = buildProjectSystemPrompt(ctxFor());
     expect(composed.length).toBeLessThanOrEqual(22_000);
     expect(composed.length).toBeGreaterThan(15_000); // the R71 delta is real content, not a gutting

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-90 -->
+<!-- last-reviewed: 2026-09-12 round-94 -->
 <!-- the R74 history still tells the truth; the draft-not-published class this round documents recurred once more with v0.83.0, caught + published in R86 -->
 
 **Date:** 2026-09-07 · **Branch:** `main` · **Version:** 0.74.0 ·

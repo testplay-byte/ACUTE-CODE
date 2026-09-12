@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-90 -->
+<!-- last-reviewed: 2026-09-12 round-94 -->
 # Round 86 — the verification + SSE-extraction round (the owner's task-list session)
 
 ## 1. Owner direction (verbatim intent)

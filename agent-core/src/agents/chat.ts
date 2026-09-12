@@ -6,8 +6,8 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { generateText, streamText, stepCountIs, type LanguageModel, type ToolSet } from "ai";
-import type { ThinkingLevel } from "shared";
+import { generateText, streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from "ai";
+import type { MessageAttachment, ThinkingLevel } from "shared";
 import { scrubSecretShapes } from "../lib/secret-shapes.js";
 
 export interface ChatTurnMessage {
@@ -19,6 +19,20 @@ export interface ChatTurnMessage {
  * kind of custom API provider as he wishes"): the wire protocol a provider
  * speaks, stored on the provider row and selectable in Settings. */
 export type ApiFormat = "chat-completions" | "anthropic-messages" | "responses";
+
+/** ROUND-94 (R94-D1, the owner's v0.91.0 field report: "the queued message
+ * appeared right after the ORIGINAL message — wrong position and wrong
+ * timing"): ONE claimed queue entry, handed to the adapter at a tool-call
+ * boundary for mid-turn injection. The shape is the queue storage's payload
+ * exactly ({content, attachments?} — what appendQueuedMessage persisted), so
+ * the runtime's claim callback stays a plain pass-through of the storage row
+ * (the claim/delete/persist/frame mechanics live with it in runtime.ts; the
+ * adapter only decides WHEN a boundary is injectable and HOW the model sees
+ * the message). */
+export interface QueuedStepMessage {
+  content: string;
+  attachments?: MessageAttachment[];
+}
 
 export interface ChatTurnInput {
   provider: { id: string; baseUrl: string | null; apiFormat?: string };
@@ -51,6 +65,17 @@ export interface ChatTurnInput {
    * limitation — those wire formats have no equivalent passthrough wired
    * here yet). NOT persisted; sub-agents never inherit it. */
   thinkingLevel?: ThinkingLevel;
+  /** ROUND-94 (R94-D1): mid-turn QUEUED-MESSAGE injection. When set, the
+   * adapter wires a prepareStep into the SDK call; at every STEP boundary
+   * where the PRIOR step completed a tool call (the owner's contract: after
+   * a tool call completes, never between two text-only steps) it calls this
+   * ONCE — a returned entry is appended to the model-facing messages for
+   * the upcoming step (and carries forward to the SDK's later steps per the
+   * AI SDK 7 prepareStep contract); null means "nothing queued, no override"
+   * and leaves the call byte-identical to a prepareStep-less one. Absent
+   * entirely (every existing caller + every test stub) → prepareStep is not
+   * passed to the SDK at all. */
+  consumeQueuedForStep?: () => QueuedStepMessage | null;
 }
 
 /** Round-46: 10 minutes per provider call — generous enough for slow
@@ -188,6 +213,119 @@ export interface ChatToolCall {
   outputSummary?: string;
 }
 
+// ── ROUND-94 (R94-D1): the attachment renderer + the prepareStep wiring ──────
+//
+// renderAttachments moved here VERBATIM from runtime.ts (its only other
+// consumer — assembleHistory — imports it back; runtime.ts already imports
+// from this module, so no cycle). The move exists because the mid-turn
+// injection must build the model-facing user message EXACTLY the way the
+// normal send path does (attachments rendered INTO the content string —
+// never SDK message parts; that is how every other user message in this
+// codebase reaches the model), and duplicating the renderer would fork the
+// analyze_image teaching contract between the two files.
+
+/** ROUND-67 (R67-A): image-extension test for the attachment render (see
+ * renderAttachments — the same set vision.ts's IMAGE_EXT_RE uses). */
+const ATTACHED_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
+
+/**
+ * ROUND-50 (R50-c1): render a message.user event's attachments into the
+ * model-facing content AFTER the user text. The RAW event payload stays
+ * clean ({role, content, attachments}) — this block exists only in the
+ * model-facing history, so the display never sees it. Binary/unreadable
+ * attachments (text: null) render a one-line placeholder instead.
+ *
+ * ROUND-67 (R67-A, the owner's #1 v0.66.0 complaint: "the agent said the
+ * image doesn't exist"): attachments persisted through POST
+ * /attachments/upload now carry a path, and the model is TAUGHT what to do
+ * with it instead of guessing (the old render showed a.name only, so the
+ * model invented paths and analyze_image ENOENT'd):
+ *   - image extension + path + no text → an explicit `attached image` block
+ *     naming the path AND the exact analyze_image call to make;
+ *   - anything else with a path → the existing render plus a trailing
+ *     "(file saved at …)" line;
+ *   - path-less attachments (inline-dropped text, legacy rows) render
+ *     EXACTLY as before.
+ */
+export function renderAttachments(content: string, attachments: readonly MessageAttachment[]): string {
+  let out = content;
+  for (const a of attachments) {
+    // ROUND-67 (R67-A): the same extension set as vision.ts's IMAGE_EXT_RE
+    // (kept local — the plugin must stay import-free from the history
+    // renderer). Check both the display name and the path; the sanitized
+    // upload name keeps its extension either way.
+    const path = typeof a.path === "string" && a.path !== "" ? a.path : null;
+    const text = typeof a.text === "string" && a.text !== "" ? a.text : null;
+    const isImage = path !== null && (ATTACHED_IMAGE_EXT_RE.test(a.name) || ATTACHED_IMAGE_EXT_RE.test(path));
+    if (isImage && text === null) {
+      out += `\n\n--- attached image: ${a.name} (saved in the project at ${path}) ---\nUse analyze_image with path "${path}" to view it.`;
+    } else if (text !== null) {
+      out += `\n\n--- attached file: ${a.name} ---\n${text}\n--- end of ${a.name} ---${path !== null ? `\n(file saved at ${path})` : ""}`;
+    } else {
+      out += `\n\n--- attached file: ${a.name} (no readable text) ---${path !== null ? `\n(file saved at ${path})` : ""}`;
+    }
+  }
+  return out;
+}
+
+/**
+ * ROUND-94 (R94-D1): the prepareStep the adapter wires into BOTH SDK call
+ * sites (generateText + streamText) when the input carries
+ * consumeQueuedForStep. The boundary contract, verbatim from the owner's
+ * field report: the queued prompt is injected "right after a tool call
+ * completes / a sub-agent task finishes, when the agent is about to continue" —
+ * so the gate is BOTH (a) stepNumber > 0 (at least one step completed — never
+ * step 0) AND (b) the prior step actually completed tool calls (inspected on
+ * the SDK's `steps` array; a text-only prior step ends the loop anyway and
+ * must never trigger an injection). ONE consumeQueuedForStep() call per
+ * boundary — the runtime claims at most one queue entry per boundary, so the
+ * next boundary can take the next message ("sent midway when the current call
+ * completed"). A null return leaves the SDK untouched (no override → the
+ * call is byte-identical to a prepareStep-less one).
+ *
+ * The messages override carries forward to later steps per the AI SDK 7
+ * prepareStep contract (verified against ai@7.0.73's types: "If you return a
+ * `messages` override, those messages carry forward to later steps"), so a
+ * multi-step tool loop keeps seeing the injected user message on every
+ * subsequent request of the same SDK call.
+ */
+function buildQueuedInjectionPrepareStep(
+  consumeQueuedForStep: () => QueuedStepMessage | null,
+): (
+  options: {
+    stepNumber: number;
+    steps: ReadonlyArray<{ toolResults?: ReadonlyArray<unknown> }>;
+    messages: ReadonlyArray<ModelMessage>;
+  },
+) => { messages: Array<ModelMessage> } | undefined {
+  return (options) => {
+    // (a) The injection boundary is BETWEEN steps — step 0 has no completed
+    // step before it, so nothing can have "just finished".
+    if (options.stepNumber <= 0) return undefined;
+    // (b) The prior step must have COMPLETED TOOL CALLS (its toolResults
+    // array is the SDK's own record of executed calls — the boundary the
+    // owner described). A text-only prior step is not an injection point.
+    const prior = options.steps[options.steps.length - 1];
+    if (prior === undefined) return undefined;
+    const priorToolResults = prior.toolResults;
+    if (!Array.isArray(priorToolResults) || priorToolResults.length === 0) return undefined;
+    // ONE claim per boundary; null → no override, no behavior change.
+    const entry = consumeQueuedForStep();
+    if (entry === null) return undefined;
+    // The model-facing user message mirrors the normal send path exactly:
+    // content string with the attachments rendered in (renderAttachments —
+    // the same renderer assembleHistory applies to every other user
+    // message; the queue storage's raw payload shape is preserved on the
+    // PERSISTED side, in runtime.ts).
+    return {
+      messages: [
+        ...options.messages,
+        { role: "user", content: renderAttachments(entry.content, entry.attachments ?? []) },
+      ],
+    };
+  };
+}
+
 /** ROUND-48 (R48-e1, stretch): one finished generateText step, normalized —
  * `text` is the step's own text ("" when the step only called tools) and
  * `toolCalls` are the step's executed tool calls summarized exactly like the
@@ -249,6 +387,12 @@ export const aiSdkChat: ChatFn = async (input) => {
             });
           },
         }
+      : {}),
+    // ROUND-94 (R94-D1): mid-turn queued-message injection — prepareStep is
+    // handed to the SDK ONLY when a consumer is attached (every legacy caller
+    // and test stub stays on the prepareStep-less call, byte-identical).
+    ...(input.consumeQueuedForStep !== undefined
+      ? { prepareStep: buildQueuedInjectionPrepareStep(input.consumeQueuedForStep) }
       : {}),
   });
   const inputTokens = result.usage.inputTokens ?? 0;
@@ -437,6 +581,13 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
     stopWhen: stepCountIs(Math.max(1, input.maxTurns)),
     abortSignal: callSignal,
     ...(input.tools !== undefined ? { tools: input.tools } : {}),
+    // ROUND-94 (R94-D1): mid-turn queued-message injection on the STREAMED
+    // path — the owner's exact scenario (the message rides the LIVE turn's
+    // still-open stream, injected at the tool-call boundary). Same
+    // conditional wiring as generateText above: no consumer → no prepareStep.
+    ...(input.consumeQueuedForStep !== undefined
+      ? { prepareStep: buildQueuedInjectionPrepareStep(input.consumeQueuedForStep) }
+      : {}),
   });
 
   const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };

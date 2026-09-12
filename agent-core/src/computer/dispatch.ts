@@ -200,6 +200,10 @@ const MUTATING_TOOLS = new Set([
   // user's screen; LOW risk class, so NO consent-gate entry — the plugin's
   // CONSENT_TOOLS set intentionally excludes them).
   "move_window", "window_state", "focus_window",
+  // R94-E: the window ACTOR (minimize/maximize/restore/focus/close) — same
+  // LOW-risk placement class: it rearranges windows but types nothing,
+  // clicks nothing, and the close is the GENTLE WM_CLOSE (apps may prompt).
+  "window_action",
 ]);
 
 /** R69 (task 4-c-2): the tools whose SENT receipts automatically carry the
@@ -600,6 +604,10 @@ export class ComputerDispatcher {
         return this.toolSetWindowState(args);
       case "focus_window":
         return this.toolFocusWindow(args);
+      // ── R94-E (PART 2): the window ACTOR (the "minimize the current
+      // window" task's missing verb) ──
+      case "window_action":
+        return this.toolWindowAction(args);
 
       default:
         return refuse(
@@ -1327,7 +1335,7 @@ export class ComputerDispatcher {
       // matches". The honest refusal names the helper-process cause and
       // redirects to the host app (list_apps). A confirmed-not-running pid
       // keeps the plain app_not_found shape.
-      return { ok: false, refusal: this.noAccessibleWindowRefusal(resolved.app.pid, diagnostics?.processRunning) };
+      return { ok: false, refusal: this.noAccessibleWindowRefusal(resolved.app.pid, diagnostics?.processRunning, diagnostics?.addTypeError) };
     }
     return { ok: true, app: resolved.app, window };
   }
@@ -1340,8 +1348,17 @@ export class ComputerDispatcher {
    * plain app_not_found shape; anything else gets the honest
    * helper-process message. Shared by resolveAppWindow, toolType and
    * toolKey (all three used to emit the misleading generic shape).
+   *
+   * R94-E: the refusal now carries `addTypeError` when the WINDOW PROBE
+   * ITSELF failed on both layers (the csc compile died AND the UIA
+   * fallback found nothing — the owner's v0.91.0 report had EVERY app
+   * failing here with no hint that the probe, not the app, was broken).
    */
-  private noAccessibleWindowRefusal(pid: number, processRunning: boolean | undefined): DispatchResult {
+  private noAccessibleWindowRefusal(
+    pid: number,
+    processRunning: boolean | undefined,
+    addTypeError?: string,
+  ): DispatchResult {
     if (processRunning === false) {
       return { kind: "refusal", refusal: appNotFound(`pid ${pid} (not running)`).refusal };
     }
@@ -1349,10 +1366,12 @@ export class ComputerDispatcher {
       kind: "refusal",
       refusal: {
         error: "app_not_found",
-        message: `process ${pid} is running but owns no accessible top-level window — it may be a helper/child process (e.g. a WebView2 renderer); target the HOST application instead (see list_apps).`,
+        message:
+          `process ${pid} is running but owns no accessible top-level window — it may be a helper/child process (e.g. a WebView2 renderer); target the HOST application instead (see list_apps).` +
+          (addTypeError !== undefined ? ` NOTE: the window probe itself may be broken on this host (Add-Type/csc failure: ${addTypeError.slice(0, 200)}) — run request_access and read addTypeOk before concluding the app owns no window.` : ""),
         recovery:
           "Call list_apps and re-issue the action against the host application's pid (its `name` is the top-level window title — e.g. the browser or app hosting the WebView2, not the renderer).",
-        payload: { pid, processRunning: processRunning ?? null, ownsAccessibleWindow: false },
+        payload: { pid, processRunning: processRunning ?? null, ownsAccessibleWindow: false, ...(addTypeError !== undefined ? { addTypeError } : {}) },
       },
     };
   }
@@ -1881,6 +1900,91 @@ export class ComputerDispatcher {
         },
       };
     }
+    return { kind: "receipt", receipt: receipt(true, "accepted", false) };
+  }
+
+  /**
+   * R94-E (PART 2b): the WINDOW ACTOR — minimize | maximize | restore |
+   * focus | close. The owner's v0.91.0 task "minimize the current window" had
+   * NO actor: the agent could only observe (windows_overview/list_apps), then
+   * a loop guard stopped it. Target resolution (exactly ONE way to say which
+   * window, mirroring the placement trio's discipline):
+   *   · windowId (HWND) — the primary form (from windows_overview/list_windows);
+   *   · target:'foreground' — the frontmost window (resolved INSIDE the
+   *     backend capsule: GetForegroundWindow, or the UIA FocusedElement when
+   *     the csc compile is dead — the owner's machine);
+   *   · appRef — the tiered app resolution (resolveAppRef) → the pid's MAIN
+   *     window HWND via listWindows (the same pick resolveAppWindow makes).
+   * The action lands in the session ring (intent + the auto action record
+   * every receipt earns), and the backend's resolved windowId/title ride the
+   * ring's intent record for the owner's mini-window.
+   */
+  private async toolWindowAction(args: Record<string, unknown>): Promise<DispatchResult> {
+    const rawAction = args["action"];
+    if (rawAction !== "minimize" && rawAction !== "maximize" && rawAction !== "restore" && rawAction !== "focus" && rawAction !== "close") {
+      return {
+        kind: "refusal",
+        refusal: invalidTarget("window_action needs action 'minimize' | 'maximize' | 'restore' | 'focus' | 'close'").refusal,
+      };
+    }
+    const action = rawAction;
+    const rawWindowId = Number(args["windowId"] ?? args["window_id"]);
+    const hasWindowId = Number.isInteger(rawWindowId) && rawWindowId !== 0;
+    const isForeground = args["target"] === "foreground";
+    const appRef = args["appRef"] ?? args["app_ref"];
+    const hasAppRef = typeof appRef === "object" && appRef !== null;
+    if (!hasWindowId && !isForeground && !hasAppRef) {
+      return {
+        kind: "refusal",
+        refusal: invalidTarget(
+          "window_action needs exactly ONE target: windowId (from windows_overview/list_windows), target:'foreground' (the frontmost window), or appRef (resolves to the app's main window)",
+        ).refusal,
+      };
+    }
+    // R93's runtime guard pattern: the interface method is OPTIONAL (other
+    // backends predate the surface) — a missing actor refuses honestly.
+    if (typeof this.backend.windowAction !== "function") {
+      return unsupportedOnBackend("window_action", this.backend.kind);
+    }
+    // appRef → pid → the MAIN window's HWND (windows.find(main) ?? windows[0]
+    // — the same pick resolveAppWindow's default scope makes).
+    let windowId: number | undefined = hasWindowId ? rawWindowId : undefined;
+    if (windowId === undefined && !isForeground) {
+      const resolved = await this.resolveAppRef(appRef);
+      if (!resolved.ok) return resolved.refusal;
+      const { windows, diagnostics } = await this.backend.listWindows(this.run, { pid: resolved.app.pid });
+      if (windows.length === 0) {
+        return this.noAccessibleWindowRefusal(resolved.app.pid, diagnostics?.processRunning, diagnostics?.addTypeError);
+      }
+      const main = windows.find((w) => w.main) ?? windows[0];
+      windowId = main.windowId;
+    }
+    const targetDesc = isForeground ? "the foreground window" : `window ${windowId}`;
+    this.session.record("intent", `window_action '${action}' on ${targetDesc}`, "window_action");
+    const result = await this.backend.windowAction(
+      this.run,
+      isForeground ? { foreground: true } : { windowId },
+      action,
+    );
+    if (!result.ok) {
+      return {
+        kind: "refusal",
+        refusal: {
+          error: "capability_fail_closed",
+          message: `window_action '${action}' failed on ${targetDesc}: ${result.error ?? "unknown error"}`,
+          recovery: "Use a real windowId from windows_overview/list_windows; the window may have closed, or (Windows) the Add-Type/csc compile and the UIA fallback are both unavailable — run request_access and read addTypeOk.",
+          payload: { action, ...(isForeground ? { target: "foreground" } : { windowId }) },
+        },
+      };
+    }
+    // The resolved HWND + title ride the ring so the owner's mini-window (and
+    // the audit trail) names WHAT was acted on — target:'foreground' results
+    // are otherwise anonymous.
+    this.session.record("action", `window_action '${action}' on window ${result.windowId ?? windowId ?? 0}${result.title !== undefined ? ` ('${result.title}')` : ""}`, "window_action", {
+      windowId: result.windowId ?? windowId,
+      action,
+      ...(result.title !== undefined ? { title: result.title } : {}),
+    });
     return { kind: "receipt", receipt: receipt(true, "accepted", false) };
   }
 
@@ -2464,7 +2568,7 @@ export class ComputerDispatcher {
     const window = windows[0];
     if (window === undefined) {
       // R67-C: live-but-windowless pid → the honest helper-process refusal.
-      return this.noAccessibleWindowRefusal(resolved.app.pid, diagnostics?.processRunning);
+      return this.noAccessibleWindowRefusal(resolved.app.pid, diagnostics?.processRunning, diagnostics?.addTypeError);
     }
     this.session.record("intent", `Typing into '${window.title}' (app-scoped)`, "type");
     // R68-C (C2): the frontmost auto-retry — a gate mismatch or a
@@ -2598,7 +2702,7 @@ export class ComputerDispatcher {
     const window = windows[0];
     if (window === undefined) {
       // R67-C: live-but-windowless pid → the honest helper-process refusal.
-      return this.noAccessibleWindowRefusal(resolved.app.pid, diagnostics?.processRunning);
+      return this.noAccessibleWindowRefusal(resolved.app.pid, diagnostics?.processRunning, diagnostics?.addTypeError);
     }
     this.session.record("intent", `Sending key '${text}'${repeat > 1 ? ` ×${repeat}` : ""}`, "key");
     let lastResult: { ok: boolean; error?: string } | undefined;

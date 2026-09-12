@@ -144,6 +144,16 @@ export interface EnumerationDiagnostics {
   screenCount?: number;
   /** Why the result is empty / degraded — one honest sentence. */
   note?: string;
+  /** R94-E: TRUE when the result came from the csc-FREE UIAutomation
+   * fallback (the Add-Type/csc compile failed on this host, so the
+   * EnumWindows walk is unavailable but UIA still works — the owner's
+   * v0.91.0 field report: every window-layer probe silently emptied). */
+  uiaFallback?: boolean;
+  /** R94-E: the CAPTURED Add-Type (csc) failure reason, truncated to ~300
+   * chars — the owner's report could only say "EnumWindows walk failed"
+   * with NO why; this field makes the next field report self-diagnosing
+   * (present only when the compile actually failed). */
+  addTypeError?: string;
 }
 
 export interface ListAppsResult {
@@ -268,6 +278,22 @@ export interface CuaBackend {
   ): Promise<{ ok: boolean; error?: string }>;
   /** Bring a window to the foreground by id (without activating its app). */
   focusWindow(run: RunCommand, windowId: number): Promise<{ ok: boolean; error?: string }>;
+
+  /** R94-E (PART 2): the WINDOW ACTOR — minimize | maximize | restore | focus |
+   * close ONE window, by HWND or the resolved foreground window (the owner's
+   * "minimize the current window" task previously had NO actor: the agent
+   * could only observe, then a loop guard stopped it). OPTIONAL on purpose:
+   * the Windows backend implements BOTH paths (U32 ShowWindowAsync/
+   * SetForegroundWindow/PostMessage-WM_CLOSE, and the csc-free UIA
+   * WindowPattern fallback for hosts where the Add-Type compile fails —
+   * the v0.91.0 field report's root cause); backends that predate the
+   * surface keep compiling (the dispatcher runtime-guards and refuses
+   * unsupported_on_backend, the toolMoveWindow precedent). */
+  windowAction?(
+    run: RunCommand,
+    target: { windowId?: number; foreground?: boolean },
+    action: "minimize" | "maximize" | "restore" | "focus" | "close",
+  ): Promise<{ ok: boolean; windowId?: number; title?: string; error?: string }>;
 
   // capture
   captureDisplay(run: RunCommand, displayIndex: number): Promise<Raster | { error: string }>;

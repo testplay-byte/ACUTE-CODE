@@ -36,6 +36,22 @@
  * task→verifiable-goal transform, COMMUNICATION's verification receipts +
  * 🟢/🟡/🔴 confidence tags + anti-question-padding, and the SUB-AGENTS
  * scope/no-polling discipline lines.
+ *
+ * ROUND-94 (R94-G, the prompt-overhaul round — the owner's v0.91.0 field
+ * report: "our system prompts need to be much better… Learn from the best
+ * of the best… It should be able to follow our commands properly. It
+ * should be flexible where needed"): (1) the RECOVERY PROTOCOL section
+ * right after the agentic-loop (re-observe before retry, ≤2 identical
+ * retries then CHANGE STRATEGY, recovery hints exactly once, believe
+ * refusals, let the world settle, never abandon the task); (2) the
+ * CAPABILITIES section (hasVisionPath — the SAME gate the screenshot tools
+ * enforce; no-vision sessions get the one-line "NEVER call screenshot…"
+ * doctrine with the text-tree alternatives instead of learning it by
+ * refusal); (3) browser discipline for R94-F's wait/sequence actions
+ * (navigate → wait → read_dom → verify-before-interact); (4) computer-use
+ * discipline for R94-E's window_action + windows_overview (exact
+ * title/pid targeting) and the app_ref re-resolution rule. Additions are
+ * paid for by trims in the same sections — the prompt stays tight.
  */
 
 import type { PermissionMode } from "shared";
@@ -147,6 +163,20 @@ export interface PromptContext {
    * passes agent.maxOuterLoops ?? 5) — mentioned honestly in the AGENTIC
    * LOOP section. Absent → the built-in default (5). */
   maxOuterLoops?: number;
+  /** ROUND-94 (R94-G): the session's IMAGE-UNDERSTANDING capability, as
+   * computed by the caller with sessionHasVisionPath (tools/plugins/
+   * computer-use.ts — the SAME gate the screenshot tools enforce BEFORE
+   * any capture: a configured separate vision model OR the main model's
+   * supports_vision row). When false AND image-capable tools are in the
+   * toolset (browser_control / analyze_image / the computer-use master
+   * switch), a "## CAPABILITIES" section carries the ONE clear line: no
+   * image understanding — never call screenshot, zoom, or any image-
+   * analysis tool; perceive via the text trees instead. When true, the
+   * short converse line (screenshots MAY answer visual-layout questions).
+   * Absent → NO section, byte-identical composition (the pre-R94 callers
+   * and the env-less tests keep their exact bytes — the golden ctx sets it
+   * deliberately so the no-vision line is pinned byte-for-byte). */
+  hasVisionPath?: boolean;
 }
 
 /** ROUND-70 (R70-c, D1): the turn's real machine state, as computed by
@@ -363,7 +393,10 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   ident("");
   ident("Rules:");
   ident("- Proceed autonomously — do NOT ask the user for confirmation between steps.");
-  ident("- If a tool call fails: read the error, fix the root cause, retry. Do not abort.");
+  // ROUND-94 (R94-G): the old one-liner ("read the error, fix the root
+  // cause, retry. Do not abort.") is folded into the pointer form — the
+  // RECOVERY PROTOCOL immediately below now owns the retry doctrine.
+  ident("- If a tool call fails: read the error, fix the root cause, retry — the RECOVERY PROTOCOL below governs. Do not abort.");
   // ROUND-61 (R61): honest reporting — the DeepSeek-harness lesson.
   ident("- REPORT OUTCOMES FAITHFULLY: when a step fails, say so with the real error; never claim work you did not do or verification you did not perform.");
   ident("- For research tasks: research → save findings to a file → research the next sub-topic → append → repeat. Do NOT put all findings in one final message.");
@@ -373,6 +406,29 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // place. ROUND-70 (R70-c): the outer-iteration cap is now mentioned
   // honestly too (the turn continues across them — keep working within).
   ident(`- Multi-step tasks are EXPECTED (4–7+ tool calls); up to ${ctx.maxTurns ?? 80} tool round-trips per iteration and ${ctx.maxOuterLoops ?? 5} outer iterations exist — keep working within them. But every call must earn its place: FEWEST steps that genuinely complete and verify the work, not step count for its own sake.`);
+  ident("");
+
+  // ── Recovery protocol (ROUND-94, R94-G) ────────────────────────────────
+  // The owner's v0.91.0 field report, distilled: the browser agent
+  // detoured to example.com after a click failure, never waited after
+  // navigate, and retried blind; the computer-use agent hammered
+  // get_app_state with the same dead pids until the loop guard stopped
+  // it. The best agents' recovery doctrine, compressed to imperative
+  // lines: re-observe before retrying, bounded identical retries, follow
+  // the error's own recovery hint once, believe refusals, let the world
+  // settle, never abandon the task. Sits immediately after the loop it
+  // governs (the loop's failure rule points here). Static and
+  // unconditional — failure recovery is core process, not a gated
+  // capability; the browser/computer examples ride the same lines.
+  beginSection("recovery");
+  ident("## RECOVERY PROTOCOL (tool failures)");
+  ident("Any action can fail. A failure is information — work it, never fear it:");
+  ident("- RE-OBSERVE BEFORE RETRYING: after a failed action, read the CURRENT state first (browser: get_state/read_dom; desktop: get_app_state/list_apps) — the world may have changed; never retry blind.");
+  ident("- IDENTICAL RETRIES: at most 2. If the same call fails the same way twice, CHANGE STRATEGY — a different selector, a different action, or a different path to the goal (eval as the fallback, another element, keyboard instead of mouse).");
+  ident("- RECOVERY HINTS: when a tool error names a recovery, follow it EXACTLY ONCE; if the hint's fix also fails, change strategy.");
+  ident("- REFUSALS ARE REAL: when a result says a call was refused or blocked (policy, permissions, no image understanding), believe it — do not immediately repeat the call.");
+  ident("- LET THE WORLD SETTLE: after navigate/back/forward/reload or an app launch, wait before observing (browser wait / desktop wait; sequence waits automatically) — never race a loading page; a human-solvable wall (CAPTCHA) → wait_for_verification, never a retry loop.");
+  ident("- NEVER ABANDON THE TASK on tool failures: report progress honestly and continue with a changed approach. Stop only when genuinely impossible — then say what was tried and what is needed.");
   ident("");
 
   // ── Engineering discipline (ROUND-71, R71-e1) ───────────────────────────
@@ -663,17 +719,23 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // BODY (R70-b's read_skill progressive disclosure) — this section keeps
     // the always-on SAFETY + posture lines and ends with the skill pointer.
     ident("## COMPUTER USE (desktop control)");
-    ident("You can observe and actuate the REAL desktop GUI. This touches the user's actual machine — follow the discipline:");
+    ident("You observe and actuate the user's REAL desktop — follow the discipline:");
+    // ROUND-94 (R94-G): the R94-E window actor — windows are identified by
+    // EXACT title/pid from the observation tools (never guessed), and
+    // window_action is the one tool for window-state requests (the old
+    // "minimize the current window" task had no actor at all).
+    ident("- WINDOWS: identify windows by EXACT title/pid from list_apps / windows_overview — never guess. window_action (minimize/maximize/restore/focus/close; target:'foreground' = the current window) is the actor for window-state requests.");
     ident("- OBSERVE → ACT → VERIFY: get_app_state (the accessibility tree) BEFORE acting; element targets ({type:\"element\"}) are the PRIMARY path — semantic and background-safe (never steals the user's focus).");
     // ROUND-66 (R66, B2): find_elements — big Chromium trees need SEARCH,
-    // not full-tree reads and not screenshots.
-    ident("- BIG APPS (browsers, Edge, VS Code): find_elements {appRef, query} SEARCHES the accessibility tree by name substring (optional kind filter) and returns matching elements with indexes — locate one control in a huge window that way, then left_click its index.");
+    // not full-tree reads and not screenshots. (R94-G: tightened — the
+    // kind-filter/index details live in the tool's own schema.)
+    ident("- BIG APPS (browsers, Edge, VS Code): find_elements {appRef, query} SEARCHES the accessibility tree by name substring — locate one control in a huge window that way, then left_click its index.");
     // ROUND-68 (R68-C): the Chromium poke made browser trees REAL — teach
     // the model that BROWSER CONTENT IS SEARCHABLE.
     ident("- BROWSER CONTENT IS SEARCHABLE (R68): Edge/Chrome pages expose their REAL element tree — find_elements {appRef, query:'Wikipedia'} finds links/buttons BY NAME (the web tree is activated automatically before every walk); element targets are the PRIMARY path for browser content, screenshots only when the tree genuinely misses.");
     // ROUND-67 (R67, the owner's Tab-walk technique): the element-discovery
     // fallback when find_elements/screenshot loops stall.
-    ident("- TAB-WALK DISCOVERY (R67): when find_elements comes back empty or screenshots cannot identify the control, press key \"tab\" repeatedly — each key receipt names the FOCUSED element; Tab walks the focusable controls one by one.");
+    ident("- TAB-WALK DISCOVERY (R67): when find_elements comes back empty, press key \"tab\" repeatedly — each key receipt names the FOCUSED element (Tab walks the focusable controls one by one).");
     // ROUND-69 (R69, task 4-c-2): CHAIN DISCIPLINE — the receipt's
     // observation IS the verification read; the screenshot-after-action
     // loop is structurally unfed (R69) and must stay untaught here.
@@ -682,7 +744,7 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     ident("- After navigation (Enter, links), call wait() — its receipt reports what changed while you waited. A screen_unchanged refusal means: act or change strategy — do not re-capture.");
     ident("- Coordinates ({type:\"coordinate\"}) are the FALLBACK: pixels copied UNCHANGED from the LATEST returned raster. Never pre-scale, never attach app_ref/state_id to them.");
     ident("- Receipts are not promises: action_sent=true means it MAY have happened — the receipt's observation is the first verification read; an external oracle (file exists, exit code) is the strong one.");
-    ident("- Refusals are self-teaching: read the named reason and follow its recovery (frontmost_pid_mismatch → the auto-activation failed: re-observe, retry ONCE). Never replay a sent action.");
+    ident("- Refusals are self-teaching: read the named reason and follow its recovery (frontmost_pid_mismatch → the auto-activation failed: re-observe, retry ONCE; a dead app_ref → re-resolve it from list_apps — pids change). Never replay a sent action; two identical failures = CHANGE STRATEGY.");
     ident("- Raw input (typing, keys, coordinate clicks) needs the target frontmost — the raw-input tools ACTIVATE their target app automatically (a mismatch refusal means the activation itself failed); set_value is the preferred write.");
     ident("- Destructive/hard-to-reverse actions need explicit user go-ahead. NEVER type credentials. stop_computer_control ends the session — no further computer-use calls after it.");
     // ROUND-65 (R65): the SURFACE BOUNDARY — the owner's live 0.63.0 run had
@@ -732,7 +794,7 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // the read_skill pointer. No settings gate exists for the panel (unlike
     // computer-use): the section is purely tool-gated on browser_control.
     ident("## EMBEDDED BROWSER PANEL (browser_control)");
-    ident("- The user has a real web browser embedded in the app's right sidebar. browser_control drives it: pages you navigate to APPEAR in the user's panel IMMEDIATELY. Omit sessionId and every action drives THIS chat session's OWN tab (auto-opened; get_state lists only this session's tab).");
+    ident("- browser_control drives the user's EMBEDDED browser panel (the app's right sidebar): pages you navigate to APPEAR in the user's panel IMMEDIATELY — the user watches it, so announce viewport changes in one short line. Omit sessionId and every action drives THIS chat session's OWN tab (auto-opened; get_state lists only this session's tab).");
     // ROUND-67 (R67, the owner's 0.66.0 field report): the model drove the
     // panel with computer-use tools because every bridge call failed then —
     // the bridge works now; this line keeps the separation + the
@@ -740,18 +802,22 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     ident("- DRIVE THE PANEL ONLY WITH browser_control (R67): NEVER computer-use tools (left_click, scroll, type, mouse_move, screenshot) — those drive REAL desktop apps, and browser work must never show \"agent is using your computer\". The bridge WORKS: read_dom first, then click / type the SELECTOR PATHS it returns (type submit:true submits; press_key Enter submits the focused form).");
     // ROUND-66 (R66, A3/A6): the high-level page actions — kept as the
     // one-line vocabulary summary (per-action detail lives in the tool's
-    // own schema description).
-    ident("- Actions: navigate (absolute http(s) URL), back/forward/reload, set_viewport (display size + zoom), read (fresh server-side text), read_dom (STRUCTURED page outline — the way to know the page WITHOUT screenshots), click (by selector or visible text), type (fill by selector; submit:true submits), press_key (Enter triggers NATIVE form submission), source (html | css | scripts), eval (JS in the live page), screenshot (panel pixels + vision description), get_state (currentUrl, title, viewport, this session's tab), wait_for_verification (bot-wall pause).");
+    // own schema description). ROUND-94 (R94-G): the R94-F actions join the
+    // vocabulary (wait + sequence) and eval gains its fallback framing.
+    ident("- Actions: navigate (absolute http(s) URL), back/forward/reload, set_viewport (display size + zoom), read (fresh server-side text), read_dom (STRUCTURED page outline — the way to know the page WITHOUT screenshots), click (selector or visible text), type (fill by selector; submit:true submits), press_key (Enter = native form submit), source (html | css | scripts), eval (JS in the live page — the fallback path when selectors fail), wait (settle until readyState/selector/urlContains), sequence (a multi-step chain in ONE call — waits between steps, stops at the first failure naming it), screenshot (panel pixels + vision description), get_state (currentUrl, title, viewport, this session's tab), wait_for_verification (bot-wall pause).");
+    // ROUND-94 (R94-G): the workflow discipline for the R94-F actions —
+    // the owner's field report had the agent clicking into a page that
+    // never settled. Navigate → wait → read_dom → verify BEFORE acting.
+    ident("- NAVIGATION SETTLES: after navigate/back/forward/reload call wait, then read_dom and verify the element you need EXISTS before interacting — never act on a page that may still be loading. Prefer sequence for known multi-step chains (fewer round-trips, one atomic failure report).");
     ident("- FORMS (R66): typing alone never submits — type with submit:true, press_key key Enter (native requestSubmit), or click the submit button by text.");
     // ROUND-66 (R66, A4): the bot-wall protocol — detect (⚠) →
-    // wait_for_verification → honest re-probe result.
-    ident("- BOT WALLS (R66): a navigate/read/click result warning '⚠ A verification wall' (CAPTCHA / Cloudflare / age gate) means STOP retrying — call action wait_for_verification (the user gets a countdown card in chat, solves the wall in the panel; you then receive the honest re-probe result).");
-    ident("- ALWAYS announce viewport changes in one short line — the user watches that panel; set_viewport changes what they see.");
+    // wait_for_verification → honest re-probe result. (R94-G: tightened.)
+    ident("- BOT WALLS (R66): a navigate/read/click result warning '⚠ A verification wall' (CAPTCHA / Cloudflare / age gate) means STOP retrying — call action wait_for_verification (the user solves it in the panel; you receive the honest re-probe result).");
     // ROUND-65 (R65): the mirror of the computer-use SURFACE BOUNDARY —
     // a browser_control navigate is NOT "opening the user's Edge", and the
     // final answer must never describe panel actions as desktop actions.
     ident("- SURFACE BOUNDARY (R65): this panel lives INSIDE the app — browser_control NEVER opens the user's real browsers (Edge, Chrome, Firefox) or touches their desktop; for the user's REAL machine use the computer-use tools. NEVER narrate a browser_control action as something that happened on the user's computer — say \"in the embedded browser panel\" when that is where it happened.");
-    ident("- The page the panel shows can differ from a fresh fetch (logins, JS): read = fresh server-side text, read_dom/click/type/press_key/source/eval = the LIVE page, screenshot = the pixels the user sees. Say which you used.");
+    ident("- read = fresh SERVER-SIDE text; read_dom/click/type/eval = the LIVE page (logins and JS included) — say which you used.");
     // R70-c: the deep-craft pointer — the core loop, verification patterns
     // and layout-testing detail live in the skill body.
     ident("- Full browser craft (the core loop, forms, wait patterns, layout testing): read_skill \"browser-use\".");
@@ -767,6 +833,32 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // section at the bottom of the turn. Nothing to compose here — the
   // ctx.debugMode field stays declared (a no-op) so callers keep
   // type-checking; see the PromptContext comment.
+
+  // ── Capabilities (ROUND-94, R94-G): the session's perception facts ──────
+  // The owner's v0.91.0 field report: a no-vision session kept calling the
+  // screenshot tools (every capture dead weight — the R94-E/F gate now
+  // refuses them). The prompt-side half of that fix: tell the model UP
+  // FRONT. Strictly gated — ctx.hasVisionPath absent (pre-R94 callers,
+  // the env-less tests) or no image-capable tool in the toolset → NO
+  // section, byte-identical composition (the golden ctx sets it false
+  // deliberately so the no-vision line is byte-pinned). The screenshot
+  // refusal's own message (NO_VISION_SCREENSHOT_MESSAGE) and this line
+  // speak the same doctrine — one lesson, taught before the first try.
+  if (
+    ctx.hasVisionPath !== undefined &&
+    (ctx.toolNames.includes("browser_control") ||
+      ctx.toolNames.includes("analyze_image") ||
+      ctx.computerUse?.enabled === true)
+  ) {
+    beginSection("capabilities");
+    ident("## CAPABILITIES");
+    ident(
+      ctx.hasVisionPath
+        ? "- IMAGE UNDERSTANDING: available — you MAY analyze images (the screenshot tools / analyze_image) when the VISUAL LAYOUT itself is the question; otherwise prefer the text trees (read_dom, get_app_state): cheaper and usually enough."
+        : "- IMAGE UNDERSTANDING: NONE in this session. NEVER call screenshot, zoom, or any image-analysis tool — they cannot help you and will be REFUSED. Perceive through text instead: browser read_dom/read/source; desktop get_app_state/find_elements/get_tree.",
+    );
+    ident("");
+  }
 
   // ── Communication ───────────────────────────────────────────────────────
   beginSection("communication");

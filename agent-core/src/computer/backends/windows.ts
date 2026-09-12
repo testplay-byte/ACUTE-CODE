@@ -28,6 +28,40 @@
  * PowerShell is never executed in this sandbox — the scripts are pinned by
  * command-construction tests (tests/computer-windows-backend.test.ts).
  *
+ * ROUND-94 (R94-E — the owner's v0.91.0 Windows 11 / PowerShell 5.1 field
+ * report: the window layer was BROKEN — windows_overview → {"windows":[]}
+ * with enumWindowsCount -1, list_apps → 11 apps ALL active:false,
+ * get_app_state → "process N is running but owns no accessible top-level
+ * window" for EVERY app). Root cause: $script:U32_OK is FALSE on the
+ * owner's machine — the Add-Type (csc) compile of the U32 P/Invoke helper
+ * fails there, and EVERYTHING cascaded from that (no EnumWindows, no
+ * GetForegroundWindow, no ShowWindow). The accessibility tree itself was
+ * NEVER affected (System.Windows.Automation rides .NET assemblies — no
+ * csc needed). Fixes, all verified by construction (no Windows here):
+ *   · U32_ERR CAPTURED: the preamble's catch block now records the compile
+ *     error into $script:U32_ERR, and EVERY diagnostics object that reports
+ *     enumWindowsCount -1 carries it as addTypeError (truncated ~300 chars)
+ *     — the next field report says WHY csc failed on that machine instead
+ *     of just "EnumWindows walk failed".
+ *   · THE CSC-FREE UIA FALLBACK LAYER: when U32_OK is false, UIAutomationClient
+ *     + UIAutomationTypes load via [System.Reflection.Assembly]::
+ *     LoadWithPartialName (try/catch-guarded — no Add-Type, no csc), and the
+ *     window layer degrades to UIA instead of to emptiness:
+ *     RootElement.FindAll(Children, TrueCondition) = the top-level windows
+ *     (pid/title/bounds/NativeWindowHandle), FocusedElement = the foreground
+ *     (pid + hwnd — more reliable than nothing when GetForegroundWindow is
+ *     gone). Every fallback entry carries source:'uia-fallback' and the
+ *     diagnostics gain uiaFallback:true — results stay debuggable, never
+ *     presented as the real EnumWindows walk. list_apps keeps its honest
+ *     Get-Process fallback ONLY when even UIA fails to walk.
+ *   · THE window_action ACTOR: minimize|maximize|restore|focus|close by HWND
+ *     or the resolved foreground window (ShowWindowAsync 6/3/9,
+ *     BringWindowToTop+SetForegroundWindow for focus, PostMessage WM_CLOSE
+ *     for the GENTLE close that lets apps prompt; the UIA fallback acts via
+ *     WindowPattern.SetWindowVisualState / Close / AutomationElement.SetFocus
+ *     — the owner's "minimize the current window" task had NO actor before:
+ *     the agent could only observe, then a loop guard stopped it).
+ *
  * ROUND-69-a (R69-a — four Windows input-engine fixes, all verified by
  * construction against this file, none by live run):
  *   · SCROLL MATH: rawScroll was QUADRATIC (it sent `ticks` events, each
@@ -261,6 +295,7 @@ export const WINDOWS_PS_PROGRAM = "powershell.exe";
 const PS_PREAMBLE = `
 $ErrorActionPreference = 'Stop'
 $script:U32_OK = $false
+$script:U32_ERR = ''
 try {
 Add-Type -TypeDefinition 'using System;using System.Text;using System.Collections.Generic;using System.Runtime.InteropServices;
 public class U32{
@@ -276,6 +311,8 @@ public class U32{
 [DllImport("user32.dll")]public static extern IntPtr WindowFromPoint(int x,int y);
 [DllImport("user32.dll")]public static extern bool GetCursorPos(out PT p);
 [DllImport("user32.dll")]public static extern bool ShowWindow(IntPtr h,int cmd);
+[DllImport("user32.dll")]public static extern bool ShowWindowAsync(IntPtr h,int cmd);
+[DllImport("user32.dll")]public static extern bool PostMessage(IntPtr h,uint msg,IntPtr w,IntPtr l);
 [DllImport("user32.dll")]public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int cx,int cy,uint f);
 public delegate bool EnumProc(IntPtr h,IntPtr lp);
 [DllImport("user32.dll")]public static extern bool EnumWindows(EnumProc cb,IntPtr lp);
@@ -392,8 +429,38 @@ public static List<WINFO> ListTopWindows(){
   $script:U32_OK = $true
 } catch {
   $script:U32_OK = $false
+  try { $script:U32_ERR = [string]$_.Exception.Message } catch { $script:U32_ERR = '' }
 }
 if ($script:U32_OK) { [void][U32]::SetProcessDPIAware() }
+# R94-E: the csc-FREE UIA fallback layer. The owner's v0.91.0 Windows 11
+# host compiles NEITHER the U32 helper NOR anything else via Add-Type -
+# but UIAutomation itself rides .NET assemblies (no csc). When (and ONLY
+# when) the U32 compile failed, load UIAutomationClient + UIAutomationTypes
+# via LoadWithPartialName (try/catch-guarded; deprecated but PS 5.1-solid)
+# and prove the surface with RootElement - $script:UIA_OK is the honest
+# flag the enumeration scripts branch on. On a healthy host this block
+# never runs (byte-identical cost to pre-R94 capsules).
+$script:UIA_OK = $false
+if (-not $script:U32_OK) {
+  try {
+    $null = [System.Reflection.Assembly]::LoadWithPartialName('UIAutomationClient')
+    $null = [System.Reflection.Assembly]::LoadWithPartialName('UIAutomationTypes')
+    if ($null -ne [System.Windows.Automation.AutomationElement]::RootElement) { $script:UIA_OK = $true }
+  } catch { $script:UIA_OK = $false }
+}
+# R94-E: the Add-Type failure reason, capped at ~300 chars for the JSON
+# diagnostics channel - the field report's "enumWindowsCount":-1 said THAT
+# csc failed but never WHY ("csc.exe not found" / a locked temp dir / a
+# policy). addTypeError rides every diagnostics object the failed compile
+# touches, so the next report self-diagnoses.
+function AddTypeErr() {
+  if ($script:U32_OK) { return '' }
+  if ($null -eq $script:U32_ERR) { return '(the Add-Type compile failed with no error message captured)' }
+  $m = [string]$script:U32_ERR
+  if ($m.Length -gt 300) { $m = $m.Substring(0,300) }
+  if ($m.Trim().Length -eq 0) { $m = '(the Add-Type compile failed with no error message captured)' }
+  return $m
+}
 function OutJson($o){
   [Console]::OutputEncoding=[System.Text.Encoding]::UTF8
   if ($null -eq $o) { Write-Output 'null'; return }
@@ -659,6 +726,8 @@ function toDiagnostics(raw: unknown): EnumerationDiagnostics | undefined {
     ...(num(r["enumWindowsCount"]) !== undefined ? { enumWindowsCount: num(r["enumWindowsCount"]) } : {}),
     ...(r["processRunning"] !== undefined ? { processRunning: r["processRunning"] === true } : {}),
     ...(num(r["screenCount"]) !== undefined ? { screenCount: num(r["screenCount"]) } : {}),
+    ...(r["uiaFallback"] !== undefined ? { uiaFallback: r["uiaFallback"] === true } : {}),
+    ...(typeof r["addTypeError"] === "string" && r["addTypeError"].trim() !== "" ? { addTypeError: r["addTypeError"] } : {}),
     ...(typeof r["note"] === "string" && r["note"].trim() !== "" ? { note: r["note"] } : {}),
   };
   return Object.keys(diag).length > 0 ? diag : undefined;
@@ -1339,12 +1408,59 @@ if ([U32]::SetForegroundWindow($h)) { Write-Output 'OK' } else { Write-Output 'E
     return { ok: false, error: out.startsWith("ERR:") ? out.slice(4) : "focus failed" };
   },
 
+  // R94-E (PART 2): the WINDOW ACTOR. One capsule resolves the target (an
+  // HWND, or "foreground" via GetForegroundWindow with the UIA
+  // FocusedElement fallback), acts, reads the title back, and reports
+  // {ok, action, windowId, title} as JSON — the dispatch layer records the
+  // action in the session ring and wraps failures in the standard refusal.
+  async windowAction(run, target, action) {
+    const script = windowsWindowActionScript(target, action);
+    const result = await run(psCapsule(script, 12000));
+    if (result.code !== 0) {
+      return { ok: false, error: `window_action failed: ${result.stderr.trim().slice(0, 200)}` };
+    }
+    const text = result.stdout.trim();
+    if (text.startsWith("ERR:")) {
+      return { ok: false, error: text.slice(4, 304) };
+    }
+    try {
+      const parsed = JSON.parse(text) as { ok?: unknown; windowId?: unknown; title?: unknown };
+      if (parsed.ok === true) {
+        const windowId = Number(parsed.windowId);
+        return {
+          ok: true,
+          ...(Number.isInteger(windowId) && windowId !== 0 ? { windowId } : {}),
+          ...(typeof parsed.title === "string" && parsed.title.trim() !== "" ? { title: parsed.title } : {}),
+        };
+      }
+    } catch {
+      // fall through to the honest refusal
+    }
+    return { ok: false, error: `window_action produced no usable output: ${text.slice(0, 200)}` };
+  },
+
   async frontmostPid(run) {
     // R67-C: guarded — with U32 unavailable the frontmost pid is honestly
     // 0 → null ("unknown"), the dispatcher's foreground gate then skips on
     // a null front (its existing semantics), never a fabricated pid.
+    // R94-E: the UIA FALLBACK — AutomationElement.FocusedElement reads the
+    // focused element through the same .NET assemblies the a11y walk uses
+    // (no csc), so a dead U32 compile no longer zeroes the foreground gate
+    // (the owner's report: foregroundPid 0 → every app active:false, every
+    // raw-input path degraded). Still honest: UIA unavailable → 0 → null.
     const script = `
-if (-not $script:U32_OK) { Write-Output '0'; exit 0 }
+if (-not $script:U32_OK) {
+  if ($script:UIA_OK) {
+    try {
+      $fel = [System.Windows.Automation.AutomationElement]::FocusedElement
+      if ($null -ne $fel) {
+        $fpid = [int]$fel.Current.ProcessId
+        if ($fpid -gt 0) { Write-Output $fpid; exit 0 }
+      }
+    } catch {}
+  }
+  Write-Output '0'; exit 0
+}
 $fg = [U32]::GetForegroundWindow()
 if ($fg -eq [IntPtr]::Zero) { Write-Output '0'; exit 0 }
 $fgpid = 0
@@ -1525,14 +1641,31 @@ export const WINDOWS_PS_PREAMBLE = PS_PREAMBLE;
  * before any output — the owner's empty list_apps) and its entries carry
  * an honest `source: "get-process-fallback"` field (the strict JS parser
  * tolerates and strips unknown fields).
+ *
+ * R94-E: the U32-false branch now tries the csc-FREE UIA FALLBACK first
+ * (the owner's v0.91.0 report: U32_OK false → 11 apps ALL active:false —
+ * foregroundPid was 0 because GetForegroundWindow was gone too). The
+ * fallback walk mirrors the EnumWindows shape exactly: the UIA ROOT's
+ * children ARE the top-level windows (pid = Current.ProcessId, title =
+ * Current.Name, bounds = Current.BoundingRectangle — empty rects filtered,
+ * windowId = Current.NativeWindowHandle); the FOREGROUND pid rides
+ * AutomationElement.FocusedElement (more reliable than the 0 the owner's
+ * report showed), the dedupe keeps the LARGEST-area window title per pid
+ * (mirroring $best below), and every entry carries source:'uia-fallback' +
+ * diagnostics.uiaFallback so the result is debuggable, never dressed up as
+ * the real walk. The Get-Process fallback survives ONLY when even UIA
+ * fails (both layers' honest last resort, note included).
  */
 export function windowsListAppsScript(): string {
   return `
 $fg = [IntPtr]::Zero
 $fgpid = 0
-if ($script:U32_OK) { try { $fg = [U32]::GetForegroundWindow() } catch { $fg = [IntPtr]::Zero } }
+if ($script:U32_OK) { try { $fg = [U32]::GetForegroundWindow() } catch { $fg = [IntPtr]::Zero } } elseif ($script:UIA_OK) { try { $fel = [System.Windows.Automation.AutomationElement]::FocusedElement; if ($null -ne $fel) { $fgpid = [int]$fel.Current.ProcessId } } catch { $fgpid = 0 } }
 if ($fg -ne [IntPtr]::Zero) { [void][U32]::GetWindowThreadProcessId($fg, [ref]$fgpid) }
 $diag = @{ processCount = 0; foregroundPid = $fgpid; enumWindowsCount = -1 }
+# R94-E: the compile-failure reason rides every -1 diagnostics (the
+# field report said csc failed but never why).
+if (-not $script:U32_OK) { $u32err = AddTypeErr; if ($u32err -ne '') { $diag.addTypeError = $u32err } }
 $procs = @()
 try { $procs = @(Get-Process) } catch { $procs = @() }
 $diag.processCount = $procs.Count
@@ -1559,7 +1692,45 @@ if ($null -ne $enum) {
     $apps += [pscustomobject]@{ name = [string]$best[$k].name; pid = [int]$best[$k].pid; processName = [string]$best[$k].processName; active = [bool]$best[$k].active }
   }
   $apps = @($apps | Sort-Object -Property name)
-} else {
+} elseif ($script:UIA_OK) {
+  # R94-E: the csc-FREE UIA walk - RootElement children ARE the top-level
+  # windows. Titled + non-empty rects only (the EnumWindows filters, UIA
+  # equivalents); one app per pid keeping the LARGEST window title; active
+  # via FocusedElement's pid. Entries are tagged source:'uia-fallback'.
+  $diag.uiaFallback = $true
+  $diag.note = 'Add-Type (csc) failed on this host - EnumWindows is unavailable; listing top-level windows via the UIAutomation fallback (no csc needed)'
+  try {
+    $kids = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+    $best = @{}
+    for ($i = 0; $i -lt $kids.Count; $i++) {
+      $el = $kids.Item($i)
+      if ($null -eq $el) { continue }
+      try {
+        $procId = [int]$el.Current.ProcessId
+        $title = [string]$el.Current.Name
+        $r = $el.Current.BoundingRectangle
+        if ($title.Trim().Length -eq 0) { continue }
+        if ($r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0) { continue }
+        $area = [int]$r.Width * [int]$r.Height
+        $cur = $best[$procId]
+        if ($null -eq $cur -or $area -gt $cur.area) {
+          $pname = ''
+          if ($procNames.ContainsKey($procId)) { $pname = $procNames[$procId] }
+          else { try { $pname = [string](Get-Process -Id $procId -ErrorAction Stop).ProcessName } catch { $pname = '' } }
+          $best[$procId] = @{ pid = $procId; name = $title; processName = $pname; area = $area; active = ($procId -eq $fgpid) }
+        }
+      } catch {}
+    }
+    foreach ($k in @($best.Keys)) {
+      $apps += [pscustomobject]@{ name = [string]$best[$k].name; pid = [int]$best[$k].pid; processName = [string]$best[$k].processName; active = [bool]$best[$k].active; source = 'uia-fallback' }
+    }
+    $apps = @($apps | Sort-Object -Property name)
+  } catch {
+    $apps = @()
+    $diag.note = 'both the EnumWindows walk and the UIAutomation fallback failed; using the Get-Process MainWindowTitle fallback'
+  }
+}
+if ($apps.Count -eq 0 -and $null -eq $enum) {
   $diag.note = 'EnumWindows walk failed; using the Get-Process MainWindowTitle fallback'
   foreach ($p in $procs) {
     try {
@@ -1576,7 +1747,7 @@ OutJson @{ apps = $apps; diagnostics = $diag }
 /**
  * R64-a list_windows: ALL of the pid's top-level EnumWindows windows (NOT
  * just MainWindowHandle — secondary windows, tool palettes, dialogs), each
- * with windowId (HWND), title, bounds, focused (GetForegroundWindow), and
+ * with windowId (HWND), title, bounds [x,y,w,h], focused (GetForegroundWindow), and
  * main = largest-area window; the MainWindowHandle fallback only when the
  * walk yields nothing for a LIVE process.
  *
@@ -1585,6 +1756,17 @@ OutJson @{ apps = $apps; diagnostics = $diag }
  * and invented bounds are FORBIDDEN, R64-a's fake-1920×1080 lesson), so
  * the script emits its existing empty-with-diagnostics shape and names the
  * cause.
+ *
+ * R94-E: the guard branch now tries the csc-FREE UIA FALLBACK FIRST — the
+ * owner's report had get_app_state failing for EVERY app with "owns no
+ * accessible top-level window" purely because this script returned empty
+ * when U32_OK was false. The UIA walk (RootElement children filtered to
+ * the pid — the SAME top-level-window set, NativeWindowHandle as windowId,
+ * BoundingRectangle as bounds, FocusedElement's hwnd as focused, largest
+ * area as main) restores real windows without csc; entries carry
+ * source:'uia-fallback' and diagnostics gain uiaFallback:true + addTypeError.
+ * BOTH layers failing still emits the honest empty + note (the geometry
+ * ban holds — no invented bounds ever).
  */
 export function windowsListWindowsScript(pid: number): string {
   return `
@@ -1592,6 +1774,55 @@ $targetPid = ${pid}
 if (-not $script:U32_OK) {
   $liveProc = $false
   try { $null = Get-Process -Id $targetPid -ErrorAction Stop; $liveProc = $true } catch {}
+  $u32err = AddTypeErr
+  if ($script:UIA_OK) {
+    # R94-E: the UIA fallback walk - same shape as the EnumWindows branch
+    # below, sourced from RootElement children instead. BoundingRectangle
+    # may be EMPTY (UIA's honest "no geometry") - those are filtered, never
+    # invented. FocusedElement's NativeWindowHandle is the focused flag.
+    $diag = @{ processRunning = $liveProc; enumWindowsCount = -1; uiaFallback = $true }
+    if ($u32err -ne '') { $diag.addTypeError = $u32err }
+    $wins = @()
+    try {
+      $fgl = 0
+      try { $fel = [System.Windows.Automation.AutomationElement]::FocusedElement; if ($null -ne $fel) { $fgl = [int64]$fel.Current.NativeWindowHandle } } catch { $fgl = 0 }
+      $kids = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+      for ($i = 0; $i -lt $kids.Count; $i++) {
+        $el = $kids.Item($i)
+        if ($null -eq $el) { continue }
+        try {
+          if ([int]$el.Current.ProcessId -ne $targetPid) { continue }
+          $title = [string]$el.Current.Name
+          $r = $el.Current.BoundingRectangle
+          if ($title.Trim().Length -eq 0) { continue }
+          if ($r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0) { continue }
+          $hwnd = [int64]$el.Current.NativeWindowHandle
+          $wins += [pscustomobject]@{
+            windowId = $hwnd
+            title = $title
+            bounds = @([int]$r.X, [int]$r.Y, [int]$r.Width, [int]$r.Height)
+            main = $false
+            focused = ($fgl -eq $hwnd)
+            source = 'uia-fallback'
+          }
+        } catch {}
+      }
+      $bestIdx = -1; $bestArea = -1
+      for ($i = 0; $i -lt $wins.Count; $i++) {
+        $a = [int]$wins[$i].bounds[2] * [int]$wins[$i].bounds[3]
+        if ($a -gt $bestArea) { $bestArea = $a; $bestIdx = $i }
+      }
+      if ($bestIdx -ge 0) { $wins[$bestIdx].main = $true }
+    } catch {}
+    if ($wins.Count -gt 0) { OutJson @{ windows = $wins; diagnostics = $diag }; exit 0 }
+    # Both layers produced nothing for this pid - the honest empty, with
+    # the compile failure reason riding along (the get_app_state gate up in
+    # dispatch.ts surfaces it as addTypeError on the refusal).
+    $failDiag = @{ processRunning = $liveProc; enumWindowsCount = -1; note = 'the U32 helper (Add-Type -TypeDefinition) did not compile on this host AND the UIAutomation fallback found no titled top-level window for this pid - run request_access and read addTypeOk' }
+    if ($u32err -ne '') { $failDiag.addTypeError = $u32err } else { $failDiag.addTypeError = '(the Add-Type compile failed with no error message captured)' }
+    OutJson @{ windows = @(); diagnostics = $failDiag }
+    exit 0
+  }
   OutJson @{ windows = @(); diagnostics = @{ processRunning = $liveProc; note = 'the U32 helper (Add-Type -TypeDefinition) did not compile on this host - the EnumWindows window enumeration is unavailable; run request_access and read addTypeOk' } }
   exit 0
 }
@@ -1635,6 +1866,92 @@ if ($wins.Count -eq 0 -and $diag.processRunning) {
   } catch {}
 }
 OutJson @{ windows = $wins; diagnostics = $diag }
+`;
+}
+
+/**
+ * R94-E (PART 2a): the window_action script — ONE capsule resolves the
+ * target (a concrete HWND, or "foreground" via GetForegroundWindow with the
+ * UIA FocusedElement fallback), performs the action, reads the window title
+ * back, and reports {ok, action, windowId, title} via OutJson. The owner's
+ * v0.91.0 task "minimize the current window" had NO actor: the agent could
+ * only observe (windows_overview), then a loop guard stopped it.
+ *
+ * Two actuation paths, same script:
+ *   · U32 (the healthy host): ShowWindowAsync SW_MINIMIZE(6)/SW_MAXIMIZE(3)/
+ *     SW_RESTORE(9) — ASYNC because the target may be a cross-process window
+ *     whose message pump we must not block on; focus = BringWindowToTop +
+ *     SetForegroundWindow (the focusWindow primitive, postcondition-honest
+ *     return); close = PostMessage WM_CLOSE (0x0010) — the GENTLE close that
+ *     lets the app prompt "save changes?" instead of hard-killing it.
+ *     The title is read BEFORE acting (a close may destroy the window).
+ *   · UIA fallback (U32_OK false — the owner's machine): AutomationElement.
+ *     FromHandle(hwnd) resolves the element from the bare HWND (no Add-Type,
+ *     no csc), then WindowPattern.SetWindowVisualState(Minimized=0 |
+ *     Maximized=1 | Normal=2) / WindowPattern.Close(); focus rides the
+ *     element's own SetFocus() (WindowPattern has no focus verb).
+ * Both failing → the honest ERR (never a fabricated success).
+ */
+export function windowsWindowActionScript(
+  target: { windowId?: number; foreground?: boolean },
+  action: "minimize" | "maximize" | "restore" | "focus" | "close",
+): string {
+  const windowId = Math.trunc(target.windowId ?? 0);
+  // The foreground target resolves the frontmost window INSIDE the capsule
+  // (GetForegroundWindow, or the UIA FocusedElement when U32 is dead) — the
+  // JS side passes no windowId and the resolved HWND rides the JSON report.
+  const foregroundResolution = target.foreground === true
+    ? `
+# R94-E: target 'foreground' - resolve the frontmost window first
+# (GetForegroundWindow, or the UIA FocusedElement when U32 is dead).
+if ($script:U32_OK) { try { $h = [U32]::GetForegroundWindow() } catch { $h = [IntPtr]::Zero } }
+if ($h -eq [IntPtr]::Zero -and $script:UIA_OK) {
+  try { $fel = [System.Windows.Automation.AutomationElement]::FocusedElement; if ($null -ne $fel) { $h = [IntPtr]$fel.Current.NativeWindowHandle } } catch { $h = [IntPtr]::Zero }
+}
+if ($h -eq [IntPtr]::Zero) { Write-Output 'ERR:no-foreground (no foreground window could be resolved - neither GetForegroundWindow nor the UIA FocusedElement is available)'; exit 0 }
+`
+    : "";
+  return `
+$action = '${action}'
+$title = ''
+$h = [IntPtr]${windowId}
+${foregroundResolution}
+if ($h -eq [IntPtr]::Zero) { Write-Output 'ERR:no-window (no window to act on - pass a real windowId from windows_overview/list_windows, or target the foreground)'; exit 0 }
+if ($script:U32_OK) {
+  # The U32 path - title FIRST (a close may destroy the window), then act.
+  try {
+    $len = [U32]::GetWindowTextLength($h)
+    if ($len -gt 0) { $sb = New-Object System.Text.StringBuilder($len + 1); [void][U32]::GetWindowText($h, $sb, $sb.Capacity); $title = $sb.ToString() }
+  } catch {}
+  $sent = $false
+  if ($action -eq 'minimize') { $sent = [U32]::ShowWindowAsync($h, 6) } elseif ($action -eq 'maximize') { $sent = [U32]::ShowWindowAsync($h, 3) } elseif ($action -eq 'restore') { $sent = [U32]::ShowWindowAsync($h, 9) } elseif ($action -eq 'focus') { [void][U32]::BringWindowToTop($h); $sent = [U32]::SetForegroundWindow($h) } elseif ($action -eq 'close') { $sent = [U32]::PostMessage($h, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
+  if (-not $sent) { Write-Output 'ERR:action-failed (the win32 call returned false - the window may have closed, or belongs to an elevated process this session cannot touch)'; exit 0 }
+  OutJson @{ ok = $true; action = $action; windowId = [int64]$h; title = $title }
+  exit 0
+}
+if ($script:UIA_OK) {
+  # R94-E: the csc-free path - FromHandle resolves the element from the
+  # bare HWND (no Add-Type); WindowPattern carries the visual-state verbs.
+  $el = $null
+  try { $el = [System.Windows.Automation.AutomationElement]::FromHandle($h) } catch { $el = $null }
+  if ($null -eq $el) { Write-Output 'ERR:no-window (the UIA FromHandle lookup found no window for this id)'; exit 0 }
+  try { $title = [string]$el.Current.Name } catch {}
+  if ($action -eq 'focus') {
+    try { $el.SetFocus(); OutJson @{ ok = $true; action = $action; windowId = [int64]$h; title = $title }; exit 0 } catch { Write-Output ('ERR:focus-failed (' + $_.Exception.Message + ')'); exit 0 }
+  }
+  $wp = $null
+  try { $wp = $el.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern) } catch {}
+  if ($null -eq $wp) { Write-Output 'ERR:window-pattern-unavailable (the window does not expose the UIA WindowPattern - minimize/maximize/restore/close need it when the U32 helper is unavailable)'; exit 0 }
+  if ($action -eq 'close') {
+    try { $wp.Close(); OutJson @{ ok = $true; action = $action; windowId = [int64]$h; title = $title }; exit 0 } catch { Write-Output ('ERR:close-failed (' + $_.Exception.Message + ')'); exit 0 }
+  }
+  $vis = 2
+  if ($action -eq 'minimize') { $vis = 0 }
+  if ($action -eq 'maximize') { $vis = 1 }
+  try { $wp.SetWindowVisualState($vis); OutJson @{ ok = $true; action = $action; windowId = [int64]$h; title = $title }; exit 0 } catch { Write-Output ('ERR:state-failed (' + $_.Exception.Message + ')'); exit 0 }
+}
+Write-Output 'ERR:U32-unavailable (the Add-Type helper did not compile on this host and the UIAutomation fallback is unavailable - this action cannot run)'
+exit 0
 `;
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type RefObject } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -7,6 +7,7 @@ import {
   ArrowRight,
   AudioLines,
   Check,
+  ChevronDown,
   Copy,
   Eye,
   EyeOff,
@@ -22,6 +23,7 @@ import {
   Video,
   X,
   Zap,
+  type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 // ROUND-87 (R87): the shared ease curve for the dialog/entrance animations.
@@ -1802,21 +1804,32 @@ function useTestTint(state: ModelTestState): { tinted: boolean; outcome: "pass" 
   return { tinted, outcome };
 }
 
-/** The presentational TEST button (both views share it). */
+/** The presentational TEST button (both views share it). R94-C adds the
+ * `segment` variant — the model ROW's unified action-group look (bordered
+ * cluster, per-button dividers, pressed scale, focus ring) — while the
+ * config dialog keeps the bare ghost icon (its compact footer-line
+ * contract). The R87 animation/tint contract is IDENTICAL in both: the
+ * button spins while testing, then tints light green/red for 5s, with the
+ * 300ms transition riding the button's own background. */
 function TestIconButton({
   model,
   state,
   run,
   label,
+  variant = "ghost",
 }: {
   model: ProviderModelConfig;
   state: ModelTestState;
   run: () => void;
   label?: string;
+  variant?: "ghost" | "segment";
 }) {
   const styles = useThemeStyles();
   const { tinted, outcome } = useTestTint(state);
   const testing = state.kind === "testing";
+  // R94-C: the settled outcome keeps its icon color (green/red) — the hover
+  // only swaps the color of an UNTINTED, UNANSWERED button to the accent.
+  const baseColor = outcome === "pass" ? "#16a34a" : outcome === "fail" ? "#ef4444" : styles.textSecondary;
   return (
     <button
       onClick={run}
@@ -1825,10 +1838,17 @@ function TestIconButton({
       title="Send a real test request to this model — checks the key, the model id, and the reply"
       data-testid="model-test-button"
       data-model-row={model.id}
-      className="h-8 rounded-[10px] shrink-0 text-[11px] font-bold transition-colors duration-300 flex items-center justify-center gap-1.5 px-2.5"
+      className={[
+        "h-8 shrink-0 text-[11px] font-bold transition-all duration-300 flex items-center justify-center gap-1.5",
+        // R94-C: the pressed scale + the focus-visible ring (drawn INSIDE
+        // the button edge, so the row cluster's overflow-hidden rounding
+        // never clips it).
+        "active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]",
+        variant === "segment" ? "w-8 px-0" : "rounded-[10px] px-2.5",
+      ].join(" ")}
       style={{
         width: label === undefined ? 32 : undefined,
-        color: outcome === "pass" ? "#16a34a" : outcome === "fail" ? "#ef4444" : styles.textSecondary,
+        color: baseColor,
         background: tinted
           ? outcome === "pass"
             ? withAlpha("#22c55e", 0.14)
@@ -1837,10 +1857,16 @@ function TestIconButton({
         borderColor: "transparent",
       }}
       onMouseEnter={(e) => {
-        if (!tinted) e.currentTarget.style.background = withAlpha(styles.accent, 0.1);
+        if (!tinted) {
+          e.currentTarget.style.background = withAlpha(styles.accent, 0.12);
+          if (outcome === null) e.currentTarget.style.color = styles.accent;
+        }
       }}
       onMouseLeave={(e) => {
-        if (!tinted) e.currentTarget.style.background = "transparent";
+        if (!tinted) {
+          e.currentTarget.style.background = "transparent";
+          if (outcome === null) e.currentTarget.style.color = baseColor;
+        }
       }}
     >
       {testing ? (
@@ -1977,11 +2003,15 @@ function ModelCard({
   onToggleHidden?: () => void;
   /** R93-A7: the Test-All driver — a bumped seq runs THIS card's test
    * (each card owns its own useModelTest state, so the per-card result
-   * sections render exactly as a manual click). */
+   * sections render exactly as a manual click). R94-C: the header now scopes
+   * the pulse — a card OUTSIDE the chosen scope (not "all", or its last
+   * recorded result doesn't match) simply never receives the new seq. */
   testAllSeq?: number;
-  /** R93-A7: the card reports its Test-All completion back to the header's
-   * progress counter (once per seq). */
-  onTestAllResult?: (seq: number, ok: boolean) => void;
+  /** R93-A7 → R94-C: the card reports every SETTLED test back to the
+   * header. `seq` identifies the bulk pulse the run answers (null = a
+   * manual row-button click: the scope map records it, the progress counter
+   * ignores it); `rowId` feeds the Test-scope dropdown's memory. */
+  onTestAllResult?: (seq: number | null, ok: boolean, rowId: string | null) => void;
 }) {
   const styles = useThemeStyles();
   const { state, run } = useModelTest(row);
@@ -1990,26 +2020,39 @@ function ModelCard({
   const [showResult, setShowResult] = useState(false);
   const hideTimerRef = useRef<number | null>(null);
 
-  // ── R93-A7: the Test-All wiring. A new seq fires the card's own test once;
-  // the settled outcome is reported to the header exactly once per seq (the
-  // settledRef guard keeps a re-rendered pass from double-counting). */
-  const testAllSettledRef = useRef(false);
+  // ── R93-A7 → R94-C: the Test-All wiring. A new seq fires the card's own
+  // test once; every SETTLED outcome is reported to the header through the
+  // card channel. The old boolean settledRef had a latent double-count on a
+  // SECOND pulse (the still-settled state from the PREVIOUS run reported
+  // the STALE outcome for the new seq and then suppressed the fresh one) —
+  // the prev-kind guard below only reports when the state actually
+  // TRANSITIONS into pass/fail, which also lets MANUAL row-button clicks
+  // report (seq null) without touching the bulk counter. */
+  const runInfoRef = useRef<{ seq: number | null }>({ seq: null });
   useEffect(() => {
     if (testAllSeq === undefined || testAllSeq === 0 || row === null) return;
-    testAllSettledRef.current = false;
+    runInfoRef.current = { seq: testAllSeq };
     run();
     // run is the card-local stable callback; testAllSeq changes only when
     // the header button is clicked again.
   }, [testAllSeq]);
+  // A manual click on the row's Test segment — same probe, but it reports
+  // with seq null (the scope map records the outcome, the counter doesn't).
+  const runManual = (): void => {
+    runInfoRef.current = { seq: null };
+    run();
+  };
+  const prevKindRef = useRef<ModelTestState["kind"]>("idle");
   useEffect(() => {
-    if (testAllSeq === undefined || testAllSeq === 0) return;
-    if (state.kind === "pass" || state.kind === "fail") {
-      if (!testAllSettledRef.current) {
-        testAllSettledRef.current = true;
-        onTestAllResult?.(testAllSeq, state.kind === "pass");
-      }
-    }
-  }, [state, testAllSeq, onTestAllResult]);
+    const kind = state.kind;
+    const wasSettled = prevKindRef.current === "pass" || prevKindRef.current === "fail";
+    prevKindRef.current = kind;
+    if (kind !== "pass" && kind !== "fail") return;
+    // A re-fire with an already-settled state (the seq prop or the row
+    // object changed) is NOT a fresh settle — never report it.
+    if (wasSettled) return;
+    onTestAllResult?.(runInfoRef.current.seq, kind === "pass", row?.id ?? m.rowId ?? null);
+  }, [state, testAllSeq, onTestAllResult, row, m]);
 
   // The section appears on completion and auto-collapses after 5s UNLESS the
   // owner interacts with it (Show reply / Show full cancels the timer — the
@@ -2037,6 +2080,11 @@ function ModelCard({
 
   const inChips = row !== null ? capabilityChips(row, "in") : [];
   const outChips = row !== null ? capabilityChips(row, "out") : [];
+  // R94-C: the action group's divider — a 1px hairline inset top/bottom
+  // between the segments (self-stretch inside the items-stretch cluster).
+  const actionDivider = (
+    <span className="w-px my-[3px] shrink-0" style={{ background: withAlpha(styles.border, 0.6) }} aria-hidden />
+  );
   // R91-C: the STAT FACTS — only the CONFIGURED ones (null = unknown =
   // absent). The section's shape follows the count (the owner: "If nothing
   // is added … it would not show the whole complete section at all. If only
@@ -2191,45 +2239,77 @@ function ModelCard({
           </div>
         </div>
 
-        {/* RIGHT: the actions (R87's uniform icon trio + R93-A7's hide/show
-            quick toggle — the owner: "add one more button: the mark as hidden
-            or mark as shown button") */}
+        {/* RIGHT: the actions — R94-C: the owner's "cleaner UI, like an
+            actual button kind of interface". The R87 icon trio + the R93-A7
+            hide/show toggle are now ONE segmented ACTION GROUP: a shared
+            rounded container with a hairline border + a subtle fill, a
+            divider between the buttons, an accent hover (red for the
+            destructive delete), a pressed scale, and a focus-visible ring.
+            The Test segment keeps the R87 spin/pass/fail tint contract; the
+            Eye keeps its accent-when-hidden state; every aria-label,
+            title and data-testid is unchanged. */}
         {m.configured && row !== null && (
-          <div className="flex items-center gap-1 shrink-0">
-            <TestIconButton model={row} state={state} run={run} />
+          <div
+            className="inline-flex items-stretch rounded-[10px] shrink-0 overflow-hidden"
+            style={{ border: `1px solid ${withAlpha(styles.border, 0.9)}`, background: styles.subtle }}
+          >
+            <TestIconButton model={row} state={state} run={runManual} variant="segment" />
+            {actionDivider}
             <button
               onClick={onEdit}
               aria-label={`Configure model ${m.displayName || m.modelId}`}
               title="Configure — display name, capabilities, pricing, limits"
-              className="h-8 w-8 grid place-items-center rounded-[10px] shrink-0 transition-colors"
+              className="h-8 w-8 grid place-items-center shrink-0 transition-all duration-200 active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
               style={{ color: styles.textSecondary }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.1))}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = withAlpha(styles.accent, 0.12);
+                e.currentTarget.style.color = styles.accent;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.color = styles.textSecondary;
+              }}
             >
               <Pencil size={13} />
             </button>
             {onToggleHidden !== undefined && (
-              <button
-                onClick={onToggleHidden}
-                aria-label={row.hidden ? `Show model ${m.displayName || m.modelId} in the chat picker` : `Hide model ${m.displayName || m.modelId} from the chat picker`}
-                title={row.hidden ? "Hidden from the chat picker — click to show" : "Shown in the chat picker — click to hide"}
-                data-testid="model-toggle-hidden"
-                className="h-8 w-8 grid place-items-center rounded-[10px] shrink-0 transition-colors"
-                style={{ color: row.hidden ? styles.accent : styles.textSecondary }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.1))}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              >
-                {row.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
-              </button>
+              <>
+                {actionDivider}
+                <button
+                  onClick={onToggleHidden}
+                  aria-label={row.hidden ? `Show model ${m.displayName || m.modelId} in the chat picker` : `Hide model ${m.displayName || m.modelId} from the chat picker`}
+                  title={row.hidden ? "Hidden from the chat picker — click to show" : "Shown in the chat picker — click to hide"}
+                  data-testid="model-toggle-hidden"
+                  className="h-8 w-8 grid place-items-center shrink-0 transition-all duration-200 active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
+                  style={{ color: row.hidden ? styles.accent : styles.textSecondary }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = withAlpha(styles.accent, 0.12);
+                    e.currentTarget.style.color = styles.accent;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.color = row.hidden ? styles.accent : styles.textSecondary;
+                  }}
+                >
+                  {row.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
+                </button>
+              </>
             )}
+            {actionDivider}
             <button
               onClick={onDelete}
               aria-label={`Delete model ${m.displayName || m.modelId}`}
               title="Delete this model"
-              className="h-8 w-8 grid place-items-center rounded-[10px] shrink-0 transition-colors"
+              className="h-8 w-8 grid place-items-center shrink-0 transition-all duration-200 active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
               style={{ color: styles.textTertiary }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = withAlpha("#ef4444", 0.12);
+                e.currentTarget.style.color = "#ef4444";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.color = styles.textTertiary;
+              }}
             >
               <Trash2 size={13} />
             </button>
@@ -2363,6 +2443,96 @@ function ModelCard({
   );
 }
 
+/** R94-C: the Test-All scope — "all" (every configured row), "failed" /
+ * "working" (only rows whose LAST recorded outcome matches). */
+type TestScope = "all" | "failed" | "working";
+
+/** R94-C: the Test-scope menu's dismissal — outside mousedown, Escape, and
+ * any scroll/resize (the menu is position:fixed, so a scrolled pane would
+ * orphan it). The returned ref goes on the wrapper that contains BOTH the
+ * trigger and the menu, so a click on the trigger toggles instead of
+ * dismissing-then-reopening. Same shape as the composer's useDismiss —
+ * replicated here because this file owns its own helpers. */
+function useMenuDismiss(open: boolean, onDismiss: () => void): RefObject<HTMLDivElement> {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent): void => {
+      if (ref.current !== null && !ref.current.contains(e.target as Node)) onDismiss();
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") onDismiss();
+    };
+    const onAnyScroll = (): void => onDismiss();
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onAnyScroll, true);
+    window.addEventListener("resize", onAnyScroll);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onAnyScroll, true);
+      window.removeEventListener("resize", onAnyScroll);
+    };
+  }, [open, onDismiss]);
+  return ref;
+}
+
+/** R94-C: one row of the Test-scope menu — the app's dropdown idiom
+ * (rounded-lg rows, hover = subtleHover, icon + label + inline desc), with
+ * the honest disabled state (opacity + cursor, and the explanatory title
+ * the caller passes for the "nothing to test yet" cases). */
+function ScopeMenuItem({
+  testId,
+  icon,
+  label,
+  desc,
+  disabled,
+  title,
+  onClick,
+}: {
+  testId: string;
+  icon: LucideIcon;
+  label: string;
+  desc: string;
+  disabled?: boolean;
+  title?: string;
+  onClick: () => void;
+}) {
+  const styles = useThemeStyles();
+  const Icon = icon;
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      data-testid={testId}
+      disabled={disabled}
+      title={title}
+      onClick={onClick}
+      className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg transition-colors disabled:cursor-default disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
+      style={{ color: disabled ? styles.textTertiary : styles.text }}
+      onMouseEnter={(e) => {
+        if (!disabled) e.currentTarget.style.background = styles.subtleHover;
+      }}
+      onMouseLeave={(e) => {
+        if (!disabled) e.currentTarget.style.background = "transparent";
+      }}
+    >
+      <Icon
+        size={12}
+        className="shrink-0"
+        style={{ color: disabled ? styles.textTertiary : styles.accent }}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block text-[11.5px] font-bold leading-tight">{label}</span>
+        <span className="block text-[9.5px] leading-tight" style={{ color: styles.textTertiary }}>
+          {desc}
+        </span>
+      </span>
+    </button>
+  );
+}
+
 function ModelListSection({
   providerId,
   models,
@@ -2389,27 +2559,24 @@ function ModelListSection({
   const [adding, setAdding] = useState<ModelAddPrefill | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // ── R93-A7: the Test-All driver + progress. Each card owns its test state
-  // (useModelTest) — the header just bumps a seq and counts the cards'
-  // settled reports. `done === total && total > 0` = finished; failed > 0
-  // colors the summary red. A models list change (add/delete) RESETS the
-  // progress so a stale counter can never stick to the new list. ────────
-  const [testAll, setTestAll] = useState<{ seq: number; total: number; done: number; failed: number } | null>(null);
+  // ── R93-A7 → R94-C: the Test-All driver + progress + SCOPE. Each card owns
+  // its test state (useModelTest) — the header bumps a seq and counts the
+  // cards' settled reports. `done === total && total > 0` = finished; failed
+  // > 0 colors the summary red. A models ROW-SET change (add/delete) RESETS
+  // the progress so a stale counter can never stick to the new list — but a
+  // per-row flip (the R94-C optimistic hidden toggle) must NOT reset it: it
+  // re-renders `models` without changing the row set, and the reset would
+  // also throw away the running summary. ─────────────────────────────────
+  const [testAll, setTestAll] = useState<{ seq: number; total: number; done: number; failed: number; scope: TestScope } | null>(null);
+  /** R94-C: the LAST test outcome per row (rowId → pass/fail) — the
+   * Test-scope dropdown's memory. Filled as tests run: bulk pulses AND
+   * manual row-button clicks both report through the card channel; entries
+   * for rows that later leave the list simply stop matching. */
+  const [lastResults, setLastResults] = useState<Map<string, "pass" | "fail">>(new Map());
+  const modelIdsKey = models.map((m) => m.id).join("\u0000");
   useEffect(() => {
     setTestAll(null);
-  }, [models]);
-  const triggerTestAll = (): void => {
-    const total = models.length;
-    if (total === 0) return;
-    setTestAll({ seq: (testAll?.seq ?? 0) + 1, total, done: 0, failed: 0 });
-  };
-  const onTestAllResult = useCallback((seq: number, ok: boolean) => {
-    setTestAll((prev) =>
-      prev !== null && prev.seq === seq
-        ? { ...prev, done: prev.done + 1, failed: prev.failed + (ok ? 0 : 1) }
-        : prev,
-    );
-  }, []);
+  }, [modelIdsKey]);
 
   // ROUND-60 (R60-B): the list shows CONFIGURED (stored) rows ONLY — the
   // R58/R50 catalog→list merge is GONE (the owner: "By default none of the
@@ -2419,6 +2586,75 @@ function ModelListSection({
   // catalog feeds the "Add models" picker ALONE — catalogIds is [] by
   // design; the static catalog stays a param for the picker pre-fill.
   const merged = mergeCatalogIntoModels(models, [], staticCatalog);
+
+  /** R94-C: does this row belong to a test scope? "all" = every configured
+   * row; "failed"/"working" = only rows whose LAST recorded outcome matches
+   * (models never tested count in "all" only). */
+  const inTestScope = (m: MergedModel, scope: TestScope): boolean =>
+    m.configured &&
+    m.rowId !== null &&
+    (scope === "all" || lastResults.get(m.rowId) === (scope === "failed" ? "fail" : "pass"));
+  const triggerTestAll = (scope: TestScope = "all"): void => {
+    const total = merged.filter((m) => inTestScope(m, scope)).length;
+    if (total === 0) return;
+    setTestAll({ seq: (testAll?.seq ?? 0) + 1, total, done: 0, failed: 0, scope });
+  };
+  const onTestAllResult = useCallback((seq: number | null, ok: boolean, rowId: string | null) => {
+    if (rowId !== null) {
+      setLastResults((prev) => {
+        if (prev.get(rowId) === (ok ? "pass" : "fail")) return prev;
+        const next = new Map(prev);
+        next.set(rowId, ok ? "pass" : "fail");
+        return next;
+      });
+    }
+    // A manual row click (seq null) feeds the scope map ONLY — it never
+    // touches the bulk run's counter.
+    if (seq === null) return;
+    setTestAll((prev) =>
+      prev !== null && prev.seq === seq
+        ? { ...prev, done: prev.done + 1, failed: prev.failed + (ok ? 0 : 1) }
+        : prev,
+    );
+  }, []);
+
+  // ── R94-C: the scope menu (the split button's chevron half). The menu is
+  // position:fixed off the trigger's rect — the section card's
+  // overflow-hidden + the scrollable detail pane would clip an in-flow
+  // absolute dropdown.
+  const [scopeMenu, setScopeMenu] = useState<{ top: number; left: number } | null>(null);
+  const closeScopeMenu = useCallback((): void => setScopeMenu(null), []);
+  const scopeSplitRef = useMenuDismiss(scopeMenu !== null, closeScopeMenu);
+  const toggleScopeMenu = (): void => {
+    if (scopeMenu !== null) {
+      setScopeMenu(null);
+      return;
+    }
+    const el = scopeSplitRef.current;
+    if (el === null) return;
+    const rect = el.getBoundingClientRect();
+    const width = 236;
+    const estHeight = 176;
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    const roomBelow = window.innerHeight - rect.bottom;
+    setScopeMenu({
+      top: roomBelow >= estHeight + 12 ? rect.bottom + 6 : Math.max(8, rect.top - estHeight - 6),
+      left,
+    });
+  };
+  const runScope = (scope: TestScope): void => {
+    setScopeMenu(null);
+    triggerTestAll(scope);
+  };
+  const testRunActive = testAll !== null && testAll.done < testAll.total;
+  let failedCount = 0;
+  let workingCount = 0;
+  for (const m of merged) {
+    if (!m.configured || m.rowId === null) continue;
+    const r = lastResults.get(m.rowId);
+    if (r === "fail") failedCount += 1;
+    else if (r === "pass") workingCount += 1;
+  }
 
   // ROUND-62 (R62-2b): model-config mutations fan out to the session
   // page's ["provider-models-config"] family (the rename/hide/pricing
@@ -2431,13 +2667,40 @@ function ModelListSection({
     onError: (err: Error) => setError(err.message),
   });
 
-  // R93-A7: the hide/show quick toggle — PATCH {hidden} + invalidate; the
-  // same mutation path the config dialog's segmented control uses.
+  // R93-A7 → R94-C: the hide/show quick toggle — now OPTIMISTIC. The old
+  // path (PATCH → invalidate → refetch) reset the detail pane's scroll to
+  // the top on every flip; now onMutate snapshots + patches the list's
+  // query cache so the row turns over INSTANTLY and the list NEVER
+  // refetches on this mutation (the patch is exactly {hidden}, so the
+  // optimistic row is the server's answer too — onSuccess merges the
+  // returned row in, still without a refetch). Only the CHAT PICKER's
+  // families are invalidated: they are not mounted here, so their
+  // background refetch can never flash or reset this pane.
   const toggleHidden = useMutation({
     mutationFn: (input: { rowId: string; hidden: boolean }) =>
       updateProviderModelConfig(input.rowId, { hidden: input.hidden }),
-    onSuccess: invalidate,
-    onError: (err: Error) => setError(err.message),
+    onMutate: async (input: { rowId: string; hidden: boolean }) => {
+      await queryClient.cancelQueries({ queryKey: ["settings-provider-models", providerId] });
+      const snapshot =
+        queryClient.getQueryData<ProviderModelConfig[]>(["settings-provider-models", providerId]) ?? null;
+      queryClient.setQueryData<ProviderModelConfig[]>(["settings-provider-models", providerId], (rows) =>
+        rows === undefined ? undefined : rows.map((r) => (r.id === input.rowId ? { ...r, hidden: input.hidden } : r)),
+      );
+      return { snapshot };
+    },
+    onError: (err: Error, _input: { rowId: string; hidden: boolean }, context: { snapshot: ProviderModelConfig[] | null } | undefined) => {
+      if (context?.snapshot != null) {
+        queryClient.setQueryData(["settings-provider-models", providerId], context.snapshot);
+      }
+      setError(err.message);
+    },
+    onSuccess: (row: ProviderModelConfig) => {
+      queryClient.setQueryData<ProviderModelConfig[]>(["settings-provider-models", providerId], (rows) =>
+        rows === undefined ? [row] : rows.map((r) => (r.id === row.id ? { ...r, ...row } : r)),
+      );
+      void queryClient.invalidateQueries({ queryKey: ["provider-models-config"] });
+      void queryClient.invalidateQueries({ queryKey: ["models-configured"] });
+    },
   });
 
   return (
@@ -2454,37 +2717,158 @@ function ModelListSection({
             test all the models out, like a quick test button there"). Every
             card fires its OWN probe (the per-card result sections render
             exactly as a manual click); this button tracks the progress and
-            the summary. */}
+            the summary.
+            ── R94-C: it is now a SPLIT BUTTON — the main half still runs the
+            whole list, the chevron half opens the SCOPE menu (all / only
+            the failed / only the working — the owner's "test only the ones
+            that failed" ask). The menu is fixed-position (see the comment
+            at scopeMenu above) and rides the same trigger wrapper for the
+            outside-click dismissal. */}
         {merged.length > 0 ? (
-          <button
-            onClick={triggerTestAll}
-            disabled={testAll !== null && testAll.done < testAll.total}
-            data-testid="test-all-models"
-            className="h-7 px-2.5 rounded-full text-[11px] font-bold flex items-center gap-1.5 disabled:cursor-default"
-            style={{
-              background: withAlpha(styles.accent, 0.1),
-              color:
-                testAll !== null && testAll.done >= testAll.total
-                  ? testAll.failed > 0
-                    ? "#ef4444"
-                    : "#22c55e"
-                  : styles.accent,
-            }}
-            title="Run the connection test for every model in this list"
-          >
-            {testAll !== null && testAll.done < testAll.total ? (
-              <RefreshCw size={11} className="animate-spin" />
-            ) : (
-              <Zap size={11} strokeWidth={2.5} />
+          <div ref={scopeSplitRef} className="relative flex items-stretch shrink-0">
+            <button
+              onClick={() => triggerTestAll("all")}
+              disabled={testRunActive}
+              data-testid="test-all-models"
+              className="h-7 pl-2.5 pr-1.5 rounded-l-full text-[11px] font-bold flex items-center gap-1.5 disabled:cursor-default transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
+              style={{
+                background: withAlpha(styles.accent, 0.1),
+                color:
+                  testAll !== null && !testRunActive
+                    ? testAll.failed > 0
+                      ? "#ef4444"
+                      : "#22c55e"
+                    : styles.accent,
+              }}
+              title="Run the connection test for every model in this list"
+            >
+              {testRunActive ? (
+                <RefreshCw size={11} className="animate-spin" />
+              ) : (
+                <Zap size={11} strokeWidth={2.5} />
+              )}
+              {testAll === null
+                ? "Test all"
+                : testRunActive
+                  ? `Testing ${testAll.done}/${testAll.total}${testAll.scope === "failed" ? " failed" : testAll.scope === "working" ? " working" : ""}…`
+                  : testAll.failed > 0
+                    ? testAll.scope === "failed"
+                      ? `${testAll.failed} of ${testAll.total} still failing`
+                      : `${testAll.failed} of ${testAll.total} failed`
+                    : testAll.scope === "failed"
+                      ? `All ${testAll.total} now pass`
+                      : testAll.scope === "working"
+                        ? `All ${testAll.total} still pass`
+                        : `All ${testAll.total} passed`}
+            </button>
+            <button
+              onClick={toggleScopeMenu}
+              disabled={testRunActive}
+              aria-haspopup="menu"
+              aria-expanded={scopeMenu !== null}
+              aria-label="Choose the test scope"
+              data-testid="test-scope-toggle"
+              title="Test scope — all models, only the failed ones, or only the working ones"
+              className="h-7 w-6 rounded-r-full grid place-items-center shrink-0 disabled:cursor-default transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
+              style={{
+                background: withAlpha(styles.accent, 0.1),
+                color:
+                  testAll !== null && !testRunActive
+                    ? testAll.failed > 0
+                      ? "#ef4444"
+                      : "#22c55e"
+                    : styles.accent,
+                boxShadow: `inset 1px 0 0 ${withAlpha(styles.accent, 0.28)}`,
+              }}
+            >
+              <ChevronDown size={11} />
+            </button>
+            {scopeMenu !== null && (
+              <div
+                role="menu"
+                aria-label="Test scope"
+                className="fixed z-50 w-[236px] rounded-[14px] border-[1.5px] p-1.5"
+                style={{
+                  top: scopeMenu.top,
+                  left: scopeMenu.left,
+                  background: styles.card,
+                  borderColor: styles.border,
+                  boxShadow: styles.bentoShadow,
+                }}
+                onKeyDown={(e) => {
+                  // R94-C: the keyboard ladder — Arrow/Home/End move the
+                  // focus through the ENABLED items (Enter is the buttons'
+                  // native activation; Escape rides the document listener).
+                  const items = Array.from(
+                    e.currentTarget.querySelectorAll<HTMLButtonElement>("button:not([disabled])"),
+                  );
+                  if (items.length === 0) return;
+                  const idx = items.indexOf(document.activeElement as HTMLButtonElement);
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    items[(idx + 1) % items.length]!.focus();
+                  } else if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    items[(idx - 1 + items.length) % items.length]!.focus();
+                  } else if (e.key === "Home") {
+                    e.preventDefault();
+                    items[0]!.focus();
+                  } else if (e.key === "End") {
+                    e.preventDefault();
+                    items[items.length - 1]!.focus();
+                  }
+                }}
+              >
+                <ScopeMenuItem
+                  testId="test-scope-all"
+                  icon={Zap}
+                  label="Test all"
+                  desc={`Every model in this list (${merged.length})`}
+                  disabled={testRunActive}
+                  title={testRunActive ? "A test run is already in progress" : undefined}
+                  onClick={() => runScope("all")}
+                />
+                <ScopeMenuItem
+                  testId="test-scope-failed"
+                  icon={AlertTriangle}
+                  label="Test only failed"
+                  desc={
+                    failedCount === 0
+                      ? "No failures recorded yet"
+                      : `Only the ${failedCount} model${failedCount === 1 ? "" : "s"} whose last test failed`
+                  }
+                  disabled={testRunActive || failedCount === 0}
+                  title={
+                    testRunActive
+                      ? "A test run is already in progress"
+                      : failedCount === 0
+                        ? "No failed models yet — run Test all first"
+                        : undefined
+                  }
+                  onClick={() => runScope("failed")}
+                />
+                <ScopeMenuItem
+                  testId="test-scope-working"
+                  icon={Check}
+                  label="Test only working"
+                  desc={
+                    workingCount === 0
+                      ? "No passes recorded yet"
+                      : `Only the ${workingCount} model${workingCount === 1 ? "" : "s"} whose last test passed`
+                  }
+                  disabled={testRunActive || workingCount === 0}
+                  title={
+                    testRunActive
+                      ? "A test run is already in progress"
+                      : workingCount === 0
+                        ? "No working models yet — run Test all first"
+                        : undefined
+                  }
+                  onClick={() => runScope("working")}
+                />
+              </div>
             )}
-            {testAll === null
-              ? "Test all"
-              : testAll.done < testAll.total
-                ? `Testing ${testAll.done}/${testAll.total}…`
-                : testAll.failed > 0
-                  ? `${testAll.failed} of ${testAll.total} failed`
-                  : `All ${testAll.total} passed`}
-          </button>
+          </div>
         ) : null}
         <span className="flex-1" />
         {/* ROUND-50 (R50-d): "Add models" opens the catalog picker dialog
@@ -2548,7 +2932,12 @@ function ModelListSection({
                     }
                   : undefined
               }
-              testAllSeq={testAll?.seq}
+              // R94-C: the scoped pulse — only IN-SCOPE cards receive the new
+              // seq (the others keep undefined: their effect early-returns, so
+              // a scope run never re-tests an out-of-scope model).
+              testAllSeq={
+                testAll !== null && inTestScope(m, testAll.scope) ? testAll.seq : undefined
+              }
               onTestAllResult={onTestAllResult}
             />
           ))}

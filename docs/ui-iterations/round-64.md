@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-90 -->
+<!-- last-reviewed: 2026-09-12 round-94 -->
 # Round 64 — The capability round: computer use actually sees the desktop + the always-on-top STOP bar + the chat/polish backlog
 
 **Date:** 2026-09-02 · **Branch:** `main` · **Version:** 0.64.0 · **Owner directive (verbatim intent):** "the computer use skill was not functioning as it was supposed to be. It was supposed to grant the agent full access to my computer, like it could see what is on my screen currently, interact with it, click buttons… know the buttons which are present… [the floating window] needs to be very minimal. It needs to be clean. It needs to be beautiful. It will be shown at the top of each and every single one of the screens… The floating one will automatically show up as soon as the agent starts to use the computer skill… There is actually no need to show the computer use in the right sidebar menu at all."

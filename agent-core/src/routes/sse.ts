@@ -394,6 +394,16 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
           });
           // R78: the queue check — continue the same stream when
           // messages are waiting (and the cap is not reached).
+          // ROUND-94 (R94-D1): NO double-consumption race with the new
+          // mid-turn STEP-BOUNDARY injection — both consumers claim through
+          // the SAME storage pair (listUndeliveredQueuedMessages →
+          // deleteQueuedMessage, whose type-guarded WHERE clause is the
+          // atomic claim; better-sqlite3 is synchronous on the single Node
+          // thread, so a list-then-delete can never interleave). A message
+          // consumed mid-turn is already DELETED here, so this loop simply
+          // finds an empty queue and closes cleanly; only what the
+          // boundaries could not reach (queued during the final tail /
+          // after the SDK call returned) still arrives here.
           const queued = listUndeliveredQueuedMessages(db, id);
           if (queued.length > 0 && continuations < MAX_QUEUE_CONTINUATIONS) {
             continuations += 1;

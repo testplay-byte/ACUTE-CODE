@@ -13,7 +13,7 @@
 # rich, beautiful terminal UI (panels, spinners, progress, tables). It:
 #
 #   • asks for your GitHub token ONCE on first run (saved in your USER
-#     HOME at ~/.acute/github.pat — it downloads the private repo; R87: the
+#     HOME at ~/.acute/github.pat — it downloads the repo; R87: the
 #     old credentials.txt file is GONE and provider API keys are saved IN
 #     THE APP, Settings → Models & Providers; R90-B1: the token moved out
 #     of the kit folder so the app's update check finds it)
@@ -82,6 +82,22 @@
 # (_pick_latest_release: pure, unit-tested in launcher/tests/) — drafts
 # stay first-class (the owner's PAT sees them by design), and the
 # version-truth panel names the tag it picked. Nothing else changed.
+#
+# ROUND-94-A (R94-A) — the public-migration update round (owner: the update
+# died with "fatal: Not possible to fast-forward, aborting" after the repo
+# went PUBLIC — the v0.91.0 migration REWROTE the history, so every
+# pre-existing clone diverged from remote main):
+#   • the repository being PUBLIC is the intended state now — the old
+#     "GitHub reports this repository as PUBLIC" warning is GONE (a plain
+#     note instead); all "private repo" help/error texts neutralized (the
+#     PAT is still used — it only raises rate limits and sees drafts);
+#   • repo_state also counts "ahead" (FETCH_HEAD..HEAD); clone_or_update
+#     REALIGNS a diverged checkout with `git reset --hard FETCH_HEAD`
+#     (clean-tree-guarded, nothing outside ACUTE-CODE/ touched) instead of
+#     the fast-forward pull that could never succeed;
+#   • an update failure NEVER dead-ends a machine with an existing build —
+#     warn + boot the installed version, retry next run. Only a fresh-clone
+#     failure (no local copy at all) still hard-fails.
 
 import hashlib
 import json
@@ -427,14 +443,14 @@ def probe(cmd, timeout=20):
 # ─────────────────────────────────────────────────────────────────────────────
 # GitHub access token (R87: credentials.txt is GONE — provider API keys are
 # saved IN THE APP, Settings → Models & Providers; the launcher's only
-# credential is the GitHub token that downloads the private repo itself)
+# credential is the GitHub token that downloads the repository itself)
 # ─────────────────────────────────────────────────────────────────────────────
 
 SETUP_INSTRUCTIONS = """\
 FIRST-TIME SETUP — 3 steps, about 2 minutes:
 
   1.  Create a folder anywhere (e.g.  C:\\ACUTE  ) — done, you are here.
-  2.  Put exactly TWO files in it (from the private GitHub repo,
+  2.  Put exactly TWO files in it (from the GitHub repo,
       folder  launcher/  → click each file → Raw → right-click → Save as):
         • ACUTE.bat            (the file you double-click)
         • acute_launcher.py    (the program doing all the work)
@@ -480,7 +496,7 @@ def _no_interactive_github_pat():
 
 def resolve_github_pat():
     """The ONE credential the launcher still needs: the GitHub token that
-    downloads the private repo. R87 (credentials.txt removed): resolved from
+    downloads the repository. R87 (credentials.txt removed): resolved from
     (1) the ACUTE_GITHUB_PAT / GITHUB_PAT environment variable, (2) the
     locally saved  ~/.acute/github.pat  in the USER HOME (R90-B1: moved out
     of the kit folder — the app's update check reads exactly this path, and
@@ -542,8 +558,8 @@ def resolve_github_pat():
         "The launcher needs your GitHub token ONCE to download the app.\n"
         "It is saved on this PC only (never uploaded, never logged).\n"
         "Get one: github.com → Settings → Developer settings →\n"
-        "Personal access tokens → Generate new token (read access to the\n"
-        "private repo testplay-byte/ACUTE-CODE).",
+        "Personal access tokens → Generate new token (read access to this\n"
+        "repository, testplay-byte/ACUTE-CODE).",
         title="GitHub token",
     )
     try:
@@ -565,7 +581,7 @@ def resolve_github_pat():
             "How to fix (2 minutes):\n"
             "  1. Go to github.com → Settings → Developer settings →\n"
             "     Personal access tokens → Generate new token\n"
-            "  2. Give it read access to the private repo testplay-byte/ACUTE-CODE\n"
+            "  2. Give it read access to this repository (testplay-byte/ACUTE-CODE)\n"
             "  3. Run the launcher again and paste the new token",
         )
 
@@ -621,9 +637,14 @@ def validate_github_access(pat):
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = _json.loads(resp.read().decode("utf-8", "replace") or "{}")
-        if body.get("private") is False:
-            warn("GitHub reports this repository as PUBLIC — please flag this to the owner (closed-source repo)")
-        ok(f"token accepted  ·  repository visible ({'private' if body.get('private') else 'public'})")
+        # R94-A: the repository is PUBLIC by owner decision (the v0.91.0
+        # public migration) — "public" is the intended, healthy state, not
+        # an anomaly to flag. The PAT stays valid: it only raises GitHub's
+        # rate limits (and still sees draft releases).
+        visibility = "private" if body.get("private") else "public"
+        if visibility == "public":
+            note("repository is public — anonymous GitHub access works; the saved token only raises rate limits")
+        ok(f"token accepted  ·  repository visible ({visibility})")
         return True
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
@@ -634,7 +655,7 @@ def validate_github_access(pat):
                 "How to fix (2 minutes):\n"
                 "  1. Go to github.com → Settings → Developer settings →\n"
                 "     Personal access tokens → Generate new token\n"
-                "  2. Give it read access to the private repo testplay-byte/ACUTE-CODE\n"
+                "  2. Give it read access to this repository (testplay-byte/ACUTE-CODE)\n"
                 f"  3. Delete {PAT_PATH} (or set ACUTE_GITHUB_PAT), then run the\n"
                 "     launcher again and paste the new token when asked",
             )
@@ -642,7 +663,7 @@ def validate_github_access(pat):
             fail(
                 "repository not visible to this token",
                 "The token itself is valid, but GitHub hides testplay-byte/ACUTE-CODE from it.\n"
-                "It needs read access to that private repository\n"
+                "It needs read access to this repository\n"
                 "(or the repository owner/name changed — check with the owner).",
             )
         fail(f"GitHub answered HTTP {exc.code}", f"While verifying the token: {exc}")
@@ -719,7 +740,7 @@ def explain_git_failure(proc, cmd_display=""):
             "Diagnosis: GitHub rejected the download — almost always the token.",
             "Fix: delete ~/.acute/github.pat (or set ACUTE_GITHUB_PAT), rerun, and paste",
             "token (github.com → Settings → Developer settings → Personal access",
-            "tokens → it needs read access to the private repo), save, re-run.",
+            "tokens → it needs read access to this repository), save, re-run.",
         ]
     elif ("could not resolve host" in low or "timed out" in low
           or "connection" in low and ("reset" in low or "refused" in low)
@@ -885,10 +906,28 @@ def repo_state(pat, env):
     fetch = run(["git", "fetch", authed_url(pat), "main"],
                 cwd=APP_DIR, env=genv, check=False, timeout=180)
     if fetch.returncode != 0:
-        return {"head": head, "behind": -1, "dirty": dirty}
-    count = run(["git", "rev-list", "--count", "HEAD..FETCH_HEAD"],
+        # R94-A: "ahead" defaults to 0 when GitHub is unreachable —
+        # divergence can only be judged against a FETCH_HEAD we actually got
+        # (and the behind == -1 caller path returns before ever reading it).
+        return {"head": head, "behind": -1, "ahead": 0, "dirty": dirty}
+    behind = run(["git", "rev-list", "--count", "HEAD..FETCH_HEAD"],
+                 cwd=APP_DIR, env=genv, check=False).stdout.strip()
+    # R94-A: "ahead" counts the commits local HEAD carries that FETCH_HEAD
+    # does not. >0 means the histories DIVERGED (e.g. the project rewrote
+    # its history when going public), so `git pull --ff-only` can never
+    # succeed — clone_or_update realigns with a reset instead.
+    ahead = run(["git", "rev-list", "--count", "FETCH_HEAD..HEAD"],
                 cwd=APP_DIR, env=genv, check=False).stdout.strip()
-    return {"head": head, "behind": int(count or 0), "dirty": dirty}
+    return {"head": head, "behind": int(behind or 0), "ahead": int(ahead or 0), "dirty": dirty}
+
+
+def _local_build_available():
+    """R94-A: is there a runnable local build to fall back to when an update
+    fails? True only when the checkout exists AND was already built (the
+    agent-core bundle is there) — a fresh machine with no local copy has
+    nothing to boot, which keeps the hard fail() below; everything else
+    warns and continues with the installed version."""
+    return (APP_DIR / ".git").exists() and (APP_DIR / "agent-core" / "dist" / "main.js").exists()
 
 
 def clone_or_update(pat, env):
@@ -899,8 +938,13 @@ def clone_or_update(pat, env):
                 shutil.rmtree(APP_DIR)
             r = run(["git", "clone", authed_url(pat), str(APP_DIR)],
                     env=git_env(env), timeout=1800, check=False)
-            if r.returncode != 0 or not (APP_DIR / ".git").exists():
-                fail("downloading the ACUTE-CODE repository", explain_git_failure(r))
+            if r is None or r.returncode != 0 or not (APP_DIR / ".git").exists():
+                fail(
+                    "downloading the ACUTE-CODE repository",
+                    explain_git_failure(r) if r is not None else
+                    "command exited with code —\n\n(git produced no output; the clone"
+                    " timed out or could not start)",
+                )
             # Never persist the token: sanitize the stored remote right away.
             run(["git", "remote", "set-url", "origin", GIT_CLEAN_URL],
                 cwd=APP_DIR, env=git_env(env))
@@ -925,13 +969,51 @@ def clone_or_update(pat, env):
             ok(f"already up to date  ·  commit {state['head']}")
             return False
         stop_live_servers("applying update")
-        r = run(["git", "pull", "--ff-only", authed_url(pat), "main"],
-                cwd=APP_DIR, env=git_env(env), timeout=600, check=False)
-        if r.returncode != 0:
-            fail("updating ACUTE-CODE to the latest version", explain_git_failure(r))
+        # R94-A divergence-aware updating:
+        #   ahead == 0 → the local history is an ancestor of main → the plain
+        #                fast-forward pull keeps working;
+        #   ahead  > 0 → the histories DIVERGED (the project rewrote its
+        #                history when going public — every pre-existing
+        #                clone hit "Not possible to fast-forward, aborting"),
+        #                so realign to FETCH_HEAD (the fetch repo_state just
+        #                did) with a hard reset. The dirty-tree guard above
+        #                already proved the tree is clean, so the reset loses
+        #                nothing — and nothing outside ACUTE-CODE/ is touched.
+        realigned = False
+        if state["ahead"] > 0:
+            note("local history diverged from GitHub (the project rewrote its history when going public) — realigning to the published version; nothing outside ACUTE-CODE/ is touched")
+            r = run(["git", "reset", "--hard", "FETCH_HEAD"],
+                    cwd=APP_DIR, env=git_env(env), timeout=600, check=False)
+            realigned = True
+        else:
+            r = run(["git", "pull", "--ff-only", authed_url(pat), "main"],
+                    cwd=APP_DIR, env=git_env(env), timeout=600, check=False)
+        if r is None or r.returncode != 0:
+            # R94-A: an update failure must NEVER dead-end a machine that
+            # already has a working local build — warn with the diagnosis
+            # and keep booting the installed version (the update retries
+            # next run). The hard fail() stays reserved for a fresh clone
+            # with no local copy at all (handled above). Returning False
+            # tells install_and_build "not updated, don't rebuild" — exactly
+            # right for continuing with the existing build.
+            detail = (
+                explain_git_failure(r)
+                if r is not None
+                else "command exited with code —\n\n(git produced no output; the update\ncommand timed out or could not start)\n\n"
+                     "Diagnosis: the update itself failed — the local copy is untouched.\n"
+                     "Fix: check your internet connection (or VPN/proxy) and re-run."
+            )
+            if _local_build_available():
+                warn(redact(detail))
+                note("continuing with the currently installed version — the update will retry next run")
+                return False
+            fail("updating ACUTE-CODE to the latest version", detail)
         new_head = run(["git", "rev-parse", "--short", "HEAD"],
                        cwd=APP_DIR, env=git_env(env)).stdout.strip()
-        ok(f"updated  ·  {state['head']} → {new_head}  ·  {state['behind']} new commit(s)")
+        if realigned:
+            ok(f"updated (realigned)  ·  {state['head']} → {new_head}")
+        else:
+            ok(f"updated  ·  {state['head']} → {new_head}  ·  {state['behind']} new commit(s)")
         return True
 
 
@@ -1632,9 +1714,9 @@ def _desktop_latest_release(pat):
     GitHub's own server-side sha256 of the asset (R63: every download is
     verified against it, so a truncated/corrupt setup.exe can never reach
     the silent installer); info = {"tag", "draft", "created"} feeds the
-    version-truth panel. Authenticated with the owner's PAT (the repo is
-    private AND the CI creates the release as a DRAFT — drafts are only
-    visible to tokens with repo access, which the owner's launcher has).
+    version-truth panel. Authenticated with the owner's PAT (the CI
+    creates the release as a DRAFT — drafts are only visible to tokens
+    with repo access, which the owner's launcher has).
 
     R74: the page is fetched with per_page=100 and the winner is chosen by
     MAX VERSION in _pick_latest_release — GitHub sorts never-published
@@ -1689,9 +1771,10 @@ def _desktop_digest_ok(path, digest):
 def _desktop_download(pat, asset_id, version, digest=""):
     """Stream the installer asset into .acute/downloads/ (progress shown).
 
-    Private-repo assets download through the API endpoint with the PAT; the
-    token is registered in SECRETS_TO_REDACT and never appears in logs or
-    panels. R63: the finished file is VERIFIED against the asset's sha256
+    Release assets download through the API endpoint with the PAT (a DRAFT
+    release's assets are only reachable that way); the token is registered
+    in SECRETS_TO_REDACT and never appears in logs or panels. R63: the
+    finished file is VERIFIED against the asset's sha256
     digest and a mismatch triggers ONE full re-download — a corrupt
     installer can no longer reach the silent install step. Returns the
     local Path or None.
@@ -2153,6 +2236,11 @@ def mode_status(pat, env):
                          + ("  (up to date)" if state["behind"] == 0
                             else f"  ({state['behind']} behind GitHub)" if state["behind"] > 0
                             else "  (GitHub unreachable)"))
+            # R94-A: a diverged checkout (behind>0 AND ahead>0 — e.g. after
+            # the public-migration history rewrite) says so up front: the
+            # next update REALIGNS instead of pulling.
+            if state["behind"] > 0 and state.get("ahead", 0) > 0:
+                lines.append(f"             {state['ahead']} local commit(s) not on GitHub — the next update realigns to the published history")
             lines.append(f"app folder   {'MODIFIED locally' if state['dirty'] else 'clean'}  ·  {APP_DIR}")
             lines.append(f"dev database {'present — agents/sessions/projects persist' if (APP_DIR / '.dev' / 'acute.db').exists() else 'not created yet'}")
     else:
@@ -2418,7 +2506,7 @@ def main():
         mode_status(pat, env)
         return
 
-    with step("Verifying GitHub access (token + private repository)"):
+    with step("Verifying GitHub access (token + repository)"):
         validate_github_access(pat)
 
     # R56: the launch mode resolves AFTER the update pass (below), so the

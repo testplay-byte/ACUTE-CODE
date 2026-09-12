@@ -157,6 +157,14 @@ let revealKeys: Array<{ slot: number; value: string }> = [];
 /** R89-C6: what POST /models/:rowId/test answers (null = the route 404s —
  * most tests never click the model test button). */
 let modelTestAnswer: unknown = null;
+/** R94-C: the per-row FAILURE knob — rows whose ids are in this set answer
+ * ok:false whatever the global modelTestAnswer says (the scope tests need
+ * one model failing while another passes). */
+let modelTestFailIds: Set<string> = new Set();
+/** R94-C: when set, PATCH /models/:id responses wait on this gate — the
+ * optimistic-update test flips a row while the network leg is still in
+ * flight (release() proves the flip never waited for it). */
+let modelPatchGate: Promise<void> | null = null;
 // R93-A6: the knob that simulates the backend rejecting the upsert.
 let modelAddFails = false;
 /** R59-C: when true, the reveal route answers HTTP 500 (the error path). */
@@ -327,6 +335,11 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   // R89-C6: POST /models/:rowId/test — the model card's test button.
   const modelTestMatch = url.match(/\/api\/v1\/models\/([^/]+)\/test$/);
   if (modelTestMatch !== null && method === "POST") {
+    // R94-C: the per-row failure knob first (a scoped-run fixture needs one
+    // row failing while the global answer passes the others).
+    if (modelTestFailIds.has(modelTestMatch[1]!)) {
+      return jsonResponse({ ok: false, reason: "the upstream refused (test fixture)" });
+    }
     if (modelTestAnswer === null) {
       return {
         status: 404,
@@ -438,6 +451,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   // ROUND-50 (R50-d): per-model PATCH (the configuration dialog).
   const patchMatch = url.match(/\/api\/v1\/models\/(mdl_[^/]+)$/);
   if (patchMatch !== null && method === "PATCH") {
+    // R94-C: the optimistic-update gate — hold the response until the test
+    // releases it (null = answer immediately, the normal path).
+    if (modelPatchGate !== null) await modelPatchGate;
     const row = configured.find((m) => m.id === patchMatch[1]);
     if (row === undefined) {
       return {
@@ -491,6 +507,8 @@ beforeEach(() => {
   revealKeys = [];
   revealFails = false;
   modelTestAnswer = null;
+  modelTestFailIds = new Set();
+  modelPatchGate = null;
   modelAddFails = false;
   providersFail = false;
   modelsConfigFail = false;
@@ -2437,5 +2455,111 @@ describe("Model card + list header — the R93-A7 buttons", () => {
     });
     // The summary lands on the button when every card settles.
     await waitFor(() => expect(button.textContent).toContain("passed"), { timeout: 4000 });
+  });
+
+  // ── R94-C: the Test-scope split button ──────────────────────────────────
+
+  it("R94-C: the scope dropdown offers all three options; 'Test only failed'/'working' are honestly disabled (with the hint) until a run records outcomes; Escape and outside-click close it", async () => {
+    renderWithProviders(<ModelsProvidersTab />);
+    await screen.findByTestId("test-all-models");
+
+    // Open the scope menu.
+    fireEvent.click(screen.getByTestId("test-scope-toggle"));
+    const all = screen.getByTestId("test-scope-all");
+    const failed = screen.getByTestId("test-scope-failed");
+    const working = screen.getByTestId("test-scope-working");
+    expect(all.textContent).toContain("Test all");
+    expect(failed.textContent).toContain("Test only failed");
+    expect(working.textContent).toContain("Test only working");
+    // Nothing has been tested yet — the scoped entries are DISABLED with the
+    // honest tooltip, "Test all" stays available.
+    expect((all as HTMLButtonElement).disabled).toBe(false);
+    expect((failed as HTMLButtonElement).disabled).toBe(true);
+    expect(failed.getAttribute("title")).toBe("No failed models yet — run Test all first");
+    expect((working as HTMLButtonElement).disabled).toBe(true);
+    expect(working.getAttribute("title")).toBe("No working models yet — run Test all first");
+
+    // Outside mousedown closes (the menu rides the document listener).
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByTestId("test-scope-all")).toBeNull();
+
+    // Reopen — Escape closes too (keyboard access).
+    fireEvent.click(screen.getByTestId("test-scope-toggle"));
+    expect(screen.getByTestId("test-scope-all")).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("test-scope-all")).toBeNull();
+  });
+
+  it("R94-C: after a Test all where ONE model fails, 'Test only failed' re-runs ONLY that model (the passing one is not probed again)", async () => {
+    // The first model's probe fails; the second passes.
+    modelTestFailIds = new Set(["mdl_first"]);
+    renderWithProviders(<ModelsProvidersTab />);
+    const button = await screen.findByTestId("test-all-models");
+    fireEvent.click(button);
+    await waitFor(() => expect(button.textContent).toContain("1 of 2 failed"), { timeout: 4000 });
+
+    // The scoped entry is enabled now (exactly one failure recorded).
+    fireEvent.click(screen.getByTestId("test-scope-toggle"));
+    const failed = screen.getByTestId("test-scope-failed");
+    expect((failed as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(failed);
+
+    // ONLY the failed model probes again — the passing one keeps its single
+    // probe from the Test-all run.
+    await waitFor(() => {
+      const firstTests = calls.filter(
+        (c) => c.method === "POST" && /\/api\/v1\/models\/mdl_first\/test$/.test(c.url),
+      );
+      expect(firstTests.length).toBe(2);
+    });
+    const secondTests = calls.filter(
+      (c) => c.method === "POST" && /\/api\/v1\/models\/mdl_second\/test$/.test(c.url),
+    );
+    expect(secondTests.length).toBe(1);
+    // The menu closed and the summary reflects the SCOPE (the still-failing
+    // retest of the one failed model).
+    expect(screen.queryByTestId("test-scope-failed")).toBeNull();
+    await waitFor(() => expect(button.textContent).toContain("1 of 1 still failing"), { timeout: 4000 });
+  });
+
+  it("R94-C: the hide/show toggle flips the row OPTIMISTICALLY — the cache is patched while the PATCH is still in flight, and the list NEVER refetches (the scroll-reset root cause)", async () => {
+    renderWithProviders(<ModelsProvidersTab />);
+    const toggles = await screen.findAllByTestId("model-toggle-hidden");
+    expect(toggles).toHaveLength(2);
+
+    // Freeze the PATCH leg: the fetch will not settle until release().
+    let release!: () => void;
+    modelPatchGate = new Promise<void>((res) => {
+      release = res;
+    });
+    const configGets = () =>
+      calls.filter((c) => c.method === "GET" && c.url.endsWith("/models-config")).length;
+    const configGetsBefore = configGets();
+
+    fireEvent.click(toggles[0]!);
+
+    // The row flips INSTANTLY while the network leg is still pending —
+    // the eye's aria-label inverts and the HIDDEN badge appears.
+    await waitFor(() => {
+      const firstToggle = screen.getAllByTestId("model-toggle-hidden")[0]!;
+      expect(firstToggle.getAttribute("aria-label")).toContain("Show model GLM 5.2 in the chat picker");
+    });
+    expect(screen.getByTitle("Hidden from the chat model picker (still visible here)")).toBeTruthy();
+    // …and the list query was NEVER refetched (no models-config GET after the
+    // click — the pre-R94 invalidation was the scroll reset).
+    expect(configGets()).toBe(configGetsBefore);
+    // The PATCH itself is on the wire exactly once, still unresolved.
+    const patches = calls.filter((c) => c.method === "PATCH" && c.url.endsWith("/models/mdl_first"));
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.body).toMatchObject({ hidden: true });
+
+    // Release the network: the server row merges in (onSuccess), the row
+    // STAYS hidden — the optimistic flip is never rolled back — and there
+    // is STILL no refetch of the settings list. (The wait lets the resolved
+    // PATCH flow through the mutation's onSuccess before the assertions.)
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getAllByTestId("model-toggle-hidden")[0]!.getAttribute("aria-label")).toContain("Show model GLM 5.2 in the chat picker");
+    expect(configGets()).toBe(configGetsBefore);
   });
 });

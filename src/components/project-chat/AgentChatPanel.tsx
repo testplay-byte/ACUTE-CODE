@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Braces,
   Check,
+  ChevronDown,
   Clock,
   Copy,
   File,
@@ -1496,6 +1497,24 @@ const MessageRenderer = forwardRef<
  * state survives panel remounts (background sessions). The interface is
  * re-exported from there. */
 
+/** R94-D2: the stick-to-bottom NEAR-BOTTOM threshold — a viewport within
+ * this many pixels of the transcript bottom counts as PINNED. Generous
+ * enough that a growing last element doesn't instantly detach the follower,
+ * strict enough that reading mid-history does. */
+const STICK_TO_BOTTOM_PX = 96;
+
+/** R94-D2: the keys that scroll the transcript when focus sits inside it
+ * (PageUp/Home/ArrowUp leave the bottom; the down-keys only end any in-
+ * flight programmatic scroll and let the resulting scroll events decide). */
+const SCROLL_KEYS = new Set([
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+  "ArrowUp",
+  "ArrowDown",
+]);
+
 export function AgentChatPanel({
   projectId,
   project,
@@ -1830,6 +1849,148 @@ export function AgentChatPanel({
 
   useScrollFade(scrollRef);
 
+  // ── R94-D2 (owner: "While the agent is doing its work, I should be able
+  //    to scroll the chat up and down without it automatically re-scrolling
+  //    to the very bottom. It should only auto-scroll if I have moved to
+  //    the very bottom."): STICK-TO-BOTTOM. The panel tracks whether the user
+  //    is PINNED at (or near — STICK_TO_BOTTOM_PX) the bottom of the
+  //    transcript; the auto-scroll effect below only follows while pinned,
+  //    and a floating "Jump to latest" pill (above the composer) offers the
+  //    way back down.
+  //
+  //    DETECTION (why it looks like this): a naive "is near bottom?" check
+  //    on every scroll event is flipped by the intermediate positions of
+  //    the panel's OWN programmatic SMOOTH scrolls — scrollTo({behavior:
+  //    "smooth"}) emits a stream of scroll events on the way down, which
+  //    would detach the user mid-stream without them touching anything. So:
+  //      • a scroll that lands within STICK_TO_BOTTOM_PX of the bottom PINS
+  //        (however it got there — our follow landing, or the user arriving);
+  //      • while a programmatic scroll is in flight, intermediate positions
+  //        are IGNORED — except one moving UP: our follows only ever target
+  //        the maximum scrollTop and never move away from it, so an upward
+  //        move during a flight is the user fighting the auto-scroll →
+  //        detach immediately (a content-shrink clamp lands AT the bottom,
+  //        caught by the pin rule first);
+  //      • explicit user gestures detach outright and end the flight: wheel
+  //        up, keyboard PageUp/Home/ArrowUp on the transcript; touchstart
+  //        hands control to the scroll events that follow;
+  //      • `scrollend` (Chromium 114+/Safari 17.4+/Firefox 109+; a silent
+  //        no-op listener elsewhere) ends the flight when the browser
+  //        settles, so a follow that landed short of a newly-grown bottom
+  //        can never leave the flight stuck armed;
+  //      • container-box RESIZE (ResizeObserver — sidebar toggles and window
+  //        resizes alike) re-evaluates: a pinned view KEEPS FOLLOWING (the
+  //        layout moved the bottom); a detached one re-pins only if the
+  //        resize actually brought it near the bottom.
+  //    jsdom/happy-dom note: no layout exists there (scrollHeight and
+  //    clientHeight are 0), so every position reads as "at the bottom" and
+  //    pinned starts true — the old always-follow behavior for suites that
+  //    never dispatch scroll events.
+  const [pinned, setPinned] = useState(true);
+  // "new content landed at the bottom while the user reads higher up" — arms
+  // the jump pill after a turn ends and the user never came back down.
+  const [missedContent, setMissedContent] = useState(false);
+  const pinnedRef = useRef(true);
+  const programmaticScrollRef = useRef(false);
+  const lastScrollTopRef = useRef(0);
+
+  const applyPinned = (next: boolean): void => {
+    pinnedRef.current = next;
+    setPinned((prev) => (prev === next ? prev : next));
+    if (next) setMissedContent(false);
+  };
+
+  /** The one scroll primitive: marks the flight, then scrolls to the current
+   * bottom. Every auto-follow, send re-pin, and pill jump goes through it. */
+  const scrollToBottom = (behavior: ScrollBehavior = "smooth"): void => {
+    const el = scrollRef.current;
+    if (el === null) return;
+    programmaticScrollRef.current = true;
+    lastScrollTopRef.current = el.scrollTop;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  };
+
+  /** Re-pin + follow in one step — the user's own send, a session switch,
+   *  and the jump pill all call this (they ASK for the bottom). */
+  const pinToBottom = (): void => {
+    applyPinned(true);
+    scrollToBottom();
+  };
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el === null) return;
+    const onScroll = (): void => {
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distance < STICK_TO_BOTTOM_PX) {
+        // Arrived at (or near) the bottom — our follow landing or the user.
+        programmaticScrollRef.current = false;
+        applyPinned(true);
+      } else if (programmaticScrollRef.current) {
+        // Our own smooth scroll on the way down: only an UPWARD move is the
+        // user fighting it (follows never move away from the bottom).
+        if (el.scrollTop < lastScrollTopRef.current) {
+          programmaticScrollRef.current = false;
+          applyPinned(false);
+        }
+      } else {
+        applyPinned(false);
+      }
+      lastScrollTopRef.current = el.scrollTop;
+    };
+    const onWheel = (e: WheelEvent): void => {
+      if (e.deltaY >= 0) return; // toward the bottom is fine (arrival pins)
+      programmaticScrollRef.current = false;
+      applyPinned(false);
+    };
+    const onTouchStart = (): void => {
+      // The user grabs the transcript: the scroll events that follow decide.
+      programmaticScrollRef.current = false;
+    };
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (!SCROLL_KEYS.has(e.key)) return;
+      programmaticScrollRef.current = false;
+      if (e.key === "PageUp" || e.key === "Home" || e.key === "ArrowUp") {
+        applyPinned(false);
+      }
+    };
+    const onScrollEnd = (): void => {
+      // The browser settled the scroll (ours or the user's): the flight is
+      // over — from here every scroll event is user/layout movement.
+      programmaticScrollRef.current = false;
+    };
+    const onLayoutResize = (): void => {
+      if (pinnedRef.current) {
+        scrollToBottom("auto"); // keep following: the layout moved the bottom
+      } else if (el.scrollHeight - el.scrollTop - el.clientHeight < STICK_TO_BOTTOM_PX) {
+        applyPinned(true); // the resize brought the view near the bottom
+      }
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("keydown", onKeyDown);
+    el.addEventListener("scrollend", onScrollEnd);
+    // R94-D2: RESIZE — observed on the CONTAINER (not window) so sidebar
+    // toggles and column resizes re-evaluate too, not just window resizes
+    // (the repo's GutterScrollbar/PopoutApp convention). Content growth
+    // never fires this: the scroller is absolute inset-0, so its box only
+    // changes when the LAYOUT around it does.
+    const resizeObserver = new ResizeObserver(() => onLayoutResize());
+    resizeObserver.observe(el);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("keydown", onKeyDown);
+      el.removeEventListener("scrollend", onScrollEnd);
+      resizeObserver.disconnect();
+    };
+    // The listeners only touch refs + state setters (stable across renders)
+    // and the scroll container lives for the panel's lifetime — mount-once
+    // is the contract.
+  }, []);
+
   // ROUND-38 (owner: sessions mixing across projects): declare this project
   // active so the per-project scoped state (selectedFileId/Agent/folders)
   // swaps in — opening a file in project A never re-opens it in B.
@@ -1854,6 +2015,11 @@ export function AgentChatPanel({
     setLastSent(null);
     setInput("");
     prevSessionIdRef.current = activeSessionId;
+    // R94-D2: a session switch starts the new view PINNED at the bottom
+    // (pre-R94 the unconditional effect scrolled on the items swap; the
+    // stick-to-bottom gate must not inherit the previous session's
+    // detached state into the fresh one).
+    pinToBottom();
   }, [activeSessionId]);
 
   // ROUND-38/39 (owner: running session shows a pixelated animation in the
@@ -1884,9 +2050,21 @@ export function AgentChatPanel({
   // R78: the queue lengths join the auto-scroll deps — a new chip / a
   // delivered bubble is new content at the bottom, exactly like a working
   // entry (the owner should see the chip land without scrolling).
+  // R94-D2: STICK-TO-BOTTOM — the effect only follows while the user is
+  // PINNED (at/near the bottom). While the user reads higher up, new
+  // content must NOT move their viewport: the run is skipped and the
+  // jump-to-latest pill is armed instead. The pinned contracts the pre-R94
+  // effect served unconditionally are preserved by RE-PINNING at their
+  // sources — the user's own send (runTurn → pinToBottom, which also owns
+  // the pendingUser optimistic echo) and session switches (the session
+  // effect) — and re-pinning is natural: scroll back to the bottom and the
+  // next tick follows again.
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    if (!pinnedRef.current) {
+      setMissedContent(true);
+      return;
+    }
+    scrollToBottom();
   }, [
     items.length,
     busy,
@@ -1900,6 +2078,11 @@ export function AgentChatPanel({
   const runTurn = async (content: string, composerAttachments: ComposerAttachment[] = []) => {
     const text = content.trim();
     if (!text || !agent) return;
+    // ── R94-D2: the user's own send ALWAYS re-pins + follows — their message
+    // is the new bottom (the optimistic echo renders there a beat later and
+    // the pinned effect takes over). Retry / Send-now route through runTurn
+    // too, so every user-initiated turn gets the same treatment. ──
+    pinToBottom();
     // ── ROUND-78 (R78-D, owner: "工作中发送消息（排队）" — send while the
     // agent works): a LIVE stream is running on this session → QUEUE the
     // message instead of refusing it. The POST validates server-side and
@@ -2892,6 +3075,39 @@ export function AgentChatPanel({
             ) : null}
           </div>
         </div>
+
+        {/* ── R94-D2 (owner: "It should only auto-scroll if I have moved to
+            the very bottom"): the JUMP-TO-LATEST pill — floats near the
+            bottom of the transcript area (above the composer; the transcript
+            scrolls UNDER it — same frosted-pill language as the TodoFloat
+            widget, z-20 like every float in this wrapper), only while the
+            user is DETACHED and there is something to come back to: a turn
+            is running, or content landed below since they left the bottom.
+            Clicking re-pins + follows; arriving at the bottom hides it.
+            The mousedown preventDefault keeps the focus wherever it was
+            (usually the composer — the pill must never steal focus or
+            interrupt typing). ── */}
+        {!pinned && (busy || missedContent) ? (
+          <button
+            type="button"
+            data-testid="jump-to-latest"
+            aria-label="Jump to the latest message"
+            title="Jump to the latest message"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => pinToBottom()}
+            className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-full border-[1.5px] pl-3 pr-2 py-1.5 shadow-md transition-all hover:shadow-lg"
+            style={{
+              borderColor: withAlpha(styles.accent, 0.28),
+              background: styles.isDark ? "rgba(44,44,46,0.72)" : "rgba(255,255,255,0.72)",
+              backdropFilter: "blur(12px) saturate(1.15)",
+              WebkitBackdropFilter: "blur(12px) saturate(1.15)",
+              color: styles.text,
+            }}
+          >
+            <span className="text-[11px] font-semibold">Jump to latest</span>
+            <ChevronDown size={12} style={{ color: styles.accent }} aria-hidden />
+          </button>
+        ) : null}
       </div>
 
       {/* Error banner (ChatView pattern): keeps the failed text for Retry.

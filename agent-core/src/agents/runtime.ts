@@ -26,8 +26,12 @@ import {
   // session's uncollected addressed delegations (cheap guard first; the
   // taskHints/modeHints ephemeral pattern, one tier over).
   buildBackgroundTasksReminder,
+  // ROUND-94 (R94-D1): the mid-turn injection's CLAIM — deleteQueuedMessage
+  // is the same type-guarded consume the route's post-turn continuation
+  // loop uses (never a double-take between the two consumers).
   deliverAllQueuedMessages,
   deliverQueuedMessage,
+  deleteQueuedMessage,
   getSession,
   lastSessionSeq,
   latestTodoSnapshot,
@@ -39,11 +43,27 @@ import {
   touchSession,
   updateSessionActiveMode,
 } from "../storage/sessions.js";
-import type { ChatFn, ChatStepSnapshot, ChatTurnMessage, ChatTurnOutput, StreamChatFn } from "./chat.js";
+import type {
+  ChatFn,
+  ChatStepSnapshot,
+  ChatTurnMessage,
+  ChatTurnOutput,
+  QueuedStepMessage,
+  StreamChatFn,
+} from "./chat.js";
 // ROUND-70 (R70-b, D3): the sticky-result tool set (read_skill /
 // memory_recall — instructions and durable facts survive replay stubbing).
-import { isStickyResultTool } from "./chat.js";
+// ROUND-94 (R94-D1): renderAttachments moved INTO chat.ts (the mid-turn
+// queued-message injection builds its model-facing user message there);
+// this module — assembleHistory — imports it back (see chat.ts's section
+// header for the move's rationale).
+import { isStickyResultTool, renderAttachments } from "./chat.js";
 import { buildProjectSystemPrompt, readCustomRules, type PromptEnvironment } from "./prompts.js";
+// ROUND-94 (R94-G wiring): the vision-capability gate for the prompt's
+// CAPABILITIES section — the SAME sessionHasVisionPath the screenshot tools
+// refuse through (tools/plugins/computer-use.ts). No cycle: the plugin
+// chain never imports this module.
+import { sessionHasVisionPath } from "../tools/plugins/computer-use.js";
 // ROUND-72 (R72-a): the deterministic task→skill matcher — scores this
 // turn's user message against the effective skills' descriptions so the
 // prompt's SKILLS section can carry an advisory "Task signal" line.
@@ -286,6 +306,17 @@ const TOOL_INTENT_NUDGE =
  * used by meta.compaction / meta.context_limit — SSE-only, never persisted,
  * never model-facing). */
 const OVERFLOW_RECOVERY_NOTE = "[context overflow → auto-compacted conversation → retrying]";
+
+/** ROUND-94 (R94-D1, Part 2b — the owner's v0.91.0 field report: mid-task the
+ * generation died with "Generation failed: unknown object", classified
+ * `unknown` → fail-fast → an instant dead end): the wait before the ONE
+ * unknown-class-with-PROGRESS retry. 5 s sits inside the short 3–7 s window
+ * the fix calls for and is deliberately NOT a new rung of lib/retry.ts's
+ * ladder (that module stays read-only this round; the ask was a single
+ * bounded extra attempt, not a new schedule shape) — waitForRetry still
+ * provides the abort-aware wait so a user Stop cuts it short, and the
+ * meta.retry frame keeps it visible on the stream while it runs. */
+const UNKNOWN_PROGRESS_RETRY_MS = 5_000;
 
 /** True when a zero-tool reply text mentions a real tool name or delegation
  * words — the evidence threshold for spending the one nudge. */
@@ -588,48 +619,6 @@ function asChatMessage(
     content: payload.content,
     ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
   };
-}
-
-/**
- * ROUND-50 (R50-c1): render a message.user event's attachments into the
- * model-facing content AFTER the user text. The RAW event payload stays
- * clean ({role, content, attachments}) — this block exists only in the
- * model-facing history, so the display never sees it. Binary/unreadable
- * attachments (text: null) render a one-line placeholder instead.
- *
- * ROUND-67 (R67-A, the owner's #1 v0.66.0 complaint: "the agent said the
- * image doesn't exist"): attachments persisted through POST
- * /attachments/upload now carry a path, and the model is TAUGHT what to do
- * with it instead of guessing (the old render showed a.name only, so the
- * model invented paths and analyze_image ENOENT'd):
- *   - image extension + path + no text → an explicit `attached image` block
- *     naming the path AND the exact analyze_image call to make;
- *   - anything else with a path → the existing render plus a trailing
- *     "(file saved at …)" line;
- *   - path-less attachments (inline-dropped text, legacy rows) render
- *     EXACTLY as before.
- */
-const ATTACHED_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
-
-function renderAttachments(content: string, attachments: readonly MessageAttachment[]): string {
-  let out = content;
-  for (const a of attachments) {
-    // ROUND-67 (R67-A): the same extension set as vision.ts's IMAGE_EXT_RE
-    // (kept local — the plugin must stay import-free from the history
-    // renderer). Check both the display name and the path; the sanitized
-    // upload name keeps its extension either way.
-    const path = typeof a.path === "string" && a.path !== "" ? a.path : null;
-    const text = typeof a.text === "string" && a.text !== "" ? a.text : null;
-    const isImage = path !== null && (ATTACHED_IMAGE_EXT_RE.test(a.name) || ATTACHED_IMAGE_EXT_RE.test(path));
-    if (isImage && text === null) {
-      out += `\n\n--- attached image: ${a.name} (saved in the project at ${path}) ---\nUse analyze_image with path "${path}" to view it.`;
-    } else if (text !== null) {
-      out += `\n\n--- attached file: ${a.name} ---\n${text}\n--- end of ${a.name} ---${path !== null ? `\n(file saved at ${path})` : ""}`;
-    } else {
-      out += `\n\n--- attached file: ${a.name} (no readable text) ---${path !== null ? `\n(file saved at ${path})` : ""}`;
-    }
-  }
-  return out;
 }
 
 /**
@@ -1524,6 +1513,16 @@ async function prepareTurn(
           const cu = getComputerUseSettings(db);
           return { enabled: cu.enabled, posture: cu.permission };
         })(),
+        // ROUND-94 (R94-G wiring): the session's vision path for the
+        // CAPABILITIES section (no-vision → the one-line "never call
+        // screenshot tools" instruction; vision → the converse MAY line).
+        // The EFFECTIVE pair (the send's override when present — the same
+        // pair the turn runs with) — a queued continuation turn's override
+        // re-resolves per turn here too.
+        hasVisionPath: sessionHasVisionPath(db, {
+          providerId: effectiveProviderId,
+          modelId: effectiveModelId,
+        }),
         // ROUND-65 (R65) → ROUND-66 (R66, C1): the debug-mode switch
         // (Settings → Advanced). The R65 prompt-side self-report is GONE —
         // the agent's prompt never changes. The flag is threaded for the
@@ -1594,7 +1593,11 @@ export async function runSingleAgentTurn(
   const retrySchedule = resolveRetrySchedule(retrySettings);
   /** R78: is auto-retry ON for this transient class? Non-transient classes
    * are already excluded by isTransientApiFailure — false here just means
-   * "fail fast" for a class the owner switched off. */
+   * "fail fast" for a class the owner switched off.
+   * ROUND-94 (R94-D1): malformed_response defaults ON — no per-class settings
+   * switch exists for it (adding one needs storage + route + UI work outside
+   * this round's file ownership), and the owner's field report demands the
+   * class never dead-ends ("Generation failed: unknown object"). */
   const retryClassEnabled = (cls: ProviderErrorClass): boolean =>
     cls === "rate_limit"
       ? retrySettings.autoRetryRateLimit
@@ -1602,7 +1605,9 @@ export async function runSingleAgentTurn(
         ? retrySettings.autoRetryTimeout
         : cls === "network"
           ? retrySettings.autoRetryNetwork
-          : false;
+          : cls === "malformed_response"
+            ? true
+            : false;
   // ROUND-48 (R48-e1): forward emit AND signal into the turn prep so the
   // child's toolDeps carries both — interactiveApprovals becomes true for
   // emitted children (the owner's "sub-agents can ask for permission") and
@@ -1727,6 +1732,19 @@ export async function runSingleAgentTurn(
   // → 6 total attempts at the R75 defaults, R80-customizable).
   let providerRetries = 0;
   let forceCompaction = false;
+  // ROUND-94 (R94-D1, Part 2b — the owner's v0.91.0 field report: the
+  // generation died mid-task with "Generation failed: unknown object", an
+  // error no pattern predicted, and the turn was an INSTANT dead end): the
+  // ONE unknown-class-with-PROGRESS retry on the SYNC path (sub-agent
+  // children die the same way the main turn does). `unknown` stays
+  // fail-fast by default (the R75 contract — no evidence waiting helps an
+  // unclassified failure) EXCEPT when the dying turn already did real work
+  // (persisted tool results / an assistant reply): one bounded extra
+  // attempt after a short delay, then the existing honest terminal path.
+  // Counted separately from providerRetries so the ladder's rung indexing
+  // is untouched, but it rides the same `attempts` arithmetic so the error
+  // card never under-reports what ran.
+  let unknownProgressRetries = 0;
   // ROUND-48 (R48-e1, stretch): count of steps the adapter reported LIVE via
   // onStepFinish. When > 0 the tool/text events for THIS chat() call were
   // already emitted as they happened — the post-call batch emission is
@@ -2017,11 +2035,81 @@ export async function runSingleAgentTurn(
         // honest ABORTED outcome.
         continue;
       }
+      // ── ROUND-94 (R94-D1, Part 2b): the ONE unknown-with-PROGRESS retry.
+      // The ladder above only serves the transient classes; `unknown` stays
+      // fail-fast by R75's contract — EXCEPT when the dying turn already did
+      // real work (a previous iteration's persisted tool results / assistant
+      // reply; lastAssistantEvent non-null is exactly that signal on the
+      // sync path — every completed iteration ends with its assistant
+      // append). The owner's dead end was precisely this shape: sub-agents
+      // had run, work was real, and an unclassifiable provider error
+      // ("Generation failed: unknown object") torched it instantly. ONE
+      // bounded extra attempt after a short wait, visible on the stream,
+      // then the existing honest terminal path below. ──
+      if (
+        classified.class === "unknown" &&
+        unknownProgressRetries === 0 &&
+        lastAssistantEvent !== null &&
+        // A retry iteration must REMAIN (the overflow guard's rule — a
+        // recovery `continue` on the last iteration would fall out of the
+        // loop with no error set, faking success).
+        outerIter < maxOuterLoops - 1
+      ) {
+        unknownProgressRetries = 1;
+        emit?.({
+          type: "meta.retry",
+          sessionId: session.id,
+          // The single extra attempt: 2 of 2 — the card the UI already
+          // renders (attempt/totalAttempts/waitMs/…), the same frame shape
+          // the ladder emits, so no frontend change is needed.
+          attempt: 2,
+          totalAttempts: 2,
+          waitMs: UNKNOWN_PROGRESS_RETRY_MS,
+          remainingMs: UNKNOWN_PROGRESS_RETRY_MS,
+          retryAt: Date.now() + UNKNOWN_PROGRESS_RETRY_MS,
+          errorClass: classified.class,
+          classMessage,
+          providerError: scrubSecrets(providerErrorDetail(normalized, apiKey), keySecrets),
+          message: `${classMessage} — provider error, retrying (attempt 2 of 2) in ${formatRetryWaitMs(UNKNOWN_PROGRESS_RETRY_MS)}`,
+        });
+        log("warn", "provider.unknown_progress_retry", {
+          sessionId: session.id,
+          agentId: agent.id,
+          providerId: provider.id,
+          model,
+          attempt: 2,
+          waitMs: UNKNOWN_PROGRESS_RETRY_MS,
+          errorClass: classified.class,
+        });
+        registerActiveRetryWait({
+          sessionId: session.id,
+          attempt: 2,
+          totalAttempts: 2,
+          waitMs: UNKNOWN_PROGRESS_RETRY_MS,
+          startedAt: Date.now(),
+          until: Date.now() + UNKNOWN_PROGRESS_RETRY_MS,
+        });
+        const waitOutcome = await waitForRetry({ waitMs: UNKNOWN_PROGRESS_RETRY_MS, signal });
+        clearActiveRetryWait(session.id);
+        // The fresh pool rotation the ladder uses (the wait may outlive a
+        // quota window; the original key is the preferred one).
+        apiKey = prepared.keyPool[startPoolIndex]!.key;
+        activeKeySlot = prepared.keyPool[startPoolIndex]!.slot;
+        keyRotationIndex = startPoolIndex;
+        if (waitOutcome === "completed") {
+          // Re-run THIS iteration — compensated like every recovery path so
+          // the extra attempt never spends the outer-loop budget.
+          outerIter -= 1;
+        }
+        // Aborted during the wait → the loop-top signal guard owns the
+        // honest ABORTED outcome.
+        continue;
+      }
       lastError = {
         ok: false,
         status: 502,
         code: "PROVIDER_ERROR",
-        message: providerFailureMessage(provider.id, session.id, classified, overflowRecovered, providerRetries + 1),
+        message: providerFailureMessage(provider.id, session.id, classified, overflowRecovered, providerRetries + unknownProgressRetries + 1),
         // R71-e2 D4: the class + the class-specific honest line ride the
         // envelope additively (existing readers only look at providerError).
         // R75: attempts (ladder rungs used + the initial call) — additive.
@@ -2031,7 +2119,9 @@ export async function runSingleAgentTurn(
           errorClass: classified.class,
           // R78: the scrubbed real text (the catch's classMessage const).
           classMessage,
-          attempts: providerRetries + 1,
+          // R75: the total attempts (ladder rungs + the R94-D1 unknown
+          // progress retry + the initial call) — the card's honest count.
+          attempts: providerRetries + unknownProgressRetries + 1,
         },
       };
       break;
@@ -2447,7 +2537,11 @@ export async function runStreamedAgentTurn(
   const retrySchedule = resolveRetrySchedule(retrySettings);
   /** R78: is auto-retry ON for this transient class? Non-transient classes
    * are already excluded by isTransientApiFailure — false here just means
-   * "fail fast" for a class the owner switched off. */
+   * "fail fast" for a class the owner switched off.
+   * ROUND-94 (R94-D1): malformed_response defaults ON — no per-class settings
+   * switch exists for it (adding one needs storage + route + UI work outside
+   * this round's file ownership), and the owner's field report demands the
+   * class never dead-ends ("Generation failed: unknown object"). */
   const retryClassEnabled = (cls: ProviderErrorClass): boolean =>
     cls === "rate_limit"
       ? retrySettings.autoRetryRateLimit
@@ -2455,7 +2549,9 @@ export async function runStreamedAgentTurn(
         ? retrySettings.autoRetryTimeout
         : cls === "network"
           ? retrySettings.autoRetryNetwork
-          : false;
+          : cls === "malformed_response"
+            ? true
+            : false;
   // ROUND-34: values the keyring holds — scrubbed from persisted tool output
   // summaries (run_command inherits process.env which carries ACUTE_* keys).
   const keySecrets = keyring.list().filter((v) => v.length >= 8);
@@ -2587,6 +2683,17 @@ export async function runStreamedAgentTurn(
   // (0 = none yet; capped at the resolved schedule's rung count — 5 rungs
   // → 6 total attempts at the R75 defaults, R80-customizable).
   let providerRetries = 0;
+  // ROUND-94 (R94-D1, Part 2b — see the sync twin's comment above): the ONE
+  // unknown-class-with-PROGRESS retry. This is the STREAMED main turn — the
+  // owner's exact dead end ("Generation failed: unknown object" mid-task,
+  // fail-fast, no retry). `unknown` stays fail-fast by default EXCEPT when
+  // the dying turn already did real work (persisted tool results / streamed
+  // text): one bounded extra attempt after a short delay, visible on the
+  // stream (a meta.retry frame — the card the UI already renders), then the
+  // existing honest terminal path. Counted separately from providerRetries
+  // so the ladder's rung indexing is untouched, but it rides the same
+  // `attempts` arithmetic so the error card never under-reports what ran.
+  let unknownProgressRetries = 0;
   let forceCompaction = false;
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
@@ -2600,6 +2707,15 @@ export async function runStreamedAgentTurn(
     // iteration), and on iteration 0 with pre-flipped events nothing
     // remains (a no-op). Each delivery emits a queued.delivered frame so
     // the live chip moves into the transcript.
+    // ROUND-94 (R94-D1): the STEP-BOUNDARY injection below now claims most
+    // mid-turn messages EARLIER (right after a completed tool call, inside
+    // the same SDK call — the owner's position contract). This loop-top
+    // remains the safety net for what the boundaries cannot reach: a
+    // message landing after the final step's last boundary (during the
+    // tail text / after the SDK call returned but before the outer loop
+    // iterates, e.g. during a ladder wait's fresh iteration). Both
+    // consumers claim through the same type-guarded storage row, so a
+    // message is delivered by exactly one of them — never both.
     const pendingQueued = listUndeliveredQueuedMessages(db, session.id);
     for (const queuedEvent of pendingQueued) {
       deliverQueuedMessage(db, session.id, queuedEvent.seq);
@@ -2731,6 +2847,114 @@ export async function runStreamedAgentTurn(
 
     let statsCarrierNeeded = false;
 
+    // ── ROUND-94 (R94-D1, the owner's v0.91.0 field report: "the queued
+    // prompt should be INJECTED MID-TURN at a TOOL-CALL BOUNDARY… the
+    // transcript shows it AT THAT POSITION — after the tool result, not
+    // right after the original user message"): the STEP-BOUNDARY injection
+    // state for THIS SDK call. The adapter (chat.ts's prepareStep) calls
+    // consumeQueuedForStep at every boundary where the PRIOR step completed
+    // tool calls; this side CLAIMS one queue entry (delete — the same
+    // atomic type-guarded storage claim the route's post-turn continuation
+    // uses, so the two consumers can never double-take) and records it as
+    // PENDING rather than persisting immediately. WHY deferred: the SDK may
+    // run prepareStep BEFORE this for-await has processed the completed
+    // step's tool-result parts (fullStream is an ordered queue, not a
+    // rendezvous — the internal step loop does not wait on our consumer),
+    // and an immediate append could land the user row BEFORE the tool
+    // results it must follow. The flush runs at the FIRST part observed
+    // AFTER the claim — ordered after ALL of the prior step's parts by
+    // stream construction — so the persisted event position and the SSE
+    // frame position are exactly "after the tool result". ──
+    let pendingQueuedInjection: {
+      seq: number;
+      ts: string;
+      content: string;
+      attachments?: MessageAttachment[];
+    } | null = null;
+
+    /** R94-D1: the claim side — ONE entry per boundary, FIFO (seq order,
+     * like every other consumer). Returns the storage payload shape
+     * ({content, attachments?}) for the adapter's model-facing message. */
+    const consumeQueuedForStep = (): QueuedStepMessage | null => {
+      const queued = listUndeliveredQueuedMessages(db, session.id);
+      const first = queued[0];
+      if (first === undefined) return null;
+      const queuedStepPayload =
+        first.payload !== null && typeof first.payload === "object"
+          ? (first.payload as Record<string, unknown>)
+          : null;
+      const queuedStepContent =
+        queuedStepPayload !== null && typeof queuedStepPayload.content === "string"
+          ? queuedStepPayload.content
+          : "";
+      const queuedStepAttachments =
+        queuedStepPayload !== null && Array.isArray(queuedStepPayload.attachments)
+          ? (queuedStepPayload.attachments as MessageAttachment[])
+          : undefined;
+      // THE CLAIM: delete the queued row FIRST (the continuation loop's own
+      // consume step — same function, same type-guarded WHERE clause). Both
+      // are synchronous better-sqlite3 statements on the single Node thread,
+      // so list → delete can never interleave with the route's post-turn
+      // loop: the row is either claimed here or stays `message.queued` for
+      // the next consumer. A false return (vanished mid-tick, defensive)
+      // leaves the boundary empty.
+      if (!deleteQueuedMessage(db, session.id, first.seq)) return null;
+      // The R82 per-send override fields (model/providerId) in the payload
+      // are deliberately dropped: they steer a FRESH continuation turn's
+      // routing, while a mid-turn injection rides the CURRENT turn's
+      // in-flight model by construction — the SDK call is already running.
+      pendingQueuedInjection = {
+        seq: first.seq,
+        ts: first.ts,
+        content: queuedStepContent,
+        ...(queuedStepAttachments !== undefined && queuedStepAttachments.length > 0
+          ? { attachments: queuedStepAttachments }
+          : {}),
+      };
+      return {
+        content: queuedStepContent,
+        ...(queuedStepAttachments !== undefined && queuedStepAttachments.length > 0
+          ? { attachments: queuedStepAttachments }
+          : {}),
+      };
+    };
+
+    /** R94-D1: the flush side — persist the claimed message at the CURRENT
+     * stream position + announce it with the frame the frontend already
+     * renders. Idempotent (a null pending is a no-op), so it is safe to
+     * call at every part, at stream end, and in the catch. */
+    const flushPendingInjection = (): void => {
+      if (pendingQueuedInjection === null) return;
+      const injection = pendingQueuedInjection;
+      pendingQueuedInjection = null;
+      // (a) The PERSIST: a fresh message.user event — the exact payload
+      // shape the normal send path appends (raw content + attachments; the
+      // model-facing attachment RENDERING happens in assembleHistory for
+      // every later iteration and in chat.ts's prepareStep for the in-flight
+      // call). Appending NOW lands the row after the last persisted
+      // tool.use of the completed step — the position the owner asked for.
+      appendSessionEvent(db, session.id, {
+        type: "message.user",
+        agentId: agent.id,
+        payload: {
+          role: "user",
+          content: injection.content,
+          ...(injection.attachments !== undefined ? { attachments: injection.attachments } : {}),
+        },
+      });
+      // (b) The FRAME: the exact shape the loop-top delivery emits — the
+      // frontend's queued.delivered handler moves the chip (keyed by the
+      // ORIGINAL queued seq) to an ordinary user bubble at the live
+      // position; the folded log owns the render after the refetch
+      // (content-deduped there — no double bubble).
+      emit({
+        type: "queued.delivered",
+        seq: injection.seq,
+        content: injection.content,
+        ts: injection.ts,
+      });
+    };
+
     /** ROUND-35 (owner: tool calls "should show within the chat at the point
      * of the tools being called… afterwards it should continue with the
      * message"): when a tool call arrives mid-message, flush the text-so-far
@@ -2797,7 +3021,19 @@ export async function runStreamedAgentTurn(
         // reasoning.effort injection — see chat.ts buildThinkingFetch).
         ...(prepared.thinkingLevel !== undefined ? { thinkingLevel: prepared.thinkingLevel } : {}),
         ...(signal !== undefined ? { signal } : {}),
+        // ROUND-94 (R94-D1): the STEP-BOUNDARY claim the adapter's prepareStep
+        // calls at every completed-tool-call boundary — the mid-turn
+        // injection (the sync runner deliberately passes NO such callback:
+        // its callers — the sync REST route + orchestrator children — have no
+        // live registered notify turn, so POST /queue 409s and the queue is
+        // always empty there; wiring it would be dead code).
+        consumeQueuedForStep,
       })) {
+        // ROUND-94 (R94-D1): the claimed injection lands HERE — at the first
+        // part observed after the claim, i.e. strictly after all of the
+        // completed step's parts were processed (see the deferred-flush WHY
+        // above). Every part checks; a no-pending call is a cheap null test.
+        flushPendingInjection();
         if (event.type === "tool-result") {
           // handled below with a scrubbed outputSummary — do NOT emit raw.
         } else {
@@ -2898,7 +3134,21 @@ export async function runStreamedAgentTurn(
           }
         }
       }
+      // ROUND-94 (R94-D1): the stream ended cleanly — a healthy stream
+      // always ends each step with a finish-step part (the part loop's flush
+      // already handled any claim), but a claim that raced the very last
+      // part must never be dropped: the queued row is already DELETED, so
+      // this defensive flush is the difference between "delivered" and
+      // "lost". Idempotent (null pending → no-op).
+      flushPendingInjection();
     } catch (error) {
+      // ROUND-94 (R94-D1): flush any claimed-but-unpersisted injection FIRST
+      // — the claim already deleted the queued row, so not persisting it here
+      // would LOSE the message; and it must land BEFORE the partial-segment
+      // flush below (the segment's text streamed AFTER the injection point,
+      // so the log order is [tool results] [injected user message] [partial
+      // text] on every exit: abort, retry, and terminal alike).
+      flushPendingInjection();
       // ROUND-42: a deliberate user stop (POST /sessions/:id/stop) is not a
       // provider failure — return a distinct ABORTED outcome so the route can
       // skip the task_failed notification and the UI can render "Stopped".
@@ -3129,6 +3379,82 @@ export async function runStreamedAgentTurn(
         // the same way.)
         continue;
       }
+      // ── ROUND-94 (R94-D1, Part 2b — the STREAMED twin of the sync branch
+      // above): the ONE unknown-with-PROGRESS retry. `unknown` stays
+      // fail-fast by the R75 contract, EXCEPT when the dying turn already
+      // did real work — persisted tool results (turnToolCalls > 0), a
+      // flushed assistant segment (lastAssistantEvent), or text currently
+      // streaming unflushed (iterText). The owner's exact dead end:
+      // sub-agents had finished their calls, the generation then died with
+      // "Generation failed: unknown object" (a shape no pattern predicted),
+      // and the turn failed FAST with the whole task torched. ONE bounded
+      // extra attempt after a short wait, VISIBLE on the stream (the
+      // meta.retry card the UI already renders — the same frame shape the
+      // ladder emits), then the existing honest terminal path below. ──
+      if (
+        classified.class === "unknown" &&
+        unknownProgressRetries === 0 &&
+        (turnToolCalls > 0 || lastAssistantEvent !== null || iterText.trim() !== "") &&
+        // A retry iteration must REMAIN (the overflow guard's rule — a
+        // recovery `continue` on the last iteration would fall out of the
+        // loop with no error set, faking success).
+        outerIter < maxOuterLoops - 1
+      ) {
+        unknownProgressRetries = 1;
+        emit({
+          type: "meta.retry",
+          sessionId: session.id,
+          // The single extra attempt: 2 of 2 — the card the UI already
+          // renders (attempt/totalAttempts/waitMs/…), the same frame shape
+          // the ladder emits, so no frontend change is needed.
+          attempt: 2,
+          totalAttempts: 2,
+          waitMs: UNKNOWN_PROGRESS_RETRY_MS,
+          remainingMs: UNKNOWN_PROGRESS_RETRY_MS,
+          retryAt: Date.now() + UNKNOWN_PROGRESS_RETRY_MS,
+          errorClass: classified.class,
+          classMessage,
+          providerError: scrubSecrets(providerErrorDetail(normalized, apiKey), keySecrets),
+          message: `${classMessage} — provider error, retrying (attempt 2 of 2) in ${formatRetryWaitMs(UNKNOWN_PROGRESS_RETRY_MS)}`,
+        });
+        log("warn", "provider.unknown_progress_retry", {
+          sessionId: session.id,
+          agentId: agent.id,
+          providerId: provider.id,
+          model,
+          attempt: 2,
+          waitMs: UNKNOWN_PROGRESS_RETRY_MS,
+          errorClass: classified.class,
+        });
+        registerActiveRetryWait({
+          sessionId: session.id,
+          attempt: 2,
+          totalAttempts: 2,
+          waitMs: UNKNOWN_PROGRESS_RETRY_MS,
+          startedAt: Date.now(),
+          until: Date.now() + UNKNOWN_PROGRESS_RETRY_MS,
+        });
+        const waitOutcome = await waitForRetry({ waitMs: UNKNOWN_PROGRESS_RETRY_MS, signal });
+        clearActiveRetryWait(session.id);
+        // The fresh pool rotation the ladder uses (the wait may outlive a
+        // quota window; the original key is the preferred one).
+        apiKey = prepared.keyPool[startPoolIndex]!.key;
+        activeKeySlot = prepared.keyPool[startPoolIndex]!.slot;
+        keyRotationIndex = startPoolIndex;
+        // The partial text/thinking persists now (the ladder's flush
+        // precedent — the retry iteration re-assembles history from the log
+        // and CONTINUES from it; the partial work is never lost).
+        flushSegment(true);
+        if (waitOutcome === "completed") {
+          // Re-run THIS iteration — compensated like every recovery path so
+          // the extra attempt never spends the outer-loop budget.
+          outerIter -= 1;
+        }
+        // Aborted during the wait → the re-run call throws on the aborted
+        // signal and the catch's signal.aborted path above returns the
+        // honest ABORTED outcome.
+        continue;
+      }
       // ROUND-75 (R75): the partial streamed text survives THIS exit too —
       // the R58-c abort flush, extended to the terminal error path (the
       // owner's "no silent loss" rule: abort, retry, and terminal failure
@@ -3179,7 +3505,9 @@ export async function runStreamedAgentTurn(
       // R75: the attempts count (ladder rungs used + the initial call)
       // rides the message + payload + envelope — the error card says
       // "failed after N attempts" when the ladder ran.
-      const attempts = providerRetries + 1;
+      // R94-D1: the ONE unknown-progress retry counts too — the card never
+      // under-reports what ran.
+      const attempts = providerRetries + unknownProgressRetries + 1;
       const message = providerFailureMessage(provider.id, session.id, classified, overflowRecovered, attempts);
       const errorTs = persistTurnError(db, {
         sessionId: session.id,

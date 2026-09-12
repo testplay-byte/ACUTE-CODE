@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-90 -->
+<!-- last-reviewed: 2026-09-12 round-94 -->
 # OpenCode — Research Summary
 
 *Researched 2026-08-21 against the live repository and docs. Every claim below was verified by fetching the repo/docs unless marked [UNVERIFIED].*

@@ -67,6 +67,7 @@ import {
   windowsListAppsScript,
   windowsListWindowsScript,
   windowsListDisplaysScript,
+  windowsWindowActionScript,
   windowsElementActionScript,
   windowsBackend,
 } from "../src/computer/backends/windows";
@@ -174,15 +175,19 @@ describe("ROUND-64-a (R64-a): the shared PowerShell preamble", () => {
     expect(WINDOWS_PS_PREAMBLE).toContain("KeyInput(0,(ushort)ch,0x0006)");
   });
 
-  it("R68-C: NO Windows.Forms for input — LoadWithPartialName is GONE (the dead dependency the live trace exposed)", () => {
+  it("R68-C: NO Windows.Forms for input — the LoadWithPartialName('System.Windows.Forms') line is GONE (the dead dependency the live trace exposed)", () => {
     // The owner's host: LoadWithPartialName('System.Windows.Forms')
     // silently failed (every SendKeys call → TypeNotFound) while
     // captureDisplay's own Add-Type -AssemblyName System.Windows.Forms
     // WORKED live (screenshots succeeded all round). Input is SendInput
     // P/Invoke now — the assembly is dead weight and REMOVED.
-    expect(WINDOWS_PS_PREAMBLE).not.toContain("LoadWithPartialName");
+    // R94-E: LoadWithPartialName itself is BACK — but ONLY for the UIA
+    // fallback (UIAutomationClient/UIAutomationTypes — the csc-free window
+    // layer the v0.91.0 field report demanded); Windows.Forms stays dead.
+    expect(WINDOWS_PS_PREAMBLE).not.toContain("LoadWithPartialName('System.Windows.Forms')");
     expect(WINDOWS_PS_PREAMBLE).not.toContain("System.Windows.Forms");
     expect(WINDOWS_PS_PREAMBLE).not.toContain("SendKeys");
+    expect(WINDOWS_PS_PREAMBLE).toContain("LoadWithPartialName('UIAutomationClient')");
     // captureDisplay/captureRegion keep their OWN proven Add-Type lines
     // (pinned in their describes below).
   });
@@ -217,22 +222,40 @@ describe("ROUND-64-a (R64-a): the shared PowerShell preamble", () => {
     expect(WINDOWS_PS_PREAMBLE).not.toContain("$o | ConvertTo-Json");
   });
 
-  it("capsule shape: -EncodedCommand carries the script as base64 UTF-16LE in ARGV — NO stdin (R67-C)", async () => {
+  it("capsule shape: listApps rides the temp-.ps1 -File transport (R93-C + R94-E) — still NO stdin (R67-C)", async () => {
+    // R94-E: the UIA fallback + addTypeError capture grew the shared
+    // preamble; preamble + the list_apps script now measures ~35.4k base64 —
+    // past the 30k PS_ARGV_SWITCH_B64 — so listApps composes the R93-C
+    // temp-.ps1 -File capsule. The R67-C lesson still holds: the script is
+    // never lost via stdin (the old `-Command -` transport died twice on the
+    // owner's machine — PS 5.1 exit-0-on-abort + EPIPE-swallowed stdin).
     const run = fakeRun('{"apps":[],"diagnostics":{}}');
     await windowsBackend.listApps(run);
     expect(run.capsules).toHaveLength(1);
     const capsule = run.capsules[0];
     expect(capsule.program).toBe(WINDOWS_PS_PROGRAM);
-    expect(capsule.args.slice(0, 5)).toEqual(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand"]);
+    expect(capsule.args.slice(0, 5)).toEqual(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]);
     expect(capsule.args).not.toContain("-Command");
-    // The old transport died twice on the owner's machine: PS 5.1 under
-    // `-Command -` reports exit 0 on aborting scripts, and the stdin write
-    // is EPIPE-swallowed when the child exits early (an EMPTY script ran →
-    // no stdout). The script cannot be lost in ARGV.
     expect(capsule.stdin).toBeUndefined();
     const script = decodeCapsuleScript(capsule);
     expect(script).toContain(WINDOWS_PS_PREAMBLE);
     expect(script).toContain("[U32]::ListTopWindows()");
+  });
+
+  it("capsule shape: a SMALL script still rides -EncodedCommand as base64 UTF-16LE in ARGV (R67-C)", async () => {
+    // The switch is size-gated, not global: capsules under 30k base64 keep
+    // the one-shot ARGV transport (this is the typeText per-char path's
+    // capsule — preamble + a small fixed script).
+    const run = fakeRun("OK");
+    await windowsBackend.typeText(run, "hi", { pid: 111, windowId: 222 });
+    expect(run.capsules).toHaveLength(1);
+    const capsule = run.capsules[0];
+    expect(capsule.program).toBe(WINDOWS_PS_PROGRAM);
+    expect(capsule.args.slice(0, 5)).toEqual(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand"]);
+    expect(capsule.args).not.toContain("-Command");
+    expect(capsule.stdin).toBeUndefined();
+    const script = decodeCapsuleScript(capsule);
+    expect(script).toContain(WINDOWS_PS_PREAMBLE);
   });
 
   it("R67-C: the U32 Add-Type is GUARDED — a failed compile sets $script:U32_OK instead of aborting the script", () => {
@@ -848,7 +871,10 @@ describe("R68-C: the ARGV ceiling guard — model-supplied payloads refuse BEFOR
     expect(run.capsules[0]!.stdin).toBeDefined();
     const b64 = run.capsules[0]!.args[run.capsules[0]!.args.indexOf("-EncodedCommand") + 1]!;
     expect(b64.length).toBeGreaterThan(20_000); // preamble + fixed clipboard script
-    expect(b64.length).toBeLessThan(25_000); // ...and it does NOT grow with the 7,000 chars
+    // R94-E: the preamble grew (the UIA fallback + addTypeError capture —
+    // 26,188 measured); the INTENT holds: the fixed script does NOT grow
+    // with the 7,000 chars and stays under the 30k -File switch point.
+    expect(b64.length).toBeLessThan(29_000);
   });
 
   it("typeText: a 300-char text (the per-char path's max) still sends via the per-char capsule, no stdin", async () => {
@@ -1132,7 +1158,7 @@ describe("R69-a: typeText LONG text rides the clipboard paste (Set-Clipboard →
     const result = await windowsBackend.typeText(run, "x".repeat(100_000), SCOPE);
     expect(result.ok).toBe(true);
     const b64 = run.capsules[0]!.args[run.capsules[0]!.args.indexOf("-EncodedCommand") + 1]!;
-    expect(b64.length).toBeLessThan(25_000); // the fixed clipboard script (~20.7k measured)
+    expect(b64.length).toBeLessThan(29_000); // the fixed clipboard script (26.2k measured post-R94-E)
     expect(run.capsules[0]!.stdin!.length).toBeGreaterThan(100_000); // the payload rides stdin
     expect(Buffer.from(run.capsules[0]!.stdin!.trim(), "base64").toString("utf8")).toBe("x".repeat(100_000));
   });
@@ -1310,5 +1336,226 @@ describe("R67-C: probePermissions — the THIRD probe (Add-Type -TypeDefinition,
     const run = seqRun(["PS_OK", "UIA_OK", ""], [0, 0, 1]);
     const report = await windowsBackend.probePermissions(run);
     expect(report.addTypeOk).toBe(false);
+  });
+});
+
+/* ── R94-E: the csc-free UIAutomation fallback layer + the window ACTOR ─────
+ * The owner's v0.91.0 Windows 11 / PowerShell 5.1 field report: U32_OK false
+ * (the Add-Type/csc compile fails on that host) → windows_overview
+ * {"windows":[]}, list_apps 11 apps ALL active:false (foregroundPid 0),
+ * get_app_state "owns no accessible top-level window" for every app — and
+ * NO tool to change window state at all. The pins below hold the fallback
+ * mechanics by construction (PowerShell never runs in this sandbox):
+ *   · the preamble captures WHY the compile failed ($script:U32_ERR →
+ *     addTypeError on every -1 diagnostics) and loads UIA without csc;
+ *   · the list_apps/list_windows U32-false branches walk the UIA ROOT's
+ *     children instead of returning empty;
+ *   · frontmostPid reads FocusedElement when GetForegroundWindow is gone;
+ *   · windowsWindowActionScript carries BOTH actuation paths (ShowWindowAsync
+ *     / PostMessage-WM_CLOSE, and the UIA WindowPattern fallback) plus the
+ *     'foreground' target resolution. */
+describe("R94-E: the preamble captures the csc failure + loads UIA without csc", () => {
+  it("U32_ERR is captured in the catch block and AddTypeErr() caps it at ~300 chars for the diagnostics channel", () => {
+    expect(WINDOWS_PS_PREAMBLE).toContain("$script:U32_ERR = ''");
+    expect(WINDOWS_PS_PREAMBLE).toContain("try { $script:U32_ERR = [string]$_.Exception.Message } catch { $script:U32_ERR = '' }");
+    expect(WINDOWS_PS_PREAMBLE).toContain("function AddTypeErr() {");
+    expect(WINDOWS_PS_PREAMBLE).toContain("if ($m.Length -gt 300) { $m = $m.Substring(0,300) }");
+  });
+
+  it("the UIA load runs ONLY when the U32 compile failed (healthy hosts pay nothing) and probes RootElement", () => {
+    expect(WINDOWS_PS_PREAMBLE).toContain("$script:UIA_OK = $false");
+    expect(WINDOWS_PS_PREAMBLE).toContain("if (-not $script:U32_OK) {");
+    expect(WINDOWS_PS_PREAMBLE).toContain("[System.Reflection.Assembly]::LoadWithPartialName('UIAutomationClient')");
+    expect(WINDOWS_PS_PREAMBLE).toContain("[System.Reflection.Assembly]::LoadWithPartialName('UIAutomationTypes')");
+    expect(WINDOWS_PS_PREAMBLE).toContain("if ($null -ne [System.Windows.Automation.AutomationElement]::RootElement) { $script:UIA_OK = $true }");
+  });
+
+  it("the window-actor P/Invokes land in the SAME TypeDefinition (still EXACTLY ONE csc compile)", () => {
+    expect(WINDOWS_PS_PREAMBLE.split("Add-Type -TypeDefinition").length - 1).toBe(1);
+    expect(WINDOWS_PS_PREAMBLE).toContain("public static extern bool ShowWindowAsync(IntPtr h,int cmd);");
+    expect(WINDOWS_PS_PREAMBLE).toContain("public static extern bool PostMessage(IntPtr h,uint msg,IntPtr w,IntPtr l);");
+  });
+});
+
+describe("R94-E: list_apps — the U32-false + UIA-ok path produces apps from the UIA walk", () => {
+  const script = windowsListAppsScript();
+
+  it("the UIA branch walks RootElement children and dedupes by pid keeping the largest-area window (mirroring the EnumWindows logic)", () => {
+    expect(script).toContain("} elseif ($script:UIA_OK) {");
+    expect(script).toContain("[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)");
+    expect(script).toContain("$procId = [int]$el.Current.ProcessId");
+    expect(script).toContain("$area = [int]$r.Width * [int]$r.Height");
+    expect(script).toContain("if ($null -eq $cur -or $area -gt $cur.area)");
+    expect(script).toContain("active = ($procId -eq $fgpid)");
+    // Honesty: the fallback entries are TAGGED, never dressed up as the walk.
+    expect(script).toContain("source = 'uia-fallback'");
+    expect(script).toContain("$diag.uiaFallback = $true");
+  });
+
+  it("the foreground pid rides FocusedElement when GetForegroundWindow is unavailable (the active:false-everywhere fix)", () => {
+    expect(script).toContain("} elseif ($script:UIA_OK) { try { $fel = [System.Windows.Automation.AutomationElement]::FocusedElement; if ($null -ne $fel) { $fgpid = [int]$fel.Current.ProcessId } } catch { $fgpid = 0 } }");
+    // The U32 path is byte-identical to R67-C's (the gate line is untouched).
+    expect(script).toContain("if ($script:U32_OK) { try { $fg = [U32]::GetForegroundWindow() } catch { $fg = [IntPtr]::Zero } }");
+  });
+
+  it("empty-rect and untitled UIA children are filtered; the Get-Process fallback survives only when even UIA fails", () => {
+    expect(script).toContain("if ($r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0) { continue }");
+    expect(script).toContain("if ($title.Trim().Length -eq 0) { continue }");
+    expect(script).toContain("'both the EnumWindows walk and the UIAutomation fallback failed; using the Get-Process MainWindowTitle fallback'");
+    expect(script).toContain("if ($apps.Count -eq 0 -and $null -eq $enum) {");
+  });
+
+  it("the strict parser KEEPS the tagged fallback entry (unknown fields stripped) and surfaces uiaFallback + addTypeError diagnostics", async () => {
+    const run = fakeRun(
+      JSON.stringify({
+        apps: [{ name: "Untitled - Notepad", pid: 4012, processName: "notepad", active: true, source: "uia-fallback" }],
+        diagnostics: {
+          processCount: 266,
+          foregroundPid: 4012,
+          enumWindowsCount: -1,
+          uiaFallback: true,
+          addTypeError: "csc.exe could not be found",
+          note: "Add-Type (csc) failed on this host - EnumWindows is unavailable",
+        },
+      }),
+    );
+    const result = await windowsBackend.listApps(run);
+    expect(result.apps).toEqual([{ name: "Untitled - Notepad", pid: 4012, processName: "notepad", active: true }]);
+    expect(result.diagnostics?.uiaFallback).toBe(true);
+    expect(result.diagnostics?.addTypeError).toBe("csc.exe could not be found");
+    expect(result.diagnostics?.enumWindowsCount).toBe(-1);
+  });
+
+  it("a NON-fallback result carries no addTypeError (the field is compile-failure-only)", async () => {
+    const run = fakeRun(
+      JSON.stringify({ apps: [{ name: "App", pid: 1 }], diagnostics: { processCount: 5, foregroundPid: 1, enumWindowsCount: 9 } }),
+    );
+    const result = await windowsBackend.listApps(run);
+    expect(result.diagnostics?.addTypeError).toBeUndefined();
+    expect(result.diagnostics?.uiaFallback).toBeUndefined();
+  });
+});
+
+describe("R94-E: list_windows — the UIA fallback restores the pid's windows when U32 is dead", () => {
+  const script = windowsListWindowsScript(4012);
+
+  it("the guard branch tries the UIA walk BEFORE the honest empty: RootElement children filtered to the pid, NativeWindowHandle as windowId", () => {
+    expect(script).toContain("if ($script:UIA_OK) {");
+    expect(script).toContain("if ([int]$el.Current.ProcessId -ne $targetPid) { continue }");
+    expect(script).toContain("$hwnd = [int64]$el.Current.NativeWindowHandle");
+    expect(script).toContain("bounds = @([int]$r.X, [int]$r.Y, [int]$r.Width, [int]$r.Height)");
+    expect(script).toContain("focused = ($fgl -eq $hwnd)");
+    expect(script).toContain("$fgl = [int64]$fel.Current.NativeWindowHandle");
+    expect(script).toContain("source = 'uia-fallback'");
+    // The listWindows diag is built INLINE in the hashtable constructor
+    // (unlike listApps' assignment form) — pin the actual construction.
+    expect(script).toContain("uiaFallback = $true");
+    // main = largest area (the same pick the EnumWindows branch makes).
+    expect(script).toContain("if ($bestIdx -ge 0) { $wins[$bestIdx].main = $true }");
+  });
+
+  it("a non-empty UIA result exits with the diagnostics wrapper; BOTH layers failing still reports the honest empty + addTypeError", () => {
+    expect(script).toContain("if ($wins.Count -gt 0) { OutJson @{ windows = $wins; diagnostics = $diag }; exit 0 }");
+    expect(script).toContain("$failDiag = @{ processRunning = $liveProc; enumWindowsCount = -1; note =");
+    expect(script).toContain("if ($u32err -ne '') { $failDiag.addTypeError = $u32err } else { $failDiag.addTypeError = '(the Add-Type compile failed with no error message captured)' }");
+    expect(script).toContain("did not compile on this host AND the UIAutomation fallback found no titled top-level window");
+    // The R67-C no-U32-at-all shape is intact (still the final branch).
+    expect(script).toContain("OutJson @{ windows = @(); diagnostics = @{ processRunning = $liveProc; note =");
+  });
+
+  it("the strict parser keeps the UIA fallback windows (source stripped) and the tagged diagnostics", async () => {
+    const run = fakeRun(
+      JSON.stringify({
+        windows: [
+          { windowId: 197266, title: "notes.txt - Notepad", bounds: [40, 60, 700, 500], main: true, focused: true, source: "uia-fallback" },
+        ],
+        diagnostics: { processRunning: true, enumWindowsCount: -1, uiaFallback: true, addTypeError: "csc.exe could not be found" },
+      }),
+    );
+    const result = await windowsBackend.listWindows(run, { pid: 4012 });
+    expect(result.windows).toEqual([
+      { windowId: 197266, title: "notes.txt - Notepad", bounds: [40, 60, 700, 500], main: true, focused: true },
+    ]);
+    expect(result.diagnostics?.uiaFallback).toBe(true);
+    expect(result.diagnostics?.addTypeError).toBe("csc.exe could not be found");
+  });
+});
+
+describe("R94-E: frontmostPid — the UIA FocusedElement fallback (the foregroundPid:0 fix)", () => {
+  it("the guard branch reads FocusedElement's pid before falling back to 0; the U32 path is unchanged", async () => {
+    const run = fakeRun("4012");
+    const pid = await windowsBackend.frontmostPid(run);
+    expect(pid).toBe(4012);
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    expect(script).toContain("if (-not $script:U32_OK) {");
+    expect(script).toContain("if ($script:UIA_OK) {");
+    expect(script).toContain("$fel = [System.Windows.Automation.AutomationElement]::FocusedElement");
+    expect(script).toContain("$fpid = [int]$fel.Current.ProcessId");
+    expect(script).toContain("if ($fpid -gt 0) { Write-Output $fpid; exit 0 }");
+    expect(script).toContain("Write-Output '0'; exit 0");
+    expect(script).toContain("$fg = [U32]::GetForegroundWindow()");
+  });
+
+  it("an honest 0/unparsable output stays null — never a fabricated pid", async () => {
+    expect(await windowsBackend.frontmostPid(fakeRun("0"))).toBeNull();
+    expect(await windowsBackend.frontmostPid(fakeRun("garbage"))).toBeNull();
+    expect(await windowsBackend.frontmostPid(fakeRun("", 1))).toBeNull();
+  });
+});
+
+describe("R94-E: window_action — the window ACTOR script (the 'minimize the current window' verb)", () => {
+  it("the U32 path: ShowWindowAsync 6/3/9, focus via BringWindowToTop+SetForegroundWindow, close via PostMessage WM_CLOSE (the gentle close)", () => {
+    const script = windowsWindowActionScript({ windowId: 77 }, "minimize");
+    expect(script).toContain("$action = 'minimize'");
+    expect(script).toContain("$h = [IntPtr]77");
+    expect(script).toContain("[U32]::ShowWindowAsync($h, 6)");
+    expect(script).toContain("[U32]::ShowWindowAsync($h, 3)");
+    expect(script).toContain("[U32]::ShowWindowAsync($h, 9)");
+    expect(script).toContain("[void][U32]::BringWindowToTop($h); $sent = [U32]::SetForegroundWindow($h)");
+    expect(script).toContain("[U32]::PostMessage($h, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)");
+    // The title is read BEFORE acting (a close may destroy the window).
+    expect(script).toContain("$len = [U32]::GetWindowTextLength($h)");
+    // The report is JSON via the shape-aware OutJson, not a bare string.
+    expect(script).toContain("OutJson @{ ok = $true; action = $action; windowId = [int64]$h; title = $title }");
+  });
+
+  it("the UIA fallback path: FromHandle → WindowPattern.SetWindowVisualState/Close, focus via the element's SetFocus()", () => {
+    const script = windowsWindowActionScript({ windowId: 77 }, "minimize");
+    expect(script).toContain("[System.Windows.Automation.AutomationElement]::FromHandle($h)");
+    expect(script).toContain("[System.Windows.Automation.WindowPattern]::Pattern");
+    expect(script).toContain("$wp.SetWindowVisualState($vis)");
+    expect(script).toContain("if ($action -eq 'minimize') { $vis = 0 }");
+    expect(script).toContain("if ($action -eq 'maximize') { $vis = 1 }");
+    expect(script).toContain("$wp.Close()");
+    expect(script).toContain("$el.SetFocus()");
+    expect(script).toContain("'ERR:window-pattern-unavailable");
+  });
+
+  it("the 'foreground' target resolves the frontmost window FIRST (GetForegroundWindow, or the UIA FocusedElement when U32 is dead)", () => {
+    const script = windowsWindowActionScript({ foreground: true }, "minimize");
+    expect(script).toContain("$h = [IntPtr]0");
+    expect(script).toContain("if ($script:U32_OK) { try { $h = [U32]::GetForegroundWindow() } catch { $h = [IntPtr]::Zero } }");
+    expect(script).toContain("if ($h -eq [IntPtr]::Zero -and $script:UIA_OK) {");
+    expect(script).toContain("$h = [IntPtr]$fel.Current.NativeWindowHandle");
+    expect(script).toContain("'ERR:no-foreground (no foreground window could be resolved");
+    // The plain-windowId form does NOT carry the foreground resolution.
+    const byId = windowsWindowActionScript({ windowId: 77 }, "minimize");
+    expect(byId).not.toContain("[U32]::GetForegroundWindow()");
+  });
+
+  it("backend parse: the JSON report → {ok, windowId, title}; the ERR channel and garbage refuse honestly", async () => {
+    const ok = await windowsBackend.windowAction?.(fakeRun(JSON.stringify({ ok: true, action: "minimize", windowId: 77, title: "Notes" })), { windowId: 77 }, "minimize");
+    expect(ok).toMatchObject({ ok: true, windowId: 77, title: "Notes" });
+
+    const err = await windowsBackend.windowAction?.(fakeRun("ERR:U32-unavailable (the Add-Type helper did not compile on this host)"), { foreground: true }, "focus");
+    expect(err?.ok).toBe(false);
+    expect(err?.error).toContain("Add-Type helper did not compile");
+
+    const garbage = await windowsBackend.windowAction?.(fakeRun("<S>noise"), { windowId: 77 }, "close");
+    expect(garbage?.ok).toBe(false);
+
+    const failed = await windowsBackend.windowAction?.(fakeRun("", 1), { windowId: 77 }, "close");
+    expect(failed?.ok).toBe(false);
+    expect(failed?.error).toContain("window_action failed");
   });
 });

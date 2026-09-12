@@ -534,7 +534,12 @@ describe("D6: browser-panel + computer-use trims", () => {
   it("browser-panel: materially smaller, vocabulary + discipline kept, craft pointer last", () => {
     const bp = buildSectionText(ctxFor(), "browser-panel") ?? "";
     expect(bp).toContain("## EMBEDDED BROWSER PANEL (browser_control)");
-    expect(bp.length).toBeLessThan(2_600); // was 4,056 — R70-A issue #2
+    // R94-G: 2,774 measured — the R94-F wait/sequence settle discipline
+    // (~+570 gross) was paid for by absorbing the fresh-fetch advisory +
+    // the viewport-announce line into the intro and tightening the action
+    // parentheticals. Still ~32% below the pre-R70 4,056 the trim mandate
+    // (R70-A issue #2) exists for.
+    expect(bp.length).toBeLessThan(2_850);
     expect(bp.length).toBeGreaterThan(1_200); // the discipline survived
     // The kept contract pieces.
     expect(bp).toContain("read_dom first, then click / type the SELECTOR PATHS it returns");
@@ -544,6 +549,13 @@ describe("D6: browser-panel + computer-use trims", () => {
     for (const action of ["navigate", "read_dom", "set_viewport", "wait_for_verification", "get_state", "press_key", "screenshot", "eval"]) {
       expect(bp).toContain(action); // the vocabulary summary
     }
+    // R94-G: the R94-F actions are in the vocabulary AND carry the settle
+    // discipline — pinned as full phrases so a bare "wait" substring hit
+    // from wait_for_verification cannot satisfy them.
+    expect(bp).toContain("wait (settle until readyState/selector/urlContains)");
+    expect(bp).toContain("sequence (a multi-step chain in ONE call");
+    expect(bp).toContain("NAVIGATION SETTLES");
+    expect(bp).toContain("verify the element you need EXISTS before interacting");
     // The craft pointer is the closing line.
     expect(bp.trimEnd().endsWith('Full browser craft (the core loop, forms, wait patterns, layout testing): read_skill "browser-use".')).toBe(true);
     // The retired deep-craft lines.
@@ -554,12 +566,22 @@ describe("D6: browser-panel + computer-use trims", () => {
   it("computer-use: smaller, R69 chain discipline + element-first + boundary kept, pointer last", () => {
     const cu = buildSectionText(ctxFor({ computerUse: { enabled: true, posture: "act" } }), "computer-use") ?? "";
     expect(cu).toContain("## COMPUTER USE (desktop control)");
-    expect(cu.length).toBeLessThan(3_300); // was 3,898
+    // R94-G: 3,389 measured — the R94-E window_action/windows_overview
+    // discipline + the app_ref re-resolution half of the refusals rule
+    // (~+430 gross) was paid for by tightening BIG APPS / TAB-WALK / the
+    // intro. Still below the pre-R70 3,898 the trim mandate exists for.
+    expect(cu.length).toBeLessThan(3_450);
     expect(cu.length).toBeGreaterThan(2_000); // the safety lines survived
     expect(cu).toContain("CHAIN DISCIPLINE (R69)");
     expect(cu).toContain("Do NOT screenshot or zoom after acting");
     expect(cu).toContain("Element-first beats coordinate guessing");
     expect(cu).toContain("SURFACE BOUNDARY (R65)");
+    // R94-G: the window actor — exact identity targeting + window_action
+    // as the one window-state tool + the app_ref re-resolution rule.
+    expect(cu).toContain("identify windows by EXACT title/pid from list_apps / windows_overview");
+    expect(cu).toContain("window_action (minimize/maximize/restore/focus/close; target:'foreground'");
+    expect(cu).toContain("a dead app_ref → re-resolve it from list_apps");
+    expect(cu).toContain("two identical failures = CHANGE STRATEGY");
     expect(cu.trimEnd().endsWith('read_skill "computer-use".')).toBe(true);
   });
 

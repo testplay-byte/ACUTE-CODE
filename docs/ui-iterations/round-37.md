@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-90 -->
+<!-- last-reviewed: 2026-09-12 round-94 -->
 # Round 37 — Chat continuity (Working section) · Provider rebuild · Approvals
 
 **Date:** 2026-08-25 · **Branch:** `work/round-37` · **Owner directives:**

@@ -66,6 +66,21 @@
 // until done, ≤25s). Every script is CSP-tolerant (element.style.cssText +
 // innerHTML — no <style> elements) and ≤ the 20KB Rust eval limit.
 //
+// ROUND-94 (R94-F) — THE SPLIT. The owner's v0.91.0 Windows field report:
+// in a 45-step browsing session EVERY hands action (type/click/press_key/
+// mouse) failed with "evalJob: unexpected start payload (no job started)"
+// while plain ~2KB eval actions on the SAME pages worked — the discriminating
+// variable was SIZE: buildHandsActionScript embedded the ENTIRE ~15KB runtime
+// installer into every action (17-19KB monoliths). The fix is structural:
+//   · buildHandsInstallScript() — the one-time runtime installer, sent with
+//     every evalJob command as `payload.installScript` and eval'd by the
+//     panel ONLY when the page reports the runtime missing;
+//   · buildHandsActionScript(driverBody) — now TINY (~2-4KB: the driver +
+//     the element finder only). A page without the runtime answers
+//     {needInstall:true} instead of embedding the installer, and the panel
+//     self-heals (install → retry the start once).
+// The driver signatures and the job protocol are UNCHANGED.
+//
 // ANTI-AUTOMATION posture (the owner: "make it seem like it is being
 // performed by some actual person"): bezier-curved cursor paths with
 // perpendicular bow + micro-jitter + ease-in-out + post-move settle +
@@ -395,14 +410,38 @@ if (booted !== null) paint(booted.x, booted.y);
 return { installed: true, adopted: booted !== null };`;
 }
 
-/** Wrap a driver body so the ONE eval installs the runtime (if the page
- * navigated it away), starts the async job, and returns instantly — the
- * evalJob bridge action then collects window.__acuteJob. */
+/**
+ * R94-F: the ONE-TIME runtime installer — the whole hands runtime
+ * (buildHandsRuntime) wrapped as a standalone script that RETURNS the
+ * installer's result ({installed:true, adopted:…}). The tool sends this with
+ * every evalJob command as `payload.installScript` (it rides the SSE frame,
+ * NOT the page eval); the BrowserPanel evals it ONLY when the tiny action
+ * script answers {needInstall:true} — so the page pays the 15KB install
+ * once per navigation, never once per action (the v0.91.0 Windows failure:
+ * the old 17-19KB monoliths were the only evals failing while ~2KB evals
+ * on the same pages worked).
+ */
+export function buildHandsInstallScript(): string {
+  return `(function () {
+  try {
+    return (function () { ${buildHandsRuntime()} })();
+  } catch (e) {
+    return { error: String((e && e.message) || e) };
+  }
+})()`;
+}
+
+/** Wrap a driver body so the ONE eval starts the async job and returns
+ * instantly — the evalJob bridge action then collects window.__acuteJob.
+ *
+ * R94-F: the runtime is NO LONGER EMBEDDED here — this script must stay
+ * TINY (that is the fix). A page without the runtime answers
+ * {needInstall:true} and the panel installs it from the command's
+ * installScript payload, then re-runs this script once. */
 function buildHandsActionScript(driverBody: string): string {
   return `(function () {
   try {
-    var installer = (function () { ${buildHandsRuntime()} })();
-    var _installed = installer && installer.installed;
+    if (!window.__acuteHands) return { needInstall: true };
     ${driverBody}
     return { started: true };
   } catch (e) {

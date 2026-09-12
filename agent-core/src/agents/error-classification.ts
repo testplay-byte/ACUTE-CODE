@@ -48,13 +48,15 @@
  *      is empty. The class chip (UI) keeps carrying the class NAME.
  */
 
-/** The six provider-failure classes (R71-d design: A6). */
+/** The provider-failure classes (R71-d design: A6; R94-D1 added the
+ * seventh — malformed_response). */
 export type ProviderErrorClass =
   | "context_window_exceeded"
   | "auth"
   | "rate_limit"
   | "network"
   | "timeout"
+  | "malformed_response"
   | "unknown";
 
 export interface ProviderErrorClassification {
@@ -106,6 +108,26 @@ const NETWORK_PATTERNS: readonly RegExp[] = [
   /\bsocket\s+hang\s?up\b/i,
   /\b(?:connection|network)\s+(?:reset|refused|closed|error)\b/i,
   /\b(?:internal server error|service unavailable|bad gateway|server error)\b/i,
+];
+
+/** ROUND-94 (R94-D1, the owner's v0.91.0 field report: mid-task the
+ * generation died with "Generation failed: unknown object" — an NVIDIA /
+ * OpenRouter MALFORMED-RESPONSE error that classified `unknown` → fail-fast,
+ * no retry, an instant dead end): message shapes that mean the provider
+ * returned a RESPONSE we could not parse — not a transport failure, not a
+ * rate limit, but garbage from the endpoint itself (a truncated/invalid
+ * SSE chunk, an unexpected token where a JSON field belonged). Known
+ * transient-in-practice on some endpoints (NVIDIA NIM's "unknown object",
+ * OpenRouter's partial-model redirects), so the class maps TRANSIENT and
+ * rides the existing retry ladder — never an instant dead end. Checked
+ * AFTER the network patterns (a 5xx-shaped body keeps its honest network
+ * class) and BEFORE the final `unknown` fallthrough. */
+const MALFORMED_RESPONSE_PATTERNS: readonly RegExp[] = [
+  // The owner's literal case, verbatim.
+  /unknown object/i,
+  /unexpected (?:token|chunk|part|object)/i,
+  /invalid (?:response|chunk) (?:format|shape)/i,
+  /malformed/i,
 ];
 
 /** ROUND-78 (R78): message shapes that mean a 403 is about REGION / ACCESS /
@@ -218,6 +240,10 @@ export const CLASS_MESSAGES: Record<ProviderErrorClass, string> = {
   rate_limit: "rate limited — the provider is throttling requests",
   network: "network/server error — the provider connection failed",
   timeout: "timeout — the provider call did not complete in time",
+  // R94-D1: the human line for the new class (honestUserMessage's fallback
+  // when the real provider text is empty — the card normally shows the
+  // provider's own words).
+  malformed_response: "the provider returned a malformed response (known transient class on some endpoints)",
   unknown: "unclassified provider error",
 };
 
@@ -310,6 +336,15 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
   if (NETWORK_PATTERNS.some((re) => re.test(message)) || (status !== null && status >= 500)) {
     return { class: "network", userMessage: honestUserMessage(message, "network") };
   }
+  // 6. ROUND-94 (R94-D1): malformed/unknown-object provider RESPONSE bodies —
+  // the owner's "Generation failed: unknown object" dead end. Before the
+  // final `unknown` fallthrough so a body that says BOTH (a 500-shaped
+  // network wording — see 5) keeps the network class, while a shapeless
+  // parse failure from a healthy connection lands here: TRANSIENT, ladder-
+  // retryable, never an instant dead end.
+  if (MALFORMED_RESPONSE_PATTERNS.some((re) => re.test(message))) {
+    return { class: "malformed_response", userMessage: honestUserMessage(message, "malformed_response") };
+  }
   return { class: "unknown", userMessage: honestUserMessage(message, "unknown") };
 }
 
@@ -367,7 +402,18 @@ export function providerFailureMessage(
  * timeouts. False for auth (a dead key never heals by waiting), context
  * overflow (has its own D5 recovery path — compaction, not waiting), and
  * unknown (no evidence waiting helps — fail fast with the honest card).
+ *
+ * ROUND-94 (R94-D1): malformed_response JOINS the transient set — the
+ * owner's "Generation failed: unknown object" dead end was exactly this
+ * class, and it is transient-in-practice on the endpoints that produce it
+ * (a rerun typically succeeds). The ladder's existing rungs handle it with
+ * no special-casing beyond this classification.
  */
 export function isTransientApiFailure(classification: ProviderErrorClass): boolean {
-  return classification === "rate_limit" || classification === "network" || classification === "timeout";
+  return (
+    classification === "rate_limit" ||
+    classification === "network" ||
+    classification === "timeout" ||
+    classification === "malformed_response"
+  );
 }

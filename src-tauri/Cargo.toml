@@ -32,8 +32,21 @@ tauri-plugin-shell = "2"
 # derived as `{user}.{service}` (`api-key.ACUTE-CODE/provider/<id>`), which
 # can never match the launcher's cmdkey targets
 # (`ACUTE-CODE/provider/<id>`). See src/wincred.rs for the post-mortem.
+#
+# ROUND-94 (R94-B): the sidecar child's kill-on-close leash (src/sidecar.rs
+# `sidecar_job` — CreateJobObjectW / SetInformationJobObject /
+# AssignProcessToJobObject) so a taskkill'd/crashed app can never orphan a
+# file-locking node.exe (the owner's installer report). Feature notes:
+# "Win32_System_JobObjects" is the module itself, "Win32_System_Threading"
+# carries the JOBOBJECT_EXTENDED_LIMIT_INFORMATION struct (its IoInfo field
+# is Threading::IO_COUNTERS), and "Win32_Security" gates CreateJobObjectW's
+# SECURITY_ATTRIBUTES parameter (already implied by
+# Win32_Security_Credentials — listed for explicitness).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Security_Credentials",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
 ] }

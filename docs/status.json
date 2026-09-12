@@ -3,7 +3,7 @@
  "product": {
   "name": "Acute",
   "tagline": "Local-first multi-agent engineering workbench",
-  "version": "0.91.0",
+  "version": "0.92.0",
   "availability": "Private build — not yet distributed",
   "chips": [
    "Windows desktop",
@@ -312,13 +312,13 @@
  ],
  "plan": {
   "current": {
-   "title": "R93 — the fifth-walkthrough round",
-   "detail": "The owner's fifth end-to-end walkthrough, shipped as v0.91.0. (A) THE COMPUTER-USE V2 (the headline — the owner's 'full-fledged computer use' directive): the element map (stable per-element identity via quantized rects, scan diffing with mapDelta on every observation, per-element reliability counters fed from action receipts, per-app profiles with reliability leaders, ClickScope-style relocation scoring — migration 0034 + docs/architecture/COMPUTER-USE-V2.md, an INDEPENDENT module only element-map.ts touches), the hierarchy (key/windowKey/parentKey/path/treeDepth on every element; the flat actuation index contract preserved), ten new posture-gated tools (get_tree/get_children/get_parent/get_subtree/windows_overview/element_at/app_profile/move_window/window_state/focus_window), the STALE_ELEMENT relocation payload, ghost-box verification (Otsu minority-ink, fail-open), the layered clickability TYPE→PATTERN→FOCUSABLE (the inert ACTION/MSAA by-id draft deleted in the C5 review — they need the COM IUIAutomation bridge, honestly documented absent), the temp-.ps1 -File transport with UTF-8 BOM for the oversized walk capsule, and the rewritten skill body. (B) THE BROWSER AGENT'S HANDS: code-point typing + per-char keydowns + any-failure fallback arming (the garbled-text verdict), the full spec-order hover-first pointer sequence with real pointer identity (the 'not a real mouse' verdict), and read_dom's pageState + the click focus-report (the Images→All reversion verdict). (C) THE TURN-LOOP RELIABILITY: the post-analyst queue re-check + failure-path continuation (queued messages send even after a failed turn), ONE automatic recovery continuation for network/timeout failures with queued messages (queuedKept reported honestly — no silent drops), the acquireSlot empty-pool fast failure, and children inheriting the parent turn's effective pair (a single API key serves sub-agents). (D) THE SETTINGS SURFACE: the slot-1 key listing fix, the multi-add picker (right-zone direct add / left-zone select / drag-paint range + allSettled batch), Test all + the 4th Eye/EyeOff hide-from-picker button, the shared contrast-aware toggle, the sectioned agent form, and the sub-agent picker showing ONLY configured models. Full pipeline green: lint, both typechecks, the 3,023-test root suite (1,026 frontend + 1,997 agent-core; the 12 node-pty tests are Linux-only by design), e2e 12/12, build, license audit 134 CLEAN, docs:check 198/0/0; zero .rs files changed (CI's Windows build re-verifies the Rust side)."
+   "title": "R94 — the field-report round",
+   "detail": "The owner's v0.91.0 field report, shipped as v0.92.0. (A) THE UPDATE PATHS: the in-app updater's asset-URL allowlist fix (browser_download_url's github.com host was never accepted — every download died with 'body.url must be a GitHub release asset of this repository'), the PAT now optional (public repo — anonymous works), the launcher's divergence realignment (git reset --hard FETCH_HEAD after the public-migration history rewrite — the 'Not possible to fast-forward' dead end gone; public-repo warning gone; update failures never dead-end an existing build), and the installer's orphan-proof kill (the sidecar's kill-on-close Job Object + the NSIS preinstall hook killing under-$INSTDIR node.exe — the 'Error opening file for writing' class). (B) THE CHAT: stick-to-bottom auto-scroll (only while pinned; the Jump-to-latest pill) + the queued-message MID-TURN injection (AI SDK prepareStep's messages override — the model sees the note at the next tool-call boundary and the transcript shows it after the tool result). (C) PROVIDER RELIABILITY: malformed_response (the literal 'unknown object') joins the transient ladder + the ONE unknown-with-PROGRESS retry with a visible meta.retry card. (D) COMPUTER USE: the Windows window layer's whole failure chain traced to the dead U32 Add-Type compile — the csc-free UIAutomation fallback (list_apps/list_windows/frontmostPid) + addTypeError diagnostics + the new window_action tool (minimize/maximize/restore/focus/close by windowId|target:'foreground'|appRef) + the no-vision screenshot gate (browser included). (E) BROWSER: the evalJob self-heal (tiny per-action scripts + one-time install; unexpected payloads recovered-or-retried with the payload in the error), the wait action, and the sequence action (multi-stage steps in one call). (F) THE SETTINGS SURFACE: real button affordances for the model-row actions, the optimistic hide/show (scroll preserved), and Test scopes (all/failed/working). (G) THE PROMPTS: the CAPABILITIES section (no-vision sessions told once, never screenshot) + the RECOVERY PROTOCOL (re-observe, ≤2 identical retries then change strategy, never abandon). Full pipeline green + the new LINUX LIVE-FIRE harness (scripts/r94-live-fire.mjs) proving the queue injection, the unknown-object recovery, and the headless browser/window paths end-to-end on the wire."
   },
   "upcoming": [
    {
-    "title": "R94+ — the modularity continuation (owner-gated)",
-    "detail": "Wave 2-b the turn-loop harness extraction (risk #1 per the R85 audit; R93's queue/recovery work grew the sync/streamed duplication further), the remaining server.ts domains (terminal, MCP, computer-use, diagnostics, approvals, vision + the notifications/jobs/checkpoints tail), then Wave 3 the frontend seams; standing items: edit-linting, installer code-signing, the browser agent's CDP-level trusted-input tier (isTrusted), the computer-use COM IUIAutomation bridge for the ACTION/MSAA legacy clickability layers, and the owner's future browser asks (right-click → Save Image As)."
+    "title": "R95+ — the modularity continuation (owner-gated)",
+    "detail": "Wave 2-b the turn-loop harness extraction, the remaining server.ts domains, then Wave 3 the frontend seams; standing items: the NSIS wizard's custom UI, installer code-signing, the browser agent's CDP-level trusted-input tier (isTrusted), the computer-use COM IUIAutomation bridge for the ACTION/MSAA legacy layers, and the owner's future browser asks."
    }
   ],
   "principles": [
@@ -327,6 +327,6 @@
    "Quality over speed — every round verified before push"
   ]
  },
- "round": 93,
+ "round": 94,
  "ci": null
 }

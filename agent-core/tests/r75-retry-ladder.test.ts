@@ -21,6 +21,14 @@
  *  · Sync integration: the immediate rung recovers a sub-agent turn; the
  *    R75 swallow fix — a failure after partial replies returns 502 (the
  *    old code returned ok:true and the orchestrator believed the lie).
+ *
+ * ROUND-94 (R94-D1) additions: malformed_response joins the transient
+ * ladder (the owner's literal "Generation failed: unknown object" dead
+ * end — classification → ladder, no special-casing), and the ONE
+ * unknown-class-with-PROGRESS retry: `unknown` stays fail-fast EXCEPT
+ * when the dying turn already did real work, then exactly one bounded
+ * extra attempt (visible meta.retry card, attempt 2 of 2) before the
+ * honest terminal path.
  */
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -417,5 +425,256 @@ describe("R75: the sync ladder + the swallow fix", () => {
     expect(usage).toHaveLength(1);
     expect(usage[0]?.input_tokens).toBe(10);
     expect(usage[0]?.output_tokens).toBe(20);
+  });
+});
+
+/* ── ROUND-94 (R94-D1): malformed_response on the ladder + the
+   unknown-with-PROGRESS retry — the owner's "Generation failed: unknown
+   object" instant dead end ──────────────────────────────────────────────── */
+
+describe("R94-D1: malformed_response rides the transient ladder", () => {
+  it("'Generation failed: unknown object' retries on the IMMEDIATE rung and recovers — never an instant dead end", async () => {
+    const { sessionId, keyring } = setup("R94-Malformed-Ladder");
+    const emitted: Array<Record<string, unknown>> = [];
+    let streamCalls = 0;
+    const chatStream: StreamChatFn = async function* (): AsyncGenerator<StreamChatEvent> {
+      streamCalls += 1;
+      // The owner's literal v0.91.0 failure, verbatim.
+      if (streamCalls === 1) throw new Error("Generation failed: unknown object");
+      yield { type: "text-delta", delta: "Recovered — the work is done." };
+      yield { type: "finish", usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 } };
+    };
+
+    const outcome = await runStreamedAgentTurn(
+      { db, keyring, chat: summarizerChat, chatStream },
+      sessionId,
+      "do the work",
+      (event) => emitted.push(event as Record<string, unknown>),
+    );
+
+    // Pre-R94 this failed FAST (class unknown → no ladder → the instant
+    // dead end the owner reported). Now: one immediate-rung retry, then
+    // success.
+    expect(outcome.ok).toBe(true);
+    expect(streamCalls).toBe(2);
+    const retryFrames = emitted.filter((e) => e.type === "meta.retry");
+    expect(retryFrames).toHaveLength(1);
+    expect(retryFrames[0]?.errorClass).toBe("malformed_response");
+    expect(String(retryFrames[0]?.providerError)).toContain("unknown object");
+    expect(String(retryFrames[0]?.classMessage)).toContain("unknown object");
+    expect(listSessionEvents(db, sessionId).some((e) => e.type === "turn.error")).toBe(false);
+  });
+
+  it("a malformed failure that never heals exhausts the ladder honestly (attempts = totalAttempts)", async () => {
+    const { sessionId, keyring } = setup("R94-Malformed-Exhaust");
+    const chatStream: StreamChatFn = async function* (): AsyncGenerator<StreamChatEvent> {
+      throw new Error("Generation failed: unknown object");
+    };
+
+    vi.useFakeTimers();
+    try {
+      const turnPromise = runStreamedAgentTurn(
+        { db, keyring, chat: summarizerChat, chatStream },
+        sessionId,
+        "do the work",
+        () => undefined,
+      );
+      await vi.advanceTimersByTimeAsync(90_000 + 300_000 + 600_000 + 1_800_000 + 5_000);
+      const outcome = await turnPromise;
+
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        expect(outcome.details?.errorClass).toBe("malformed_response");
+        expect(outcome.details?.attempts).toBe(6);
+        expect(String(outcome.message)).toContain("auto-retry ladder exhausted");
+      }
+      const error = listSessionEvents(db, sessionId).find((e) => e.type === "turn.error");
+      expect(error).toBeDefined();
+      expect((error!.payload as Record<string, unknown>).errorClass).toBe("malformed_response");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("R94-D1: the ONE unknown-class-with-PROGRESS retry", () => {
+  /** An error NO pattern predicts — class stays `unknown` (the R75
+   * fail-fast contract for the fresh case; the progress case is what
+   * R94-D1 carves out). */
+  const novelUnknownError = (): Error => new Error("the provider exploded in a novel way");
+
+  it("an UNKNOWN failure after tool progress retries ONCE (visible card, attempt 2 of 2) and recovers — streamed", async () => {
+    const { sessionId, keyring } = setup("R94-Unknown-Progress");
+    const emitted: Array<Record<string, unknown>> = [];
+    let streamCalls = 0;
+    const chatStream: StreamChatFn = async function* (): AsyncGenerator<StreamChatEvent> {
+      streamCalls += 1;
+      if (streamCalls === 1) {
+        // Iteration 1: REAL work (a tool call) — the progress that earns
+        // the retry (the owner's exact shape: sub-agents had finished).
+        yield { type: "tool-call", toolName: "write_file", argsSummary: "path: a.txt" };
+        yield { type: "tool-result", toolName: "write_file", argsSummary: "path: a.txt", ok: true, outputSummary: "ok" };
+        yield { type: "finish", usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 } };
+        return;
+      }
+      if (streamCalls === 2) throw novelUnknownError();
+      // Call 3 — the ONE retry: succeeds.
+      yield { type: "text-delta", delta: "Recovered — Task completed." };
+      yield { type: "finish", usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 } };
+    };
+
+    vi.useFakeTimers();
+    try {
+      const turnPromise = runStreamedAgentTurn(
+        { db, keyring, chat: summarizerChat, chatStream },
+        sessionId,
+        "do the work",
+        (event) => emitted.push(event as Record<string, unknown>),
+      );
+      // Iteration 1 runs; iteration 2 dies; the 5-second wait elapses; the
+      // retry (iteration 2 re-run) succeeds. TWO advances: the runtime's
+      // startup microtasks ride the FIRST advance's flush, so the wait's
+      // setTimeout(5s) registers with the fake clock ALREADY at ~5.1s —
+      // its deadline (~10.1s) only falls inside a SECOND window.
+      await vi.advanceTimersByTimeAsync(5_000 + 100);
+      await vi.advanceTimersByTimeAsync(5_000 + 100);
+      const outcome = await turnPromise;
+
+      expect(outcome.ok).toBe(true);
+      expect(streamCalls).toBe(3);
+      // The visible retry card — the frame shape the UI already renders.
+      const retryFrames = emitted.filter((e) => e.type === "meta.retry");
+      expect(retryFrames).toHaveLength(1);
+      expect(retryFrames[0]?.attempt).toBe(2);
+      expect(retryFrames[0]?.totalAttempts).toBe(2);
+      expect(retryFrames[0]?.errorClass).toBe("unknown");
+      expect(String(retryFrames[0]?.message)).toContain("retrying (attempt 2 of 2)");
+      expect(String(retryFrames[0]?.providerError)).toContain("novel way");
+      // No error persisted — the turn recovered.
+      expect(listSessionEvents(db, sessionId).some((e) => e.type === "turn.error")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the retry is ONE: a second unknown failure ends through the honest terminal path with attempts=2", async () => {
+    const { sessionId, keyring } = setup("R94-Unknown-Progress-Twice");
+    const emitted: Array<Record<string, unknown>> = [];
+    let streamCalls = 0;
+    const chatStream: StreamChatFn = async function* (): AsyncGenerator<StreamChatEvent> {
+      streamCalls += 1;
+      if (streamCalls === 1) {
+        yield { type: "tool-call", toolName: "write_file", argsSummary: "path: a.txt" };
+        yield { type: "tool-result", toolName: "write_file", argsSummary: "path: a.txt", ok: true, outputSummary: "ok" };
+        yield { type: "finish", usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 } };
+        return;
+      }
+      throw novelUnknownError();
+    };
+
+    vi.useFakeTimers();
+    try {
+      const turnPromise = runStreamedAgentTurn(
+        { db, keyring, chat: summarizerChat, chatStream },
+        sessionId,
+        "do the work",
+        (event) => emitted.push(event as Record<string, unknown>),
+      );
+      // TWO advances (same fake-clock shape as the recover test above: the
+      // wait's timer registers with the clock already at ~5.1s — the second
+      // window covers its ~10.1s deadline, the terminal path needs no more).
+      await vi.advanceTimersByTimeAsync(5_000 + 100);
+      await vi.advanceTimersByTimeAsync(5_000 + 100);
+      const outcome = await turnPromise;
+
+      // Exactly TWO attempts (the initial + the one retry), then terminal.
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        expect(outcome.status).toBe(502);
+        expect(outcome.details?.errorClass).toBe("unknown");
+        expect(outcome.details?.attempts).toBe(2);
+      }
+      expect(streamCalls).toBe(3);
+      // ONE retry card, never a second.
+      expect(emitted.filter((e) => e.type === "meta.retry")).toHaveLength(1);
+      const error = listSessionEvents(db, sessionId).find((e) => e.type === "turn.error");
+      expect(error).toBeDefined();
+      expect((error!.payload as Record<string, unknown>).attempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a FRESH no-progress unknown error still fails fast — one call, no retry card (the R75 contract intact)", async () => {
+    const { sessionId, keyring } = setup("R94-Unknown-Fresh");
+    const emitted: Array<Record<string, unknown>> = [];
+    let streamCalls = 0;
+    const chatStream: StreamChatFn = async function* (): AsyncGenerator<StreamChatEvent> {
+      streamCalls += 1;
+      // The VERY FIRST call dies unclassified — nothing was done yet.
+      throw novelUnknownError();
+    };
+
+    const outcome = await runStreamedAgentTurn(
+      { db, keyring, chat: summarizerChat, chatStream },
+      sessionId,
+      "do the work",
+      (event) => emitted.push(event as Record<string, unknown>),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.details?.attempts).toBe(1);
+      expect(outcome.details?.errorClass).toBe("unknown");
+    }
+    expect(streamCalls).toBe(1);
+    expect(emitted.filter((e) => e.type === "meta.retry")).toHaveLength(0);
+    expect(listSessionEvents(db, sessionId).some((e) => e.type === "turn.error")).toBe(true);
+  });
+
+  it("the SYNC twin: a sub-agent iteration-2 unknown failure after iteration-1 work retries once", async () => {
+    const { sessionId, keyring } = setup("R94-Unknown-Progress-Sync");
+    let chatCalls = 0;
+    const chat: ChatFn = async () => {
+      chatCalls += 1;
+      if (chatCalls === 1) {
+        // Iteration 1: a tool-using reply — the persisted progress. The
+        // text deliberately avoids COMPLETION_SIGNAL phrases ("done.",
+        // "task complete.", …) — a completion signal on a tool-using
+        // iteration with all todos done BREAKS the outer loop after this
+        // call (the runtime's inverted continueIfUnfinished), and this
+        // test needs the loop to CONTINUE to the failing iteration 2.
+        return {
+          text: "Part one executed; continuing with the second half.",
+          usage: { inputTokens: 10, outputTokens: 10, totalTokens: 20 },
+          toolCalls: [
+            { name: "read_file", argsSummary: "path: README.md", ok: true, outputSummary: "200 chars" },
+          ],
+        };
+      }
+      if (chatCalls === 2) throw novelUnknownError();
+      return {
+        text: "Recovered sync — done.",
+        usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+        toolCalls: [],
+      };
+    };
+
+    vi.useFakeTimers();
+    try {
+      const turnPromise = runSingleAgentTurn({ db, keyring, chat }, sessionId, "two-part work");
+      // TWO advances (the same fake-clock shape as the streamed twins: the
+      // wait's timer registers with the clock already at ~5.1s; the second
+      // window covers its ~10.1s deadline).
+      await vi.advanceTimersByTimeAsync(5_000 + 100);
+      await vi.advanceTimersByTimeAsync(5_000 + 100);
+      const outcome = await turnPromise;
+
+      expect(outcome.ok).toBe(true);
+      expect(chatCalls).toBe(3);
+      expect(listSessionEvents(db, sessionId).some((e) => e.type === "turn.error")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

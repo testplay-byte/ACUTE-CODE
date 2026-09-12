@@ -66,11 +66,15 @@ import {
 import { sendBrowserCommand } from "../../browser-command.js";
 // ROUND-89 (R89-E): the AGENT HANDS — the visible, human-like input engine
 // (browser-hands.ts: the in-page cursor/typing/scroll runtime + drivers).
+// R94-F: buildHandsInstallScript is the ONE-TIME runtime installer — it rides
+// every evalJob command as payload.installScript (the action script itself
+// stays tiny; see the split's comment in browser-hands.ts).
 import {
   buildHandsClickScript,
   buildHandsTypeScript,
   buildHandsPressKeyScript,
   buildHandsMouseScript,
+  buildHandsInstallScript,
 } from "./browser-hands.js";
 import { detectVerificationWall, openBrowserCheckpoint } from "../../browser-checkpoint.js";
 import type { VerificationWallHit } from "../../browser-checkpoint.js";
@@ -78,6 +82,11 @@ import { requestWebFetchApproval } from "../../approvals.js";
 import { buildApprovalDeps } from "../approval-deps.js";
 import { getActiveComputerRelay } from "./computer-relay.js";
 import { relayVision } from "./computer-use.js";
+// R94-E (PART 3): the vision gate — the same no-image-understanding check the
+// computer-use screenshot tools run BEFORE any capture work (the helper +
+// the canonical message live in computer-use.ts; browser.ts already imports
+// relayVision from there, so this adds NO new module edge).
+import { NO_VISION_SCREENSHOT_MESSAGE, NO_VISION_SCREENSHOT_RECOVERY, sessionHasVisionPath } from "./computer-use.js";
 // ROUND-67 (R67-D): the screenshot action copies its capture into the
 // route-served raster registry + announces the chat THUMBNAIL frame.
 import { registerRaster } from "../../computer/raster-cache.js";
@@ -287,12 +296,69 @@ function wallWarningNote(hit: VerificationWallHit): string {
   return `\n⚠ A verification wall (${hit.kind}) is showing on this page — call browser_control with action wait_for_verification so the owner can solve it while the agent waits.`;
 }
 
+/**
+ * R94-F: the ONE-TIME hands runtime installer, sent with EVERY evalJob
+ * command as `payload.installScript`. It rides the SSE frame — NOT the page
+ * eval — and the BrowserPanel only evals it when the (tiny) action script
+ * answers {needInstall:true}, i.e. once per page navigation. This is the
+ * structural fix for the owner's v0.91.0 Windows report: the old action
+ * scripts embedded this whole runtime into every click/type/press_key
+ * (17-19KB monoliths — the ONLY evals failing on his machine while ~2KB
+ * evals on the same pages worked; size was the discriminating variable).
+ */
+const HANDS_INSTALL_SCRIPT = buildHandsInstallScript();
+
+/** R94-F: the wait action's page probe — a tiny read-only eval answered with
+ * {ready, has, url}. `selector` is embedded via JSON.stringify ONLY
+ * (injection safety, the same contract as every other page script). A
+ * failing probe (page navigating, bridge timeout) is NEVER an immediate
+ * error — the wait loop treats it as not-ready and keeps probing. */
+function buildWaitProbeScript(selector: string): string {
+  return `return { ready: document.readyState, has: ${
+    selector === "" ? "null" : `!!(document.querySelector(${JSON.stringify(selector)}))`
+  }, url: location.href };`;
+}
+
+/** The step actions a sequence may chain (R94-F) — every action except
+ * "sequence" itself (no nesting) and except the tool-level plumbing that
+ * must not run mid-chain. Kept in sync with the action enum + the schema's
+ * steps description. */
+const SEQUENCE_STEP_ACTIONS: ReadonlySet<string> = new Set([
+  "navigate",
+  "back",
+  "forward",
+  "reload",
+  "read",
+  "read_dom",
+  "source",
+  "click",
+  "type",
+  "press_key",
+  "mouse",
+  "eval",
+  "wait",
+  "wait_for_verification",
+  "set_viewport",
+  "screenshot",
+  "get_state",
+]);
+
+/** R94-F: one condensed line for a sequence step's report — the step
+ * outputs can be huge (read_dom up to 20KB); the sequence report is a
+ * progress overview, not a data dump (the failing step's FULL error is
+ * always surfaced separately, and data actions should be called directly
+ * when their payload matters). */
+function condenseSequenceLine(output: string): string {
+  const flat = output.replace(/\s+/g, " ").trim();
+  return flat.length > 500 ? `${flat.slice(0, 500)}…(${flat.length} chars — call the action directly for the full result)` : flat;
+}
+
 export const browserPlugin: PluginDefinition = {
   id: "core-browser",
   name: "Embedded Browser",
   version: "1.2.0",
   description:
-    "Drives the user's embedded browser panel (navigate/history/viewport/read_dom/source/click/type/press_key/eval/wait_for_verification/screenshot/state).",
+    "Drives the user's embedded browser panel (navigate/history/viewport/read_dom/source/click/type/press_key/eval/wait/sequence/wait_for_verification/screenshot/state).",
   category: "browser",
   createTools: (ctx): ToolDefinition[] => {
     const toolDeps = ctx.toolDeps;
@@ -300,14 +366,14 @@ export const browserPlugin: PluginDefinition = {
       {
         name: "browser_control",
         description:
-          "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live, driven with VISIBLE HUMAN-LIKE INPUT: a custom agent cursor is ALWAYS on the page (parked at a resting spot between actions), moves to every target along a natural human path (slight overshoot-and-return, hesitation, curved — never a straight-line teleport), fires a real pointermove/mousemove trail with hover events as it travels (hover menus open), clicks land as real pointer events with a visible press pulse, and typing is word-by-word at a human pace (~150 WPM) after a natural ~1s beat from the click that focused the field; submit (Enter) also lands ~1s after the typing finishes. HOW TO WORK: (0) PLAN — for a multi-step browsing task, write the plan with the todo tool first (the owner watches the list progress live). (1) SEARCH FIRST — if the task is to find/search/look something up, navigate to a search engine (https://duckduckgo.com or https://www.bing.com), TYPE the query into its search box, then submit — do NOT guess direct URLs unless the task explicitly gives one. (2) read_dom FIRST on every new page — it returns each interactive element's exact selector + x/y/w/h position, which feed the mouse ops. (3) Interact like a person: type into fields (word-by-word), click (the cursor visibly moves), press_key Enter to submit forms, mouse scroll to browse results. Actions: navigate (absolute http(s) URL; documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts; presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps w/h), read (the CURRENT page's text content, fetched fresh server-side — works in every mode), read_dom (a STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element with a short CSS selector + its text/label/value + its x/y/w/h position, forms with field names, and pageState — the SPA SECTION tracker: the URL hash + query params + which tab/nav item is aria-selected or aria-current; AFTER clicking a section or tab, call read_dom again and CHECK pageState to confirm the section stuck — if it reverted (e.g. back to 'all'), click the section again; include 'all' adds the text paragraphs — THE way to know the page content without screenshots — call it FIRST), source (the live page's raw material: html (outerHTML of the page or one selector), css (stylesheets, plus the computed style of a selector), or scripts (src list + inline bodies); native desktop mode only), click (click an element — by CSS selector, or a case-insensitive substring of a clickable's visible text/aria-label/name/value/title; the cursor VISIBLY moves to it, hovers first (menus arm), then a full real pointer-event sequence — over/enter, move, down, up, click — fires at that exact spot, and the result reports where focus moved afterwards, a cheap effect check; native desktop mode only), type (the cursor moves to the field and TAPS it, a natural ~1s beat passes, then the text is typed WORD BY WORD at ~150 WPM with real per-character events so React/Vue pages register it; newlines in the text become REAL newlines (Shift+Enter formatting — the form is NEVER submitted implicitly); pass submit:true to submit after typing (the Enter key lands ~1s after the typing finishes — a person reviewing what they typed); capped at 600 chars per call — split longer texts), press_key (dispatch a key to an element or the focused element — Enter inside a form triggers REAL native form submission), mouse (FULL pointer control at exact page coordinates from read_dom: op move (hover), click (left), double, right (context menu), drag (x,y → toX,toY), scroll (dx/dy pixels, optional x/y hover point) — the custom cursor visibly travels every path), eval (run JavaScript INSIDE the live page and get the value back — click links with `return document.querySelector('a').click()`, fill inputs, read the DOM; the page's own state (logins, JS) is live; native desktop mode only), screenshot (capture EXACTLY what the browser panel shows + a vision-model description — panel region only, NEVER the full screen; requires Computer Use enabled in Settings and the browser tab to be open in the app; prefer read/read_dom — screenshot only when pixels are genuinely the question), get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab), wait_for_verification (the page is blocked by a bot wall — captcha/Cloudflare/age gate: opens a countdown card in the OWNER's chat and waits — default 15s, up to 60s — while the owner solves it, then re-checks the page and reports honestly). To submit a search box / form: type with submit:true, or press_key key Enter (it triggers native form submission), or click the submit button. When a tool result warns '⚠ A verification wall', call wait_for_verification — the owner gets a live countdown card in chat to solve it. sessionId optional — omit it to drive THIS chat session's own tab (auto-opened for you; never another chat session's tab). click/type/press_key/mouse/read_dom/source/eval run through the desktop app's native bridge — in web dev mode they fail fast with an honest error (read works in every mode). The actions are HUMAN-PACED by design (the user watches a person work): a type call takes ~1s per 12 words plus the beats — do not fire them in parallel; do them in order like a person would. Viewport/page changes appear LIVE in the user's panel; announce them in one line. The page the panel shows may differ from a fresh fetch (logins, JS) — read for text, eval for the live DOM, screenshot for what the user actually sees.",
+          "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live, driven with VISIBLE HUMAN-LIKE INPUT: a custom agent cursor is ALWAYS on the page (parked at a resting spot between actions), moves to every target along a natural human path (slight overshoot-and-return, hesitation, curved — never a straight-line teleport), fires a real pointermove/mousemove trail with hover events as it travels (hover menus open), clicks land as real pointer events with a visible press pulse, and typing is word-by-word at a human pace (~150 WPM) after a natural ~1s beat from the click that focused the field; submit (Enter) also lands ~1s after the typing finishes. HOW TO WORK: (0) PLAN — for a multi-step browsing task, write the plan with the todo tool first (the owner watches the list progress live). (1) SEARCH FIRST — if the task is to find/search/look something up, navigate to a search engine (https://duckduckgo.com or https://www.bing.com), TYPE the query into its search box, then submit — do NOT guess direct URLs unless the task explicitly gives one. (2) read_dom FIRST on every new page — it returns each interactive element's exact selector + x/y/w/h position, which feed the mouse ops. (3) Interact like a person: type into fields (word-by-word), click (the cursor visibly moves), press_key Enter to submit forms, mouse scroll to browse results. Actions: navigate (absolute http(s) URL; documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts; presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps w/h), read (the CURRENT page's text content, fetched fresh server-side — works in every mode), read_dom (a STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element with a short CSS selector + its text/label/value + its x/y/w/h position, forms with field names, and pageState — the SPA SECTION tracker: the URL hash + query params + which tab/nav item is aria-selected or aria-current; AFTER clicking a section or tab, call read_dom again and CHECK pageState to confirm the section stuck — if it reverted (e.g. back to 'all'), click the section again; include 'all' adds the text paragraphs — THE way to know the page content without screenshots — call it FIRST), source (the live page's raw material: html (outerHTML of the page or one selector), css (stylesheets, plus the computed style of a selector), or scripts (src list + inline bodies); native desktop mode only), click (click an element — by CSS selector, or a case-insensitive substring of a clickable's visible text/aria-label/name/value/title; the cursor VISIBLY moves to it, hovers first (menus arm), then a full real pointer-event sequence — over/enter, move, down, up, click — fires at that exact spot, and the result reports where focus moved afterwards, a cheap effect check; native desktop mode only), type (the cursor moves to the field and TAPS it, a natural ~1s beat passes, then the text is typed WORD BY WORD at ~150 WPM with real per-character events so React/Vue pages register it; newlines in the text become REAL newlines (Shift+Enter formatting — the form is NEVER submitted implicitly); pass submit:true to submit after typing (the Enter key lands ~1s after the typing finishes — a person reviewing what they typed); capped at 600 chars per call — split longer texts), press_key (dispatch a key to an element or the focused element — Enter inside a form triggers REAL native form submission), mouse (FULL pointer control at exact page coordinates from read_dom: op move (hover), click (left), double, right (context menu), drag (x,y → toX,toY), scroll (dx/dy pixels, optional x/y hover point) — the custom cursor visibly travels every path), eval (run JavaScript INSIDE the live page and get the value back — click links with `return document.querySelector('a').click()`, fill inputs, read the DOM; the page's own state (logins, JS) is live; native desktop mode only), wait (let the page settle — probes the live page until its conditions hold, up to ms (default 900, max 15000): document.readyState 'complete' (default on; readyState:false skips it), a CSS selector appearing (selector), and/or the tab URL containing a substring (urlContains); returns honestly what matched or what did not — a pure ms pause with readyState:false needs no bridge. ALWAYS call wait (or use sequence, which waits automatically) after navigate before clicking/typing — pages need a moment to become interactive), sequence (MULTI-STAGE STEPS in ONE tool call — the way to do atomic multi-step interactions: steps is an array of 1-8 step objects {action, ...params}, each action being any of navigate/back/forward/reload/read/read_dom/source/click/type/press_key/mouse/eval/wait/wait_for_verification/set_viewport/screenshot/get_state (never sequence itself — no nesting); the steps run IN ORDER on one tab, each through the exact same code as the standalone action, stopping at the FIRST failure with its step index; between steps the tool settles automatically (250ms, or after navigate/back/forward/reload it waits up to 5s for readyState complete — the built-in proper waiting); use it for type→wait→click, navigate→read_dom, form fill→submit chains), screenshot (capture EXACTLY what the browser panel shows + a vision-model description — panel region only, NEVER the full screen; requires Computer Use enabled in Settings and the browser tab to be open in the app; prefer read/read_dom — screenshot only when pixels are genuinely the question), get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab), wait_for_verification (the page is blocked by a bot wall — captcha/Cloudflare/age gate: opens a countdown card in the OWNER's chat and waits — default 15s, up to 60s — while the owner solves it, then re-checks the page and reports honestly). To submit a search box / form: type with submit:true, or press_key key Enter (it triggers native form submission), or click the submit button. When a tool result warns '⚠ A verification wall', call wait_for_verification — the owner gets a live countdown card in chat to solve it. sessionId optional — omit it to drive THIS chat session's own tab (auto-opened for you; never another chat session's tab). click/type/press_key/mouse/read_dom/source/eval run through the desktop app's native bridge — in web dev mode they fail fast with an honest error (read works in every mode). The actions are HUMAN-PACED by design (the user watches a person work): a type call takes ~1s per 12 words plus the beats — do not fire them in parallel; do them in order like a person would. Viewport/page changes appear LIVE in the user's panel; announce them in one line. The page the panel shows may differ from a fresh fetch (logins, JS) — read for text, eval for the live DOM, screenshot for what the user actually sees.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
             action: {
               type: "string",
               description:
-                "navigate | back | forward | reload | set_viewport | read | read_dom | source | click | type | press_key | mouse | eval | screenshot | get_state | wait_for_verification",
+                "navigate | back | forward | reload | set_viewport | read | read_dom | source | click | type | press_key | mouse | eval | wait | sequence | screenshot | get_state | wait_for_verification",
               enum: [
                 "navigate",
                 "back",
@@ -322,6 +388,8 @@ export const browserPlugin: PluginDefinition = {
                 "press_key",
                 "mouse",
                 "eval",
+                "wait",
+                "sequence",
                 "screenshot",
                 "get_state",
                 "wait_for_verification",
@@ -351,7 +419,7 @@ export const browserPlugin: PluginDefinition = {
             selector: {
               type: "string",
               description:
-                "CSS selector of the target element (actions click/press_key/source; type also falls back to matching an input by aria-label/name/placeholder/id substring when the selector matches nothing)",
+                "CSS selector of the target element (actions click/press_key/source; type also falls back to matching an input by aria-label/name/placeholder/id substring when the selector matches nothing; action=wait: succeed once document.querySelector(selector) finds an element)",
             },
             text: {
               type: "string",
@@ -401,6 +469,32 @@ export const browserPlugin: PluginDefinition = {
               description:
                 "action=wait_for_verification: how long the owner may take to solve the wall, in ms (default 15000, clamped to 3000-60000)",
             },
+            ms: {
+              type: "number",
+              description:
+                "action=wait: the total wait budget in ms (250-15000, default 900) — the tool probes the page every 250ms until the conditions hold (readyState complete by default; optional selector appearing / urlContains); with readyState:false and no selector/urlContains it is a plain pause",
+            },
+            urlContains: {
+              type: "string",
+              description:
+                "action=wait: succeed once the tab's URL contains this substring (a redirect/settle detector — e.g. 'github.com' while a login hop lands)",
+            },
+            readyState: {
+              type: "boolean",
+              description:
+                "action=wait: require document.readyState === 'complete' (default true — the recommended wait after navigate; set false for a pure ms pause)",
+            },
+            steps: {
+              type: "array",
+              description:
+                "action=sequence: 1-8 steps, each an object {action: <one of navigate/back/forward/reload/read/read_dom/source/click/type/press_key/mouse/eval/wait/wait_for_verification/set_viewport/screenshot/get_state>, ...that action's params} — executed IN ORDER on ONE tab in a single tool call, stopping at the first failure (e.g. {action:'type', selector:'#q', text:'hello', submit:true} then {action:'wait', ms:900} then {action:'click', selector:'button[type=submit]'})",
+              items: {
+                type: "object",
+                description:
+                  "One sequence step: {action, ...params} — the same params the standalone action takes. 'sequence' is not allowed as a step action (no nesting).",
+              },
+              maxItems: 8,
+            },
             sessionId: {
               type: "string",
               description:
@@ -410,7 +504,6 @@ export const browserPlugin: PluginDefinition = {
           required: ["action"],
         }),
         execute: async (input) => {
-          const action = typeof input.action === "string" ? input.action : "";
           // Mirror of the backend's SESSION_ID_RE (browser-proxy.ts) — the
           // command entry points trust their caller, so validate here.
           const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -479,748 +572,980 @@ export const browserPlugin: PluginDefinition = {
               ? " (note: no chat-session context — using the shared fallback tab; this state is not visible to the user)"
               : "";
 
-          // ── R66 (A3/A6): run ONE eval script through the bridge ────────
-          // Shared by click/type/press_key/source/read_dom. Fails closed
-          // exactly like the raw eval action (no toolDeps/emit → honest
-          // refusal); page-level {ok:false} + thrown errors + the script's
-          // own {error} return all surface as honest tool failures.
-          const runPageScript = async (
-            actionName: string,
-            script: string,
-          ): Promise<{ ok: true; value: unknown } | { ok: false; output: string }> => {
-            if (toolDeps === undefined || typeof toolDeps.emit !== "function") {
-              return {
-                ok: false,
-                output: `browser_control: ${actionName} unavailable — no live stream channel in this context (${actionName} needs the app UI to run a script in the page)`,
-              };
-            }
-            let data: unknown;
-            try {
-              data = await sendBrowserCommand(toolDeps.emit, sessionId, "eval", { script }, 12_000);
-            } catch (error) {
-              return {
-                ok: false,
-                output: `browser_control: ${actionName} failed — ${error instanceof Error ? error.message : String(error)}`,
-              };
-            }
-            const result = (data ?? {}) as { ok?: unknown; value?: unknown; error?: unknown };
-            if (result.ok !== true) {
-              const message = typeof result.error === "string" ? result.error : "the page rejected the script";
-              return { ok: false, output: `browser_control: ${actionName} — page error: ${message}` };
-            }
-            return { ok: true, value: result.value ?? null };
-          };
-          /** The script's in-page honest miss ({error: "…"}). */
-          const pageError = (actionName: string, value: unknown): string | null => {
-            const err = (value ?? {}) as { error?: unknown };
-            return typeof err.error === "string" && err.error !== "" ? `browser_control: ${actionName} — ${err.error}` : null;
-          };
+          // ── ROUND-94 (R94-F): the per-action dispatch ────────────────
+          // Extracted from the single-action path so the SEQUENCE action
+          // (below) can run its steps through THE SAME code — one shared
+          // if-chain, one set of helpers, one validation story. The tab is
+          // resolved ONCE by the outer execute() (a sequence never
+          // re-resolves or re-mints); every action reads its params from
+          // `input` exactly as before.
+          const executeAction = async (
+            input: Record<string, unknown>,
+            resolvedSessionId: string,
+            hint: string,
+          ): Promise<{ ok: boolean; output: string }> => {
+            const action = typeof input.action === "string" ? input.action : "";
+            const sessionId = resolvedSessionId;
+            const noTabHint = hint;
 
-          /** R89-E: run one AGENT-HANDS job — the script installs the cursor
-           * runtime, starts the async job, and returns {started:true} at
-           * once; the evalJob BRIDGE action (BrowserPanel) then polls the
-           * page's job state every 120ms and answers with the final result.
-           * R90-D1: the budget is now 75s — the human pacing grew (tap →
-           * ~1s beat → typing → ~1s beat → Enter; ~150 WPM ≈ 12.5 chars/s
-           * means a full 600-char type call alone takes ~48s, plus the move
-           * path + the beats). The panel's own job budget matches (60s) and
-           * this outer round-trip covers the bridge overhead on top. */
-          const runPageJob = async (
-            actionName: string,
-            script: string,
-          ): Promise<{ ok: true; value: unknown } | { ok: false; output: string }> => {
-            if (toolDeps === undefined || typeof toolDeps.emit !== "function") {
-              return {
-                ok: false,
-                output: `browser_control: ${actionName} unavailable — no live stream channel in this context (${actionName} needs the app UI to drive the page)`,
-              };
-            }
-            let data: unknown;
-            try {
-              data = await sendBrowserCommand(toolDeps.emit, sessionId, "evalJob", { script }, 75_000);
-            } catch (error) {
-              return {
-                ok: false,
-                output: `browser_control: ${actionName} failed — ${error instanceof Error ? error.message : String(error)}`,
-              };
-            }
-            const result = (data ?? {}) as { ok?: unknown; value?: unknown; error?: unknown };
-            if (result.ok !== true) {
-              const message = typeof result.error === "string" ? result.error : "the page rejected the script";
-              return { ok: false, output: `browser_control: ${actionName} — page error: ${message}` };
-            }
-            return { ok: true, value: result.value ?? null };
-          };
-
-          // ── R66 (A4): the wall probe ───────────────────────────────────
-          // Bridge first (the LIVE page the user sees), server-side fetch
-          // fallback (web dev mode / no native webview). Callers decide what
-          // a probe failure means (navigate swallows it; wait_for_verification
-          // reports it).
-          const probeWallOnce = async (
-            url: string,
-            fallbackTitle: string | null,
-          ): Promise<{ ok: true; title: string; text: string; via: "bridge" | "fetch" } | { ok: false; error: string }> => {
-            if (toolDeps !== undefined && typeof toolDeps.emit === "function") {
+            // ── R66 (A3/A6): run ONE eval script through the bridge ────────
+            // Shared by click/type/press_key/source/read_dom. Fails closed
+            // exactly like the raw eval action (no toolDeps/emit → honest
+            // refusal); page-level {ok:false} + thrown errors + the script's
+            // own {error} return all surface as honest tool failures.
+            const runPageScript = async (
+              actionName: string,
+              script: string,
+              timeoutMs: number = 12_000,
+            ): Promise<{ ok: true; value: unknown } | { ok: false; output: string }> => {
+              if (toolDeps === undefined || typeof toolDeps.emit !== "function") {
+                return {
+                  ok: false,
+                  output: `browser_control: ${actionName} unavailable — no live stream channel in this context (${actionName} needs the app UI to run a script in the page)`,
+                };
+              }
+              let data: unknown;
               try {
-                const data = await sendBrowserCommand(toolDeps.emit, sessionId, "eval", { script: WALL_PROBE_SCRIPT }, 5_000);
-                const result = (data ?? {}) as { ok?: unknown; value?: unknown };
-                if (result.ok === true) {
-                  const value = (result.value ?? {}) as { title?: unknown; text?: unknown; markers?: unknown };
-                  const title = typeof value.title === "string" ? value.title : "";
-                  const text = typeof value.text === "string" ? value.text : "";
-                  const markers = Array.isArray(value.markers)
-                    ? value.markers.filter((m): m is string => typeof m === "string")
-                    : [];
-                  return { ok: true, title, text: markers.length > 0 ? `${text}\n${markers.join("\n")}` : text, via: "bridge" };
+                data = await sendBrowserCommand(toolDeps.emit, sessionId, "eval", { script }, timeoutMs);
+              } catch (error) {
+                return {
+                  ok: false,
+                  output: `browser_control: ${actionName} failed — ${error instanceof Error ? error.message : String(error)}`,
+                };
+              }
+              const result = (data ?? {}) as { ok?: unknown; value?: unknown; error?: unknown };
+              if (result.ok !== true) {
+                const message = typeof result.error === "string" ? result.error : "the page rejected the script";
+                return { ok: false, output: `browser_control: ${actionName} — page error: ${message}` };
+              }
+              return { ok: true, value: result.value ?? null };
+            };
+            /** The script's in-page honest miss ({error: "…"}). */
+            const pageError = (actionName: string, value: unknown): string | null => {
+              const err = (value ?? {}) as { error?: unknown };
+              return typeof err.error === "string" && err.error !== "" ? `browser_control: ${actionName} — ${err.error}` : null;
+            };
+
+            /** R89-E (R94-F split): run one AGENT-HANDS job — the TINY action
+             * script starts the async job and returns {started:true} at once
+             * (the ~15KB runtime installer rides the command payload as
+             * installScript — the BrowserPanel evals it only when the page
+             * reports {needInstall:true}); the evalJob BRIDGE action then
+             * polls the page's job state every 120ms and answers with the
+             * final result.
+             * R90-D1: the budget is now 75s — the human pacing grew (tap →
+             * ~1s beat → typing → ~1s beat → Enter; ~150 WPM ≈ 12.5 chars/s
+             * means a full 600-char type call alone takes ~48s, plus the move
+             * path + the beats). The panel's own job budget matches (60s) and
+             * this outer round-trip covers the bridge overhead on top. */
+            const runPageJob = async (
+              actionName: string,
+              script: string,
+            ): Promise<{ ok: true; value: unknown } | { ok: false; output: string }> => {
+              if (toolDeps === undefined || typeof toolDeps.emit !== "function") {
+                return {
+                  ok: false,
+                  output: `browser_control: ${actionName} unavailable — no live stream channel in this context (${actionName} needs the app UI to drive the page)`,
+                };
+              }
+              let data: unknown;
+              try {
+                data = await sendBrowserCommand(toolDeps.emit, sessionId, "evalJob", { script, installScript: HANDS_INSTALL_SCRIPT }, 75_000);
+              } catch (error) {
+                return {
+                  ok: false,
+                  output: `browser_control: ${actionName} failed — ${error instanceof Error ? error.message : String(error)}`,
+                };
+              }
+              const result = (data ?? {}) as { ok?: unknown; value?: unknown; error?: unknown };
+              if (result.ok !== true) {
+                const message = typeof result.error === "string" ? result.error : "the page rejected the script";
+                return { ok: false, output: `browser_control: ${actionName} — page error: ${message}` };
+              }
+              return { ok: true, value: result.value ?? null };
+            };
+
+            // ── R66 (A4): the wall probe ───────────────────────────────────
+            // Bridge first (the LIVE page the user sees), server-side fetch
+            // fallback (web dev mode / no native webview). Callers decide what
+            // a probe failure means (navigate swallows it; wait_for_verification
+            // reports it).
+            const probeWallOnce = async (
+              url: string,
+              fallbackTitle: string | null,
+            ): Promise<{ ok: true; title: string; text: string; via: "bridge" | "fetch" } | { ok: false; error: string }> => {
+              if (toolDeps !== undefined && typeof toolDeps.emit === "function") {
+                try {
+                  const data = await sendBrowserCommand(toolDeps.emit, sessionId, "eval", { script: WALL_PROBE_SCRIPT }, 5_000);
+                  const result = (data ?? {}) as { ok?: unknown; value?: unknown };
+                  if (result.ok === true) {
+                    const value = (result.value ?? {}) as { title?: unknown; text?: unknown; markers?: unknown };
+                    const title = typeof value.title === "string" ? value.title : "";
+                    const text = typeof value.text === "string" ? value.text : "";
+                    const markers = Array.isArray(value.markers)
+                      ? value.markers.filter((m): m is string => typeof m === "string")
+                      : [];
+                    return { ok: true, title, text: markers.length > 0 ? `${text}\n${markers.join("\n")}` : text, via: "bridge" };
+                  }
+                  // Page-level probe error → the fetch fallback below.
+                } catch {
+                  // Timeout / no panel mounted → the fetch fallback below.
                 }
-                // Page-level probe error → the fetch fallback below.
-              } catch {
-                // Timeout / no panel mounted → the fetch fallback below.
               }
-            }
-            const fetched = await webFetch(url);
-            if (!fetched.ok) {
-              return { ok: false, error: `fetching the page failed: ${fetched.output}` };
-            }
-            return { ok: true, title: fallbackTitle ?? "", text: fetched.output, via: "fetch" };
-          };
+              const fetched = await webFetch(url);
+              if (!fetched.ok) {
+                return { ok: false, error: `fetching the page failed: ${fetched.output}` };
+              }
+              return { ok: true, title: fallbackTitle ?? "", text: fetched.output, via: "fetch" };
+            };
 
-          if (action === "navigate") {
-            const url = typeof input.url === "string" ? input.url.trim() : "";
-            if (url === "") return { ok: false, output: "browser_control: action navigate requires url" };
-            // ROUND-45 (audit P0-5): agent-driven navigation is host-gated
-            // exactly like web_fetch (the panel then renders through the
-            // server-side proxy). Malformed/non-http URLs fall through to the
-            // shape validation below (its error is the better one); no approval
-            // channel at all = fail-closed for http(s) too.
-            if (/^https?:\/\//i.test(url)) {
-              if (toolDeps === undefined) {
-                return { ok: false, output: "browser_control: navigate unavailable — no approval channel in this context" };
+            if (action === "navigate") {
+              const url = typeof input.url === "string" ? input.url.trim() : "";
+              if (url === "") return { ok: false, output: "browser_control: action navigate requires url" };
+              // ROUND-45 (audit P0-5): agent-driven navigation is host-gated
+              // exactly like web_fetch (the panel then renders through the
+              // server-side proxy). Malformed/non-http URLs fall through to the
+              // shape validation below (its error is the better one); no approval
+              // channel at all = fail-closed for http(s) too.
+              if (/^https?:\/\//i.test(url)) {
+                if (toolDeps === undefined) {
+                  return { ok: false, output: "browser_control: navigate unavailable — no approval channel in this context" };
+                }
+                const approvalDeps = buildApprovalDeps(toolDeps);
+                const gate = await requestWebFetchApproval(approvalDeps, url, "browser_control");
+                if (!gate.allowed) {
+                  return { ok: false, output: `browser_control: navigate blocked — ${gate.note}` };
+                }
               }
-              const approvalDeps = buildApprovalDeps(toolDeps);
-              const gate = await requestWebFetchApproval(approvalDeps, url, "browser_control");
-              if (!gate.allowed) {
-                return { ok: false, output: `browser_control: navigate blocked — ${gate.note}` };
+              const result = browserNavigateCommand(sessionId, { url });
+              if (!result.ok) return { ok: false, output: `browser_control: ${result.error}` };
+              // ── ROUND-67 (R67/E1): the INSTANT navigation frame ───────────
+              // The owner's blank-panel bug: navigate used to mutate ONLY the
+              // sidecar history and the panel learned via the 4s poll — on a
+              // fresh tab the poll ADOPTED the URL without ever creating the
+              // WebView2, so the panel stayed empty until the user pressed
+              // Enter in the address bar. The frame carries the target tab +
+              // URL so the panel navigates (creating the webview when needed)
+              // IMMEDIATELY; the poll stays as the backfill. Turn-independent
+              // on the frontend (stream-store handles it before the liveTurn
+              // guard), mirroring the R66 browser-viewport frame.
+              if (toolDeps !== undefined && typeof toolDeps.emit === "function") {
+                try {
+                  toolDeps.emit({
+                    type: "browser-navigate",
+                    sessionId: "",
+                    tabId: sessionId,
+                    url: result.entry?.url ?? url,
+                  });
+                } catch {
+                  // The frame is an optimization on top of the 4s poll backfill.
+                }
               }
+              // R66 (A4): ONE short wall probe on the live page — the panel
+              // follows within seconds, and bot walls (Cloudflare interstitials,
+              // captcha gates) are exactly what the owner needs to know about
+              // IMMEDIATELY. Bridge-only, single try, 5s, failures swallowed
+              // (a probe error must NEVER fail a successful navigation).
+              let note = "";
+              if (toolDeps !== undefined && typeof toolDeps.emit === "function") {
+                try {
+                  const data = await sendBrowserCommand(toolDeps.emit, sessionId, "eval", { script: WALL_PROBE_SCRIPT }, 5_000);
+                  const bridgeReply = (data ?? {}) as { ok?: unknown; value?: unknown };
+                  if (bridgeReply.ok === true) {
+                    const value = (bridgeReply.value ?? {}) as { title?: unknown; text?: unknown; markers?: unknown };
+                    const title = typeof value.title === "string" ? value.title : "";
+                    const text = typeof value.text === "string" ? value.text : "";
+                    const markers = Array.isArray(value.markers)
+                      ? value.markers.filter((m): m is string => typeof m === "string")
+                      : [];
+                    const hit = detectVerificationWall({
+                      title,
+                      text: markers.length > 0 ? `${text}\n${markers.join("\n")}` : text,
+                    });
+                    if (hit !== null) note = wallWarningNote(hit);
+                  }
+                } catch {
+                  // No answer in 5s (page still loading / no panel) — no note.
+                }
+              }
+              return {
+                ok: true,
+                output: `navigated the embedded browser to ${result.entry?.url ?? url} (history index ${result.index}, canBack ${result.canBack}, canForward ${result.canForward}). The panel follows immediately (a browser tab opens in the user's right sidebar if none is open for this session yet).${noTabHint}${note}`,
+              };
             }
-            const result = browserNavigateCommand(sessionId, { url });
-            if (!result.ok) return { ok: false, output: `browser_control: ${result.error}` };
-            // ── ROUND-67 (R67/E1): the INSTANT navigation frame ───────────
-            // The owner's blank-panel bug: navigate used to mutate ONLY the
-            // sidecar history and the panel learned via the 4s poll — on a
-            // fresh tab the poll ADOPTED the URL without ever creating the
-            // WebView2, so the panel stayed empty until the user pressed
-            // Enter in the address bar. The frame carries the target tab +
-            // URL so the panel navigates (creating the webview when needed)
-            // IMMEDIATELY; the poll stays as the backfill. Turn-independent
-            // on the frontend (stream-store handles it before the liveTurn
-            // guard), mirroring the R66 browser-viewport frame.
-            if (toolDeps !== undefined && typeof toolDeps.emit === "function") {
+            if (action === "back" || action === "forward" || action === "reload") {
+              const result = browserNavigateCommand(sessionId, { direction: action });
+              if (!result.ok) return { ok: false, output: `browser_control: ${result.error}` };
+              if (result.action === "noop" || result.entry === null) {
+                return { ok: true, output: `browser_control: ${action} did nothing (history boundary; index ${result.index})` };
+              }
+              // R67/E1: back/forward/reload announce the landed URL the same
+              // instant-navigate way (the panel loads it immediately; the 4s
+              // poll stays as the backfill).
+              if (toolDeps !== undefined && typeof toolDeps.emit === "function" && result.entry !== null) {
+                try {
+                  toolDeps.emit({
+                    type: "browser-navigate",
+                    sessionId: "",
+                    tabId: sessionId,
+                    url: result.entry.url,
+                  });
+                } catch {
+                  // Backfill via the poll.
+                }
+              }
+              return {
+                ok: true,
+                output: `${action} → ${result.entry.url} (history index ${result.index}, canBack ${result.canBack}, canForward ${result.canForward}). The panel follows immediately.`,
+              };
+            }
+            if (action === "set_viewport") {
+              const patch: { preset?: unknown; width?: unknown; height?: unknown; zoom?: unknown; rotate?: unknown } = {};
+              if (input.preset !== undefined) patch.preset = input.preset;
+              if (input.width !== undefined) patch.width = input.width;
+              if (input.height !== undefined) patch.height = input.height;
+              if (input.zoom !== undefined) patch.zoom = input.zoom;
+              if (input.rotate !== undefined) patch.rotate = input.rotate;
+              if (Object.keys(patch).length === 0) {
+                return {
+                  ok: false,
+                  output: "browser_control: set_viewport requires preset and/or width/height/zoom/rotate",
+                };
+              }
+              const result = browserViewportCommand(sessionId, patch);
+              if (!result.ok) return { ok: false, output: `browser_control: ${result.error}` };
+              const v = result.viewport;
+              // R66 (A5): the INSTANT-APPLY frame — the mounted BrowserPanel
+              // applies the change live (exits natural mode) instead of
+              // waiting for the 4s poll (the owner's "had to nudge a number"
+              // bug). Turn-independent in the frontend (stream-store handles
+              // it before the liveTurn guard); never breaks the tool.
               try {
-                toolDeps.emit({
-                  type: "browser-navigate",
+                toolDeps?.emit?.({
+                  type: "browser-viewport",
                   sessionId: "",
                   tabId: sessionId,
-                  url: result.entry?.url ?? url,
+                  viewport: { width: v.width, height: v.height, preset: v.preset, zoom: v.zoom, rotate: v.rotate },
                 });
               } catch {
                 // The frame is an optimization on top of the 4s poll backfill.
               }
+              return {
+                ok: true,
+                output: `viewport set to ${v.width}×${v.height} (${v.preset}, zoom ${v.zoom}${v.rotate ? ", rotated" : ""}). The user's browser panel resizes live.${noTabHint}`,
+              };
             }
-            // R66 (A4): ONE short wall probe on the live page — the panel
-            // follows within seconds, and bot walls (Cloudflare interstitials,
-            // captcha gates) are exactly what the owner needs to know about
-            // IMMEDIATELY. Bridge-only, single try, 5s, failures swallowed
-            // (a probe error must NEVER fail a successful navigation).
-            let note = "";
-            if (toolDeps !== undefined && typeof toolDeps.emit === "function") {
-              try {
-                const data = await sendBrowserCommand(toolDeps.emit, sessionId, "eval", { script: WALL_PROBE_SCRIPT }, 5_000);
-                const bridgeReply = (data ?? {}) as { ok?: unknown; value?: unknown };
-                if (bridgeReply.ok === true) {
-                  const value = (bridgeReply.value ?? {}) as { title?: unknown; text?: unknown; markers?: unknown };
-                  const title = typeof value.title === "string" ? value.title : "";
-                  const text = typeof value.text === "string" ? value.text : "";
-                  const markers = Array.isArray(value.markers)
-                    ? value.markers.filter((m): m is string => typeof m === "string")
-                    : [];
-                  const hit = detectVerificationWall({
-                    title,
-                    text: markers.length > 0 ? `${text}\n${markers.join("\n")}` : text,
-                  });
-                  if (hit !== null) note = wallWarningNote(hit);
+
+            // ── R62 (D8): read — the current page's text, server-side ──────
+            if (action === "read") {
+              const state = browserGetStateCommand(sessionId);
+              if (state.currentUrl === null) {
+                return {
+                  ok: false,
+                  output: `browser_control: read — no page is open in tab '${sessionId}' yet; navigate first`,
+                };
+              }
+              const maxCharsRaw = input.maxChars;
+              const maxChars =
+                typeof maxCharsRaw === "number" && Number.isFinite(maxCharsRaw)
+                  ? Math.min(16000, Math.max(1000, Math.round(maxCharsRaw)))
+                  : 8000;
+              const fetched = await webFetch(state.currentUrl);
+              if (!fetched.ok) {
+                return {
+                  ok: false,
+                  output: `browser_control: read — fetching the panel's page failed: ${fetched.output}`,
+                };
+              }
+              // The read is bounded (the same 16KB web_fetch cap) — trim to
+              // the requested window and note the truncation honestly.
+              let text = fetched.output;
+              let truncated = false;
+              if (text.length > maxChars) {
+                text = `${text.slice(0, maxChars)}\n…(truncated — ${text.length} chars total; raise maxChars up to 16000)`;
+                truncated = true;
+              }
+              // R66 (A4): the fetched text carries the wall markers just like
+              // the live page (the proxy renders what the server saw) — flag
+              // it so the agent calls wait_for_verification instead of
+              // pretending the page is usable.
+              const note = (() => {
+                const hit = detectVerificationWall({ title: state.title ?? undefined, text: fetched.output });
+                return hit !== null ? wallWarningNote(hit) : "";
+              })();
+              return {
+                ok: true,
+                output: `Embedded-browser page ${state.title ?? "(untitled)"} — ${state.currentUrl}${truncated ? "" : " (full text)"}:\n\n${text}${noTabHint}${note}`,
+              };
+            }
+
+            // ── R66 (A6): read_dom — the structured page outline ───────────
+            if (action === "read_dom") {
+              const include = input.include === "all" ? "all" : "interactive";
+              const maxCharsRaw = input.maxChars;
+              const maxChars =
+                typeof maxCharsRaw === "number" && Number.isFinite(maxCharsRaw)
+                  ? Math.min(20000, Math.max(2000, Math.round(maxCharsRaw)))
+                  : 12000;
+              const page = await runPageScript("read_dom", buildReadDomScript(include));
+              if (!page.ok) return { ok: false, output: page.output };
+              const miss = pageError("read_dom", page.value);
+              if (miss !== null) return { ok: false, output: miss };
+              // The outline is capped at the SERIALIZED level (the script
+              // already caps entries/strings — this bounds the total).
+              const serialized = JSON.stringify(page.value ?? null);
+              const capped =
+                serialized.length > maxChars
+                  ? `${serialized.slice(0, maxChars)}…(truncated, ${serialized.length} chars total — raise maxChars up to 20000, or use include 'interactive' rather than 'all')`
+                  : serialized;
+              return {
+                ok: true,
+                output: `read_dom ok (tab '${sessionId}', include ${include}) → ${capped}`,
+              };
+            }
+
+            // ── R66 (A6): source — html | css | scripts ─────────────────────
+            if (action === "source") {
+              const part = input.part === "html" ? "html" : input.part === "css" ? "css" : input.part === "scripts" ? "scripts" : "";
+              if (part === "") {
+                return { ok: false, output: "browser_control: source requires part html | css | scripts" };
+              }
+              const selector = typeof input.selector === "string" ? input.selector.trim() : "";
+              const maxCharsRaw = input.maxChars;
+              const maxChars =
+                typeof maxCharsRaw === "number" && Number.isFinite(maxCharsRaw)
+                  ? Math.min(20000, Math.max(1000, Math.round(maxCharsRaw)))
+                  : 12000;
+              const page = await runPageScript("source", buildSourceScript(part, selector, maxChars));
+              if (!page.ok) return { ok: false, output: page.output };
+              const miss = pageError("source", page.value);
+              if (miss !== null) return { ok: false, output: miss };
+              return {
+                ok: true,
+                output: `source ${part} ok (tab '${sessionId}') → ${JSON.stringify(page.value ?? null)}`,
+              };
+            }
+
+            // ── R66 (A3): click — by selector or by text label ─────────────
+            if (action === "click") {
+              const selector = typeof input.selector === "string" ? input.selector.trim() : "";
+              const text = typeof input.text === "string" ? input.text.trim() : "";
+              const nthRaw = input.nth;
+              const nth =
+                typeof nthRaw === "number" && Number.isFinite(nthRaw) ? Math.max(1, Math.round(nthRaw)) : 1;
+              if (selector === "" && text === "") {
+                return {
+                  ok: false,
+                  output: "browser_control: click requires 'selector' (CSS) or 'text' (a substring of the clickable element's label)",
+                };
+              }
+              const page = await runPageJob("click", buildHandsClickScript(selector, text, nth));
+              if (!page.ok) return { ok: false, output: page.output };
+              const miss = pageError("click", page.value);
+              if (miss !== null) return { ok: false, output: miss };
+              // R93-B3: the light post-action verification — the hands' click
+              // reports where focus moved (tag/name) when it changed; surfaced
+              // as a hint (never fatal, absent when focus did not move).
+              const value = (page.value ?? {}) as { clicked?: unknown; focus?: unknown };
+              const focusNote =
+                value.focus === undefined || value.focus === null
+                  ? ""
+                  : ` Focus moved to ${JSON.stringify(value.focus)} — the click took effect.`;
+              return {
+                ok: true,
+                output: `clicked (tab '${sessionId}') → ${JSON.stringify(value.clicked ?? page.value)}${focusNote}`,
+              };
+            }
+
+            // ── R66 (A3): type — the framework-visible value setter ────────
+            if (action === "type") {
+              const selector = typeof input.selector === "string" ? input.selector.trim() : "";
+              const text = typeof input.text === "string" ? input.text : "";
+              if (selector === "" || typeof input.text !== "string") {
+                return { ok: false, output: "browser_control: type requires 'selector' and 'text'" };
+              }
+              if (text.length > 600) {
+                return {
+                  ok: false,
+                  output: `browser_control: type — the text is ${text.length} chars; the human-paced typing (150 WPM) is capped at 600 chars per call. Split the text and type it in parts.`,
+                };
+              }
+              const submit = input.submit === true;
+              const page = await runPageJob("type", buildHandsTypeScript(selector, text, submit));
+              if (!page.ok) return { ok: false, output: page.output };
+              const miss = pageError("type", page.value);
+              if (miss !== null) return { ok: false, output: miss };
+              const value = (page.value ?? {}) as { submitted?: unknown; submitHow?: unknown };
+              const submitNote =
+                submit === false
+                  ? ""
+                  : value.submitted === true
+                    ? " The form was submitted (native requestSubmit)."
+                    : ` The form was NOT submitted natively: ${typeof value.submitHow === "string" ? value.submitHow : "no form found"}.`;
+              return {
+                ok: true,
+                output: `typed into ${selector} (tab '${sessionId}', input/change events dispatched so the page's framework sees it).${submitNote} → ${JSON.stringify(page.value)}`,
+              };
+            }
+
+            // ── R66 (A3): press_key — with the Enter→requestSubmit fix ──────
+            if (action === "press_key") {
+              const key = typeof input.key === "string" ? input.key.trim() : "";
+              if (key === "") {
+                return { ok: false, output: "browser_control: press_key requires 'key' (e.g. Enter, Tab, Escape, or a character)" };
+              }
+              if (key.length > 32) {
+                return { ok: false, output: "browser_control: press_key — key must be a single key name, not a long string" };
+              }
+              const selector = typeof input.selector === "string" ? input.selector.trim() : "";
+              const page = await runPageJob("press_key", buildHandsPressKeyScript(key, selector));
+              if (!page.ok) return { ok: false, output: page.output };
+              const miss = pageError("press_key", page.value);
+              if (miss !== null) return { ok: false, output: miss };
+              const value = (page.value ?? {}) as { submitted?: unknown };
+              return {
+                ok: true,
+                output: `pressed ${key} (tab '${sessionId}') → ${JSON.stringify(page.value)}${value.submitted === true ? " — the focused element's form was submitted natively (requestSubmit)." : ""}`,
+              };
+            }
+
+            // ── R89-E: mouse — the full-fledged pointer control ──────────────
+            // The owner's directive: "give it full-fledged capabilities… its
+            // own custom mouse pointer… the mouse pointer will actually be
+            // shown moving… left click or right click… the scroll
+            // functionality will work properly too." Coordinates are PAGE CSS
+            // pixels — exactly what read_dom reports per element.
+            if (action === "mouse") {
+              const opInput = input.op;
+              const op =
+                opInput === "move" || opInput === "click" || opInput === "double" || opInput === "right" || opInput === "drag" || opInput === "scroll"
+                  ? opInput
+                  : "";
+              if (op === "") {
+                return {
+                  ok: false,
+                  output: "browser_control: mouse requires 'op' — move | click | double | right | drag | scroll",
+                };
+              }
+              const numOrNull = (v: unknown): number | null =>
+                typeof v === "number" && Number.isFinite(v) ? v : null;
+              const x = numOrNull(input.x);
+              const y = numOrNull(input.y);
+              const toX = numOrNull(input.toX);
+              const toY = numOrNull(input.toY);
+              const dx = numOrNull(input.dx);
+              const dy = numOrNull(input.dy);
+              if (op === "drag" && (x === null || y === null || toX === null || toY === null)) {
+                return { ok: false, output: "browser_control: mouse drag requires x, y (start) AND toX, toY (end)" };
+              }
+              if ((op === "move" || op === "click" || op === "double" || op === "right") && (x === null || y === null)) {
+                return { ok: false, output: `browser_control: mouse ${op} requires x and y (page CSS px — read_dom reports them per element)` };
+              }
+              if (op === "scroll" && dx === null && dy === null) {
+                return { ok: false, output: "browser_control: mouse scroll requires dx and/or dy (pixels; positive = down/right)" };
+              }
+              const page = await runPageJob("mouse", buildHandsMouseScript(op, x, y, toX, toY, dx, dy));
+              if (!page.ok) return { ok: false, output: page.output };
+              const miss = pageError("mouse", page.value);
+              if (miss !== null) return { ok: false, output: miss };
+              return {
+                ok: true,
+                output: `mouse ${op} (tab '${sessionId}', the visible agent cursor performed it) → ${JSON.stringify(page.value)}`,
+              };
+            }
+
+            // ── R94-F: wait — the proper waiting the owner asked for ──────
+            // His v0.91.0 report: the model literally called a nonexistent
+            // action 'wait' after navigate (and then fired clicks into pages
+            // that were still loading — the click failures that started the
+            // whole detour). This is the real one: a server-side probe loop
+            // (250ms cadence, SHORT 2s per-probe timeout — a failing probe
+            // means the page is NAVIGATING, i.e. not ready, never an error)
+            // until readyState complete (default) and/or a selector appears
+            // and/or the URL contains a substring, all within `ms` (250ms
+            // floor, 15s cap, default 900ms).
+            if (action === "wait") {
+              const msRaw = input.ms;
+              const ms =
+                typeof msRaw === "number" && Number.isFinite(msRaw)
+                  ? Math.min(15_000, Math.max(250, Math.round(msRaw)))
+                  : 900;
+              const selector = typeof input.selector === "string" ? input.selector.trim() : "";
+              const urlContains = typeof input.urlContains === "string" ? input.urlContains.trim() : "";
+              const readyStateNeeded = input.readyState !== false; // default true
+              // A wait with NO conditions is a plain pause — no page probe,
+              // no bridge needed (works in every mode, like a person pausing).
+              if (selector === "" && urlContains === "" && !readyStateNeeded) {
+                await new Promise((resolve) => setTimeout(resolve, ms));
+                return {
+                  ok: true,
+                  output: `wait ok (tab '${sessionId}') — paused ${ms}ms (no conditions requested; set readyState true or a selector/urlContains to wait for the page)`,
+                };
+              }
+              if (toolDeps === undefined || typeof toolDeps.emit !== "function") {
+                return {
+                  ok: false,
+                  output:
+                    "browser_control: wait unavailable — no live stream channel in this context (wait needs the app UI to probe the live page)",
+                };
+              }
+              const started = Date.now();
+              const deadline = started + ms;
+              let lastReady: string | null = null;
+              let lastUrl: string | null = null;
+              let lastHas: boolean | null = null;
+              // Probe → check → (not ready) sleep to the next 250ms tick,
+              // until the conditions hold or the budget is spent. A probe
+              // that FAILS (bridge error, page navigating) is simply not
+              // ready — the loop keeps its head and the honest timeout
+              // below says what never matched.
+              for (;;) {
+                const probe = await runPageScript("wait", buildWaitProbeScript(selector), 2_000);
+                if (probe.ok) {
+                  const value = (probe.value ?? {}) as { ready?: unknown; has?: unknown; url?: unknown; error?: unknown };
+                  if (typeof value.error !== "string" || value.error === "") {
+                    if (typeof value.ready === "string") lastReady = value.ready;
+                    if (typeof value.url === "string") lastUrl = value.url;
+                    if (typeof value.has === "boolean") lastHas = value.has;
+                    const readyOk = !readyStateNeeded || lastReady === "complete";
+                    const selectorOk = selector === "" || lastHas === true;
+                    const urlOk = urlContains === "" || (lastUrl ?? "").includes(urlContains);
+                    if (readyOk && selectorOk && urlOk) {
+                      return {
+                        ok: true,
+                        output: `wait ok (tab '${sessionId}') → ${JSON.stringify({
+                          waited: true,
+                          elapsedMs: Date.now() - started,
+                          readyState: lastReady,
+                          matched: {
+                            readyState: readyStateNeeded || undefined,
+                            selector: selector === "" ? undefined : true,
+                            urlContains: urlContains === "" ? undefined : true,
+                          },
+                        })}`,
+                      };
+                    }
+                  }
                 }
-              } catch {
-                // No answer in 5s (page still loading / no panel) — no note.
+                if (Date.now() >= deadline) break;
+                await new Promise((resolve) => setTimeout(resolve, Math.max(1, Math.min(250, deadline - Date.now()))));
               }
+              // The honest timeout — every unmet condition, named.
+              const unmet: string[] = [];
+              if (readyStateNeeded && lastReady !== "complete") {
+                unmet.push(
+                  `document.readyState is '${lastReady ?? "unknown — the page never answered a probe (it may be navigating)"}' (needs 'complete')`,
+                );
+              }
+              if (selector !== "" && lastHas !== true) unmet.push(`the selector '${selector}' did not appear`);
+              if (urlContains !== "" && !(lastUrl ?? "").includes(urlContains)) {
+                unmet.push(`the URL still doesn't contain '${urlContains}' (last seen: ${lastUrl ?? "unknown"})`);
+              }
+              return {
+                ok: false,
+                output: `browser_control: wait — timed out after ${ms}ms: ${unmet.join("; ")}. Read the page state (read_dom) and decide: wait again, or investigate why the condition never held.`,
+              };
             }
-            return {
-              ok: true,
-              output: `navigated the embedded browser to ${result.entry?.url ?? url} (history index ${result.index}, canBack ${result.canBack}, canForward ${result.canForward}). The panel follows immediately (a browser tab opens in the user's right sidebar if none is open for this session yet).${noTabHint}${note}`,
-            };
-          }
-          if (action === "back" || action === "forward" || action === "reload") {
-            const result = browserNavigateCommand(sessionId, { direction: action });
-            if (!result.ok) return { ok: false, output: `browser_control: ${result.error}` };
-            if (result.action === "noop" || result.entry === null) {
-              return { ok: true, output: `browser_control: ${action} did nothing (history boundary; index ${result.index})` };
-            }
-            // R67/E1: back/forward/reload announce the landed URL the same
-            // instant-navigate way (the panel loads it immediately; the 4s
-            // poll stays as the backfill).
-            if (toolDeps !== undefined && typeof toolDeps.emit === "function" && result.entry !== null) {
+
+            // ── R66 (A4): wait_for_verification — the owner-solvable wait ──
+            if (action === "wait_for_verification") {
+              const state = browserGetStateCommand(sessionId);
+              if (state.currentUrl === null) {
+                return {
+                  ok: false,
+                  output: `browser_control: wait_for_verification — no page is open in tab '${sessionId}' yet; navigate first`,
+                };
+              }
+              const url = state.currentUrl;
+              // (1) Probe the CURRENT wall state (live page via the bridge;
+              // server-side fetch fallback).
+              const probe = await probeWallOnce(url, state.title);
+              if (!probe.ok) {
+                return {
+                  ok: false,
+                  output: `browser_control: wait_for_verification — could not probe the page: ${probe.error}`,
+                };
+              }
+              const initial = detectVerificationWall({ title: probe.title, text: probe.text });
+              // (2) Clean page — no checkpoint, no wait.
+              if (initial === null) {
+                return {
+                  ok: true,
+                  output: `no verification wall detected on ${url} — the page looks accessible; continue normally${probe.via === "fetch" ? " (probed via a server-side fetch; the live panel may differ)" : ""}`,
+                };
+              }
+              // (3) Wall — clamp the wait and open the checkpoint.
+              const waitMsRaw = input.waitMs;
+              const waitMs =
+                typeof waitMsRaw === "number" && Number.isFinite(waitMsRaw)
+                  ? Math.min(60_000, Math.max(3_000, Math.round(waitMsRaw)))
+                  : 15_000;
+              if (toolDeps === undefined || typeof toolDeps.emit !== "function") {
+                return {
+                  ok: false,
+                  output: `browser_control: wait_for_verification — a ${initial.kind} wall is showing on ${url} (${initial.evidence}), but there is no live chat channel in this context to open a countdown card; ask the owner to solve it in the browser panel, then re-check with read or eval`,
+                };
+              }
+              let resolution: { resolution: "done" | "stop" | "timeout" };
               try {
-                toolDeps.emit({
-                  type: "browser-navigate",
-                  sessionId: "",
+                resolution = await openBrowserCheckpoint(toolDeps.emit, {
                   tabId: sessionId,
-                  url: result.entry.url,
+                  kind: initial.kind,
+                  url,
+                  waitMs,
                 });
-              } catch {
-                // Backfill via the poll.
+              } catch (error) {
+                return {
+                  ok: false,
+                  output: `browser_control: wait_for_verification — the checkpoint could not be opened: ${error instanceof Error ? error.message : String(error)}`,
+                };
               }
-            }
-            return {
-              ok: true,
-              output: `${action} → ${result.entry.url} (history index ${result.index}, canBack ${result.canBack}, canForward ${result.canForward}). The panel follows immediately.`,
-            };
-          }
-          if (action === "set_viewport") {
-            const patch: { preset?: unknown; width?: unknown; height?: unknown; zoom?: unknown; rotate?: unknown } = {};
-            if (input.preset !== undefined) patch.preset = input.preset;
-            if (input.width !== undefined) patch.width = input.width;
-            if (input.height !== undefined) patch.height = input.height;
-            if (input.zoom !== undefined) patch.zoom = input.zoom;
-            if (input.rotate !== undefined) patch.rotate = input.rotate;
-            if (Object.keys(patch).length === 0) {
-              return {
-                ok: false,
-                output: "browser_control: set_viewport requires preset and/or width/height/zoom/rotate",
-              };
-            }
-            const result = browserViewportCommand(sessionId, patch);
-            if (!result.ok) return { ok: false, output: `browser_control: ${result.error}` };
-            const v = result.viewport;
-            // R66 (A5): the INSTANT-APPLY frame — the mounted BrowserPanel
-            // applies the change live (exits natural mode) instead of
-            // waiting for the 4s poll (the owner's "had to nudge a number"
-            // bug). Turn-independent in the frontend (stream-store handles
-            // it before the liveTurn guard); never breaks the tool.
-            try {
-              toolDeps?.emit?.({
-                type: "browser-viewport",
-                sessionId: "",
-                tabId: sessionId,
-                viewport: { width: v.width, height: v.height, preset: v.preset, zoom: v.zoom, rotate: v.rotate },
-              });
-            } catch {
-              // The frame is an optimization on top of the 4s poll backfill.
-            }
-            return {
-              ok: true,
-              output: `viewport set to ${v.width}×${v.height} (${v.preset}, zoom ${v.zoom}${v.rotate ? ", rotated" : ""}). The user's browser panel resizes live.${noTabHint}`,
-            };
-          }
-
-          // ── R62 (D8): read — the current page's text, server-side ──────
-          if (action === "read") {
-            const state = browserGetStateCommand(sessionId);
-            if (state.currentUrl === null) {
-              return {
-                ok: false,
-                output: `browser_control: read — no page is open in tab '${sessionId}' yet; navigate first`,
-              };
-            }
-            const maxCharsRaw = input.maxChars;
-            const maxChars =
-              typeof maxCharsRaw === "number" && Number.isFinite(maxCharsRaw)
-                ? Math.min(16000, Math.max(1000, Math.round(maxCharsRaw)))
-                : 8000;
-            const fetched = await webFetch(state.currentUrl);
-            if (!fetched.ok) {
-              return {
-                ok: false,
-                output: `browser_control: read — fetching the panel's page failed: ${fetched.output}`,
-              };
-            }
-            // The read is bounded (the same 16KB web_fetch cap) — trim to
-            // the requested window and note the truncation honestly.
-            let text = fetched.output;
-            let truncated = false;
-            if (text.length > maxChars) {
-              text = `${text.slice(0, maxChars)}\n…(truncated — ${text.length} chars total; raise maxChars up to 16000)`;
-              truncated = true;
-            }
-            // R66 (A4): the fetched text carries the wall markers just like
-            // the live page (the proxy renders what the server saw) — flag
-            // it so the agent calls wait_for_verification instead of
-            // pretending the page is usable.
-            const note = (() => {
-              const hit = detectVerificationWall({ title: state.title ?? undefined, text: fetched.output });
-              return hit !== null ? wallWarningNote(hit) : "";
-            })();
-            return {
-              ok: true,
-              output: `Embedded-browser page ${state.title ?? "(untitled)"} — ${state.currentUrl}${truncated ? "" : " (full text)"}:\n\n${text}${noTabHint}${note}`,
-            };
-          }
-
-          // ── R66 (A6): read_dom — the structured page outline ───────────
-          if (action === "read_dom") {
-            const include = input.include === "all" ? "all" : "interactive";
-            const maxCharsRaw = input.maxChars;
-            const maxChars =
-              typeof maxCharsRaw === "number" && Number.isFinite(maxCharsRaw)
-                ? Math.min(20000, Math.max(2000, Math.round(maxCharsRaw)))
-                : 12000;
-            const page = await runPageScript("read_dom", buildReadDomScript(include));
-            if (!page.ok) return { ok: false, output: page.output };
-            const miss = pageError("read_dom", page.value);
-            if (miss !== null) return { ok: false, output: miss };
-            // The outline is capped at the SERIALIZED level (the script
-            // already caps entries/strings — this bounds the total).
-            const serialized = JSON.stringify(page.value ?? null);
-            const capped =
-              serialized.length > maxChars
-                ? `${serialized.slice(0, maxChars)}…(truncated, ${serialized.length} chars total — raise maxChars up to 20000, or use include 'interactive' rather than 'all')`
-                : serialized;
-            return {
-              ok: true,
-              output: `read_dom ok (tab '${sessionId}', include ${include}) → ${capped}`,
-            };
-          }
-
-          // ── R66 (A6): source — html | css | scripts ─────────────────────
-          if (action === "source") {
-            const part = input.part === "html" ? "html" : input.part === "css" ? "css" : input.part === "scripts" ? "scripts" : "";
-            if (part === "") {
-              return { ok: false, output: "browser_control: source requires part html | css | scripts" };
-            }
-            const selector = typeof input.selector === "string" ? input.selector.trim() : "";
-            const maxCharsRaw = input.maxChars;
-            const maxChars =
-              typeof maxCharsRaw === "number" && Number.isFinite(maxCharsRaw)
-                ? Math.min(20000, Math.max(1000, Math.round(maxCharsRaw)))
-                : 12000;
-            const page = await runPageScript("source", buildSourceScript(part, selector, maxChars));
-            if (!page.ok) return { ok: false, output: page.output };
-            const miss = pageError("source", page.value);
-            if (miss !== null) return { ok: false, output: miss };
-            return {
-              ok: true,
-              output: `source ${part} ok (tab '${sessionId}') → ${JSON.stringify(page.value ?? null)}`,
-            };
-          }
-
-          // ── R66 (A3): click — by selector or by text label ─────────────
-          if (action === "click") {
-            const selector = typeof input.selector === "string" ? input.selector.trim() : "";
-            const text = typeof input.text === "string" ? input.text.trim() : "";
-            const nthRaw = input.nth;
-            const nth =
-              typeof nthRaw === "number" && Number.isFinite(nthRaw) ? Math.max(1, Math.round(nthRaw)) : 1;
-            if (selector === "" && text === "") {
-              return {
-                ok: false,
-                output: "browser_control: click requires 'selector' (CSS) or 'text' (a substring of the clickable element's label)",
-              };
-            }
-            const page = await runPageJob("click", buildHandsClickScript(selector, text, nth));
-            if (!page.ok) return { ok: false, output: page.output };
-            const miss = pageError("click", page.value);
-            if (miss !== null) return { ok: false, output: miss };
-            // R93-B3: the light post-action verification — the hands' click
-            // reports where focus moved (tag/name) when it changed; surfaced
-            // as a hint (never fatal, absent when focus did not move).
-            const value = (page.value ?? {}) as { clicked?: unknown; focus?: unknown };
-            const focusNote =
-              value.focus === undefined || value.focus === null
-                ? ""
-                : ` Focus moved to ${JSON.stringify(value.focus)} — the click took effect.`;
-            return {
-              ok: true,
-              output: `clicked (tab '${sessionId}') → ${JSON.stringify(value.clicked ?? page.value)}${focusNote}`,
-            };
-          }
-
-          // ── R66 (A3): type — the framework-visible value setter ────────
-          if (action === "type") {
-            const selector = typeof input.selector === "string" ? input.selector.trim() : "";
-            const text = typeof input.text === "string" ? input.text : "";
-            if (selector === "" || typeof input.text !== "string") {
-              return { ok: false, output: "browser_control: type requires 'selector' and 'text'" };
-            }
-            if (text.length > 600) {
-              return {
-                ok: false,
-                output: `browser_control: type — the text is ${text.length} chars; the human-paced typing (150 WPM) is capped at 600 chars per call. Split the text and type it in parts.`,
-              };
-            }
-            const submit = input.submit === true;
-            const page = await runPageJob("type", buildHandsTypeScript(selector, text, submit));
-            if (!page.ok) return { ok: false, output: page.output };
-            const miss = pageError("type", page.value);
-            if (miss !== null) return { ok: false, output: miss };
-            const value = (page.value ?? {}) as { submitted?: unknown; submitHow?: unknown };
-            const submitNote =
-              submit === false
-                ? ""
-                : value.submitted === true
-                  ? " The form was submitted (native requestSubmit)."
-                  : ` The form was NOT submitted natively: ${typeof value.submitHow === "string" ? value.submitHow : "no form found"}.`;
-            return {
-              ok: true,
-              output: `typed into ${selector} (tab '${sessionId}', input/change events dispatched so the page's framework sees it).${submitNote} → ${JSON.stringify(page.value)}`,
-            };
-          }
-
-          // ── R66 (A3): press_key — with the Enter→requestSubmit fix ──────
-          if (action === "press_key") {
-            const key = typeof input.key === "string" ? input.key.trim() : "";
-            if (key === "") {
-              return { ok: false, output: "browser_control: press_key requires 'key' (e.g. Enter, Tab, Escape, or a character)" };
-            }
-            if (key.length > 32) {
-              return { ok: false, output: "browser_control: press_key — key must be a single key name, not a long string" };
-            }
-            const selector = typeof input.selector === "string" ? input.selector.trim() : "";
-            const page = await runPageJob("press_key", buildHandsPressKeyScript(key, selector));
-            if (!page.ok) return { ok: false, output: page.output };
-            const miss = pageError("press_key", page.value);
-            if (miss !== null) return { ok: false, output: miss };
-            const value = (page.value ?? {}) as { submitted?: unknown };
-            return {
-              ok: true,
-              output: `pressed ${key} (tab '${sessionId}') → ${JSON.stringify(page.value)}${value.submitted === true ? " — the focused element's form was submitted natively (requestSubmit)." : ""}`,
-            };
-          }
-
-          // ── R89-E: mouse — the full-fledged pointer control ──────────────
-          // The owner's directive: "give it full-fledged capabilities… its
-          // own custom mouse pointer… the mouse pointer will actually be
-          // shown moving… left click or right click… the scroll
-          // functionality will work properly too." Coordinates are PAGE CSS
-          // pixels — exactly what read_dom reports per element.
-          if (action === "mouse") {
-            const opInput = input.op;
-            const op =
-              opInput === "move" || opInput === "click" || opInput === "double" || opInput === "right" || opInput === "drag" || opInput === "scroll"
-                ? opInput
-                : "";
-            if (op === "") {
-              return {
-                ok: false,
-                output: "browser_control: mouse requires 'op' — move | click | double | right | drag | scroll",
-              };
-            }
-            const numOrNull = (v: unknown): number | null =>
-              typeof v === "number" && Number.isFinite(v) ? v : null;
-            const x = numOrNull(input.x);
-            const y = numOrNull(input.y);
-            const toX = numOrNull(input.toX);
-            const toY = numOrNull(input.toY);
-            const dx = numOrNull(input.dx);
-            const dy = numOrNull(input.dy);
-            if (op === "drag" && (x === null || y === null || toX === null || toY === null)) {
-              return { ok: false, output: "browser_control: mouse drag requires x, y (start) AND toX, toY (end)" };
-            }
-            if ((op === "move" || op === "click" || op === "double" || op === "right") && (x === null || y === null)) {
-              return { ok: false, output: `browser_control: mouse ${op} requires x and y (page CSS px — read_dom reports them per element)` };
-            }
-            if (op === "scroll" && dx === null && dy === null) {
-              return { ok: false, output: "browser_control: mouse scroll requires dx and/or dy (pixels; positive = down/right)" };
-            }
-            const page = await runPageJob("mouse", buildHandsMouseScript(op, x, y, toX, toY, dx, dy));
-            if (!page.ok) return { ok: false, output: page.output };
-            const miss = pageError("mouse", page.value);
-            if (miss !== null) return { ok: false, output: miss };
-            return {
-              ok: true,
-              output: `mouse ${op} (tab '${sessionId}', the visible agent cursor performed it) → ${JSON.stringify(page.value)}`,
-            };
-          }
-
-          // ── R66 (A4): wait_for_verification — the owner-solvable wait ──
-          if (action === "wait_for_verification") {
-            const state = browserGetStateCommand(sessionId);
-            if (state.currentUrl === null) {
-              return {
-                ok: false,
-                output: `browser_control: wait_for_verification — no page is open in tab '${sessionId}' yet; navigate first`,
-              };
-            }
-            const url = state.currentUrl;
-            // (1) Probe the CURRENT wall state (live page via the bridge;
-            // server-side fetch fallback).
-            const probe = await probeWallOnce(url, state.title);
-            if (!probe.ok) {
-              return {
-                ok: false,
-                output: `browser_control: wait_for_verification — could not probe the page: ${probe.error}`,
-              };
-            }
-            const initial = detectVerificationWall({ title: probe.title, text: probe.text });
-            // (2) Clean page — no checkpoint, no wait.
-            if (initial === null) {
-              return {
-                ok: true,
-                output: `no verification wall detected on ${url} — the page looks accessible; continue normally${probe.via === "fetch" ? " (probed via a server-side fetch; the live panel may differ)" : ""}`,
-              };
-            }
-            // (3) Wall — clamp the wait and open the checkpoint.
-            const waitMsRaw = input.waitMs;
-            const waitMs =
-              typeof waitMsRaw === "number" && Number.isFinite(waitMsRaw)
-                ? Math.min(60_000, Math.max(3_000, Math.round(waitMsRaw)))
-                : 15_000;
-            if (toolDeps === undefined || typeof toolDeps.emit !== "function") {
-              return {
-                ok: false,
-                output: `browser_control: wait_for_verification — a ${initial.kind} wall is showing on ${url} (${initial.evidence}), but there is no live chat channel in this context to open a countdown card; ask the owner to solve it in the browser panel, then re-check with read or eval`,
-              };
-            }
-            let resolution: { resolution: "done" | "stop" | "timeout" };
-            try {
-              resolution = await openBrowserCheckpoint(toolDeps.emit, {
-                tabId: sessionId,
-                kind: initial.kind,
-                url,
-                waitMs,
-              });
-            } catch (error) {
-              return {
-                ok: false,
-                output: `browser_control: wait_for_verification — the checkpoint could not be opened: ${error instanceof Error ? error.message : String(error)}`,
-              };
-            }
-            // (4) Re-probe once (a "stop" needs no re-check — the owner said
-            // stop) and report honestly.
-            if (resolution.resolution === "stop") {
-              return {
-                ok: true,
-                output: `the owner stopped the wait — do not retry this page automatically; ask how to proceed (a ${initial.kind} wall was showing on ${url})`,
-              };
-            }
-            const reprobe = await probeWallOnce(url, state.title);
-            if (!reprobe.ok) {
-              return {
-                ok: true,
-                output: `${resolution.resolution === "done" ? "the owner marked it done" : `the ${Math.round(waitMs / 1000)}s wait timed out`}, but re-checking the page failed: ${reprobe.error} — verify with read or eval before continuing`,
-              };
-            }
-            const still = detectVerificationWall({ title: reprobe.title, text: reprobe.text });
-            if (resolution.resolution === "done") {
+              // (4) Re-probe once (a "stop" needs no re-check — the owner said
+              // stop) and report honestly.
+              if (resolution.resolution === "stop") {
+                return {
+                  ok: true,
+                  output: `the owner stopped the wait — do not retry this page automatically; ask how to proceed (a ${initial.kind} wall was showing on ${url})`,
+                };
+              }
+              const reprobe = await probeWallOnce(url, state.title);
+              if (!reprobe.ok) {
+                return {
+                  ok: true,
+                  output: `${resolution.resolution === "done" ? "the owner marked it done" : `the ${Math.round(waitMs / 1000)}s wait timed out`}, but re-checking the page failed: ${reprobe.error} — verify with read or eval before continuing`,
+                };
+              }
+              const still = detectVerificationWall({ title: reprobe.title, text: reprobe.text });
+              if (resolution.resolution === "done") {
+                if (still === null) {
+                  return {
+                    ok: true,
+                    output: `verification cleared — the page now shows ${reprobe.title !== "" ? reprobe.title : url} (the owner solved the ${initial.kind} wall; re-probe found no wall markers)`,
+                  };
+                }
+                return {
+                  ok: true,
+                  output: `the owner marked it done but the wall markers are still present (${still.kind}: ${still.evidence}) — re-check or ask before trusting the page`,
+                };
+              }
+              // timeout
               if (still === null) {
                 return {
                   ok: true,
-                  output: `verification cleared — the page now shows ${reprobe.title !== "" ? reprobe.title : url} (the owner solved the ${initial.kind} wall; re-probe found no wall markers)`,
+                  output: `the ${Math.round(waitMs / 1000)}s wait timed out but the wall appears cleared — the page now shows ${reprobe.title !== "" ? reprobe.title : url}; continue carefully`,
                 };
               }
               return {
                 ok: true,
-                output: `the owner marked it done but the wall markers are still present (${still.kind}: ${still.evidence}) — re-check or ask before trusting the page`,
+                output: `the ${Math.round(waitMs / 1000)}s wait timed out with the wall still up (${still.kind}: ${still.evidence}) — tell the owner what is needed (solve it in the browser panel, then ask me to re-check)`,
               };
             }
-            // timeout
-            if (still === null) {
+
+            // ── R62 (D8): eval — JavaScript inside the live page ───────────
+            if (action === "eval") {
+              const script = typeof input.script === "string" ? input.script : "";
+              if (script.trim() === "") {
+                return { ok: false, output: "browser_control: eval requires a non-empty 'script' (end it with `return value`)" };
+              }
+              if (script.length > 20_000) {
+                return { ok: false, output: "browser_control: eval script too large (max 20000 chars)" };
+              }
+              if (toolDeps === undefined || typeof toolDeps.emit !== "function") {
+                return {
+                  ok: false,
+                  output:
+                    "browser_control: eval unavailable — no live stream channel in this context (eval needs the app UI to run the script in the page)",
+                };
+              }
+              let data: unknown;
+              try {
+                data = await sendBrowserCommand(toolDeps.emit, sessionId, "eval", { script }, 12_000);
+              } catch (error) {
+                return {
+                  ok: false,
+                  output: `browser_control: eval failed — ${error instanceof Error ? error.message : String(error)}`,
+                };
+              }
+              // The bridge replies with the Rust command's {ok, value|error}.
+              const result = (data ?? {}) as { ok?: unknown; value?: unknown; error?: unknown };
+              if (result.ok !== true) {
+                const message = typeof result.error === "string" ? result.error : "the page rejected the script";
+                return { ok: false, output: `browser_control: eval — page error: ${message}` };
+              }
+              const serialized = JSON.stringify(result.value ?? null);
+              const capped =
+                serialized.length > 12_000
+                  ? `${serialized.slice(0, 12_000)}…(truncated, ${serialized.length} chars total)`
+                  : serialized;
               return {
                 ok: true,
-                output: `the ${Math.round(waitMs / 1000)}s wait timed out but the wall appears cleared — the page now shows ${reprobe.title !== "" ? reprobe.title : url}; continue carefully`,
+                output: `eval ok (tab '${sessionId}') → ${capped}`,
               };
             }
-            return {
-              ok: true,
-              output: `the ${Math.round(waitMs / 1000)}s wait timed out with the wall still up (${still.kind}: ${still.evidence}) — tell the owner what is needed (solve it in the browser panel, then ask me to re-check)`,
-            };
-          }
 
-          // ── R62 (D8): eval — JavaScript inside the live page ───────────
-          if (action === "eval") {
-            const script = typeof input.script === "string" ? input.script : "";
-            if (script.trim() === "") {
-              return { ok: false, output: "browser_control: eval requires a non-empty 'script' (end it with `return value`)" };
-            }
-            if (script.length > 20_000) {
-              return { ok: false, output: "browser_control: eval script too large (max 20000 chars)" };
-            }
-            if (toolDeps === undefined || typeof toolDeps.emit !== "function") {
-              return {
-                ok: false,
-                output:
-                  "browser_control: eval unavailable — no live stream channel in this context (eval needs the app UI to run the script in the page)",
-              };
-            }
-            let data: unknown;
-            try {
-              data = await sendBrowserCommand(toolDeps.emit, sessionId, "eval", { script }, 12_000);
-            } catch (error) {
-              return {
-                ok: false,
-                output: `browser_control: eval failed — ${error instanceof Error ? error.message : String(error)}`,
-              };
-            }
-            // The bridge replies with the Rust command's {ok, value|error}.
-            const result = (data ?? {}) as { ok?: unknown; value?: unknown; error?: unknown };
-            if (result.ok !== true) {
-              const message = typeof result.error === "string" ? result.error : "the page rejected the script";
-              return { ok: false, output: `browser_control: eval — page error: ${message}` };
-            }
-            const serialized = JSON.stringify(result.value ?? null);
-            const capped =
-              serialized.length > 12_000
-                ? `${serialized.slice(0, 12_000)}…(truncated, ${serialized.length} chars total)`
-                : serialized;
-            return {
-              ok: true,
-              output: `eval ok (tab '${sessionId}') → ${capped}`,
-            };
-          }
-
-          // ── R62 (D8): screenshot — capture + describe the panel ─────────
-          if (action === "screenshot") {
-            const state = browserGetStateCommand(sessionId);
-            if (state.currentUrl === null) {
-              return {
-                ok: false,
-                output: `browser_control: screenshot — no page is open in tab '${sessionId}' yet; navigate first`,
-              };
-            }
-            const relay = getActiveComputerRelay();
-            if (relay === null) {
-              return {
-                ok: false,
-                output:
-                  "browser_control: screenshot needs Computer Use enabled (Settings → Computer Use — the screen-capture engine). It is currently OFF. Meanwhile action 'read' gets the page text and 'eval' the live DOM.",
-              };
-            }
-            if (toolDeps === undefined || toolDeps.db === null || toolDeps.db === undefined) {
-              return { ok: false, output: "browser_control: screenshot unavailable — no database in this context" };
-            }
-            // Ask the live UI for the panel's on-screen region (physical px).
-            // R87 (the owner: screenshots must be the PANEL ONLY — never the
-            // whole display): no answer / web mode → an HONEST ERROR steering
-            // to read/read_dom, never a full-display capture (the old fallback
-            // leaked the owner's entire screen into the agent's context).
-            let region: { x: number; y: number; w: number; h: number } | null = null;
-            if (typeof toolDeps.emit === "function") {
-              try {
-                const meta = (await sendBrowserCommand(toolDeps.emit, sessionId, "screenshot_meta", {}, 5000)) as {
-                  supported?: unknown;
-                  region?: { x?: unknown; y?: unknown; w?: unknown; h?: unknown } | null;
+            // ── R62 (D8): screenshot — capture + describe the panel ─────────
+            if (action === "screenshot") {
+              const state = browserGetStateCommand(sessionId);
+              if (state.currentUrl === null) {
+                return {
+                  ok: false,
+                  output: `browser_control: screenshot — no page is open in tab '${sessionId}' yet; navigate first`,
                 };
-                if (
-                  meta?.supported === true &&
-                  meta.region !== null &&
-                  meta.region !== undefined &&
-                  typeof meta.region.x === "number" &&
-                  typeof meta.region.y === "number" &&
-                  typeof meta.region.w === "number" &&
-                  typeof meta.region.h === "number" &&
-                  meta.region.w > 0 &&
-                  meta.region.h > 0
-                ) {
-                  region = {
-                    x: Math.round(meta.region.x),
-                    y: Math.round(meta.region.y),
-                    w: Math.round(meta.region.w),
-                    h: Math.round(meta.region.h),
+              }
+              const relay = getActiveComputerRelay();
+              if (relay === null) {
+                return {
+                  ok: false,
+                  output:
+                    "browser_control: screenshot needs Computer Use enabled (Settings → Computer Use — the screen-capture engine). It is currently OFF. Meanwhile action 'read' gets the page text and 'eval' the live DOM.",
+                };
+              }
+              if (toolDeps === undefined || toolDeps.db === null || toolDeps.db === undefined) {
+                return { ok: false, output: "browser_control: screenshot unavailable — no database in this context" };
+              }
+              // ── R94-E (PART 3): the VISION GATE (the single surgical block) ──
+              // The owner's v0.91.0 report: the session's model had NO image
+              // understanding, yet the agent kept screenshotting — dead captures
+              // downstream. Resolve the vision path BEFORE any capture work
+              // (the region ask included — that is a 5s-potential UI bridge
+              // round-trip); no path → the honest, instructive refusal steering
+              // to the text actions that DO work everywhere (read / read_dom).
+              if (!sessionHasVisionPath(toolDeps.db, toolDeps.mainModel)) {
+                return {
+                  ok: false,
+                  output: `browser_control: screenshot — ${NO_VISION_SCREENSHOT_MESSAGE} ${NO_VISION_SCREENSHOT_RECOVERY}`,
+                };
+              }
+              // Ask the live UI for the panel's on-screen region (physical px).
+              // R87 (the owner: screenshots must be the PANEL ONLY — never the
+              // whole display): no answer / web mode → an HONEST ERROR steering
+              // to read/read_dom, never a full-display capture (the old fallback
+              // leaked the owner's entire screen into the agent's context).
+              let region: { x: number; y: number; w: number; h: number } | null = null;
+              if (typeof toolDeps.emit === "function") {
+                try {
+                  const meta = (await sendBrowserCommand(toolDeps.emit, sessionId, "screenshot_meta", {}, 5000)) as {
+                    supported?: unknown;
+                    region?: { x?: unknown; y?: unknown; w?: unknown; h?: unknown } | null;
                   };
+                  if (
+                    meta?.supported === true &&
+                    meta.region !== null &&
+                    meta.region !== undefined &&
+                    typeof meta.region.x === "number" &&
+                    typeof meta.region.y === "number" &&
+                    typeof meta.region.w === "number" &&
+                    typeof meta.region.h === "number" &&
+                    meta.region.w > 0 &&
+                    meta.region.h > 0
+                  ) {
+                    region = {
+                      x: Math.round(meta.region.x),
+                      y: Math.round(meta.region.y),
+                      w: Math.round(meta.region.w),
+                      h: Math.round(meta.region.h),
+                    };
+                  }
+                } catch {
+                  // The UI didn't answer (no panel mounted / web dev mode) —
+                  // region stays null and the honest error below fires.
                 }
-              } catch {
-                // The UI didn't answer (no panel mounted / web dev mode) —
-                // region stays null and the honest error below fires.
               }
+              if (region === null) {
+                return {
+                  ok: false,
+                  output:
+                    "browser_control: screenshot — the browser panel is not mounted in the app right now (web dev mode, or the browser tab is closed), so there is no panel region to capture. The panel-only capture NEVER falls back to a full-screen shot. Use action 'read' for the page text or 'read_dom' for the structured content (they work everywhere), or re-open the browser tab and retry.",
+                };
+              }
+              const raster = await relay.backend.captureRegion(relay.run, region);
+              if ("error" in raster) {
+                return {
+                  ok: false,
+                  output: `browser_control: screenshot — screen capture failed: ${raster.error}`,
+                };
+              }
+              // ── ROUND-67 (R67-D): the chat THUMBNAIL frame ────────────────
+              // The owner: "if the agent takes screenshots… the images should
+              // be shown during its thinking in the agent's chat window itself,
+              // in a small view." The capture's bytes are LOCAL to this plugin
+              // call, so they are copied into the route-served raster registry
+              // under a MINTED id (`bs_<base36>` — no session frame exists for
+              // browser captures) and announced as a `screenshot` SSE frame.
+              // Never recorded into the computer-use monitor ring (A1 above
+              // still holds); never persisted (emit is the SSE-only channel);
+              // never model-facing. Enhancement only — try/catch discipline.
+              if (toolDeps !== undefined && typeof toolDeps.emit === "function") {
+                try {
+                  const frameId = `bs_${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36).padStart(2, "0")}`;
+                  registerRaster(frameId, raster.pngBase64);
+                  toolDeps.emit({
+                    type: "screenshot",
+                    sessionId: toolDeps.sessionId,
+                    frameId,
+                    tool: "browser_control",
+                    note: "browser panel",
+                  });
+                } catch {
+                  // The thumbnail strip is an enhancement — never break the tool.
+                }
+              }
+              // R66 (A1): NO relay.session.record here anymore — browser
+              // screenshots must NOT appear in the computer-use monitor ring
+              // (the owner: browser work wrongly showed "agent is using your
+              // computer"). The capture + vision description stand alone.
+              const instruction =
+                typeof input.instruction === "string" && input.instruction.trim() !== ""
+                  ? input.instruction.trim().slice(0, 500)
+                  : "Describe the embedded browser panel in this screenshot: which page/site is open, its visible headline content, main interactive elements, and anything actionable for the task.";
+              const vision = await relayVision(toolDeps.db, toolDeps.keyring, toolDeps.mainModel, raster.pngBase64, instruction);
+              if (vision.ok) {
+                return {
+                  ok: true,
+                  output: `Browser panel screenshot (panel region ${region.w}×${region.h}, ${raster.width}×${raster.height}px, page ${state.currentUrl}) — vision (${vision.model}) says:\n${vision.text}`,
+                };
+              }
+              return {
+                ok: true,
+                output: `Browser panel screenshot captured (panel region ${region.w}×${region.h}, ${raster.width}×${raster.height}px, page ${state.currentUrl}), but the vision description is unavailable: ${vision.error}`,
+              };
             }
-            if (region === null) {
+
+            if (action === "get_state") {
+              // R62: the state includes the open tabs + which one is active.
+              // R67/E3: the tab list is now SCOPED to what this chat session
+              // can drive — its own bound tab (plus any explicitly-addressed
+              // tab). The owner's leak report: a new session's get_state used
+              // to list EVERY session's tabs globally, inviting the model to
+              // drive another session's still-open tab. With no binding yet,
+              // the tool mints one above (browser-open frame) — so the agent
+              // always sees exactly its own tab.
+              const state = browserGetStateCommand(sessionId);
+              const known = new Set<string>([sessionId]);
+              const payload = {
+                ...state,
+                activeTab: sessionId,
+                tabs: browserListSessionsCommand()
+                  .filter((t) => known.has(t.sessionId))
+                  .map((t) => ({
+                    sessionId: t.sessionId,
+                    currentUrl: t.currentUrl,
+                    title: t.title,
+                    viewport: `${t.viewport.width}×${t.viewport.height} @ ${t.viewport.zoom}×${t.viewport.rotate ? " (rotated)" : ""}`,
+                  })),
+              };
+              return { ok: true, output: JSON.stringify(payload) };
+            }
+            return {
+              ok: false,
+              output: `browser_control: unknown action '${action}' (navigate | back | forward | reload | set_viewport | read | read_dom | source | click | type | press_key | eval | wait | sequence | screenshot | get_state | wait_for_verification)`,
+            };
+          };
+
+          // ── ROUND-94 (R94-F): sequence — the multi-stage step chain ──
+          // The owner's report: a 45-step browsing session where every
+          // hands action failed left the model stringing dozens of tiny
+          // tool calls together with NO waiting between them. sequence is
+          // the atomic multi-step path: 1-8 steps, ONE tab, first failure
+          // stops the chain, and the built-in settle between steps is the
+          // "proper waiting" he asked for (250ms; after navigate/back/
+          // forward/reload, up to 5s for readyState complete via the wait
+          // logic above).
+          if (input.action === "sequence") {
+            const stepsRaw = input.steps;
+            if (!Array.isArray(stepsRaw) || stepsRaw.length === 0) {
               return {
                 ok: false,
                 output:
-                  "browser_control: screenshot — the browser panel is not mounted in the app right now (web dev mode, or the browser tab is closed), so there is no panel region to capture. The panel-only capture NEVER falls back to a full-screen shot. Use action 'read' for the page text or 'read_dom' for the structured content (they work everywhere), or re-open the browser tab and retry.",
+                  "browser_control: sequence requires 'steps' — an array of 1-8 step objects, e.g. {steps: [{action: 'type', selector: '#q', text: 'hello', submit: true}, {action: 'wait', ms: 900}, {action: 'click', selector: 'button[type=submit]'}]}",
               };
             }
-            const raster = await relay.backend.captureRegion(relay.run, region);
-            if ("error" in raster) {
+            if (stepsRaw.length > 8) {
               return {
                 ok: false,
-                output: `browser_control: screenshot — screen capture failed: ${raster.error}`,
+                output: `browser_control: sequence — ${stepsRaw.length} steps is over the cap of 8; split the flow into consecutive sequence calls (each stays focused and its own progress report)`,
               };
             }
-            // ── ROUND-67 (R67-D): the chat THUMBNAIL frame ────────────────
-            // The owner: "if the agent takes screenshots… the images should
-            // be shown during its thinking in the agent's chat window itself,
-            // in a small view." The capture's bytes are LOCAL to this plugin
-            // call, so they are copied into the route-served raster registry
-            // under a MINTED id (`bs_<base36>` — no session frame exists for
-            // browser captures) and announced as a `screenshot` SSE frame.
-            // Never recorded into the computer-use monitor ring (A1 above
-            // still holds); never persisted (emit is the SSE-only channel);
-            // never model-facing. Enhancement only — try/catch discipline.
-            if (toolDeps !== undefined && typeof toolDeps.emit === "function") {
-              try {
-                const frameId = `bs_${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36).padStart(2, "0")}`;
-                registerRaster(frameId, raster.pngBase64);
-                toolDeps.emit({
-                  type: "screenshot",
-                  sessionId: toolDeps.sessionId,
-                  frameId,
-                  tool: "browser_control",
-                  note: "browser panel",
-                });
-              } catch {
-                // The thumbnail strip is an enhancement — never break the tool.
+            const steps: Array<Record<string, unknown>> = [];
+            for (const raw of stepsRaw) {
+              if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+                return {
+                  ok: false,
+                  output: "browser_control: sequence — every step must be an object like {action: 'click', selector: '…'}",
+                };
+              }
+              const step = raw as Record<string, unknown>;
+              const stepAction = typeof step.action === "string" ? step.action : "";
+              if (stepAction === "sequence") {
+                return {
+                  ok: false,
+                  output:
+                    "browser_control: sequence steps cannot include 'sequence' (no nesting) — build the flow as consecutive sequence calls instead",
+                };
+              }
+              if (!SEQUENCE_STEP_ACTIONS.has(stepAction)) {
+                return {
+                  ok: false,
+                  output: `browser_control: sequence — step action '${stepAction}' is not allowed (allowed step actions: ${[...SEQUENCE_STEP_ACTIONS].join(" | ")})`,
+                };
+              }
+              steps.push(step);
+            }
+            const started = Date.now();
+            const results: Array<{ ok: boolean; action: string; output: string }> = [];
+            const readyNotes: string[] = [];
+            for (let i = 0; i < steps.length; i++) {
+              const step = steps[i];
+              const stepAction = String(step.action);
+              // All steps run on the ONE resolved tab — a per-step
+              // sessionId override is stripped (with a note in the step's
+              // line) so a step can never silently hop tabs mid-chain.
+              const stepSession = typeof step.sessionId === "string" ? step.sessionId.trim() : "";
+              const stepInput: Record<string, unknown> = { ...step };
+              delete stepInput.sessionId;
+              const result = await executeAction(stepInput, sessionId, noTabHint);
+              const overrideNote =
+                stepSession !== "" && stepSession !== sessionId
+                  ? ` (per-step sessionId '${stepSession}' ignored — the sequence runs on tab '${sessionId}')`
+                  : "";
+              results.push({ ok: result.ok, action: stepAction, output: result.ok ? result.output + overrideNote : result.output });
+              if (!result.ok) {
+                const lines = results.map((r, n) => `${n + 1}. ${r.ok ? "ok" : "FAILED"} ${r.action} — ${condenseSequenceLine(r.output)}`);
+                return {
+                  ok: false,
+                  output:
+                    `browser_control: sequence FAILED at step ${i + 1} (${stepAction}) — steps after it were NOT run. ${condenseSequenceLine(result.output)}\n` +
+                    `${lines.join("\n")}` +
+                    (readyNotes.length > 0 ? `\n${readyNotes.join("\n")}` : "") +
+                    `\nFix or verify step ${i + 1}, then re-run the sequence (or continue with single actions).`,
+                };
+              }
+              // The settle between steps — the built-in proper waiting.
+              if (i < steps.length - 1) {
+                if (stepAction === "navigate" || stepAction === "back" || stepAction === "forward" || stepAction === "reload") {
+                  const settle = await executeAction({ action: "wait", ms: 5_000, readyState: true }, sessionId, "");
+                  if (!settle.ok) {
+                    readyNotes.push(
+                      `(note: the page did not reach readyState complete within 5s before step ${i + 2} — it may still be loading; the step's own result is the honest signal)`,
+                    );
+                  }
+                } else {
+                  await new Promise((resolve) => setTimeout(resolve, 250));
+                }
               }
             }
-            // R66 (A1): NO relay.session.record here anymore — browser
-            // screenshots must NOT appear in the computer-use monitor ring
-            // (the owner: browser work wrongly showed "agent is using your
-            // computer"). The capture + vision description stand alone.
-            const instruction =
-              typeof input.instruction === "string" && input.instruction.trim() !== ""
-                ? input.instruction.trim().slice(0, 500)
-                : "Describe the embedded browser panel in this screenshot: which page/site is open, its visible headline content, main interactive elements, and anything actionable for the task.";
-            const vision = await relayVision(toolDeps.db, toolDeps.keyring, toolDeps.mainModel, raster.pngBase64, instruction);
-            if (vision.ok) {
-              return {
-                ok: true,
-                output: `Browser panel screenshot (panel region ${region.w}×${region.h}, ${raster.width}×${raster.height}px, page ${state.currentUrl}) — vision (${vision.model}) says:\n${vision.text}`,
-              };
-            }
+            const lines = results.map((r, n) => `${n + 1}. ok ${r.action} — ${condenseSequenceLine(r.output)}`);
             return {
               ok: true,
-              output: `Browser panel screenshot captured (panel region ${region.w}×${region.h}, ${raster.width}×${raster.height}px, page ${state.currentUrl}), but the vision description is unavailable: ${vision.error}`,
+              output:
+                `sequence ok (tab '${sessionId}', ${steps.length} step${steps.length === 1 ? "" : "s"}, ${((Date.now() - started) / 1000).toFixed(1)}s) — all steps succeeded:\n` +
+                `${lines.join("\n")}` +
+                (readyNotes.length > 0 ? `\n${readyNotes.join("\n")}` : "") +
+                "\n(step outputs are condensed — call the action directly for its full result)",
             };
           }
 
-          if (action === "get_state") {
-            // R62: the state includes the open tabs + which one is active.
-            // R67/E3: the tab list is now SCOPED to what this chat session
-            // can drive — its own bound tab (plus any explicitly-addressed
-            // tab). The owner's leak report: a new session's get_state used
-            // to list EVERY session's tabs globally, inviting the model to
-            // drive another session's still-open tab. With no binding yet,
-            // the tool mints one above (browser-open frame) — so the agent
-            // always sees exactly its own tab.
-            const state = browserGetStateCommand(sessionId);
-            const known = new Set<string>([sessionId]);
-            const payload = {
-              ...state,
-              activeTab: sessionId,
-              tabs: browserListSessionsCommand()
-                .filter((t) => known.has(t.sessionId))
-                .map((t) => ({
-                  sessionId: t.sessionId,
-                  currentUrl: t.currentUrl,
-                  title: t.title,
-                  viewport: `${t.viewport.width}×${t.viewport.height} @ ${t.viewport.zoom}×${t.viewport.rotate ? " (rotated)" : ""}`,
-                })),
-            };
-            return { ok: true, output: JSON.stringify(payload) };
-          }
-          return {
-            ok: false,
-            output: `browser_control: unknown action '${action}' (navigate | back | forward | reload | set_viewport | read | read_dom | source | click | type | press_key | eval | screenshot | get_state | wait_for_verification)`,
-          };
+          return executeAction(input, sessionId, noTabHint);
         },
       },
     ];

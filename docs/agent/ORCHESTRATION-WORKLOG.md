@@ -796,7 +796,7 @@ token-in-URL auth-doc URL noise). The CI step is `continue-on-error: true`
 **J2 work delivered (commit 65246ca):**
 - Created `scripts/docs/stamp-all.mjs` — the bulk idempotent stamper that
   DOC-STANDARDS §8 references but never existed. Reads round from status.json.
-- Backfilled the `<!-- last-reviewed: 2026-09-11 round-90 -->` stamp on 103
+- Backfilled the `<!-- last-reviewed: 2026-09-12 round-94 -->` stamp on 103
   docs (105 failures → 0).
 - Hardened `scripts/docs/check-stale.mjs`:
   1. **indented-fence support** (`/^ {0,3}```/m`) — the actual root bug;
@@ -2583,3 +2583,49 @@ Work Log:
 
 Stage Summary:
 - The repository is PUBLIC with a fully purged, noreply-mapped, secret-free history; CI confirmed green on public runners (the quota wall is gone); the release path re-runs on the re-cut tag. Owner defense-in-depth recommendation recorded (rotate the three historical OpenRouter keys; optionally pick a new ntfy topic).
+
+## Round 94 — the field-report round (v0.91.0 → v0.92.0)
+
+**Session shape:** 7 parallel implementation subagents (launcher / updater+installer
+/ models-tab / chat-runtime / chat-scroll / computer-use / browser) + a follow-up
+prompts agent + orchestrator-owned integration. Four subagents hit the dispatch
+context deadline with COMPLETE work in the tree — recovered by the verify-then-finish
+protocol (git status → focused suites → the interrupted tail: 8 un-pinned tests, the
+hasVisionPath prompt wiring).
+
+**What shipped (the owner's v0.91.0 field report, item by item):**
+- In-app updater: the asset-URL allowlist fix (github.com release-download permalinks
+  accepted; API URL preferred) + the PAT optional (public repo).
+- Launcher: public-repo note (no warning), divergence realignment (reset --hard
+  FETCH_HEAD), never dead-end an existing build.
+- Installer: the sidecar's kill-on-close Job Object + the NSIS preinstall hook
+  (under-$INSTDIR node.exe kills) — the file-lock class closed kernel-side AND
+  installer-side.
+- Chat: stick-to-bottom auto-scroll + the Jump-to-latest pill; queued messages
+  injected at tool-call boundaries (AI SDK prepareStep's messages override — proven
+  on the live wire: the second provider request carries the note, the transcript
+  persists it after tool.use).
+- Providers: malformed_response ("unknown object") joins the transient ladder + the
+  one unknown-with-progress retry with a visible meta.retry card.
+- Computer use: the UIA no-csc fallback layer + addTypeError diagnostics + the
+  window_action tool (target:'foreground' closes the "minimize the current window"
+  gap) + the no-vision screenshot gate.
+- Browser: the evalJob self-heal (install/start split, ~2KB action scripts),
+  wait, sequence (multi-stage), the screenshot vision-gate.
+- Models tab: real button affordances, the optimistic hide/show (scroll preserved),
+  Test scopes (all/failed/working).
+- Prompts: the CAPABILITIES section + the RECOVERY PROTOCOL (+302 words net).
+
+**Verification:** lint clean, both typechecks clean, root 3,091/3,091 (168 files),
+agent-core 2,041/2,041 (101 files), e2e 12/12, build green, license 134 clean,
+docs:check 200/0/0 (the round-94 bulk stamp sweep — 188 docs re-validated),
+version:check ×4 = 0.92.0, + the NEW Linux live-fire harness
+(scripts/r94-live-fire.mjs): real end-to-end turns through a local
+OpenAI-compatible SSE provider — ALL CHECKS PASSED (queue injection mid-turn,
+unknown-object ladder recovery, honest headless browser/window paths,
+anonymous /system/updates).
+
+**Live-fire finds (both fixed in the round):** projectless sessions resolve no
+toolset (the queue-injection scenarios initially vacuous), and the SDK absorbs ~5
+internal retries before the runtime ladder ever engages (the live proof needed the
+5-fail 500 pattern to reach the runtime's own recovery).

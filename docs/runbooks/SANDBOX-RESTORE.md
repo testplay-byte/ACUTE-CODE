@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-90 -->
+<!-- last-reviewed: 2026-09-12 round-94 -->
 # SANDBOX RESTORE — resuming after the agent sandbox is wiped
 
 **Owner directive (2026-08-24, round 28 revision):** the agent's sandbox is

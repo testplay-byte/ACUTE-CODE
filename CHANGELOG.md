@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-93 -->
+<!-- last-reviewed: 2026-09-12 round-94 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -20,6 +20,82 @@ ratings-driven prompt tuning, and the standing items (edit-linting, installer
 code-signing, the Files-tab polish, the browser agent's CDP-level trusted-input
 tier, the computer-use COM IUIAutomation bridge for the ACTION/MSAA legacy
 layers).
+
+## [0.92.0] - 2026-09-12 — the field-report round
+
+The owner's v0.91.0 field report, answered end to end.
+
+### Fixed — the update paths
+- **The in-app updater**: "body.url must be a GitHub release asset of this
+  repository" — every real download was rejected (the asset permalink's
+  host was never in the allowlist). Both URL forms of this repo's release
+  assets are accepted now, and the GitHub token is OPTIONAL (the repo is
+  public — anonymous check + download work; the token only raises limits).
+- **The launcher**: the "GitHub reports this repository as PUBLIC" warning
+  is gone (public is the chosen state); a diverged clone (the public-
+  migration history rewrite) realigns via `git reset --hard FETCH_HEAD`
+  instead of the "Not possible to fast-forward" dead-end panel; an update
+  failure with an existing local build warns and continues booting.
+- **The installer**: "Error opening file for writing" on node.exe — the
+  node sidecar child is tied to an app-lifetime kill-on-close Job Object
+  (whatever kills the app kills the child with it, kernel-enforced), and
+  the NSIS preinstall hook kills ACUTE-CODE.exe + under-$INSTDIR node.exe
+  so no orphan can lock the install directory.
+
+### Fixed — the chat
+- **Stick-to-bottom scrolling**: auto-scroll only while you are at the
+  bottom; scrolling up during a running turn detaches (a "Jump to latest"
+  pill re-pins).
+- **Queued messages land mid-turn**: a message queued while the agent works
+  is injected at the next tool-call boundary — the model sees it during the
+  run and the transcript shows it after the tool result (not after the
+  original message).
+
+### Fixed — provider reliability
+- "Generation failed: unknown object" and its malformed-response family
+  now auto-retry through the existing ladder; an unclassifiable error
+  after real work gets ONE visible retry (the meta.retry card) before the
+  honest terminal path — no more instant dead ends mid-task.
+
+### Fixed — computer use (Windows)
+- The whole window layer (empty windows_overview, no active window, "owns
+  no accessible top-level window" for every app) traced to the U32 Add-Type
+  compile failing on the host: a csc-free UIAutomation fallback now lists
+  windows/apps and the foreground (tagged + diagnosed with the compile
+  error), and the new **window_action** tool (minimize / maximize / restore
+  / focus / close, by windowId, `target:'foreground'`, or appRef) gives
+  window tasks an actor.
+- **The vision gate**: a session with no image understanding can no longer
+  burn turns on screenshots — the refusal is instructive and fires before
+  any capture (the browser screenshot action shares the gate).
+
+### Fixed — browser use
+- The agent-hands bridge is self-healing: a tiny per-action script + a
+  one-time runtime install, unexpected start payloads are recovered-or-
+  retried with the received payload in the error, and timeouts retry once
+  (the "evalJob: unexpected start payload (no job started)" class).
+- New **wait** action (readyState / selector / URL polling) and new
+  **sequence** action — multi-stage steps in one call with built-in
+  settle waits (the owner's multi-stage ask).
+
+### Changed — the models list & the prompts
+- The model-row actions are real buttons (segmented cluster, hover/press
+  states); hide/show no longer resets the list scroll (fully optimistic
+  update); the Test button gained scopes — all / only failed / only
+  working.
+- The system prompt gained a CAPABILITIES section (no-vision sessions are
+  told, once, never to call screenshot tools) and a RECOVERY PROTOCOL
+  (re-observe before retrying; at most two identical retries then change
+  strategy; never abandon the task), plus browser/computer-use discipline
+  (wait after navigate, verify before interacting).
+
+### Verified
+Full pipeline: lint, both typechecks, 3,091 frontend + 2,041 agent-core
+tests, e2e 12/12, build, license audit 134 clean; plus a new LINUX
+LIVE-FIRE harness (scripts/r94-live-fire.mjs) driving real end-to-end
+turns through a local OpenAI-compatible provider — the mid-turn queue
+injection, the unknown-object recovery, and the headless browser/window
+paths all proven on the wire.
 
 ## [0.91.0] - 2026-09-12 — the R93 fifth-walkthrough round
 

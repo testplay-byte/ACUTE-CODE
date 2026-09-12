@@ -52,10 +52,12 @@ const GITHUB_RELEASES_PAGE = `https://github.com/${GITHUB_REPO}/releases`;
 // ── R91-E: the IN-APP UPDATER's download state ─────────────────────────────
 // The owner: "there was no inbuilt update system… I can update the application
 // from within the app itself rather than going anywhere." The download
-// streams HERE (the sidecar holds the PAT the private repo's assets demand),
-// the progress is polled by the About tab, and the verified installer path
-// is handed to the Rust shell's `run_update_installer` command at the end.
-// Single-flight by construction: ONE download at a time, module state.
+// streams HERE (the sidecar can attach the launcher's PAT to raise GitHub's
+// anonymous rate limits — R94-B: the repo is PUBLIC now, so the PAT is an
+// optional accelerator, never a gate), the progress is polled by the About
+// tab, and the verified installer path is handed to the Rust shell's
+// `run_update_installer` command at the end. Single-flight by construction:
+// ONE download at a time, module state.
 interface UpdateDownloadState {
   status: "idle" | "downloading" | "verifying" | "ready" | "error";
   /** Bytes received so far (0 until the stream starts). */
@@ -99,6 +101,10 @@ interface GithubRelease {
   html_url?: unknown;
   assets?: Array<{
     name?: unknown;
+    /** R94-B: the API asset endpoint (api.github.com/…/assets/<id>) — serves
+     * the bytes with a 302 to objects.githubusercontent.com when asked with
+     * Accept: octet-stream. Both URL forms ship in every asset object. */
+    url?: unknown;
     browser_download_url?: unknown;
     size?: unknown;
     digest?: unknown;
@@ -106,7 +112,17 @@ interface GithubRelease {
 }
 
 /** Finds the x64 setup.exe asset of a release (the NSIS installer the
- * launcher-kit job uploads — `ACUTE-CODE_<v>_x64-setup.exe`). */
+ * launcher-kit job uploads — `ACUTE-CODE_<v>_x64-setup.exe`).
+ *
+ * R94-B: the owner's "Update now" died with "body.url must be a GitHub
+ * release asset of this repository" because the pre-R94 code returned ONLY
+ * `browser_download_url` (host github.com) while the download route's
+ * allowlist accepted ONLY api.github.com / objects.githubusercontent.com —
+ * every real download was rejected by construction. Each GitHub asset
+ * carries BOTH URL forms; we now prefer the API `url` (the token-friendly
+ * api.github.com surface) and fall back to `browser_download_url` (the
+ * github.com /releases/download permalink, which the allowlist accepts too).
+ * Both empty → null (no usable asset). */
 function findInstallerAsset(release: GithubRelease): {
   url: string;
   size: number;
@@ -115,8 +131,15 @@ function findInstallerAsset(release: GithubRelease): {
   for (const asset of release.assets ?? []) {
     const name = typeof asset.name === "string" ? asset.name : "";
     if (name.endsWith("_x64-setup.exe")) {
+      const apiUrl = typeof asset.url === "string" ? asset.url : "";
+      const browserUrl =
+        typeof asset.browser_download_url === "string" ? asset.browser_download_url : "";
+      const url = apiUrl !== "" ? apiUrl : browserUrl;
+      if (url === "") {
+        return null;
+      }
       return {
-        url: typeof asset.browser_download_url === "string" ? asset.browser_download_url : "",
+        url,
         size: typeof asset.size === "number" ? asset.size : 0,
         digest: typeof asset.digest === "string" ? asset.digest : null,
       };
@@ -158,10 +181,12 @@ function versionTuple(v: string): number[] {
  *      looked in the home while the launcher saved in the kit, so "Check
  *      for updates" answered no-token forever; the launcher migrates the
  *      legacy file automatically).
- * The repo is PRIVATE, so the releases API answers 404 to anonymous
- * callers. Never logged, never returned — read once per /system/updates
- * call and used in the Authorization header only. Returns null when
- * absent/unreadable. */
+ * R94-B: the repo is PUBLIC now, so this token is OPTIONAL — anonymous
+ * GitHub access works for both the check and the download; the PAT only
+ * raises the 60 req/h anonymous rate limit. The launcher's first-run prompt
+ * is an optional accelerator, never a gate. Never logged, never returned —
+ * read once per /system/updates call and used in the Authorization header
+ * only. Returns null when absent/unreadable (proceed anonymously). */
 function readLauncherGithubPat(): string | null {
   // R90-B1: the env var wins FIRST — the launcher only ever exports a token
   // it has already resolved (file, env, or fresh prompt), so this path cannot
@@ -244,34 +269,35 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
 
   // ── R89-A2: the update check ──────────────────────────────────────────────
   // The About tab's "Check for updates" used to call api.github.com from the
-  // webview — the repo is PRIVATE, so GitHub answered 404 to the anonymous
-  // browser fetch (the owner's verdict). The check now runs HERE, server-side,
-  // with the launcher's saved token — the PAT never crosses the REST boundary.
-  // The fetch is short-lived (8s) so the button can answer honestly fast.
+  // webview — the repo was PRIVATE then, so GitHub answered 404 to the
+  // anonymous browser fetch (the owner's verdict). The check runs HERE,
+  // server-side, so the token (when one exists) never crosses the REST
+  // boundary. R94-B: the repo is PUBLIC — anonymous access works, so the
+  // launcher's PAT is now OPTIONAL: it rides in the Authorization header
+  // only when present (raising the 60 req/h anonymous limit); without one
+  // the fetch is plain anonymous instead of dead-ending in a 409/no-token
+  // wall. The fetch is short-lived (8s) so the button can answer honestly
+  // fast.
   scope.get("/system/updates", async () => {
     const current = appVersion();
     const base = { current, releasesUrl: GITHUB_RELEASES_PAGE };
     const pat = readLauncherGithubPat();
-    if (pat === null) {
-      return {
-        ...base,
-        ok: false,
-        reason: "no-token",
-        error:
-          "the launcher's GitHub token is not saved on this machine (start the app once via ACUTE.bat and let it save it)",
-      };
+    // R94-B: PAT-optional — the repo is public, so the header is attached
+    // only when a token exists; the anonymous call proceeds below either way.
+    const requestHeaders: Record<string, string> = {
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "ACUTE-CODE-update-check",
+    };
+    if (pat !== null) {
+      requestHeaders.Authorization = `Bearer ${pat}`;
     }
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8_000);
       try {
         const response = await fetch(GITHUB_LATEST_RELEASE_URL, {
-          headers: {
-            Accept: "application/vnd.github+json",
-            Authorization: `Bearer ${pat}`,
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "ACUTE-CODE-update-check",
-          },
+          headers: requestHeaders,
           signal: controller.signal,
         });
         if (response.status === 404) {
@@ -279,7 +305,13 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
             ...base,
             ok: false,
             reason: "no-release",
-            error: "no published release is visible to this token yet",
+            // R94-B: the anonymous 404 no longer implies "your token cannot
+            // see this repo" — the repo is public, so the honest framing is
+            // reachability/publish state (no token needed for either).
+            error:
+              pat === null
+                ? "no published release is visible (the repository is public — no token required; is the network reachable?)"
+                : "no published release is visible to this token yet",
           };
         }
         if (!response.ok) {
@@ -337,12 +369,10 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
   // repo's release assets (the PAT-bearing fetch would otherwise be an
   // open proxy) — enforced below.
   scope.post("/system/updates/download", async (request, reply) => {
+    // R94-B: PAT-optional — the repo is public, so anonymous downloads work;
+    // the launcher's token, when present, only raises the rate limit (it is
+    // attached below). No 409 no-token wall anymore.
     const pat = readLauncherGithubPat();
-    if (pat === null) {
-      return reply.code(409).send(
-        errorBody("NO_TOKEN", "the launcher's GitHub token is not saved on this machine", {}),
-      );
-    }
     const body = request.body as { url?: unknown; digest?: unknown; version?: unknown } | null;
     const url = typeof body?.url === "string" ? body.url : "";
     const digest = typeof body?.digest === "string" && body.digest.startsWith("sha256:") ? body.digest : null;
@@ -350,9 +380,19 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
     if (url === "") {
       return reply.code(400).send(errorBody("VALIDATION", "body.url must be the release asset URL", { field: "body.url" }));
     }
-    // The URL must be THIS repo's release asset download (api.github.com or
-    // objects.githubusercontent.com hosts, /testplay-byte/ACUTE-CODE path) —
-    // never an open proxy for arbitrary URLs with the PAT attached.
+    // The URL must be THIS repo's release asset download. R94-B: the
+    // allowlist now covers BOTH real GitHub asset URL shapes —
+    //   · api.github.com /repos/testplay-byte/ACUTE-CODE/releases… (the API
+    //     asset endpoint — the form findInstallerAsset prefers),
+    //   · github.com /testplay-byte/ACUTE-CODE/releases/download/… (the
+    //     browser_download_url permalink — the R94-B fix: the pre-R94 gate
+    //     rejected exactly this host, so every real "Update now" died with
+    //     the VALIDATION error the owner reported),
+    //   · objects.githubusercontent.com / release-assets.githubusercontent.com
+    //     (where GitHub's 302 lands the actual bytes).
+    // The repo is PUBLIC, so none of these need a token — the PAT, when
+    // present, only raises the rate limit — but the gate still stands: this
+    // must never be an open proxy for arbitrary URLs with the PAT attached.
     let parsed: URL;
     try {
       parsed = new URL(url);
@@ -361,6 +401,8 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
     }
     const hostOk =
       (parsed.host === "api.github.com" && parsed.pathname.startsWith("/repos/testplay-byte/ACUTE-CODE/releases")) ||
+      (parsed.host === "github.com" &&
+        parsed.pathname.startsWith("/testplay-byte/ACUTE-CODE/releases/download/")) ||
       parsed.host === "objects.githubusercontent.com" ||
       parsed.host === "release-assets.githubusercontent.com";
     if (!hostOk || parsed.protocol !== "https:") {
@@ -377,12 +419,18 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
     void (async () => {
       const dest = join(tmpdir(), `ACUTE-CODE-${version || "update"}-x64-setup.exe`);
       try {
+        // R94-B: the PAT is optional — anonymous downloads work on the
+        // public repo; the Authorization header rides along only when a
+        // launcher token exists (raising the rate limit).
+        const downloadHeaders: Record<string, string> = {
+          "User-Agent": "ACUTE-CODE-in-app-updater",
+          Accept: "application/octet-stream",
+        };
+        if (pat !== null) {
+          downloadHeaders.Authorization = `Bearer ${pat}`;
+        }
         const response = await fetch(url, {
-          headers: {
-            Authorization: `Bearer ${pat}`,
-            "User-Agent": "ACUTE-CODE-in-app-updater",
-            Accept: "application/octet-stream",
-          },
+          headers: downloadHeaders,
           redirect: "follow",
         });
         if (!response.ok || response.body === null) {

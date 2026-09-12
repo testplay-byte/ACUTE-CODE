@@ -231,6 +231,59 @@ describe("R78: model-availability 404", () => {
   });
 });
 
+/* ── ROUND-94 (R94-D1): malformed provider responses — the owner's
+ * "Generation failed: unknown object" instant dead end ──────────────────── */
+
+describe("R94-D1: malformed_response classification (the 'unknown object' dead end)", () => {
+  it("the owner's literal case — 'Generation failed: unknown object' → malformed_response, TRANSIENT (ladder-retryable)", () => {
+    // v0.91.0 field report, verbatim: the NVIDIA/OpenRouter error classified
+    // `unknown` → fail-fast → the mid-task generation died instantly.
+    const classified = classifyProviderError(new Error("Generation failed: unknown object"));
+    expect(classified.class).toBe("malformed_response");
+    expect(isTransientApiFailure(classified.class)).toBe(true);
+    // The real provider text rides the line (the R78 honesty rule).
+    expect(classified.userMessage).toContain("unknown object");
+    expect(classified.userMessage).not.toBe(CLASS_MESSAGES.malformed_response);
+  });
+
+  it("the pattern family: unexpected token/chunk/part/object, invalid response|chunk format|shape, malformed", () => {
+    for (const message of [
+      "Unexpected token '<' in JSON at position 0",
+      "unexpected chunk in provider stream",
+      "Unexpected part received",
+      "unexpected object in response body",
+      "invalid response format from upstream",
+      "invalid chunk shape",
+      "The response was malformed and could not be parsed",
+    ]) {
+      expect(classifyProviderError(new Error(message)).class).toBe("malformed_response");
+    }
+  });
+
+  it("a RetryError wrapping the malformed body still classifies malformed (the unwrap happens first)", () => {
+    const err = retryError(apiCallError(400, "unknown object"));
+    expect(classifyProviderError(err).class).toBe("malformed_response");
+  });
+
+  it("network-shaped bodies keep the honest network class (the malformed check comes after)", () => {
+    // A 5xx whose body ALSO says "malformed" is a server error first.
+    expect(classifyProviderError(apiCallError(500, "malformed upstream payload")).class).toBe("network");
+  });
+
+  it("region/availability bodies stay unknown — no malformed false-positives on the R78 refinements", () => {
+    expect(classifyProviderError(apiCallError(403, "This model is not available in your region.")).class).toBe(
+      "unknown",
+    );
+    expect(classifyProviderError(apiCallError(404, "This model is unavailable for free users")).class).toBe("unknown");
+  });
+
+  it("the CLASS_MESSAGES line for the new class (the empty-real-text fallback)", () => {
+    expect(CLASS_MESSAGES.malformed_response).toBe(
+      "the provider returned a malformed response (known transient class on some endpoints)",
+    );
+  });
+});
+
 /* ── providerErrorDetail unwraps + scrubs ────────────────────────────────── */
 
 describe("R78: providerErrorDetail unwraps the RetryError", () => {

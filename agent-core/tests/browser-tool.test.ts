@@ -40,6 +40,7 @@ import {
 } from "../src/tools/plugins/computer-relay.js";
 import { buildServer } from "../src/server";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
+import { setVisionSettings } from "../src/storage/vision.js";
 import { ProviderKeyring } from "../src/providers/registry";
 import { resetBrowserStoreForTest, browserSessionForChatSession } from "../src/browser-proxy";
 import type { ToolSet } from "ai";
@@ -567,11 +568,15 @@ describe("browser_control — screenshot (R62: computer-use capture + vision rel
       );
     };
     const tools = await buildTools(tempDir, { emit });
+    // R94-E: the vision gate requires a live vision path BEFORE any capture
+    // — seed one (a separate vision model with no keyring entry: the path
+    // exists, the relay below still fails honestly → the off-mode note).
+    setVisionSettings(db, { mode: "separate", provider: "prov-shot", modelId: "vision-x" });
     const bc = tool(tools, "browser_control");
     await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot2", sessionId: "tool-tab-shot2" });
 
     const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-shot2" });
-    // Vision defaults OFF (fresh DB) → the tool is still ok:true with the
+    // Vision defaults OFF (fresh keyring) → the tool is still ok:true with the
     // honest unavailable note; the CAPTURE happened with the UI's region.
     expect(result.ok).toBe(true);
     expect(result.output).toContain("panel region 800×600");
@@ -598,6 +603,9 @@ describe("browser_control — screenshot (R62: computer-use capture + vision rel
     };
     setActiveComputerRelay(relay as never);
     const tools = await buildTools(tempDir); // no emit → no screenshot_meta ask at all
+    // R94-E: the vision gate requires a live vision path BEFORE the region
+    // ask — seed one so this test still exercises the REGION story below.
+    setVisionSettings(db, { mode: "separate", provider: "prov-shot3", modelId: "vision-x" });
     const bc = tool(tools, "browser_control");
     await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot3", sessionId: "tool-tab-shot3" });
     const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-shot3" });
@@ -627,6 +635,8 @@ describe("browser_control — screenshot (R62: computer-use capture + vision rel
     };
     setActiveComputerRelay(relay as never);
     const tools = await buildTools(tempDir, { emit });
+    // R94-E: the vision gate requires a live vision path BEFORE the capture.
+    setVisionSettings(db, { mode: "separate", provider: "prov-shot4", modelId: "vision-x" });
     const bc = tool(tools, "browser_control");
     await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot4", sessionId: "tool-tab-shot4" });
     const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-shot4" });
@@ -745,11 +755,15 @@ describe("browser command bridge (R62 D8) — the REST result route", () => {
 
 describe("browser_control — click (R66: element interaction via the eval bridge)", () => {
   it("click by selector sends ONE eval command with the escaped selector and returns the clicked element", async () => {
-    const commands: Array<{ action: string; script: string }> = [];
+    const commands: Array<{ action: string; script: string; installScript: string }> = [];
     const emit = (event: unknown) => {
-      const frame = event as { type: string; commandId: string; action: string; payload: { script?: string } };
+      const frame = event as { type: string; commandId: string; action: string; payload: { script?: string; installScript?: string } };
       expect(frame.type).toBe("browser-command");
-      commands.push({ action: frame.action, script: String(frame.payload.script ?? "") });
+      commands.push({
+        action: frame.action,
+        script: String(frame.payload.script ?? ""),
+        installScript: String(frame.payload.installScript ?? ""),
+      });
       queueMicrotask(() =>
         resolveBrowserCommand(frame.commandId, {
           ok: true,
@@ -772,10 +786,14 @@ describe("browser_control — click (R66: element interaction via the eval bridg
     // concatenated raw into the script.
     expect(commands[0].script).toContain(JSON.stringify('button[type="submit"]'));
     expect(commands[0].script).toContain("scrollIntoView");
-    // The agent-hands engine markers: the cursor install + the real-click.
+    // R94-F split: the ACTION script is tiny — the driver + the element
+    // finder, with the hands entrypoint and the real-click call; the cursor
+    // ENGINE (the SVG install) rides the payload's one-time installScript.
     expect(commands[0].script).toContain("__acuteHands");
-    expect(commands[0].script).toContain("__acute-agent-cursor");
     expect(commands[0].script).toContain("realClick");
+    expect(commands[0].script).not.toContain("__acute-agent-cursor");
+    expect(commands[0].installScript).toContain("__acute-agent-cursor");
+    expect(commands[0].installScript).toContain("{ installed: true");
   });
 
   it("click by text embeds the text + nth and scans the clickable set", async () => {
@@ -827,10 +845,10 @@ describe("browser_control — click (R66: element interaction via the eval bridg
 
 describe("browser_control — type (R66: the framework-visible value setter)", () => {
   it("type embeds selector+text, uses the native value setter path, and requestSubmit when submit:true", async () => {
-    const scripts: string[] = [];
+    const scripts: Array<{ script: string; installScript: string }> = [];
     const emit = (event: unknown) => {
-      const frame = event as { commandId: string; payload: { script?: string } };
-      scripts.push(String(frame.payload.script ?? ""));
+      const frame = event as { commandId: string; payload: { script?: string; installScript?: string } };
+      scripts.push({ script: String(frame.payload.script ?? ""), installScript: String(frame.payload.installScript ?? "") });
       queueMicrotask(() =>
         resolveBrowserCommand(frame.commandId, {
           ok: true,
@@ -852,14 +870,17 @@ describe("browser_control — type (R66: the framework-visible value setter)", (
     expect(result.output).toContain("submitted");
     expect(result.output).toContain("requestSubmit");
     expect(scripts).toHaveLength(1);
-    expect(scripts[0]).toContain(JSON.stringify('input[name="q"]'));
-    expect(scripts[0]).toContain(JSON.stringify("acute code editor"));
+    expect(scripts[0].script).toContain(JSON.stringify('input[name="q"]'));
+    expect(scripts[0].script).toContain(JSON.stringify("acute code editor"));
     // The Google-search fix: native prototype value setter + input/change
-    // events (React/Vue) + requestSubmit (native form submission).
-    expect(scripts[0]).toContain("getOwnPropertyDescriptor");
-    expect(scripts[0]).toContain("requestSubmit");
-    expect(scripts[0]).toContain('new Event("input"');
-    expect(scripts[0]).toContain('new Event("change"');
+    // events (React/Vue) + requestSubmit (native form submission). R94-F:
+    // the value-setter machinery is RUNTIME (setNativeValue in the one-time
+    // installScript); the requestSubmit beat + the submit flag are the
+    // DRIVER's (the tiny action script).
+    expect(scripts[0].installScript).toContain("getOwnPropertyDescriptor");
+    expect(scripts[0].installScript).toContain('new Event("input"');
+    expect(scripts[0].installScript).toContain('new Event("change"');
+    expect(scripts[0].script).toContain("requestSubmit");
   });
 
   it("type without submit dispatches no requestSubmit; missing selector/text is refused", async () => {
@@ -1004,16 +1025,21 @@ describe("browser_control — source / read_dom (R66: page content without scree
     }
   });
 
-  it("every compiled page script (incl. the wall probe) is syntactically valid JavaScript", async () => {
+  it("every compiled page script (incl. the wall probe and the R94-F installer) is syntactically valid JavaScript", async () => {
     // The bridge is mocked everywhere else, so the scripts never RUN here —
     // this compiles each generated script as a function body (exactly what
     // the Rust browser_tab_eval wrapper does) to prove the builders emit
-    // parseable JS before the owner's first live Windows run.
+    // parseable JS before the owner's first live Windows run. R94-F: the
+    // evalJob payload's installScript is compiled too (the panel evals it
+    // in the page when the tiny action script reports needInstall).
     const scripts: string[] = [];
     const emit = (event: unknown) => {
-      const frame = event as { type?: string; action?: string; commandId: string; payload?: { script?: string } };
+      const frame = event as { type?: string; action?: string; commandId: string; payload?: { script?: string; installScript?: string } };
       if (frame.type === "browser-command" && typeof frame.payload?.script === "string") {
         scripts.push(frame.payload.script);
+        if (typeof frame.payload.installScript === "string" && frame.payload.installScript !== "") {
+          scripts.push(frame.payload.installScript);
+        }
       }
       queueMicrotask(() =>
         resolveBrowserCommand(frame.commandId, {
@@ -1034,7 +1060,7 @@ describe("browser_control — source / read_dom (R66: page content without scree
     await bc.execute({ action: "source", part: "scripts", sessionId: "tab-compile" });
     await bc.execute({ action: "read_dom", sessionId: "tab-compile" });
     await bc.execute({ action: "read_dom", include: "all", sessionId: "tab-compile" });
-    expect(scripts.length).toBeGreaterThanOrEqual(10);
+    expect(scripts.length).toBeGreaterThanOrEqual(14); // 10+ scripts + the 4 evalJob installers
     for (const script of scripts) {
       expect(() => new Function(script)).not.toThrow();
     }
@@ -1304,7 +1330,7 @@ describe("browser_control — the R67-E description contract (read_dom-first, pe
 // ── ROUND-89 (R89-E): the AGENT HANDS — the mouse action + the job bridge ──
 
 describe("browser_control — mouse (R89-E: the full-fledged pointer control)", () => {
-  it("mouse click sends the evalJob command carrying the cursor engine + the exact coordinates", async () => {
+  it("mouse click sends the evalJob command carrying the driver + the exact coordinates (R94-F: the engine rides the installer)", async () => {
     const commands: Array<{ action: string; script: string }> = [];
     const emit = (event: unknown) => {
       const frame = event as { type: string; commandId: string; action: string; payload: { script?: string } };
@@ -1320,7 +1346,9 @@ describe("browser_control — mouse (R89-E: the full-fledged pointer control)", 
     expect(result.ok).toBe(true);
     expect(commands).toHaveLength(1);
     expect(commands[0].action).toBe("evalJob");
-    // The coordinates ride as literals; the engine + the click kind are in.
+    // The coordinates ride as literals; the driver + the click kind are in
+    // (R94-F: the cursor ENGINE itself is no longer embedded — the payload
+    // carries it as the one-time installScript).
     expect(commands[0].script).toContain("341");
     expect(commands[0].script).toContain("262");
     expect(commands[0].script).toContain('"click"');
@@ -1368,10 +1396,10 @@ describe("browser_control — mouse (R89-E: the full-fledged pointer control)", 
 
 describe("browser_control — R93-B3 typing fidelity (code points, mid-stream fallback, keydowns)", () => {
   it("the type script iterates by CODE POINTS (Array.from) — never the old word[i] code-unit loop that typed astral chars as gibberish", async () => {
-    const scripts: string[] = [];
+    const scripts: Array<{ script: string; installScript: string }> = [];
     const emit = (event: unknown) => {
-      const frame = event as { commandId: string; payload: { script?: string } };
-      scripts.push(String(frame.payload.script ?? ""));
+      const frame = event as { commandId: string; payload: { script?: string; installScript?: string } };
+      scripts.push({ script: String(frame.payload.script ?? ""), installScript: String(frame.payload.installScript ?? "") });
       queueMicrotask(() =>
         resolveBrowserCommand(frame.commandId, {
           ok: true,
@@ -1385,16 +1413,19 @@ describe("browser_control — R93-B3 typing fidelity (code points, mid-stream fa
     const result = await bc.execute({ action: "type", selector: "#q", text: "héllo 🎉 world", sessionId: "tab-cp" });
     expect(result.ok).toBe(true);
     expect(scripts).toHaveLength(1);
-    const script = scripts[0];
+    // R94-F: the RUNTIME (typeInto — where the per-char loop lives) rides
+    // the one-time installScript; the driver only references it.
+    const script = scripts[0].script;
+    const runtime = scripts[0].installScript;
     // The fix: code-point iteration — astral-plane chars stay whole.
-    expect(script).toContain("Array.from(word)");
-    expect(script).toContain("chars[i]");
+    expect(runtime).toContain("Array.from(word)");
+    expect(runtime).toContain("chars[i]");
     // The old UTF-16 code-unit indexing and the first-char-only fallback
     // arming (a mid-stream execCommand failure used to DROP the letter) are gone.
-    expect(script).not.toContain("word[i]");
-    expect(script).not.toContain("inserted === 0");
+    expect(runtime).not.toContain("word[i]");
+    expect(runtime).not.toContain("inserted === 0");
     // ANY failed char now arms the native-setter fallback.
-    expect(script).toContain("if (!ok) fellBack = true;");
+    expect(runtime).toContain("if (!ok) fellBack = true;");
     // The semantics the loop now performs, proven on an astral string:
     // code-point-joined strings survive the DOM/JSON boundary, while the
     // old code-unit loop's lone surrogates become U+FFFD (the mojibake).
@@ -1410,18 +1441,21 @@ describe("browser_control — R93-B3 typing fidelity (code points, mid-stream fa
       .map((c) => new TextDecoder().decode(new TextEncoder().encode(c)))
       .join("");
     expect(byCodeUnit).not.toBe(word); // the old loop's output = gibberish
-    // The generated script stays within the 20KB Rust eval budget — the
-    // Rust check is UTF-8 BYTES (browser.rs: script.len() > 20_000), so the
-    // assertion measures bytes, not chars.
+    // R94-F: BOTH generated scripts stay within the 20KB Rust eval budget —
+    // the Rust check is UTF-8 BYTES (browser.rs: script.len() > 20_000), so
+    // the assertions measure bytes, not chars. The ACTION script is the
+    // small one now (the runtime rides installScript — also under budget).
     expect(Buffer.byteLength(script, "utf8")).toBeLessThan(20000);
+    expect(Buffer.byteLength(runtime, "utf8")).toBeLessThan(20000);
     expect(() => new Function(script)).not.toThrow();
+    expect(() => new Function(runtime)).not.toThrow();
   });
 
   it("every typed char is preceded by a synthetic keydown on the focused element — a canceled keydown is reported, never obeyed (and per-char typing never dispatches keypress/keyup)", async () => {
-    const scripts: string[] = [];
+    const scripts: Array<{ script: string; installScript: string }> = [];
     const emit = (event: unknown) => {
-      const frame = event as { commandId: string; payload: { script?: string } };
-      scripts.push(String(frame.payload.script ?? ""));
+      const frame = event as { commandId: string; payload: { script?: string; installScript?: string } };
+      scripts.push({ script: String(frame.payload.script ?? ""), installScript: String(frame.payload.installScript ?? "") });
       queueMicrotask(() =>
         resolveBrowserCommand(frame.commandId, {
           ok: true,
@@ -1435,9 +1469,10 @@ describe("browser_control — R93-B3 typing fidelity (code points, mid-stream fa
     const result = await bc.execute({ action: "type", selector: "#editor", text: "quill", sessionId: "tab-kd" });
     expect(result.ok).toBe(true);
     expect(scripts).toHaveLength(1);
-    // Isolate typeInto's body — the driver's ENTER sequence and the
-    // press_key driver legitimately use keypress/keyup; per-char typing must not.
-    const script = scripts[0];
+    // Isolate typeInto's body (R94-F: it lives in the RUNTIME/installScript
+    // now) — the driver's ENTER sequence and the press_key driver legitimately
+    // use keypress/keyup; per-char typing must not.
+    const script = scripts[0].installScript;
     const start = script.indexOf("function typeInto");
     const end = script.indexOf("function findScroller");
     expect(start).toBeGreaterThanOrEqual(0);
@@ -1458,10 +1493,14 @@ describe("browser_control — R93-B3 typing fidelity (code points, mid-stream fa
 
 describe("browser_control — R93-B3 click trust (the full spec-order pointer flow)", () => {
   it("realClick fires pointerover → pointerenter → mouseover → mouseenter → pointermove → pointerdown → mousedown → focus → pointerup → mouseup → click, hover-first at the element center", async () => {
-    const commands: Array<{ action: string; script: string }> = [];
+    const commands: Array<{ action: string; script: string; installScript: string }> = [];
     const emit = (event: unknown) => {
-      const frame = event as { type: string; commandId: string; action: string; payload: { script?: string } };
-      commands.push({ action: frame.action, script: String(frame.payload.script ?? "") });
+      const frame = event as { type: string; commandId: string; action: string; payload: { script?: string; installScript?: string } };
+      commands.push({
+        action: frame.action,
+        script: String(frame.payload.script ?? ""),
+        installScript: String(frame.payload.installScript ?? ""),
+      });
       queueMicrotask(() =>
         resolveBrowserCommand(frame.commandId, {
           ok: true,
@@ -1476,7 +1515,10 @@ describe("browser_control — R93-B3 click trust (the full spec-order pointer fl
     expect(result.ok).toBe(true);
     expect(commands).toHaveLength(1);
     expect(commands[0].action).toBe("evalJob");
-    const script = commands[0].script;
+    // R94-F: realClick is RUNTIME — its body lives in the one-time
+    // installScript the payload carries (the action script is the tiny
+    // driver that CALLS it).
+    const script = commands[0].installScript;
     // Isolate realClick's body — the movement TRAIL helper mentions pointer
     // events earlier in the runtime; the CLICK itself is what must be in order.
     const start = script.indexOf("function realClick");
@@ -1517,8 +1559,11 @@ describe("browser_control — R93-B3 click trust (the full spec-order pointer fl
     // The light post-action focus hint rides in the job result.
     expect(body).toContain("focusBefore");
     expect(body).toContain("activeElement");
-    // The generated script stays within the 20KB Rust eval budget (bytes).
+    // R94-F: BOTH generated scripts stay within the 20KB Rust eval budget
+    // (bytes) — the tiny action script AND the installer it carries.
+    expect(Buffer.byteLength(commands[0].script, "utf8")).toBeLessThan(20000);
     expect(Buffer.byteLength(script, "utf8")).toBeLessThan(20000);
+    expect(() => new Function(commands[0].script)).not.toThrow();
     expect(() => new Function(script)).not.toThrow();
   });
 
@@ -1597,5 +1642,248 @@ describe("browser_control — R93-B3 read_dom pageState (the SPA section tracker
     // The click action teaches the focus hint + the hover-first sequence.
     expect(description).toContain("hovers first (menus arm)");
     expect(description).toContain("where focus moved");
+  });
+});
+
+// ── ROUND-94 (R94-F): the evalJob SPLIT — tiny action scripts + the ──────────
+// one-time installer payload. The owner's v0.91.0 Windows report: every hands
+// action failed with "unexpected start payload" while ~2KB evals on the SAME
+// pages worked — the old 17-19KB monoliths (runtime embedded in every action)
+// were the only difference. The split is the fix; these tests pin it.
+
+describe("browser_control — R94-F: the evalJob split (tiny action scripts + the one-time installer)", () => {
+  it("every hands action script is TINY (< 4000 chars — no embedded runtime) and the installer rides the payload", async () => {
+    const commands: Array<{ action: string; script: string; installScript: string }> = [];
+    const emit = (event: unknown) => {
+      const frame = event as { type: string; commandId: string; action: string; payload: { script?: string; installScript?: string } };
+      commands.push({
+        action: frame.action,
+        script: String(frame.payload.script ?? ""),
+        installScript: String(frame.payload.installScript ?? ""),
+      });
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { clicked: { tag: "a" }, typed: 3, pressed: "Enter", moved: { x: 1, y: 2 } } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    await bc.execute({ action: "click", selector: "#a", sessionId: "tab-split" });
+    await bc.execute({ action: "type", selector: "#q", text: "hi", sessionId: "tab-split" });
+    await bc.execute({ action: "press_key", key: "Enter", sessionId: "tab-split" });
+    await bc.execute({ action: "mouse", op: "click", x: 10, y: 20, sessionId: "tab-split" });
+    expect(commands).toHaveLength(4);
+    for (const command of commands) {
+      expect(command.action).toBe("evalJob");
+      // THE fix, pinned by size: the action script no longer embeds the
+      // ~15KB runtime (the old monoliths were 17-19KB; the drivers +
+      // element finders alone are what remain).
+      expect(command.script.length).toBeLessThan(4000);
+      expect(command.script).toContain("needInstall"); // the missing-runtime answer
+      expect(command.script).not.toContain("__acute-agent-cursor"); // no cursor install
+      expect(command.script).not.toContain("function realClick"); // no runtime body
+      expect(command.script).not.toContain("function typeInto");
+      // The one-time installer rides the SAME command payload, and it is
+      // the full runtime (idempotent, reports {installed:true}).
+      expect(command.installScript).toContain("__acute-agent-cursor");
+      expect(command.installScript).toContain("function realClick");
+      expect(command.installScript).toContain("function typeInto");
+      expect(command.installScript).toContain("{ installed: true");
+      expect(() => new Function(command.script)).not.toThrow();
+      expect(() => new Function(command.installScript)).not.toThrow();
+    }
+  });
+});
+
+// ── ROUND-94 (R94-F): the wait action — the proper waiting the owner asked ──
+// for (his report: the model literally called a nonexistent action 'wait'
+// after navigate, then fired clicks into still-loading pages).
+
+describe("browser_control — wait (R94-F: settle until the page is ready)", () => {
+  it("probes the page until readyState is complete, then reports the elapsed time and what matched", async () => {
+    // Probe order: the navigate wall probe + the wait's first probe see
+    // 'loading' (not ready) → the wait's second probe sees 'complete'.
+    const probes: Array<{ ready: string; has: unknown; url: string }> = [
+      { ready: "loading", has: null, url: "https://en.wikipedia.org/wait" },
+      { ready: "loading", has: null, url: "https://en.wikipedia.org/wait" },
+      { ready: "complete", has: null, url: "https://en.wikipedia.org/wait" },
+    ];
+    let call = 0;
+    const emit = (event: unknown) => {
+      const frame = event as { type?: string; commandId: string; payload?: { script?: string } };
+      if (frame.type === "browser-command") {
+        // Capture the answer BEFORE the microtask (it must not see the bump).
+        const answer = probes[Math.min(call, probes.length - 1)];
+        call += 1;
+        queueMicrotask(() => resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: answer } }));
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/wait", sessionId: "tab-wait-ready" }); // probe 1
+
+    const result = await bc.execute({ action: "wait", sessionId: "tab-wait-ready" }); // default: readyState complete, 900ms
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("wait ok");
+    expect(result.output).toContain("\"waited\":true");
+    expect(result.output).toContain("\"readyState\":\"complete\"");
+    expect(result.output).toContain("\"readyState\":true"); // the matched condition
+    // The wait itself probed twice (loading → complete) — the 250ms cadence
+    // did the waiting (the navigate's wall probe was the first call).
+    expect(call).toBeGreaterThanOrEqual(3);
+  });
+
+  it("a selector that never appears fails honestly after the cap, naming what did not match", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { type?: string; commandId: string; payload?: { script?: string } };
+      if (frame.type === "browser-command") {
+        queueMicrotask(() =>
+          resolveBrowserCommand(frame.commandId, {
+            ok: true,
+            data: { ok: true, value: { ready: "complete", has: false, url: "https://example.com/" } },
+          }),
+        );
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "wait", selector: ".never-appears", ms: 250, sessionId: "tab-wait-miss" });
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("timed out after 250ms");
+    expect(result.output).toContain("'.never-appears' did not appear");
+    expect(result.output).not.toContain("readyState"); // the page WAS complete — only the selector failed
+  });
+});
+
+// ── ROUND-94 (R94-F): the sequence action — multi-stage steps in ONE call ───
+// (the owner's multi-stage-steps request: type → wait → click atomically,
+// with the built-in settle between steps).
+
+describe("browser_control — sequence (R94-F: multi-stage steps in one tool call)", () => {
+  it("runs a 3-step chain (type → wait → read_dom) in order on one tab and reports per-step one-liners", async () => {
+    // The bridge commands in order: evalJob(type) → eval(wait probe) → eval(read_dom).
+    const replies: Array<{ action: string; data: unknown }> = [
+      { action: "evalJob", data: { ok: true, value: { typed: 5, fallback: false, wpm: 150, keydownsCanceled: 0, submitted: true, submitHow: "synthetic Enter + form.requestSubmit()" } } },
+      { action: "eval", data: { ok: true, value: { ready: "complete", has: null, url: "https://example.com/search" } } },
+      { action: "eval", data: { ok: true, value: { title: "Results", url: "https://example.com/search", headings: [], interactive: [], forms: [], paragraphs: undefined, pageState: { lang: "en" } } } },
+    ];
+    let call = 0;
+    const emit = (event: unknown) => {
+      const frame = event as { type?: string; commandId: string; payload?: { script?: string } };
+      if (frame.type === "browser-command") {
+        // Capture the reply BEFORE the microtask (it must not see the bump).
+        const reply = replies[Math.min(call, replies.length - 1)];
+        call += 1;
+        queueMicrotask(() => resolveBrowserCommand(frame.commandId, { ok: true, data: reply.data }));
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({
+      action: "sequence",
+      sessionId: "tab-seq3",
+      steps: [
+        { action: "type", selector: "#q", text: "acute code", submit: true },
+        { action: "wait", ms: 250 },
+        { action: "read_dom" },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("sequence ok (tab 'tab-seq3', 3 steps");
+    expect(result.output).toContain("all steps succeeded");
+    // The per-step one-liners, in order.
+    expect(result.output).toContain("1. ok type —");
+    expect(result.output).toContain("2. ok wait —");
+    expect(result.output).toContain("3. ok read_dom —");
+    // The steps really ran: three bridge commands in order.
+    expect(call).toBe(3);
+  });
+
+  it("a failing middle step stops the chain, reports the step index, and never runs the later steps", async () => {
+    let call = 0;
+    const emit = (event: unknown) => {
+      const frame = event as { type?: string; commandId: string; payload?: { script?: string } };
+      if (frame.type === "browser-command") {
+        call += 1;
+        // Step 1 (type) succeeds; step 2 (click) misses honestly.
+        const value =
+          call === 1
+            ? { typed: 5, fallback: false, wpm: 150, keydownsCanceled: 0 }
+            : { error: "no element matches the CSS selector" };
+        queueMicrotask(() => resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value } }));
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({
+      action: "sequence",
+      sessionId: "tab-seqfail",
+      steps: [
+        { action: "type", selector: "#q", text: "hello" },
+        { action: "click", selector: ".not-there" },
+        { action: "read_dom" },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("sequence FAILED at step 2 (click)");
+    expect(result.output).toContain("steps after it were NOT run");
+    expect(result.output).toContain("no element matches the CSS selector");
+    // Step 1's line is present; step 3 never ran (only the two commands).
+    expect(result.output).toContain("1. ok type —");
+    expect(result.output).toContain("2. FAILED click —");
+    expect(result.output).not.toContain("3.");
+    expect(call).toBe(2);
+  });
+
+  it("refuses nested sequence steps, over-cap chains, and malformed steps", async () => {
+    const tools = await buildTools(tempDir, { emit: () => {} });
+    const bc = tool(tools, "browser_control");
+
+    const nested = await bc.execute({
+      action: "sequence",
+      sessionId: "tab-seqval",
+      steps: [{ action: "wait", ms: 250 }, { action: "sequence", steps: [] }],
+    });
+    expect(nested.ok).toBe(false);
+    expect(nested.output).toContain("cannot include 'sequence'");
+    expect(nested.output).toContain("no nesting");
+
+    const overCap = await bc.execute({
+      action: "sequence",
+      sessionId: "tab-seqval",
+      steps: Array.from({ length: 9 }, () => ({ action: "wait", ms: 250 })),
+    });
+    expect(overCap.ok).toBe(false);
+    expect(overCap.output).toContain("over the cap of 8");
+
+    const badAction = await bc.execute({
+      action: "sequence",
+      sessionId: "tab-seqval",
+      steps: [{ action: "levitate" }],
+    });
+    expect(badAction.ok).toBe(false);
+    expect(badAction.output).toContain("'levitate' is not allowed");
+
+    const notObjects = await bc.execute({ action: "sequence", sessionId: "tab-seqval", steps: ["wait"] });
+    expect(notObjects.ok).toBe(false);
+    expect(notObjects.output).toContain("every step must be an object");
+
+    const empty = await bc.execute({ action: "sequence", sessionId: "tab-seqval", steps: [] });
+    expect(empty.ok).toBe(false);
+    expect(empty.output).toContain("requires 'steps'");
+  });
+
+  it("a plain pause (readyState:false, no selector) works with NO bridge at all — it is just a timed pause", async () => {
+    const tools = await buildTools(tempDir); // no emit channel
+    const bc = tool(tools, "browser_control");
+    const result = await bc.execute({ action: "wait", readyState: false, ms: 250, sessionId: "tab-seq-plain" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("paused 250ms");
   });
 });

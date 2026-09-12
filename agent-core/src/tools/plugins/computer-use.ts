@@ -21,6 +21,17 @@
  *     model (provider+model+key configured independently); "main" through
  *     the turn's model when its row has supports_vision; "off" returns the
  *     raster metadata with an honest vision-disabled note.
+ *   · the VISION GATE (R94-E, PART 3): the owner's v0.91.0 report — a
+ *     session whose model has NO image understanding (vision off, non-vision
+ *     main model, no separate vision provider) kept calling screenshot
+ *     anyway; every capture was dead weight (nothing downstream could ever
+ *     read it). screenshot/zoom now REFUSE before any capture work unless
+ *     sessionHasVisionPath() finds a live path (separate vision model
+ *     configured, or main-model vision with supports_vision); the refusal
+ *     is the honest, instructive no-image-understanding message steering to
+ *     get_app_state / read_dom / read. The browser plugin's screenshot
+ *     action rides the SAME gate (browser.ts imports the helper — no
+ *     cycle: browser → computer-use is the existing edge).
  *   · the MONITOR: every dispatch records into the session ring (the
  *     owner's mini-window reads GET /computer-use/session); intents also
  *     ride the turn SSE as {type:"computer-use"} envelopes.
@@ -233,8 +244,30 @@ export const computerUsePlugin: PluginDefinition = {
       }
     };
 
-    /* The shared execute wrapper: consent gate → dispatch → shaping. */
+    /* The shared execute wrapper: vision gate → consent gate → dispatch → shaping. */
     const execute = async (tool: string, input: Record<string, unknown>): Promise<ToolResult> => {
+      // 0. R94-E (PART 3): the VISION GATE — screenshots need a seer. BEFORE
+      //    any capture work, resolve whether ANY vision path exists for this
+      //    session: the separate vision model (Settings → Image Analysis) or
+      //    the main model's supports_vision row. NO path → the honest,
+      //    instructive refusal (the owner's report: the agent kept taking
+      //    screenshots a blind session could never use). Deliberately NOT
+      //    gated: get_app_state's includeScreenshot (the accessibility TREE is
+      //    the observation there — the auxiliary raster rides along and the
+      //    owner's chat thumbnail can still show it) and the dispatcher's
+      //    post-action auto-observations (their screenChanged math is local
+      //    aHash work, no vision model involved).
+      if (
+        (tool === "screenshot" || tool === "zoom") &&
+        !sessionHasVisionPath(toolDeps.db, toolDeps.mainModel)
+      ) {
+        session.record("refusal", `${tool} refused: this session has no image understanding`, tool);
+        return refusalResult({
+          error: "vision_disabled",
+          message: NO_VISION_SCREENSHOT_MESSAGE,
+          recovery: NO_VISION_SCREENSHOT_RECOVERY,
+        });
+      }
       // 1. The consent gate (ask-mode risk classes; posture act only —
       //    "auto" skips; permissionMode=full auto-approves inside the gate).
       if (settings.permission === "act" && needsConsent(tool, input) && toolDeps.permissionMode !== "full") {
@@ -667,6 +700,18 @@ export const computerUsePlugin: PluginDefinition = {
         },
         ["windowId"],
       ),
+      // ── R94-E (PART 2): the window ACTOR (the missing verb) ──
+      tool(
+        "window_action",
+        "THE window ACTOR — change a window's state: minimize | maximize | restore | focus | close. FIND the window first (windows_overview / list_windows give windowId + title), then act here; target:'foreground' acts on the frontmost window with no windowId at all (e.g. 'minimize the current window' → window_action {target:'foreground', action:'minimize'}); appRef resolves to the app's main window. close is the GENTLE close (the app may prompt to save). Windows hosts where the Add-Type/csc compile fails still act through the UIAutomation fallback, so this works where the older placement tools could not.",
+        {
+          appRef: appRefSchema,
+          windowId: { type: "integer", description: "from windows_overview / list_windows (the primary target form)" },
+          target: { type: "string", enum: ["foreground"], description: "'foreground' = act on the FRONTMOST window (no windowId needed)" },
+          action: { type: "string", enum: ["minimize", "maximize", "restore", "focus", "close"], description: "what to do to the window" },
+        },
+        ["action"],
+      ),
     ];
 
     // Observe posture: register only the read-only subset (the dispatcher
@@ -773,6 +818,52 @@ function findModelRow(
     return listModels(db, providerId).find((m) => m.modelId === modelId);
   } catch {
     return undefined;
+  }
+}
+
+/* ── the vision-gate helpers (R94-E, PART 3) ───────────────────────────── */
+
+/** The instructive refusal message when a no-vision session calls a
+ * screenshot tool (the task's canonical wording — the browser plugin's
+ * screenshot action reuses it so both gates speak identically). */
+export const NO_VISION_SCREENSHOT_MESSAGE =
+  "This session has no image understanding (the model has no vision capability and no vision provider is configured) — screenshots cannot help you.";
+
+/** The recovery half of the same refusal. */
+export const NO_VISION_SCREENSHOT_RECOVERY =
+  "Use get_app_state / read_dom / read (text trees) instead, and do not call screenshot tools again in this session.";
+
+/**
+ * R94-E (PART 3): does this session have ANY vision path? The two live
+ * paths, mirroring relayVision's mode resolution exactly (one vision
+ * configuration, one honest failure story — R66-2-b):
+ *   · "separate" — the dedicated vision provider+model are CONFIGURED
+ *     (their key may still be missing — relayVision fails honestly at
+ *     describe time with vision_no_key; the gate is about the path EXISTING,
+ *     not about the credential);
+ *   · "main" — the turn's model row has supports_vision.
+ * "off", or any settings-read failure → false (fail-closed: a broken read
+ * is NOT a vision path). Exported for the browser plugin's screenshot gate
+ * (browser.ts already imports relayVision from here — same edge, no cycle)
+ * and for the plugin tests.
+ */
+export function sessionHasVisionPath(
+  db: Parameters<typeof getVisionSettings>[0],
+  mainModel: { providerId: string; modelId: string } | undefined,
+): boolean {
+  try {
+    const settings = getVisionSettings(db);
+    if (settings.mode === "separate") {
+      return settings.provider !== null && settings.modelId !== null;
+    }
+    if (settings.mode === "main") {
+      if (mainModel === undefined) return false;
+      const row = findModelRow(db, mainModel.providerId, mainModel.modelId);
+      return row !== undefined && row.supportsVision;
+    }
+    return false;
+  } catch {
+    return false;
   }
 }
 

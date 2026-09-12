@@ -93,6 +93,17 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   // consolidated into the merged AGENTIC LOOP (R70-A issue #2; the
   // R66-2-c removal-cascade precedent). The registry-completeness pin
   // guarantees the stale entries can't linger.
+  // ROUND-94 (R94-G): the recovery protocol — the owner's v0.91.0 field
+  // report demanded robust failure behavior (no blind retries, no
+  // abandoned tasks, no raced pages). Sits immediately after the loop whose
+  // failure rule points here; static + unconditional like the loop it
+  // governs.
+  {
+    id: "recovery",
+    description: "## RECOVERY PROTOCOL (tool failures) — re-observe before retry, ≤2 identical retries then change strategy, recovery hints once, believe refusals, let the world settle, never abandon (R94-G)",
+    dynamic: false,
+    bucket: "identity",
+  },
   {
     id: "engineering-discipline",
     description: "## ENGINEERING DISCIPLINE — the karpathy principles with binary self-tests, [KNOWN]/[ASSUMED]/[UNKNOWN] tagging, 3-strike escalation, red-flags (R71-e1)",
@@ -191,6 +202,18 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     id: "browser-panel",
     description: "## EMBEDDED BROWSER PANEL (browser_control) (only when the tool is allowed; trimmed R70-c — the deep craft lives in the browser-use skill)",
     dynamic: true, // tool-gated
+    bucket: "identity",
+  },
+  // ROUND-94 (R94-G): the session's perception facts. The vision half of
+  // the R94-E/F no-vision fix: the model is told its image-understanding
+  // capability UP FRONT (the same gate the screenshot tools enforce), so
+  // a no-vision session never wastes a turn learning it by refusal.
+  // Strictly gated: ctx.hasVisionPath absent, or no image-capable tool in
+  // the toolset → no section (byte-identical pre-R94 composition).
+  {
+    id: "capabilities",
+    description: "## CAPABILITIES — session perception facts: IMAGE UNDERSTANDING on/off (hasVisionPath — the screenshot-tool gate; R94-G)",
+    dynamic: true, // gated on ctx.hasVisionPath + image-capable tools
     bucket: "identity",
   },
   // R66 (R66-2-c): the "debug" section entry is REMOVED together with the

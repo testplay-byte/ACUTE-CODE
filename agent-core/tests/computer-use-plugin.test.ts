@@ -77,7 +77,7 @@ describe("ROUND-61 (R61): the settings gates", () => {
     expect(tools).toHaveLength(0);
   });
 
-  it("ENABLED + act posture: exactly the 41 tools (30 doc-02 + find_elements + the 10 R93 v2 tools)", async () => {
+  it("ENABLED + act posture: exactly the 42 tools (30 doc-02 + find_elements + the 10 R93 v2 tools + R94-E's window_action)", async () => {
     setComputerUseSettings(db, { enabled: true, permission: "act" });
     const tools = await computerUsePlugin.createTools({ root: tempDir, toolDeps: makeDeps() });
     expect(tools.map((t) => t.name).sort()).toEqual([
@@ -97,8 +97,11 @@ describe("ROUND-61 (R61): the settings gates", () => {
       "read_clipboard", "stop_computer_control", "wait", "write_clipboard",
       // R93 (§2.5): window placement (act posture)
       "focus_window", "move_window", "window_state",
+      // R94-E: the window ACTOR (minimize/maximize/restore/focus/close +
+      // target:'foreground' — the owner's "minimize the current window" task)
+      "window_action",
     ].sort());
-    expect(tools).toHaveLength(41);
+    expect(tools).toHaveLength(42);
   });
 
   it("observe posture: ONLY the read-only subset is offered (the model never sees mutating schemas — placement included)", async () => {
@@ -312,6 +315,12 @@ describe("ROUND-67 (R67-D): screenshot frames after successful captures", () => 
   beforeEach(() => {
     resetRasterCacheForTest();
     emitLog = [];
+    // R94-E (PART 3): the VISION GATE — screenshots need a sighted session
+    // (the separate vision model OR the main model's supports_vision row)
+    // BEFORE any capture work. These tests pin the FRAME-EMISSION contract
+    // that runs AFTER a successful capture, so they seed a complete
+    // separate-vision-model path to open the gate.
+    setVisionSettings(db, { mode: "separate", provider: "openrouter", modelId: "test/vision" });
     // The capture result is faked (headless linux refuses real captures);
     // rasterFor feeds the emission exactly as a real cache hit would.
     dispatchSpy = vi

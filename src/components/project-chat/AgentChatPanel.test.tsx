@@ -1746,3 +1746,297 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
     expect(card.textContent).toContain("rate limited — the provider is throttling requests");
   });
 });
+
+// ── R94-D2: stick-to-bottom auto-scroll ──────────────────────────────────────
+// Owner (v0.91.0): "While the agent is doing its work, I should be able to
+// scroll the chat up and down without it automatically re-scrolling to the
+// very bottom. It should only auto-scroll if I have moved to the very bottom."
+//
+// happy-dom has NO layout — scrollHeight/clientHeight are 0 and the built-in
+// scrollTo is a no-op that fires no events — so these tests assert on the
+// LOGIC, not pixels: the scroll listener's pinned state, whether the
+// auto-scroll path calls el.scrollTo, and the pill's presence. Where a real
+// distance-from-bottom is needed the test gives the container a geometry via
+// Object.defineProperty, and user gestures are dispatched exactly as the
+// browser would (wheel / scroll / scrollend events).
+describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
+  const SLOW = { timeout: 5000 };
+  const SESSION_ID = "sess_r94_scroll";
+
+  function messageEvent(
+    seq: number,
+    role: "user" | "assistant",
+    content: string,
+    ts: string,
+  ): SessionEvent {
+    return {
+      seq,
+      type: role === "user" ? "message.user" : "message.assistant",
+      agentId: "agt_scribe",
+      payload: { role, content, agentId: "agt_scribe", ts },
+      ts,
+    };
+  }
+
+  /** A transcript with history (so there is somewhere to scroll up to) bound
+   * to the first fixture project; returns the chat scroll container. */
+  async function renderScrollPanel(): Promise<HTMLElement> {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: SESSION_ID,
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "running",
+          title: "Scroll probe",
+          createdAt: "2026-10-01T10:00:00Z",
+          updatedAt: "2026-10-01T10:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "long running question", "2026-10-01T10:00:10Z"),
+          messageEvent(2, "assistant", "working on it", "2026-10-01T10:00:20Z"),
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await screen.findByText("long running question", {}, SLOW);
+    const scroller = document.querySelector(
+      'div[class*="overflow-y-auto"][class*="overflow-x-hidden"]',
+    ) as HTMLElement;
+    expect(scroller).toBeTruthy();
+    return scroller;
+  }
+
+  /** Arm the store's live turn exactly like a streaming tick would (the same
+   * full-slice shape the rest of this suite builds). */
+  function armLiveTurn(streamText: string): void {
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: {
+          liveTurn: {
+            startedAtMs: Date.now() - 3000,
+            working: [],
+            streamText,
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+        },
+      },
+    });
+  }
+
+  /** Give the container a geometry (2000px of content in a 500px viewport)
+   * so distance-from-bottom is real in the no-layout happy-dom world. */
+  function giveGeometry(el: HTMLElement): void {
+    Object.defineProperty(el, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(el, "clientHeight", { value: 500, configurable: true });
+  }
+
+  const pill = () => screen.queryByRole("button", { name: "Jump to the latest message" });
+
+  beforeEach(() => {
+    streamMock.streamSessionMessage.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("while pinned, every content tick smooth-scrolls to the bottom (the R37/R64 follow contract) and NO pill renders", async () => {
+    const scroller = await renderScrollPanel();
+    const scrollTo = vi.fn();
+    scroller.scrollTo = scrollTo;
+
+    armLiveTurn("the first streaming chunk");
+    await screen.findByText(/first streaming chunk/, {}, SLOW);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    expect(scrollTo.mock.calls[0][0]).toMatchObject({ behavior: "smooth" });
+
+    // Growth follows too — and the pill stays hidden while pinned.
+    scrollTo.mockClear();
+    armLiveTurn("the first streaming chunk — and then it kept growing");
+    await screen.findByText(/kept growing/, {}, SLOW);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    expect(pill()).toBeNull();
+  });
+
+  it("wheel-up mid-turn DETACHES: further streaming ticks never move the viewport, and the Jump-to-latest pill appears", async () => {
+    const scroller = await renderScrollPanel();
+    const scrollTo = vi.fn();
+    scroller.scrollTo = scrollTo;
+    armLiveTurn("the first streaming chunk");
+    await screen.findByText(/first streaming chunk/, {}, SLOW);
+
+    // The user scrolls UP over the transcript (the owner's field report).
+    fireEvent.wheel(scroller, { deltaY: -120 });
+    expect(
+      await screen.findByRole("button", { name: "Jump to the latest message" }, SLOW),
+    ).toBeTruthy();
+
+    // New content lands — their viewport must stay exactly where it is.
+    scrollTo.mockClear();
+    armLiveTurn("the first streaming chunk — and then it kept growing");
+    await screen.findByText(/kept growing/, {}, SLOW);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("scrolling back to the bottom RE-PINS: the next tick follows again and the pill hides", async () => {
+    const scroller = await renderScrollPanel();
+    const scrollTo = vi.fn();
+    scroller.scrollTo = scrollTo;
+    armLiveTurn("the first streaming chunk");
+    await screen.findByText(/first streaming chunk/, {}, SLOW);
+    fireEvent.wheel(scroller, { deltaY: -120 });
+    await screen.findByRole("button", { name: "Jump to the latest message" }, SLOW);
+
+    // The user returns to the very bottom (a scrollbar drag all the way
+    // down — distance 0, well inside the 96px pin threshold).
+    giveGeometry(scroller);
+    scroller.scrollTop = 2000;
+    fireEvent.scroll(scroller);
+
+    await waitFor(() => expect(pill()).toBeNull(), SLOW);
+    scrollTo.mockClear();
+    armLiveTurn("the first streaming chunk — resumed following the stream");
+    await screen.findByText(/resumed following/, {}, SLOW);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+  });
+
+  it("a scrollbar DRAG (plain scroll events) detaches once no programmatic scroll is in flight", async () => {
+    const scroller = await renderScrollPanel();
+    armLiveTurn("the first streaming chunk");
+    await screen.findByText(/first streaming chunk/, {}, SLOW);
+
+    // scrollend: the browser settled our last programmatic follow — from
+    // here every scroll event is the user's.
+    scroller.dispatchEvent(new Event("scrollend"));
+    giveGeometry(scroller);
+    scroller.scrollTop = 100; // deep in history: 1400px from the bottom
+    fireEvent.scroll(scroller);
+
+    expect(
+      await screen.findByRole("button", { name: "Jump to the latest message" }, SLOW),
+    ).toBeTruthy();
+  });
+
+  it("the smooth-scroll trap: intermediate positions of OUR OWN follow never detach — but the user fighting it (moving UP mid-flight) does", async () => {
+    const scroller = await renderScrollPanel();
+    giveGeometry(scroller);
+    armLiveTurn("the first streaming chunk"); // effect scrolls → flight armed
+    await screen.findByText(/first streaming chunk/, {}, SLOW);
+
+    // Our follow on its way DOWN (scrollTop rising toward the target): an
+    // intermediate position — ignored, still pinned, no pill.
+    scroller.scrollTop = 300;
+    fireEvent.scroll(scroller);
+    expect(pill()).toBeNull();
+
+    // The user fights the follow (scrollTop falls mid-flight) → detach.
+    scroller.scrollTop = 150;
+    fireEvent.scroll(scroller);
+    expect(
+      await screen.findByRole("button", { name: "Jump to the latest message" }, SLOW),
+    ).toBeTruthy();
+  });
+
+  it("the pill floats ABOVE the composer as an overlay — outside the scroll container, so the transcript scrolls under it", async () => {
+    const scroller = await renderScrollPanel();
+    armLiveTurn("the first streaming chunk");
+    await screen.findByText(/first streaming chunk/, {}, SLOW);
+    fireEvent.wheel(scroller, { deltaY: -120 });
+    const button = await screen.findByRole("button", { name: "Jump to the latest message" });
+
+    // A sibling of the scroller (inside the scroll-body wrapper)…
+    expect(button.parentElement).toBe(scroller.parentElement);
+    // …never inside the scroller itself (no covering the streaming text).
+    expect(scroller.contains(button)).toBe(false);
+    expect(button.className).toContain("absolute");
+  });
+
+  it("clicking the pill re-pins + smooth-scrolls to the bottom, and the pill hides", async () => {
+    const scroller = await renderScrollPanel();
+    const scrollTo = vi.fn();
+    scroller.scrollTo = scrollTo;
+    armLiveTurn("the first streaming chunk");
+    await screen.findByText(/first streaming chunk/, {}, SLOW);
+    fireEvent.wheel(scroller, { deltaY: -120 });
+    const button = await screen.findByRole("button", { name: "Jump to the latest message" });
+
+    scrollTo.mockClear();
+    fireEvent.click(button);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled(), SLOW);
+    expect(scrollTo.mock.calls[0][0]).toMatchObject({ behavior: "smooth" });
+    await waitFor(() => expect(pill()).toBeNull(), SLOW);
+  });
+
+  it("the user's own send (queued mid-turn — the owner's send-while-working flow) ALWAYS re-pins", async () => {
+    const scroller = await renderScrollPanel();
+    const scrollTo = vi.fn();
+    scroller.scrollTo = scrollTo;
+    armLiveTurn("the first streaming chunk");
+    await screen.findByText(/first streaming chunk/, {}, SLOW);
+    fireEvent.wheel(scroller, { deltaY: -120 });
+    await screen.findByRole("button", { name: "Jump to the latest message" }, SLOW);
+
+    scrollTo.mockClear();
+    fireEvent.change(screen.getByLabelText("Message composer"), {
+      target: { value: "come back down" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Message composer"), { key: "Enter" });
+
+    // runTurn re-pinned before anything else: the follow fired and the
+    // message took the QUEUE path (a live turn is running).
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled(), SLOW);
+    await waitFor(
+      () =>
+        expect(queueMock.queueSessionMessage).toHaveBeenCalledWith(SESSION_ID, {
+          content: "come back down",
+        }),
+      SLOW,
+    );
+    await waitFor(() => expect(pill()).toBeNull(), SLOW);
+  });
+
+  it("the user's own send from an IDLE detached position re-pins and starts the normal turn", async () => {
+    const scroller = await renderScrollPanel();
+    const scrollTo = vi.fn();
+    scroller.scrollTo = scrollTo;
+
+    // Idle transcript (no live turn): detach by wheel-up, then send.
+    fireEvent.wheel(scroller, { deltaY: -120 });
+
+    scrollTo.mockClear();
+    fireEvent.change(screen.getByLabelText("Message composer"), {
+      target: { value: "take this too" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Message composer"), { key: "Enter" });
+
+    // The send re-pinned (the follow fired) and went through the NORMAL
+    // stream path (idle → no queue).
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled(), SLOW);
+    await waitFor(
+      () =>
+        expect(streamMock.streamSessionMessage).toHaveBeenCalledWith(
+          SESSION_ID,
+          "take this too",
+          expect.any(Function),
+          expect.anything(),
+        ),
+      SLOW,
+    );
+  });
+});

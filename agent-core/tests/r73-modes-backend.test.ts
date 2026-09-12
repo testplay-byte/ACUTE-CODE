@@ -121,7 +121,7 @@ const TWO_MODES = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R73-b D1: the registry + the two composed sections", () => {
-  it("the registry pins 25 sections (21 pre-R73 + task-modes + active-mode + ROUND-79 background-tasks + ROUND-88 todo-list), the R73 pair sitting DIRECTLY after skills", () => {
+  it("the registry pins 27 sections (25 pre-R94 + ROUND-94 recovery + capabilities), the R73 pair sitting DIRECTLY after skills", () => {
     // ROUND-79 (R79-a): 23 → 24 — the background-tasks section (the per-turn
     // uncollected-delegation reminder) joined the registry directly after
     // active-mode. The count pin is versioned by design: every section round
@@ -129,8 +129,11 @@ describe("R73-b D1: the registry + the two composed sections", () => {
     // ROUND-88 (R88): 24 → 25 — the todo-list section (the CURRENT TODO LIST
     // snapshot the floating widget's manual edits feed) joined directly
     // after background-tasks.
-    expect(PROMPT_SECTION_IDS.length).toBe(25);
-    expect(PROMPT_REGISTRY.length).toBe(25);
+    // ROUND-94 (R94-G): 25 → 27 — the recovery section (the tool-failure
+    // doctrine, directly after agentic-loop) + the capabilities section
+    // (hasVisionPath, directly after browser-panel).
+    expect(PROMPT_SECTION_IDS.length).toBe(27);
+    expect(PROMPT_REGISTRY.length).toBe(27);
     expect(PROMPT_SECTION_IDS.indexOf("task-modes")).toBe(PROMPT_SECTION_IDS.indexOf("skills") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBe(PROMPT_SECTION_IDS.indexOf("task-modes") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("computer-use"));
