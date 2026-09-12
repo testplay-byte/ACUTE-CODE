@@ -814,6 +814,83 @@ describe("POST /internal/providers/keys (shell key handoff)", () => {
   });
 });
 
+// ── R93-A5: the slot-1 pool listing (the owner's "keys added but not
+// shown" report) ─────────────────────────────────────────────────────────
+// The R92-D3 UI lowered MIN_POOL_SLOT to 1, so the FIRST added pool key
+// lands at slot 1 — but poolInfo's maxSlot scan still counted only slots
+// >= 2, so a [primary + slot 1] provider listed just Key 1 in the API
+// keys card while the provider row's chip said "2 keys".
+describe("GET /api/v1/providers/:id/keys (R93: slot 1 is listed)", () => {
+  it("a [primary + slot 1] pool lists BOTH keys (the first added key is visible)", async () => {
+    const SLOT1_KEY = "sk-or-slot1-r93a1";
+    const pooled = buildServer({
+      token: TOKEN,
+      db,
+      keyring: new ProviderKeyring({
+        ACUTE_PROVIDER_OPENROUTER: KEY,
+        ACUTE_PROVIDER_OPENROUTER_SLOT1: SLOT1_KEY,
+      }),
+    });
+    try {
+      const response = await pooled.inject({
+        method: "GET",
+        url: "/api/v1/providers/openrouter/keys",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(response.statusCode).toBe(200);
+      const keys = response.json().keys as Array<{
+        slot: number;
+        hasKey: boolean;
+        masked: string | null;
+      }>;
+      // Both slots present — the card renders Key 1 (primary) + Key 2 (slot 1).
+      expect(keys.map((k) => k.slot)).toEqual([0, 1]);
+      expect(keys.every((k) => k.hasKey)).toBe(true);
+      expect(keys[1]!.masked).toBe(`${SLOT1_KEY.slice(0, 4)}…${SLOT1_KEY.slice(-4)}`);
+      // The key VALUE never leaves the process.
+      expect(response.body).not.toContain(SLOT1_KEY);
+    } finally {
+      await pooled.close();
+    }
+  });
+
+  it("a [primary + slot 2] pool keeps listing every slot (no regression)", async () => {
+    const pooled = buildServer({
+      token: TOKEN,
+      db,
+      keyring: new ProviderKeyring({
+        ACUTE_PROVIDER_OPENROUTER: KEY,
+        ACUTE_PROVIDER_OPENROUTER_SLOT2: SLOT2_KEY,
+      }),
+    });
+    try {
+      const response = await pooled.inject({
+        method: "GET",
+        url: "/api/v1/providers/openrouter/keys",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(response.statusCode).toBe(200);
+      const keys = response.json().keys as Array<{ slot: number; hasKey: boolean }>;
+      expect(keys.map((k) => k.slot)).toEqual([0, 1, 2]);
+      expect(keys[0]!.hasKey).toBe(true);
+      expect(keys[1]!.hasKey).toBe(false);
+      expect(keys[2]!.hasKey).toBe(true);
+    } finally {
+      await pooled.close();
+    }
+  });
+
+  it("a primary-only provider lists exactly one key (the pre-pool shape)", async () => {
+    const response = await authInject({
+      method: "GET",
+      url: "/api/v1/providers/openrouter/keys",
+    });
+    expect(response.statusCode).toBe(200);
+    const keys = response.json().keys as Array<{ slot: number; hasKey: boolean }>;
+    expect(keys).toEqual([{ slot: 0, hasKey: true, masked: expect.any(String) }]);
+  });
+});
+
 describe("GET /api/v1/providers/:id/key (ROUND-47: route REMOVED)", () => {
   it("404s — the raw key value is never served; the PUT at the same path STAYS", async () => {
     // The round-19 "view/copy" route returned the RAW key — the only route

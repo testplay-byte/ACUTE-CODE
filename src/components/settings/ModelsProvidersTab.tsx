@@ -1006,13 +1006,17 @@ function ProviderDetailPane({
               border: `1.5px solid ${provider.enabled ? styles.accent : styles.border}`,
             }}
           >
+            {/* R93-A4: the knob is now contrast-aware (accentText/toggleActive
+                via the theme) — on Mono Stone dark's #E0E0E0 track it turns
+                #111111 instead of the vanishing white. */}
             <span
-              className="absolute top-1/2 block rounded-full bg-white shadow transition-all"
+              className="absolute top-1/2 block rounded-full shadow transition-all"
               style={{
                 left: provider.enabled ? "calc(100% - 21px)" : "3px",
                 height: 18,
                 width: 18,
                 transform: "translateY(-50%)",
+                background: provider.enabled ? styles.accentText : styles.toggleActive,
               }}
             />
           </button>

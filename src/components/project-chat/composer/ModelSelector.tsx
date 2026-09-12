@@ -194,6 +194,49 @@ export function ModelSelector({
   };
   const popoverRef = useDismiss(open, close);
 
+  // ── R93-A1: the popover's viewport-clamped geometry ─────────────────────
+  // The owner (fifth walkthrough): "the model selection window opened… the
+  // providers were cut off… showing outside the available space… on the left
+  // side, outside of the window area." The old anchor (absolute, right-0,
+  // w-64) extends 256px LEFT of the trigger's right edge — at the 240px chat
+  // floor that lands past the window's left edge. The popover now measures
+  // the trigger and places itself in VIEWPORT coordinates: right-aligned to
+  // the trigger by default, then clamped to [8px, innerWidth - 264px] so it
+  // can never leave the window. Recomputed on window resize while open.
+  const [popGeo, setPopGeo] = useState<{ left: number; bottom: number } | null>(null);
+  useEffect(() => {
+    if (!open) {
+      setPopGeo(null);
+      return;
+    }
+    const measure = (): void => {
+      const el = popoverRef.current;
+      if (el === null) {
+        setPopGeo(null);
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      const POPOVER_W = 256; // w-64
+      const MARGIN = 8;
+      let left = r.right - POPOVER_W;
+      if (left < MARGIN) left = MARGIN;
+      const maxLeft = window.innerWidth - POPOVER_W - MARGIN;
+      if (left > maxLeft) left = Math.max(MARGIN, maxLeft);
+      // bottom-9 semantics preserved: the popover's BOTTOM sits 36px above
+      // the trigger's TOP edge (the composer sits at the screen bottom, the
+      // list grows upward). Clamped so a trigger at the very top still fits.
+      const bottom = Math.max(window.innerHeight - r.top + 36, 36);
+      setPopGeo({ left, bottom });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("resize", measure);
+    };
+    // popoverRef is a stable ref from useDismiss; reading it inside measure
+    // always sees the current node.
+  }, [open, popoverRef]);
+
   // ── R87-A1: trajectory-intent state ─────────────────────────────────────
   // The open flyout's viewport rect (captured by the flyout's ref callback)
   // feeds the corridor check; the double-buffered pointer trail yields the
@@ -544,26 +587,34 @@ export function ModelSelector({
       {/* R87-A1 (owner: "When the option is opened up, the background will be
           slightly darkened and a slight frosted glass effect will be applied
           to it"): a fixed scrim BEHIND the popover (z-40 vs the popover's
-          z-50) — 25% black + a 3px blur, fading in over 150ms via the shared
-          overlay-in keyframes. Clicking it dismisses (the useDismiss
-          mousedown path fires too — both land on the same close).
+          z-50), fading in over 150ms via the shared overlay-in keyframes.
+          Clicking it dismisses (the useDismiss mousedown path fires too —
+          both land on the same close).
           R92-A (owner: opening the model menu "cleared out" the embedded
           browser): data-webview-backdrop marks this as a PURE DIM LAYER —
           it renders BELOW the OS-level browser webview, so the overlay
           guard no longer records its full-viewport rect as covering the
           browser (which blanked the page for a dim the webview never
           showed). The popover CONTENT below is untouched — it still hides
-          the webview whenever it geometrically covers it. */}
+          the webview whenever it geometrically covers it.
+          R93-A2 (owner: "it should become slightly blurred only. This blur
+          effect should apply to the browser window itself too"): the blur
+          drops to a SLIGHT 1.5px (was 3px — the stronger frost read as a
+          heavy dim), the tint lightens with it, and the marker now carries
+          the radius — data-webview-backdrop="1.5" — which the webview
+          guard mirrors INTO the browser page itself (BrowserPanel's
+          nativeTabEval filter), so the browser window frosts together
+          with the rest of the app instead of staying oddly crisp. */}
       {open ? (
         <div
           aria-hidden
           data-model-backdrop
-          data-webview-backdrop
+          data-webview-backdrop="1.5"
           className="fixed inset-0 z-40"
           style={{
-            background: "rgba(0,0,0,0.25)",
-            backdropFilter: "blur(3px)",
-            WebkitBackdropFilter: "blur(3px)",
+            background: "rgba(0,0,0,0.16)",
+            backdropFilter: "blur(1.5px)",
+            WebkitBackdropFilter: "blur(1.5px)",
             animation: "overlay-in 0.15s ease",
           }}
           onClick={close}
@@ -637,8 +688,25 @@ export function ModelSelector({
               setHoveredProvider(null);
             }
           }}
-          className="absolute bottom-9 right-0 w-64 max-h-[min(24rem,calc(100vh-2rem))] overflow-y-auto auto-scroll rounded-2xl border p-1.5 z-50"
-          style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+          // R93-A1: VIEWPORT-CLAMPED placement (see the popGeo effect above)
+          // — position:fixed with a measured left/bottom replaces the old
+          // absolute/right-0 anchor whose 256px box could leave the window's
+          // left edge at the 240px chat floor (the owner's "providers were
+          // cut off… outside of the window area"). Unmeasured fallback (the
+          // first paint frame, or a test DOM without layout): the old
+          // right-aligned absolute anchor, so behavior degrades to exactly
+          // the pre-R93 placement instead of vanishing.
+          className={
+            popGeo === null
+              ? "absolute bottom-9 right-0 w-64 max-h-[min(24rem,calc(100vh-2rem))] overflow-y-auto auto-scroll rounded-2xl border p-1.5 z-50"
+              : "fixed w-64 max-h-[min(24rem,calc(100vh-2rem))] overflow-y-auto auto-scroll rounded-2xl border p-1.5 z-50"
+          }
+          style={{
+            ...(popGeo === null ? {} : { left: `${popGeo.left}px`, bottom: `${popGeo.bottom}px` }),
+            background: styles.card,
+            borderColor: styles.border,
+            boxShadow: styles.bentoShadow,
+          }}
         >
           {/* Free only / All — the SHARED persisted preference (same store the
               Settings → Providers list uses), accessible right in the popover. */}

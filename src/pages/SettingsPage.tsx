@@ -586,8 +586,14 @@ function RetryConfigCard() {
               }}
             >
               <span
-                className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full bg-white shadow transition-all"
-                style={{ left: current[key] ? "calc(100% - 21px)" : "3px", height: 18, width: 18 }}
+                className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full shadow transition-all"
+                style={{
+                  left: current[key] ? "calc(100% - 21px)" : "3px",
+                  height: 18,
+                  width: 18,
+                  // R93-A4: contrast-aware knob (Mono Stone dark → #111111).
+                  background: current[key] ? styles.accentText : styles.toggleActive,
+                }}
               />
             </button>
           </div>
@@ -846,8 +852,14 @@ function DebugModeCard() {
           }}
         >
           <span
-            className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full bg-white shadow transition-all"
-            style={{ left: current.enabled ? "calc(100% - 21px)" : "3px", height: 18, width: 18 }}
+            className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full shadow transition-all"
+            style={{
+              left: current.enabled ? "calc(100% - 21px)" : "3px",
+              height: 18,
+              width: 18,
+              // R93-A4: contrast-aware knob (Mono Stone dark → #111111).
+              background: current.enabled ? styles.accentText : styles.toggleActive,
+            }}
           />
         </button>
       </div>
@@ -936,8 +948,14 @@ function MemoryCard() {
           }}
         >
           <span
-            className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full bg-white shadow transition-all"
-            style={{ left: current.enabled ? "calc(100% - 21px)" : "3px", height: 18, width: 18 }}
+            className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full shadow transition-all"
+            style={{
+              left: current.enabled ? "calc(100% - 21px)" : "3px",
+              height: 18,
+              width: 18,
+              // R93-A4: contrast-aware knob (Mono Stone dark → #111111).
+              background: current.enabled ? styles.accentText : styles.toggleActive,
+            }}
           />
         </button>
       </div>

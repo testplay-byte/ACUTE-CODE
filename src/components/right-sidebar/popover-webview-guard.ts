@@ -72,8 +72,17 @@ interface WebviewGuardState {
   overlaySeq: number;
   /** R60-D: the tab id whose webview is hidden under the sidebar popover. */
   popoverTabId: string | null;
+  /** R93-A2: the backdrop blur radius the BROWSER should mirror (px), or
+   * null when no blurring backdrop is open. A DOM backdrop-filter cannot
+   * reach the OS-level webview, so the BrowserPanel injects the SAME blur
+   * into the page itself (nativeTabEval) — the browser participates in
+   * the app's frosted look instead of staying oddly crisp. */
+  backdropBlur: number | null;
+  /** Bumped whenever backdropBlur changes. */
+  backdropSeq: number;
   setOverlayRects: (rects: OverlayRect[]) => void;
   setPopoverTabId: (tabId: string | null) => void;
+  setBackdropBlur: (blur: number | null) => void;
 }
 
 /** R92-A: shallow rect-list equality (order-sensitive — querySelectorAll
@@ -92,6 +101,8 @@ export const useWebviewGuardStore = create<WebviewGuardState>()((set) => ({
   overlayRects: [],
   overlaySeq: 0,
   popoverTabId: null,
+  backdropBlur: null,
+  backdropSeq: 0,
   // R92-A: an identical rect list does NOT bump the seq — the periodic
   // 600ms re-check would otherwise re-render every panel subscriber twice a
   // second for as long as any overlay stays open (the rects usually haven't
@@ -103,6 +114,9 @@ export const useWebviewGuardStore = create<WebviewGuardState>()((set) => ({
         : { overlayRects, overlaySeq: s.overlaySeq + 1 },
     ),
   setPopoverTabId: (popoverTabId) => set({ popoverTabId }),
+  // R93-A2: same no-op discipline for the backdrop blur.
+  setBackdropBlur: (backdropBlur) =>
+    set((s) => (s.backdropBlur === backdropBlur ? {} : { backdropBlur, backdropSeq: s.backdropSeq + 1 })),
 }));
 
 /**
@@ -158,9 +172,14 @@ export function isWebviewHiddenNow(
  * (role="listbox" rides inside a popper wrapper for Select; tooltips are
  * filtered out below — they are too transient to blank the page for.
  * R89-E5 adds the full-screen dialog SCRIMS — `.fixed.inset-0` — because a
- * modal's dim layer genuinely covers the whole viewport.) */
+ * modal's dim layer genuinely covers the whole viewport.
+ * R93-A3 adds the ModelSelector's model FLYOUT — `[data-model-flyout]` —
+ * a position:fixed panel that can open over the right-side browser; it
+ * never matched any role-based selector (role="listbox" not role="menu"),
+ * so the OS webview painted OVER it: the owner saw the model list render
+ * "under the browser window itself".) */
 const OVERLAY_SELECTOR =
-  '[role="menu"], [role="dialog"], [data-radix-popper-content-wrapper], [data-overlay], .fixed.inset-0';
+  '[role="menu"], [role="dialog"], [data-model-flyout], [data-radix-popper-content-wrapper], [data-overlay], .fixed.inset-0';
 
 /** The result of one DOM sweep: the measured rects + whether any matching
  * overlay had to be SKIPPED as unmeasurable (drives the R92-A rAF retry). */
@@ -194,6 +213,24 @@ function overlayRectsPresent(): OverlaySweep {
     }
   }
   return { rects, sawUnmeasured };
+}
+
+/** R93-A2: the backdrop-blur the BROWSER should mirror right now (px), or
+ * null when no blurring backdrop is open. Backdrops carry the radius in
+ * their marker's value: `data-webview-backdrop="1.5"`. A marker with no
+ * value (the Radix dialog overlay, the drawer scrim) means DIM-ONLY — the
+ * browser stays crisp for those, exactly as before. The strongest open
+ * blur wins (two stacked backdrops must never cancel out). */
+function backdropBlurPresent(): number | null {
+  let blur: number | null = null;
+  for (const el of document.querySelectorAll("[data-webview-backdrop]")) {
+    const raw = (el as HTMLElement).dataset.webviewBackdrop ?? "";
+    const value = Number.parseFloat(raw);
+    if (Number.isFinite(value) && value > 0 && (blur === null || value > blur)) {
+      blur = value;
+    }
+  }
+  return blur;
 }
 
 let watcherInstalled = false;
@@ -230,6 +267,9 @@ function runOverlaySync(): void {
   if (typeof document === "undefined") return;
   const { rects, sawUnmeasured } = overlayRectsPresent();
   useWebviewGuardStore.getState().setOverlayRects(rects);
+  // R93-A2: mirror the backdrop's blur into the browser (the sweep and the
+  // store's no-op guard make this cheap while anything stays open).
+  useWebviewGuardStore.getState().setBackdropBlur(backdropBlurPresent());
   if (!sawUnmeasured) {
     unmeasuredRetryCount = 0;
   } else if (unmeasuredRetryCount < 3 && unmeasuredRetryHandle === null && typeof window !== "undefined") {
@@ -247,7 +287,10 @@ function runOverlaySync(): void {
   // state self-heals even with ZERO structural mutations: a stale covering
   // rect used to pin the browser hidden forever (the R91 watchdog
   // deliberately skips while covered, so it could never heal this either).
-  // Stop the timer once nothing is open.
+  // (The R93 backdrop-blur sync needs no timer of its own: a backdrop can
+  // only appear or disappear via a structural mutation, and the observer
+  // fires runOverlaySync for exactly those.) Stop the timer once nothing
+  // is open.
   if (rects.length > 0 || sawUnmeasured) {
     if (periodicRefreshHandle === null && typeof window !== "undefined") {
       periodicRefreshHandle = window.setInterval(() => runOverlaySync(), OVERLAY_RECT_REFRESH_MS);
@@ -323,5 +366,11 @@ export function resetOverlayWatcherForTests(): void {
     window.clearInterval(periodicRefreshHandle);
   }
   periodicRefreshHandle = null;
-  useWebviewGuardStore.setState({ overlayRects: [], overlaySeq: 0, popoverTabId: null });
+  useWebviewGuardStore.setState({
+    overlayRects: [],
+    overlaySeq: 0,
+    popoverTabId: null,
+    backdropBlur: null,
+    backdropSeq: 0,
+  });
 }

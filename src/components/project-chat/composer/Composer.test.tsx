@@ -1476,13 +1476,17 @@ describe("Composer: model selector (owner spec F)", () => {
     const scrim = backdrop();
     expect(scrim).toBeTruthy();
     // The scrim sits BELOW the popover (z-40 vs its z-50) and covers the
-    // viewport — fixed inset-0 with the blur + dim the owner asked for.
+    // viewport — fixed inset-0. R93-A2 (owner: "it should become slightly
+    // blurred only"): the frost is now a SLIGHT 1.5px (was 3px) with a
+    // lighter 16% dim, and the marker carries the radius so the webview
+    // guard mirrors the SAME blur into the browser page itself.
     expect(scrim?.className).toContain("fixed");
     expect(scrim?.className).toContain("inset-0");
     expect(scrim?.className).toContain("z-40");
-    expect(scrim?.style.backdropFilter).toBe("blur(3px)");
+    expect(scrim?.style.backdropFilter).toBe("blur(1.5px)");
     // happy-dom normalizes the rgba() spacing.
-    expect(scrim?.style.background).toBe("rgba(0, 0, 0, 0.25)");
+    expect(scrim?.style.background).toBe("rgba(0, 0, 0, 0.16)");
+    expect(scrim?.dataset.webviewBackdrop).toBe("1.5");
     expect(popover.className).toContain("z-50");
 
     // Clicking the backdrop dismisses the whole thing (popover + scrim).

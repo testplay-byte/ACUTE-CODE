@@ -6,6 +6,7 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 import { isTauri } from "../../lib/sidecar";
 import { withAlpha } from "../dashboard/helpers";
 import { ClampedText } from "../shared/ClampedText";
+import { ToggleSwitch } from "../ui/toggle-switch"; // R93-A4: the shared contrast-aware switch
 import {
   createSkill,
   deleteSkill,
@@ -31,49 +32,6 @@ const coreUnreachableHint = isTauri()
 /** The server's stance on built-in skills, surfaced verbatim in the UI. */
 const BUILTIN_DELETE_NOTE =
   "built-in skills can be disabled or edited, not deleted — they reappear if removed from the database";
-
-/** The card's own toggle (same track/thumb markup as ModelsProvidersTab). */
-function ToggleSwitch({
-  checked,
-  onToggle,
-  label,
-  title,
-  disabled,
-}: {
-  checked: boolean;
-  onToggle: () => void;
-  label: string;
-  title?: string;
-  disabled?: boolean;
-}) {
-  const styles = useThemeStyles();
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      title={title}
-      disabled={disabled}
-      onClick={onToggle}
-      className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
-      style={{
-        background: checked ? styles.accent : withAlpha(styles.text, 0.18),
-        border: `1.5px solid ${checked ? styles.accent : styles.border}`,
-      }}
-    >
-      <span
-        className="absolute top-1/2 block rounded-full bg-white shadow transition-all"
-        style={{
-          left: checked ? "calc(100% - 21px)" : "3px",
-          height: 18,
-          width: 18,
-          transform: "translateY(-50%)",
-        }}
-      />
-    </button>
-  );
-}
 
 /* ── The expandable editor (name / description / body) ────────────────────── */
 

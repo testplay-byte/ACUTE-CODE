@@ -305,3 +305,71 @@ describe("webview overlay guard — the R92-A hardening", () => {
     expect(useWebviewGuardStore.getState().overlaySeq).toBe(seqAfterSet + 1);
   });
 });
+
+// ── R93: the model flyout counts as an overlay + the backdrop-blur mirror ───
+
+describe("webview overlay guard — the R93 additions", () => {
+  it("R93-A3: a [data-model-flyout] element IS a covering overlay (the model list never renders under the browser)", async () => {
+    installOverlayWebviewWatcher();
+    // The ModelSelector's hover flyout: role="listbox" + data-model-flyout,
+    // position:fixed over the right-side browser panel. Before R93 the
+    // selector matched no role it carries, so the OS webview painted OVER
+    // it (the owner: the menu was "being shown under the browser window").
+    const flyout = document.createElement("div");
+    flyout.setAttribute("data-model-flyout", "");
+    flyout.setAttribute("data-flyout-side", "right");
+    flyout.setAttribute("role", "listbox");
+    measureAs(flyout, { left: 950, top: 100, right: 1230, bottom: 700, width: 280, height: 600 } as DOMRect);
+    document.body.appendChild(flyout);
+    await vi.waitFor(() => {
+      if (!anyOverlay()) throw new Error("not yet");
+    });
+    const panelArea = { left: 900, top: 100, right: 1400, bottom: 800 };
+    expect(overlayCoversRect(panelArea)).toBe(true);
+    expect(isWebviewHiddenNow("tab-x", panelArea)).toBe(true);
+    flyout.remove();
+    await vi.waitFor(() => expect(anyOverlay()).toBe(false));
+    expect(overlayCoversRect(panelArea)).toBe(false);
+  });
+
+  it("R93-A2: a blurring backdrop reports its radius for the browser mirror (data-webview-backdrop=\"1.5\")", async () => {
+    installOverlayWebviewWatcher();
+    expect(useWebviewGuardStore.getState().backdropBlur).toBeNull();
+    const scrim = document.createElement("div");
+    scrim.setAttribute("data-webview-backdrop", "1.5");
+    scrim.setAttribute("data-model-backdrop", "");
+    document.body.appendChild(scrim);
+    await vi.waitFor(() => {
+      if (useWebviewGuardStore.getState().backdropBlur !== 1.5) throw new Error("not yet");
+    });
+    // A PURE backdrop still never counts as a covering overlay.
+    expect(anyOverlay()).toBe(false);
+    // Removal clears the mirror value.
+    scrim.remove();
+    await vi.waitFor(() => {
+      if (useWebviewGuardStore.getState().backdropBlur !== null) throw new Error("not yet");
+    });
+  });
+
+  it("R93-A2: a valueless backdrop stays dim-only (no browser blur) and the strongest open blur wins", async () => {
+    installOverlayWebviewWatcher();
+    const a = document.createElement("div");
+    a.setAttribute("data-webview-backdrop", "1.5");
+    const b = document.createElement("div");
+    b.setAttribute("data-webview-backdrop", ""); // the Radix dialog overlay
+    document.body.append(a, b);
+    await vi.waitFor(() => {
+      if (useWebviewGuardStore.getState().backdropBlur !== 1.5) throw new Error("not yet");
+    });
+    const c = document.createElement("div");
+    c.setAttribute("data-webview-backdrop", "2.5");
+    document.body.appendChild(c);
+    await vi.waitFor(() => {
+      if (useWebviewGuardStore.getState().backdropBlur !== 2.5) throw new Error("not yet");
+    });
+    document.body.innerHTML = "";
+    await vi.waitFor(() => {
+      if (useWebviewGuardStore.getState().backdropBlur !== null) throw new Error("not yet");
+    });
+  });
+});

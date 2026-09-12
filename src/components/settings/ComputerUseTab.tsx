@@ -5,6 +5,7 @@ import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { isTauri } from "../../lib/sidecar";
 import { withAlpha } from "../dashboard/helpers";
+import { ToggleSwitch } from "../ui/toggle-switch"; // R93-A4: the shared contrast-aware switch
 import {
   fetchComputerUseConfig,
   testComputerUse,
@@ -39,53 +40,6 @@ const coreUnreachableHint = isTauri()
   : "Agent core unreachable — start the app (or pnpm dev:full).";
 
 const AMBER = "#f59e0b";
-
-/** The card's own toggle (same track/thumb markup as ModelsProvidersTab). */
-function ToggleSwitch({
-  checked,
-  onToggle,
-  label,
-  title,
-  disabled,
-  big,
-}: {
-  checked: boolean;
-  onToggle: () => void;
-  label: string;
-  title?: string;
-  disabled?: boolean;
-  big?: boolean;
-}) {
-  const styles = useThemeStyles();
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      title={title}
-      disabled={disabled}
-      onClick={onToggle}
-      className={`${
-        big ? "h-7 w-[52px]" : "h-6 w-11"
-      } relative shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60`}
-      style={{
-        background: checked ? styles.accent : withAlpha(styles.text, 0.18),
-        border: `1.5px solid ${checked ? styles.accent : styles.border}`,
-      }}
-    >
-      <span
-        className="absolute top-1/2 block rounded-full bg-white shadow transition-all"
-        style={{
-          left: checked ? "calc(100% - 25px)" : "3px",
-          height: 21,
-          width: 21,
-          transform: "translateY(-50%)",
-        }}
-      />
-    </button>
-  );
-}
 
 /** A radio row (title + description) in the SubAgentsTab picker style. */
 function RadioRow({

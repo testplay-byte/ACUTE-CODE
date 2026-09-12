@@ -104,7 +104,13 @@ export class ProviderKeyring {
       ...Object.keys(this.#env)
         .filter((name) => name.startsWith(`${ProviderKeyring.envVarName(providerId)}_SLOT`))
         .map((name) => Number(name.split("_SLOT")[1] ?? 0))
-        .filter((n) => Number.isInteger(n) && n >= 2),
+        // R93: slot 1 counts. The R92-D3 UI lowered the pool floor to slot 1
+        // (MIN_POOL_SLOT = 1), so the FIRST added key lands at slot 1 — a
+        // provider holding [primary + slot 1] computed maxSlot = 0 here and
+        // the Settings keys card listed only Key 1 while the provider row's
+        // chip said "2 keys" (getPool/resolveKeyPool scan 0..31 and never
+        // had the hole). >= 1, not >= 2.
+        .filter((n) => Number.isInteger(n) && n >= 1),
     );
     for (let slot = 0; slot <= Math.max(maxSlot, 0); slot++) {
       const value = this.#env[ProviderKeyring.slotEnvVarName(providerId, slot)];

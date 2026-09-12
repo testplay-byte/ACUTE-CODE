@@ -335,6 +335,22 @@ function nativeWarn(err: unknown): void {
   console.warn("[native-browser]", err);
 }
 
+/**
+ * R93-A2: inject (or clear) the backdrop-blur mirror INSIDE a native tab's
+ * page. Module-scoped on purpose — the nativeCreate .then() re-assert must
+ * not depend on render-scope closures. The script sets a FIXED filter value
+ * (never accumulates) on the page's root element; ExecuteScript bypasses
+ * page CSP, and pages without a documentElement (about:blank edge) reject
+ * harmlessly into the catch.
+ */
+function evalBackdropBlur(tabId: string, blur: number | null): void {
+  const script =
+    blur !== null
+      ? `try { document.documentElement.style.filter = 'blur(${blur}px)'; } catch (e) {}`
+      : "try { document.documentElement.style.filter = ''; } catch (e) {}";
+  void nativeTabEval(tabId, script).catch(() => {});
+}
+
 const QUICK_LINKS: Array<{ label: string; url: string }> = [
   { label: "GitHub", url: "https://github.com" },
   { label: "MDN", url: "https://developer.mozilla.org" },
@@ -729,6 +745,11 @@ export function BrowserPanel({
           scheduleBoundsSync();
           const factor = useBrowserTabStore.getState().tabs[tabId]?.viewport.zoom ?? 1;
           void nativeTabSetZoom(tabId, factor).catch(nativeWarn);
+          // R93-A2: a (re)created webview starts with a clean root — re-assert
+          // the backdrop blur if one is active while the panel remounts (read
+          // from the guard store directly: this callback outlives closures).
+          const activeBlur = useWebviewGuardStore.getState().backdropBlur;
+          if (activeBlur !== null) evalBackdropBlur(tabId, activeBlur);
           // R87: a KEEP-ALIVE-hidden panel (an inactive browser tab) must
           // NOT show its webview at create time — it would float above the
           // active tab's content (OS-level webviews sit above all HTML).
@@ -810,6 +831,26 @@ export function BrowserPanel({
     if (!nativeMode || !nativeReadyRef.current) return;
     void nativeTabSetVisible(tabId, !webviewHidden).catch(nativeWarn);
   }, [nativeMode, tabId, webviewHidden]);
+
+  // ── R93-A2: the backdrop-blur mirror (the owner: "This blur effect
+  // should apply to the browser window itself too. The browser window did
+  // not blur out but the other things did blur out.") ──────────────────
+  // A DOM backdrop-filter can NEVER reach the OS-level child webview — it
+  // paints under it. So the browser mirrors the app's frosted look from
+  // the INSIDE: the guard reports the open backdrop's blur radius (px) and
+  // this effect injects/removes a matching CSS filter on the page's own
+  // root element via nativeTabEval. The page content itself goes slightly
+  // blurry, exactly like the app behind its scrim — the browser reads as
+  // an embedded part of the application, not a crisp foreign layer.
+  // Idempotent (a fixed value is set, never accumulated) and fire-and-forget
+  // (a menu is transient; a late removal after close is harmless). The
+  // nativeCreate re-assert covers a webview that attaches while a backdrop
+  // is ALREADY open (tab switch / watchdog recreation).
+  const backdropBlur = useWebviewGuardStore((s) => s.backdropBlur);
+  useEffect(() => {
+    if (!nativeMode || !nativeReadyRef.current) return;
+    evalBackdropBlur(tabId, backdropBlur);
+  }, [nativeMode, tabId, backdropBlur]);
 
   // ── R62 (D8): the agent-browser command handler for THIS tab ───────────
   // Registered while the panel is mounted in native mode (the only mode

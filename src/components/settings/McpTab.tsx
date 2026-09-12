@@ -6,6 +6,7 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 import { isTauri } from "../../lib/sidecar";
 import { withAlpha } from "../dashboard/helpers";
 import { ClampedText } from "../shared/ClampedText";
+import { ToggleSwitch } from "../ui/toggle-switch"; // R93-A4: the shared contrast-aware switch
 import {
   createMcpServer,
   deleteMcpServer,
@@ -29,49 +30,6 @@ import {
 const coreUnreachableHint = isTauri()
   ? "agent-core is not responding — if the connection banner is showing, use its Restart engine button, then reopen this tab."
   : "Agent core unreachable — start the app (or pnpm dev:full).";
-
-/** The card's own toggle (same track/thumb markup as ModelsProvidersTab). */
-function ToggleSwitch({
-  checked,
-  onToggle,
-  label,
-  title,
-  disabled,
-}: {
-  checked: boolean;
-  onToggle: () => void;
-  label: string;
-  title?: string;
-  disabled?: boolean;
-}) {
-  const styles = useThemeStyles();
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      title={title}
-      disabled={disabled}
-      onClick={onToggle}
-      className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
-      style={{
-        background: checked ? styles.accent : withAlpha(styles.text, 0.18),
-        border: `1.5px solid ${checked ? styles.accent : styles.border}`,
-      }}
-    >
-      <span
-        className="absolute top-1/2 block rounded-full bg-white shadow transition-all"
-        style={{
-          left: checked ? "calc(100% - 21px)" : "3px",
-          height: 18,
-          width: 18,
-          transform: "translateY(-50%)",
-        }}
-      />
-    </button>
-  );
-}
 
 /** "npx  -y,@model/context server" → ["npx","-y","@model/context","server"]. */
 function parseArgs(text: string): string[] {
