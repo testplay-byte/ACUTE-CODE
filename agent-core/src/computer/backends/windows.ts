@@ -121,26 +121,31 @@
  *     aligned), windowKey (the root's key), parentKey ($null on the
  *     root), path (the " › " breadcrumb of ancestor names + self, capped
  *     at 5 segments + "…", 120 chars total) and treeDepth.
- *   · LAYERED CLICKABILITY (§2.2, the ClickScope port): TYPE (the $probe
- *     ControlTypes — unchanged) → PATTERN (the existing 4 GetCurrentPattern
- *     probes, still gated to TYPE kinds — the R66-2-d Edge-crawl fix) →
- *     ACTION (LegacyIAccessible.DefaultAction, property id 10030) → MSAA
- *     (the legacy AccessibleRole, property id 10095, ROLE_SYSTEM_* map) →
- *     FOCUSABLE (IsKeyboardFocusable, property id 10009 + named +
- *     non-container). via records the FIRST layer that fired. The three new
- *     probes ride GetUiaProp — a by-id property reader that degrades
- *     HONESTLY on hosts whose managed wrapper lacks the by-id overload
- *     (the layer never fires, the walk never aborts; 10009 falls back to
- *     the typed $el.Current.IsKeyboardFocusable view).
+ *   · LAYERED CLICKABILITY (§2.2, the ClickScope port, the C5 rework):
+ *     TYPE (the $probe ControlTypes — unchanged) → PATTERN (the same 4
+ *     GetCurrentPattern probes — Invoke/Toggle/ExpandCollapse/Value —
+ *     widened from TYPE-only kinds to NAMED elements at depth>0, catching
+ *     interactive controls hiding in generic panes) → FOCUSABLE
+ *     ($el.Current.IsKeyboardFocusable read DIRECTLY off the typed Current
+ *     view + named + non-container). via records the FIRST layer that
+ *     fired. The reference's ACTION/MSAA legacy layers are HONESTLY ABSENT:
+ *     they read LegacyIAccessible.DefaultAction / AccessibleRole, which
+ *     live on the COM IUIAutomation face System.Windows.Automation never
+ *     exposes — the first draft's by-id GetPropertyValue reader could not
+ *     bind an int to AutomationProperty, so those two layers were inert
+ *     scaffolding (caught in the C5 pre-release review, deleted rather
+ *     than shipped dead).
  *   · PLACEMENT: moveWindow (SetWindowPos — the one new U32 P/Invoke, one
  *     line, still ONE csc compile per capsule), setWindowState (ShowWindow
  *     3/6/9 — the activate() primitive, by handle), focusWindow
  *     (BringWindowToTop + SetForegroundWindow, the light by-id raise).
  * The capsule ceiling math was RE-MEASURED for the v2 walk (see the
- * psCapsule docblock): the fixed buildSnapshot capsule grew past the old
- * 32,000-char comfort pin to ~32.4K — still under the hard 32,767
- * CreateProcess ceiling with ~330 chars of slack; the temp-.ps1 transport
- * note below stands as the honest next step if the walk grows again.
+ * psCapsule docblock): the fixed buildSnapshot capsule measured 33,140
+ * base64 chars — PAST the hard 32,767 CreateProcess ceiling — so the
+ * temp-.ps1 -File transport is not a future option, it is the ACTIVE
+ * path for the walk (every detail:full snapshot rides it; see the C5
+ * BOM note in psCapsule — the .ps1 is written UTF-8 WITH BOM because
+ * powershell.exe 5.1 decodes BOM-less scripts as ANSI).
  *
  * ROUND-66-2-d (R66-2-d): the owner's live Windows test hit a Chromium-sized
  * tree (Edge) — every node paid 4+ cross-process COM pattern probes
@@ -472,7 +477,12 @@ const psCapsule = (script: string, timeoutMs = 20000): CommandCapsule => {
   // factory returns) — best-effort cleanup, never blocking the caller.
   const dir = mkdtempSync(join(tmpdir(), "acute-ps-"));
   const file = join(dir, "s.ps1");
-  writeFileSync(file, full, "utf8");
+  // C5: UTF-8 WITH BOM. powershell.exe is Windows PowerShell 5.1, which
+  // decodes a BOM-LESS .ps1 as ANSI — the walk's "›" path separator and
+  // "…" truncation ellipsis would mojibake ("Foo â€º Bar") on every
+  // full-detail snapshot. The BOM makes 5.1 decode UTF-8 correctly (and
+  // is a no-op for pwsh 7+, which sniffs it natively).
+  writeFileSync(file, "\uFEFF" + full, "utf8");
   const delay = Math.max(120_000, timeoutMs + 30_000);
   setTimeout(() => {
     try {
@@ -786,14 +796,6 @@ $maxDepth = 25; $maxEl = 2400
 $probe = @('Button','Hyperlink','Edit','ComboBox','CheckBox','RadioButton','Slider','TabItem','MenuItem','ListItem','DataItem','TreeItem','Spinner','Thumb','ScrollBar','Document','Custom')
 $kindMap = @{Window='window';MenuItem='menuitem';Button='button';Hyperlink='button';Edit='textfield';Document='textfield';ComboBox='combobox';CheckBox='checkbox';RadioButton='checkbox';Slider='slider';Tab='pane';TabItem='tab';DataItem='row';ListItem='row';TreeItem='row';Text='text';Image='image'}
 function MapKind($ct) { if ($kindMap.ContainsKey($ct)) { return $kindMap[$ct] }; return 'pane' }
-# R93 v2 §2.2: by-id property reader — a probe that cannot read on this host
-# never fires (10009 falls back to the typed Current view).
-function GetUiaProp($el, $id) {
-  $m = $el.PSObject.Methods['GetPropertyValue']
-  if ($null -ne $m) { try { return $m.Invoke($id) } catch { return $null } }
-  if ($id -eq 10009) { try { return $el.Current.IsKeyboardFocusable } catch {} }
-  return $null
-}
 $winKey = 'w${window.windowId}-0'
 function Walk($el, $depth, $parentKey, $pathSegs) {
   if ($out.Count -ge $maxEl -or $depth -gt $maxDepth) { return }
@@ -804,31 +806,30 @@ function Walk($el, $depth, $parentKey, $pathSegs) {
     $interactive = $probe -contains $ct
     $via = ''
     if ($interactive) { $via = 'type' }
-    $flags = @()
-    # ONE pattern pass, interactive kinds only — handles reused below.
+    # ONE pattern pass — TYPE kinds always probe; NAMED non-type elements
+    # probe too (the pattern layer: interactive controls hiding in generic
+    # panes). Unnamed nodes skip the probes (cost without signal).
     $ip = $null; $tp = $null; $ec = $null; $vp = $null
-    if ($interactive) {
+    if ($interactive -or ($name -and $depth -gt 0)) {
       try { $ip = $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) } catch {}
       try { $tp = $el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern) } catch {}
       try { $ec = $el.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern) } catch {}
       try { $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) } catch {}
-      if ($null -ne $ip -or $null -ne $tp) { $flags += 'pressable' }
-      if ($null -ne $ec) { $flags += 'has_menu' }
-      if ($null -ne $vp) { $flags += 'editable' }
     }
+    # The layered net (managed bridge only — ACTION/MSAA legacy need the
+    # COM IUIAutomation face System.Windows.Automation never exposes).
     if ($depth -gt 0 -and -not $interactive) {
-      $da = GetUiaProp $el 10030
-      if ($null -ne $da -and "$da" -ne '' -and "$da" -ne 'no default action') { $interactive = $true; $via = 'action' }
+      if ($null -ne $ip -or $null -ne $tp -or $null -ne $ec -or $null -ne $vp) { $interactive = $true; $via = 'pattern' }
       if (-not $interactive) {
-        $r = GetUiaProp $el 10095
-        if ('43','56','45','44','12','60','37','46','34','30','51','63' -contains "$r") { $interactive = $true; $via = 'msaa' }
-      }
-      if (-not $interactive) {
-        $kb = GetUiaProp $el 10009
+        try { $kb = $el.Current.IsKeyboardFocusable } catch { $kb = $false }
         $k = MapKind $ct
         if ("$kb" -eq 'True' -and $name -and $k -ne 'window' -and $k -ne 'pane') { $interactive = $true; $via = 'focusable' }
       }
     }
+    $flags = @()
+    if ($null -ne $ip -or $null -ne $tp) { $flags += 'pressable' }
+    if ($null -ne $ec) { $flags += 'has_menu' }
+    if ($null -ne $vp) { $flags += 'editable' }
     try { if ($el.Current.IsKeyboardFocused) { $flags += 'focused' } } catch {}
     $key = "$winKey-$($out.Count)"
     $segs = @(); if ($null -ne $pathSegs) { $segs = @($pathSegs) }

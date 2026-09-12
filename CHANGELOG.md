@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-11 round-92 -->
+<!-- last-reviewed: 2026-09-12 round-93 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -17,7 +17,100 @@ harness extraction — risk #1 per the R85 audit; the remaining server.ts domain
 notifications/jobs/checkpoints/dialogs/plugins tail; then Wave 3 the frontend
 seams), external plugin ctx enrichment, the lessons-ledger affordance,
 ratings-driven prompt tuning, and the standing items (edit-linting, installer
-code-signing, the Files-tab polish, agent web-app-testing tools).
+code-signing, the Files-tab polish, the browser agent's CDP-level trusted-input
+tier, the computer-use COM IUIAutomation bridge for the ACTION/MSAA legacy
+layers).
+
+## [0.91.0] - 2026-09-12 — the R93 fifth-walkthrough round
+
+The owner's fifth end-to-end walkthrough, answered: the computer-use learning
+layer (the headline), the browser agent's hands, the turn-loop reliability, and
+the settings-surface polish.
+
+### Added — the computer-use learning layer (the headline)
+- **The element map**: every observed desktop element gets a stable identity
+  (app + window + kind + name + a quantized rect); every scan reports what is
+  NEW and what was LOST (`mapDelta` on the tool result); per-element
+  reliability counters (fed from action receipts) and per-app profiles
+  (`app_profile`) build a memory of every app the agent has worked — the
+  reliability leaders are surfaced so the agent prefers what historically
+  worked. `docs/architecture/COMPUTER-USE-V2.md` documents the whole module.
+- **The hierarchy + tree navigation**: elements carry keys, parents, paths and
+  depths; `get_tree` / `get_children` / `get_parent` / `get_subtree` navigate
+  dense UIs without re-ingesting everything.
+- **Ten new computer-use tools** (posture-gated): the tree navigators,
+  `windows_overview`, `element_at` (coordinate hit-test through the live
+  frame), `app_profile`, and window placement (`move_window`,
+  `window_state`, `focus_window`) on Windows and Linux.
+- **The relocation shortcut**: acting on an element that moved refuses with
+  the scored candidate (index/name/stateId + why) — the retry is one call.
+- **Ghost-box verification**: degenerate rectangles (flat 2px "elements" on
+  gradients) are detected against the live raster and dropped from the
+  registry — fail-open when no raster exists.
+- **Layered clickability**: TYPE → PATTERN (probed on named elements too —
+  interactive controls hiding in generic panes) → FOCUSABLE, with `via`
+  recording the layer that fired. The reference's ACTION/MSAA legacy layers
+  are honestly absent (they need the COM IUIAutomation bridge; the inert
+  first draft was deleted in review, not shipped).
+
+### Added — batch model management
+- **Multi-add models**: the right side of a catalog row adds that model
+  directly (the row flips to ADDED, the picker stays open); the left side
+  selects; click-and-drag paints a range; "Add N models" adds the batch with
+  an honest per-failure error strip. The pencil still opens the full
+  configure dialog.
+- **Test all models** (the Models & Providers header): every configured model
+  probed in sequence with live progress and a summary.
+- **The 4th per-model button** (Eye/EyeOff): hide a model from the chat
+  picker, the sub-agent picker and the agent dialogs — one click, reversible.
+
+### Fixed — the browser agent's hands
+- Typing no longer garbles emoji (code-point iteration), no longer drops
+  letters when a mid-word insert fails (the fallback arms on any failed
+  char), and fires a `keydown` before every inserted char (key-reactive
+  editors register the input).
+- Clicks run the full spec-order pointer sequence (hover-first, press pulse,
+  focus, hold) with real pointer identity — menus arm before the click lands;
+  the action reports when focus moved (a cheap effect-confirmation).
+- `read_dom` carries `pageState` (the URL hash/query + every selected tab) —
+  the skill teaches: re-read after clicking a section and re-click if it
+  reverted.
+
+### Fixed — the turn-loop reliability
+- Queued messages send when a turn ends — including after a failed turn, and
+  including a message queued during the failure-analysis phase (both
+  continuation gaps closed).
+- A network/timeout failure with queued messages makes exactly ONE
+  automatic recovery continuation; the kept messages are named honestly
+  (the amber strip) — no silent drops, no silent retries.
+- Sub-agents: an empty key pool fails fast with an actionable message (the
+  infinite queue-hang is gone), and a child without an explicit model
+  inherits the parent turn's effective provider/model — the "has no provider
+  ID/model configured" child dead end is closed; a single API key serves
+  sub-agents like any other turn.
+
+### Fixed — the settings surface
+- The API keys card lists Key 1 AND Key 2 (the slot-1 floor was filtered out
+  by a `≥ 2` check — the count chip and the card now agree).
+- The model-selector popover is viewport-clamped (the providers list can no
+  longer render outside the window at a narrow chat column), its blur is
+  SLIGHT and mirrors into the browser page itself, and the provider-hover
+  flyout floats ABOVE the browser (joined the overlay set).
+- The sub-agent model picker shows ONLY configured models (the static
+  OpenRouter catalog is gone from that surface; zero configured shows the
+  honest hint + link).
+- Every toggle's ON knob is contrast-aware (dark on light accents — no more
+  white-on-white in Mono Stone).
+- The agent form is sectioned (Identity / Model / Behavior / Capabilities /
+  Advanced) with a tall monospace system-prompt editor.
+
+### Fixed — the build/release spine (caught in the pre-release review)
+- The built sidecar failed to boot (an extension-less `import "./types"`
+  compiled clean but crashed at Node ESM runtime — invisible to the unit
+  suites, caught by the e2e gate); the oversized PowerShell walk transport
+  writes UTF-8 WITH BOM (Windows PowerShell 5.1 decoded BOM-less scripts
+  as ANSI and mojibaked the path breadcrumbs); the element registration
+  commits as ONE transaction.
 
 ## [0.90.0] - 2026-09-11 — the R92 fourth-walkthrough round
 

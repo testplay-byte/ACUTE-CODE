@@ -69,13 +69,20 @@ purely additional — the walkers emit them alongside, never reordering.
 A node is `interactive` when ANY layer fires (first match wins, recorded in `via`):
 
 1. **TYPE** — the control type inherently implies interaction (Button, MenuItem, CheckBox…).
-2. **PATTERN** — Invoke / Toggle / ExpandCollapse / SelectionItem / Value / RangeValue UIA patterns (the existing probe list).
-3. **ACTION** — `LegacyIAccessible.DefaultAction` (UIA property 10030: "press", "check", "toggle", "expand", "open"…) — catches owner-drawn buttons with no patterns.
-4. **MSAA** — the legacy `AccessibleRole` (UIA property 10095, `ROLE_SYSTEM_*`) mapping.
-5. **FOCUSABLE** — `IsKeyboardFocusable` (property 10009) + named + not a known container — the heuristic net.
+2. **PATTERN** — Invoke / Toggle / ExpandCollapse / Value UIA patterns, probed on TYPE kinds **and on named non-type elements** (catches interactive controls hiding in generic panes).
+3. **FOCUSABLE** — `IsKeyboardFocusable` (read directly off the managed `Current` view) + named + not a known container — the heuristic net.
 
-On Linux (AT-SPI): the action-interface verbs + the `STATE_FOCUSABLE` flag.
-On macOS (System Events): the role mapping + `AXFocused`/focusable attribute.
+ClickScope's ACTION (`LegacyIAccessible.DefaultAction`) and MSAA
+(`AccessibleRole`) layers are **honestly absent on Windows**: those
+properties live on the COM `IUIAutomation` face that
+`System.Windows.Automation` (the managed bridge the walker rides) never
+exposes. The first draft carried a by-id `GetPropertyValue` reader that
+could not bind an int to `AutomationProperty` — the layers were inert
+scaffolding; the C5 pre-release review deleted them rather than shipping
+dead code. Porting them requires the COM bridge (a future, separately
+tested change). On Linux (AT-SPI): the action-interface verbs + the
+`STATE_FOCUSABLE` flag. On macOS (System Events): the role mapping +
+`AXFocused`/focusable attribute.
 
 ### 2.3 The element map store (`computer/element-map.ts` + migration 0034)
 

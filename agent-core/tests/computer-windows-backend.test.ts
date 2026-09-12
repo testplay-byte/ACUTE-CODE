@@ -507,16 +507,35 @@ describe("R66-2-d: buildSnapshot walks 2400 elements and probes ONLY interactive
     }
   });
 
-  it("gates EVERY GetCurrentPattern probe behind the interactive branch — 4 probes, one pass", async () => {
+  it("the layered clickability — 4 pattern probes, ONE pass, widened to NAMED elements; focusable reads Current directly", async () => {
     const script = await snapshotScript("full");
     expect(script).toContain("$interactive = $probe -contains $ct");
-    expect(script).toContain("if ($interactive) {");
-    // EXACTLY FOUR probes — Invoke, Toggle, ExpandCollapse, Value — all inside
-    // the gated branch; value capture + action advertisement REUSE the cached
-    // handles instead of re-probing (the old script probed 8× per full node).
+    // TYPE sets via first…
+    expect(script).toContain("if ($interactive) { $via = 'type' }");
+    // …PATTERN probes run for TYPE kinds AND named non-type elements at
+    // depth>0 (the C5 rework: interactive controls hiding in generic
+    // panes — unnamed nodes are skipped, cost without signal).
+    expect(script).toContain("if ($interactive -or ($name -and $depth -gt 0)) {");
+    // EXACTLY FOUR probes — Invoke, Toggle, ExpandCollapse, Value — all
+    // inside the widened branch; value capture + action advertisement REUSE
+    // the cached handles instead of re-probing (the old script probed 8×
+    // per full node).
     expect(script.split("GetCurrentPattern").length - 1).toBe(4);
     expect(script).toContain("if ($null -ne $vp) {");
     expect(script).toContain("if ($null -ne $ip) {");
+    // The layered net for non-TYPE elements: pattern first, then the
+    // FOCUSABLE layer reading $el.Current.IsKeyboardFocusable DIRECTLY.
+    expect(script).toContain("if ($depth -gt 0 -and -not $interactive) {");
+    expect(script).toContain("via = 'pattern'");
+    expect(script).toContain("try { $kb = $el.Current.IsKeyboardFocusable } catch { $kb = $false }");
+    expect(script).toContain("via = 'focusable'");
+    // The C5 deletion: the by-id GetPropertyValue reader was inert (an int
+    // can never bind to AutomationProperty) — the ACTION/MSAA legacy
+    // layers are honestly absent from the managed bridge, so their
+    // scaffolding must be too.
+    expect(script).not.toContain("GetUiaProp");
+    expect(script).not.toContain("10030");
+    expect(script).not.toContain("10095");
     // The gated branch sits INSIDE the per-node Walk (depth-capped
     // recursion). R93-C: the walk signature grew the hierarchy params
     // ($parentKey + $pathSegs — the breadcrumb stack).

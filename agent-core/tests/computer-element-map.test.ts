@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import {
@@ -27,6 +27,16 @@ let db: SqliteDatabase;
 beforeEach(() => {
   if (tempDir === "") tempDir = mkdtempSync(join(tmpdir(), "acute-elmap-"));
   db = openDatabase(join(tempDir, `${randomUUID()}.db`));
+});
+
+// Lesson #88: every DB-opening test closes its handle — Windows refuses the
+// afterAll rmSync (EPERM) while SQLite still holds the .db open.
+afterEach(() => {
+  try {
+    db?.close();
+  } catch {
+    /* already closed */
+  }
 });
 
 afterAll(() => {

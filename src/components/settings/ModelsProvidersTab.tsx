@@ -2000,7 +2000,6 @@ function ModelCard({
     run();
     // run is the card-local stable callback; testAllSeq changes only when
     // the header button is clicked again.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [testAllSeq]);
   useEffect(() => {
     if (testAllSeq === undefined || testAllSeq === 0) return;

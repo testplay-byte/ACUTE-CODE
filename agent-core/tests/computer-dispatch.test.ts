@@ -1973,6 +1973,7 @@ describe("R93: the element-map seam — get_app_state registers the scan; mapDel
     // The LOST row is kept (history + click stats survive a disappearance).
     const bare = db.prepare(`SELECT seen_count FROM computer_element WHERE name = 'Bare'`).get() as { seen_count: number };
     expect(bare.seen_count).toBe(1);
+    db.close(); // Lesson #88: Windows EPERM if the handle outlives the test
   });
 
   it("a db-LESS dispatcher degrades honestly: the observation succeeds with NO mapDelta (pre-R93 shape)", async () => {
@@ -2011,6 +2012,7 @@ describe("R93: the element-map seam — get_app_state registers the scan; mapDel
       expect(file.kind).toBe("receipt");
       expect(calls).toEqual(["press"]); // the semantic press ran (File has has_menu)
     }
+    db.close(); // Lesson #88: Windows EPERM if the handle outlives the test
   });
 
   it("the reliability fold: a SENT element press advances click_count + verify_success_count (the receipt's targetVerificationStatus is the oracle)", async () => {
@@ -2021,6 +2023,7 @@ describe("R93: the element-map seam — get_app_state registers the scan; mapDel
     expect(click.kind).toBe("receipt");
     const row = db.prepare(`SELECT click_count, verify_success_count FROM computer_element WHERE app_name = 'App Window' AND name = 'Save'`).get() as Record<string, number>;
     expect(row).toEqual({ click_count: 1, verify_success_count: 1 });
+    db.close(); // Lesson #88: Windows EPERM if the handle outlives the test
   });
 });
 
@@ -2108,6 +2111,7 @@ describe("R93: get_tree + the tree navigation tools", () => {
       expect(tree).toContain('  4 textfield/input "Search" #w1-4 — App › Search');
       expect(result.data["mapDelta"]).toMatchObject({ newCount: 5, knownTotal: 5 });
     }
+    db.close(); // Lesson #88: Windows EPERM if the handle outlives the test
   });
 
   it("get_children / get_parent / get_subtree navigate a REGISTERED snapshot; unknown stateId and unknown key refuse honestly", async () => {
@@ -2232,6 +2236,7 @@ describe("R93: windows_overview + element_at + app_profile", () => {
       const leaders = learned.data["mostReliable"] as Array<{ name: string; reliability: number }>;
       expect(leaders[0]).toMatchObject({ name: "Save", reliability: 1 });
     }
+    db.close(); // Lesson #88: Windows EPERM if the handle outlives the test
   });
 
   it("app_profile without a db: the honest capability refusal (the learning layer is unavailable, observation unaffected)", async () => {

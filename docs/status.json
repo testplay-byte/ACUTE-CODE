@@ -3,7 +3,7 @@
  "product": {
   "name": "Acute",
   "tagline": "Local-first multi-agent engineering workbench",
-  "version": "0.90.0",
+  "version": "0.91.0",
   "availability": "Private build — not yet distributed",
   "chips": [
    "Windows desktop",
@@ -272,18 +272,22 @@
   {
    "date": "2026-09-11",
    "label": "R92 — the multi-key pool + juggling, the browser-embedding finish, the generation dead end closed (v0.90.0)"
+  },
+  {
+   "date": "2026-09-12",
+   "label": "R93 — the fifth-walkthrough round: the computer-use v2 (element map + learning + tree tools + placement + relocation + ghost verification), the browser agent's hands, the turn-loop reliability, and the settings-surface polish (v0.91.0)"
   }
  ],
  "quality": {
-  "ci": "GREEN — R92 push d18ba05 → CI run 34659188740 SUCCESS on the FIRST try (the fourth-walkthrough round: lint, typechecks, the 2,953-test root suite in 165 files, the 4-page build, e2e 12/12, license audit 134 CLEAN, cargo check, docs check 197/0/0) + the Release run 34659190170 SUCCESS; v0.90.0 tagged, built, and PUBLISHED (both assets verified: ACUTE-CODE_0.90.0_x64-setup.exe 37,550,238 B sha256 59bba825… + acute-launcher-kit-v0.90.0.zip 105,863 B sha256 7e03fcc2… — the digests the in-app updater verifies against; the release marked latest; zero drafts remain).",
+  "ci": "PENDING — the R93 close-out push is in flight; this field syncs to the run verdict after CI + the Release workflow finish (the R92 precedent: GREEN on the first try).",
   "suites": [
    {
     "name": "frontend",
-    "tests": 1024
+    "tests": 1026
    },
    {
     "name": "agent-core",
-    "tests": 1929
+    "tests": 1997
    },
    {
     "name": "sidecar e2e",
@@ -308,13 +312,13 @@
  ],
  "plan": {
   "current": {
-   "title": "R92 — the fourth-walkthrough round",
-   "detail": "The owner's fourth end-to-end walkthrough, shipped as v0.90.0. (A) THE MULTI-KEY POOL with automatic juggling: the 'API keys' card in Models & Providers (Key 1 primary + Key 2..N as ordinals, masked with reveal/copy + per-key test, the 31-key cap), the Rust shell persists every provider's pool keys (the generalized <id>-slot<N> credential targets + the provider-pool-slots note file — restart survival for every provider, and the R47 add-slot-overwrites-primary bug fixed), the turn runners swap to the next untried key IMMEDIATELY on auth/rate-limit failures (the streamed runner flushes the partial segment first; the meta.key frame renders 'switching to API key 2 of 3' in the live chat; pool exhaustion hands to the R75 ladder), and sub-agents ride the same pool (the separate sub-agent key card deleted; the orchestrator's single-key child views removed; model picker + parallelism + supervision stay). (B) The browser-embedding finish: the composer's mode/thinking/add-context menus ride the menu-overlay window above the browser (useNativeOptionsMenu — the R90-C2 ladder generalized), pure backdrops are exempt from the webview guard (the model picker's fixed inset-0 dim was the deterministic 'cleared out'), the guard self-heals (zero-rect skip + rAF retry, the 600ms periodic re-sweep, the watchdog's fresh sweep before its geometric skip), and the paused caption renders on both hide legs. (C) The 'agent acute has no provider ID/model configured' dead end closed at both ends: the override-first turn gate (the context meter + compact routes mirror it) and the chat picker's agent self-heal PATCH. (D) Agents editable again: the NULL-model render crash fixed, model/provider optional with the empty round-trip, explicit-null PATCH semantics, the shared AgentRecord types telling the backend truth. Full pipeline green (2,953/2,953 + e2e 12/12 + license 134 clean + windows-target cargo check + docs:check 196/0/0)."
+   "title": "R93 — the fifth-walkthrough round",
+   "detail": "The owner's fifth end-to-end walkthrough, shipped as v0.91.0. (A) THE COMPUTER-USE V2 (the headline — the owner's 'full-fledged computer use' directive): the element map (stable per-element identity via quantized rects, scan diffing with mapDelta on every observation, per-element reliability counters fed from action receipts, per-app profiles with reliability leaders, ClickScope-style relocation scoring — migration 0034 + docs/architecture/COMPUTER-USE-V2.md, an INDEPENDENT module only element-map.ts touches), the hierarchy (key/windowKey/parentKey/path/treeDepth on every element; the flat actuation index contract preserved), ten new posture-gated tools (get_tree/get_children/get_parent/get_subtree/windows_overview/element_at/app_profile/move_window/window_state/focus_window), the STALE_ELEMENT relocation payload, ghost-box verification (Otsu minority-ink, fail-open), the layered clickability TYPE→PATTERN→FOCUSABLE (the inert ACTION/MSAA by-id draft deleted in the C5 review — they need the COM IUIAutomation bridge, honestly documented absent), the temp-.ps1 -File transport with UTF-8 BOM for the oversized walk capsule, and the rewritten skill body. (B) THE BROWSER AGENT'S HANDS: code-point typing + per-char keydowns + any-failure fallback arming (the garbled-text verdict), the full spec-order hover-first pointer sequence with real pointer identity (the 'not a real mouse' verdict), and read_dom's pageState + the click focus-report (the Images→All reversion verdict). (C) THE TURN-LOOP RELIABILITY: the post-analyst queue re-check + failure-path continuation (queued messages send even after a failed turn), ONE automatic recovery continuation for network/timeout failures with queued messages (queuedKept reported honestly — no silent drops), the acquireSlot empty-pool fast failure, and children inheriting the parent turn's effective pair (a single API key serves sub-agents). (D) THE SETTINGS SURFACE: the slot-1 key listing fix, the multi-add picker (right-zone direct add / left-zone select / drag-paint range + allSettled batch), Test all + the 4th Eye/EyeOff hide-from-picker button, the shared contrast-aware toggle, the sectioned agent form, and the sub-agent picker showing ONLY configured models. Full pipeline green: lint, both typechecks, the 3,023-test root suite (1,026 frontend + 1,997 agent-core; the 12 node-pty tests are Linux-only by design), e2e 12/12, build, license audit 134 CLEAN, docs:check 198/0/0; zero .rs files changed (CI's Windows build re-verifies the Rust side)."
   },
   "upcoming": [
    {
-    "title": "R93+ — the modularity continuation (owner-gated)",
-    "detail": "Wave 2-b the turn-loop harness extraction (risk #1 per the R85 audit; the R92 key-pool work grew the sync/streamed duplication again — the juggling branches are now twins), the remaining server.ts domains (terminal, MCP, computer-use, diagnostics, approvals, vision + the notifications/jobs/checkpoints/dialogs/plugins tail), then Wave 3 the frontend seams (api.ts 4,2xx, stream-store, ModelsProvidersTab). Standing items: edit-linting, installer code-signing, the Files-tab polish, agent web-app-testing tools."
+    "title": "R94+ — the modularity continuation (owner-gated)",
+    "detail": "Wave 2-b the turn-loop harness extraction (risk #1 per the R85 audit; R93's queue/recovery work grew the sync/streamed duplication further), the remaining server.ts domains (terminal, MCP, computer-use, diagnostics, approvals, vision + the notifications/jobs/checkpoints tail), then Wave 3 the frontend seams; standing items: edit-linting, installer code-signing, the browser agent's CDP-level trusted-input tier (isTrusted), the computer-use COM IUIAutomation bridge for the ACTION/MSAA legacy clickability layers, and the owner's future browser asks (right-click → Save Image As)."
    }
   ],
   "principles": [
@@ -323,6 +327,6 @@
    "Quality over speed — every round verified before push"
   ]
  },
- "round": "92",
+ "round": 93,
  "ci": null
 }
