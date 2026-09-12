@@ -334,14 +334,29 @@ class Orchestrator {
     return chosen.slot;
   }
 
-  /** Poll until a slot frees up (the queued child stays `queued` in the UI). */
+  /**
+   * Poll until a slot frees up (the queued child stays `queued` in the UI).
+   * R93-B4 (the owner: "I looked at running some sub-agent tasks but
+   * apparently it was NOT able to run the sub-agent tasks at all, most
+   * probably because of only one API key"): an EMPTY POOL fails FAST —
+   * the infinite poll below could never resolve without the owner adding
+   * a key, so the child hung `queued` forever while the parent's
+   * delegate_task never returned (the real "not able to run sub-agent
+   * tasks" failure). A busy pool (maxParallel children running, or
+   * perKeyLimit reached) keeps polling — that is legitimate queueing and
+   * resolves on its own as children finish. Returns the reserved slot, or
+   * the "EMPTY_POOL" marker the caller turns into an honest failure.
+   */
   private async acquireSlot(
     db: SqliteDatabase,
     keyring: ProviderKeyring,
     providerId: string,
     childId: string,
-  ): Promise<number> {
+  ): Promise<number | "EMPTY_POOL"> {
     for (;;) {
+      // R93-B4: the empty-pool gate FIRST — a pool with zero keys can never
+      // free up on its own (the owner must add a key in Settings).
+      if (resolveKeyPool(keyring, providerId).length === 0) return "EMPTY_POOL";
       const slot = this.tryReserveSlot(db, keyring, providerId, childId);
       if (slot !== null) return slot;
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -798,7 +813,7 @@ class Orchestrator {
     if (agent === undefined) {
       return "parent agent not found";
     }
-    const providerId = agent.providerId ?? "openrouter";
+    const providerId = agent.providerId ?? deps.mainModel?.providerId ?? "openrouter";
     // ROUND-50 (R50-b): the effective child model, resolved ONCE — the
     // turn's modelOverride (R43-5) AND the `model` field on every
     // subagent-status frame below (the stats footer's model line).
@@ -806,16 +821,34 @@ class Orchestrator {
     // {providerId, modelId} — the modelOverride object routes the child
     // turns to the NIM/custom provider (prepareTurn's effective-provider
     // resolution); the status frames show the bare model id as before.
+    // R93-B4 (the owner: "it should be able to utilize only that one single
+    // API key to run the sub-agents too"): the FALLBACK CHAIN. When no
+    // explicit subagentModel is set, the agent row's OWN durable pair wins
+    // (unchanged); when the row carries NO pair (the R91/R92 NULL rows,
+    // seeded templates, a force-deleted provider's reset) the PARENT
+    // TURN's effective pair — ToolDeps.mainModel threaded through
+    // TurnDeps — takes over: the child rides the same provider (and its
+    // key pool) the parent is running on, exactly like the owner's
+    // single-key workflow expects. Before R93 that case 409'd every
+    // child with "has no providerId/model configured".
     const subagentModel = getOrchestrationSettings(db).subagentModel;
+    const agentRowConfigured =
+      (agent.providerId !== null && agent.providerId !== "") &&
+      (agent.model !== null && agent.model !== "");
+    const fallbackOverride =
+      subagentModel !== null
+        ? { model: subagentModel.modelId, providerId: subagentModel.providerId }
+        : agentRowConfigured
+          ? undefined
+          : deps.mainModel !== undefined
+            ? { model: deps.mainModel.modelId, providerId: deps.mainModel.providerId }
+            : undefined;
     return {
       parent,
       agent,
       providerId,
-      modelOverride:
-        subagentModel !== null
-          ? { model: subagentModel.modelId, providerId: subagentModel.providerId }
-          : undefined,
-      effectiveModel: subagentModel?.modelId ?? agent.model ?? "unknown",
+      modelOverride: fallbackOverride,
+      effectiveModel: subagentModel?.modelId ?? agent.model ?? deps.mainModel?.modelId ?? "unknown",
       taskId: trimmedTaskId,
     };
   }
@@ -985,6 +1018,29 @@ class Orchestrator {
     // counts against the provider that actually serves the child turns.
     const effectiveProviderId = overrideProviderId(ctx.modelOverride) ?? providerId;
     const slot = await this.acquireSlot(db, keyring, effectiveProviderId, child.id);
+    // R93-B4: an EMPTY key pool fails FAST and HONESTLY (see acquireSlot) —
+    // the child is marked failed with the actionable message, the parent's
+    // delegate_task returns it as the tool result, and the owner is
+    // notified. Never a silent forever-queued child.
+    if (slot === "EMPTY_POOL") {
+      const emptyPoolLine =
+        `Sub-agent could not start: the provider "${effectiveProviderId}" has no API keys configured. ` +
+        "Sub-agents share the provider's key pool with the main agent — add at least one key in Settings → Models & Providers, then re-delegate.";
+      setSessionStatus(db, child.id, "failed");
+      status("failed", { detail: emptyPoolLine });
+      getNotificationBus().publish(db, {
+        kind: "subagent_failed",
+        title: `Sub-agent (${role}) could not start`,
+        body: `No API keys configured for provider "${effectiveProviderId}"`,
+        sessionId: child.id,
+        projectId: ctx.parent.projectId ?? undefined,
+      });
+      return {
+        ok: false,
+        output: `[subagent session: ${child.id} | role: ${role}]\n${emptyPoolLine}`,
+        sessionId: child.id,
+      };
+    }
     this.runs = this.runs.map((r) =>
       r.childId === child.id ? { ...r, parentSessionId } : r,
     );
@@ -1252,11 +1308,23 @@ class Orchestrator {
     // ROUND-82 (R82, §2.4.5): the provider-scoped ref routes the retried
     // child to its provider (see delegateTask's comment).
     const subagentModel = getOrchestrationSettings(db).subagentModel;
+    // R93-B4: the same fallback chain as resolveDelegation — the agent row's
+    // durable pair, else the parent turn's effective pair (TurnDeps.mainModel).
+    const agentRowConfigured =
+      agent !== undefined &&
+      agent.providerId !== null &&
+      agent.providerId !== "" &&
+      agent.model !== null &&
+      agent.model !== "";
     const modelOverride =
       subagentModel !== null
         ? { model: subagentModel.modelId, providerId: subagentModel.providerId }
-        : undefined;
-    const effectiveModel = subagentModel?.modelId ?? agent?.model ?? "unknown";
+        : agentRowConfigured
+          ? undefined
+          : deps.mainModel !== undefined
+            ? { model: deps.mainModel.modelId, providerId: deps.mainModel.providerId }
+            : undefined;
+    const effectiveModel = subagentModel?.modelId ?? agent?.model ?? deps.mainModel?.modelId ?? "unknown";
 
     const status = (s: SubAgentEventPayload["status"]) => {
       emit?.({
@@ -1291,6 +1359,24 @@ class Orchestrator {
     // subagentModel ref between attempts (the R82-TESTS retry pin).
     const effectiveProviderId = overrideProviderId(modelOverride) ?? providerId;
     const slot = await this.acquireSlot(db, keyring, effectiveProviderId, childId);
+    // R93-B4: the retry path gets the same honest EMPTY_POOL failure (see
+    // runChildTurn) — a retried child whose provider lost its keys fails
+    // fast with the actionable message instead of hanging forever.
+    if (slot === "EMPTY_POOL") {
+      const emptyPoolLine =
+        `Retry refused: the provider "${effectiveProviderId}" has no API keys configured. ` +
+        "Add at least one key in Settings → Models & Providers, then retry the sub-agent.";
+      setSessionStatus(db, childId, "failed");
+      status("failed");
+      getNotificationBus().publish(db, {
+        kind: "subagent_failed",
+        title: `Sub-agent (${role}) retry could not start`,
+        body: `No API keys configured for provider "${effectiveProviderId}"`,
+        sessionId: childId,
+        projectId: child.projectId ?? undefined,
+      });
+      return { ok: false, message: emptyPoolLine };
+    }
     this.runs = this.runs.map((r) =>
       r.childId === childId ? { ...r, parentSessionId } : r,
     );

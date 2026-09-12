@@ -80,6 +80,7 @@ import {
 import { createAgent } from "../src/storage/agents";
 import { createProviderRecord } from "../src/storage/providers";
 import { createProject } from "../src/storage/projects";
+import { setDebugSettings, setRetrySettings } from "../src/storage/settings";
 import {
   getTurnController,
   notifyTurn,
@@ -912,5 +913,163 @@ describe("R78 + R82: queued messages carry their own per-send override", () => {
     expect(createOpenAICompatibleMock.mock.calls[1][0]).toEqual(
       expect.objectContaining({ name: GW_ID, baseURL: GW_BASE }),
     );
+  });
+});
+
+// ── R93-B1/B2: the recovery continuation + the honest stranded-queue report ──
+
+describe("R93-B2: the automatic recovery continuation after a transient failure", () => {
+  beforeEach(() => {
+    // A FAST ladder (2 attempts, no wait) so the terminal failure arrives
+    // quickly — the recovery logic is under test, not the ladder itself.
+    setRetrySettings(db, { maxAttempts: 2, waitMinutes: [0] });
+  });
+
+  it("a NETWORK failure with a queued message CONTINUES the stream with it (exactly once)", async () => {
+    const sessionId = await makeSessionViaApi();
+    let calls = 0;
+    let recovered = false;
+    streamTextMock.mockImplementation(() => {
+      calls += 1;
+      // The message queues during the FINAL ladder attempt (call 2) — the
+      // earlier attempts' retries are fresh outer iterations whose loop-top
+      // delivery would flip a mid-turn message into the history, emptying
+      // the queue before the terminal failure. Queueing on the LAST attempt
+      // is the race window the recovery serves.
+      if (calls === 2) {
+        appendQueuedMessage(db, sessionId, { content: "please retry the search" });
+      }
+      // Both LADDER attempts of turn 1 fail (maxAttempts: 2)…
+      if (calls <= 2) throw new Error("500 Internal Server Error from provider");
+      // …call 3 is the RECOVERY turn (the queued message as its content).
+      recovered = true;
+      return sdkStream([{ type: "text-delta", text: "Recovered — done." }]);
+    });
+
+    const response = await authInject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/messages/stream`,
+      payload: { content: "start the search" },
+    });
+    expect(response.statusCode).toBe(200);
+    const frames = parseSse(response.body as string);
+    expect(recovered).toBe(true);
+    // The recovery continuation frame carries the recovery marker.
+    const continueFrames = frames.filter((f) => f.type === "meta.queue_continue");
+    expect(continueFrames).toEqual([
+      { type: "meta.queue_continue", count: 1, recovery: true },
+    ]);
+    // The stream ended on the recovery's OWN success (done, not error).
+    expect(frames.filter((f) => f.type === "done")).toHaveLength(1);
+    expect(frames[frames.length - 1]?.type).toBe("done");
+    // The queued message was consumed.
+    expect(listUndeliveredQueuedMessages(db, sessionId)).toHaveLength(0);
+  });
+
+  it("a SECOND transient failure does not recover again — the error frame reports queuedKept", async () => {
+    const sessionId = await makeSessionViaApi();
+    let calls = 0;
+    streamTextMock.mockImplementation(() => {
+      calls += 1;
+      // The message queues during the FINAL ladder attempt (see test 1).
+      if (calls === 2) appendQueuedMessage(db, sessionId, { content: "queued follow-up" });
+      throw new Error("500 Internal Server Error from provider");
+    });
+
+    const response = await authInject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/messages/stream`,
+      payload: { content: "start" },
+    });
+    expect(response.statusCode).toBe(200);
+    const frames = parseSse(response.body as string);
+    // FOUR attempts ran (turn 1's ladder + the recovery turn's ladder).
+    expect(calls).toBe(4);
+    // The recovery turn ran (one meta.queue_continue with recovery)…
+    const continueFrames = frames.filter((f) => f.type === "meta.queue_continue");
+    expect(continueFrames).toEqual([
+      { type: "meta.queue_continue", count: 1, recovery: true },
+    ]);
+    // …failed too: exactly one terminal error frame. No queuedKept here —
+    // the message was CONSUMED by the recovery turn (the auth test below
+    // covers the strand-report).
+    const errorFrames = frames.filter((f) => f.type === "error");
+    expect(errorFrames).toHaveLength(1);
+    const details = (errorFrames[0] as { details?: { queuedKept?: number } }).details;
+    expect(details?.queuedKept).toBeUndefined();
+    expect(frames[frames.length - 1]?.type).toBe("error");
+  });
+
+  it("an AUTH failure never auto-continues — the queue strands with the report", async () => {
+    const sessionId = await makeSessionViaApi();
+    let calls = 0;
+    streamTextMock.mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) appendQueuedMessage(db, sessionId, { content: "queued follow-up" });
+      const err = new Error("401 Unauthorized: invalid API key");
+      (err as Error & { statusCode?: number }).statusCode = 401;
+      throw err;
+    });
+
+    const response = await authInject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/messages/stream`,
+      payload: { content: "start" },
+    });
+    expect(response.statusCode).toBe(200);
+    const frames = parseSse(response.body as string);
+    // NO recovery continuation was attempted.
+    expect(frames.filter((f) => f.type === "meta.queue_continue")).toHaveLength(0);
+    const errorFrames = frames.filter((f) => f.type === "error");
+    expect(errorFrames).toHaveLength(1);
+    const details = (errorFrames[0] as { details?: { queuedKept?: number; errorClass?: string } }).details;
+    expect(details?.queuedKept).toBe(1);
+    expect(details?.errorClass).toBe("auth");
+    expect(listUndeliveredQueuedMessages(db, sessionId)).toHaveLength(1);
+  });
+});
+
+describe("R93-B1: the post-analyst queue re-check (the late-queue race)", () => {
+  it("a message queued during the debug-analyst phase still continues the stream", async () => {
+    // Debug mode ON: the analyst runs between the primary queue check and
+    // the done frame — the exact window the race lived in.
+    setDebugSettings(db, { enabled: true });
+    const sessionId = await makeSessionViaApi();
+    const calls: Array<Record<string, unknown>> = [];
+    streamTextMock.mockImplementation((input: Record<string, unknown>) => {
+      calls.push(input);
+      if (calls.length === 1) {
+        // Turn 1 — a clean success (the analyst follows).
+        return sdkStream([{ type: "text-delta", text: "First done." }]);
+      }
+      if (calls.length === 2) {
+        // The ANALYST's model call — the user queues a message WHILE it
+        // runs (the turn is still registered; POST /queue succeeds).
+        appendQueuedMessage(db, sessionId, { content: "late message" });
+        return sdkStream([{ type: "text-delta", text: "## Report\nAll good." }]);
+      }
+      // Turn 2 — the LATE-queued message's continuation turn.
+      return sdkStream([{ type: "text-delta", text: "Late message handled." }]);
+    });
+
+    const response = await authInject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/messages/stream`,
+      payload: { content: "start" },
+    });
+    expect(response.statusCode).toBe(200);
+    const frames = parseSse(response.body as string);
+    // FOUR model calls: the turn, the analyst, the LATE continuation, and
+    // the analyst again on the late turn's exit (the documented cost of the
+    // post-analyst re-check — debug mode only).
+    expect(calls).toHaveLength(4);
+    const lateInput = calls[2] as { messages?: Array<{ role: string; content: string }> };
+    expect(
+      lateInput.messages?.some((m) => m.role === "user" && m.content === "late message"),
+    ).toBe(true);
+    // The late message was consumed; the stream closed exactly once on done.
+    expect(listUndeliveredQueuedMessages(db, sessionId)).toHaveLength(0);
+    expect(frames.filter((f) => f.type === "done")).toHaveLength(1);
+    expect(frames[frames.length - 1]?.type).toBe("done");
   });
 });

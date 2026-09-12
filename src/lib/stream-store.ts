@@ -242,6 +242,11 @@ export interface TurnErrorInfo {
    * one — used to swap the live card for the folded one without a flash or
    * a duplicate. */
   errorTs?: string;
+  /** R93-B1: the number of messages that were LEFT QUEUED when the turn
+   * failed (they stay queued server-side and pre-flip on the next send) —
+   * the error card renders "N messages kept — they'll send with your next
+   * message" so a stranded queue is never silent. */
+  queuedKept?: number;
   ts: string;
 }
 
@@ -425,6 +430,13 @@ export interface StreamSessionState {
    * rendered as ordinary user bubbles until the refetch folds the flipped
    * message.user events. Same reset/clear lifecycle as `queued`. */
   deliveredQueued: DeliveredQueuedMessage[];
+  /** R93-B1: the KEPT-QUEUE notice — how many messages were still queued
+   * when the stream ended (the continuation cap's honest break, or a
+   * failure that stranded them). Rendered as a calm strip near the
+   * composer: "N messages stayed queued — they'll send with your next
+   * message." Cleared by startStream (the backend pre-flips the queue
+   * into the new turn). */
+  queueKeptNotice: number | null;
 }
 
 interface StreamStore {
@@ -545,6 +557,7 @@ function emptyState(): StreamSessionState {
     lastTurnStoppedTs: null,
     queued: [],
     deliveredQueued: [],
+    queueKeptNotice: null,
   };
 }
 
@@ -958,6 +971,9 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
       // no delivered-queue bubbles (the folded log owns those).
       queued: [],
       deliveredQueued: [],
+      // R93-B1: a fresh turn clears the kept-queue notice (the backend's
+      // pre-flip folds the stranded messages into this new turn's history).
+      queueKeptNotice: null,
     });
 
     const controller = new AbortController();
@@ -1388,9 +1404,27 @@ function handleStreamEvent(
     return;
   }
   if (event.type === "meta.queue_continue") {
-    // R78: informational no-op (typed above — the frame documents that the
-    // SAME stream continues on the first queued message; the queued.
-    // delivered flips own everything the UI shows).
+    // R78: informational (typed above — the frame documents that the SAME
+    // stream continues on the first queued message; the queued/delivered
+    // flips own everything the UI shows). R93-B2: the RECOVERY variant is
+    // surfaced on the live turn's note (it renders under the working
+    // section — "resuming with your queued message…") and the kept-queue
+    // notice clears (the queue is being consumed right now).
+    if (event.recovery === true) {
+      const curNote = useStreamStore.getState().bySession[sessionId];
+      if (curNote) {
+        patchSession(sessionId, {
+          queueKeptNotice: null,
+          liveTurn:
+            curNote.liveTurn !== null
+              ? {
+                  ...curNote.liveTurn,
+                  note: `resuming with your queued message — the previous attempt failed (${event.count} waiting)`,
+                }
+              : curNote.liveTurn,
+        });
+      }
+    }
     return;
   }
 
@@ -1918,6 +1952,11 @@ function handleStreamEvent(
       details && typeof details.attempts === "number" && Number.isFinite(details.attempts) && details.attempts > 1
         ? details.attempts
         : undefined;
+    // R93-B1: the stranded-queue count (only sent when messages were kept).
+    const queuedKept =
+      details && typeof details.queuedKept === "number" && Number.isFinite(details.queuedKept) && details.queuedKept > 0
+        ? details.queuedKept
+        : undefined;
     patchSession(sessionId, {
       liveError: {
         code: event.code,
@@ -1928,6 +1967,7 @@ function handleStreamEvent(
         ...(errorTs !== undefined ? { errorTs } : {}),
         ...(errorClass !== undefined ? { errorClass } : {}),
         ...(attempts !== undefined ? { attempts } : {}),
+        ...(queuedKept !== undefined ? { queuedKept } : {}),
         ts: new Date().toISOString(),
       },
       ...(cur.lastTurnStoppedByUser || liveTurn.stoppedByUser
@@ -1966,6 +2006,12 @@ function handleStreamEvent(
       if (fresh !== undefined && fresh !== null) {
         patchSession(sessionId, { liveTurn: { ...fresh, lastAssistantSeq: event.assistantMessage.seq } });
       }
+    }
+    // R93-B1: the honest cap-break — N messages are STILL queued (the
+    // continuation cap was reached). Surface the calm kept-notice strip;
+    // the folded queue items render their own chips after the refetch.
+    if (typeof event.queuedKept === "number" && Number.isFinite(event.queuedKept) && event.queuedKept > 0) {
+      patchSession(sessionId, { queueKeptNotice: event.queuedKept });
     }
     return;
   }

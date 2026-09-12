@@ -2254,6 +2254,7 @@ describe("Composer: Continue after a user stop (ROUND-58 R58-cf)", () => {
           lastTurnStoppedTs: "2026-08-31T12:00:00Z",
           queued: [],
           deliveredQueued: [],
+          queueKeptNotice: null,
         },
       },
     });
@@ -2349,6 +2350,7 @@ describe("Composer: the action anchor + queue-send (ROUND-78 R78-B/R78-D)", () =
           lastTurnStoppedTs: null,
           queued: [],
           deliveredQueued: [],
+          queueKeptNotice: null,
         },
       },
     });

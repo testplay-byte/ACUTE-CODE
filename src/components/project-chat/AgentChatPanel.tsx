@@ -910,7 +910,14 @@ export function TurnErrorCard({
 }: {
   /** The persisted fold item OR a live shape (code/message/model/ts). */
   error: Pick<ErrorTurnItem, "code" | "message" | "ts"> &
-    Partial<Pick<ErrorTurnItem, "model" | "providerId" | "providerError" | "errorClass" | "attempts">>;
+    Partial<
+      Pick<ErrorTurnItem, "model" | "providerId" | "providerError" | "errorClass" | "attempts">
+    > & {
+      /** R93-B1: live-only — the stranded-queue count (the error frame's
+       * details). The folded card re-derives it from nothing (the folded
+       * queue chips render their own state). */
+      queuedKept?: number;
+    };
   sessionId: string | null;
   /** Zero-arg — the PANEL binds the failed turn's user text before calling. */
   onRetry?: () => void;
@@ -981,6 +988,19 @@ export function TurnErrorCard({
             <span className="text-[11.5px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
               {shortReason}
             </span>
+            {/* R93-B1: the stranded queue is never silent — the card says
+                the messages are KEPT (they pre-flip into the next send),
+                matching the owner's "it does not silently fail" directive. */}
+            {error.queuedKept !== undefined ? (
+              <span
+                data-error-queued-kept
+                className="text-[11px] font-semibold px-2 py-0.5 rounded-md shrink-0"
+                style={{ background: withAlpha("#f59e0b", 0.12), color: "#f59e0b" }}
+                title="They stay queued server-side and send with your next message"
+              >
+                {error.queuedKept} message{error.queuedKept === 1 ? "" : "s"} kept — they&apos;ll send with your next message
+              </span>
+            ) : null}
             {/* R77: the full-error toggle — long provider payloads (the raw
                 OpenRouter body can run hundreds of chars) collapse to the
                 excerpt; the toggle reveals everything, scrollable. */}
@@ -1616,6 +1636,12 @@ export function AgentChatPanel({
   // fold as `queued` items, delivered ones as ordinary user items).
   const liveQueued = streamSlice?.queued ?? [];
   const deliveredQueued = streamSlice?.deliveredQueued ?? [];
+  // R93-B1: the KEPT-QUEUE notice — how many messages stayed queued when the
+  // stream ended (the cap's honest break, or a failure that stranded them
+  // without the recovery). Rendered as a calm amber strip so the queue is
+  // never silently stranded; startStream clears it (the pre-flip folds
+  // them into the new turn's history).
+  const queueKeptNotice = streamSlice?.queueKeptNotice ?? null;
   // ROUND-58 (R58-cf): the last live turn ended by a USER STOP — the quiet
   // Stopped card below the (folded or still-live) partial + the composer's
   // Continue affordance both key off this signal (it survives the live-turn
@@ -1883,9 +1909,16 @@ export function AgentChatPanel({
     // the POST — the sidecar answers 409 {code:"NO_LIVE_TURN"} and we FALL
     // THROUGH to the normal send path below exactly as if not busy (the
     // stale `busy` closure must not block the retry). Runs BEFORE the busy
-    // guard for that reason. ──
+    // guard for that reason.
+    // R93-B1: the gate no longer requires `streamBusy` — the LOCAL store
+    // can lag the server's registration (the send POST just resolved, the
+    // SSE reader hasn't opened yet) and the old `streamBusy` requirement
+    // SILENTLY DROPPED the message in that window (the owner's "queued
+    // messages were not being handled properly"). The SERVER is the truth:
+    // its 409 NO_LIVE_TURN is exactly the "no live turn, send normally"
+    // answer, and the handler below falls through to the normal send. ──
     const liveSid = session?.id;
-    if (busy && liveMode && streamBusy && liveSid !== undefined) {
+    if (busy && liveMode && liveSid !== undefined) {
       const queueAttachments = composerAttachments.map(toMessageAttachment);
       try {
         // ROUND-82 (R82): the queue entry carries the picker state at queue
@@ -2834,6 +2867,28 @@ export function AgentChatPanel({
                 onRetry={() => void runTurn(lastUserContent)}
                 disabled={busy}
               />
+            ) : null}
+
+            {/* ── R93-B1: the KEPT-QUEUE notice — the stream ended with
+                messages still queued (the continuation cap's honest break,
+                or a failure the recovery could not save). A calm amber
+                strip, never a silent strand: the messages ARE safe, they
+                pre-flip into the next send's history. Cleared by the next
+                startStream. ── */}
+            {queueKeptNotice !== null && queueKeptNotice > 0 && !streamBusy ? (
+              <div
+                data-testid="queue-kept-notice"
+                className="mt-2 rounded-[12px] border px-3 py-2 text-[11.5px] font-semibold flex items-center gap-2"
+                style={{
+                  borderColor: withAlpha("#f59e0b", 0.35),
+                  background: withAlpha("#f59e0b", styles.isDark ? 0.08 : 0.05),
+                  color: "#f59e0b",
+                }}
+              >
+                <Clock size={13} className="shrink-0" aria-hidden />
+                {queueKeptNotice} message{queueKeptNotice === 1 ? "" : "s"} stayed queued — they&apos;ll send
+                with your next message
+              </div>
             ) : null}
           </div>
         </div>

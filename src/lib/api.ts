@@ -3161,7 +3161,14 @@ export type StreamTurnEvent =
    * Informational today — the store types it but takes no action (the
    * delivered/flipped events own the render); reserved for a future
    * "continuing with your queued message" status line. */
-  | { type: "meta.queue_continue"; count: number }
+  | {
+      type: "meta.queue_continue";
+      count: number;
+      /** R93-B2: this continuation is the automatic RECOVERY after a
+       * transient (network/timeout) failure — the UI can say "resuming
+       * with your queued message" instead of the plain "continuing". */
+      recovery?: boolean;
+    }
   /** ROUND-92 (R92-D): the key-pool JUGGLING frame — a key-attributable
    * failure (auth: the key was rejected; rate_limit: that key's quota is
    * spent) swapped the turn onto the next untried key of the provider's
@@ -3252,7 +3259,15 @@ export type StreamTurnEvent =
       type: "finish";
       usage: { inputTokens: number; outputTokens: number; totalTokens: number };
     }
-  | { type: "done"; assistantMessage: AssistantMessage; usage: UsageRecord }
+  | {
+      type: "done";
+      assistantMessage: AssistantMessage;
+      usage: UsageRecord;
+      /** R93-B1: the honest cap-break — N messages are STILL queued after
+       * the continuation cap was reached (they stay queued server-side and
+       * pre-flip on the next send). The UI renders the kept notice. */
+      queuedKept?: number;
+    }
   /** ROUND-37 approvals: a tool call needs the owner's permission — the
    * stream stays open while the ApprovalCard waits for a decision. */
   | {

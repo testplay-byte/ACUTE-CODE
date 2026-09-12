@@ -2101,3 +2101,78 @@ describe("stream store ROUND-78 message queue", () => {
     await promise;
   });
 });
+
+// ── R93-B1/B2: the kept-queue report + the recovery note ────────────────────
+
+describe("stream store R93 kept-queue + recovery frames", () => {
+  beforeEach(() => {
+    useStreamStore.setState({ bySession: {} });
+  });
+
+  it("an error frame with details.queuedKept surfaces on liveError (the error card's kept line)", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    sse.emit({
+      type: "error",
+      status: 502,
+      code: "PROVIDER_ERROR",
+      message: "provider call failed",
+      details: { errorClass: "auth", queuedKept: 2 },
+    });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveError?.queuedKept).toBe(2);
+    });
+
+    sse.close();
+    await promise;
+  });
+
+  it("a done frame with queuedKept sets the calm notice (the cap's honest break)", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    sse.emit({
+      type: "done",
+      assistantMessage: { seq: 9, role: "assistant", agentId: "agt_r93", content: "done", ts: new Date().toISOString() },
+      usage: { agentId: "agt_r93", sessionId: PARENT, provider: "openrouter", model: "m", inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, costUsd: 0, ts: "" },
+      queuedKept: 3,
+    });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.queueKeptNotice).toBe(3);
+    });
+
+    sse.close();
+    await promise;
+  });
+
+  it("a RECOVERY queue_continue clears the notice and notes the live turn", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    sse.emit({
+      type: "done",
+      assistantMessage: { seq: 9, role: "assistant", agentId: "agt_r93", content: "done", ts: new Date().toISOString() },
+      usage: { agentId: "agt_r93", sessionId: PARENT, provider: "openrouter", model: "m", inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, costUsd: 0, ts: "" },
+      queuedKept: 1,
+    });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.queueKeptNotice).toBe(1);
+    });
+    // The next stream's recovery continuation clears the notice + notes the
+    // live turn (renders under the working section).
+    sse.emit({ type: "meta.queue_continue", count: 1, recovery: true });
+    await vi.waitFor(() => {
+      const slice = useStreamStore.getState().bySession[PARENT];
+      expect(slice?.queueKeptNotice).toBeNull();
+      expect(slice?.liveTurn?.note).toContain("resuming with your queued message");
+    });
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+});

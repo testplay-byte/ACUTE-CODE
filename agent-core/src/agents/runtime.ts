@@ -543,6 +543,21 @@ export interface TurnDeps {
    * attributes its tokens/cost to the key that paid them.
    */
   keySlot?: number;
+  /**
+   * R93-B4 (the owner: "it should be able to utilize only that one single
+   * API key to run the sub-agents too"): the parent turn's EFFECTIVE
+   * model pair (the per-send override, or the agent row's own provider +
+   * model — exactly what prepareTurn resolved, non-null by the R92-B
+   * override-first gate). The delegation plugin threads it in from
+   * ToolDeps.mainModel so the orchestrator can fall children back onto it
+   * when the agent row carries NO durable pair (the R91/R92 NULL rows +
+   * seeded templates) — before R93 a NULL row with no subagentModel meant
+   * every child 409'd "has no providerId/model configured" and the
+   * delegation hung as a failure. The explicit orchestration.subagentModel
+   * setting still wins; the agent row's OWN durable pair still beats the
+   * per-send transient.
+   */
+  mainModel?: { providerId: string; modelId: string };
 }
 
 /** Narrows an event payload back to the {role, content} chat shape we write.

@@ -1211,3 +1211,94 @@ describe("ROUND-50 (R50-b): streamed sub-agent delegation", () => {
     expect(children[0]?.model).toBe("test/orch-1");
   });
 });
+
+// ── R93-B4: the sub-agent key-pool + NULL-row fixes ─────────────────────────
+
+describe("R93-B4: the empty-pool fast failure + the mainModel fallback", () => {
+  it("a delegation to a provider with NO keys fails FAST with the honest, actionable message (never a forever-queued child)", async () => {
+    const agent = createAgent(db, {
+      name: "Keyless",
+      providerId: "nvidia", // no ACUTE_PROVIDER_NVIDIA in the keyring
+      model: "nim/test",
+    });
+    const parent = createSession(db, { agentId: agent.id, mode: "single" });
+    const orchestrator = getOrchestrator();
+
+    const result = await orchestrator.delegateTask(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }), chat: aiSdkChat },
+      parent.id,
+      "count the files",
+      "researcher",
+    );
+
+    // The delegation returns immediately with the honest refusal — the
+    // pre-R93 acquireSlot polled FOREVER (the child stayed queued, the
+    // parent's delegate_task never returned).
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("no API keys configured");
+    expect(result.output).toContain("Settings → Models & Providers");
+    expect(result.output).toContain("nvidia");
+    // The child is marked failed (not stuck queued).
+    const child = getSession(db, result.sessionId!);
+    expect(child?.status).toBe("failed");
+  });
+
+  it("a NULL agent row (no providerId/model) falls back to the PARENT turn's effective pair — the child runs, no 409", async () => {
+    const agent = createAgent(db, { name: "Blank", providerId: null, model: null });
+    const parent = createSession(db, { agentId: agent.id, mode: "single" });
+    const orchestrator = getOrchestrator();
+
+    // The parent turn's effective pair (what ToolDeps.mainModel threads
+    // through): openrouter + test/fallback-1.
+    const result = await orchestrator.delegateTask(
+      {
+        db,
+        keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }),
+        chat: aiSdkChat,
+        mainModel: { providerId: "openrouter", modelId: "test/fallback-1" },
+      },
+      parent.id,
+      "count the files",
+      "researcher",
+    );
+
+    // The child RAN (the generateText mock answers) — pre-R93 every child
+    // 409'd "has no providerId/model configured".
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("Sub-agent report: task done.");
+    const child = getSession(db, result.sessionId!);
+    expect(child?.status).toBe("completed");
+  });
+
+  it("a CONFIGURED agent row still wins over the mainModel fallback (the durable pair is stable)", async () => {
+    const agent = createAgent(db, {
+      name: "Durable",
+      providerId: "openrouter",
+      model: "test/durable-1",
+    });
+    const parent = createSession(db, { agentId: agent.id, mode: "single" });
+    const orchestrator = getOrchestrator();
+
+    let seenModel = "";
+    generateTextMock.mockImplementation(async (input: { model?: unknown }) => {
+      seenModel = String((input as { model?: { modelId?: string } }).model?.modelId ?? "");
+      return {
+        text: "Sub-agent report: task done.",
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      };
+    });
+
+    await orchestrator.delegateTask(
+      {
+        db,
+        keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }),
+        chat: aiSdkChat,
+        mainModel: { providerId: "openrouter", modelId: "test/transient-override" },
+      },
+      parent.id,
+      "count the files",
+      "researcher",
+    );
+    expect(seenModel).toBe("test/durable-1");
+  });
+});

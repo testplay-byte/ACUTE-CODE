@@ -349,6 +349,15 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
       // closes the stream normally and leaves the rest queued.
       const MAX_QUEUE_CONTINUATIONS = 25;
       let continuations = 0;
+      // R93-B2: the ONE recovery attempt. A transient-class failure
+      // (network/timeout) with messages waiting in the queue no longer
+      // strands the stream — the first queued message drives exactly one
+      // automatic continuation ("it would not even try to continue the
+      // session" fixed with a hard bound: a second failure strands the
+      // queue and reports honestly via queuedKept). Auth/rate_limit/
+      // context failures NEVER auto-continue (a dead key or a spent quota
+      // would just burn the queued message into the same wall).
+      let recoveryAttempted = false;
       let currentContent = content;
       let currentAttachments = composer.value.attachments;
       // ROUND-82: currentModelOverride is declared above the try (the
@@ -442,7 +451,59 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
           // R78: once, after the loop's LAST successful turn (queue empty
           // or the cap's honest break — the remaining chips stay queued).
           await runDebugAnalystPhase();
-          send({ type: "done", assistantMessage: outcome.assistantMessage, usage: outcome.usage });
+          // R93-B1: the debug-analyst race. The primary queue check above ran
+          // BEFORE the analyst — a message queued DURING the analyst's model
+          // call (the turn is still registered; POST /queue succeeds) fell in
+          // the gap between the check and the done frame and stranded.
+          // Re-check AFTER the analyst: anything that arrived in between
+          // continues the stream exactly like a normal queued message.
+          // (Cost: the analyst may run again on the next exit — debug mode
+          // only, rare.)
+          const queuedLate = listUndeliveredQueuedMessages(db, id);
+          if (queuedLate.length > 0 && continuations < MAX_QUEUE_CONTINUATIONS) {
+            continuations += 1;
+            send({ type: "meta.queue_continue", count: queuedLate.length });
+            const firstLate = queuedLate[0];
+            deleteQueuedMessage(db, id, firstLate.seq);
+            for (const q of queuedLate.slice(1)) deliverQueuedMessage(db, id, q.seq);
+            const latePayload =
+              firstLate.payload !== null && typeof firstLate.payload === "object"
+                ? (firstLate.payload as Record<string, unknown>)
+                : null;
+            currentContent =
+              latePayload !== null && typeof latePayload.content === "string"
+                ? latePayload.content
+                : "";
+            currentAttachments =
+              latePayload !== null && Array.isArray(latePayload.attachments)
+                ? (latePayload.attachments as MessageAttachment[])
+                : undefined;
+            const lateOverrideModel =
+              latePayload !== null && typeof latePayload.model === "string"
+                ? latePayload.model.trim()
+                : "";
+            if (lateOverrideModel !== "") {
+              const lateOverrideProviderId =
+                latePayload !== null && typeof latePayload.providerId === "string"
+                  ? latePayload.providerId.trim()
+                  : "";
+              currentModelOverride =
+                lateOverrideProviderId !== ""
+                  ? { model: lateOverrideModel, providerId: lateOverrideProviderId }
+                  : { model: lateOverrideModel };
+            }
+            continue;
+          }
+          // R93-B1: the honest cap-break — the queue is non-empty but the
+          // continuation cap is reached. The done frame carries the count so
+          // the UI can say the messages are kept (never a silent strand).
+          const queuedKeptCount = queuedLate.length;
+          send({
+            type: "done",
+            assistantMessage: outcome.assistantMessage,
+            usage: outcome.usage,
+            ...(queuedKeptCount > 0 ? { queuedKept: queuedKeptCount } : {}),
+          });
         } else if (outcome.code === "ABORTED") {
           // ROUND-42: the user explicitly stopped the turn — a deliberate
           // stop is not a failure; no task_failed notification, and NO
@@ -479,6 +540,78 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
               sessionId: id,
               projectId: session?.projectId ?? undefined,
             });
+          }
+          // ── R93-B2: the ONE automatic recovery continuation. A
+          // network/timeout failure with messages waiting in the queue
+          // continues the session instead of stranding it: the owner's
+          // "the generation would fail, and it would not even try to
+          // continue the session from there at all". The task_failed
+          // notification above already TOLD the owner what happened; the
+          // queued message then drives one more turn (its own ladder
+          // applies). Only network/timeout qualify — auth (every key
+          // failed), rate_limit (the quota is spent), context and
+          // validation failures would just hit the same wall and burn the
+          // queued message. A second failure breaks here for real.
+          // NOTE the window this serves: the ladder's retries are fresh
+          // outer-loop iterations, so a message queued during an EARLIER
+          // attempt is already flipped into the history by the retry's
+          // loop-top delivery (the model saw it). Only a message landing
+          // during the FINAL attempt (or after the ladder was disabled
+          // per settings) is still queued at the terminal failure —
+          // exactly the race this branch recovers.
+          const errorClass =
+            outcome.details !== undefined && typeof outcome.details === "object"
+              ? (outcome.details as { errorClass?: unknown }).errorClass
+              : undefined;
+          const queuedOnFailure = listUndeliveredQueuedMessages(db, id);
+          if (
+            queuedOnFailure.length > 0 &&
+            !recoveryAttempted &&
+            continuations < MAX_QUEUE_CONTINUATIONS &&
+            (errorClass === "network" || errorClass === "timeout")
+          ) {
+            recoveryAttempted = true;
+            const firstRecovery = queuedOnFailure[0];
+            deleteQueuedMessage(db, id, firstRecovery.seq);
+            for (const q of queuedOnFailure.slice(1)) deliverQueuedMessage(db, id, q.seq);
+            const recoveryPayload =
+              firstRecovery.payload !== null && typeof firstRecovery.payload === "object"
+                ? (firstRecovery.payload as Record<string, unknown>)
+                : null;
+            currentContent =
+              recoveryPayload !== null && typeof recoveryPayload.content === "string"
+                ? recoveryPayload.content
+                : "";
+            currentAttachments =
+              recoveryPayload !== null && Array.isArray(recoveryPayload.attachments)
+                ? (recoveryPayload.attachments as MessageAttachment[])
+                : undefined;
+            const recoveryOverrideModel =
+              recoveryPayload !== null && typeof recoveryPayload.model === "string"
+                ? recoveryPayload.model.trim()
+                : "";
+            if (recoveryOverrideModel !== "") {
+              const recoveryOverrideProviderId =
+                recoveryPayload !== null && typeof recoveryPayload.providerId === "string"
+                  ? recoveryPayload.providerId.trim()
+                  : "";
+              currentModelOverride =
+                recoveryOverrideProviderId !== ""
+                  ? { model: recoveryOverrideModel, providerId: recoveryOverrideProviderId }
+                  : { model: recoveryOverrideModel };
+            }
+            send({
+              type: "meta.queue_continue",
+              count: queuedOnFailure.length,
+              recovery: true,
+            });
+            continue;
+          }
+          // R93-B1: any stranded queue is REPORTED in the error frame's
+          // details (queuedKept) — the error card renders "N messages kept
+          // — they'll send with your next message". Never a silent strand.
+          const queuedKeptOnFailure = queuedOnFailure.length;
+          if (outcome.status >= 500) {
             // R66-2-c: a REAL failure (status >= 500 — provider error,
             // loop guard) still ran real work the analyst can dissect
             // (the turn.error event is already persisted, so the
@@ -491,7 +624,12 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
             status: outcome.status,
             code: outcome.code,
             message: outcome.message,
-            ...(outcome.details ? { details: outcome.details } : {}),
+            // R93-B1: the details carry the stranded-queue count whenever
+            // messages are kept (the card's "N messages kept" line).
+            details: {
+              ...(outcome.details ?? {}),
+              ...(queuedKeptOnFailure > 0 ? { queuedKept: queuedKeptOnFailure } : {}),
+            },
           });
         }
         break; // every terminal branch above ends the loop (queue-continue `continue`s are the only loop-around)

@@ -1012,6 +1012,7 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
           lastTurnStoppedTs: null,
           queued: [],
           deliveredQueued: [],
+          queueKeptNotice: null,
         },
       },
     });
@@ -1061,6 +1062,7 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
           lastTurnStoppedTs: null,
           queued: [],
           deliveredQueued: [],
+          queueKeptNotice: null,
         },
       },
     });

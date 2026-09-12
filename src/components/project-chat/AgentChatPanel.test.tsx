@@ -357,6 +357,7 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           lastTurnStoppedTs: stoppedByUser ? "2026-08-31T11:00:25Z" : null,
           queued: [],
           deliveredQueued: [],
+          queueKeptNotice: null,
         },
       },
     });
@@ -416,6 +417,7 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           lastTurnStoppedTs: null,
           queued: [],
           deliveredQueued: [],
+          queueKeptNotice: null,
         },
       },
     });
@@ -475,6 +477,7 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           lastTurnStoppedTs: null,
           queued: [],
           deliveredQueued: [],
+          queueKeptNotice: null,
         },
       },
     });
@@ -923,6 +926,7 @@ describe("AgentChatPanel response ratings (ROUND-59 R59-D)", () => {
           lastTurnStoppedTs: null,
           queued: [],
           deliveredQueued: [],
+          queueKeptNotice: null,
         },
       },
     });
@@ -1250,6 +1254,7 @@ describe("AgentChatPanel inline screenshots (ROUND-68 R68-A)", () => {
           lastTurnStoppedTs: null,
           queued: [],
           deliveredQueued: [],
+          queueKeptNotice: null,
         },
       },
     });
@@ -1341,6 +1346,7 @@ describe("AgentChatPanel ROUND-75 retry ladder surfaces", () => {
           lastTurnStoppedTs: null,
           queued: [],
           deliveredQueued: [],
+          queueKeptNotice: null,
         },
       },
     });
@@ -1502,6 +1508,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
           lastTurnStoppedTs: null,
           queued,
           deliveredQueued: [],
+          queueKeptNotice: null,
         },
       },
     });
@@ -1685,6 +1692,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
           lastTurnStoppedTs: null,
           queued: [],
           deliveredQueued: [],
+          queueKeptNotice: null,
         },
       },
     });

@@ -108,6 +108,10 @@ export const delegationPlugin: PluginDefinition = {
               // parent turn spawns STREAMED children (live raw deltas to the
               // sub-agent panel); sync parents keep the sync fallback.
               ...(toolDeps.chatStream !== undefined ? { chatStream: toolDeps.chatStream } : {}),
+              // R93-B4: the parent turn's effective model pair — the
+              // orchestrator falls NULL-agent-row children back onto it
+              // (subagentModel ?? agent row ?? THIS).
+              ...(toolDeps.mainModel !== undefined ? { mainModel: toolDeps.mainModel } : {}),
             };
             // ── The COLLECT path: resume present → task/role are ignored. ──
             if (resume !== "") {

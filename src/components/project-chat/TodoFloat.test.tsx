@@ -66,6 +66,7 @@ function sessionState(over: Partial<StreamSessionState> = {}): StreamSessionStat
     lastTurnStoppedTs: null,
     queued: [],
     deliveredQueued: [],
+          queueKeptNotice: null,
     ...over,
   };
 }
