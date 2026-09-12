@@ -1356,3 +1356,246 @@ describe("browser_control — mouse (R89-E: the full-fledged pointer control)", 
     expect(tooLong.output).toContain("capped at 600");
   });
 });
+
+// ── ROUND-93 (R93-B3): typing fidelity, click trust, section state ─────────
+// The owner's fifth-walkthrough reports: "it sometimes typed out gibberish"
+// (UTF-16 code-unit iteration split astral chars + mid-stream execCommand
+// failures silently dropped letters + no key events for contenteditable
+// frameworks), "the mouse use functionality does not register it as a proper
+// mouse" (synthetic clicks with a thin event sequence), and "it was in the
+// images section, but it then reverted back to the all section" (read_dom
+// could not tell the model WHICH SPA section was active).
+
+describe("browser_control — R93-B3 typing fidelity (code points, mid-stream fallback, keydowns)", () => {
+  it("the type script iterates by CODE POINTS (Array.from) — never the old word[i] code-unit loop that typed astral chars as gibberish", async () => {
+    const scripts: string[] = [];
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload: { script?: string } };
+      scripts.push(String(frame.payload.script ?? ""));
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { typed: 13, fallback: false, wpm: 150, keydownsCanceled: 0 } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "type", selector: "#q", text: "héllo 🎉 world", sessionId: "tab-cp" });
+    expect(result.ok).toBe(true);
+    expect(scripts).toHaveLength(1);
+    const script = scripts[0];
+    // The fix: code-point iteration — astral-plane chars stay whole.
+    expect(script).toContain("Array.from(word)");
+    expect(script).toContain("chars[i]");
+    // The old UTF-16 code-unit indexing and the first-char-only fallback
+    // arming (a mid-stream execCommand failure used to DROP the letter) are gone.
+    expect(script).not.toContain("word[i]");
+    expect(script).not.toContain("inserted === 0");
+    // ANY failed char now arms the native-setter fallback.
+    expect(script).toContain("if (!ok) fellBack = true;");
+    // The semantics the loop now performs, proven on an astral string:
+    // code-point-joined strings survive the DOM/JSON boundary, while the
+    // old code-unit loop's lone surrogates become U+FFFD (the mojibake).
+    const word = "héllo🎉";
+    expect(word.length).toBe(7); // UTF-16 code units — the emoji is TWO
+    expect(Array.from(word)).toHaveLength(6); // code POINTS — the emoji is one
+    const byCodePoint = new TextDecoder().decode(new TextEncoder().encode(Array.from(word).join("")));
+    expect(byCodePoint).toBe(word);
+    // Each char crosses the DOM/execCommand boundary SEPARATELY — encode the
+    // code-unit halves individually, exactly what the old loop inserted.
+    const byCodeUnit = word
+      .split("")
+      .map((c) => new TextDecoder().decode(new TextEncoder().encode(c)))
+      .join("");
+    expect(byCodeUnit).not.toBe(word); // the old loop's output = gibberish
+    // The generated script stays within the 20KB Rust eval budget — the
+    // Rust check is UTF-8 BYTES (browser.rs: script.len() > 20_000), so the
+    // assertion measures bytes, not chars.
+    expect(Buffer.byteLength(script, "utf8")).toBeLessThan(20000);
+    expect(() => new Function(script)).not.toThrow();
+  });
+
+  it("every typed char is preceded by a synthetic keydown on the focused element — a canceled keydown is reported, never obeyed (and per-char typing never dispatches keypress/keyup)", async () => {
+    const scripts: string[] = [];
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload: { script?: string } };
+      scripts.push(String(frame.payload.script ?? ""));
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { typed: 5, fallback: false, wpm: 150, keydownsCanceled: 2 } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "type", selector: "#editor", text: "quill", sessionId: "tab-kd" });
+    expect(result.ok).toBe(true);
+    expect(scripts).toHaveLength(1);
+    // Isolate typeInto's body — the driver's ENTER sequence and the
+    // press_key driver legitimately use keypress/keyup; per-char typing must not.
+    const script = scripts[0];
+    const start = script.indexOf("function typeInto");
+    const end = script.indexOf("function findScroller");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const body = script.slice(start, end);
+    // The keydown fires BEFORE the insert, on the focused element.
+    expect(body).toContain('new KeyboardEvent("keydown"');
+    expect(body.indexOf("KeyboardEvent")).toBeLessThan(body.indexOf("execCommand"));
+    expect(body).toContain("document.activeElement");
+    // A preventDefault on the keydown is counted, never obeyed.
+    expect(body).toContain("keydownsCanceled");
+    expect(body).toContain("keydownsCanceled: keydownsCanceled");
+    // Minimal by design: no keypress, no keyup during typing.
+    expect(body).not.toContain("keypress");
+    expect(body).not.toContain("keyup");
+  });
+});
+
+describe("browser_control — R93-B3 click trust (the full spec-order pointer flow)", () => {
+  it("realClick fires pointerover → pointerenter → mouseover → mouseenter → pointermove → pointerdown → mousedown → focus → pointerup → mouseup → click, hover-first at the element center", async () => {
+    const commands: Array<{ action: string; script: string }> = [];
+    const emit = (event: unknown) => {
+      const frame = event as { type: string; commandId: string; action: string; payload: { script?: string } };
+      commands.push({ action: frame.action, script: String(frame.payload.script ?? "") });
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { clicked: { tag: "button", text: "Images" } } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "click", selector: '[role="tab"]', sessionId: "tab-seq" });
+    expect(result.ok).toBe(true);
+    expect(commands).toHaveLength(1);
+    expect(commands[0].action).toBe("evalJob");
+    const script = commands[0].script;
+    // Isolate realClick's body — the movement TRAIL helper mentions pointer
+    // events earlier in the runtime; the CLICK itself is what must be in order.
+    const start = script.indexOf("function realClick");
+    const end = script.indexOf("function setNativeValue");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const body = script.slice(start, end);
+    // The FULL spec-order sequence, strictly in order (present + ordered).
+    const order = [
+      "pointerover",
+      "pointerenter",
+      "mouseover",
+      "mouseenter",
+      "pointermove",
+      "pointerdown",
+      "mousedown",
+      "pointerup",
+      "mouseup",
+      '"click"',
+    ];
+    let prev = -1;
+    for (const marker of order) {
+      const at = body.indexOf(marker);
+      expect(at).toBeGreaterThan(prev);
+      prev = at;
+    }
+    // Hover-first: the pointermove lands at the TARGET CENTER before the
+    // press, with a hover beat between arrival and the press.
+    expect(body.indexOf("pointermove")).toBeLessThan(body.indexOf("pointerdown"));
+    expect(body).toContain("TARGET CENTER");
+    // Focus sits between the down and the up (spec order).
+    expect(body.indexOf("el.focus")).toBeGreaterThan(body.indexOf('"pointerdown"'));
+    expect(body.indexOf('"pointerup"')).toBeGreaterThan(body.indexOf("el.focus"));
+    // The pointer identity on the PointerEvents.
+    expect(body).toContain('pointerType: "mouse"');
+    expect(body).toContain("pointerId: 1");
+    expect(body).toContain("isPrimary: true");
+    // The light post-action focus hint rides in the job result.
+    expect(body).toContain("focusBefore");
+    expect(body).toContain("activeElement");
+    // The generated script stays within the 20KB Rust eval budget (bytes).
+    expect(Buffer.byteLength(script, "utf8")).toBeLessThan(20000);
+    expect(() => new Function(script)).not.toThrow();
+  });
+
+  it("the click result surfaces the focus hint when the job reports focus moved (and stays silent when it does not)", async () => {
+    let answer: Record<string, unknown> = { clicked: { tag: "input", id: "search" } };
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string };
+      queueMicrotask(() => resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: answer } }));
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    answer = { clicked: { tag: "input", id: "search" }, focus: { tag: "input", name: "q" } };
+    const focused = await bc.execute({ action: "click", selector: "#search", sessionId: "tab-fx" });
+    expect(focused.ok).toBe(true);
+    expect(focused.output).toContain("Focus moved to");
+    expect(focused.output).toContain('"name":"q"');
+
+    answer = { clicked: { tag: "button", text: "Next" } };
+    const plain = await bc.execute({ action: "click", selector: "button", sessionId: "tab-fx" });
+    expect(plain.ok).toBe(true);
+    expect(plain.output).not.toContain("Focus moved to");
+  });
+});
+
+describe("browser_control — R93-B3 read_dom pageState (the SPA section tracker)", () => {
+  it("read_dom compiles the pageState sweep (hash/query + aria-selected/aria-current + lang) and passes it through to the model", async () => {
+    const scripts: string[] = [];
+    const outline = {
+      title: "Gallery",
+      url: "https://example.com/gallery?tab=images#/images",
+      headings: [],
+      interactive: [],
+      forms: [],
+      paragraphs: undefined,
+      pageState: {
+        lang: "en",
+        hash: "#/images",
+        query: { tab: "images" },
+        selected: [{ tag: "button", role: "tab", text: "Images", href: undefined, ariaCurrent: undefined }],
+      },
+    };
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload: { script?: string } };
+      scripts.push(String(frame.payload.script ?? ""));
+      queueMicrotask(() => resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: outline } }));
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "read_dom", sessionId: "tab-ps" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("read_dom ok");
+    expect(result.output).toContain("pageState");
+    expect(result.output).toContain("#/images");
+    expect(result.output).toContain("Images");
+    expect(scripts).toHaveLength(1);
+    // The in-script sweep: the aria signals + the URL signals + <html lang>,
+    // capped at 12 matches, every read individually guarded.
+    expect(scripts[0]).toContain("pageState");
+    expect(scripts[0]).toContain('[aria-selected="true"], [aria-current]');
+    expect(scripts[0]).toContain("location.hash");
+    expect(scripts[0]).toContain("URLSearchParams");
+    expect(scripts[0]).toContain('documentElement.getAttribute("lang")');
+    expect(scripts[0]).toContain("slice(0, 12)");
+    expect(() => new Function(scripts[0])).not.toThrow();
+  });
+
+  it("the read_dom description teaches the check-pageState-after-clicking-a-section workflow", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    const description = String((bc as unknown as { description?: string }).description ?? "");
+    expect(description).toContain("SPA SECTION tracker");
+    expect(description).toContain("CHECK pageState");
+    expect(description).toContain("click the section again");
+    // The click action teaches the focus hint + the hover-first sequence.
+    expect(description).toContain("hovers first (menus arm)");
+    expect(description).toContain("where focus moved");
+  });
+});

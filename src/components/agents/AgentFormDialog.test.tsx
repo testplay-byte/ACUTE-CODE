@@ -9,17 +9,22 @@
  *  2. Registry unreachable → honest fallback to the PROVIDER_IDS defaults
  *     with the dim "provider list unavailable — showing defaults" note (the
  *     dialog must ALWAYS open).
- *  3. The free-text Model / Vision model inputs gain catalog-fed <datalist>
- *     suggestions (free models first, then paid; value = the exact modelId;
- *     the vision list is vision-capable-only).
+ *  3. ROUND-93 (R93-A8): the free-text Model / Vision model inputs' <datalist>
+ *     suggestions come from the user's CONFIGURED rows (GET /models/configured
+ *     — the Models & Providers page), hidden rows excluded, the SELECTED
+ *     provider's rows first and cross-provider rows labeled
+ *     "provider: model-id"; the vision list is vision-capable-only. The static
+ *     catalog (GET /models/catalog) is never consulted (it fed ~47 OpenRouter
+ *     ids the owner never curated — the same noise A9 removed from the
+ *     sub-agent picker).
  *  4. The dead openrouter/ox-alpha placeholder is gone — the model input
- *     advertises the current default model id from the catalog.
+ *     advertises the first configured row's id.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { AgentFormDialog } from "./AgentFormDialog";
 import { resetTestState, renderWithProviders } from "../../test-utils";
-import type { AgentDraft, ProviderView, ModelsCatalog } from "../../lib/api";
+import type { AgentDraft, ProviderModelConfig, ProviderView } from "../../lib/api";
 
 /* ── Stateful fetch mock (the two endpoints the dialog now touches) ───────── */
 
@@ -49,53 +54,87 @@ const PROVIDERS: ProviderView[] = [
   },
 ];
 
-/** Small catalog fixture: free+tools, free NO-tools, paid, recommended. */
-const CATALOG: ModelsCatalog = {
-  models: [
-    {
-      modelId: "z-ai/glm-5.2:free",
-      displayName: "Z.ai: GLM 5.2",
-      contextWindow: 256000,
-      maxOutputTokens: 65536,
-      inputPricePerMtok: 0,
-      inputPriceCachedPerMtok: 0,
-      outputPricePerMtok: 0,
-      free: true,
-      supportsTools: true,
-      supportsStructuredOutputs: true,
-      supportsVision: false,
-    },
-    {
-      modelId: "nvidia/nemotron-3.5-lightning:free",
-      displayName: "NVIDIA: Nemotron 3.5 Lightning",
-      contextWindow: 1000000,
-      maxOutputTokens: 32768,
-      inputPricePerMtok: 0,
-      inputPriceCachedPerMtok: 0,
-      outputPricePerMtok: 0,
-      free: true,
-      supportsTools: true,
-      supportsStructuredOutputs: true,
-      supportsVision: true,
-    },
-    {
-      modelId: "openai/gpt-5.2",
-      displayName: "OpenAI: GPT-5.2",
-      contextWindow: 400000,
-      maxOutputTokens: 128000,
-      inputPricePerMtok: 1.25,
-      inputPriceCachedPerMtok: 0.125,
-      outputPricePerMtok: 10,
-      free: false,
-      supportsTools: true,
-      supportsStructuredOutputs: true,
-      supportsVision: true,
-    },
-  ],
-  defaultModelId: "z-ai/glm-5.2:free",
-  subagentDefaultModelId: "nvidia/nemotron-3.5-lightning:free",
-  recommendedModelIds: ["z-ai/glm-5.2:free", "nvidia/nemotron-3.5-lightning:free"],
-};
+/** R93-A8: configured-rows fixture (GET /models/configured) — the datalist
+ * source. openrouter rows (free, free+vision, paid+vision, a HIDDEN row that
+ * must never be suggested) + two acme rows (one vision-capable). */
+function configuredRow(
+  overrides: Partial<ProviderModelConfig> & Pick<ProviderModelConfig, "id" | "providerId" | "modelId">,
+): ProviderModelConfig {
+  return {
+    displayName: "",
+    contextWindow: null,
+    maxOutputTokens: null,
+    inputPricePerMtok: null,
+    inputPriceCachedPerMtok: null,
+    outputPricePerMtok: null,
+    supportsThinking: false,
+    supportsVision: false,
+    supportsTools: null,
+    supportsAudio: null,
+    supportsVideo: null,
+    supportsPdf: null,
+    supportsTextOutput: null,
+    supportsImageOutput: null,
+    supportsVideoOutput: null,
+    supportsAudioOutput: null,
+    sizeLabel: null,
+    hidden: false,
+    sortOrder: 0,
+    createdAt: "2026-09-11T09:00:00Z",
+    updatedAt: "2026-09-11T09:00:00Z",
+    ...overrides,
+  };
+}
+
+const CONFIGURED_ROWS: ProviderModelConfig[] = [
+  configuredRow({
+    id: "m1",
+    providerId: "openrouter",
+    modelId: "z-ai/glm-5.2:free",
+    displayName: "Z.ai: GLM 5.2",
+    contextWindow: 256000,
+    inputPricePerMtok: 0,
+    supportsVision: false,
+  }),
+  configuredRow({
+    id: "m2",
+    providerId: "openrouter",
+    modelId: "nvidia/nemotron-3.5-lightning:free",
+    displayName: "NVIDIA: Nemotron 3.5 Lightning",
+    contextWindow: 1000000,
+    inputPricePerMtok: 0,
+    supportsVision: true,
+  }),
+  configuredRow({
+    id: "m3",
+    providerId: "openrouter",
+    modelId: "openai/gpt-5.2",
+    displayName: "OpenAI: GPT-5.2",
+    contextWindow: 400000,
+    inputPricePerMtok: 1.25,
+    supportsVision: true,
+  }),
+  configuredRow({
+    id: "m4",
+    providerId: "openrouter",
+    modelId: "hidden/row",
+    displayName: "Hidden Row",
+    hidden: true,
+  }),
+  configuredRow({
+    id: "m5",
+    providerId: "acme",
+    modelId: "acme/rocket-1",
+    displayName: "Acme Rocket 1",
+  }),
+  configuredRow({
+    id: "m6",
+    providerId: "acme",
+    modelId: "acme/vision-1",
+    displayName: "Acme Vision 1",
+    supportsVision: true,
+  }),
+];
 
 /** What GET /providers answers this test (null = 503 failure). */
 let providersResponse: ProviderView[] | null = PROVIDERS;
@@ -122,8 +161,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
       ? errorResponse("registry down (fixture)")
       : jsonResponse({ providers: providersResponse });
   }
-  if (url === `${BASE}/api/v1/models/catalog` && method === "GET") {
-    return jsonResponse(CATALOG);
+  // R93-A8: the datalist source — the user's configured rows.
+  if (url === `${BASE}/api/v1/models/configured` && method === "GET") {
+    return jsonResponse({ models: CONFIGURED_ROWS });
   }
   return {
     status: 404,
@@ -224,8 +264,13 @@ describe("AgentFormDialog — live provider options (ROUND-47 R47-c2)", () => {
   });
 });
 
-describe("AgentFormDialog — catalog-fed model suggestions (ROUND-47 R47-c2)", () => {
-  it("feeds both free-text inputs from GET /models/catalog: free first, then paid; exact ids as values", async () => {
+// ── ROUND-93 (R93-A8): the datalists are CONFIG-fed — exactly the rows the
+// user curated in Models & Providers (hidden excluded), the selected
+// provider's rows first, cross-provider rows labeled "provider: model-id".
+// The catalog-fed suggestions (free-first over the served OpenRouter list)
+// are retired with the fetchModelsCatalog query.
+describe("AgentFormDialog — config-fed model suggestions (ROUND-93 R93-A8)", () => {
+  it("feeds both free-text inputs from GET /models/configured: selected provider first, others labeled; exact ids as values", async () => {
     renderDialog();
 
     // Both inputs stay free-text but reference their datalists.
@@ -234,31 +279,42 @@ describe("AgentFormDialog — catalog-fed model suggestions (ROUND-47 R47-c2)", 
     expect(modelInput.getAttribute("list")).toBe("agent-model-options");
     expect(visionInput.getAttribute("list")).toBe("agent-vision-model-options");
 
-    // The model datalist lands from the served catalog…
+    // The model datalist lands from the served configured rows — hidden
+    // rows excluded…
     await waitFor(() => {
       const options = Array.from(
         document.querySelectorAll("#agent-model-options option"),
       ) as HTMLOptionElement[];
-      expect(options.length).toBe(3);
+      expect(options.length).toBe(5);
     });
-    const values = Array.from(
-      document.querySelectorAll("#agent-model-options option"),
-    ).map((o) => (o as HTMLOptionElement).value);
-    // …FREE models first, paid last — and the VALUE is the exact modelId, so
-    // picking a suggestion pastes the unambiguous id.
+    const values = Array.from(document.querySelectorAll("#agent-model-options option")).map(
+      (o) => (o as HTMLOptionElement).value,
+    );
+    // …the SELECTED provider's (openrouter, the default) rows FIRST, then
+    // the other provider's — and the VALUE is the exact modelId, so picking
+    // a suggestion pastes the unambiguous id.
     expect(values).toEqual([
       "z-ai/glm-5.2:free",
       "nvidia/nemotron-3.5-lightning:free",
       "openai/gpt-5.2",
+      "acme/rocket-1",
+      "acme/vision-1",
     ]);
-    // The labels carry the human name + tier.
+    // Own-provider labels carry the human name…
     expect(
       Array.from(document.querySelectorAll("#agent-model-options option")).map(
         (o) => o.textContent,
       ),
-    ).toContain("Z.ai: GLM 5.2 (free)");
+    ).toContain("Z.ai: GLM 5.2");
+    // …cross-provider rows are clearly labeled "provider: model-id".
+    expect(
+      Array.from(document.querySelectorAll("#agent-model-options option")).map(
+        (o) => o.textContent,
+      ),
+    ).toContain("acme: acme/rocket-1");
 
-    // The vision datalist offers ONLY vision-capable models (glm is not).
+    // The vision datalist offers ONLY vision-capable configured rows (glm
+    // and rocket-1 are not), same provider-first order.
     await waitFor(() => {
       const visionValues = Array.from(
         document.querySelectorAll("#agent-vision-model-options option"),
@@ -266,24 +322,60 @@ describe("AgentFormDialog — catalog-fed model suggestions (ROUND-47 R47-c2)", 
       expect(visionValues).toEqual([
         "nvidia/nemotron-3.5-lightning:free",
         "openai/gpt-5.2",
+        "acme/vision-1",
       ]);
     });
+    // R93-A8: the configured-rows endpoint is the source; the static catalog
+    // is never consulted.
     expect(
-      calls.some((c) => c.method === "GET" && c.url.endsWith("/api/v1/models/catalog")),
+      calls.some((c) => c.method === "GET" && c.url.endsWith("/api/v1/models/configured")),
     ).toBe(true);
+    expect(calls.every((c) => !c.url.endsWith("/api/v1/models/catalog"))).toBe(true);
   });
 
-  it("model placeholder is the CURRENT default model id — the dead ox-alpha is gone", async () => {
+  it("switching the provider re-scopes the suggestion order (the new provider's rows come first)", async () => {
+    renderDialog();
+
+    await waitFor(() => {
+      expect(
+        (Array.from(document.querySelectorAll("#agent-model-options option")) as HTMLOptionElement[]).length,
+      ).toBe(5);
+    });
+
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "acme" } });
+
+    await waitFor(() => {
+      const values = Array.from(document.querySelectorAll("#agent-model-options option")).map(
+        (o) => (o as HTMLOptionElement).value,
+      );
+      // acme's rows lead now; the openrouter rows follow, clearly labeled.
+      expect(values).toEqual([
+        "acme/rocket-1",
+        "acme/vision-1",
+        "z-ai/glm-5.2:free",
+        "nvidia/nemotron-3.5-lightning:free",
+        "openai/gpt-5.2",
+      ]);
+    });
+    const labels = Array.from(document.querySelectorAll("#agent-model-options option")).map(
+      (o) => o.textContent,
+    );
+    expect(labels).toContain("Acme Rocket 1");
+    expect(labels).toContain("openrouter: z-ai/glm-5.2:free");
+  });
+
+  it("model placeholder is the first configured row's id — the dead ox-alpha is gone", async () => {
     renderDialog();
 
     const modelInput = screen.getByLabelText("Model") as HTMLInputElement;
-    // The live default from the catalog (z-ai/glm-5.2:free), never the
-    // deleted-upstream openrouter/ox-alpha the placeholder used to advertise.
+    // The first configured row for the default provider (z-ai/glm-5.2:free),
+    // never the deleted-upstream openrouter/ox-alpha the placeholder used to
+    // advertise.
     await waitFor(() => expect(modelInput.placeholder).toBe("z-ai/glm-5.2:free"));
     expect(modelInput.placeholder).not.toBe("openrouter/ox-alpha");
     // Custom models remain enterable — plain free-text, nothing coerced.
-    fireEvent.change(modelInput, { target: { value: "acme/rocket-1" } });
-    expect(modelInput.value).toBe("acme/rocket-1");
+    fireEvent.change(modelInput, { target: { value: "custom/anything-1" } });
+    expect(modelInput.value).toBe("custom/anything-1");
   });
 });
 

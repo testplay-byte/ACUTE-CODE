@@ -158,13 +158,18 @@ export function invalidateProvidersEverywhere(queryClient: QueryClient): void {
 
 /** Model-config mutations (add/configure/delete): fan the invalidation out
  * to the session picker's models-config family (display names, hidden
- * flags, per-1M-token pricing all live there). */
+ * flags, per-1M-token pricing all live there). ROUND-93 (R93-A9): the
+ * ["models-configured"] family (GET /models/configured) joins the fan-out —
+ * it is now the PRIMARY source of the Sub-agents picker AND the agent
+ * dialog's model datalists, so an add/hide/delete here must reflect there
+ * on the next open (not after the 60s staleTime). */
 export function invalidateModelConfigEverywhere(
   queryClient: QueryClient,
   providerId: string,
 ): void {
   void queryClient.invalidateQueries({ queryKey: ["settings-provider-models", providerId] });
   void queryClient.invalidateQueries({ queryKey: ["provider-models-config"] });
+  void queryClient.invalidateQueries({ queryKey: ["models-configured"] });
 }
 
 /** The three wire formats the runtime speaks (ROUND-37). */
@@ -851,6 +856,10 @@ function ProviderDetailPane({
       }
       void queryClient.invalidateQueries({ queryKey: ["settings-provider-models"] });
       void queryClient.invalidateQueries({ queryKey: ["provider-models-config"] });
+      // R93-A9: the provider's configured rows went with it (the CASCADE
+      // above) — the configured-models family (the Sub-agents picker's +
+      // agent dialog's PRIMARY source) must not keep serving them.
+      void queryClient.invalidateQueries({ queryKey: ["models-configured"] });
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
       void queryClient.invalidateQueries({ queryKey: ["session"] });
       onDeleted();

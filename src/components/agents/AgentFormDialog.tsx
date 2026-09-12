@@ -1,11 +1,11 @@
 import { useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import type { Agent, AgentDraft } from "../../lib/api";
+import type { Agent, AgentDraft, ProviderModelConfig } from "../../lib/api";
 import {
   PROVIDER_IDS,
   TOOL_CATALOG,
-  fetchModelsCatalog,
+  fetchConfiguredModels,
   fetchProviders,
 } from "../../lib/api";
 import type { MemoryPolicy } from "shared";
@@ -13,6 +13,22 @@ import { Dialog, DialogContent, DialogHeader } from "../ui/dialog";
 import { Badge, Button, Field, inputClass } from "../ui/controls";
 
 const MEMORY_POLICIES: MemoryPolicy[] = ["none", "on-start", "every-turn"];
+
+/**
+ * ROUND-93 (R93-A8): the small uppercase section label that groups the form
+ * into scannable blocks (Identity / Model / Behavior / Capabilities /
+ * Advanced) — the app's existing section visual language (see
+ * ModelsProvidersTab's SectionLabel), with a hairline rule running to the
+ * right so sections read as dividers, not floating captions.
+ */
+function SectionLabel({ children }: { children: string }) {
+  return (
+    <div className="col-span-2 flex items-center gap-2.5" aria-hidden>
+      <span className="text-[10px] font-bold uppercase tracking-widest text-muted">{children}</span>
+      <span className="h-px flex-1 bg-line" />
+    </div>
+  );
+}
 
 type FormState = {
   name: string;
@@ -129,27 +145,47 @@ export function AgentFormDialog({
   const selectionVisible =
     form.providerId === "" || providerOptions.some((o) => o.id === form.providerId);
 
-  // ROUND-47 (R47-c2): the model inputs stay FREE-TEXT (custom models must
-  // remain enterable) but gain <datalist> suggestions fed by the served
-  // catalog (GET /models/catalog) — free models first, then paid. The
-  // suggestion VALUE is the exact modelId, so picking one pastes the
-  // unambiguous id; the label shows the human name + tier. Fails soft:
-  // unreachable catalog ⇒ no suggestions, inputs keep working.
-  const catalogQuery = useQuery({
-    queryKey: ["models-catalog"],
-    queryFn: fetchModelsCatalog,
+  // ROUND-93 (R93-A8, owner directive — the edit dialog's UX pass): the model
+  // inputs stay FREE-TEXT (custom models must remain enterable) but their
+  // <datalist> suggestions now come from the user's CONFIGURED rows (GET
+  // /models/configured — the Models & Providers page), hidden rows excluded —
+  // NOT the static OpenRouter catalog (the fetchModelsCatalog query is gone:
+  // it fed ~47 ids the owner never curated, the same class of noise A9 removed
+  // from the sub-agent picker). Fails soft: unreachable config ⇒ no
+  // suggestions, inputs keep working.
+  const configuredQuery = useQuery({
+    queryKey: ["models-configured"],
+    queryFn: fetchConfiguredModels,
     enabled: open,
-    staleTime: 10 * 60 * 1000, // constants on the wire — generous
+    staleTime: 60 * 1000, // rows change only via Models & Providers (invalidates)
     retry: false,
   });
+  const configuredRows = useMemo(
+    () => (configuredQuery.data ?? []).filter((m) => m.hidden !== true),
+    [configuredQuery.data],
+  );
+  // The Model field's suggestion order: the SELECTED provider's rows first
+  // (what the agent will actually call), then every other provider's rows —
+  // clearly labeled "provider: model-id" so a cross-provider id is never
+  // mistaken for a local one. Deduped by value (datalist collapses dupes
+  // anyway; first occurrence wins, i.e. the selected provider's row).
   const modelSuggestions = useMemo(() => {
-    const models = catalogQuery.data?.models ?? [];
-    return [...models.filter((m) => m.free), ...models.filter((m) => !m.free)];
-  }, [catalogQuery.data]);
+    const current = form.providerId.trim();
+    const mine: ProviderModelConfig[] = [];
+    const others: ProviderModelConfig[] = [];
+    for (const m of configuredRows) {
+      if (current !== "" && m.providerId === current) mine.push(m);
+      else others.push(m);
+    }
+    return [...mine, ...others];
+  }, [configuredRows, form.providerId]);
   const visionSuggestions = useMemo(
     () => modelSuggestions.filter((m) => m.supportsVision),
     [modelSuggestions],
   );
+  // The LIVE first suggestion (the selected provider's first row once the
+  // config lands) rides the placeholder; the known default id before that.
+  const modelPlaceholder = modelSuggestions[0]?.modelId ?? "z-ai/glm-5.2:free";
 
   // Reset whenever a different agent (or create-mode) opens the dialog, and
   // again on close so a cancelled draft never leaks into the next open.
@@ -232,7 +268,15 @@ export function AgentFormDialog({
           description="Saved to the agent registry (SPEC F2) and reusable across sessions."
         />
         <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
-          <div className="grid min-h-0 flex-1 grid-cols-2 gap-3.5 overflow-y-auto px-5 py-4">
+          {/* ROUND-93 (R93-A8): the body is SECTIONED (Identity / Model /
+              Behavior / Capabilities / Advanced) instead of one long
+              undifferentiated grid — the same scannable block language the
+              settings tabs use. The scroll container is unchanged: the
+              DialogContent caps the height (max-h-[86vh]) and this div
+              scrolls internally, so long prompts/tool grids never push the
+              footer off-screen. */}
+          <div className="grid min-h-0 flex-1 grid-cols-2 gap-x-3.5 gap-y-3 overflow-y-auto px-5 py-4">
+            <SectionLabel>Identity</SectionLabel>
             <Field label="Name" hint={fieldErrors.name}>
               <input
                 className={inputClass}
@@ -251,15 +295,7 @@ export function AgentFormDialog({
               />
             </Field>
 
-            <Field label="System prompt" className="col-span-2">
-              <textarea
-                className={`${inputClass} min-h-[72px] resize-y`}
-                value={form.systemPrompt}
-                onChange={(e) => set("systemPrompt", e.target.value)}
-                placeholder="You write precise, minimal diffs…"
-              />
-            </Field>
-
+            <SectionLabel>Model</SectionLabel>
             <Field
               label="Provider"
               hint={
@@ -292,40 +328,64 @@ export function AgentFormDialog({
                 value={form.model}
                 onChange={(e) => set("model", e.target.value)}
                 list="agent-model-options"
-                // The LIVE default model id once the catalog lands; the known
-                // current id before that. The old placeholder advertised the
-                // dead openrouter/ox-alpha (deleted upstream) — never again.
-                placeholder={catalogQuery.data?.defaultModelId ?? "z-ai/glm-5.2:free"}
+                // The LIVE first configured row's id once the config lands;
+                // the known current default before that. The old placeholder
+                // advertised the dead openrouter/ox-alpha (deleted upstream)
+                // — never again.
+                placeholder={modelPlaceholder}
               />
             </Field>
-
-            <Field label="Vision model (optional)" hint="Secondary vision-capable model; empty = none">
+            <Field
+              label="Vision model (optional)"
+              hint="Secondary vision-capable model; empty = none"
+              className="col-span-2"
+            >
               <input
                 className={`${inputClass} font-mono text-xs`}
                 value={form.visionModel}
                 onChange={(e) => set("visionModel", e.target.value)}
                 list="agent-vision-model-options"
-                placeholder="e.g. google/gemma-4-31b-it:free — empty = none"
+                placeholder="e.g. a vision-capable model id — empty = none"
               />
             </Field>
-
-            {/* ROUND-47 (R47-c2): catalog-fed datalists for the free-text model
-                inputs above. value = the exact modelId (what gets pasted);
-                label = displayName + tier so suggestions read at a glance. */}
+            {/* ROUND-93 (R93-A8): config-fed datalists for the free-text
+                model inputs above (the catalog-fed ones are retired — the
+                suggestions are exactly the user's configured rows now).
+                value = the exact modelId (what gets pasted); the selected
+                provider's rows come first, other providers' rows are
+                labeled "provider: model-id" so a cross-provider pick is
+                never mistaken for a local one. */}
             <datalist id="agent-model-options">
               {modelSuggestions.map((m) => (
-                <option key={m.modelId} value={m.modelId}>
-                  {`${m.displayName} (${m.free ? "free" : "paid"})`}
+                <option key={`${m.providerId}:${m.modelId}`} value={m.modelId}>
+                  {form.providerId.trim() !== "" && m.providerId === form.providerId.trim()
+                    ? m.displayName || m.modelId
+                    : `${m.providerId}: ${m.modelId}`}
                 </option>
               ))}
             </datalist>
             <datalist id="agent-vision-model-options">
               {visionSuggestions.map((m) => (
-                <option key={m.modelId} value={m.modelId}>
-                  {`${m.displayName} (${m.free ? "free" : "paid"}, vision)`}
+                <option key={`${m.providerId}:${m.modelId}`} value={m.modelId}>
+                  {form.providerId.trim() !== "" && m.providerId === form.providerId.trim()
+                    ? m.displayName || m.modelId
+                    : `${m.providerId}: ${m.modelId}`}
                 </option>
               ))}
             </datalist>
+
+            <SectionLabel>Behavior</SectionLabel>
+            {/* R93-A8: the system prompt gets REAL room to breathe — a
+                min-h-[160px] mono textarea (was a 72px sliver) with the
+                app's input chrome; it is the main thing an agent IS. */}
+            <Field label="System prompt" className="col-span-2">
+              <textarea
+                className={`${inputClass} min-h-[160px] resize-y rounded-[14px] font-mono text-xs leading-relaxed`}
+                value={form.systemPrompt}
+                onChange={(e) => set("systemPrompt", e.target.value)}
+                placeholder="You write precise, minimal diffs…"
+              />
+            </Field>
             <Field label="Memory policy">
               <select
                 className={inputClass}
@@ -340,7 +400,8 @@ export function AgentFormDialog({
               </select>
             </Field>
 
-            <Field label="Allowed tools" className="col-span-2">
+            <SectionLabel>Capabilities</SectionLabel>
+            <Field label="Allowed tools" hint="Empty = all tools (ADR-0019)" className="col-span-2">
               <div className="grid grid-cols-3 gap-1.5">
                 {TOOL_CATALOG.map((tool) => (
                   <label
@@ -385,6 +446,7 @@ export function AgentFormDialog({
               </div>
             </Field>
 
+            <SectionLabel>Advanced</SectionLabel>
             <Field label="Max turns" hint={fieldErrors.maxTurns}>
               <input
                 type="number"

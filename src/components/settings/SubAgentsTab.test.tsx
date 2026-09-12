@@ -4,30 +4,39 @@
  *
  *  1. The section renders (keys card, model card, parallelism card,
  *     supervision card — R58-d order).
- *  2. Key paste slots write the EXISTING pool routes at slots 2/3/4 — never
- *     slot 0 — and removal DELETEs the same slot.
- *  3. The model picker is free-only by default (shared pref), "All models"
- *     escapes it, tool-less entries are disabled with a hint, and picking a
- *     model persists orchestration.subagentModel (null clears it).
+ *  2. The keys NOTE points at Models & Providers (R92-D3: sub-agents ride the
+ *     provider key pools; nothing on this page writes a key).
+ *  3. The model picker's PRIMARY list is the user's CONFIGURED models
+ *     (GET /models/configured) — see the R93-A9 block below.
  *  4. The dedicated ?tab=subagents page renders the same section; since
- *     ROUND-58 (R58-d) Advanced NO LONGER duplicates it (the owner: "the
- *     subagent and advanced options are apparently mixed up") — Advanced
- *     keeps only the connection + memory cards.
+ *     ROUND-58 (R58-d) Advanced NO LONGER duplicates it.
  *  5. ROUND-58 (R58-d): the parallelism card (maxParallel + perKeyLimit
  *     steppers) MOVED here from the old Advanced tab's OrchestrationCard.
  *
- * ROUND-47 (R47-c2) — the picker rows come from GET /models/catalog (the
- * backend's MODEL_CATALOG) instead of a hand-copied local duplicate: rows
- * render from the fixture, the recommended badge is data-driven, and a
- * catalog failure renders an HONEST error + retry (never a hidden fallback).
+ * ROUND-93 (R93-A9, owner directive: "in the sub-agent models only those
+ * models should be shown which are available, not the other ones. Currently
+ * it is utilizing OpenRouter and showing me all the available OpenRouter
+ * models") — the picker is CONFIG-ONLY, re-pinned:
+ *   - the primary (and only) row list comes from GET /models/configured,
+ *     hidden rows excluded, provider chips resolved from GET /providers;
+ *   - the static catalog (GET /models/catalog) is NEVER consulted;
+ *   - picking a configured row writes the provider-scoped
+ *     {providerId, modelId} pair (the R82 wire, unchanged);
+ *   - zero configured rows render the honest hint + the Models & Providers
+ *     link (never a fallback catalog);
+ *   - the inherit row keeps its exact old behavior (null clears).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import SubAgentsTab, { SubAgentsSection } from "./SubAgentsTab";
 import { SettingsPage } from "../../pages/SettingsPage";
 import { resetTestState, renderWithProviders } from "../../test-utils";
-import { useSettingsStore } from "../../lib/settings-store";
-import type { KeyPoolSlot, ModelsCatalog, SubagentModelRef } from "../../lib/api";
+import type {
+  KeyPoolSlot,
+  ProviderModelConfig,
+  ProviderView,
+  SubagentModelRef,
+} from "../../lib/api";
 
 /* ── Stateful fetch mock (the sidecar API surface this tab touches) ───────── */
 
@@ -60,71 +69,112 @@ function normalizeSubagentModel(value: unknown): SubagentModelRef | null {
   return null;
 }
 
-/** Small realistic GET /models/catalog fixture (R47-b contract shape):
- * free+tools, free+tool-less (must render disabled), paid, and the
- * recommended sub-agent default. */
-const CATALOG: ModelsCatalog = {
-  models: [
-    {
-      modelId: "z-ai/glm-5.2:free",
-      displayName: "Z.ai: GLM 5.2",
-      contextWindow: 256000,
-      maxOutputTokens: 65536,
-      inputPricePerMtok: 0,
-      inputPriceCachedPerMtok: 0,
-      outputPricePerMtok: 0,
-      free: true,
-      supportsTools: true,
-      supportsStructuredOutputs: true,
-      supportsVision: false,
-    },
-    {
-      modelId: "nvidia/nemotron-3.5-lightning:free",
-      displayName: "NVIDIA: Nemotron 3.5 Lightning",
-      contextWindow: 1000000,
-      maxOutputTokens: 32768,
-      inputPricePerMtok: 0,
-      inputPriceCachedPerMtok: 0,
-      outputPricePerMtok: 0,
-      free: true,
-      supportsTools: true,
-      supportsStructuredOutputs: true,
-      supportsVision: true,
-    },
-    {
-      modelId: "nvidia/nemotron-3.5-content-safety:free",
-      displayName: "NVIDIA: Nemotron 3.5 Content Safety",
-      contextWindow: 128000,
-      maxOutputTokens: 16384,
-      inputPricePerMtok: 0,
-      inputPriceCachedPerMtok: 0,
-      outputPricePerMtok: 0,
-      free: true,
-      supportsTools: false,
-      supportsStructuredOutputs: false,
-      supportsVision: false,
-    },
-    {
-      modelId: "openai/gpt-5.2",
-      displayName: "OpenAI: GPT-5.2",
-      contextWindow: 400000,
-      maxOutputTokens: 128000,
-      inputPricePerMtok: 1.25,
-      inputPriceCachedPerMtok: 0.125,
-      outputPricePerMtok: 10,
-      free: false,
-      supportsTools: true,
-      supportsStructuredOutputs: true,
-      supportsVision: true,
-    },
-  ],
-  defaultModelId: "z-ai/glm-5.2:free",
-  subagentDefaultModelId: "nvidia/nemotron-3.5-lightning:free",
-  recommendedModelIds: ["z-ai/glm-5.2:free", "nvidia/nemotron-3.5-lightning:free"],
-};
+/** The live provider registry fixture (GET /providers) — feeds the picker's
+ * provider chips (R93-A9: the display name, falling back to the raw id). */
+const PROVIDERS: ProviderView[] = [
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    kind: "openai-compatible",
+    baseUrl: "https://openrouter.ai/api/v1",
+    apiFormat: "chat-completions",
+    enabled: true,
+    createdAt: "2026-08-21T09:00:00Z",
+    hasKey: true,
+  },
+  {
+    id: "nvidia",
+    name: "NVIDIA NIM",
+    kind: "openai-compatible",
+    baseUrl: "https://integrate.api.nvidia.com/v1",
+    apiFormat: "chat-completions",
+    enabled: true,
+    createdAt: "2026-08-22T09:00:00Z",
+    hasKey: true,
+  },
+];
 
-/** What GET /models/catalog answers this test (true = fixture, false = 503). */
-let catalogOk = true;
+/** R93-A9: configured-rows fixture (GET /models/configured) — the picker's
+ * PRIMARY list. Covers: a free tool-capable openrouter row, a PAID openrouter
+ * row (both must show — the user curated them), a nvidia NIM row (the R82
+ * provider-scoped pick), a HIDDEN row (must never render), and a tool-less
+ * row (renders disabled with the honest gate). */
+function configuredRow(
+  overrides: Partial<ProviderModelConfig> & Pick<ProviderModelConfig, "id" | "providerId" | "modelId">,
+): ProviderModelConfig {
+  return {
+    displayName: "",
+    contextWindow: null,
+    maxOutputTokens: null,
+    inputPricePerMtok: null,
+    inputPriceCachedPerMtok: null,
+    outputPricePerMtok: null,
+    supportsThinking: false,
+    supportsVision: false,
+    supportsTools: null,
+    supportsAudio: null,
+    supportsVideo: null,
+    supportsPdf: null,
+    supportsTextOutput: null,
+    supportsImageOutput: null,
+    supportsVideoOutput: null,
+    supportsAudioOutput: null,
+    sizeLabel: null,
+    hidden: false,
+    sortOrder: 0,
+    createdAt: "2026-09-11T09:00:00Z",
+    updatedAt: "2026-09-11T09:00:00Z",
+    ...overrides,
+  };
+}
+
+const CONFIGURED_ROWS: ProviderModelConfig[] = [
+  configuredRow({
+    id: "m1",
+    providerId: "openrouter",
+    modelId: "z-ai/glm-5.2:free",
+    displayName: "Z.ai: GLM 5.2",
+    contextWindow: 256000,
+    inputPricePerMtok: 0,
+    supportsTools: true,
+  }),
+  configuredRow({
+    id: "m2",
+    providerId: "openrouter",
+    modelId: "openai/gpt-5.2",
+    displayName: "OpenAI: GPT-5.2",
+    contextWindow: 400000,
+    inputPricePerMtok: 1.25,
+    supportsTools: true,
+  }),
+  configuredRow({
+    id: "m3",
+    providerId: "nvidia",
+    modelId: "nim/llama-4-70b",
+    displayName: "NIM: Llama 4 70B",
+    contextWindow: 131072,
+    supportsTools: true,
+  }),
+  configuredRow({
+    id: "m4",
+    providerId: "openrouter",
+    modelId: "hidden/row",
+    displayName: "Hidden Row",
+    supportsTools: true,
+    hidden: true,
+  }),
+  configuredRow({
+    id: "m5",
+    providerId: "openrouter",
+    modelId: "toolless/row",
+    displayName: "Toolless Row",
+    supportsTools: false,
+  }),
+];
+
+/** What GET /models/configured answers this test (rows list + ok flag). */
+let configuredRows: ProviderModelConfig[] = CONFIGURED_ROWS;
+let configuredOk = true;
 
 function jsonResponse(body: unknown): Response {
   return { status: 200, ok: true, text: async () => JSON.stringify(body) } as unknown as Response;
@@ -154,16 +204,21 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
       return jsonResponse({ keys: pool });
     }
   }
-  if (url.endsWith("/api/v1/models/catalog") && method === "GET") {
-    if (!catalogOk) {
+  // R93-A9: the provider registry — feeds the row chips' display names.
+  if (url.endsWith("/api/v1/providers") && method === "GET") {
+    return jsonResponse({ providers: PROVIDERS });
+  }
+  // R93-A9: the picker's PRIMARY source — the user's configured rows.
+  if (url.endsWith("/api/v1/models/configured") && method === "GET") {
+    if (!configuredOk) {
       return {
         status: 503,
         ok: false,
         text: async () =>
-          JSON.stringify({ error: { code: "UNAVAILABLE", message: "catalog down (fixture)" } }),
+          JSON.stringify({ error: { code: "UNAVAILABLE", message: "configured rows down (fixture)" } }),
       } as unknown as Response;
     }
-    return jsonResponse(CATALOG);
+    return jsonResponse({ models: configuredRows });
   }
   if (url.endsWith("/api/v1/settings/orchestration")) {
     if (method === "GET") {
@@ -225,8 +280,8 @@ beforeEach(() => {
     childWatchdogMs: 15_000,
     childStallTimeoutMs: 300_000,
   };
-  catalogOk = true;
-  useSettingsStore.setState({ modelsFreeOnly: true });
+  configuredRows = CONFIGURED_ROWS;
+  configuredOk = true;
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockClear();
   vi.stubGlobal("confirm", vi.fn(() => true));
@@ -237,7 +292,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d, re-pinned ROUND-92 R92-D3)", () => {
+describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d, re-pinned ROUND-93 R93-A9)", () => {
   it("renders the page header + the keys note, model, parallelism, and supervision cards", async () => {
     renderWithProviders(<SubAgentsTab />);
 
@@ -269,16 +324,24 @@ describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d, re-pinned
     expect(screen.getByText("Max parallel sub-agents")).toBeTruthy();
     expect(screen.getByText("Per API-key limit")).toBeTruthy();
     expect(screen.getByText("Sub-agent supervision")).toBeTruthy();
-    // ROUND-47 (R47-c2): the rows are FETCHED from GET /models/catalog —
-    // the de-drifted single source of truth, not a local copy.
+    // R93-A9: the picker rows are FETCHED from GET /models/configured — the
+    // user's curated rows, not a served catalog.
     await waitFor(() =>
       expect(
-        calls.some((c) => c.method === "GET" && c.url.endsWith("/api/v1/models/catalog")),
+        calls.some((c) => c.method === "GET" && c.url.endsWith("/api/v1/models/configured")),
       ).toBe(true),
     );
-    // Catalog rows render from the served fixture (display name + id + ctx).
+    // Configured rows render from the served fixture (display name + ctx).
     await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
     expect(screen.getByText("256K")).toBeTruthy();
+    // R93-A9: the static OpenRouter catalog is NEVER consulted anymore —
+    // the owner's "only the models which are available" directive.
+    await waitFor(() =>
+      expect(screen.getAllByRole("button", { name: /Use .* for sub-agents/ }).length).toBeGreaterThanOrEqual(1),
+    );
+    expect(
+      calls.every((c) => !c.url.endsWith("/api/v1/models/catalog")),
+    ).toBe(true);
     // Default override state + the inherit picker row (both once the
     // orchestration query lands).
     await waitFor(() =>
@@ -342,63 +405,106 @@ describe("SubAgentsTab — the keys note (ROUND-92 R92-D3)", () => {
   });
 });
 
-describe("SubAgentsTab — model picker", () => {
-  it("is free-only by default; All models escapes the filter", async () => {
+// ── ROUND-93 (R93-A9): the CONFIG-ONLY picker. The owner: "in the sub-agent
+// models only those models should be shown which are available, not the other
+// ones. Currently it is utilizing OpenRouter and showing me all the available
+// OpenRouter models." The primary list is the user's CONFIGURED rows (hidden
+// excluded); picking writes the provider-scoped pair (R82 wire, unchanged).
+describe("SubAgentsTab — model picker (ROUND-93 R93-A9: the configured models are the list)", () => {
+  it("shows every configured row — free and paid alike — and never consults the OpenRouter catalog", async () => {
     renderWithProviders(<SubAgentsSection />);
 
     await waitFor(() => expect(screen.getByText("Sub-agent model")).toBeTruthy());
-    // Free default: a paid catalog model is hidden…
-    expect(screen.queryByText("openai/gpt-5.2")).toBeNull();
-    // …while free entries (incl. the recommended sub-agent default) show.
-    expect(screen.getByText("NVIDIA: Nemotron 3.5 Lightning")).toBeTruthy();
-    // The recommended badge is data-driven (catalog.subagentDefaultModelId).
-    expect(screen.getAllByText("recommended").length).toBe(1);
-
-    fireEvent.click(screen.getByRole("button", { name: /all models/i }));
-    await waitFor(() => expect(screen.getByText("openai/gpt-5.2")).toBeTruthy());
+    // The FREE configured row shows…
+    await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
+    // …and so does the PAID one (the user curated it — no free-only
+    // segmentation hides a configured row anymore)…
+    expect(screen.getByText("OpenAI: GPT-5.2")).toBeTruthy();
+    // …and the non-openrouter (nvidia NIM) row too — the R82 gap closed.
+    expect(screen.getByText("NIM: Llama 4 70B")).toBeTruthy();
+    // The provider chips resolve display names from the registry.
+    expect(screen.getByText("NVIDIA NIM")).toBeTruthy();
+    // The retired catalog-era segment control is GONE.
+    expect(screen.queryByRole("button", { name: /all models/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /free only/i })).toBeNull();
+    // The static catalog endpoint is never fetched.
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.method === "GET" && c.url.endsWith("/api/v1/models/configured")),
+      ).toBe(true),
+    );
+    expect(calls.every((c) => !c.url.endsWith("/api/v1/models/catalog"))).toBe(true);
   });
 
-  it("disables tool-less models with the required hint", async () => {
-    renderWithProviders(<SubAgentsSection />);
-
-    const toolless = await screen.findByRole("button", {
-      name: "nvidia/nemotron-3.5-content-safety:free (unavailable)",
-    });
-    expect((toolless as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("tool calling required")).toBeTruthy();
-  });
-
-  it("picking a model persists orchestration.subagentModel and reloads the selection", async () => {
+  it("picking a configured model persists the provider-scoped {providerId, modelId} pair", async () => {
     renderWithProviders(<SubAgentsSection />);
 
     await waitFor(() => expect(screen.getByText("Sub-agent model")).toBeTruthy());
+    // The nvidia NIM row — the R82 §2.4.5 case a catalog-only picker could
+    // never serve.
     fireEvent.click(
-      screen.getByRole("button", { name: "Use nvidia/nemotron-3.5-lightning:free for sub-agents" }),
+      screen.getByRole("button", { name: "Use nim/llama-4-70b on nvidia for sub-agents" }),
     );
 
     await waitFor(() => {
       const put = calls.find(
         (c) => c.method === "PUT" && c.url.endsWith("/settings/orchestration"),
       );
-      // ROUND-82: catalog picks write the explicit provider-scoped pair —
-      // the orchestrator override routes the child turns to THIS provider
-      // (the pre-R82 bare string was openrouter-implied only).
+      // ROUND-82 wire, unchanged by A9: the explicit provider-scoped pair —
+      // the orchestrator override routes the child turns to THAT provider.
       expect(put?.body).toEqual({
-        subagentModel: { providerId: "openrouter", modelId: "nvidia/nemotron-3.5-lightning:free" },
+        subagentModel: { providerId: "nvidia", modelId: "nim/llama-4-70b" },
       });
     });
     // The refreshed state shows the override as the running model.
     await waitFor(() =>
-      expect(screen.getAllByText(/nvidia\/nemotron-3\.5-lightning:free/).length).toBeGreaterThanOrEqual(2),
+      expect(screen.getAllByText(/nim\/llama-4-70b/).length).toBeGreaterThanOrEqual(2),
     );
   });
 
+  it("a HIDDEN configured row never renders (the hide toggle keeps it out of pickers)", async () => {
+    renderWithProviders(<SubAgentsSection />);
+
+    await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
+    // The hidden fixture row is nowhere on the page — not by name…
+    expect(screen.queryByText("Hidden Row")).toBeNull();
+    // …not by its pick affordance.
+    expect(
+      screen.queryByRole("button", { name: "Use hidden/row on openrouter for sub-agents" }),
+    ).toBeNull();
+  });
+
+  it("zero configured models — the honest hint renders and links to the Models & Providers page", async () => {
+    configuredRows = [];
+    renderWithProviders(<SubAgentsSection />);
+
+    await waitFor(() => expect(screen.getByTestId("subagent-no-models-hint")).toBeTruthy());
+    expect(
+      screen.getByText("No models configured — add them in Settings → Models & Providers."),
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Open Models and Providers to add models" });
+    expect(link.getAttribute("href")).toBe("/settings?tab=api");
+    // No fallback catalog rows sneak in — the inherit row is the only pick.
+    expect(screen.queryByRole("button", { name: /Use .* for sub-agents/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Inherit the main model for sub-agents" })).toBeTruthy();
+  });
+
+  it("disables tool-less configured models with the honest hint", async () => {
+    renderWithProviders(<SubAgentsSection />);
+
+    const toolless = await screen.findByRole("button", {
+      name: "toolless/row on openrouter (unavailable)",
+    });
+    expect((toolless as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("no tool calling")).toBeTruthy();
+  });
+
   it("Inherits main model clears the override with subagentModel: null", async () => {
-    settings = { maxParallel: 5, perKeyLimit: 3, subagentModel: "nvidia/nemotron-3.5-lightning:free", childWatchdogMs: 15_000, childStallTimeoutMs: 300_000 };
+    settings = { maxParallel: 5, perKeyLimit: 3, subagentModel: { providerId: "nvidia", modelId: "nim/llama-4-70b" }, childWatchdogMs: 15_000, childStallTimeoutMs: 300_000 };
     renderWithProviders(<SubAgentsSection />);
 
     await waitFor(() =>
-      expect(screen.getAllByText(/nvidia\/nemotron-3\.5-lightning:free/).length).toBeGreaterThanOrEqual(1),
+      expect(screen.getAllByText(/nim\/llama-4-70b/).length).toBeGreaterThanOrEqual(1),
     );
     fireEvent.click(screen.getByRole("button", { name: "Inherit the main model for sub-agents" }));
 
@@ -411,32 +517,34 @@ describe("SubAgentsTab — model picker", () => {
     await waitFor(() => expect(screen.getByText("Cleared — inherits main model.")).toBeTruthy());
   });
 
-  it("catalog fetch failure shows an honest error — never a hidden fallback copy (R47-c2)", async () => {
-    catalogOk = false;
+  it("configured-rows fetch failure shows an honest error — never a hidden fallback (R93-A9)", async () => {
+    configuredOk = false;
     renderWithProviders(<SubAgentsSection />);
 
     // The backend's own failure message surfaces verbatim…
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Model catalog unavailable — catalog down (fixture)");
+    expect(alert.textContent).toContain("Configured models unavailable — configured rows down (fixture)");
     // …with a visible retry affordance…
-    expect(screen.getByRole("button", { name: "Retry loading the model catalog" })).toBeTruthy();
-    // …and ZERO model rows — no silent fallback to a baked-in catalog.
+    expect(screen.getByRole("button", { name: "Retry loading the configured models" })).toBeTruthy();
+    // …and ZERO model rows — no silent fallback to the OpenRouter catalog.
     expect(screen.queryByRole("button", { name: /Use .* for sub-agents/ })).toBeNull();
     expect(screen.queryByText("Z.ai: GLM 5.2")).toBeNull();
   });
 
-  it("retry reloads the catalog and renders the picker rows (R47-c2)", async () => {
-    catalogOk = false;
+  it("retry reloads the configured rows and renders the picker (R93-A9)", async () => {
+    configuredOk = false;
     renderWithProviders(<SubAgentsSection />);
 
     await screen.findByRole("alert");
-    // Backend recovers → Retry refetches → the picker rows render from the catalog.
-    catalogOk = true;
-    fireEvent.click(screen.getByRole("button", { name: "Retry loading the model catalog" }));
+    // Backend recovers → Retry refetches → the picker rows render from the
+    // configured list.
+    configuredOk = true;
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading the configured models" }));
 
     await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
-    expect(screen.getByRole("button", { name: "Use nvidia/nemotron-3.5-lightning:free for sub-agents" })).toBeTruthy();
-    expect(screen.getByText("recommended")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Use nim/llama-4-70b on nvidia for sub-agents" }),
+    ).toBeTruthy();
   });
 });
 

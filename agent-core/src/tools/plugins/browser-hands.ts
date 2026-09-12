@@ -36,6 +36,27 @@
 //    pulse (the cursor squashes + springs back), a real 60–140ms
 //    mousedown→mouseup duration.
 //
+// ROUND-93 (R93-B3, the fifth walkthrough) — TYPING FIDELITY + CLICK TRUST:
+//  · "Sometimes it was supposed to type some other text but it sometimes
+//    typed out gibberish" — typeInto now iterates by CODE POINTS
+//    (Array.from — astral-plane chars stay whole instead of splitting into
+//    lone surrogates the DOM renders as mojibake), arms the native-setter
+//    fallback on ANY failed char (the old code only armed when the FIRST
+//    char failed, so a mid-stream execCommand failure silently DROPPED the
+//    letter), and fires a synthetic keydown before every char so
+//    contenteditable frameworks that derive state from key events
+//    (ProseMirror/Quill/Lexical) behave. The human pacing (150-WPM
+//    word-by-word cadence, the beats) is UNCHANGED — owner-approved.
+//  · "The mouse use functionality does not register it as a proper mouse" —
+//    synthetic dispatchEvent events can never be isTrusted:true (only CDP
+//    could grant that), but realClick v3 makes the SEQUENCE maximally
+//    real: the FULL spec-order pointer flow (pointerover → pointerenter →
+//    mouseover → mouseenter → pointermove → pointerdown → mousedown →
+//    focus → pointerup → mouseup → click) with hover-first arrival at the
+//    element center (hover-driven menus/comboboxes arm before the press),
+//    per-phase buttons/pressure, and the full pointer identity
+//    (pointerId 1, pointerType "mouse", isPrimary) on every PointerEvent.
+//
 // ARCHITECTURE (unchanged from R89-E): the runtime installs ONCE per page
 // (window.__acuteHands — a branded fixed-position SVG cursor + the
 // movement/typing/scroll primitives); each action runs as an async JOB
@@ -201,41 +222,60 @@ function fire(el, type, init) {
   } catch (e) { return; }
   el.dispatchEvent(ev);
 }
-// realClick v2 — the owner: "the mouse pointer was not apparently clicking
-// anything at all… the clicks apparently were happening, but it did not
-// look natural". The click is now a LITTLE PERFORMANCE the eye can read:
-// 1. a 2–3px settle micro-move onto the exact point (the hand zeroing in),
-// 2. pointerover/over + a burst of pointermove/mousemove,
-// 3. mousedown with a VISIBLE PRESS PULSE (the cursor squashes to 0.82 and
-//    springs back — a real finger's feedback),
-// 4. a genuine 60–140ms held duration before pointerup,
-// 5. the click, then a 20–60ms post-click stillness.
+// realClick v3 (R93-B3): no isTrusted without CDP — the SEQUENCE is maximally
+// real instead: settle at the TARGET CENTER (hover-first) → over/enter + move
+// → hover beat (menus arm) → zero-in → down/pulse/focus → held → up → click
+// → the light FOCUS HINT.
 function realClick(x, y, kind) {
   var el = document.elementFromPoint(x, y);
   if (el === null) return { error: "no element is at that point (it may be scrolled away — read_dom again and retry)" };
   return (async function () {
-    var init = { clientX: x, clientY: y, bubbles: true, cancelable: true, view: window,
-      screenX: Math.round(x + rand(20, 120)), screenY: Math.round(y + rand(80, 220)),
-      button: kind === "right" ? 2 : 0, buttons: 1, detail: kind === "double" ? 2 : 1, relatedTarget: null,
-      pointerId: 1, pointerType: "mouse", isPrimary: true, pressure: 0.5 };
-    // The settle micro-move (2–3px onto the point).
-    await bezierOf({ x: pos.x, y: pos.y }, { x: x, y: y }, { dur: rand(90, 170), bow: rand(-4, 4) });
-    fire(el, "pointerover", init); fire(el, "mouseover", init);
+    var r = el.getBoundingClientRect(), cx = r.left + r.width * 0.5, cy = r.top + r.height * 0.5; // the TARGET CENTER
+    var mkInit = function (px, py, down, detail) {
+      return { clientX: px, clientY: py, bubbles: true, cancelable: true, view: window,
+        screenX: Math.round(px + rand(20, 120)), screenY: Math.round(py + rand(80, 220)),
+        button: kind === "right" ? 2 : 0, buttons: down ? 1 : 0, detail: detail || 1,
+        relatedTarget: null, pointerId: 1, pointerType: "mouse", isPrimary: true, pressure: down ? 0.5 : 0 };
+    };
+    var focusBefore = document.activeElement || null;
+    await bezierOf({ x: pos.x, y: pos.y }, { x: cx, y: cy }, { dur: rand(90, 170), bow: rand(-4, 4) });
+    var hover = mkInit(cx, cy, false), enterInit = Object.assign({}, hover, { bubbles: false, cancelable: false, detail: 0 });
+    fire(el, "pointerover", hover); fire(el, "pointerenter", enterInit);
+    fire(el, "mouseover", hover); fire(el, "mouseenter", enterInit);
+    fire(el, "pointermove", hover); fire(el, "mousemove", hover);
+    await sleep(rand(40, 120)); // the hover beat
+    await bezierOf({ x: cx, y: cy }, { x: x, y: y }, { dur: rand(40, 90), bow: rand(-2, 2) });
     dispatchTrail(x, y);
-    fire(el, "pointerdown", init); fire(el, "mousedown", init);
-    paint(x, y, 0.82); // the press pulse — the visible squash
+    var init = mkInit(x, y, true);
+    fire(el, "pointerdown", init);
+    fire(el, "mousedown", init);
+    paint(x, y, 0.82); // the press pulse
     if (typeof el.focus === "function") { try { el.focus({ preventScroll: true }); } catch (e) { try { el.focus(); } catch (e2) {} } }
     await sleep(rand(60, 140)); // the held duration
-    paint(x, y, 1); // the spring-back
-    fire(el, "pointerup", init); fire(el, "mouseup", init);
-    if (kind === "right") { fire(el, "contextmenu", init); return { clicked: describe(el), button: "right" }; }
-    fire(el, "click", init);
-    var out = { clicked: describe(el) };
-    if (kind === "double") {
-      await sleep(rand(70, 120));
-      fire(el, "mousedown", init); fire(el, "mouseup", init); fire(el, "dblclick", init);
-      out.double = true;
+    paint(x, y, 1);
+    var up = mkInit(x, y, false);
+    fire(el, "pointerup", up);
+    fire(el, "mouseup", up);
+    var out = kind === "right" ? { clicked: describe(el), button: "right" } : { clicked: describe(el) };
+    if (kind === "right") fire(el, "contextmenu", up);
+    else {
+      fire(el, "click", init);
+      if (kind === "double") {
+        await sleep(rand(70, 120));
+        var d2 = mkInit(x, y, true, 2), u2 = mkInit(x, y, false, 2);
+        fire(el, "mousedown", d2); fire(el, "mouseup", u2); fire(el, "dblclick", d2);
+        out.double = true;
+      }
     }
+    // R93-B3: the light FOCUS HINT (non-fatal).
+    try {
+      var f = document.activeElement;
+      if (f !== null && f !== focusBefore && f.tagName !== undefined) {
+        out.focus = { tag: f.tagName.toLowerCase() };
+        var fn = (f.getAttribute && (f.getAttribute("name") || f.getAttribute("id") || f.getAttribute("aria-label"))) || null;
+        if (fn) out.focus.name = fn;
+      }
+    } catch (e) {}
     await sleep(rand(20, 60));
     return out;
   })();
@@ -256,16 +296,26 @@ function typeInto(el, text, wpm) {
   return (async function () {
     el.scrollIntoView({ block: "center", behavior: "instant" });
     if (typeof el.focus === "function") el.focus();
-    var inserted = 0, fellBack = false;
+    var inserted = 0, fellBack = false, keydownsCanceled = 0;
     var words = text.match(/\\S+\\s*/g) || (text.length > 0 ? [text] : []);
     for (var w = 0; w < words.length; w++) {
       var word = words[w];
-      for (var i = 0; i < word.length; i++) {
-        var ch = word[i];
+      // R93-B3: CODE-POINT iteration — astral chars stay whole (code-unit
+      // halves were mojibake).
+      var chars = Array.from(word);
+      for (var i = 0; i < chars.length; i++) {
+        var ch = chars[i];
+        // R93-B3: a keydown precedes EVERY char (ProseMirror/Quill/Lexical
+        // see key events); a cancel is counted, never obeyed.
+        try {
+          if ((document.activeElement || el).dispatchEvent(new KeyboardEvent("keydown", { key: ch, bubbles: true, cancelable: true })) === false) keydownsCanceled += 1;
+        } catch (e) {}
         if (!fellBack) {
           var ok = false;
           try { ok = document.execCommand("insertText", false, ch); } catch (e) { ok = false; }
-          if (!ok && inserted === 0) { fellBack = true; }
+          // R93-B3: ANY failed char arms the fallback (first-char-only
+          // arming dropped letters mid-stream).
+          if (!ok) fellBack = true;
         }
         if (fellBack) {
           var cur = (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) ? el.value : (el.textContent || "");
@@ -279,7 +329,7 @@ function typeInto(el, text, wpm) {
       }
       if (Math.random() < 0.05) await sleep(rand(220, 540));
     }
-    return { typed: inserted, fallback: fellBack, wpm: wpm || 150 };
+    return { typed: inserted, fallback: fellBack, wpm: wpm || 150, keydownsCanceled: keydownsCanceled };
   })();
 }
 function findScroller(el) {
@@ -439,9 +489,11 @@ export function buildHandsClickScript(selector: string, text: string, nth: numbe
  *  2. TAP it (realClick — the visible press, and the natural focus),
  *  3. a 0.7–1.3s BEAT (a person reading the field they just tapped),
  *  4. TYPE word-by-word at ~150 WPM (per-char events, execCommand
- *     insertText — React/Vue-visible; the native setter is the fallback;
- *     newlines insert as newlines — the Shift+Enter contract, submit ONLY
- *     via the explicit flag),
+ *     insertText — React/Vue-visible; a synthetic keydown precedes every
+ *     char so contenteditable frameworks see key events; CODE-POINT
+ *     iteration keeps astral chars whole — R93-B3; ANY failed char arms
+ *     the native-setter fallback; newlines insert as newlines — the
+ *     Shift+Enter contract, submit ONLY via the explicit flag),
  *  5. submit=true: a 0.8–1.4s beat, then the full synthetic ENTER sequence
  *     (keydown/keypress/keyup — the page's listeners + analytics see it),
  *     then requestSubmit() on the owning form ~100ms later (synthetic
@@ -456,17 +508,15 @@ export function buildHandsTypeScript(selector: string, text: string, submit: boo
   var y = Math.max(1, Math.min(window.innerHeight - 2, r.top + r.height * 0.5));
   var hands = window.__acuteHands;
   return hands.moveCursor(x, y, { settle: hands.rand(60, 160) }).then(function () {
-    // THE TAP — the owner's "it taps on the input bars" (the pre-R90 driver
-    // only focused the field: the owner saw typing "without a tap").
+    // THE TAP — the owner's "it taps on the input bars".
     return hands.realClick(x, y, "left").then(function (clickOut) {
-      if (clickOut !== undefined && clickOut.error !== undefined) throw new Error(clickOut.error);
-      // THE BEAT between tap and typing (the owner's "after 1 second").
+      if (clickOut && clickOut.error) throw new Error(clickOut.error);
+      // THE BEAT (the owner's "after 1 second").
       return hands.sleep(hands.rand(700, 1300)).then(function () {
         return hands.typeInto(el, ${JSON.stringify(text)}, 150).then(function (typed) {
           var out = { typed: typed, tapped: true, selector: selector };
           if (${JSON.stringify(submit)} === true) {
-            // THE BEAT between typing and Enter (the owner's "after the
-            // typing has finished and after 1 second has passed").
+            // THE BEAT (the owner's "after 1 second" again).
             return hands.sleep(hands.rand(800, 1400)).then(function () {
               var enterInit = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true };
               el.dispatchEvent(new KeyboardEvent("keydown", enterInit));
