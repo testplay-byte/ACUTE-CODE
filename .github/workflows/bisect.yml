@@ -1,0 +1,37 @@
+name: Bisect
+
+# Temporary diagnostic (deleted after the CI outage is resolved): four
+# parallel probes isolating which action reference fails to resolve at
+# job-startup time (the observed failure: instant completion, no runner,
+# no steps, empty logs).
+on:
+  workflow_dispatch:
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "control ok"
+  pnpm-setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - run: pnpm --version
+  rust-toolchain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustc --version
+  node-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: node --version
