@@ -326,3 +326,64 @@ reads/writes the new tables — nothing else in the codebase touches them).
     observations; acting on a moved element returns the relocation
     candidate; the tree/window tools navigate dense UIs; the skill
     teaches the whole discipline.
+
+## 11. The public migration (the C5 close-out's epilogue)
+
+The R93 push (93111d7 pre-rewrite) + tag v0.91.0 landed at 14:07 UTC into
+a wall: every workflow run since — CI, Release, and a re-run of the
+morning's SUCCESSFUL run — completed instantly with zero steps, empty
+logs, and `runner_id: 0`. A four-probe bisect workflow (3a0ef6c
+pre-rewrite, removed in 4baf918 pre-rewrite) settled it: the IDENTICAL
+probe jobs got runners in the public DASHBOARD repo and none in the
+private ACUTE-CODE repo — the account's monthly PRIVATE-repository
+Actions minutes were exhausted (windows-latest bills 2×; the morning's
+burst spent the last of them). The owner directed the remedy: **switch
+the repository PUBLIC** (unlimited free Actions minutes on standard
+runners; it can be turned private again later at will — the docs are
+written so both states are safe).
+
+Before the flip, the ENTIRE history was secret-scanned (every blob,
+every credential shape in the live inventory — not just the working
+tree):
+
+- **HEAD was clean** — every test fixture is synthetic (verified by
+  length + equality against the live values, never by eyeball).
+- **Three real OpenRouter keys lived in history**: the R44 launcher's
+  "baked-in defaults" (added 8156bde pre-rewrite, scrubbed from the
+  TREES in R47's 862af5d pre-rewrite) — `launcher/acute_launcher.py` +
+  `launcher/credentials.example.txt` historical blobs only.
+- **The R45 scrubber fixture reused the live PAT's opening segment**
+  (a 45-char synthetic tail — harmless to authenticate with, but GitHub
+  secret-scanning would flag the shape and mail the owner once public).
+- **Commit author metadata carried the owner's personal Gmail**, and
+  **the docs quoted the ntfy topic** (a shared secret for the
+  notification channel).
+
+Remediation (two filter-repo passes, then the flip):
+
+- The R45 fixture now uses a labeled TESTFIXTURE shape at HEAD and the
+  historical fixture string was purged (suite 50/50 re-verified).
+- `git filter-repo --replace-text` purged the three OpenRouter keys,
+  the ntfy topic string, and the historical fixture from EVERY blob;
+  `--email-callback` rewrote the two personal-email identities to the
+  GitHub noreply form (`299906586+testplay-byte@users.noreply.github.com`).
+- Post-rewrite verification: **0 real-key bytes, 0 topic occurrences,
+  0 personal emails, 0 PAT-prefix traces across all rewritten objects**
+  (the full-blob scan re-run twice — once per pass).
+- Commit hashes from R44 onward are REWRITTEN (main → 5f643a9,
+  v0.91.0 → 90521fd); pre-R44 history is byte-identical
+  (round-27-testing unchanged). Older hashes quoted in the round docs
+  are the pre-rewrite values — narrative references, not broken links.
+- The 29 published releases re-pointed to the rewritten tags (assets
+  and notes live on the release objects, not the tags).
+- GitHub suppresses push events when more than three tags are pushed at
+  once — the bulk `--tags` force-push fired no workflows; the v0.91.0
+  tag was deleted and re-pushed ALONE to fire the Release workflow.
+
+**Owner recommendation (defense-in-depth):** the three keys sat in a
+private remote for ~50 rounds, and GitHub retains unreachable objects
+until garbage collection — rotating the three OpenRouter keys closes
+even that residual path (new rounds never carry keys in git; keys live
+only in Windows Credential Manager + the local credentials file). If
+the topic's exposure ever matters, pick a new ntfy topic going
+forward (the docs no longer quote it).

@@ -2565,3 +2565,21 @@ Stage Summary:
 ### Stage Summary
 - v0.91.0 delivered: the computer-use learning layer (the owner's headline — identity, diffing, reliability, app profiles, tree tools, placement, relocation, ghost verification, the honest three-layer clickability), the browser agent's hands (typing, clicks, section state), the turn-loop reliability (queue continuation + the one recovery + sub-agent unblocks), and the settings-surface polish (keys listing, batch add, test-all, toggles, the sectioned agent form, the configured-only sub-agent picker).
 - The R93 lessons for the ledger: the e2e gate is the only local boot of the built artifact (extension-less ESM imports pass everything else); "degrades honestly" probes can be 100% inert (pin each layer's success path or delete it honestly); BOM-less -File scripts mojibake under PowerShell 5.1; literal NULs make sources binary-opaque; "pre-existing" claims are verified against the TAG, never the inherited tree.
+
+---
+
+## R93 C5-resume — the public migration (the repo goes PUBLIC)
+
+Task: The owner's directive after the C5 close-out stalled: the CI/Release outage was the account's monthly PRIVATE-repo Actions minutes (the previous session's bisect proved it — identical probes got runners in the public DASHBOARD repo, none in the private one), and the owner directed switching the repository PUBLIC (unlimited free Actions; flippable back later). Handle everything with proper care: full-history secret audit BEFORE the flip.
+
+Work Log:
+- Full-history secret audit (every blob, computed lengths + prefix equality — never trusting displayed output): HEAD clean (all fixtures synthetic); THREE real OpenRouter keys (the R44 launcher's baked-in defaults, added pre-R47-scrub) lived in history — launcher/acute_launcher.py + credentials.example.txt blobs only; one R45 fixture reused the live PAT's opening segment (45-char synthetic); the ntfy topic quoted in docs; the owner's personal Gmail in commit identities.
+- Remediation commit (pre-public hygiene): the R45 fixture → a labeled TESTFIXTURE shape (suite 50/50); status.json carries the outage diagnosis + remedy.
+- git-filter-repo PASS 1: --replace-text purged the three keys from every blob (verified 0 real-key bytes across all rewritten objects); force-pushed main + 35 tags (pre-R44 history byte-identical — round-27-testing unchanged).
+- git-filter-repo PASS 2: --email-callback mapped the two personal-email identities to 299906586+testplay-byte@users.noreply.github.com; --replace-text purged the ntfy topic + the historical fixture string (verified 0 gmail identities, 0 topic occurrences, 0 PAT-prefix traces).
+- The visibility flip (PATCH private:false) + a public description + topics. GitHub suppresses push events when >3 tags are pushed at once — the bulk --tags force-push fired nothing; v0.91.0 was deleted and re-pushed ALONE to fire Release.
+- CI GREEN on the final main (5f643a9). The Release run failed in launcher-kit: the TAG's tree (cut pre-hygiene) carried pass-2's replacement value github_pat_TESTFIXTURE-PURGED — the HYPHEN breaks the scrubber's shape regex (min-length/charset), so the tagged tree's r45 test failed while main's passed. The draft-release job (needs both kits) skipped — nothing published from the bad run.
+- Fix: the docs close-out (round-93.md §11, AGENT-MEMORY #94, HANDOFF's public-state rewrite, this entry, CHANGELOG note) lands on main, and v0.91.0 is RE-CUT at that tip (the app code is byte-identical to the original cut — only tests/docs/metadata moved), then the Release re-runs on the clean tree.
+
+Stage Summary:
+- The repository is PUBLIC with a fully purged, noreply-mapped, secret-free history; CI confirmed green on public runners (the quota wall is gone); the release path re-runs on the re-cut tag. Owner defense-in-depth recommendation recorded (rotate the three historical OpenRouter keys; optionally pick a new ntfy topic).

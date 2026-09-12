@@ -112,6 +112,20 @@ the settings-surface polish.
   as ANSI and mojibaked the path breadcrumbs); the element registration
   commits as ONE transaction.
 
+### Repository — the public migration (the C5 epilogue)
+- The repository switched from private to PUBLIC (the owner's directive:
+  the account's monthly private-repo Actions minutes were exhausted —
+  every workflow run was dying at runner assignment with zero steps;
+  public repos get unlimited free standard-runner minutes, and the repo
+  can be flipped back at will). Before the flip the FULL history was
+  secret-scanned and purged: the three R44-era OpenRouter keys (the
+  launcher's old baked-in defaults), the ntfy topic string, and a test
+  fixture that reused the live PAT's opening segment were removed from
+  every historical blob (git-filter-repo, verified 0 real-key bytes
+  across all rewritten objects), and commit identities were mapped to
+  the GitHub noreply form. Commit hashes from R44 onward are rewritten
+  accordingly. No application code changed. Details: round-93.md §11.
+
 ## [0.90.0] - 2026-09-11 — the R92 fourth-walkthrough round
 
 The owner's fourth end-to-end walkthrough, answered: the multi-key pool with
