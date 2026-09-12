@@ -157,6 +157,8 @@ let revealKeys: Array<{ slot: number; value: string }> = [];
 /** R89-C6: what POST /models/:rowId/test answers (null = the route 404s —
  * most tests never click the model test button). */
 let modelTestAnswer: unknown = null;
+// R93-A6: the knob that simulates the backend rejecting the upsert.
+let modelAddFails = false;
 /** R59-C: when true, the reveal route answers HTTP 500 (the error path). */
 let revealFails = false;
 /** R62-2b: when true, GET /providers answers HTTP 500 (the load-error path). */
@@ -410,6 +412,13 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   }
   // ROUND-50 (R50-d): model-config upsert (the picker's bulk add + manual id).
   if (url === `${BASE}/api/v1/providers/openrouter/models` && method === "POST") {
+    if (modelAddFails) {
+      return {
+        status: 429,
+        ok: false,
+        text: async () => JSON.stringify({ error: { code: "RATE_LIMIT", message: "429 rate limited" } }),
+      } as unknown as Response;
+    }
     const input = body as Record<string, unknown>;
     const row = modelRow({
       modelId: String(input.modelId),
@@ -482,6 +491,7 @@ beforeEach(() => {
   revealKeys = [];
   revealFails = false;
   modelTestAnswer = null;
+  modelAddFails = false;
   providersFail = false;
   modelsConfigFail = false;
   deleteProviderConflict = null;
@@ -894,20 +904,25 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
     await openPicker();
 
     const dialog = screen.getByRole("dialog", { name: "Add models" });
-    // ROUND-87 (R87): rows are clean clickable cards — the already-configured
-    // one is a DISABLED button carrying the ADDED badge (no checkboxes).
+    // R93-A6: rows are three-zone cards — the already-configured one's LEFT
+    // (select) zone is a DISABLED checkbox carrying the ADDED badge, and it
+    // renders NO pencil and NO direct-Add button.
     const addedRow = (await within(dialog).findByLabelText(
-      "Configure and add z-ai/glm-5.2:free",
+      "Select Z.ai: GLM 5.2 (z-ai/glm-5.2:free)",
     )) as HTMLButtonElement;
     expect(addedRow.disabled).toBe(true);
     expect(within(dialog).getByText("ADDED")).toBeTruthy();
     expect(within(dialog).getAllByText("FREE").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("PAID")).toBeTruthy();
-    // The pickable row is enabled; R89-C1: the "CONFIGURE →" label is GONE —
-    // the row's title is the clean NAME with the full id below it.
-    const pickable = within(dialog).getByLabelText("Configure and add openai/gpt-4o") as HTMLButtonElement;
+    // The pickable row's three zones are all enabled: the select checkbox,
+    // the R87 configure pencil, and the R93-A6 direct-add pill.
+    const pickable = within(dialog).getByLabelText("Select GPT-4o (openai/gpt-4o)") as HTMLButtonElement;
     expect(pickable.disabled).toBe(false);
-    expect(within(dialog).queryByText("CONFIGURE →")).toBeNull();
+    const pencil = within(dialog).getByLabelText("Configure and add openai/gpt-4o") as HTMLButtonElement;
+    expect(pencil.disabled).toBe(false);
+    const directAdd = within(dialog).getByLabelText("Add openai/gpt-4o directly") as HTMLButtonElement;
+    expect(directAdd.disabled).toBe(false);
+    // R89-C1: the row's title is the clean NAME with the full id below it.
     expect(within(pickable).getByText("GPT-4o")).toBeTruthy();
     expect(within(pickable).getByText("openai/gpt-4o")).toBeTruthy();
   });
@@ -2201,14 +2216,16 @@ describe("Models UI — the R89 overhaul", () => {
     fireEvent.click(await screen.findByRole("button", { name: /add models/i }));
     const dialog = await screen.findByRole("dialog", { name: "Add models" });
 
-    // R89-C1: the title is the CLEAN NAME (not the full id twice)…
-    const row = within(dialog).getByLabelText("Configure and add meta-llama/llama-3.3-70b-instruct:free");
+    // R89-C1: the title is the CLEAN NAME (not the full id twice)… R93-A6:
+    // the text rides the LEFT select zone; the pencil (still labeled
+    // "Configure and add …") opens the config dialog.
+    const row = within(dialog).getByLabelText("Select Llama 3.3 70b Instruct (meta-llama/llama-3.3-70b-instruct:free)");
     expect(within(row).getByText("Llama 3.3 70b Instruct")).toBeTruthy();
     // …the full id rides below as the subtitle.
     expect(within(row).getByText("meta-llama/llama-3.3-70b-instruct:free")).toBeTruthy();
 
     // Picking it opens the config dialog with the display name defaulted.
-    fireEvent.click(row);
+    fireEvent.click(within(dialog).getByLabelText("Configure and add meta-llama/llama-3.3-70b-instruct:free"));
     const config = await screen.findByRole("dialog", { name: "Add model" });
     expect((within(config).getByLabelText("Display name") as HTMLInputElement).value).toBe(
       "Llama 3.3 70b Instruct",
@@ -2286,5 +2303,139 @@ describe("Models UI — the R89 overhaul", () => {
     // …Show reply expands the FULL reply inside the section.
     fireEvent.click(within(section).getByTestId("model-test-show-reply"));
     expect(screen.getByTestId("model-test-reply-body").textContent).toContain("Hello from the model");
+  });
+});
+
+// ── R93-A6/A7: the multi-add picker + the hide/show toggle + Test all ───────
+
+describe("Add models — the R93-A6 three-way interaction", () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ modelsFreeOnly: false });
+  });
+
+  it("R93-A6: the right-side Add button adds DIRECTLY (one POST, no config dialog)", async () => {
+    liveCatalog = [
+      { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" },
+      { id: "openai/gpt-4o", name: "GPT-4o" },
+    ];
+    configured = [];
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
+    fireEvent.click(await screen.findByRole("button", { name: /add models/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Add models" });
+
+    // The direct-add pill: ONE upsert with the prefill as defaults; the
+    // picker STAYS OPEN (the row flips to ADDED through invalidation).
+    fireEvent.click(within(dialog).getByLabelText("Add openai/gpt-4o directly"));
+    await waitFor(() => {
+      const posts = calls.filter(
+        (c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"),
+      );
+      expect(posts).toHaveLength(1);
+    });
+    const post = calls.find(
+      (c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"),
+    );
+    expect(post?.body).toMatchObject({ modelId: "openai/gpt-4o", displayName: "GPT-4o" });
+    // The config dialog NEVER opened.
+    expect(screen.queryByRole("dialog", { name: "Add model" })).toBeNull();
+  });
+
+  it("R93-A6: selecting rows + the batch strip adds ALL selected (and closes the picker)", async () => {
+    liveCatalog = [
+      { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" },
+      { id: "openai/gpt-4o", name: "GPT-4o" },
+      { id: "anthropic/claude-4.5", name: "Claude 4.5" },
+    ];
+    configured = [];
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
+    fireEvent.click(await screen.findByRole("button", { name: /add models/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Add models" });
+
+    // pointerDown on two LEFT zones selects them (the paint session opens
+    // and closes with the pointerup listener).
+    fireEvent.pointerDown(within(dialog).getByLabelText("Select GPT-4o (openai/gpt-4o)"), { button: 0 });
+    fireEvent.pointerDown(within(dialog).getByLabelText("Select Claude 4.5 (anthropic/claude-4.5)"), { button: 0 });
+    fireEvent.pointerUp(window);
+
+    const strip = await within(dialog).findByTestId("picker-batch-strip");
+    expect(strip.textContent).toContain("2 models selected");
+    fireEvent.click(within(strip).getByTestId("picker-batch-add"));
+
+    await waitFor(() => {
+      const posts = calls.filter(
+        (c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"),
+      );
+      expect(posts).toHaveLength(2);
+    });
+    // The batch add closes the picker on success.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Add models" })).toBeNull(),
+    );
+  });
+
+  it("R93-A6: a failed direct add surfaces the honest error strip (never silent)", async () => {
+    liveCatalog = [{ id: "openai/gpt-4o", name: "GPT-4o" }];
+    configured = [];
+    // The backend rejects the upsert (429).
+    modelAddFails = true;
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
+    fireEvent.click(await screen.findByRole("button", { name: /add models/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Add models" });
+
+    fireEvent.click(within(dialog).getByLabelText("Add openai/gpt-4o directly"));
+    const error = await within(dialog).findByTestId("picker-batch-error");
+    expect(error.textContent).toContain("429 rate limited");
+    // The picker STAYS OPEN for a retry.
+    expect(screen.getByRole("dialog", { name: "Add models" })).toBeTruthy();
+  });
+});
+
+describe("Model card + list header — the R93-A7 buttons", () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ modelsFreeOnly: false });
+    providersList = [PROVIDER];
+    configured = [
+      modelRow({ id: "mdl_first", modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" }),
+      modelRow({ id: "mdl_second", modelId: "openai/gpt-4o", displayName: "GPT-4o" }),
+    ];
+    modelTestAnswer = {
+      ok: true,
+      latencyMs: 432,
+      contentPreview: "Hello from the model",
+      usage: { inputTokens: 3, outputTokens: 5 },
+    };
+  });
+
+  it("R93-A7: the hide/show quick-toggle PATCHes {hidden} without opening any dialog", async () => {
+    renderWithProviders(<ModelsProvidersTab />);
+    const toggle = await screen.findAllByTestId("model-toggle-hidden");
+    expect(toggle).toHaveLength(2);
+    // Hide the first model…
+    fireEvent.click(toggle[0]!);
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === "PATCH" && c.url.endsWith("/models/mdl_first"));
+      expect(patch?.body).toMatchObject({ hidden: true });
+    });
+    // …and no dialog ever opened.
+    expect(screen.queryByRole("dialog", { name: "Edit model" })).toBeNull();
+  });
+
+  it("R93-A7: Test all fires a probe for EVERY configured model and reports the summary", async () => {
+    renderWithProviders(<ModelsProvidersTab />);
+    const button = await screen.findByTestId("test-all-models");
+    expect(button.textContent).toContain("Test all");
+    fireEvent.click(button);
+    // Both cards' tests run (each POSTs /models/:id/test once).
+    await waitFor(() => {
+      const tests = calls.filter(
+        (c) => c.method === "POST" && /\/api\/v1\/models\/mdl_.*\/test$/.test(c.url),
+      );
+      expect(tests.length).toBe(2);
+    });
+    // The summary lands on the button when every card settles.
+    await waitFor(() => expect(button.textContent).toContain("passed"), { timeout: 4000 });
   });
 });

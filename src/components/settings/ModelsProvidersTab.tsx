@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -1955,11 +1955,24 @@ function ModelCard({
   row,
   onEdit,
   onDelete,
+  onToggleHidden,
+  testAllSeq,
+  onTestAllResult,
 }: {
   m: MergedModel;
   row: ProviderModelConfig | null;
   onEdit: () => void;
   onDelete: () => void;
+  /** R93-A7: the hide/show quick toggle — PATCHes {hidden: !hidden} and
+   * invalidates; the 4th action button (Eye/EyeOff). */
+  onToggleHidden?: () => void;
+  /** R93-A7: the Test-All driver — a bumped seq runs THIS card's test
+   * (each card owns its own useModelTest state, so the per-card result
+   * sections render exactly as a manual click). */
+  testAllSeq?: number;
+  /** R93-A7: the card reports its Test-All completion back to the header's
+   * progress counter (once per seq). */
+  onTestAllResult?: (seq: number, ok: boolean) => void;
 }) {
   const styles = useThemeStyles();
   const { state, run } = useModelTest(row);
@@ -1967,6 +1980,28 @@ function ModelCard({
   const [showFull, setShowFull] = useState(false);
   const [showResult, setShowResult] = useState(false);
   const hideTimerRef = useRef<number | null>(null);
+
+  // ── R93-A7: the Test-All wiring. A new seq fires the card's own test once;
+  // the settled outcome is reported to the header exactly once per seq (the
+  // settledRef guard keeps a re-rendered pass from double-counting). */
+  const testAllSettledRef = useRef(false);
+  useEffect(() => {
+    if (testAllSeq === undefined || testAllSeq === 0 || row === null) return;
+    testAllSettledRef.current = false;
+    run();
+    // run is the card-local stable callback; testAllSeq changes only when
+    // the header button is clicked again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testAllSeq]);
+  useEffect(() => {
+    if (testAllSeq === undefined || testAllSeq === 0) return;
+    if (state.kind === "pass" || state.kind === "fail") {
+      if (!testAllSettledRef.current) {
+        testAllSettledRef.current = true;
+        onTestAllResult?.(testAllSeq, state.kind === "pass");
+      }
+    }
+  }, [state, testAllSeq, onTestAllResult]);
 
   // The section appears on completion and auto-collapses after 5s UNLESS the
   // owner interacts with it (Show reply / Show full cancels the timer — the
@@ -2148,7 +2183,9 @@ function ModelCard({
           </div>
         </div>
 
-        {/* RIGHT: the actions (R87's uniform icon trio) */}
+        {/* RIGHT: the actions (R87's uniform icon trio + R93-A7's hide/show
+            quick toggle — the owner: "add one more button: the mark as hidden
+            or mark as shown button") */}
         {m.configured && row !== null && (
           <div className="flex items-center gap-1 shrink-0">
             <TestIconButton model={row} state={state} run={run} />
@@ -2163,6 +2200,20 @@ function ModelCard({
             >
               <Pencil size={13} />
             </button>
+            {onToggleHidden !== undefined && (
+              <button
+                onClick={onToggleHidden}
+                aria-label={row.hidden ? `Show model ${m.displayName || m.modelId} in the chat picker` : `Hide model ${m.displayName || m.modelId} from the chat picker`}
+                title={row.hidden ? "Hidden from the chat picker — click to show" : "Shown in the chat picker — click to hide"}
+                data-testid="model-toggle-hidden"
+                className="h-8 w-8 grid place-items-center rounded-[10px] shrink-0 transition-colors"
+                style={{ color: row.hidden ? styles.accent : styles.textSecondary }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.1))}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                {row.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
+            )}
             <button
               onClick={onDelete}
               aria-label={`Delete model ${m.displayName || m.modelId}`}
@@ -2330,6 +2381,28 @@ function ModelListSection({
   const [adding, setAdding] = useState<ModelAddPrefill | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // ── R93-A7: the Test-All driver + progress. Each card owns its test state
+  // (useModelTest) — the header just bumps a seq and counts the cards'
+  // settled reports. `done === total && total > 0` = finished; failed > 0
+  // colors the summary red. A models list change (add/delete) RESETS the
+  // progress so a stale counter can never stick to the new list. ────────
+  const [testAll, setTestAll] = useState<{ seq: number; total: number; done: number; failed: number } | null>(null);
+  useEffect(() => {
+    setTestAll(null);
+  }, [models]);
+  const triggerTestAll = (): void => {
+    const total = models.length;
+    if (total === 0) return;
+    setTestAll({ seq: (testAll?.seq ?? 0) + 1, total, done: 0, failed: 0 });
+  };
+  const onTestAllResult = useCallback((seq: number, ok: boolean) => {
+    setTestAll((prev) =>
+      prev !== null && prev.seq === seq
+        ? { ...prev, done: prev.done + 1, failed: prev.failed + (ok ? 0 : 1) }
+        : prev,
+    );
+  }, []);
+
   // ROUND-60 (R60-B): the list shows CONFIGURED (stored) rows ONLY — the
   // R58/R50 catalog→list merge is GONE (the owner: "By default none of the
   // models should be added there… By default there should not be the free
@@ -2350,6 +2423,15 @@ function ModelListSection({
     onError: (err: Error) => setError(err.message),
   });
 
+  // R93-A7: the hide/show quick toggle — PATCH {hidden} + invalidate; the
+  // same mutation path the config dialog's segmented control uses.
+  const toggleHidden = useMutation({
+    mutationFn: (input: { rowId: string; hidden: boolean }) =>
+      updateProviderModelConfig(input.rowId, { hidden: input.hidden }),
+    onSuccess: invalidate,
+    onError: (err: Error) => setError(err.message),
+  });
+
   return (
     <div className="rounded-[16px] border-[1.5px] overflow-hidden" style={{ background: styles.card, borderColor: styles.border }}>
       <div className="flex items-center gap-2 px-4 py-3 border-b flex-wrap" style={{ borderColor: styles.border }}>
@@ -2360,6 +2442,42 @@ function ModelListSection({
         <span data-testid="models-count" className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
           {merged.length}
         </span>
+        {/* ── R93-A7: Test all (the owner: "the option to easily and quickly
+            test all the models out, like a quick test button there"). Every
+            card fires its OWN probe (the per-card result sections render
+            exactly as a manual click); this button tracks the progress and
+            the summary. */}
+        {merged.length > 0 ? (
+          <button
+            onClick={triggerTestAll}
+            disabled={testAll !== null && testAll.done < testAll.total}
+            data-testid="test-all-models"
+            className="h-7 px-2.5 rounded-full text-[11px] font-bold flex items-center gap-1.5 disabled:cursor-default"
+            style={{
+              background: withAlpha(styles.accent, 0.1),
+              color:
+                testAll !== null && testAll.done >= testAll.total
+                  ? testAll.failed > 0
+                    ? "#ef4444"
+                    : "#22c55e"
+                  : styles.accent,
+            }}
+            title="Run the connection test for every model in this list"
+          >
+            {testAll !== null && testAll.done < testAll.total ? (
+              <RefreshCw size={11} className="animate-spin" />
+            ) : (
+              <Zap size={11} strokeWidth={2.5} />
+            )}
+            {testAll === null
+              ? "Test all"
+              : testAll.done < testAll.total
+                ? `Testing ${testAll.done}/${testAll.total}…`
+                : testAll.failed > 0
+                  ? `${testAll.failed} of ${testAll.total} failed`
+                  : `All ${testAll.total} passed`}
+          </button>
+        ) : null}
         <span className="flex-1" />
         {/* ROUND-50 (R50-d): "Add models" opens the catalog picker dialog
             (multi-select from the provider's live catalog, with a manual
@@ -2414,6 +2532,16 @@ function ModelListSection({
               onDelete={() => {
                 if (window.confirm(`Delete model "${m.displayName || m.modelId}"?`)) deleteModel.mutate(m.rowId!);
               }}
+              onToggleHidden={
+                m.rowId !== undefined && m.configured
+                  ? () => {
+                      const row = models.find((r) => r.id === m.rowId);
+                      if (row) toggleHidden.mutate({ rowId: row.id, hidden: !row.hidden });
+                    }
+                  : undefined
+              }
+              testAllSeq={testAll?.seq}
+              onTestAllResult={onTestAllResult}
             />
           ))}
         </div>
@@ -2421,8 +2549,10 @@ function ModelListSection({
 
       {/* ROUND-50 (R50-d): the catalog-driven picker + the per-model config
           dialog. Both invalidate THIS provider's models query on change.
-          ROUND-87 (R87): clicking a model in the picker now opens the
-          CONFIG dialog (add mode) instead of adding directly. */}
+          ROUND-87 (R87): the pencil in the picker opens the CONFIG dialog
+          (add mode). R93-A6 (the owner): the right-side "Add" adds DIRECTLY
+          with the prefill as defaults, and drag-select + "Add N models"
+          batch-adds — all with an honest failure surface, never silent. */}
       {pickerOpen && (
         <AddModelsDialog
           providerId={providerId}
@@ -2432,6 +2562,37 @@ function ModelListSection({
           onPick={(prefill) => {
             setPickerOpen(false);
             setAdding(prefill);
+          }}
+          onAddDirect={async (prefills) => {
+            // R93-A6: upsert each prefill as a configured row with the
+            // prefill as its defaults (the exact payload the ADD-mode config
+            // dialog would POST for an untouched draft). allSettled so a
+            // partial failure is REPORTED, not swallowed.
+            const results = await Promise.allSettled(
+              prefills.map((p) =>
+                upsertProviderModelConfig(providerId, {
+                  modelId: p.modelId,
+                  displayName: p.displayName,
+                  contextWindow: p.contextWindow ?? null,
+                  maxOutputTokens: p.maxOutputTokens ?? null,
+                  inputPricePerMtok: p.inputPricePerMtok ?? null,
+                  inputPriceCachedPerMtok: p.inputPriceCachedPerMtok ?? null,
+                  outputPricePerMtok: p.outputPricePerMtok ?? null,
+                  supportsVision: p.supportsVision,
+                }),
+              ),
+            );
+            const failed = results.filter((r) => r.status === "rejected") as Array<
+              PromiseRejectedResult
+            >;
+            invalidate();
+            if (failed.length > 0) {
+              const first = failed[0]!.reason;
+              const message = first instanceof Error ? first.message : String(first);
+              throw new Error(
+                `${failed.length} of ${prefills.length} add${failed.length === 1 ? "" : "s"} failed — ${message}`,
+              );
+            }
           }}
           onClose={() => setPickerOpen(false)}
         />
@@ -2466,24 +2627,43 @@ function ModelListSection({
 
 /* ── ROUND-50 (R50-d): the "Add models" catalog picker dialog ─────────────── */
 
+/**
+ * R93-A6 (the owner's exact spec): the picker's three-way interaction.
+ *  · LEFT zone (checkbox + name): click = TOGGLE selection; press + DRAG
+ *    across rows = paint-selection (every row swept joins the initial
+ *    toggle's target state — selecting OR deselecting).
+ *  · RIGHT zone: "Add" = DIRECT add with the catalog prefill (no config
+ *    dialog — one click, the row flips to ADDED via invalidation).
+ *  · The pencil between them = the ROUND-87 CONFIGURE-first flow (the
+ *    prefill opens the ADD-mode config dialog, unchanged).
+ *  · Batch: "Add N models" in the selection strip adds every selected row
+ *    with the same prefill-as-defaults contract, then closes.
+ */
 function AddModelsDialog({
   catalog,
   staticCatalog,
   configuredIds,
   onPick,
+  onAddDirect,
   onClose,
 }: {
   /** The provider being picked for (kept in the call-site shape for
    * symmetry with the sibling dialogs; the picker itself routes through
-   * the parent’s onPick). */
+   * the parent's onPick/onAddDirect). */
   providerId: string;
   catalog: ProviderCatalogState;
   staticCatalog: CatalogModel[];
   configuredIds: Set<string>;
   /** ROUND-87 (R87, owner: "when I click on any of the models … it should
-   * show me the options to configure that model"): picking a model hands the
+   * show me the options to configure that model"): the pencil hands the
    * catalog prefill to the parent, which opens the ADD-mode config dialog. */
   onPick: (prefill: ModelAddPrefill) => void;
+  /** R93-A6: DIRECT (batch) add — the parent upserts each prefill as a
+   * configured row with the prefill as its defaults and invalidates; the
+   * dialog stays open for single adds (the row flips to ADDED) and closes
+   * itself only for the batch strip's "Add N models". Rejects with a
+   * readable message on any failure (no silent partial success). */
+  onAddDirect: (prefills: ModelAddPrefill[]) => Promise<void>;
   onClose: () => void;
 }) {
   const styles = useThemeStyles();
@@ -2498,6 +2678,68 @@ function AddModelsDialog({
   // ZERO free-classified entries (NIM) auto-switches to All; the shared pref
   // the composer flyout reads is never silently flipped by that auto-switch.
   const [freeOnly, setFreeOnly] = useState(useSettingsStore.getState().modelsFreeOnly);
+
+  // ── R93-A6: selection + drag-paint state ────────────────────────────────
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** The live paint session (null when the pointer is up): `target` is the
+   * boolean every swept row joins — set at pointerdown from the initial
+   * row's toggle, so a drag can paint selection OR deselection. */
+  const paintRef = useRef<{ target: boolean } | null>(null);
+  useEffect(() => {
+    const stop = (): void => {
+      paintRef.current = null;
+    };
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+    return () => {
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+  }, []);
+  const toggleSelect = (id: string, target: boolean): void => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (target) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+  // pointerdown on a row's LEFT zone: toggle that row AND open the paint
+  // session in the toggled direction (a plain click = one-row paint).
+  const beginPaint = (id: string): void => {
+    const target = !selected.has(id);
+    paintRef.current = { target };
+    toggleSelect(id, target);
+  };
+  // pointerenter on a swept row's LEFT zone: join the paint's target state.
+  const paintOver = (id: string): void => {
+    const paint = paintRef.current;
+    if (paint === null || selected.has(id) === paint.target) return;
+    toggleSelect(id, paint.target);
+  };
+  const clearSelection = (): void => setSelected(new Set());
+  const selectedCount = selected.size;
+
+  // ── R93-A6: the direct-add/batch mutation ───────────────────────────────
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const addSelected = async (): Promise<void> => {
+    const prefills: ModelAddPrefill[] = [];
+    for (const id of selected) {
+      if (!configuredIds.has(id)) prefills.push(prefillFor(id));
+    }
+    if (prefills.length === 0) return;
+    setBatchBusy(true);
+    setBatchError(null);
+    try {
+      await onAddDirect(prefills);
+      onClose(); // batch success closes the picker (the rows are in the list)
+    } catch (err) {
+      setBatchError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBatchBusy(false);
+    }
+  };
 
   const staticById = useMemo(
     () => new Map(staticCatalog.map((m) => [m.modelId, m])),
@@ -2594,8 +2836,8 @@ function AddModelsDialog({
           </button>
         </div>
         <p className="px-5 pb-3 text-[11.5px] shrink-0" style={{ color: styles.textSecondary }}>
-          Pick a model to configure — known pricing, context windows, and limits arrive pre-filled and stay
-          editable before it&apos;s added.
+          Click <b>Add</b> on the right for a one-click add, drag across rows to select several at
+          once, or use the <b>pencil</b> to configure pricing and limits before adding.
         </p>
 
         {/* search + the ROUND-60 (R60-B) Free only ↔ All models scope toggle */}
@@ -2648,10 +2890,9 @@ function AddModelsDialog({
           </div>
         </div>
 
-        {/* the catalog rows — ROUND-87 (R87): every row is a CLEAN clickable
-            card (rounded-12, hover accent tint) that hands the prefill to the
-            parent's ADD-mode config dialog. The multi-select checkboxes are
-            GONE: every add goes through configuration, exactly as asked. */}
+        {/* the catalog rows — R93-A6: the three-zone card (LEFT = select /
+            drag-paint, pencil = configure, RIGHT = direct add). The ROUND-87
+            whole-row button is gone; its configure flow lives on the pencil. */}
         <div className="flex-1 min-h-0 overflow-y-auto auto-scroll px-3 pb-3 flex flex-col gap-1">
           {catalog.isFetching && catalog.entries.length === 0 && (
             <div className="px-2 py-4 text-[11.5px] flex items-center gap-2" style={{ color: styles.textTertiary }}>
@@ -2669,6 +2910,7 @@ function AddModelsDialog({
             const meta = staticById.get(entry.id);
             const alreadyAdded = configuredIds.has(entry.id);
             const free = meta ? meta.free : isFreeModelEntry({ modelId: entry.id });
+            const isSelected = selected.has(entry.id);
             // R89-C1 (the owner: "it should only show the model ID, the NAME
             // of the model [at the top] and below it the model ID"): the
             // title is the clean human NAME — the live entry's name, else
@@ -2676,68 +2918,159 @@ function AddModelsDialog({
             const cleanName =
               entry.name !== "" && entry.name !== entry.id ? entry.name : cleanModelName(entry.id);
             return (
-              <button
-                type="button"
+              <div
                 key={entry.id}
-                disabled={alreadyAdded}
-                onClick={() => onPick(prefillFor(entry.id))}
-                aria-label={`Configure and add ${entry.id}`}
                 data-testid="picker-model-row"
                 data-model-id={entry.id}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-[12px] border-[1.5px] text-left transition-all enabled:hover:scale-[1.01] enabled:active:scale-[0.99]"
+                data-selected={isSelected ? "true" : undefined}
+                className="flex items-stretch gap-2 rounded-[12px] border-[1.5px] transition-all"
                 style={{
-                  borderColor: alreadyAdded ? styles.border : withAlpha(styles.accent, alreadyAdded ? 0 : 0.28),
-                  background: alreadyAdded ? "transparent" : styles.isDark ? "rgba(255,255,255,0.015)" : "rgba(0,0,0,0.008)",
+                  borderColor: alreadyAdded
+                    ? styles.border
+                    : isSelected
+                      ? withAlpha(styles.accent, 0.55)
+                      : withAlpha(styles.accent, 0.28),
+                  background: alreadyAdded
+                    ? "transparent"
+                    : isSelected
+                      ? withAlpha(styles.accent, 0.08)
+                      : styles.isDark
+                        ? "rgba(255,255,255,0.015)"
+                        : "rgba(0,0,0,0.008)",
                   opacity: alreadyAdded ? 0.55 : 1,
-                  cursor: alreadyAdded ? "default" : "pointer",
                 }}
-                title={alreadyAdded ? "Already added" : entry.id}
               >
-                <span className="min-w-0 flex-1 flex flex-col gap-0.5">
-                  <span className="flex items-center gap-1.5 min-w-0 flex-wrap">
-                    <span
-                      className="truncate text-[12.5px] font-bold"
-                      style={{ color: styles.text }}
-                    >
-                      {cleanName}
-                    </span>
-                    {free ? (
-                      <span
-                        className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                        style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
-                      >
-                        FREE
-                      </span>
-                    ) : meta ? (
-                      <span
-                        className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                        style={{ background: styles.subtle, color: styles.textTertiary }}
-                      >
-                        PAID
-                      </span>
-                    ) : null}
-                    {alreadyAdded ? (
-                      <span
-                        className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                        style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
-                      >
-                        ADDED
-                      </span>
-                    ) : null}
+                {/* ── LEFT zone: the select checkbox + the text. PointerDOWN
+                    toggles and opens the paint session; sweeping the pointer
+                    across other rows' left zones paints them into the same
+                    state (R93-A6). Already-added rows never select. */}
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={isSelected}
+                  aria-label={`Select ${cleanName} (${entry.id})`}
+                  data-testid="picker-model-select"
+                  disabled={alreadyAdded}
+                  onPointerDown={(e) => {
+                    if (e.button !== 0) return;
+                    beginPaint(entry.id);
+                  }}
+                  onPointerEnter={() => paintOver(entry.id)}
+                  className="flex-1 min-w-0 flex items-center gap-3 px-3 py-2.5 text-left rounded-l-[10px] enabled:cursor-pointer disabled:cursor-default touch-none"
+                  title={
+                    alreadyAdded
+                      ? "Already added"
+                      : isSelected
+                        ? "Selected — drag across rows to select more"
+                        : "Click or drag to select"
+                  }
+                >
+                  <span
+                    aria-hidden
+                    data-testid="picker-model-checkbox"
+                    className="shrink-0 w-[18px] h-[18px] rounded-[6px] grid place-items-center border-[1.5px] transition-colors"
+                    style={{
+                      borderColor: isSelected ? styles.accent : styles.border,
+                      background: isSelected ? styles.accent : "transparent",
+                    }}
+                  >
+                    {isSelected ? <Check size={12} style={{ color: styles.accentText }} /> : null}
                   </span>
-                  <span className="flex items-center gap-2 min-w-0 flex-wrap">
-                    <span className="truncate font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-                      {entry.id}
-                    </span>
-                    {meta && (
-                      <span className="shrink-0 font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-                        {formatPricingSummary(meta) ?? "pricing unknown"}
-                        {meta.contextWindow > 0 ? ` · ${formatTokenCount(meta.contextWindow)}` : ""}
+                  <span className="min-w-0 flex-1 flex flex-col gap-0.5">
+                    <span className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                      <span
+                        className="truncate text-[12.5px] font-bold"
+                        style={{ color: styles.text }}
+                      >
+                        {cleanName}
                       </span>
-                    )}
+                      {free ? (
+                        <span
+                          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                          style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
+                        >
+                          FREE
+                        </span>
+                      ) : meta ? (
+                        <span
+                          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                          style={{ background: styles.subtle, color: styles.textTertiary }}
+                        >
+                          PAID
+                        </span>
+                      ) : null}
+                      {alreadyAdded ? (
+                        <span
+                          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                          style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
+                        >
+                          ADDED
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="flex items-center gap-2 min-w-0 flex-wrap">
+                      <span className="truncate font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+                        {entry.id}
+                      </span>
+                      {meta && (
+                        <span className="shrink-0 font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+                          {formatPricingSummary(meta) ?? "pricing unknown"}
+                          {meta.contextWindow > 0 ? ` · ${formatTokenCount(meta.contextWindow)}` : ""}
+                        </span>
+                      )}
+                    </span>
                   </span>
-                </span>
-              </button>
+                </button>
+                {/* ── the pencil: the ROUND-87 configure-first flow. */}
+                {!alreadyAdded ? (
+                  <button
+                    type="button"
+                    onClick={() => onPick(prefillFor(entry.id))}
+                    aria-label={`Configure and add ${entry.id}`}
+                    data-testid="picker-model-configure"
+                    className="shrink-0 self-center w-8 h-8 grid place-items-center rounded-[10px] mr-0.5 transition-colors"
+                    style={{ color: styles.textTertiary }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = styles.subtleHover;
+                      e.currentTarget.style.color = styles.textSecondary;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent";
+                      e.currentTarget.style.color = styles.textTertiary;
+                    }}
+                    title="Configure pricing & limits before adding"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                ) : null}
+                {/* ── RIGHT zone: the one-click DIRECT add (R93-A6, the
+                    owner: "If I click on the right side of the model, then it
+                    will directly add that model"). */}
+                {!alreadyAdded ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBatchError(null);
+                      void onAddDirect([prefillFor(entry.id)]).catch((err: unknown) => {
+                        setBatchError(err instanceof Error ? err.message : String(err));
+                      });
+                    }}
+                    aria-label={`Add ${entry.id} directly`}
+                    data-testid="picker-model-direct-add"
+                    className="shrink-0 self-center flex items-center gap-1 h-8 px-3 mr-2 rounded-full text-[11px] font-bold transition-all active:scale-[0.97]"
+                    style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = withAlpha(styles.accent, 0.22);
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = withAlpha(styles.accent, 0.14);
+                    }}
+                    title="Add now with the catalog defaults"
+                  >
+                    <Plus size={12} /> Add
+                  </button>
+                ) : null}
+              </div>
             );
           })}
           {rows.length === 0 && catalog.entries.length > 0 && (
@@ -2750,6 +3083,65 @@ function AddModelsDialog({
             </div>
           )}
         </div>
+
+        {/* ── R93-A6: the selection strip — the batch add affordance. Appears
+            the moment any row is selected; rides BETWEEN the list and the
+            manual footer so the muscle memory for both is stable. */}
+        {selectedCount > 0 ? (
+          <div
+            data-testid="picker-batch-strip"
+            className="shrink-0 border-t px-5 py-3 flex items-center gap-3"
+            style={{ borderColor: styles.border, background: withAlpha(styles.accent, 0.05) }}
+          >
+            <span className="text-[12px] font-bold" style={{ color: styles.text }}>
+              {selectedCount} model{selectedCount === 1 ? "" : "s"} selected
+            </span>
+            <span className="flex-1" />
+            <button
+              type="button"
+              onClick={clearSelection}
+              disabled={batchBusy}
+              className="h-9 px-3.5 rounded-full text-[11.5px] font-bold disabled:opacity-50"
+              style={{ color: styles.textSecondary }}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={() => void addSelected()}
+              disabled={batchBusy}
+              data-testid="picker-batch-add"
+              className="h-9 px-4 rounded-full text-[12px] font-bold disabled:opacity-50 flex items-center gap-1.5"
+              style={{ background: styles.accent, color: styles.accentText }}
+            >
+              {batchBusy ? <RefreshCw size={12} className="animate-spin" /> : <Plus size={12} />}
+              {batchBusy ? "Adding…" : `Add ${selectedCount} model${selectedCount === 1 ? "" : "s"}`}
+            </button>
+          </div>
+        ) : null}
+
+        {/* The honest failure surface (R93-B4: no silent adds) — any direct or
+            batch add error lands HERE, names the failed count, and keeps the
+            picker open for a retry. */}
+        {batchError !== null ? (
+          <div
+            data-testid="picker-batch-error"
+            className="shrink-0 border-t px-5 py-3 flex items-center gap-2 text-[11.5px] font-semibold"
+            style={{ borderColor: styles.border, color: "#ef4444" }}
+          >
+            <AlertTriangle size={13} className="shrink-0" />
+            <span className="min-w-0 flex-1">{batchError}</span>
+            <button
+              type="button"
+              onClick={() => setBatchError(null)}
+              aria-label="Dismiss error"
+              className="shrink-0 w-6 h-6 grid place-items-center rounded-[8px]"
+              style={{ color: styles.textTertiary }}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ) : null}
 
         {/* footer: manual add-by-id (also rides the configure flow — the
             ROUND-87 contract: no add without configuration). */}
@@ -2774,7 +3166,7 @@ function AddModelsDialog({
             className="h-10 px-4 rounded-full text-[12px] font-bold disabled:opacity-50 shrink-0"
             style={{ background: styles.accent, color: styles.accentText }}
           >
-            Configure & add
+            Configure &amp; add
           </button>
         </div>
       </div>
