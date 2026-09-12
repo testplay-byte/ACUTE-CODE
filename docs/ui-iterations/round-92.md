@@ -150,7 +150,9 @@ settings keep the model selection + options.
 | `pnpm build` | green (4 pages + menu-overlay/popout/mini entries) |
 | `pnpm license:audit` | 134 production dependencies, clean |
 | `cargo check --target x86_64-pc-windows-msvc` | green |
-| `pnpm docs:check` | 196 docs, 0 failures, 0 warnings |
+| `pnpm docs:check` | 197 docs, 0 failures, 0 warnings |
+| GitHub CI (run 34659188740) | **SUCCESS on the first try** |
+| Release (run 34659190170) | **SUCCESS** — v0.90.0 PUBLISHED (release 387395517, latest, zero drafts; ACUTE-CODE_0.90.0_x64-setup.exe 37,550,238 B sha256 59bba825… + acute-launcher-kit-v0.90.0.zip 105,863 B sha256 7e03fcc2…) |
 
 ## 7. Files this round
 

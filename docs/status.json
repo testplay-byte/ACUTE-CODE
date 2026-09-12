@@ -275,7 +275,7 @@
   }
  ],
  "quality": {
-  "ci": "pending — the R92 push (v0.90.0) heads to CI with this sync; this row updates at the close-out.",
+  "ci": "GREEN — R92 push d18ba05 → CI run 34659188740 SUCCESS on the FIRST try (the fourth-walkthrough round: lint, typechecks, the 2,953-test root suite in 165 files, the 4-page build, e2e 12/12, license audit 134 CLEAN, cargo check, docs check 197/0/0) + the Release run 34659190170 SUCCESS; v0.90.0 tagged, built, and PUBLISHED (both assets verified: ACUTE-CODE_0.90.0_x64-setup.exe 37,550,238 B sha256 59bba825… + acute-launcher-kit-v0.90.0.zip 105,863 B sha256 7e03fcc2… — the digests the in-app updater verifies against; the release marked latest; zero drafts remain).",
   "suites": [
    {
     "name": "frontend",
