@@ -53,6 +53,9 @@
  *     enter the computer-use monitor ring — A1 holds).
  */
 import { jsonSchema } from "ai";
+// R95-C: file:// URLs — Node's battle-tested URL→path conversion for the
+// read action's disk branch (the frontend twin is src/lib/local-url.ts).
+import { fileURLToPath } from "node:url";
 import {
   VIEWPORT_PRESETS,
   agentTabIdForChatSession,
@@ -62,6 +65,8 @@ import {
   browserNavigateCommand,
   browserSessionForChatSession,
   browserViewportCommand,
+  isTextualLocalContentType,
+  readLocalBrowserFile,
 } from "../../browser-proxy.js";
 import { sendBrowserCommand } from "../../browser-command.js";
 // ROUND-89 (R89-E): the AGENT HANDS — the visible, human-like input engine
@@ -101,6 +106,63 @@ import type { PluginDefinition, ToolDefinition } from "../registry.js";
 // USER INPUT is embedded ONLY via JSON.stringify — never string-concatenated
 // into the script (injection safety; a selector or text containing quotes
 // becomes a safely-escaped JS string literal).
+
+// ── ROUND-95 (R95-C): local files ─────────────────────────────────────
+//
+// The owner: "I gave it a file path for a local HTML file and after giving
+// it that, it gave me this error: 'Native browser unavailable. Only
+// HTTP/HTTPS URLs are supported by the embedded browser.'" The native
+// browser opens local files now (the Rust gate + the panel + the navigate
+// core all accept file://), and the TOOL normalizes what the model naturally
+// sends — a Windows path, a POSIX path, a UNC path, or a ready file:// URL —
+// into the canonical file:// URL before it reaches the history.
+
+/** A relative path that names a local page-ish file (`demo.html`). */
+const RELATIVE_LOCAL_FILE_RE = /^[^?#]*\.(?:html?|xhtml|svg|md|txt|json|css|js|mjs)(?:[?#]|$)/i;
+
+/**
+ * R95-C: normalize a file:// URL or a bare LOCAL PATH (Windows drive, POSIX
+ * absolute, UNC) into the canonical file:// URL the native chain accepts.
+ * `null` for everything else — http(s) URLs pass through untouched and the
+ * backend's validation stays the authority for junk.
+ *
+ * The frontend twin lives in src/lib/local-url.ts (agent-core cannot import
+ * frontend code — keep the two in behavioral lockstep; local-url.test.ts +
+ * browser-tool.test.ts pin the same shapes).
+ */
+function normalizeLocalFileUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  if (/^file:\/\//i.test(trimmed)) {
+    try {
+      return new URL(trimmed).toString();
+    } catch {
+      return null; // a broken file URL — the backend's error is the honest one
+    }
+  }
+  try {
+    if (/^[a-zA-Z]:[\\/]/.test(trimmed)) {
+      // C:\Users\me\page.html or C:/Users/me/page.html → file:///C:/Users/me/page.html
+      return new URL(`file:///${trimmed.replace(/\\/g, "/")}`).toString();
+    }
+    if (trimmed.startsWith("\\\\")) {
+      // \\server\share\page.html → file://server/share/page.html (host lowercases
+      // like every URL host; only BACKSLASH-led strings count as UNC).
+      const parts = trimmed.slice(2).replace(/\\/g, "/").split("/").filter((p) => p !== "");
+      if (parts.length === 0) return null;
+      const [host, ...pathParts] = parts;
+      const suffix = pathParts.length > 0 ? `/${pathParts.join("/")}` : "";
+      return new URL(`file://${host.toLowerCase()}${suffix}`).toString();
+    }
+    if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
+      // POSIX absolute path: /home/me/page.html → file:///home/me/page.html.
+      return new URL(`file://${trimmed}`).toString();
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 /** source: the page's html (outerHTML), css (stylesheets + computed style),
  * or scripts (src list + inline bodies). The total is capped INSIDE the
@@ -366,7 +428,7 @@ export const browserPlugin: PluginDefinition = {
       {
         name: "browser_control",
         description:
-          "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live, driven with VISIBLE HUMAN-LIKE INPUT: a custom agent cursor is ALWAYS on the page (parked at a resting spot between actions), moves to every target along a natural human path (slight overshoot-and-return, hesitation, curved — never a straight-line teleport), fires a real pointermove/mousemove trail with hover events as it travels (hover menus open), clicks land as real pointer events with a visible press pulse, and typing is word-by-word at a human pace (~150 WPM) after a natural ~1s beat from the click that focused the field; submit (Enter) also lands ~1s after the typing finishes. HOW TO WORK: (0) PLAN — for a multi-step browsing task, write the plan with the todo tool first (the owner watches the list progress live). (1) SEARCH FIRST — if the task is to find/search/look something up, navigate to a search engine (https://duckduckgo.com or https://www.bing.com), TYPE the query into its search box, then submit — do NOT guess direct URLs unless the task explicitly gives one. (2) read_dom FIRST on every new page — it returns each interactive element's exact selector + x/y/w/h position, which feed the mouse ops. (3) Interact like a person: type into fields (word-by-word), click (the cursor visibly moves), press_key Enter to submit forms, mouse scroll to browse results. Actions: navigate (absolute http(s) URL; documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts; presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps w/h), read (the CURRENT page's text content, fetched fresh server-side — works in every mode), read_dom (a STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element with a short CSS selector + its text/label/value + its x/y/w/h position, forms with field names, and pageState — the SPA SECTION tracker: the URL hash + query params + which tab/nav item is aria-selected or aria-current; AFTER clicking a section or tab, call read_dom again and CHECK pageState to confirm the section stuck — if it reverted (e.g. back to 'all'), click the section again; include 'all' adds the text paragraphs — THE way to know the page content without screenshots — call it FIRST), source (the live page's raw material: html (outerHTML of the page or one selector), css (stylesheets, plus the computed style of a selector), or scripts (src list + inline bodies); native desktop mode only), click (click an element — by CSS selector, or a case-insensitive substring of a clickable's visible text/aria-label/name/value/title; the cursor VISIBLY moves to it, hovers first (menus arm), then a full real pointer-event sequence — over/enter, move, down, up, click — fires at that exact spot, and the result reports where focus moved afterwards, a cheap effect check; native desktop mode only), type (the cursor moves to the field and TAPS it, a natural ~1s beat passes, then the text is typed WORD BY WORD at ~150 WPM with real per-character events so React/Vue pages register it; newlines in the text become REAL newlines (Shift+Enter formatting — the form is NEVER submitted implicitly); pass submit:true to submit after typing (the Enter key lands ~1s after the typing finishes — a person reviewing what they typed); capped at 600 chars per call — split longer texts), press_key (dispatch a key to an element or the focused element — Enter inside a form triggers REAL native form submission), mouse (FULL pointer control at exact page coordinates from read_dom: op move (hover), click (left), double, right (context menu), drag (x,y → toX,toY), scroll (dx/dy pixels, optional x/y hover point) — the custom cursor visibly travels every path), eval (run JavaScript INSIDE the live page and get the value back — click links with `return document.querySelector('a').click()`, fill inputs, read the DOM; the page's own state (logins, JS) is live; native desktop mode only), wait (let the page settle — probes the live page until its conditions hold, up to ms (default 900, max 15000): document.readyState 'complete' (default on; readyState:false skips it), a CSS selector appearing (selector), and/or the tab URL containing a substring (urlContains); returns honestly what matched or what did not — a pure ms pause with readyState:false needs no bridge. ALWAYS call wait (or use sequence, which waits automatically) after navigate before clicking/typing — pages need a moment to become interactive), sequence (MULTI-STAGE STEPS in ONE tool call — the way to do atomic multi-step interactions: steps is an array of 1-8 step objects {action, ...params}, each action being any of navigate/back/forward/reload/read/read_dom/source/click/type/press_key/mouse/eval/wait/wait_for_verification/set_viewport/screenshot/get_state (never sequence itself — no nesting); the steps run IN ORDER on one tab, each through the exact same code as the standalone action, stopping at the FIRST failure with its step index; between steps the tool settles automatically (250ms, or after navigate/back/forward/reload it waits up to 5s for readyState complete — the built-in proper waiting); use it for type→wait→click, navigate→read_dom, form fill→submit chains), screenshot (capture EXACTLY what the browser panel shows + a vision-model description — panel region only, NEVER the full screen; requires Computer Use enabled in Settings and the browser tab to be open in the app; prefer read/read_dom — screenshot only when pixels are genuinely the question), get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab), wait_for_verification (the page is blocked by a bot wall — captcha/Cloudflare/age gate: opens a countdown card in the OWNER's chat and waits — default 15s, up to 60s — while the owner solves it, then re-checks the page and reports honestly). To submit a search box / form: type with submit:true, or press_key key Enter (it triggers native form submission), or click the submit button. When a tool result warns '⚠ A verification wall', call wait_for_verification — the owner gets a live countdown card in chat to solve it. sessionId optional — omit it to drive THIS chat session's own tab (auto-opened for you; never another chat session's tab). click/type/press_key/mouse/read_dom/source/eval run through the desktop app's native bridge — in web dev mode they fail fast with an honest error (read works in every mode). The actions are HUMAN-PACED by design (the user watches a person work): a type call takes ~1s per 12 words plus the beats — do not fire them in parallel; do them in order like a person would. Viewport/page changes appear LIVE in the user's panel; announce them in one line. The page the panel shows may differ from a fresh fetch (logins, JS) — read for text, eval for the live DOM, screenshot for what the user actually sees.",
+          "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live, driven with VISIBLE HUMAN-LIKE INPUT: a custom agent cursor is ALWAYS on the page (parked at a resting spot between actions), moves to every target along a natural human path (slight overshoot-and-return, hesitation, curved — never a straight-line teleport), fires a real pointermove/mousemove trail with hover events as it travels (hover menus open), clicks land as real pointer events with a visible press pulse, and typing is word-by-word at a human pace (~150 WPM) after a natural ~1s beat from the click that focused the field; submit (Enter) also lands ~1s after the typing finishes. HOW TO WORK: (0) PLAN — for a multi-step browsing task, write the plan with the todo tool first (the owner watches the list progress live). (1) SEARCH FIRST — if the task is to find/search/look something up, navigate to a search engine (https://duckduckgo.com or https://www.bing.com), TYPE the query into its search box, then submit — do NOT guess direct URLs unless the task explicitly gives one. (2) read_dom FIRST on every new page — it returns each interactive element's exact selector + x/y/w/h position, which feed the mouse ops. (3) Interact like a person: type into fields (word-by-word), click (the cursor visibly moves), press_key Enter to submit forms, mouse scroll to browse results. Actions: navigate (absolute http(s) URL, or a LOCAL FILE — a file:// URL or an absolute local path like C:\\Users\\me\\page.html — local HTML files open natively in the browser panel; documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts; presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps w/h), read (the CURRENT page's text content, fetched fresh server-side — local file:// pages read from disk; works in every mode), read_dom (a STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element with a short CSS selector + its text/label/value + its x/y/w/h position, forms with field names, and pageState — the SPA SECTION tracker: the URL hash + query params + which tab/nav item is aria-selected or aria-current; AFTER clicking a section or tab, call read_dom again and CHECK pageState to confirm the section stuck — if it reverted (e.g. back to 'all'), click the section again; include 'all' adds the text paragraphs — THE way to know the page content without screenshots — call it FIRST), source (the live page's raw material: html (outerHTML of the page or one selector), css (stylesheets, plus the computed style of a selector), or scripts (src list + inline bodies); native desktop mode only), click (click an element — by CSS selector, or a case-insensitive substring of a clickable's visible text/aria-label/name/value/title; the cursor VISIBLY moves to it, hovers first (menus arm), then a full real pointer-event sequence — over/enter, move, down, up, click — fires at that exact spot, and the result reports where focus moved afterwards, a cheap effect check; native desktop mode only), type (the cursor moves to the field and TAPS it, a natural ~1s beat passes, then the text is typed WORD BY WORD at ~150 WPM with real per-character events so React/Vue pages register it; newlines in the text become REAL newlines (Shift+Enter formatting — the form is NEVER submitted implicitly); pass submit:true to submit after typing (the Enter key lands ~1s after the typing finishes — a person reviewing what they typed); capped at 600 chars per call — split longer texts), press_key (dispatch a key to an element or the focused element — Enter inside a form triggers REAL native form submission), mouse (FULL pointer control at exact page coordinates from read_dom: op move (hover), click (left), double, right (context menu), drag (x,y → toX,toY), scroll (dx/dy pixels, optional x/y hover point) — the custom cursor visibly travels every path), eval (run JavaScript INSIDE the live page and get the value back — click links with `return document.querySelector('a').click()`, fill inputs, read the DOM; the page's own state (logins, JS) is live; native desktop mode only), wait (let the page settle — probes the live page until its conditions hold, up to ms (default 900, max 15000): document.readyState 'complete' (default on; readyState:false skips it), a CSS selector appearing (selector), and/or the tab URL containing a substring (urlContains); returns honestly what matched or what did not — a pure ms pause with readyState:false needs no bridge. ALWAYS call wait (or use sequence, which waits automatically) after navigate before clicking/typing — pages need a moment to become interactive), sequence (MULTI-STAGE STEPS in ONE tool call — the way to do atomic multi-step interactions: steps is an array of 1-8 step objects {action, ...params}, each action being any of navigate/back/forward/reload/read/read_dom/source/click/type/press_key/mouse/eval/wait/wait_for_verification/set_viewport/screenshot/get_state (never sequence itself — no nesting); the steps run IN ORDER on one tab, each through the exact same code as the standalone action, stopping at the FIRST failure with its step index; between steps the tool settles automatically (250ms, or after navigate/back/forward/reload it waits up to 5s for readyState complete — the built-in proper waiting); use it for type→wait→click, navigate→read_dom, form fill→submit chains), screenshot (capture EXACTLY what the browser panel shows + a vision-model description — panel region only, NEVER the full screen; requires Computer Use enabled in Settings and the browser tab to be open in the app; prefer read/read_dom — screenshot only when pixels are genuinely the question), get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab), wait_for_verification (the page is blocked by a bot wall — captcha/Cloudflare/age gate: opens a countdown card in the OWNER's chat and waits — default 15s, up to 60s — while the owner solves it, then re-checks the page and reports honestly). To submit a search box / form: type with submit:true, or press_key key Enter (it triggers native form submission), or click the submit button. When a tool result warns '⚠ A verification wall', call wait_for_verification — the owner gets a live countdown card in chat to solve it. sessionId optional — omit it to drive THIS chat session's own tab (auto-opened for you; never another chat session's tab). click/type/press_key/mouse/read_dom/source/eval run through the desktop app's native bridge — in web dev mode they fail fast with an honest error (read works in every mode). The actions are HUMAN-PACED by design (the user watches a person work): a type call takes ~1s per 12 words plus the beats — do not fire them in parallel; do them in order like a person would. Viewport/page changes appear LIVE in the user's panel; announce them in one line. The page the panel shows may differ from a fresh fetch (logins, JS) — read for text, eval for the live DOM, screenshot for what the user actually sees.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
@@ -406,7 +468,7 @@ export const browserPlugin: PluginDefinition = {
             toY: { type: "number", description: "action=mouse op=drag: the end y" },
             dx: { type: "number", description: "action=mouse op=scroll: horizontal scroll pixels (positive = right)" },
             dy: { type: "number", description: "action=mouse op=scroll: vertical scroll pixels (positive = down)" },
-            url: { type: "string", description: "Absolute http(s) URL to open (action=navigate)" },
+            url: { type: "string", description: "Absolute http(s) URL, or a local file (a file:// URL or an absolute local path like C:\\Users\\me\\page.html) (action=navigate)" },
             preset: {
               type: "string",
               description: "Display-size preset (action=set_viewport)",
@@ -692,6 +754,14 @@ export const browserPlugin: PluginDefinition = {
                   // Timeout / no panel mounted → the fetch fallback below.
                 }
               }
+              // R95-C: a local file has no upstream to interrogate — the
+              // bridge probe (the LIVE page) is the only real signal. Without
+              // it, treat the file as clean: a static local file does not
+              // serve bot walls, and any marker text inside it is already
+              // visible to read/eval.
+              if (/^file:\/\//i.test(url)) {
+                return { ok: true, title: fallbackTitle ?? "", text: "", via: "fetch" };
+              }
               const fetched = await webFetch(url);
               if (!fetched.ok) {
                 return { ok: false, error: `fetching the page failed: ${fetched.output}` };
@@ -700,13 +770,29 @@ export const browserPlugin: PluginDefinition = {
             };
 
             if (action === "navigate") {
-              const url = typeof input.url === "string" ? input.url.trim() : "";
+              let url = typeof input.url === "string" ? input.url.trim() : "";
               if (url === "") return { ok: false, output: "browser_control: action navigate requires url" };
+              // ── ROUND-95 (R95-C): local files open natively ────────────
+              // Normalize what the model naturally sends — a Windows/POSIX/
+              // UNC path or a file:// URL — into the canonical file:// URL
+              // before anything else looks at it.
+              const local = normalizeLocalFileUrl(url);
+              if (local !== null) {
+                url = local;
+              } else if (RELATIVE_LOCAL_FILE_RE.test(url)) {
+                return {
+                  ok: false,
+                  output: `browser_control: navigate — '${url}' is a relative local path; give an absolute path (C:\\Users\\me\\page.html or /home/me/page.html)`,
+                };
+              }
               // ROUND-45 (audit P0-5): agent-driven navigation is host-gated
               // exactly like web_fetch (the panel then renders through the
               // server-side proxy). Malformed/non-http URLs fall through to the
               // shape validation below (its error is the better one); no approval
               // channel at all = fail-closed for http(s) too.
+              // R95-C: file:// navigations are NOT host-gated — a local file is
+              // the owner's own disk at the same trust level as the (approval-
+              // governed) read_file tool, and the panel renders it visibly live.
               if (/^https?:\/\//i.test(url)) {
                 if (toolDeps === undefined) {
                   return { ok: false, output: "browser_control: navigate unavailable — no approval channel in this context" };
@@ -850,6 +936,52 @@ export const browserPlugin: PluginDefinition = {
                 typeof maxCharsRaw === "number" && Number.isFinite(maxCharsRaw)
                   ? Math.min(16000, Math.max(1000, Math.round(maxCharsRaw)))
                   : 8000;
+              // ── R95-C: a file:// page reads from DISK, not the network ──
+              // The owner's local file is the page the user's panel shows;
+              // web_fetch refuses the file: scheme, so read it through the
+              // same capped, validated reader the /browser/local-file route
+              // serves (raw source — a local HTML file is usually the very
+              // code the agent is working on).
+              if (/^file:\/\//i.test(state.currentUrl)) {
+                let localPath: string | null = null;
+                try {
+                  localPath = fileURLToPath(new URL(state.currentUrl));
+                } catch {
+                  localPath = null;
+                }
+                if (localPath === null) {
+                  return {
+                    ok: false,
+                    output: `browser_control: read — '${state.currentUrl}' is not a valid local file URL`,
+                  };
+                }
+                const file = await readLocalBrowserFile(localPath);
+                if (!file.ok) {
+                  return { ok: false, output: `browser_control: read — reading the local file failed: ${file.error}` };
+                }
+                if (!isTextualLocalContentType(file.file.contentType)) {
+                  return {
+                    ok: false,
+                    output: `browser_control: read — '${file.file.path}' is a ${file.file.contentType} file; read returns TEXT (use screenshot for pixels)`,
+                  };
+                }
+                let fileText = file.file.bytes.toString("utf8");
+                let fileTruncated = false;
+                if (fileText.length > maxChars) {
+                  fileText = `${fileText.slice(0, maxChars)}\n…(truncated — ${fileText.length} chars total; raise maxChars up to 16000)`;
+                  fileTruncated = true;
+                }
+                // R66 (A4): the wall markers are checked on local files too
+                // (a saved interstitial page still reads like one).
+                const fileNote = (() => {
+                  const hit = detectVerificationWall({ title: state.title ?? undefined, text: file.file.bytes.toString("utf8") });
+                  return hit !== null ? wallWarningNote(hit) : "";
+                })();
+                return {
+                  ok: true,
+                  output: `Local file page ${state.title ?? "(untitled)"} — ${state.currentUrl} (read from disk, raw source${fileTruncated ? "" : ", full text"}):\n\n${fileText}${noTabHint}${fileNote}`,
+                };
+              }
               const fetched = await webFetch(state.currentUrl);
               if (!fetched.ok) {
                 return {

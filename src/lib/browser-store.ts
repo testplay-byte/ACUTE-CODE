@@ -1,5 +1,8 @@
 import { create } from "zustand";
 import { useConfigStore } from "./config-store";
+// ROUND-95 (R95-C): file:// URLs → the sidecar's local-file route (the
+// browser-side file-URL→path conversion lives there).
+import { fileUrlToLocalPath } from "./local-url";
 
 /**
  * ROUND-43 (R43-10) — the EMBEDDED BROWSER panel state.
@@ -235,9 +238,20 @@ export function putBrowserViewport(sessionId: string, patch: Partial<Pick<Browse
   });
 }
 
-/** The iframe src: everything the header-less iframe navigation needs. */
+/** The iframe src: everything the header-less iframe navigation needs.
+ * ROUND-95 (R95-C): a file:// URL (web-dev/proxy mode) routes to the
+ * sidecar's /browser/local-file route instead of the fetch proxy — the
+ * native desktop app never builds an iframe src for a file page (the child
+ * webview loads file:// directly). */
 export function buildProxySrc(url: string, sessionId: string, ticket: string): string {
   const { baseUrl } = useConfigStore.getState();
+  if (/^file:\/\//i.test(url)) {
+    const path = fileUrlToLocalPath(url);
+    if (path !== null) {
+      const fileQuery = new URLSearchParams({ path, sessionId, bt: ticket });
+      return `${baseUrl}/api/v1/browser/local-file?${fileQuery.toString()}`;
+    }
+  }
   const query = new URLSearchParams({ url, sessionId, bt: ticket });
   return `${baseUrl}/api/v1/browser/proxy?${query.toString()}`;
 }

@@ -9,7 +9,7 @@
  * /browser/history route.
  */
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -307,16 +307,68 @@ describe("browser_control — input validation + default sessionId", () => {
     expect(a.currentUrl).toBe("https://en.wikipedia.org/a");
   });
 
-  it("navigate demands an absolute http(s) url; unknown actions are refused", async () => {
+  it("navigate demands an absolute http(s) or file:// url; unknown actions are refused", async () => {
     const tools = await buildTools(tempDir);
     const bc = tool(tools, "browser_control");
 
     expect((await bc.execute({ action: "navigate", sessionId: "sess-v" })).ok).toBe(false);
-    const fileUrl = await bc.execute({ action: "navigate", url: "file:///etc/passwd", sessionId: "sess-v" });
-    expect(fileUrl.ok).toBe(false);
-    expect(fileUrl.output).toContain("http(s)");
+    const junk = await bc.execute({ action: "navigate", url: "not a url at all", sessionId: "sess-v" });
+    expect(junk.ok).toBe(false);
+    expect(junk.output).toContain("http(s)");
 
     expect((await bc.execute({ action: "sideways", sessionId: "sess-v" })).ok).toBe(false);
+  });
+
+  // ── ROUND-95 (R95-C): local files open natively — navigate + read ──────
+  it("R95-C: navigate accepts a file:// URL and a bare local path (normalized into history)", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+
+    // The model sends a ready file:// URL…
+    const byUrl = await bc.execute({
+      action: "navigate",
+      url: `file://${join(tempDir, "demo.html")}`,
+      sessionId: "sess-file",
+    });
+    expect(byUrl.ok).toBe(true);
+    // …and the natural Windows drive form (backslashes, drive letter)…
+    const windowsStyle = await bc.execute({
+      action: "navigate",
+      url: "C:\\Users\\me\\page.html",
+      sessionId: "sess-file",
+    });
+    expect(windowsStyle.ok).toBe(true);
+    const state = JSON.parse((await bc.execute({ action: "get_state", sessionId: "sess-file" })).output) as {
+      currentUrl: string;
+    };
+    expect(state.currentUrl).toBe("file:///C:/Users/me/page.html");
+
+    // A RELATIVE local path is refused honestly (no base to resolve against).
+    const relative = await bc.execute({ action: "navigate", url: "demo.html", sessionId: "sess-file" });
+    expect(relative.ok).toBe(false);
+    expect(relative.output).toContain("relative local path");
+  });
+
+  it("R95-C: read on a file:// page reads the file from DISK (and reports the honest miss)", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+
+    const fixture = join(tempDir, "local-page.html");
+    writeFileSync(fixture, "<!doctype html><html><body><h1>Local demo page</h1></body></html>");
+    await bc.execute({ action: "navigate", url: `file://${fixture}`, sessionId: "sess-read-file" });
+
+    const read = await bc.execute({ action: "read", sessionId: "sess-read-file" });
+    expect(read.ok).toBe(true);
+    expect(read.output).toContain("read from disk");
+    expect(read.output).toContain("Local demo page");
+    // webFetch is NEVER consulted for a file:// page (it refuses the scheme).
+    expect(webFetchMock).not.toHaveBeenCalled();
+
+    // A missing file surfaces the reader's honest error.
+    await bc.execute({ action: "navigate", url: `file://${join(tempDir, "does-not-exist.html")}`, sessionId: "sess-read-file" });
+    const miss = await bc.execute({ action: "read", sessionId: "sess-read-file" });
+    expect(miss.ok).toBe(false);
+    expect(miss.output).toContain("reading the local file failed");
   });
 });
 

@@ -1455,3 +1455,185 @@ describe("BrowserPanel R67 — agent navigation frames (E1: instant + create-on-
     }
   });
 });
+
+// ── ROUND-95 (R95-C): LOCAL FILES — the address bar opens them natively ──
+describe("BrowserPanel R95-C — local file paths in the address bar", () => {
+  const create = () => vi.mocked(nativeBrowser.nativeTabCreate);
+  const nativeNavigate = () => vi.mocked(nativeBrowser.nativeTabNavigate);
+
+  /** The shared native-mode setup (the R67 suite's recipe). */
+  const enableNative = (): void => {
+    nativeState.available = true;
+    nativeState.evalResult = null;
+    nativeState.evalScripts = [];
+    nativeState.evalQueue = [];
+    nativeState.windowMetrics = null;
+    create().mockReset();
+    create().mockImplementation(() => Promise.resolve());
+    nativeNavigate().mockReset();
+    nativeNavigate().mockImplementation(() => Promise.resolve());
+  };
+
+  it("R95-C: a typed Windows path normalizes to file:/// and drives BOTH the store and the native webview", async () => {
+    enableNative();
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "C:\\Users\\owner\\demo page.html" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    // The server history records the normalized file:// URL…
+    await waitFor(() =>
+      expect(
+        postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "file:///C:/Users/owner/demo%20page.html"),
+      ).toBe(true),
+    );
+    // …and the native webview is created AT it (the pre-R95 flow died in the
+    // Rust gate with "only http/https URLs are supported" — the owner's
+    // exact report).
+    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "file:///C:/Users/owner/demo%20page.html", expect.anything()));
+    // The address bar shows the canonical URL.
+    expect(input.value).toBe("file:///C:/Users/owner/demo%20page.html");
+    // The tab strip label is the decoded FILE NAME (a local page has no
+    // host to strip) — the %-escape never leaks into the label.
+    await waitFor(() =>
+      expect(useRightSidebarStore.getState().byProject["prj_test::default"].tabs[0]?.title).toBe("demo page.html"),
+    );
+  });
+
+  it("R95-C: a POSIX path normalizes too, and a pasted local path paste-and-goes", async () => {
+    enableNative();
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "/home/z/repos/demo.html" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "file:///home/z/repos/demo.html")).toBe(true),
+    );
+
+    // Paste-and-go: a file:// URL pasted into the bar navigates immediately.
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, "clipboardData", {
+      value: { getData: () => "file:///home/z/repos/other.html" },
+    });
+    fireEvent(screen.getByTestId("browser-address-input"), pasteEvent);
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "file:///home/z/repos/other.html")).toBe(true),
+    );
+  });
+
+  it("R95-C: a RELATIVE local path is refused honestly (error card, no navigation, no search fallback)", async () => {
+    enableNative();
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "demo.html" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    const card = await screen.findByTestId("browser-error-card");
+    expect(card.textContent).toContain("relative local path");
+    expect(card.textContent).toContain("absolute path");
+    // No navigation happened — and no duckduckgo search query either.
+    expect(postCalls("/api/v1/browser/navigate")).toHaveLength(0);
+    expect(create()).not.toHaveBeenCalled();
+  });
+
+  it("R95-C: web-dev (proxy) mode renders a file:// page through the sidecar's local-file route", async () => {
+    // nativeState.available stays FALSE — the iframe path.
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "/home/z/repos/demo.html" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    await waitFor(() => expect(screen.getByTestId("browser-iframe")).toBeTruthy());
+    const iframe = screen.getByTestId("browser-iframe") as HTMLIFrameElement;
+    expect(iframe.src).toContain(`${BASE}/api/v1/browser/local-file?`);
+    expect(iframe.src).toContain(encodeURIComponent("/home/z/repos/demo.html"));
+    expect(iframe.src).toContain("sessionId=tab-test-1");
+    expect(iframe.src).toContain(`bt=${ticket}`);
+  });
+
+  it("R95-C: the Rust browser-navigated hook's FILE navigations are recorded (address bar + server history stay truthful)", async () => {
+    enableNative();
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    // The user navigated somewhere first (the store has a current URL).
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "/home/z/a.html" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "file:///home/z/a.html")).toBe(true),
+    );
+
+    // The Rust hook fires for an in-page link click on the file page — the
+    // pre-R95 listener DROPPED file URLs (http-only guard).
+    expect(nativeState.navigatedListener).not.toBeNull();
+    await act(async () => {
+      nativeState.navigatedListener?.("tab-test-1", "file:///home/z/b.html");
+    });
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "file:///home/z/b.html")).toBe(true),
+    );
+  });
+
+  it("R95-C: an AGENT navigation to a file:// URL drives the native webview (the SSE browser-navigate frame path)", async () => {
+    enableNative();
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    // User first navigates (creates the webview).
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "https://a.example/one" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() => expect(create()).toHaveBeenCalled());
+
+    // The agent's browser-navigate SSE frame lands (stream-store calls
+    // applyAgentNavigation) carrying a local file — the panel must drive the
+    // native webview to it exactly like an http navigation.
+    act(() => {
+      useBrowserTabStore.getState().applyAgentNavigation("tab-test-1", "file:///home/z/repos/agent-page.html");
+    });
+    await waitFor(() =>
+      expect(nativeNavigate()).toHaveBeenCalledWith("tab-test-1", "file:///home/z/repos/agent-page.html"),
+    );
+  });
+
+  it("R95-C: 'Open externally' on a local file explains it stays in the app's browser (never the OS handoff)", async () => {
+    enableNative();
+    vi.stubGlobal("__TAURI__", { core: { invoke: vi.fn() } });
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const input = screen.getByTestId("browser-address-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "/home/z/demo.html" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() =>
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.url === "file:///home/z/demo.html")).toBe(true),
+    );
+
+    fireEvent.click(screen.getByTestId("browser-open-external"));
+    const card = await screen.findByTestId("browser-error-card");
+    expect(card.textContent).toContain("app's browser");
+    // The Rust OS-handoff command was never invoked for a local file.
+    expect(vi.mocked(nativeBrowser.openExternalUrl)).not.toHaveBeenCalled();
+  });
+});

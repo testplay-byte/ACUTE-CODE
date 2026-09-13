@@ -12,7 +12,7 @@
  * sessionId validation.
  */
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
@@ -428,12 +428,15 @@ describe("GET /browser/proxy — CSS and binary", () => {
 // ── guards + failure pages ─────────────────────────────────────────────────
 
 describe("GET /browser/proxy — guards and error pages", () => {
-  it("refuses non-http schemes with an HTML 403 page (file://)", async () => {
+  it("refuses non-http schemes with an HTML 403 page (file://) that points at the local-file route", async () => {
     const ticket = await mintTicket();
     const res = await iframeGet(proxyUrl("file:///etc/passwd", ticket));
     expect(res.statusCode).toBe(403);
     expect(res.headers["content-type"]).toContain("text/html");
     expect(res.body).toContain("refused scheme 'file:'");
+    // R95-C: the message steers file navigations to the native browser /
+    // local-file route instead of a dead end.
+    expect(res.body).toContain("local-file");
     expect(res.body).toContain("file:///etc/passwd");
   });
 
@@ -895,12 +898,22 @@ describe("POST /browser/navigate + GET /browser/history", () => {
     expect(history.index).toBe(49);
   });
 
-  it("rejects bad bodies (no url/direction, bad direction, non-http url, bad sessionId)", async () => {
+  it("rejects bad bodies (no url/direction, bad direction, non-http(s)/file url, bad sessionId)", async () => {
     expect((await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION } })).statusCode).toBe(400);
     expect((await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, direction: "sideways" } })).statusCode).toBe(400);
-    expect((await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: "file:///x" } })).statusCode).toBe(400);
+    expect((await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: "about:blank" } })).statusCode).toBe(400);
     expect((await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: "bad id!", url: A } })).statusCode).toBe(400);
     expect((await inject({ method: "GET", url: "/api/v1/browser/history?sessionId=bad id!" })).statusCode).toBe(400);
+  });
+
+  it("R95-C: navigate accepts file:// URLs as first-class history entries", async () => {
+    const push = (await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: "file:///C:/Users/me/page.html" } })).json() as { action: string; entry: { url: string } };
+    expect(push.action).toBe("push");
+    expect(push.entry.url).toBe("file:///C:/Users/me/page.html");
+    // Back/forward walk them like any other entry.
+    await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: A } });
+    const back = (await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, direction: "back" } })).json() as { entry: { url: string } };
+    expect(back.entry.url).toBe("file:///C:/Users/me/page.html");
   });
 
   it("GET history for an unknown session returns an empty view (no side effects)", async () => {
@@ -938,5 +951,133 @@ describe("GET/PUT /browser/viewport", () => {
     // Sessions are isolated.
     const other = (await inject({ method: "GET", url: "/api/v1/browser/viewport?sessionId=tab-two" })).json() as { viewport: { width: number } };
     expect(other.viewport.width).toBe(1440);
+  });
+});
+
+// ── ROUND-95 (R95-C): the local-file route (file:// pages in web dev mode) ─
+
+describe("GET /browser/local-file (R95-C)", () => {
+  /** Per-test fixture dir (the shared tempDir is cleaned once, after all). */
+  let files = "";
+  beforeEach(() => {
+    files = join(tempDir, `local-files-${randomUUID()}`);
+    mkdirSync(files, { recursive: true });
+    writeFileSync(join(files, "page.html"), "<!doctype html><html><body><h1>Local page</h1></body></html>");
+    writeFileSync(join(files, "icon.svg"), `<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>`);
+    writeFileSync(join(files, "notes.txt"), "plain notes");
+    writeFileSync(join(files, "app.exe"), Buffer.from([0x4d, 0x5a, 0x90, 0x00]));
+  });
+
+  const localFileUrl = (path: string, ticket: string, sessionId = SESSION): string =>
+    `/api/v1/browser/local-file?${new URLSearchParams({ path, sessionId, bt: ticket }).toString()}`;
+
+  it("serves an .html file to a header-less iframe load with a valid ticket", async () => {
+    const ticket = await mintTicket();
+    const res = await iframeGet(localFileUrl(join(files, "page.html"), ticket));
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/html");
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(res.body).toContain("<h1>Local page</h1>");
+  });
+
+  it("serves svg and text files with their content types", async () => {
+    const ticket = await mintTicket();
+    const svg = await iframeGet(localFileUrl(join(files, "icon.svg"), ticket));
+    expect(svg.statusCode).toBe(200);
+    expect(svg.headers["content-type"]).toContain("image/svg+xml");
+    expect(svg.body).toContain("<rect/>");
+
+    const txt = await iframeGet(localFileUrl(join(files, "notes.txt"), ticket));
+    expect(txt.statusCode).toBe(200);
+    expect(txt.headers["content-type"]).toContain("text/plain");
+    expect(txt.body).toContain("plain notes");
+  });
+
+  it("refuses missing files (404), directories (400) and relative paths (400) with the HTML error card", async () => {
+    const ticket = await mintTicket();
+
+    const missing = await iframeGet(localFileUrl(join(files, "nope.html"), ticket));
+    expect(missing.statusCode).toBe(404);
+    expect(missing.headers["content-type"]).toContain("text/html");
+    expect(missing.body).toContain("does not exist");
+
+    const dir = await iframeGet(localFileUrl(files, ticket));
+    expect(dir.statusCode).toBe(400);
+    expect(dir.body).toContain("is not a file");
+
+    const relative = await iframeGet(localFileUrl("demo.html", ticket));
+    expect(relative.statusCode).toBe(400);
+    expect(relative.body).toContain("path must be absolute");
+  });
+
+  it("refuses non-renderable extensions (an .exe is not a page) with the honest 415", async () => {
+    const ticket = await mintTicket();
+    const res = await iframeGet(localFileUrl(join(files, "app.exe"), ticket));
+    expect(res.statusCode).toBe(415);
+    expect(res.headers["content-type"]).toContain("text/html");
+    expect(res.body).toContain("application/octet-stream");
+    expect(res.body).toContain("browser panel renders HTML, SVG, text and image files");
+  });
+
+  it("refuses files over the 10 MiB cap (413)", async () => {
+    const big = join(files, "big.html");
+    const chunk = "<!-- " + "x".repeat(1024 * 1024) + " -->\n"; // 1 MiB-ish lines
+    const handle = [];
+    for (let i = 0; i < 11; i++) handle.push(chunk);
+    writeFileSync(big, handle.join(""));
+    const ticket = await mintTicket();
+    const res = await iframeGet(localFileUrl(big, ticket));
+    expect(res.statusCode).toBe(413);
+    expect(res.body).toContain("local-file cap");
+  });
+
+  it("ticket-gates like the proxy: garbage bt → HTML 401; mismatched sessionId → 403", async () => {
+    const ticket = await mintTicket();
+    // A valid ticket goes through; the header-less garbage one gets the 401 card.
+    const ok = await iframeGet(localFileUrl(join(files, "page.html"), ticket));
+    expect(ok.statusCode).toBe(200);
+    const garbage = await app.inject({
+      method: "GET",
+      url: localFileUrl(join(files, "page.html"), "0".repeat(48)),
+      headers: { host: SIDECAR_HOST },
+    });
+    expect(garbage.statusCode).toBe(401);
+    expect(garbage.headers["content-type"]).toContain("text/html");
+    expect(garbage.body).toContain("ticket");
+
+    const mismatch = await iframeGet(localFileUrl(join(files, "page.html"), ticket, "other-tab"));
+    expect(mismatch.statusCode).toBe(403);
+    expect(mismatch.body).toContain("does not match");
+  });
+
+  it("refuses non-navigation requests (sec-fetch-dest empty = a page fetch()ing other local files)", async () => {
+    const ticket = await mintTicket();
+    const res = await app.inject({
+      method: "GET",
+      url: localFileUrl(join(files, "page.html"), ticket),
+      headers: { host: SIDECAR_HOST, "sec-fetch-dest": "empty" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toContain("serves browser navigations only");
+    // The same request shaped like the iframe's own load passes.
+    const nav = await app.inject({
+      method: "GET",
+      url: localFileUrl(join(files, "page.html"), ticket),
+      headers: { host: SIDECAR_HOST, "sec-fetch-dest": "iframe" },
+    });
+    expect(nav.statusCode).toBe(200);
+  });
+
+  it("POST answers like GET (a static file has no server-side handler — the page just reloads)", async () => {
+    const ticket = await mintTicket();
+    // A form inside a local page posts urlencoded to its own URL.
+    const res = await app.inject({
+      method: "POST",
+      url: localFileUrl(join(files, "page.html"), ticket),
+      headers: { host: SIDECAR_HOST, "content-type": "application/x-www-form-urlencoded" },
+      payload: "q=1",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain("<h1>Local page</h1>");
   });
 });

@@ -52,6 +52,21 @@
 //!   + `popout_initial_url` command (see the static's doc comment for the
 //!   why-not-query-param reasoning).
 //!
+//! - ROUND-95 (R95-C): LOCAL FILES. The owner's report: "I gave it a file path
+//!   for a local HTML file and after giving it that, it gave me this error:
+//!   'Native browser unavailable. Only HTTP/HTTPS URLs are supported by the
+//!   embedded browser.' … It should be able to open up local HTML files too."
+//!   The gate (`parse_web_url`, formerly `parse_http_url`) now accepts
+//!   http/https/FILE for every tab/pop-out navigation — WebView2 renders
+//!   file:// pages natively with the same initialization scripts — and the
+//!   `on_navigation` hook emits `browser-navigated` for file pages too, so the
+//!   address bar + server-side history stay in sync on local files. The
+//!   OS-browser handoff (`open_external_url`) stays http/https-only: a local
+//!   file belongs to the app's own browser, not the system default. The
+//!   frontend normalizes local paths (C:\…, /home/…) into file:// URLs before
+//!   invoking these commands (src/lib/local-url.ts), and the agent's
+//!   `browser_control` tool + the sidecar accept file:// URLs end to end.
+//!
 //! How the child-webview dance works:
 //!  1. The frontend creates a tab webview (`browser_tab_create`) with a
 //!     starting URL. Rust creates it at 1×1 logical px at (0,0) and
@@ -144,17 +159,44 @@ fn remember_tab_bounds(tab_id: &str, x: f64, y: f64, w: f64, h: f64) {
     }
 }
 
-/// Parses and validates a URL for the native tabs: http/https only. The
-/// child webviews render arbitrary remote pages; other schemes (file:, data:,
-/// tauri:) would escape that contract and are rejected with a message the
-/// panel can surface.
-fn parse_http_url(url: &str) -> Result<Url, String> {
+/// Parses and validates a URL for the native tabs: http, https AND file.
+///
+/// ROUND-95 (R95-C): `file:` joins the allowlist — the owner's directive
+/// that the native browser open LOCAL files ("It should be able to open up
+/// local HTML files too"). WebView2 renders file:// pages natively in a
+/// child webview exactly like a remote page — same rendering path, same
+/// initialization scripts (the themed-scrollbar and hands-boot scripts are
+/// injected at DOCUMENT CREATION on every navigation, file pages included)
+/// — so `WebviewUrl::External` and `navigate` need no special-casing for
+/// it. The remaining schemes (about:, data:, javascript:, tauri:) stay
+/// REFUSED as top-level navigations: they are the attack surface (a
+/// webview-supplied string must never smuggle app-internal or synthesized
+/// content into the page area), and no legitimate browsing needs them as an
+/// address.
+fn parse_web_url(url: &str) -> Result<Url, String> {
     let parsed: Url = url
         .parse()
         .map_err(|e| format!("invalid url \"{url}\": {e}"))?;
-    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" && scheme != "file" {
         return Err(format!(
-            "only http/https URLs are supported by the embedded browser (got \"{url}\")"
+            "only http/https/file URLs are supported by the native browser (got \"{url}\")"
+        ));
+    }
+    Ok(parsed)
+}
+
+/// The http/https-only twin for the OS-browser handoff (`open_external_url`):
+/// a local file belongs to the app's OWN browser (the panel and the pop-out
+/// render it natively via `parse_web_url`), never to the system default
+/// browser, so the shell-plugin open keeps its pre-R95 contract. ROUND-95
+/// (R95-C): split out of the old `parse_http_url` when that gate grew its
+/// file arm.
+fn parse_http_url(url: &str) -> Result<Url, String> {
+    let parsed = parse_web_url(url)?;
+    if parsed.scheme() == "file" {
+        return Err(format!(
+            "only http/https URLs can be handed to the system browser — local files open in the app's own browser (got \"{url}\")"
         ));
     }
     Ok(parsed)
@@ -307,9 +349,9 @@ struct PopoutNavigate {
 /// CONTENT webview navigated (the pre-R59 behavior — focus + navigate —
 /// preserved); if the page has not created its webview yet, the
 /// `popout-navigate` event lets the page finish the navigation. The URL is
-/// validated http/https up front — that is the contract of the child webview
-/// that will render it (tightened from R58's any-scheme parse; every caller
-/// passes the panel's http/https currentUrl).
+/// validated http/https/file up front — that is the contract of the child
+/// webview that will render it (R95-C grew the contract from http/https to
+/// include local files; every caller passes the panel's currentUrl).
 ///
 /// ROUND-50 (R50-a): for the in-app browser PANEL this is superseded by the
 /// `browser_tab_*` child-webview commands below (the owner wants the pages
@@ -333,10 +375,11 @@ struct PopoutNavigate {
 /// deadlock only exists when the MAIN thread is the one waiting on us.)
 #[tauri::command]
 pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
-    // Validate http/https FIRST — the child webview that will render this URL
-    // only supports those schemes (the `parse_http_url` contract), and a bad
-    // URL must stash nothing and open nothing.
-    parse_http_url(&url)?;
+    // Validate http/https/file FIRST — the child webview that will render this
+    // URL is the native browser's own (`parse_web_url` contract, R95-C: a
+    // local file renders natively), and a bad URL must stash nothing and open
+    // nothing.
+    parse_web_url(&url)?;
 
     // Publish BEFORE anything else: the popout.html page reads this stash on
     // mount, whichever path below runs.
@@ -350,7 +393,7 @@ pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), Stri
     if let Some(existing) = app.get_webview_window(BROWSER_WINDOW_LABEL) {
         let _ = existing.set_focus();
         if let Some(content) = app.get_webview(&tab_label(POPOUT_TAB_ID)) {
-            let parsed = parse_http_url(&url)?;
+            let parsed = parse_web_url(&url)?;
             content
                 .navigate(parsed)
                 .map_err(|e| format!("navigate pop-out content failed: {e}"))?;
@@ -421,9 +464,9 @@ pub fn popout_initial_url() -> Result<Option<String>, String> {
 /// future or external caller.
 #[tauri::command]
 pub fn navigate_browser(app: AppHandle, url: String) -> Result<(), String> {
-    parse_http_url(&url)?;
+    parse_web_url(&url)?;
     if let Some(content) = app.get_webview(&tab_label(POPOUT_TAB_ID)) {
-        let parsed = parse_http_url(&url)?;
+        let parsed = parse_web_url(&url)?;
         return content
             .navigate(parsed)
             .map_err(|e| format!("navigate browser window failed: {e}"));
@@ -663,7 +706,9 @@ pub fn menu_overlay_pending() -> Result<Option<String>, String> {
 /// R58-b: the BrowserPanel's explicit "Open externally" affordance invokes
 /// this inside the Tauri shell. The URL is validated http/https FIRST
 /// (the `parse_http_url` contract — a webview-supplied string must never
-/// reach the OS handler with a file:/data:/tauri: scheme). This is the
+/// reach the OS handler with a file:/data:/tauri: scheme; R95-C: a local
+/// file is deliberately NOT handed to the system browser — it renders in
+/// the app's own native browser via `parse_web_url` instead). This is the
 /// RUST-side `ShellExt::open` call, which does NOT go through the JS ACL
 /// permission wall (the shell plugin's own JS `open` command validates
 /// against the configured open scope; the Rust entry point takes the path
@@ -814,14 +859,18 @@ pub async fn browser_tab_create(
     // init script rides the webview for its whole lifetime (R60) — no
     // re-injection needed here, and the flag only matters at creation.
     if let Some(existing) = app.get_webview(&label) {
-        let parsed = parse_http_url(&url)?;
+        let parsed = parse_web_url(&url)?;
         existing
             .navigate(parsed)
             .map_err(|e| format!("navigate tab \"{tab_id}\" failed: {e}"))?;
         return Ok(());
     }
 
-    let parsed = parse_http_url(&url)?;
+    // R95-C: a file:// URL works with `WebviewUrl::External` unchanged —
+    // WebView2 renders local files natively (the init scripts run on every
+    // navigation, file pages included); the profile/data-directory logic
+    // below applies to a local page exactly like a remote one.
+    let parsed = parse_web_url(&url)?;
     // R59-b: the host window. `get_window` (not `get_webview_window`) —
     // `add_child` lives on `Window`, and a `WebviewWindow` handle does not
     // expose it.
@@ -841,10 +890,13 @@ pub async fn browser_tab_create(
     // and the profile-dir root still isolates us from the system browser.
     let profile = browser_profile_dir(&app)?;
 
-    // Emit `browser-navigated {tab_id, url}` for EVERY http/https navigation
-    // (initial load, link clicks, redirects, form submits) so the panel can
-    // keep the address bar and the sidecar's server-side history in sync.
-    // We never block a navigation — this is a browser, not a filter.
+    // Emit `browser-navigated {tab_id, url}` for EVERY http/https/file
+    // navigation (initial load, link clicks, redirects, form submits) so the
+    // panel can keep the address bar and the sidecar's server-side history
+    // in sync. R95-C: file navigations are included — the panel used to be
+    // told only about http(s), so a file page's in-page link walks desynced
+    // the address bar/history silently. We never block a navigation — this
+    // is a browser, not a filter.
     let app_for_hook = app.clone();
     let hook_tab_id = tab_id.clone();
     // R90-D1: ONE combined initialization script — the scrollbar CSS plus
@@ -861,7 +913,8 @@ pub async fn browser_tab_create(
         .data_directory(profile)
         .initialization_script(init_script)
         .on_navigation(move |nav: &Url| {
-            if nav.scheme() == "http" || nav.scheme() == "https" {
+            // R95-C: file joins http/https — see the comment above the hook.
+            if nav.scheme() == "http" || nav.scheme() == "https" || nav.scheme() == "file" {
                 let _ = app_for_hook.emit(
                     "browser-navigated",
                     BrowserNavigated {
@@ -905,7 +958,7 @@ pub fn browser_tab_exists(app: AppHandle, tab_id: String) -> bool {
 pub fn browser_tab_navigate(app: AppHandle, tab_id: String, url: String) -> Result<(), String> {
     let webview = find_tab_webview(&app, &tab_id)
         .ok_or_else(|| format!("no native webview for tab \"{tab_id}\" — create it first"))?;
-    let parsed = parse_http_url(&url)?;
+    let parsed = parse_web_url(&url)?;
     webview
         .navigate(parsed)
         .map_err(|e| format!("navigate tab \"{tab_id}\" failed: {e}"))
@@ -1199,9 +1252,59 @@ pub fn browser_tabs_close_all(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_popout_size, popout_pending_url, set_popout_pending_url, POPOUT_DEFAULT_H,
-        POPOUT_DEFAULT_W, POPOUT_MIN_H, POPOUT_MIN_W,
+        clamp_popout_size, parse_http_url, parse_web_url, popout_pending_url, set_popout_pending_url,
+        POPOUT_DEFAULT_H, POPOUT_DEFAULT_W, POPOUT_MIN_H, POPOUT_MIN_W,
     };
+
+    /// R95-C: the native-tab gate accepts http, https AND file (the owner's
+    /// local-HTML directive); the URL round-trips as parsed.
+    #[test]
+    fn web_url_accepts_http_https_and_file() {
+        for url in [
+            "https://example.com/page",
+            "http://127.0.0.1:5173/",
+            "file:///C:/Users/owner/demo.html",
+            "file:///home/z/repos/demo.html",
+            "file://server/share/index.html",
+        ] {
+            let parsed = parse_web_url(url).unwrap_or_else(|e| panic!("{url}: {e}"));
+            assert_eq!(parsed.as_str(), url, "canonical round-trip for {url}");
+        }
+    }
+
+    /// R95-C: everything else stays refused with the message the panel can
+    /// surface — about:, data:, javascript: and tauri: are the attack surface
+    /// (a webview-supplied string must never smuggle synthesized content
+    /// into the page area); unparseable junk dies on the parse arm instead.
+    #[test]
+    fn web_url_refuses_everything_else() {
+        for url in ["about:blank", "data:text/html,<h1>x</h1>", "javascript:alert(1)", "tauri://localhost"] {
+            let err = parse_web_url(url)
+                .err()
+                .unwrap_or_else(|| panic!("{url} was accepted"));
+            assert!(
+                err.contains("only http/https/file URLs are supported"),
+                "error was: {err}"
+            );
+        }
+        assert!(parse_web_url("not a url").is_err());
+    }
+
+    /// R95-C: the OS-browser handoff keeps its pre-R95 http/https-only
+    /// contract — a local file renders in the app's own browser instead.
+    #[test]
+    fn http_url_refuses_file_for_the_os_handoff() {
+        let err = parse_http_url("file:///C:/Users/owner/demo.html")
+            .err()
+            .expect("file handed to the OS browser");
+        assert!(
+            err.contains("local files open in the app's own browser"),
+            "error was: {err}"
+        );
+        // http/https still pass through the twin unchanged.
+        assert!(parse_http_url("https://example.com/").is_ok());
+        assert!(parse_http_url("about:blank").is_err());
+    }
 
     /// 70% of a large work area EXCEEDS the defaults → the defaults win
     /// (never larger than 1200×800, never larger than the desktop).

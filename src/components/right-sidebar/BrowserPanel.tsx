@@ -56,6 +56,9 @@ import { buildHandsBootScript } from "../../lib/agent-hands-boot";
 // R94-F: the handler answers with BrowserCommandReply values (typed).
 import { registerBrowserCommandHandler, type BrowserCommandReply } from "../../lib/agent-browser-bridge";
 import { nativeTabEval, nativeWindowMetrics } from "../../lib/native-browser";
+// ROUND-95 (R95-C): local-path → file:// normalization for the address bar
+// (the Rust gate + the navigate core + the agent tool all accept file:// now).
+import { normalizeBrowserUrl } from "../../lib/local-url";
 
 /**
  * ROUND-43 (R43-10) — the EMBEDDED BROWSER, finally inside the right sidebar.
@@ -125,6 +128,18 @@ import { nativeTabEval, nativeWindowMetrics } from "../../lib/native-browser";
  * still browses, the error card explains the fallback, and the status
  * footnote's ENGINE BADGE shows which renderer is live ("Chromium
  * (native)" vs "Proxy fallback") so nobody has to guess.
+ *
+ * ROUND-95 (R95-C) — LOCAL FILES. The owner: "I gave it a file path for a
+ * local HTML file and after giving it that, it gave me this error: 'Native
+ * browser unavailable. Only HTTP/HTTPS URLs are supported by the embedded
+ * browser.'" The address bar now normalizes local paths (a Windows drive,
+ * POSIX absolute or UNC path, or a ready file:// URL — src/lib/local-url.ts)
+ * into the file:// URL the WHOLE chain accepts: the Rust gate
+ * (parse_web_url), the sidecar history (browserNavigateCore), the agent
+ * tool, and the pop-out window. Native mode renders the file in the child
+ * webview exactly like a remote page; web-dev (proxy) mode serves it through
+ * the sidecar's /browser/local-file route (buildProxySrc dispatches) —
+ * relative paths are refused honestly (no base to resolve against).
  *
  * Ticket auth (iframe path): iframes cannot send Authorization headers, so
  * each tab mints a `bt` ticket (POST /browser/session) and every proxy URL
@@ -215,6 +230,12 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed === "") return "";
+  // ROUND-95 (R95-C): a LOCAL PATH (Windows drive, POSIX absolute, UNC) or a
+  // file:// URL normalizes into the file:// URL the native chain accepts —
+  // the exact gap behind the owner's "I gave it a file path for a local HTML
+  // file" report. Everything else keeps the legacy behavior.
+  const local = normalizeBrowserUrl(trimmed);
+  if (local !== null && "url" in local) return local.url;
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
   // Looks like a domain (has a dot, no spaces)?
@@ -1166,7 +1187,9 @@ export function BrowserPanel({
     if (!nativeMode) return;
     return onBrowserNavigated((evtTabId, url) => {
       if (evtTabId !== tabId) return;
-      if (!/^https?:\/\//i.test(url)) return;
+      // R95-C: the Rust hook reports file navigations too — record them like
+      // any in-page navigation so the history/address bar stay truthful.
+      if (!/^(?:https?|file):\/\//i.test(url)) return;
       // Echo suppression: we caused this navigation (address bar, agent
       // reconcile) — the store already knows; recording it again would add
       // duplicate history entries.
@@ -1204,7 +1227,20 @@ export function BrowserPanel({
   useEffect(() => {
     if (currentUrl === null) return;
     setBrowserUrl(projectId, tabId, currentUrl);
-    const host = currentUrl.replace(/^https?:\/\//, "").split("/")[0];
+    // R95-C: a local file's tab label is its FILE NAME (there is no host).
+    // Both file shapes: `file:///path/…` (local disk) and `file://host/…`
+    // (a UNC share — the host segment is skipped like the scheme is).
+    const fileMatch = /^file:\/\/(?:\/|[^/]+\/)(?:[^?#]*\/)?([^?#]+)$/.exec(currentUrl);
+    const host =
+      fileMatch !== null
+        ? (() => {
+            try {
+              return decodeURIComponent(fileMatch[1]);
+            } catch {
+              return fileMatch[1];
+            }
+          })()
+        : currentUrl.replace(/^https?:\/\//, "").split("/")[0];
     patchTab(projectId, tabId, { title: state?.currentTitle ?? host ?? "Browser" });
   }, [currentUrl, state?.currentTitle, projectId, tabId, setBrowserUrl, patchTab]);
 
@@ -1381,6 +1417,13 @@ export function BrowserPanel({
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
+    // R95-C: a RELATIVE local path is refused honestly (there is no base to
+    // resolve it against) instead of becoming a search query.
+    const local = normalizeBrowserUrl(draft);
+    if (local !== null && "error" in local) {
+      useBrowserTabStore.getState().setError(tabId, `Cannot open this address: ${local.error}`);
+      return;
+    }
     const url = normalizeUrl(draft);
     if (url === "") return;
     setDraft(url);
@@ -1402,6 +1445,14 @@ export function BrowserPanel({
   const onOpenExternally = () => {
     const url = currentUrl ?? normalizeUrl(draft);
     if (url === "") return;
+    // R95-C: a local file belongs to the app's OWN browser — the OS handoff
+    // is http/https-only by design (the Rust gate enforces the same).
+    if (/^file:\/\//i.test(url)) {
+      useBrowserTabStore
+        .getState()
+        .setError(tabId, "Local files open in the app's browser — use the pop-out window instead of the system browser.");
+      return;
+    }
     if (isTauri()) {
       // R58-b: inside the Tauri shell, window.open is silently swallowed by
       // WebView2/wry — hand the URL to the OS default browser on the Rust
@@ -1505,7 +1556,8 @@ export function BrowserPanel({
           {nativeMode ? (
             <>
               Pages render in the embedded Chromium engine — full CSS and JavaScript, one shared
-              profile (logins persist). Type an address above, pick a display size below, or ask
+              profile (logins persist), local HTML files included. Type an address or a local file
+              path (C:\Users\me\page.html) above, pick a display size below, or ask
               the agent (“open github.com and check the mobile layout”).
             </>
           ) : (
@@ -1621,6 +1673,14 @@ export function BrowserPanel({
                 if (/^[\w-]+(\.[\w-]+)+([/?#].*)?$/.test(text)) {
                   e.preventDefault();
                   onQuickLink(normalizeUrl(text));
+                  return;
+                }
+                // R95-C: pasting a LOCAL PATH (a file:// URL or a Windows/
+                // POSIX/UNC path) navigates immediately too.
+                const pasted = normalizeBrowserUrl(text);
+                if (pasted !== null && "url" in pasted) {
+                  e.preventDefault();
+                  onQuickLink(pasted.url);
                 }
               }}
               placeholder="Search or enter address"

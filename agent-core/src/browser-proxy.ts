@@ -33,6 +33,12 @@
  *         URL. Statuses: 400 bad params · 403 scheme/private-net refused ·
  *         401 missing/expired ticket · 502 fetch/timeout/size failures ·
  *         upstream 4xx/5xx statuses are kept with our error page body.
+ *   GET/POST /api/v1/browser/local-file   ?path=&sessionId=[&bt=]
+ *         ROUND-95 (R95-C): disk-backed serving for file:// pages in web dev
+ *         mode (the native desktop app renders file:// directly in the child
+ *         webview and never calls this). Absolute local path only, ≤10 MiB,
+ *         directories refused, HTML/SVG/text/image rendered and everything
+ *         else refused honestly; ticket-gated exactly like the proxy.
  *   GET    /api/v1/browser/history        ?sessionId= → {entries, index,
  *         canBack, canForward} (entries: {url, title, ts}).
  *   POST   /api/v1/browser/navigate       {sessionId, url?, title?} records a
@@ -118,6 +124,10 @@
  *     tag pass precisely to avoid the equivalent (and worse) problem there.
  */
 import { randomBytes } from "node:crypto";
+// ROUND-95 (R95-C): local-file serving — stat + read for the /browser/
+// local-file route and the browser_control read action's file:// branch.
+import { readFile as fspReadFile, stat as fspStat } from "node:fs/promises";
+import { extname } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 // R62 (D8): the live browser command bridge (eval / screenshot-meta results).
 import { resolveBrowserCommand } from "./browser-command.js";
@@ -127,6 +137,11 @@ import type { SqliteDatabase } from "./storage/db.js";
 // ─────────────────────────── constants ─────────────────────────────────────
 
 const PROXY_PATH = "/api/v1/browser/proxy";
+
+/** ROUND-95 (R95-C): the local-file route — file:// pages in web-dev/proxy
+ * mode render through THIS (the native desktop app renders file:// directly
+ * in the child webview and never calls it). */
+const LOCAL_FILE_PATH = "/api/v1/browser/local-file";
 
 /** 20s covers the whole redirect chain (each hop gets the remaining time). */
 const FETCH_DEADLINE_MS = 20_000;
@@ -284,13 +299,17 @@ function isPrivateHost(hostname: string, port: string): boolean {
   return false;
 }
 
-/** Throws ProxyFailure for refused schemes / private-network targets. */
+/** Throws ProxyFailure for refused schemes / private-network targets.
+ * R95-C: file: is still refused HERE — the proxy FETCHES over the network,
+ * which a local file is not. The message points at the local-file route. */
 function guardTarget(target: URL): void {
   if (target.protocol !== "http:" && target.protocol !== "https:") {
     throw new ProxyFailure(
       403,
       "SCHEME_BLOCKED",
-      `refused scheme '${target.protocol}' — the embedded browser proxies http(s) only`,
+      target.protocol === "file:"
+        ? "refused scheme 'file:' — the proxy fetches http(s) only; local files render natively in the desktop app's browser (web dev mode: /api/v1/browser/local-file)"
+        : `refused scheme '${target.protocol}' — the embedded browser proxies http(s) only`,
     );
   }
   if (isPrivateHost(target.hostname, target.port)) {
@@ -742,6 +761,166 @@ function errorPage(reason: string, requestedUrl: string): string {
   );
 }
 
+// ── ROUND-95 (R95-C): local-file serving (file:// pages) ───────────────────
+//
+// The owner's report: "I gave it a file path for a local HTML file and after
+// giving it that, it gave me this error: 'Native browser unavailable. Only
+// HTTP/HTTPS URLs are supported by the embedded browser.'" The NATIVE desktop
+// app now renders file:// pages directly in the child webview (Rust gate in
+// src-tauri/src/browser.rs). What remains server-side is this thin slice for
+// the OTHER mode: in web dev mode (plain browser, no Tauri shell) the panel
+// renders through the sidecar, and a file:// navigation needs bytes the
+// iframe can load — hence GET/POST /browser/local-file, ticket-gated exactly
+// like the proxy. The browser_control `read` action also reads file:// pages
+// through the SAME reader (readLocalBrowserFile) so the agent sees the same
+// content the user's panel shows.
+//
+// SECURITY POSTURE (honest):
+//   - The route takes an ABSOLUTE LOCAL PATH and reads it from disk. There is
+//     no directory-traversal CONTAINMENT by design: the caller is the app's
+//     own panel (or the agent's read action), on the owner's own machine, at
+//     the same trust level as the approval-gated read_file tool — a browser
+//     panel that could open C:\...\index.html but not read it would be a lie.
+//   - The browser TICKET gates every request (the same `bt` promotion hook
+//     the proxy rides; without it the app-level bearer wall answers 401).
+//   - Only NAVIGATION-shaped requests are served (sec-fetch-dest document/
+//     iframe, or absent — programmatic clients): a page inside the sandboxed
+//     iframe cannot fetch() its SIBLING local files through this route (it
+//     can see its own bt in the iframe URL, so the ticket alone is not enough
+//     there — dest "empty" is refused). A page CAN still top-level-navigate
+//     itself elsewhere within the route; that residual equals the trust of
+//     deliberately opening an untrusted local file in any browser, and the
+//     shipped NATIVE mode does not use this route at all (file:// pages load
+//     in the webview, where file: fetch/XHR is blocked by the engine).
+//   - Size cap 10 MiB; directories refused; unknown extensions served as
+//     application/octet-stream are REFUSED for the iframe (only HTML, XHTML,
+//     SVG, text/* and image/* render — the honest "not a page" answer).
+
+/** Whole-file cap for local reads (the proxy's 25 MiB is for network bodies;
+ * a local page is bounded tighter). */
+const MAX_LOCAL_FILE_BYTES = 10 * 1024 * 1024;
+
+/** Extension → content-type for the files the browser opens locally. */
+const LOCAL_FILE_TYPES: Readonly<Record<string, string>> = {
+  ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8",
+  ".xhtml": "application/xhtml+xml",
+  ".svg": "image/svg+xml",
+  ".txt": "text/plain; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".xml": "application/xml; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".bmp": "image/bmp",
+  ".ico": "image/x-icon",
+};
+
+/** The absolute-path shapes the reader accepts (Windows drive, POSIX, UNC). */
+const ABSOLUTE_LOCAL_PATH_RE = /^([a-zA-Z]:[\\/]|\/|\\\\)/;
+
+/** What the iframe may RENDER (everything else is refused honestly — the
+ * agent-side `read` action is not bound by this, it just needs text). */
+function isRenderableLocalContentType(contentType: string): boolean {
+  return (
+    contentType.startsWith("text/") ||
+    contentType.startsWith("image/") ||
+    contentType === "application/xhtml+xml"
+  );
+}
+
+/** True for the types the agent's `read` action returns as TEXT (a binary
+ * image read as utf-8 would be mojibake garbage — refuse it honestly). */
+export function isTextualLocalContentType(contentType: string): boolean {
+  return (
+    contentType.startsWith("text/") ||
+    contentType === "application/json" ||
+    contentType === "application/xml" ||
+    contentType === "application/xhtml+xml"
+  );
+}
+
+/** One validated local file ready to serve (route) or decode (read action). */
+export interface LocalBrowserFile {
+  /** The slash-normalized absolute path the bytes came from. */
+  path: string;
+  bytes: Buffer;
+  contentType: string;
+}
+
+export type LocalBrowserFileResult =
+  | { ok: true; file: LocalBrowserFile }
+  | { ok: false; status: number; code: string; error: string };
+
+/**
+ * Reads ONE local file for the browser surface — the /browser/local-file
+ * route's engine and the browser_control read action's file:// branch. Every
+ * failure is an honest `{status, code, error}` the callers surface verbatim
+ * (the route wraps it in the friendly error card; the tool prints it).
+ */
+export async function readLocalBrowserFile(rawPath: string): Promise<LocalBrowserFileResult> {
+  const trimmed = (rawPath ?? "").trim();
+  if (trimmed === "") {
+    return { ok: false, status: 400, code: "VALIDATION", error: "path is required" };
+  }
+  if (!ABSOLUTE_LOCAL_PATH_RE.test(trimmed)) {
+    return {
+      ok: false,
+      status: 400,
+      code: "VALIDATION",
+      error: `path must be absolute (a Windows drive like C:\\Users\\me\\page.html, a POSIX path like /home/me/page.html, or a UNC path like \\\\server\\share\\page.html) — got '${trimmed}'`,
+    };
+  }
+  // Windows-style separators fold to "/" (Node accepts them on every
+  // platform); a POSIX path is used as-is (a literal backslash in a POSIX
+  // filename is legal-but-vanishingly-rare and stays untouched).
+  const path = /^[a-zA-Z]:[\\/]|^\\\\/.test(trimmed) ? trimmed.replace(/\\/g, "/") : trimmed;
+
+  let size: number;
+  try {
+    const stat = await fspStat(path);
+    if (!stat.isFile()) {
+      return { ok: false, status: 400, code: "NOT_A_FILE", error: `'${trimmed}' is not a file (directories cannot be opened as pages)` };
+    }
+    size = stat.size;
+  } catch (error) {
+    return {
+      ok: false,
+      status: 404,
+      code: "FILE_NOT_FOUND",
+      error: `'${trimmed}' does not exist or cannot be read (${error instanceof Error ? error.message : String(error)})`,
+    };
+  }
+  if (size > MAX_LOCAL_FILE_BYTES) {
+    return {
+      ok: false,
+      status: 413,
+      code: "FILE_TOO_LARGE",
+      error: `'${trimmed}' is ${Math.round(size / (1024 * 1024))} MiB — over the ${Math.round(MAX_LOCAL_FILE_BYTES / (1024 * 1024))} MiB local-file cap`,
+    };
+  }
+  let bytes: Buffer;
+  try {
+    bytes = await fspReadFile(path);
+  } catch (error) {
+    return {
+      ok: false,
+      status: 404,
+      code: "FILE_NOT_FOUND",
+      error: `'${trimmed}' does not exist or cannot be read (${error instanceof Error ? error.message : String(error)})`,
+    };
+  }
+  const contentType = LOCAL_FILE_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
+  return { ok: true, file: { path, bytes, contentType } };
+}
+
 // ─────────────────────── upstream fetch machinery ──────────────────────────
 
 interface UpstreamInit {
@@ -967,6 +1146,13 @@ export type BrowserNavigateResult = BrowserNavigateOutcome | { ok: false; error:
  * browser_control agent tool (direct call). `body` fields arrive unvalidated
  * (unknown) exactly like the parsed route body; error strings are the API's
  * VALIDATION messages verbatim.
+ *
+ * ROUND-95 (R95-C): `file:` URLs are VALID navigation targets now — the
+ * native browser opens local files, and the panel/the tool normalize local
+ * paths into file:// URLs before they ever get here. The proxy FETCH route
+ * still refuses file: (guardTarget) — a file navigation renders through the
+ * native webview (or, in web dev mode, the /browser/local-file route), never
+ * through a server-side fetch.
  */
 export function browserNavigateCore(
   store: SessionStore,
@@ -984,12 +1170,12 @@ export function browserNavigateCore(
     if (typeof url === "string") {
       try {
         const parsed = new URL(url);
-        urlOk = parsed.protocol === "http:" || parsed.protocol === "https:";
+        urlOk = parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "file:";
       } catch {
         urlOk = false;
       }
     }
-    if (!urlOk) return { ok: false, error: "body.url must be an absolute http(s) URL" };
+    if (!urlOk) return { ok: false, error: "body.url must be an absolute http(s) or file:// URL" };
   }
   if (title !== undefined && typeof title !== "string") {
     return { ok: false, error: "body.title must be a string" };
@@ -1335,7 +1521,9 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
         request.headers = { ...request.headers, authorization: `Bearer ${token}` };
         return;
       }
-      if (path === PROXY_PATH) {
+      // R95-C: the local-file route renders inside the iframe like the
+      // proxy — its auth failures must be HTML pages too.
+      if (path === PROXY_PATH || path === LOCAL_FILE_PATH) {
         await sendProxyAuthPage(
           reply,
           403,
@@ -1344,7 +1532,7 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
       }
       return;
     }
-    if (path === PROXY_PATH) {
+    if (path === PROXY_PATH || path === LOCAL_FILE_PATH) {
       await sendProxyAuthPage(
         reply,
         401,
@@ -1658,6 +1846,73 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
     method: ["GET", "POST"],
     url: "/browser/proxy",
     handler: proxyHandler,
+  });
+
+  // ── GET/POST /browser/local-file — R95-C: file:// pages in web dev mode ─
+  // The panel's iframe loads a local file through THIS route when the native
+  // webview is absent (web dev mode / e2e); the native desktop app never
+  // calls it (file:// renders in the child webview directly). The auth story
+  // is the proxy's: the `bt` ticket promotes to bearer (the hook above), a
+  // missing/expired one renders the same HTML 401 card. POST answers like GET
+  // — a static file has no server-side code, so a self-targeting form inside
+  // a local page simply reloads the page (the honest behavior for a static
+  // document).
+  const localFileHandler = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const query = request.query as Record<string, string | undefined>;
+    const requestedPath = query.path ?? "";
+
+    // Navigation-shape guard (see the security post above): sec-fetch-dest
+    // document/iframe is the iframe loading the page; ABSENT means a
+    // programmatic caller (tests, the app's own fetches); anything else
+    // (fetch/XHR send dest "empty") is a page trying to read OTHER local
+    // files through its own ticket — refused.
+    const dest = request.headers["sec-fetch-dest"];
+    if (typeof dest === "string" && dest !== "document" && dest !== "iframe") {
+      return sendErrorPage(
+        reply,
+        new ProxyFailure(
+          403,
+          "NOT_A_NAVIGATION",
+          "the local-file route serves browser navigations only — a page cannot fetch other local files through it",
+        ),
+        requestedPath === "" ? "(no path requested)" : requestedPath,
+      );
+    }
+
+    const read = await readLocalBrowserFile(requestedPath);
+    if (!read.ok) {
+      return sendErrorPage(reply, new ProxyFailure(read.status, read.code, read.error), requestedPath);
+    }
+    const { file } = read;
+    if (!isRenderableLocalContentType(file.contentType)) {
+      return sendErrorPage(
+        reply,
+        new ProxyFailure(
+          415,
+          "UNRENDERABLE_TYPE",
+          `'${file.path}' is a ${file.contentType} file — the browser panel renders HTML, SVG, text and image files (the desktop app's native browser opens it properly)`,
+        ),
+        requestedPath,
+      );
+    }
+    // R95-C: UNC paths ("//server/share/x") take the TWO-slash host form
+    // (`file://server/share/x`); local paths get three. The header is
+    // informational (nothing consumes it yet), but it must stay a shape
+    // the WHATWG parser round-trips.
+    const finalFileUrl = file.path.startsWith("//")
+      ? `file:${file.path}`
+      : `file://${file.path.startsWith("/") ? "" : "/"}${file.path}`;
+    return reply
+      .code(200)
+      .header("cache-control", "no-store")
+      .header("x-acute-final-url", finalFileUrl)
+      .type(file.contentType)
+      .send(file.bytes);
+  };
+  browser.route({
+    method: ["GET", "POST"],
+    url: "/browser/local-file",
+    handler: localFileHandler,
   });
 
   // ── GET /browser/history — back/forward state for the chrome bar ─────────
