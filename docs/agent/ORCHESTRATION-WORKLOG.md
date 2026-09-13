@@ -2629,3 +2629,63 @@ anonymous /system/updates).
 toolset (the queue-injection scenarios initially vacuous), and the SDK absorbs ~5
 internal retries before the runtime ladder ever engages (the live proof needed the
 5-fail 500 pattern to reach the runtime's own recovery).
+
+## R95 — the sixth-walkthrough round (v0.92.0 → v0.93.0)
+
+**Session:** 2026-09-13 (sandbox restored from GitHub at 6d8ee24 after a wipe;
+the worklog's R93/R94 entries live in this file from the prior sessions).
+
+**The owner's sixth report, answered end to end via six workstreams (each
+its own commit, verified + committed by its subagent; three dispatches
+timed out mid-work and were COMPLETED under the lesson-#95 audit-don't-redo
+protocol rather than restarted):**
+
+- **R95-A (d2035eb)** — the Models & Providers UI overhaul: the taller
+  fixed provider rail; sidebar-only back navigation; Key 2..N parity with
+  Key 1 + the shared ConfirmDialog replacing every window.confirm; the
+  add-then-configure picker (pencil gone; already-added hidden);
+  hidden-at-bottom LIVE animated sorting (scroll preserved); the one-Test
+  three-option single-row scope picker; provider delete at the TOP;
+  model-card separation. Frontend 1,044/1,044 at commit time.
+- **R95-B (c4820ca)** — the provider-test upstream error detail (the
+  reachability branch) + migration 0035 (per-model reasoning metadata:
+  the OpenRouter supported_parameters merge, verified entry-by-entry
+  against the live catalog; strict route validation; the
+  resolveModelReasoningSupport helper). 3,123 tests at commit time.
+- **R95-C (94052a7)** — the native browser opens local files end-to-end:
+  the Rust parse_web_url file gate, the panel's normalizeBrowserUrl, the
+  sidecar's ticket-gated local-file route + disk-backed read, the agent
+  tool's bare-path navigate. 3,150 tests + e2e 12/12 at commit time.
+- **R95-D (da4d40a)** — the thinking area follows its own stream
+  (useStickToBottom + the inner jump pill) + the transcript's nested-scroll
+  chaining fix (the chat pill no longer appears while reading the thinking
+  tail). The dispatch that "failed" had actually completed + committed.
+- **R95-E (51c9023)** — model-aware thinking levels (the detected ladder
+  drives the menu + the wire mapping; medium joins the vocabulary) + the
+  thinking-loop guard (ThinkingLoopError → one de-escalating retry with
+  the meta.retry card).
+- **R95-F (e12f2eb)** — three real ChatMarkdown bugs fixed with regression
+  pins (peeled punctuation vanishing, trailing emphasis glomming, quoted
+  paths losing pills); the context donut's measured-usage prominence; the
+  entry-renderer registry (standalone, the wire-up is the follow-up).
+- **R95-G (6f582df, the orchestrator)** — the REAL-API live-fire
+  (scripts/r95-live-fire.mjs): the built sidecar through a recording proxy
+  against REAL OpenRouter with the free Nemotron models. CAUGHT ONE LIVE
+  BUG: OpenRouter rejects reasoning.effort + reasoning.max_tokens
+  TOGETHER — fixed the same round (mutual exclusion by design; ladder-less
+  models get the budget alone). Verified live: the SKILLS section in the
+  system prompt, the high→medium effort mapping on the wire, the
+  capability gating, the local-file browser routes, and the TOKEN USAGE
+  TRUTH — the app's recorded numbers EXACTLY match the provider's
+  (in=17075/out=45; zero deviation, the owner's app-vs-API concern
+  answered). The R94 harness re-verified green (its hardcoded repo root
+  fixed). The minor tails: the sessions-route thinkingLevel message, the
+  prompt + skill local-file vocabulary, the D6 cap + the golden regen.
+
+**Pipeline:** lint clean; both typechecks clean; root 3,258/3,258 (175
+files); e2e 12/12; build green; license 134 clean. Rust not compiled
+locally (no cargo in the sandbox — CI's Windows build is the gate).
+
+**Docs:** round-95.md (§9 = the owner's TEST CHECKLIST), CHANGELOG
+0.93.0, status.json round 95, HANDOFF header, this entry, AGENT-MEMORY
+#96, the version ×4 at 0.93.0.

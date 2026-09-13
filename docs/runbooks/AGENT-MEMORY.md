@@ -1031,3 +1031,20 @@ code-level test failures.)
 - vitest fake timers advance the CLOCK before flushing the turn's microtasks: a retry wait registered mid-flush lands its deadline PAST the window you already advanced — `advanceTimersByTimeAsync(N)` can leave the very timer it was supposed to fire pending. Two advances (or runAllTimersAsync) when the wait is registered inside the flush. Symptom signature: the test hangs exactly one wait-long, and `vi.getTimerCount()` > 0 after the advance.
 - A unit-tested mechanism can still miss its real integration seam: the mid-turn queue injection passed every r78-queue test because the fake chatStream yields tool-result events directly — but the LIVE wire only produced them because the agent's toolset existed. The live-fire caught it: a PROJECTLESS session resolves NO tools (tool calls error, no tool-result parts, no boundaries). When a feature hangs on a part the adapters map from the SDK, prove it against the real wire (scripts/r94-live-fire.mjs is the template: a local OpenAI-compatible SSE provider + the BUILT sidecar).
 - When EVERYTHING in a failure report cascades from one diagnostic sentinel (enumWindowsCount:-1, foregroundPid:0, active:false, "owns no accessible top-level window"), find the ONE root before fixing symptoms — it was the U32 Add-Type compile dying on the owner's machine all along. The fix was a no-csc fallback layer (LoadWithPartialName UIAutomation needs no compiler), not five patches.
+
+### Lesson #96 — a capability knob the provider exposes is not a knob the provider accepts TOGETHER with its sibling
+
+R95-E shipped reasoning.effort + reasoning.max_tokens in one body because
+the OpenRouter catalog advertises BOTH (supported_parameters lists
+"reasoning"; three models also carry supported_efforts; supports_max_tokens
+appears as its own flag) — every unit test passed because the MOCKED
+provider accepted every shape. The REAL API answered "Only one of
+reasoning.effort and reasoning.max_tokens can be specified" the first time
+the two rode together. RULE: when a feature composes TWO knobs from one
+provider capability surface, the combination matrix needs either a
+documented spec citation or a live-fire leg that exercises the COMBINED
+shape — a mock that echoes success proves nothing about the pair's
+validity. (The R95 fix: mutual exclusion by design — the ladder gets
+effort, ladder-less reasoning gets the budget; the constraint is now
+pinned in the test suite AND taught in the code comment where the next
+agent will look first.)

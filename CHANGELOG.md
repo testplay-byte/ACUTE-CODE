@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-13 round-95 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -20,6 +20,71 @@ ratings-driven prompt tuning, and the standing items (edit-linting, installer
 code-signing, the Files-tab polish, the browser agent's CDP-level trusted-input
 tier, the computer-use COM IUIAutomation bridge for the ACTION/MSAA legacy
 layers).
+
+## [0.93.0] - 2026-09-13 — the sixth-walkthrough round
+
+The owner's v0.92.0 walkthrough report, answered end to end — and verified
+against the REAL OpenRouter API with the free Nemotron models.
+
+### Models & Providers — the UI overhaul
+- The provider rail is taller by default (fixed height, internal scroll).
+- Back-to-dashboard lives ONLY in the left sidebar (a proper labeled
+  button); the content-area pill is gone from every settings page.
+- Key 2..N match Key 1 exactly (bordered eye, animated Copy on reveal,
+  matching delete) — one consistent API-keys section.
+- Styled confirmation dialogs replace every browser confirm (key removal,
+  model deletion, provider deletion — the trash now at the TOP of the
+  provider header with the dedicated confirmation).
+- The Add-models picker: no more Configure button — Add adds AND opens the
+  config dialog; already-added models are hidden from the picker.
+- Hidden models sort to the bottom LIVE (animated re-sort, scroll kept).
+- The Test button: one "Test" button → a single row of three options —
+  Test All | Test Only Failed | Test Only Working.
+- A failing provider Test Connection now shows the provider's actual
+  error message (the raw upstream body, not just the HTTP status).
+
+### Model-aware thinking levels + the thinking-loop guard
+- Reasoning capabilities are DETECTED per model (OpenRouter's
+  supported_parameters — migration 0035): the thinking menu adapts to
+  each model's own ladder (Default/Low/Medium/High per model), disables
+  honestly for non-reasoning models, and the wire mapping never sends an
+  unsupported effort (max rides the model's highest rung).
+- Reasoning budgets bound ladder-less reasoning models
+  (reasoning.max_tokens by level) — and effort/budget are mutually
+  exclusive on the wire (OpenRouter rejects the pair — caught live).
+- The thinking-loop guard: a model stuck >120s producing >24KB of
+  reasoning with no text/tool progress is detected, retried ONCE with a
+  downgraded thinking level (a visible meta.retry card names it), then
+  fails honestly — "stuck in thinking" no longer hangs the turn.
+
+### The native browser opens local files
+- file:// accepted end-to-end: the Rust shell, the panel (address bar +
+  agent navigations — Windows drive paths and POSIX paths normalize to
+  file URLs), the sidecar (navigate validation + a ticket-gated
+  local-file route), and the agent tool (navigate accepts bare local
+  paths; read reads from disk). Local HTML renders natively in the
+  embedded browser with full script support.
+
+### The chat
+- The thinking area follows its own stream (stick-to-bottom + an inner
+  "Jump to latest" pill); the chat-level pill no longer appears while
+  you scroll inside the thinking block (nested-scroll chaining fixed).
+- Three real markdown bugs fixed (peeled punctuation vanishing from
+  autolinks, trailing emphasis sets glomming onto URLs, quoted file paths
+  losing their pill) + streaming-tolerant fences + wide-table scroll —
+  all regression-pinned.
+- The context donut: the MEASURED usage number renders prominently beside
+  the ring (labeled "measured", the estimate stays ~-labeled) — the
+  actual context in use is now obvious.
+- The entry-renderer registry: the modular foundation for future info
+  types in the working area.
+
+### Verified — the REAL-API live-fire
+- scripts/r95-live-fire.mjs: the built sidecar through a recording proxy
+  against real OpenRouter with the free Nemotron models — the SKILLS
+  section in the live system prompt, the effort mapping on the wire, and
+  the token-usage truth (app numbers EXACTLY match the provider's:
+  zero deviation).
 
 ## [0.92.0] - 2026-09-12 — the field-report round
 

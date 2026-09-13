@@ -3,7 +3,7 @@
  "product": {
   "name": "Acute",
   "tagline": "Local-first multi-agent engineering workbench",
-  "version": "0.92.0",
+  "version": "0.93.0",
   "availability": "Private build — not yet distributed",
   "chips": [
    "Windows desktop",
@@ -276,6 +276,10 @@
   {
    "date": "2026-09-12",
    "label": "R93 — the fifth-walkthrough round: the computer-use v2 (element map + learning + tree tools + placement + relocation + ghost verification), the browser agent's hands, the turn-loop reliability, and the settings-surface polish (v0.91.0)"
+  },
+  {
+   "date": "2026-09-13",
+   "label": "R95 — the sixth-walkthrough round: the Models & Providers overhaul, model-aware thinking + the loop guard, the native local-file browser, the chat robustness pass, the REAL-API live-fire. Shipped as v0.93.0."
   }
  ],
  "quality": {
@@ -312,13 +316,13 @@
  ],
  "plan": {
   "current": {
-   "title": "R94 — the field-report round",
-   "detail": "The owner's v0.91.0 field report, shipped as v0.92.0. (A) THE UPDATE PATHS: the in-app updater's asset-URL allowlist fix (browser_download_url's github.com host was never accepted — every download died with 'body.url must be a GitHub release asset of this repository'), the PAT now optional (public repo — anonymous works), the launcher's divergence realignment (git reset --hard FETCH_HEAD after the public-migration history rewrite — the 'Not possible to fast-forward' dead end gone; public-repo warning gone; update failures never dead-end an existing build), and the installer's orphan-proof kill (the sidecar's kill-on-close Job Object + the NSIS preinstall hook killing under-$INSTDIR node.exe — the 'Error opening file for writing' class). (B) THE CHAT: stick-to-bottom auto-scroll (only while pinned; the Jump-to-latest pill) + the queued-message MID-TURN injection (AI SDK prepareStep's messages override — the model sees the note at the next tool-call boundary and the transcript shows it after the tool result). (C) PROVIDER RELIABILITY: malformed_response (the literal 'unknown object') joins the transient ladder + the ONE unknown-with-PROGRESS retry with a visible meta.retry card. (D) COMPUTER USE: the Windows window layer's whole failure chain traced to the dead U32 Add-Type compile — the csc-free UIAutomation fallback (list_apps/list_windows/frontmostPid) + addTypeError diagnostics + the new window_action tool (minimize/maximize/restore/focus/close by windowId|target:'foreground'|appRef) + the no-vision screenshot gate (browser included). (E) BROWSER: the evalJob self-heal (tiny per-action scripts + one-time install; unexpected payloads recovered-or-retried with the payload in the error), the wait action, and the sequence action (multi-stage steps in one call). (F) THE SETTINGS SURFACE: real button affordances for the model-row actions, the optimistic hide/show (scroll preserved), and Test scopes (all/failed/working). (G) THE PROMPTS: the CAPABILITIES section (no-vision sessions told once, never screenshot) + the RECOVERY PROTOCOL (re-observe, ≤2 identical retries then change strategy, never abandon). Full pipeline green + the new LINUX LIVE-FIRE harness (scripts/r94-live-fire.mjs) proving the queue injection, the unknown-object recovery, and the headless browser/window paths end-to-end on the wire."
+   "title": "R95 — the sixth-walkthrough round",
+   "detail": "The owner's v0.92.0 report, shipped as v0.93.0. (A) THE MODELS & PROVIDERS UI OVERHAUL: the taller fixed provider rail, sidebar-only back navigation, Key 2..N parity with Key 1 + styled ConfirmDialogs replacing every browser confirm, the add-then-configure picker (pencil gone, already-added hidden), hidden-at-bottom LIVE animated sorting with scroll persistence, the one-Test-button three-option single-row scope picker, provider delete at the TOP with the dedicated confirmation, model-card separation. (B) THE PROVIDER-TEST TRUTH: the reachability probe now carries the provider's raw upstream error body. (C) MODEL-AWARE THINKING: migration 0035 captures per-model reasoning capability from OpenRouter's supported_parameters (verified against the live catalog), the thinking menu adapts to each model's ladder, the wire mapping never sends an unsupported effort, and reasoning budgets bound ladder-less models — effort XOR max_tokens on the wire (the mutual exclusion OpenRouter enforces, caught by the live-fire). (D) THE THINKING-LOOP GUARD: >120s of pure reasoning with >24KB accumulated → ThinkingLoopError → one de-escalating retry with the visible meta.retry card. (E) THE NATIVE BROWSER OPENS LOCAL FILES: file:// end-to-end (Rust parse_web_url, panel path normalization, the ticket-gated local-file route, the agent tool's bare-path navigate + disk-backed read) — the owner's 'proper native browser' directive. (F) THE CHAT: the thinking area stick-to-bottom + inner jump pill, the nested-scroll chaining fix (the chat pill no longer appears while reading the thinking tail), three markdown bugs fixed with regression pins, the context donut's measured-usage prominence, the entry-renderer registry. (G) THE REAL-API LIVE-FIRE (scripts/r95-live-fire.mjs): the built sidecar through a recording proxy against REAL OpenRouter with the free Nemotron models — SKILLS section verified in the live system prompt, the effort mapping verified on the wire, token usage EXACTLY matching the provider's numbers (zero deviation). Full pipeline: lint, both typechecks, 3,258/3,258 (175 files), e2e 12/12, build, license 134, docs:check."
   },
   "upcoming": [
    {
-    "title": "R95+ — the modularity continuation (owner-gated)",
-    "detail": "Wave 2-b the turn-loop harness extraction, the remaining server.ts domains, then Wave 3 the frontend seams; standing items: the NSIS wizard's custom UI, installer code-signing, the browser agent's CDP-level trusted-input tier (isTrusted), the computer-use COM IUIAutomation bridge for the ACTION/MSAA legacy layers, and the owner's future browser asks."
+    "title": "The owner's v0.93.0 walkthrough",
+    "detail": "The R95 test checklist lives in round-95.md §9. Standing follow-ups: the entry-renderer registry's WorkingSection wire-up, the sync-path thinking-loop watchdog, the pop-out address-bar bare-path normalization, the README round-index backfill (rounds 87-95)."
    }
   ],
   "principles": [
@@ -327,6 +331,6 @@
    "Quality over speed — every round verified before push"
   ]
  },
- "round": 94,
+ "round": 95,
  "ci": "GREEN — CI 34720217283 and Release 34720260234 both SUCCESS on 86044aa (the first push b873f81's Windows build caught one windows-sys type name — JOBOBJECT_EXTENDED_LIMIT_INFORMATION has no underscore — fixed and re-tagged within minutes). v0.92.0 PUBLISHED (release 387712322, latest, both assets downloaded + sha256-verified against GitHub's server-side digests, zero real-key bytes in the shipped kit + installer; the kit's github_pat_ occurrences are the launcher's own prefix literals in help/validation text). The R94 verification adds the Linux live-fire harness (scripts/r94-live-fire.mjs): real end-to-end turns through a local OpenAI-compatible SSE provider — the mid-turn queue injection, the 'unknown object' ladder recovery, and the honest headless browser/window paths all PASS on the wire."
 }
