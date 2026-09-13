@@ -12,8 +12,10 @@
  * pattern as the R44-c revert tests in AgentChatPanel.test.tsx.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { QueryClient } from "@tanstack/react-query";
+import type { ReactElement } from "react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router";
 import { BareWorkingEntries, WorkingSection, assignDelegateChildren } from "./WorkingSection";
 import {
   ApiError,
@@ -1136,6 +1138,172 @@ describe("thinking display redesign (ROUND-58 R58-cf — no accent rails)", () =
     expect(toggle.textContent).toContain("A longer thought that should preview");
     fireEvent.click(toggle);
     expect(screen.getByRole("button", { name: "Collapse thought" })).toBeTruthy();
+  });
+});
+
+// ── ROUND-95 (R95-D): the thinking area's own stick-to-bottom ───────────────
+// Owner (v0.91.0): "The thinking area was not auto-scrolling to the very
+// bottom. The thinking area should be automatically scrolling if the user
+// was at the very bottom of it… If I scroll up in the thinking area, then it
+// should not auto-scroll again. It should only scroll if I scroll to the
+// very bottom and leave it there."
+//
+// happy-dom has NO layout (scrollHeight/clientHeight are 0; assigning
+// scrollTop stores the value but fires no events) — so the follow is
+// asserted on the ELEMENT's scrollTop after a re-render with grown text,
+// geometry rides in via Object.defineProperty getters, and the user's
+// gestures are dispatched exactly as the browser would (scroll events
+// with the position set first) — the AgentChatPanel R94-D2 convention.
+describe("thinking area stick-to-bottom (ROUND-95 R95-D)", () => {
+  /** Mutable geometry for the thought body (1000px of content in the 256px
+   * max-h-64 viewport). */
+  function giveGeometry(el: HTMLElement): { scrollHeight: number } {
+    const geometry = { scrollHeight: 1000 };
+    Object.defineProperty(el, "scrollHeight", {
+      get: () => geometry.scrollHeight,
+      configurable: true,
+    });
+    Object.defineProperty(el, "clientHeight", { value: 256, configurable: true });
+    return geometry;
+  }
+
+  /** The inner jump pill (present only while a LIVE thought is detached
+   * from its own tail). */
+  const innerPill = () => screen.queryByRole("button", { name: "Jump to the latest thinking" });
+
+  /** The LIVE section's element for the given streaming text (built fresh
+   * for each growth re-render — the providers ride along via RTL's
+   * `wrapper` OPTION below, which rerender preserves). */
+  function liveSection(text: string): ReactElement {
+    return (
+      <WorkingSection
+        entries={[{ type: "thinking", text, ts: "t" }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        liveEntryIndex={0}
+      />
+    );
+  }
+
+  /** Render a LIVE section whose single thinking entry streams, wait for
+   * the auto-expanded body's scroller, and attach the geometry. */
+  async function renderLiveThinking(text: string): Promise<{
+    scroller: HTMLElement;
+    geometry: { scrollHeight: number };
+    rerender: (ui: ReactElement) => void;
+  }> {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const utils = render(liveSection(text), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>{children}</MemoryRouter>
+        </QueryClientProvider>
+      ),
+    });
+    // Live rows auto-expand (the owner watches progress).
+    const scroller = await waitFor(() => {
+      const el = document.querySelector("[data-thinking-scroll]") as HTMLElement | null;
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    return { scroller, geometry: giveGeometry(scroller), rerender: utils.rerender };
+  }
+
+  it("a LIVE thought follows its own stream while the user sits at the block's bottom — and the pill stays hidden", async () => {
+    const { scroller, geometry, rerender } = await renderLiveThinking("first thinking chunk");
+
+    rerender(liveSection("first thinking chunk — and it kept growing"));
+    expect(scroller.scrollTop).toBe(geometry.scrollHeight);
+
+    // Growth keeps following while pinned.
+    geometry.scrollHeight = 1400;
+    rerender(liveSection("first thinking chunk — and it kept growing even more"));
+    expect(scroller.scrollTop).toBe(1400);
+    expect(innerPill()).toBeNull();
+  });
+
+  it("scrolling UP inside the thinking area STOPS the follow (no yank) and shows the inner Jump-to-latest pill", async () => {
+    const { scroller, geometry, rerender } = await renderLiveThinking("first thinking chunk");
+    rerender(liveSection("first thinking chunk — grown"));
+    expect(scroller.scrollTop).toBe(geometry.scrollHeight);
+
+    // The user scrolls up inside the block (300px — far past the 24px
+    // threshold, moving up from the followed bottom).
+    scroller.scrollTop = 300;
+    fireEvent.scroll(scroller);
+    expect(await screen.findByRole("button", { name: "Jump to the latest thinking" })).toBeTruthy();
+
+    // New content lands — the block must NOT yank them back down.
+    geometry.scrollHeight = 1600;
+    rerender(liveSection("first thinking chunk — grown — and still streaming"));
+    expect(scroller.scrollTop).toBe(300);
+  });
+
+  it("clicking the inner pill re-pins + smooth-jumps, the pill hides, and the stream follows again", async () => {
+    const { scroller, geometry, rerender } = await renderLiveThinking("first thinking chunk");
+    rerender(liveSection("first thinking chunk — grown"));
+    scroller.scrollTop = 300;
+    fireEvent.scroll(scroller);
+    const pillButton = await screen.findByRole("button", { name: "Jump to the latest thinking" });
+
+    const scrollTo = vi.fn();
+    scroller.scrollTo = scrollTo;
+    fireEvent.click(pillButton);
+    expect(scrollTo).toHaveBeenCalledWith({ top: geometry.scrollHeight, behavior: "smooth" });
+    await waitFor(() => expect(innerPill()).toBeNull());
+
+    // Re-pinned: the next growth follows again.
+    geometry.scrollHeight = 1800;
+    rerender(liveSection("first thinking chunk — grown — resumed following the stream"));
+    expect(scroller.scrollTop).toBe(1800);
+  });
+
+  it("scrolling back to the very bottom RE-PINS the block: the next tick follows again, no pill", async () => {
+    const { scroller, geometry, rerender } = await renderLiveThinking("first thinking chunk");
+    rerender(liveSection("first thinking chunk — grown"));
+    scroller.scrollTop = 300;
+    fireEvent.scroll(scroller);
+    expect(await screen.findByRole("button", { name: "Jump to the latest thinking" })).toBeTruthy();
+
+    // The user returns to the very bottom (scrollHeight - clientHeight).
+    scroller.scrollTop = geometry.scrollHeight - 256;
+    fireEvent.scroll(scroller);
+    await waitFor(() => expect(innerPill()).toBeNull());
+
+    geometry.scrollHeight = 1800;
+    rerender(liveSection("first thinking chunk — grown — resumed at the bottom"));
+    expect(scroller.scrollTop).toBe(1800);
+  });
+
+  it("a COMPLETED thought opened by a manual tap never follows (the user reads from the top) and never shows the pill", async () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "thinking", text: "a settled, completed thought", ts: "t" }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Expand thought" }));
+    const scroller = await waitFor(() => {
+      const el = document.querySelector("[data-thinking-scroll]") as HTMLElement | null;
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    giveGeometry(scroller);
+
+    // Manual tap wins: settled text is read from the top — no auto-scroll to
+    // the bottom, no pill (the R95-D enabled gate).
+    expect(scroller.scrollTop).toBe(0);
+    expect(innerPill()).toBeNull();
+
+    // Even a scroll up + re-render never re-follows or arms the pill.
+    scroller.scrollTop = 200;
+    fireEvent.scroll(scroller);
+    expect(innerPill()).toBeNull();
   });
 });
 

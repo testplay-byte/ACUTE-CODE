@@ -37,6 +37,9 @@ import {
 } from "../../lib/stream-store";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { SubAgentCard } from "./SubAgentCard";
+// ROUND-95 (R95-D): the small-block stick-to-bottom primitive — the live
+// thinking block's body follows its own stream (see use-stick-to-bottom.ts).
+import { useStickToBottom } from "./use-stick-to-bottom";
 // ROUND-68 (R68-A): the INLINE screenshot row — one per `screenshot`
 // WorkingEntry, rendered at its capture moment between the tool rows.
 import { ScreenshotRow } from "./ScreenshotRow";
@@ -89,6 +92,18 @@ import { withAlpha } from "../dashboard/helpers";
  * WorkingEntry, at the entry's list position (the capture moment), not in
  * the R67-D bottom strip (deleted). The rows are live-only: the folded log
  * never persists rasters, so only a live (or stopped) turn can carry them.
+ *
+ * ROUND-95 (R95-D, owner: "The thinking area was not auto-scrolling to the
+ * very bottom… If I scroll up in the thinking area, then it should not
+ * auto-scroll again. It should only scroll if I scroll to the very bottom
+ * and leave it there."): the ThoughtRow's expanded body is now a STICK-
+ * TO-BOTTOM scroller (use-stick-to-bottom.ts) — while LIVE it follows the
+ * growing thinking text, scrolling up inside stops the follow, and a
+ * small floating "Jump to latest" pill offers the way back. A completed
+ * thought never follows (settled text is read from the top — manual tap
+ * wins). The body also carries data-thinking-scroll: the chat panel's
+ * wheel chaining keys off it (nested scrollers consume their own wheels
+ * before the transcript ever detaches — see AgentChatPanel's R95-D note).
  */
 
 const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -507,6 +522,20 @@ export function ThoughtRow({
   const [open, setOpen] = useState(false);
   const userTouched = useRef(false);
   const prevLive = useRef(live);
+  const trimmed = text.trim();
+
+  // ── ROUND-95 (R95-D, owner: the thinking area "should be automatically
+  //    scrolling if the user was at the very bottom of it but apparently it
+  //    was not auto-scrolling"): the expanded body is a stick-to-bottom
+  //    scroller — while LIVE it follows the streaming text (deps = the
+  //    text itself; enabled = live, so a COMPLETED thought the user tapped
+  //    open never moves). See use-stick-to-bottom.ts for the full pin /
+  //    detach / flight contract. ──
+  const {
+    ref: thoughtScrollRef,
+    pinned: thoughtPinned,
+    jumpToBottom: jumpThoughtToBottom,
+  } = useStickToBottom([trimmed], { enabled: live });
 
   useEffect(() => {
     if (!userTouched.current) {
@@ -516,7 +545,6 @@ export function ThoughtRow({
     prevLive.current = live;
   }, [live]);
 
-  const trimmed = text.trim();
   if (trimmed === "") return null;
   const preview = trimmed.length > 72 ? `${trimmed.slice(0, 72)}…` : trimmed;
   const durationLabel =
@@ -569,12 +597,54 @@ export function ThoughtRow({
                 mono, relaxed leading. NO left border rail, NO accent color on
                 the container (Linear/Notion-quiet, not AI glow). The
                 collapse/expand chevron, Thinking… label and "Thought for Ns"
-                duration above stay exactly as they were. */}
-            <div
-              className="mt-0.5 mb-1 rounded-[10px] px-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll"
-              style={{ background: styles.subtle, color: styles.textSecondary }}
-            >
-              {trimmed}
+                duration above stay exactly as they were.
+                ROUND-95 (R95-D): the scroller + its floating pill now sit in
+                a RELATIVE wrapper — an absolutely-positioned pill INSIDE the
+                scroller itself would scroll WITH the content (it anchors in
+                the scrollable area, not the visible box); the wrapper does
+                not scroll, so the pill stays pinned to the block's visible
+                bottom-right corner. */}
+            <div className="relative mt-0.5 mb-1">
+              <div
+                ref={thoughtScrollRef}
+                data-thinking-scroll
+                className="rounded-[10px] px-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll"
+                style={{ background: styles.subtle, color: styles.textSecondary }}
+              >
+                {/* The single content wrapper: the stick hook's
+                    ResizeObserver observes it (growth past the max-h-64 cap
+                    never changes the scroller's own box). */}
+                <div>{trimmed}</div>
+              </div>
+              {/* ── R95-D: the INNER JUMP PILL — only while LIVE and
+                  DETACHED from the block's own tail (the user scrolled up
+                  inside the thinking text). Same frosted-pill language as
+                  the transcript's Jump-to-latest, miniaturized for the
+                  block. Clicking re-pins + smooth-jumps to the latest
+                  thinking; arriving back at the bottom hides it. The
+                  mousedown preventDefault keeps the focus wherever it was
+                  (the transcript pill's rule — never steal focus). ── */}
+              {!thoughtPinned && live ? (
+                <button
+                  type="button"
+                  data-testid="thinking-jump-latest"
+                  aria-label="Jump to the latest thinking"
+                  title="Jump to the latest thinking"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => jumpThoughtToBottom()}
+                  className="absolute bottom-1.5 right-1.5 z-10 flex items-center gap-1 rounded-full border-[1.5px] pl-2 pr-1.5 py-0.5 shadow-md transition-all hover:shadow-lg"
+                  style={{
+                    borderColor: withAlpha(styles.accent, 0.28),
+                    background: styles.isDark ? "rgba(44,44,46,0.72)" : "rgba(255,255,255,0.72)",
+                    backdropFilter: "blur(12px) saturate(1.15)",
+                    WebkitBackdropFilter: "blur(12px) saturate(1.15)",
+                    color: styles.text,
+                  }}
+                >
+                  <span className="text-[10px] font-semibold">Jump to latest</span>
+                  <ChevronDown size={9} style={{ color: styles.accent }} aria-hidden />
+                </button>
+              ) : null}
             </div>
           </motion.div>
         )}

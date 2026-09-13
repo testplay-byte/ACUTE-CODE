@@ -1843,6 +1843,55 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
     });
   }
 
+  /** R95-D: arm the live turn with a LIVE THINKING BLOCK — a tool entry
+   * makes the segment render as a live WorkingSection (a thinking-only
+   * turn renders bare, where no row carries the live marker), and
+   * streamThinking appends the in-flight thought the section marks live
+   * (auto-expanded, its body the data-thinking-scroll scroller the owner
+   * reads while sitting at the transcript bottom). */
+  function armLiveThinkingTurn(thinkingText: string, streamText: string): void {
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: {
+          liveTurn: {
+            startedAtMs: Date.now() - 3000,
+            working: [
+              {
+                type: "tool",
+                tool: {
+                  seq: 7,
+                  toolName: "read_file",
+                  argsSummary: "path: src/app.ts",
+                  ok: null,
+                  ts: "2026-10-01T10:01:00Z",
+                },
+              },
+            ],
+            streamText,
+            streamThinking: thinkingText,
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+        },
+      },
+    });
+  }
+
   /** Give the container a geometry (2000px of content in a 500px viewport)
    * so distance-from-bottom is real in the no-layout happy-dom world. */
   function giveGeometry(el: HTMLElement): void {
@@ -2038,5 +2087,57 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
         ),
       SLOW,
     );
+  });
+
+  // ── R95-D: nested-scroller wheel chaining ─────────────────────────────────
+  // Owner (v0.91.0): "The Jump to Latest button was showing even though I
+  // was at the very bottom of it… The Jump to Latest button apparently was
+  // not working properly in the thinking area." Root cause: the wheel
+  // event BUBBLES out of the live thinking block, so wheeling up INSIDE it
+  // detached the transcript pin even though the block itself consumed the
+  // scroll — the pill then appeared at the very bottom and its jump moved
+  // nothing. The chaining rule: an upward wheel belongs to the transcript
+  // only once every nested scroller between the cursor and it is at its
+  // own top.
+  it("R95-D: wheeling UP inside the live thinking block (scrolled past its own top) does NOT detach the transcript — no pill, and the follow keeps running", async () => {
+    const scroller = await renderScrollPanel();
+    const scrollTo = vi.fn();
+    scroller.scrollTo = scrollTo;
+    armLiveThinkingTurn("the live thinking tail grows here", "the streaming answer text");
+    await screen.findByText(/live thinking tail/, {}, SLOW);
+    const inner = document.querySelector("[data-thinking-scroll]") as HTMLElement;
+    expect(inner).toBeTruthy();
+
+    // The user wheels UP over the thinking block while it sits scrolled
+    // into its own content (scrollTop 80 — the block consumes the wheel).
+    inner.scrollTop = 80;
+    fireEvent.wheel(inner, { deltaY: -120 });
+    expect(pill()).toBeNull(); // the transcript is still at the very bottom
+
+    // The transcript keeps following its own stream (the R37/R64 contract
+    // survived the wheel — the pill's "not working" report is dead).
+    scrollTo.mockClear();
+    armLiveThinkingTurn(
+      "the live thinking tail grows here — and more",
+      "the streaming answer text — and more",
+    );
+    await screen.findByText(/streaming answer text — and more/, {}, SLOW);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled(), SLOW);
+    expect(pill()).toBeNull();
+  });
+
+  it("R95-D: once the thinking block is at its OWN top, the wheel chains to the transcript and detaches (the honest chaining rule)", async () => {
+    await renderScrollPanel();
+    armLiveThinkingTurn("the live thinking tail grows here", "the streaming answer text");
+    await screen.findByText(/live thinking tail/, {}, SLOW);
+    const inner = document.querySelector("[data-thinking-scroll]") as HTMLElement;
+
+    // The block cannot scroll up anymore (its scrollTop is 0): the browser
+    // chains the wheel outward to the transcript — detaching is correct.
+    inner.scrollTop = 0;
+    fireEvent.wheel(inner, { deltaY: -120 });
+    expect(
+      await screen.findByRole("button", { name: "Jump to the latest message" }, SLOW),
+    ).toBeTruthy();
   });
 });

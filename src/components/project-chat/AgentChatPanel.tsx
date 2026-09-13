@@ -1515,6 +1515,18 @@ const SCROLL_KEYS = new Set([
   "ArrowDown",
 ]);
 
+/** R95-D (owner: "The Jump to Latest button was showing even though I was
+ * at the very bottom" while reading the live thinking tail): the selector
+ * for NESTED scrollers that may consume an upward wheel before the
+ * transcript ever sees it — the app's own scrollable convention (the
+ * `.auto-scroll` class marks every long scrollable rendered inside the
+ * chat: the live thinking block, the diff/terminal/output details…), the
+ * thinking scroller's explicit data-thinking-scroll marker (a stable hook
+ * for tests — WorkingSection owns it), and `pre` (markdown code blocks;
+ * their horizontal scrollers sit at scrollTop 0, so they only ever match
+ * for completeness — the walk below skips anything already at its top). */
+const NESTED_SCROLLABLE_SELECTOR = ".auto-scroll, [data-thinking-scroll], pre";
+
 export function AgentChatPanel({
   projectId,
   project,
@@ -1940,6 +1952,25 @@ export function AgentChatPanel({
     };
     const onWheel = (e: WheelEvent): void => {
       if (e.deltaY >= 0) return; // toward the bottom is fine (arrival pins)
+      // R95-D: NESTED-SCROLLER CHAINING — the wheel event BUBBLES from every
+      // nested scroller it passes over (the live thinking block, a diff or
+      // terminal detail, a code block), so an upward wheel INSIDE such a
+      // block used to detach the TRANSCRIPT pin even though the inner
+      // scroller — not the transcript — consumed it: the jump pill appeared
+      // while the user was still at the very bottom (the owner's report).
+      // The standard chaining rule: an upward wheel belongs to the
+      // transcript only once EVERY scrollable between the cursor and it is
+      // at its own top (scrollTop 0 — exactly when the browser chains the
+      // scroll outward). Walk from the wheel target up to (but never
+      // including) the transcript; the first scrollable that can still
+      // consume the wheel owns the gesture — the transcript stays pinned.
+      let cursor: Element | null = e.target instanceof Element ? e.target : null;
+      while (cursor !== null && cursor !== el) {
+        if (cursor.matches(NESTED_SCROLLABLE_SELECTOR) && cursor.scrollTop > 0) {
+          return; // the nested scroller consumes the wheel
+        }
+        cursor = cursor.parentElement;
+      }
       programmaticScrollRef.current = false;
       applyPinned(false);
     };
