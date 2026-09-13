@@ -107,6 +107,20 @@ describe("SettingsPage padding (R60-B)", () => {
     // provider list is the honest state.
     await screen.findByText("No providers — add one below.");
   });
+
+  // R95-A (the owner: "on any of the pages there is no need to show the Back
+  // to Dashboard page button. The only place where the option needs to be
+  // shown is in the left sidebar"): the settings page's OWN back pill is GONE.
+  it("R95-A: NO 'Back to dashboard' pill in the settings content area — the sidebar owns the back affordance", () => {
+    renderWithProviders(<SettingsPage />); // default tab: appearance
+    expect(screen.queryByRole("link", { name: /back to dashboard/i })).toBeNull();
+    expect(screen.queryByText("Back to dashboard")).toBeNull();
+
+    // And on the Models & Providers tab too.
+    cleanup();
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=api" });
+    expect(screen.queryByRole("link", { name: /back to dashboard/i })).toBeNull();
+  });
 });
 
 describe("Appearance tab simplification (R62-2a)", () => {

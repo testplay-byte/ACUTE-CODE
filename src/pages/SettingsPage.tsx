@@ -10,7 +10,7 @@ import {
   updateRetrySettings,
   type RetrySettings,
 } from "../lib/api";
-import { ArrowLeft, Bot, Brain, Info, Minus, Monitor, Moon, Palette, Plus, PlugZap, RefreshCw, RotateCcw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Timer, Users } from "lucide-react";
+import { Bot, Brain, Info, Minus, Monitor, Moon, Palette, Plus, PlugZap, RefreshCw, RotateCcw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Timer, Users } from "lucide-react";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
@@ -113,19 +113,12 @@ export function SettingsPage() {
             : "min-h-0 flex-1 overflow-y-auto px-4 md:px-6 py-4 mx-auto w-full max-w-4xl"
         }
       >
-        {/* ROUND-35 (owner: "above the appearance but below the top heading"):
-          the back-to-dashboard affordance lives HERE in the content area. */}
-        <div className={tab === "api" ? "mb-5 shrink-0" : "mb-5"}>
-          <Link
-            to="/"
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full border-[1.5px] text-[12px] font-bold transition-colors"
-            style={{ borderColor: styles.border, color: styles.textSecondary, background: styles.card }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = styles.card)}
-          >
-            <ArrowLeft size={13} /> Back to dashboard
-          </Link>
-        </div>
+        {/* ROUND-35 → ROUND-95 (R95-A): the "Back to dashboard" pill that
+            used to live HERE is GONE — the owner: "on any of the pages there
+            is no need to show the Back to Dashboard page button. The only
+            place where the option needs to be shown is in the left sidebar."
+            The sidebar's settings header (and its minimized rail) is the ONE
+            back affordance now. */}
         {tab === "appearance" && <AppearanceTab />}
         {tab === "agents" && <AgentsScreen embedded />}
         {tab === "api" && (

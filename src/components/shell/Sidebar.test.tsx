@@ -209,6 +209,31 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     expect(screen.queryByText("Navigation")).toBeNull();
   });
 
+  // R95-A (the owner: "The left sidebar does have a Back to Dashboard button
+  // but it is not proper so I would like you to improve it and make it a
+  // better-looking button"): the settings-mode back affordance is a PROPER
+  // labeled pill — icon + "Dashboard" text in the app's pill idiom — and it
+  // navigates home. It is the ONE back affordance outside the minimized rail
+  // (the settings pages' own pills are gone).
+  it("R95-A: the settings sidebar's back button is a proper labeled pill that navigates to the dashboard", async () => {
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/settings" element={<div>settings stub</div>} />
+        </Routes>
+      </>,
+      { route: "/settings?tab=api" },
+    );
+    const back = screen.getByTestId("sidebar-back-dashboard");
+    expect(back.textContent).toContain("Dashboard");
+    expect(back.className).toContain("rounded-full");
+    expect(back.className).toContain("border-[1.5px]");
+    fireEvent.click(back);
+    expect(await screen.findByText("dashboard stub")).toBeTruthy();
+  });
+
   it("R66 (B4): minimizing ON A SETTINGS ROUTE shows the SETTINGS rail, not the projects one", async () => {
     // Seed a minimized store BEFORE mount at /settings?tab=vision (the
     // owner's report: "when I minimize the settings sidebar, it shows me the

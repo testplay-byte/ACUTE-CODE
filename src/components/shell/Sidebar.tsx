@@ -381,16 +381,33 @@ export function Sidebar() {
            ─────────────────────────────────────────────────────────────── */
         <>
         <div className="shrink-0 flex items-center gap-2 px-3 pt-3">
+          {/* ROUND-95 (R95-A, the owner: "on any of the pages there is no need
+              to show the Back to Dashboard page button. The only place where
+              the option needs to be shown is in the left sidebar… it is not
+              proper so I would like you to improve it and make it a
+              better-looking button"): the settings-mode back affordance is a
+              PROPER labeled pill now — icon + "Dashboard" in the app's pill
+              button idiom (bordered rounded-full h-9, hover fill) instead of
+              the old bare 7×7 icon that read as an unlabeled afterthought.
+              This is the ONE back-to-dashboard affordance outside the
+              minimized rail (the settings pages' own pills are gone). */}
           <button
             onClick={() => navigate("/")}
             aria-label="Back to dashboard"
             title="Back to dashboard"
-            className="w-7 h-7 shrink-0 rounded-[9px] grid place-items-center transition-colors"
-            style={{ color: styles.textTertiary }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            data-testid="sidebar-back-dashboard"
+            className="h-9 shrink-0 inline-flex items-center gap-1.5 px-3.5 rounded-full border-[1.5px] text-[12px] font-bold transition-colors"
+            style={{ borderColor: styles.sidebarBorder, color: styles.textSecondary, background: styles.inputBg }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = styles.sidebarHover;
+              e.currentTarget.style.color = styles.text;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = styles.inputBg;
+              e.currentTarget.style.color = styles.textSecondary;
+            }}
           >
-            <ArrowLeft size={14} />
+            <ArrowLeft size={13} /> Dashboard
           </button>
           <span className="text-[13px] font-black tracking-tight truncate" style={{ color: styles.text }}>
             Settings

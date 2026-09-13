@@ -7,7 +7,6 @@ import {
   ArrowRight,
   AudioLines,
   Check,
-  ChevronDown,
   Copy,
   Eye,
   EyeOff,
@@ -26,6 +25,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
+// ROUND-95 (R95-A): the shared styled confirmation dialog — every
+// destructive ask in this tab (pool-key removal, model deletion, provider
+// deletion) goes through it; window.confirm is banned app-wide.
+import { ConfirmDialog } from "./ConfirmDialog";
 // ROUND-87 (R87): the shared ease curve for the dialog/entrance animations.
 import { ease } from "../../lib/motion";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
@@ -122,6 +125,20 @@ import {
  * TOKENS with decimal inputMode and gained the missing supportsVision
  * toggle (the last uneditable row field); failed loads surface honest
  * error states instead of silently rendering as empty lists.
+ *
+ * ROUND-95 (R95-A, the owner's UI-overhaul walkthrough): the left provider
+ * rail is a TALL fixed panel (h-full, 280px floor — the R58 content-adaptive
+ * h-fit retired); the provider delete moved from a bottom Danger zone INTO
+ * the header as a trash icon opening the shared styled ConfirmDialog
+ * (src/components/settings/ConfirmDialog.tsx — window.confirm is banned);
+ * Key 2..N rows mirror Key 1's visual language exactly (bordered h-10 eye +
+ * animated Copy + matching trash); the picker is add-then-configure (the
+ * pencil configure-first flow retired; already-added models are not SHOWN);
+ * the models list sorts NOT-hidden first / hidden LAST and animates the
+ * re-sort (framer-motion layout) while keeping the scroll position; the
+ * header Test button opens a three-option scope ROW (Test All | Test Only
+ * Failed | Test Only Working, divider-separated); the list gap grows to
+ * separate the model cards. The R50 "Danger zone" section is gone.
  */
 
 /* ── API plumbing ───────────────────────────────────────────────────────────
@@ -475,12 +492,16 @@ export function ModelsProvidersTab() {
           "not proper". The error now surfaces as a red alert with the
           server's message; a fetch in flight shows the loading row instead
           of a misleading "No providers". */}
-      {/* ── LEFT: the provider list (ROUND-58 R58-d: content-adaptive height —
-          shrinks with few providers, keeps a 220px floor, still scrolls when
-          many — the owner: "It should adapt its height according to the content
-          inside it… There should be a minimum height"). ─────────────────── */}
+      {/* ── LEFT: the provider list. ROUND-95 (R95-A, the owner: "make it one
+          that is taller by default. It does not adapt its height and if there
+          are more providers added then it will only allow the user to scroll
+          the providers list"): the R58 content-adaptive h-fit is retired — the
+          rail now runs the FULL height of the master–detail row (h-full, the
+          same height the right detail pane fills) with a generous 280px floor,
+          so it reads as a proper fixed panel; only the INNER list scrolls
+          when providers outgrow it. ─────────────────────────────────────── */}
       <div
-        className="w-[280px] shrink-0 h-fit max-h-full min-h-[220px] rounded-[16px] border-[1.5px] overflow-hidden flex flex-col"
+        className="w-[280px] shrink-0 h-full min-h-[280px] rounded-[16px] border-[1.5px] overflow-hidden flex flex-col"
         style={{ background: styles.card, borderColor: styles.border }}
       >
         <div
@@ -750,14 +771,19 @@ function ProviderDetailPane({
   const [baseUrlDraft, setBaseUrlDraft] = useState(provider.baseUrl ?? "");
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   /** ROUND-90 (R90-A1, the owner: "I clicked the confirm delete but nothing
-   * was happening"): the DELETE failure now renders INLINE in the Danger
-   * zone — pre-R90 the mutation's error went to `saveMsg`, which lives in
-   * the HEADER card ~1500px ABOVE the Danger zone at the bottom of the
-   * scrollable pane, styled in the ACCENT color: a 409 ("1 agent still
-   * uses this provider") was literally invisible at the click site, the
-   * dead click the owner saw. Cleared when the confirm re-arms. */
+   * was happening"): the DELETE failure now renders INLINE right under the
+   * header card (R95-A moved the delete affordance into the header — the
+   * bottom Danger zone is gone): pre-R90 the mutation's error went to
+   * `saveMsg`, which lived in the HEADER card ~1500px ABOVE the Danger zone
+   * at the bottom of the scrollable pane, styled in the ACCENT color: a 409
+   * ("1 agent still uses this provider") was literally invisible at the
+   * click site, the dead click the owner saw. Cleared when the confirm
+   * re-arms. */
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  /** ROUND-95 (R95-A): the header trash opens the shared styled
+   * ConfirmDialog — the browser window.confirm pre-arm flow is retired (the
+   * owner: "showing a proper UI popup to confirm the deletion"). */
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   // ROUND-47 (R47-c1): the test surface got explicit selectors — WHICH key
   // (primary or a held pool slot) and WHICH model (or reachability-only) —
   // instead of an invisible "primary key, no model" default. R92-D3: the
@@ -1037,7 +1063,53 @@ function ProviderDetailPane({
             {saveMsg}
           </span>
         )}
+        {/* ROUND-95 (R95-A, the owner: "The option to delete a provider should
+            not be shown at the very bottom but it should be shown at the very
+            top. At the very top there should be a trash can icon"): the delete
+            affordance lives IN THE HEADER now — the bottom Danger zone card is
+            retired. Quiet at rest (a bordered ghost); the hover turns it red
+            like every other destructive affordance in the app. The click opens
+            the shared styled ConfirmDialog (never a browser confirm). */}
+        <button
+          type="button"
+          onClick={() => {
+            // A fresh attempt clears the stale inline error first.
+            setDeleteError(null);
+            setConfirmDeleteOpen(true);
+          }}
+          aria-label={`Delete provider ${provider.name}`}
+          title="Delete provider"
+          data-testid="provider-delete-top"
+          className="w-9 h-9 shrink-0 grid place-items-center rounded-[10px] border-[1.5px] transition-colors"
+          style={{ borderColor: styles.border, color: styles.textTertiary }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = withAlpha("#ef4444", 0.12);
+            e.currentTarget.style.borderColor = withAlpha("#ef4444", 0.5);
+            e.currentTarget.style.color = "#ef4444";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.borderColor = styles.border;
+            e.currentTarget.style.color = styles.textTertiary;
+          }}
+        >
+          <Trash2 size={14} />
+        </button>
       </div>
+
+      {/* R90-A1 → R95-A: the delete failure lands INLINE directly under the
+          header (the click site is the header trash now) — in the danger
+          color, announced to screen readers. */}
+      {deleteError !== null && (
+        <p
+          className="-mt-3 text-[11px] font-medium"
+          style={{ color: "#ef4444" }}
+          role="alert"
+          data-testid="delete-provider-error"
+        >
+          {deleteError}
+        </p>
+      )}
 
       {/* ── Connection: base URL / API format / key + test ─────────────── */}
       <div
@@ -1220,34 +1292,29 @@ function ProviderDetailPane({
         staticCatalog={staticCatalog}
       />
 
-      {/* ── Danger zone: delete provider (moved out of the header — R50-d) */}
-      <div
-        className="rounded-[16px] border-[1.5px] p-4 md:p-5 flex items-center gap-4 flex-wrap"
-        style={{
-          background: withAlpha("#ef4444", 0.03),
-          borderColor: withAlpha("#ef4444", 0.25),
-        }}
-      >
-        <span
-          className="w-9 h-9 shrink-0 rounded-[10px] grid place-items-center"
-          style={{ background: withAlpha("#ef4444", 0.1), color: "#ef4444" }}
-          aria-hidden
+      {/* ROUND-95 (R95-A): the provider delete confirm — the header trash's
+          styled popup (the bottom Danger zone card is retired; the owner's
+          exact message). The pre-armed agents warning rides the dialog body
+          (R90-A1's honesty contract — the referencing agents are named BEFORE
+          the click), and the delete failure lands in the inline
+          delete-provider-error line under the header. */}
+      {confirmDeleteOpen && (
+        <ConfirmDialog
+          title="Delete provider"
+          message="Do you want to delete this provider and all the models added in it?"
+          confirmLabel="Delete provider"
+          danger
+          onConfirm={() => {
+            // R90-A1: a fresh attempt clears the stale inline error first.
+            setDeleteError(null);
+            setConfirmDeleteOpen(false);
+            removeProvider.mutate();
+          }}
+          onClose={() => setConfirmDeleteOpen(false)}
         >
-          <AlertTriangle size={15} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <SectionLabel color="#ef4444">Danger zone</SectionLabel>
-          <p className="mt-1 text-[11.5px]" style={{ color: styles.textSecondary }}>
-            Deletes the provider, its stored key, and every model override. Agents still using
-            it must be reassigned first.
-          </p>
-          {/* R90-A1: PRE-ARMED honesty — the agents referencing this provider are
-              listed BEFORE the click (the data was already here for the
-              disable warning; the owner never saw WHY the confirm was a dead
-              click because the 409 only surfaced in the header). */}
           {agentsUsingProvider.length > 0 ? (
             <p
-              className="mt-1.5 text-[11px] font-medium"
+              className="text-[11px] font-medium"
               style={{ color: "#ef4444" }}
               data-testid="delete-used-by-warning"
             >
@@ -1257,54 +1324,8 @@ function ProviderDetailPane({
               will ask on the next send).
             </p>
           ) : null}
-          {/* R90-A1: the inline failure — exactly at the click site, in the
-              danger color, announced to screen readers. */}
-          {deleteError !== null ? (
-            <p
-              className="mt-1.5 text-[11px] font-medium"
-              style={{ color: "#ef4444" }}
-              role="alert"
-              data-testid="delete-provider-error"
-            >
-              {deleteError}
-            </p>
-          ) : null}
-        </div>
-        <button
-          onClick={() => {
-            if (confirmDelete) {
-              // R90-A1: a fresh attempt clears the stale inline error first.
-              setDeleteError(null);
-              removeProvider.mutate();
-            } else {
-              setDeleteError(null);
-              setConfirmDelete(true);
-              resetAfter(() => setConfirmDelete(false), 3000);
-            }
-          }}
-          aria-label={`Delete provider ${provider.name}`}
-          title="Delete provider"
-          className="h-9 px-3.5 rounded-[10px] text-[12px] font-bold flex items-center gap-1.5 transition-colors shrink-0"
-          style={
-            confirmDelete
-              ? { background: "#ef4444", color: "#fff" }
-              : { border: `1.5px solid ${withAlpha("#ef4444", 0.5)}`, color: "#ef4444" }
-          }
-          onMouseEnter={(e) => {
-            if (!confirmDelete) e.currentTarget.style.background = withAlpha("#ef4444", 0.12);
-          }}
-          onMouseLeave={(e) => {
-            if (!confirmDelete) e.currentTarget.style.background = "transparent";
-          }}
-        >
-          <Trash2 size={12} />{" "}
-          {confirmDelete
-            ? agentsUsingProvider.length > 0
-              ? `Confirm delete (reset ${agentsUsingProvider.length})`
-              : "Confirm delete"
-            : "Delete provider"}
-        </button>
-      </div>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
@@ -2118,8 +2139,15 @@ function ModelCard({
       <div
         className="rounded-[14px] border-[1.5px] overflow-hidden"
         style={{
+          // R95-A (the owner: "add some proper separation between the models
+          // so that they are properly separated… the user can easily
+          // visually distinguish between the two models"): the card overlay
+          // is dialed up a notch (the list gap grew to gap-3 for the same
+          // ask) so each model reads as its own card AT A GLANCE against
+          // the section's styles.card background — the same neutral-overlay
+          // idiom this file already uses, just one step stronger.
           borderColor: m.configured ? styles.border : withAlpha(styles.accent, 0.3),
-          background: styles.isDark ? "rgba(255,255,255,0.015)" : "rgba(0,0,0,0.01)",
+          background: styles.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)",
         }}
       >
       {/* ── the identity row (the "top half" — stays exactly as it is when
@@ -2478,15 +2506,19 @@ function useMenuDismiss(open: boolean, onDismiss: () => void): RefObject<HTMLDiv
   return ref;
 }
 
-/** R94-C: one row of the Test-scope menu — the app's dropdown idiom
- * (rounded-lg rows, hover = subtleHover, icon + label + inline desc), with
- * the honest disabled state (opacity + cursor, and the explanatory title
- * the caller passes for the "nothing to test yet" cases). */
-function ScopeMenuItem({
+/** R94-C → R95-A: one option of the Test-scope ROW — the owner's directive:
+ * "When I click the test button above it, it should show me three options
+ * in a single row. The options should be properly formatted, well spaced,
+ * and well separated from each other by lines." Each option is a compact
+ * icon + label button that flexes to share the row evenly (the vertical
+ * dividers live between them in the menu container); the honest disabled
+ * state (opacity + cursor + the explanatory hint as the title) carries over
+ * from the R94-C vertical menu verbatim. */
+function ScopeOptionButton({
   testId,
   icon,
   label,
-  desc,
+  hint,
   disabled,
   title,
   onClick,
@@ -2494,7 +2526,9 @@ function ScopeMenuItem({
   testId: string;
   icon: LucideIcon;
   label: string;
-  desc: string;
+  /** The R94-C explanatory line — surfaced as the title tooltip (the
+   * horizontal row has no room for a second text line). */
+  hint: string;
   disabled?: boolean;
   title?: string;
   onClick: () => void;
@@ -2507,9 +2541,9 @@ function ScopeMenuItem({
       role="menuitem"
       data-testid={testId}
       disabled={disabled}
-      title={title}
+      title={title ?? hint}
       onClick={onClick}
-      className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg transition-colors disabled:cursor-default disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
+      className="flex-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 rounded-[10px] transition-colors disabled:cursor-default disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
       style={{ color: disabled ? styles.textTertiary : styles.text }}
       onMouseEnter={(e) => {
         if (!disabled) e.currentTarget.style.background = styles.subtleHover;
@@ -2519,16 +2553,11 @@ function ScopeMenuItem({
       }}
     >
       <Icon
-        size={12}
+        size={13}
         className="shrink-0"
         style={{ color: disabled ? styles.textTertiary : styles.accent }}
       />
-      <span className="min-w-0 flex-1">
-        <span className="block text-[11.5px] font-bold leading-tight">{label}</span>
-        <span className="block text-[9.5px] leading-tight" style={{ color: styles.textTertiary }}>
-          {desc}
-        </span>
-      </span>
+      <span className="text-[11.5px] font-bold leading-tight whitespace-nowrap">{label}</span>
     </button>
   );
 }
@@ -2552,12 +2581,17 @@ function ModelListSection({
   const queryClient = useQueryClient();
   // ROUND-50 (R50-d): the "Add models" picker dialog + the per-model
   // configuration dialog (replaces the inline type-an-id row editor).
-  // ROUND-87 (R87): `adding` — the ADD-mode config dialog opened by picking
-  // a model in the picker (configure BEFORE the upsert, per the owner).
+  // ROUND-95 (R95-A): the configure-BEFORE-add handoff is retired — adding a
+  // model (the picker's Add button, batch strip, or the manual by-id form)
+  // UPSERTS the row first, then a single add OPENS the config dialog on the
+  // created row (edit mode) so the owner's "it will add that model and it
+  // will open up the configuring menu for that model" flow holds.
   const [pickerOpen, setPickerOpen] = useState(false);
   const [configuring, setConfiguring] = useState<ProviderModelConfig | null>(null);
-  const [adding, setAdding] = useState<ModelAddPrefill | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** ROUND-95 (R95-A): the model row whose delete is awaiting the styled
+   * ConfirmDialog (the browser window.confirm is retired app-wide). */
+  const [pendingDeleteModel, setPendingDeleteModel] = useState<MergedModel | null>(null);
 
   // ── R93-A7 → R94-C: the Test-All driver + progress + SCOPE. Each card owns
   // its test state (useModelTest) — the header bumps a seq and counts the
@@ -2586,6 +2620,18 @@ function ModelListSection({
   // catalog feeds the "Add models" picker ALONE — catalogIds is [] by
   // design; the static catalog stays a param for the picker pre-fill.
   const merged = mergeCatalogIntoModels(models, [], staticCatalog);
+
+  // ── ROUND-95 (R95-A, the owner: "The models which are not hidden should
+  // show at the very top and the models which are hidden actually should
+  // show at the very bottom"): the render order is NOT-hidden first, hidden
+  // last — derived from the CACHED rows on every render, so the R94-C
+  // optimistic hidden-toggle flip re-sorts the list LIVE (the toggle patches
+  // the query cache without a refetch; this derivation reads it). The
+  // relative order inside each group is the query's own (stable). The cards
+  // below render through a framer-motion `layout` wrapper, so a row GLIDES
+  // to its new position instead of teleporting — and because a pure reorder
+  // neither adds nor removes content, the detail pane's scrollTop holds.
+  const orderedModels = [...merged.filter((m) => !m.hidden), ...merged.filter((m) => m.hidden)];
 
   /** R94-C: does this row belong to a test scope? "all" = every configured
    * row; "failed"/"working" = only rows whose LAST recorded outcome matches
@@ -2618,10 +2664,12 @@ function ModelListSection({
     );
   }, []);
 
-  // ── R94-C: the scope menu (the split button's chevron half). The menu is
+  // ── R94-C: the scope menu (R95-A: the Test button's picker). The menu is
   // position:fixed off the trigger's rect — the section card's
   // overflow-hidden + the scrollable detail pane would clip an in-flow
-  // absolute dropdown.
+  // absolute dropdown. R95-A: the menu is a SINGLE HORIZONTAL ROW now
+  // (Test All | Test Only Failed | Test Only Working), so the estimate is
+  // wide + short instead of the old tall vertical stack.
   const [scopeMenu, setScopeMenu] = useState<{ top: number; left: number } | null>(null);
   const closeScopeMenu = useCallback((): void => setScopeMenu(null), []);
   const scopeSplitRef = useMenuDismiss(scopeMenu !== null, closeScopeMenu);
@@ -2633,8 +2681,8 @@ function ModelListSection({
     const el = scopeSplitRef.current;
     if (el === null) return;
     const rect = el.getBoundingClientRect();
-    const width = 236;
-    const estHeight = 176;
+    const width = 470;
+    const estHeight = 68;
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
     const roomBelow = window.innerHeight - rect.bottom;
     setScopeMenu({
@@ -2713,24 +2761,35 @@ function ModelListSection({
         <span data-testid="models-count" className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
           {merged.length}
         </span>
-        {/* ── R93-A7: Test all (the owner: "the option to easily and quickly
-            test all the models out, like a quick test button there"). Every
-            card fires its OWN probe (the per-card result sections render
-            exactly as a manual click); this button tracks the progress and
-            the summary.
-            ── R94-C: it is now a SPLIT BUTTON — the main half still runs the
-            whole list, the chevron half opens the SCOPE menu (all / only
-            the failed / only the working — the owner's "test only the ones
-            that failed" ask). The menu is fixed-position (see the comment
-            at scopeMenu above) and rides the same trigger wrapper for the
-            outside-click dismissal. */}
+        {/* ── R93-A7 → R94-C → R95-A: the Test button (the owner: "that button
+            should not say 'Test All' but it should only say 'Test'. When I
+            click the test button above it, it should show me three options in
+            a single row"). ONE button labeled "Test" at rest — the progress
+            ("Testing X/Y…") and the pass/fail summary states ride the same
+            node while a run settles. The click opens the SCOPE ROW: three
+            options in ONE horizontal row, separated by divider lines —
+            [ Test All | Test Only Failed | Test Only Working ]. The menu is
+            fixed-position (see the comment at scopeMenu above) and rides the
+            same wrapper for the outside-click dismissal. */}
         {merged.length > 0 ? (
-          <div ref={scopeSplitRef} className="relative flex items-stretch shrink-0">
+          <div
+            ref={scopeSplitRef}
+            data-testid="test-scope-toggle"
+            className="relative flex items-stretch shrink-0"
+            onClick={(e) => {
+              // The WRAPPER carries the toggle testid — only direct clicks on
+              // it (not the button/menu children bubbling up) toggle here;
+              // the button's own handler covers the rest.
+              if (e.target === e.currentTarget) toggleScopeMenu();
+            }}
+          >
             <button
-              onClick={() => triggerTestAll("all")}
+              onClick={toggleScopeMenu}
               disabled={testRunActive}
+              aria-haspopup="menu"
+              aria-expanded={scopeMenu !== null}
               data-testid="test-all-models"
-              className="h-7 pl-2.5 pr-1.5 rounded-l-full text-[11px] font-bold flex items-center gap-1.5 disabled:cursor-default transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
+              className="h-7 px-2.5 rounded-full text-[11px] font-bold flex items-center gap-1.5 disabled:cursor-default transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
               style={{
                 background: withAlpha(styles.accent, 0.1),
                 color:
@@ -2740,7 +2799,7 @@ function ModelListSection({
                       : "#22c55e"
                     : styles.accent,
               }}
-              title="Run the connection test for every model in this list"
+              title="Test — all models, only the failed ones, or only the working ones"
             >
               {testRunActive ? (
                 <RefreshCw size={11} className="animate-spin" />
@@ -2748,7 +2807,7 @@ function ModelListSection({
                 <Zap size={11} strokeWidth={2.5} />
               )}
               {testAll === null
-                ? "Test all"
+                ? "Test"
                 : testRunActive
                   ? `Testing ${testAll.done}/${testAll.total}${testAll.scope === "failed" ? " failed" : testAll.scope === "working" ? " working" : ""}…`
                   : testAll.failed > 0
@@ -2761,33 +2820,11 @@ function ModelListSection({
                         ? `All ${testAll.total} still pass`
                         : `All ${testAll.total} passed`}
             </button>
-            <button
-              onClick={toggleScopeMenu}
-              disabled={testRunActive}
-              aria-haspopup="menu"
-              aria-expanded={scopeMenu !== null}
-              aria-label="Choose the test scope"
-              data-testid="test-scope-toggle"
-              title="Test scope — all models, only the failed ones, or only the working ones"
-              className="h-7 w-6 rounded-r-full grid place-items-center shrink-0 disabled:cursor-default transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
-              style={{
-                background: withAlpha(styles.accent, 0.1),
-                color:
-                  testAll !== null && !testRunActive
-                    ? testAll.failed > 0
-                      ? "#ef4444"
-                      : "#22c55e"
-                    : styles.accent,
-                boxShadow: `inset 1px 0 0 ${withAlpha(styles.accent, 0.28)}`,
-              }}
-            >
-              <ChevronDown size={11} />
-            </button>
             {scopeMenu !== null && (
               <div
                 role="menu"
                 aria-label="Test scope"
-                className="fixed z-50 w-[236px] rounded-[14px] border-[1.5px] p-1.5"
+                className="fixed z-50 w-[470px] rounded-[14px] border-[1.5px] p-1.5 flex items-stretch"
                 style={{
                   top: scopeMenu.top,
                   left: scopeMenu.left,
@@ -2796,18 +2833,19 @@ function ModelListSection({
                   boxShadow: styles.bentoShadow,
                 }}
                 onKeyDown={(e) => {
-                  // R94-C: the keyboard ladder — Arrow/Home/End move the
-                  // focus through the ENABLED items (Enter is the buttons'
-                  // native activation; Escape rides the document listener).
+                  // R94-C → R95-A: the keyboard ladder — now HORIZONTAL
+                  // (ArrowLeft/Right move the focus through the ENABLED
+                  // items; Enter is the buttons' native activation; Escape
+                  // rides the document listener).
                   const items = Array.from(
                     e.currentTarget.querySelectorAll<HTMLButtonElement>("button:not([disabled])"),
                   );
                   if (items.length === 0) return;
                   const idx = items.indexOf(document.activeElement as HTMLButtonElement);
-                  if (e.key === "ArrowDown") {
+                  if (e.key === "ArrowRight") {
                     e.preventDefault();
                     items[(idx + 1) % items.length]!.focus();
-                  } else if (e.key === "ArrowUp") {
+                  } else if (e.key === "ArrowLeft") {
                     e.preventDefault();
                     items[(idx - 1 + items.length) % items.length]!.focus();
                   } else if (e.key === "Home") {
@@ -2819,20 +2857,25 @@ function ModelListSection({
                   }
                 }}
               >
-                <ScopeMenuItem
+                <ScopeOptionButton
                   testId="test-scope-all"
                   icon={Zap}
-                  label="Test all"
-                  desc={`Every model in this list (${merged.length})`}
+                  label="Test All"
+                  hint={`Every model in this list (${merged.length})`}
                   disabled={testRunActive}
-                  title={testRunActive ? "A test run is already in progress" : undefined}
+                  title={testRunActive ? "A test run is already in progress" : `Every model in this list (${merged.length})`}
                   onClick={() => runScope("all")}
                 />
-                <ScopeMenuItem
+                <span
+                  className="w-px my-1 shrink-0"
+                  style={{ background: withAlpha(styles.border, 0.8) }}
+                  aria-hidden
+                />
+                <ScopeOptionButton
                   testId="test-scope-failed"
                   icon={AlertTriangle}
-                  label="Test only failed"
-                  desc={
+                  label="Test Only Failed"
+                  hint={
                     failedCount === 0
                       ? "No failures recorded yet"
                       : `Only the ${failedCount} model${failedCount === 1 ? "" : "s"} whose last test failed`
@@ -2842,16 +2885,21 @@ function ModelListSection({
                     testRunActive
                       ? "A test run is already in progress"
                       : failedCount === 0
-                        ? "No failed models yet — run Test all first"
-                        : undefined
+                        ? "No failed models yet — run Test All first"
+                        : `Only the ${failedCount} model${failedCount === 1 ? "" : "s"} whose last test failed`
                   }
                   onClick={() => runScope("failed")}
                 />
-                <ScopeMenuItem
+                <span
+                  className="w-px my-1 shrink-0"
+                  style={{ background: withAlpha(styles.border, 0.8) }}
+                  aria-hidden
+                />
+                <ScopeOptionButton
                   testId="test-scope-working"
                   icon={Check}
-                  label="Test only working"
-                  desc={
+                  label="Test Only Working"
+                  hint={
                     workingCount === 0
                       ? "No passes recorded yet"
                       : `Only the ${workingCount} model${workingCount === 1 ? "" : "s"} whose last test passed`
@@ -2861,8 +2909,8 @@ function ModelListSection({
                     testRunActive
                       ? "A test run is already in progress"
                       : workingCount === 0
-                        ? "No working models yet — run Test all first"
-                        : undefined
+                        ? "No working models yet — run Test All first"
+                        : `Only the ${workingCount} model${workingCount === 1 ? "" : "s"} whose last test passed`
                   }
                   onClick={() => runScope("working")}
                 />
@@ -2906,65 +2954,99 @@ function ModelListSection({
           No models yet — use “Add models” to pick from the provider's catalog.
         </div>
       ) : (
-        <div className="flex flex-col gap-2.5 p-3">
+        /* ROUND-95 (R95-A, the owner: "add some proper separation between the
+            models so that they are properly separated, look proper and good…
+            the user can easily visually distinguish between the two models"):
+            the gap grows 2.5 → 3 and each card renders through a
+            framer-motion `layout` wrapper — together with the R95-A
+            hidden-at-bottom ordering this is what makes a hidden toggle
+            visibly GLIDE the row to its new slot. The rows render from
+            `orderedModels` (not-hidden first, hidden last). */
+        <div className="flex flex-col gap-3 p-3">
           {/* R89-C5/C6: every model renders through the ModelCard — the
               bordered card with the LEFT identity / RIGHT actions split,
               the DEDICATED details strip (context / input / output / cache
               read), the colored capability ICON chips, and the expanding
               TEST section below the card. */}
-          {merged.map((m) => (
-            <ModelCard
+          {orderedModels.map((m) => (
+            <motion.div
               key={m.rowId ?? `cat:${m.modelId}`}
-              m={m}
-              row={models.find((r) => r.id === m.rowId) ?? null}
-              onEdit={() => {
-                const row = models.find((r) => r.id === m.rowId);
-                if (row) setConfiguring(row);
-              }}
-              onDelete={() => {
-                if (window.confirm(`Delete model "${m.displayName || m.modelId}"?`)) deleteModel.mutate(m.rowId!);
-              }}
-              onToggleHidden={
-                m.rowId !== undefined && m.configured
-                  ? () => {
-                      const row = models.find((r) => r.id === m.rowId);
-                      if (row) toggleHidden.mutate({ rowId: row.id, hidden: !row.hidden });
-                    }
-                  : undefined
-              }
-              // R94-C: the scoped pulse — only IN-SCOPE cards receive the new
-              // seq (the others keep undefined: their effect early-returns, so
-              // a scope run never re-tests an out-of-scope model).
-              testAllSeq={
-                testAll !== null && inTestScope(m, testAll.scope) ? testAll.seq : undefined
-              }
-              onTestAllResult={onTestAllResult}
-            />
+              layout
+              transition={{ type: "spring", stiffness: 420, damping: 38 }}
+              className="flex flex-col min-w-0"
+              data-hidden={m.hidden ? "true" : undefined}
+            >
+              <ModelCard
+                m={m}
+                row={models.find((r) => r.id === m.rowId) ?? null}
+                onEdit={() => {
+                  const row = models.find((r) => r.id === m.rowId);
+                  if (row) setConfiguring(row);
+                }}
+                onDelete={() => {
+                  // ROUND-95 (R95-A): the styled ConfirmDialog replaces the
+                  // browser window.confirm (the owner's "properly formatted"
+                  // popup ask) — the confirm itself fires the delete.
+                  setPendingDeleteModel(m);
+                }}
+                onToggleHidden={
+                  m.rowId !== undefined && m.configured
+                    ? () => {
+                        const row = models.find((r) => r.id === m.rowId);
+                        if (row) toggleHidden.mutate({ rowId: row.id, hidden: !row.hidden });
+                      }
+                    : undefined
+                }
+                // R94-C: the scoped pulse — only IN-SCOPE cards receive the new
+                // seq (the others keep undefined: their effect early-returns, so
+                // a scope run never re-tests an out-of-scope model).
+                testAllSeq={
+                  testAll !== null && inTestScope(m, testAll.scope) ? testAll.seq : undefined
+                }
+                onTestAllResult={onTestAllResult}
+              />
+            </motion.div>
           ))}
         </div>
       )}
 
+      {/* ROUND-95 (R95-A): the model-delete confirm — the card's trash opens
+          the shared styled ConfirmDialog (window.confirm is retired). */}
+      {pendingDeleteModel !== null && (
+        <ConfirmDialog
+          title="Delete model"
+          message={`Do you want to delete "${pendingDeleteModel.displayName || pendingDeleteModel.modelId}" and its saved configuration?`}
+          confirmLabel="Delete model"
+          danger
+          onConfirm={() => {
+            if (pendingDeleteModel.rowId !== null) deleteModel.mutate(pendingDeleteModel.rowId);
+            setPendingDeleteModel(null);
+          }}
+          onClose={() => setPendingDeleteModel(null)}
+        />
+      )}
+
       {/* ROUND-50 (R50-d): the catalog-driven picker + the per-model config
           dialog. Both invalidate THIS provider's models query on change.
-          ROUND-87 (R87): the pencil in the picker opens the CONFIG dialog
-          (add mode). R93-A6 (the owner): the right-side "Add" adds DIRECTLY
-          with the prefill as defaults, and drag-select + "Add N models"
-          batch-adds — all with an honest failure surface, never silent. */}
+          R93-A6: the right-side "Add" (and the batch strip, and the manual
+          by-id form) adds DIRECTLY with the prefill as defaults.
+          ROUND-95 (R95-A, the owner): "when the user clicks on the add button
+          manually, it will add that model and it will open up the
+          configuring menu for that model" — a SINGLE add's created row is
+          handed back here and the EDIT-mode config dialog opens on it
+          (configure-before-add is retired). */}
       {pickerOpen && (
         <AddModelsDialog
           providerId={providerId}
           catalog={catalog}
           staticCatalog={staticCatalog}
           configuredIds={new Set(models.map((m) => m.modelId))}
-          onPick={(prefill) => {
-            setPickerOpen(false);
-            setAdding(prefill);
-          }}
           onAddDirect={async (prefills) => {
             // R93-A6: upsert each prefill as a configured row with the
-            // prefill as its defaults (the exact payload the ADD-mode config
-            // dialog would POST for an untouched draft). allSettled so a
-            // partial failure is REPORTED, not swallowed.
+            // prefill as its defaults (the exact payload an untouched config
+            // draft would POST). allSettled so a partial failure is REPORTED,
+            // not swallowed. R95-A: the CREATED rows ride the resolution so a
+            // single add can open its config dialog immediately.
             const results = await Promise.allSettled(
               prefills.map((p) =>
                 upsertProviderModelConfig(providerId, {
@@ -2990,6 +3072,13 @@ function ModelListSection({
                 `${failed.length} of ${prefills.length} add${failed.length === 1 ? "" : "s"} failed — ${message}`,
               );
             }
+            return results.map((r) => (r.status === "fulfilled" ? r.value : null));
+          }}
+          onConfigureAdded={(row) => {
+            // R95-A: add-then-configure — the picker closes and the created
+            // row's config dialog opens (edit mode; tweaks are PATCHes).
+            setPickerOpen(false);
+            setConfiguring(row);
           }}
           onClose={() => setPickerOpen(false)}
         />
@@ -3006,18 +3095,6 @@ function ModelListSection({
           }}
         />
       )}
-      {adding !== null && (
-        <ModelConfigDialog
-          providerId={providerId}
-          model={null}
-          prefill={adding}
-          onClose={() => setAdding(null)}
-          onSaved={() => {
-            invalidate();
-            setAdding(null);
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -3025,14 +3102,19 @@ function ModelListSection({
 /* ── ROUND-50 (R50-d): the "Add models" catalog picker dialog ─────────────── */
 
 /**
- * R93-A6 (the owner's exact spec): the picker's three-way interaction.
+ * R93-A6 → ROUND-95 (R95-A): the picker's TWO-way interaction (the owner
+ * retired the third — "there should first of all not be the configure button
+ * at all… the configuring should happen like this: when the user clicks on
+ * the add button manually, it will add that model and it will open up the
+ * configuring menu for that model"):
  *  · LEFT zone (checkbox + name): click = TOGGLE selection; press + DRAG
  *    across rows = paint-selection (every row swept joins the initial
  *    toggle's target state — selecting OR deselecting).
- *  · RIGHT zone: "Add" = DIRECT add with the catalog prefill (no config
- *    dialog — one click, the row flips to ADDED via invalidation).
- *  · The pencil between them = the ROUND-87 CONFIGURE-first flow (the
- *    prefill opens the ADD-mode config dialog, unchanged).
+ *  · RIGHT zone: "Add" = DIRECT add with the catalog prefill, and for a
+ *    SINGLE add the created row's config dialog OPENS immediately (the
+ *    onConfigureAdded handoff). Already-added models are NOT SHOWN at all
+ *    (R95-A: "The models which have already been added should not be shown
+ *    in the add model popup").
  *  · Batch: "Add N models" in the selection strip adds every selected row
  *    with the same prefill-as-defaults contract, then closes.
  */
@@ -3040,27 +3122,27 @@ function AddModelsDialog({
   catalog,
   staticCatalog,
   configuredIds,
-  onPick,
   onAddDirect,
+  onConfigureAdded,
   onClose,
 }: {
   /** The provider being picked for (kept in the call-site shape for
    * symmetry with the sibling dialogs; the picker itself routes through
-   * the parent's onPick/onAddDirect). */
+   * the parent's onAddDirect). */
   providerId: string;
   catalog: ProviderCatalogState;
   staticCatalog: CatalogModel[];
   configuredIds: Set<string>;
-  /** ROUND-87 (R87, owner: "when I click on any of the models … it should
-   * show me the options to configure that model"): the pencil hands the
-   * catalog prefill to the parent, which opens the ADD-mode config dialog. */
-  onPick: (prefill: ModelAddPrefill) => void;
   /** R93-A6: DIRECT (batch) add — the parent upserts each prefill as a
-   * configured row with the prefill as its defaults and invalidates; the
-   * dialog stays open for single adds (the row flips to ADDED) and closes
-   * itself only for the batch strip's "Add N models". Rejects with a
+   * configured row with the prefill as its defaults and invalidates;
+   * resolves with the CREATED rows in order (a rejected entry never reaches
+   * the success path — a failure rejects the whole call). Rejects with a
    * readable message on any failure (no silent partial success). */
-  onAddDirect: (prefills: ModelAddPrefill[]) => Promise<void>;
+  onAddDirect: (prefills: ModelAddPrefill[]) => Promise<(ProviderModelConfig | null)[]>;
+  /** ROUND-95 (R95-A): a successful SINGLE add hands the created row back —
+   * the parent closes the picker and opens the EDIT-mode config dialog on
+   * it (the owner's add-then-configure flow). */
+  onConfigureAdded: (row: ProviderModelConfig) => void;
   onClose: () => void;
 }) {
   const styles = useThemeStyles();
@@ -3138,6 +3220,29 @@ function AddModelsDialog({
     }
   };
 
+  // ── ROUND-95 (R95-A): the SINGLE add — add first, then configure. One
+  // upsert with the catalog prefill; on success the created row hands off
+  // through onConfigureAdded (the parent closes the picker and opens the
+  // row's config dialog — the owner's add-then-configure flow). Serves BOTH
+  // the row's right-zone Add button and the manual add-by-id footer. */
+  const [singleBusy, setSingleBusy] = useState(false);
+  const addOne = (id: string): void => {
+    if (batchBusy || singleBusy) return;
+    setSingleBusy(true);
+    setBatchError(null);
+    onAddDirect([prefillFor(id)])
+      .then((rows) => {
+        const row = rows[0];
+        if (row !== null && row !== undefined) onConfigureAdded(row);
+        // A null row on the success path cannot happen (the parent rejects
+        // on failure); if it ever did, the picker simply stays open.
+      })
+      .catch((err: unknown) => {
+        setBatchError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setSingleBusy(false));
+  };
+
   const staticById = useMemo(
     () => new Map(staticCatalog.map((m) => [m.modelId, m])),
     [staticCatalog],
@@ -3155,19 +3260,23 @@ function AddModelsDialog({
   }, [freeOnly, catalogFreeCount]);
   // ROUND-60: free-only filters BEFORE the 300-row sanity cap — `free`
   // prefers the served catalog's flag, falling back to the id heuristic.
-  const rows = catalog.entries
-    .filter(
-      (entry) =>
-        q === "" ||
-        entry.id.toLowerCase().includes(q) ||
-        entry.name.toLowerCase().includes(q),
-    )
-    .filter((entry) => {
-      if (!freeOnly) return true;
-      const meta = staticById.get(entry.id);
-      return meta ? meta.free : isFreeModelEntry({ modelId: entry.id });
-    })
-    .slice(0, 300); // sanity cap — the live OpenRouter catalog is huge
+  // ROUND-95 (R95-A, the owner: "The models which have already been added
+  // should not be shown in the add model popup"): the search scope and the
+  // free scope are kept as separate steps so the empty note below can tell
+  // the three "nothing to show" causes apart (no search match / no free
+  // match / every match already added). Never-added rows only, then the cap.
+  const searchRows = catalog.entries.filter(
+    (entry) =>
+      q === "" ||
+      entry.id.toLowerCase().includes(q) ||
+      entry.name.toLowerCase().includes(q),
+  );
+  const scopeRows = searchRows.filter((entry) => {
+    if (!freeOnly) return true;
+    const meta = staticById.get(entry.id);
+    return meta ? meta.free : isFreeModelEntry({ modelId: entry.id });
+  });
+  const rows = scopeRows.filter((entry) => !configuredIds.has(entry.id)).slice(0, 300); // sanity cap — the live OpenRouter catalog is huge
 
   /** ROUND-87 (R87) → R89-C2: the prefill a picked model hands to the config
    * dialog — a CLEAN human display name FIRST (the live entry's name, then
@@ -3233,8 +3342,8 @@ function AddModelsDialog({
           </button>
         </div>
         <p className="px-5 pb-3 text-[11.5px] shrink-0" style={{ color: styles.textSecondary }}>
-          Click <b>Add</b> on the right for a one-click add, drag across rows to select several at
-          once, or use the <b>pencil</b> to configure pricing and limits before adding.
+          Click <b>Add</b> on the right to add a model and open its configuration, or drag across
+          rows on the left to select several at once. Already-added models are hidden.
         </p>
 
         {/* search + the ROUND-60 (R60-B) Free only ↔ All models scope toggle */}
@@ -3287,9 +3396,9 @@ function AddModelsDialog({
           </div>
         </div>
 
-        {/* the catalog rows — R93-A6: the three-zone card (LEFT = select /
-            drag-paint, pencil = configure, RIGHT = direct add). The ROUND-87
-            whole-row button is gone; its configure flow lives on the pencil. */}
+        {/* the catalog rows — R93-A6 → R95-A: the TWO-zone card (LEFT =
+            select / drag-paint, RIGHT = Add + configure). Already-added rows
+            are NOT rendered at all (filtered out of `rows` above). */}
         <div className="flex-1 min-h-0 overflow-y-auto auto-scroll px-3 pb-3 flex flex-col gap-1">
           {catalog.isFetching && catalog.entries.length === 0 && (
             <div className="px-2 py-4 text-[11.5px] flex items-center gap-2" style={{ color: styles.textTertiary }}>
@@ -3305,7 +3414,6 @@ function AddModelsDialog({
           )}
           {rows.map((entry) => {
             const meta = staticById.get(entry.id);
-            const alreadyAdded = configuredIds.has(entry.id);
             const free = meta ? meta.free : isFreeModelEntry({ modelId: entry.id });
             const isSelected = selected.has(entry.id);
             // R89-C1 (the owner: "it should only show the model ID, the NAME
@@ -3322,32 +3430,26 @@ function AddModelsDialog({
                 data-selected={isSelected ? "true" : undefined}
                 className="flex items-stretch gap-2 rounded-[12px] border-[1.5px] transition-all"
                 style={{
-                  borderColor: alreadyAdded
-                    ? styles.border
-                    : isSelected
-                      ? withAlpha(styles.accent, 0.55)
-                      : withAlpha(styles.accent, 0.28),
-                  background: alreadyAdded
-                    ? "transparent"
-                    : isSelected
-                      ? withAlpha(styles.accent, 0.08)
-                      : styles.isDark
-                        ? "rgba(255,255,255,0.015)"
-                        : "rgba(0,0,0,0.008)",
-                  opacity: alreadyAdded ? 0.55 : 1,
+                  borderColor: isSelected
+                    ? withAlpha(styles.accent, 0.55)
+                    : withAlpha(styles.accent, 0.28),
+                  background: isSelected
+                    ? withAlpha(styles.accent, 0.08)
+                    : styles.isDark
+                      ? "rgba(255,255,255,0.015)"
+                      : "rgba(0,0,0,0.008)",
                 }}
               >
                 {/* ── LEFT zone: the select checkbox + the text. PointerDOWN
                     toggles and opens the paint session; sweeping the pointer
                     across other rows' left zones paints them into the same
-                    state (R93-A6). Already-added rows never select. */}
+                    state (R93-A6). */}
                 <button
                   type="button"
                   role="checkbox"
                   aria-checked={isSelected}
                   aria-label={`Select ${cleanName} (${entry.id})`}
                   data-testid="picker-model-select"
-                  disabled={alreadyAdded}
                   onPointerDown={(e) => {
                     if (e.button !== 0) return;
                     beginPaint(entry.id);
@@ -3355,11 +3457,9 @@ function AddModelsDialog({
                   onPointerEnter={() => paintOver(entry.id)}
                   className="flex-1 min-w-0 flex items-center gap-3 px-3 py-2.5 text-left rounded-l-[10px] enabled:cursor-pointer disabled:cursor-default touch-none"
                   title={
-                    alreadyAdded
-                      ? "Already added"
-                      : isSelected
-                        ? "Selected — drag across rows to select more"
-                        : "Click or drag to select"
+                    isSelected
+                      ? "Selected — drag across rows to select more"
+                      : "Click or drag to select"
                   }
                 >
                   <span
@@ -3396,14 +3496,6 @@ function AddModelsDialog({
                           PAID
                         </span>
                       ) : null}
-                      {alreadyAdded ? (
-                        <span
-                          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                          style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
-                        >
-                          ADDED
-                        </span>
-                      ) : null}
                     </span>
                     <span className="flex items-center gap-2 min-w-0 flex-wrap">
                       <span className="truncate font-mono text-[10px]" style={{ color: styles.textTertiary }}>
@@ -3418,65 +3510,46 @@ function AddModelsDialog({
                     </span>
                   </span>
                 </button>
-                {/* ── the pencil: the ROUND-87 configure-first flow. */}
-                {!alreadyAdded ? (
-                  <button
-                    type="button"
-                    onClick={() => onPick(prefillFor(entry.id))}
-                    aria-label={`Configure and add ${entry.id}`}
-                    data-testid="picker-model-configure"
-                    className="shrink-0 self-center w-8 h-8 grid place-items-center rounded-[10px] mr-0.5 transition-colors"
-                    style={{ color: styles.textTertiary }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = styles.subtleHover;
-                      e.currentTarget.style.color = styles.textSecondary;
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "transparent";
-                      e.currentTarget.style.color = styles.textTertiary;
-                    }}
-                    title="Configure pricing & limits before adding"
-                  >
-                    <Pencil size={13} />
-                  </button>
-                ) : null}
-                {/* ── RIGHT zone: the one-click DIRECT add (R93-A6, the
-                    owner: "If I click on the right side of the model, then it
-                    will directly add that model"). */}
-                {!alreadyAdded ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBatchError(null);
-                      void onAddDirect([prefillFor(entry.id)]).catch((err: unknown) => {
-                        setBatchError(err instanceof Error ? err.message : String(err));
-                      });
-                    }}
-                    aria-label={`Add ${entry.id} directly`}
-                    data-testid="picker-model-direct-add"
-                    className="shrink-0 self-center flex items-center gap-1 h-8 px-3 mr-2 rounded-full text-[11px] font-bold transition-all active:scale-[0.97]"
-                    style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = withAlpha(styles.accent, 0.22);
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = withAlpha(styles.accent, 0.14);
-                    }}
-                    title="Add now with the catalog defaults"
-                  >
-                    <Plus size={12} /> Add
-                  </button>
-                ) : null}
+                {/* ── RIGHT zone: the DIRECT add (R93-A6 → R95-A, the owner:
+                    "when the user clicks on the add button manually, it will
+                    add that model and it will open up the configuring menu
+                    for that model") — one upsert with the catalog prefill,
+                    then the created row's config dialog opens (the
+                    onConfigureAdded handoff through the parent). */}
+                <button
+                  type="button"
+                  onClick={() => addOne(entry.id)}
+                  disabled={singleBusy || batchBusy}
+                  aria-label={`Add ${entry.id}`}
+                  data-testid="picker-model-direct-add"
+                  className="shrink-0 self-center flex items-center gap-1 h-8 px-3 mr-2 rounded-full text-[11px] font-bold transition-all active:scale-[0.97] disabled:opacity-50"
+                  style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = withAlpha(styles.accent, 0.22);
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = withAlpha(styles.accent, 0.14);
+                  }}
+                  title="Add this model, then open its configuration"
+                >
+                  {singleBusy ? <RefreshCw size={12} className="animate-spin" /> : <Plus size={12} />} Add
+                </button>
               </div>
             );
           })}
           {rows.length === 0 && catalog.entries.length > 0 && (
             <div className="px-2 py-4 text-[11.5px]" style={{ color: styles.textTertiary }}>
-              {/* ROUND-60: honest about BOTH filters — the free-only scope or
-                  the search text may each have emptied the list. */}
-              {freeOnly
-                ? "No free models match — switch to “All models” or refine the search."
-                : `No catalog model matches “${query.trim()}” — add one by id below.`}
+              {/* ROUND-60 → R95-A: honest about ALL THREE filters — the search
+                  text, the free-only scope, or "every match is already added"
+                  may each have emptied the list (already-added rows are not
+                  rendered at all anymore). */}
+              {searchRows.length === 0
+                ? `No catalog model matches “${query.trim()}” — add one by id below.`
+                : scopeRows.length === 0
+                  ? "No free models match — switch to “All models” or refine the search."
+                  : scopeRows.every((entry) => configuredIds.has(entry.id))
+                    ? "All matches are already added."
+                    : "No addable models match — refine the search."}
             </div>
           )}
         </div>
@@ -3540,31 +3613,43 @@ function AddModelsDialog({
           </div>
         ) : null}
 
-        {/* footer: manual add-by-id (also rides the configure flow — the
-            ROUND-87 contract: no add without configuration). */}
+        {/* footer: manual add-by-id — R95-A: the SAME add-then-configure
+            contract as the row's Add button (one upsert, then the config
+            dialog opens on the row). An id that is ALREADY configured is
+            handled honestly: the upsert keeps its current semantics (the
+            existing row is updated, then opened for editing), and the hint
+            below says so before the click. */}
         <div
-          className="shrink-0 border-t px-5 py-3.5 flex items-center gap-2"
+          className="shrink-0 border-t px-5 py-3.5 flex flex-col gap-1.5"
           style={{ borderColor: styles.border, background: withAlpha(styles.accent, 0.02) }}
+          data-testid="picker-manual-add"
         >
-          <input
-            value={manualId}
-            onChange={(e) => setManualId(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && manualId.trim()) onPick(prefillFor(manualId.trim()));
-            }}
-            placeholder="…or enter a model id not in the list"
-            aria-label="Model id"
-            className="h-10 flex-1 min-w-0 rounded-[14px] border-[1.5px] px-3.5 font-mono text-[12px] outline-none"
-            style={inputStyle}
-          />
-          <button
-            onClick={() => onPick(prefillFor(manualId.trim()))}
-            disabled={!manualId.trim()}
-            className="h-10 px-4 rounded-full text-[12px] font-bold disabled:opacity-50 shrink-0"
-            style={{ background: styles.accent, color: styles.accentText }}
-          >
-            Configure &amp; add
-          </button>
+          <div className="flex items-center gap-2">
+            <input
+              value={manualId}
+              onChange={(e) => setManualId(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && manualId.trim()) addOne(manualId.trim());
+              }}
+              placeholder="…or enter a model id not in the list"
+              aria-label="Model id"
+              className="h-10 flex-1 min-w-0 rounded-[14px] border-[1.5px] px-3.5 font-mono text-[12px] outline-none"
+              style={inputStyle}
+            />
+            <button
+              onClick={() => addOne(manualId.trim())}
+              disabled={!manualId.trim() || singleBusy || batchBusy}
+              className="h-10 px-4 rounded-full text-[12px] font-bold disabled:opacity-50 shrink-0"
+              style={{ background: styles.accent, color: styles.accentText }}
+            >
+              {singleBusy ? "Adding…" : "Add"}
+            </button>
+          </div>
+          {manualId.trim() !== "" && configuredIds.has(manualId.trim()) && (
+            <p className="text-[10.5px]" style={{ color: styles.textTertiary }} data-testid="picker-manual-already-added">
+              Already added — Add opens the existing row for editing.
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -4287,8 +4372,14 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
   // Never auto-fetched on mount.
   const [revealedValues, setRevealedValues] = useState<Record<number, string>>({});
   const [revealedRows, setRevealedRows] = useState<Set<number>>(new Set());
-  const [revealLoading, setRevealLoading] = useState(false);
+  // R95-A: WHICH row's reveal fetch is in flight (null = none) — the rows
+  // are Key-1-lookalikes now, so only the CLICKED row spins (the old global
+  // boolean spun every eye at once).
+  const [revealLoadingSlot, setRevealLoadingSlot] = useState<number | null>(null);
   const [revealError, setRevealError] = useState<string | null>(null);
+  /** R95-A: the pool row whose removal is awaiting the styled
+   * ConfirmDialog (the browser window.confirm is retired). */
+  const [pendingRemoveSlot, setPendingRemoveSlot] = useState<KeyPoolSlot | null>(null);
 
   // Same query key the detail pane's test-key selector uses — one cache.
   const poolQuery = useQuery({
@@ -4467,8 +4558,9 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
     const listingSaysHeld = pool.find((k) => k.slot === slot)?.hasKey === true;
     if (Object.keys(map).length === 0 || (map[slot] === undefined && listingSaysHeld)) {
       // First reveal this mount (or a cache-miss) — one fetch fills it.
+      // R95-A: only the CLICKED row's eye spins (revealLoadingSlot).
       setRevealError(null);
-      setRevealLoading(true);
+      setRevealLoadingSlot(slot);
       try {
         const keys = await revealProviderKeys(provider.id);
         map = {};
@@ -4478,7 +4570,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
         setRevealError(err instanceof Error ? err.message : String(err));
         return;
       } finally {
-        setRevealLoading(false);
+        setRevealLoadingSlot(null);
       }
     }
     if (map[slot] === undefined) {
@@ -4530,7 +4622,11 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
           className="flex items-center gap-2.5 px-3 py-2.5 border-b"
           style={{ borderColor: styles.borderSubtle, background: withAlpha(styles.accent, 0.02) }}
         >
-          <span className="flex items-center gap-1.5 shrink-0">
+          {/* R95-A: the label groups of Key 1 AND every pool row share a fixed
+              min-width so the value fields + action buttons all start at the
+              same x — the rows read as ONE aligned list (the owner's key-row
+              parity ask). */}
+          <span className="flex items-center gap-1.5 shrink-0 min-w-[108px]">
             <span className="text-[11px] font-mono font-bold" style={{ color: styles.textSecondary }}>
               KEY 1
             </span>
@@ -4700,84 +4796,157 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
             )}
           </div>
         </div>
-        {/* ── Key 2..N — the pool rows (ordinals, masked + reveal/copy/remove) */}
+        {/* ── Key 2..N — the pool rows. ROUND-95 (R95-A, the owner: "The first
+            primary API key… looks good and proper but the second one which
+            gets added is a bit different in terms of its UI… For the other
+            ones, the primary key UI and the other keys' UI should be exactly
+            the same"): every pool row now mirrors Key 1's visual language
+            EXACTLY — the read-only display field (bordered h-10,
+            input-styled), the SAME bordered h-10 w-10 eye with its
+            spinner-while-loading, the SAME animated fade/slide-in Copy
+            (shown ONLY while revealed), and a matching bordered trash whose
+            hover turns red. The only differences are the contract ones: no
+            "primary" badge (Key 1 only), and the value is read-only (pool
+            keys are removed/re-added, never edited in place). The removal
+            confirm is the shared styled ConfirmDialog (R95-A). */}
         {heldSlots.map((k) => {
           const ordinal = keyOrdinal(k.slot, primaryHeld, heldSlotNumbers);
           const revealed = revealedRows.has(k.slot) ? revealedValues[k.slot] : undefined;
+          const rowLoading = revealLoadingSlot === k.slot;
           return (
             <div
               key={k.slot}
               data-pool-slot={k.slot}
               data-key-ordinal={ordinal}
-              className="flex items-center gap-2 px-3 py-2 border-b last:border-b-0"
+              className="flex items-center gap-2.5 px-3 py-2.5 border-b last:border-b-0"
               style={{ borderColor: styles.borderSubtle }}
             >
-              <span className="text-[11px] font-mono font-bold shrink-0" style={{ color: styles.textSecondary }}>
-                KEY {ordinal}
+              <span className="flex items-center gap-1.5 shrink-0 min-w-[108px]">
+                <span className="text-[11px] font-mono font-bold" style={{ color: styles.textSecondary }}>
+                  KEY {ordinal}
+                </span>
               </span>
-              {revealed !== undefined ? (
-                // ROUND-58 (R58-d): the revealed full value — mono, break-all,
-                // with a copy affordance. Masked again via the eye button.
-                <span
-                  className="font-mono text-[11px] flex-1 min-w-0 break-all"
-                  style={{ color: styles.textSecondary }}
-                  data-revealed-value
+              <div className="flex gap-2 items-stretch flex-1 min-w-0">
+                {/* The value display — the SAME field look as Key 1 (masked
+                    dots at rest, the full key while revealed, the accent
+                    border exactly like Key 1's revealed state). */}
+                <div
+                  aria-label={`Key ${ordinal} value`}
+                  data-revealed-value={revealed !== undefined ? "true" : undefined}
+                  title={
+                    revealed !== undefined
+                      ? "The stored key — revealed"
+                      : "The stored key (masked) — use the eye to reveal"
+                  }
+                  className="min-h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 flex items-center font-mono text-[12px] overflow-hidden"
+                  style={{
+                    background: styles.bg,
+                    color: revealed !== undefined ? styles.text : styles.textSecondary,
+                    borderColor:
+                      revealed !== undefined ? withAlpha(styles.accent, 0.45) : styles.border,
+                  }}
                 >
-                  {revealed}
-                </span>
-              ) : (
-                <span className="font-mono text-[11px] flex-1 min-w-0 truncate" style={{ color: styles.textTertiary }}>
-                  {k.masked ?? "—"}
-                </span>
-              )}
-              {/* ROUND-58 (R58-d): the reveal eye — only rows that HOLD a key
-                  get it (a keyless row has nothing to reveal). */}
-              <button
-                onClick={() => void revealSlot(k.slot)}
-                // ROUND-58 (R58-d): disabled during ANY reveal fetch (the
-                // first reveal AND a cache-miss re-fetch) — no double-click
-                // can fire two concurrent fetches.
-                disabled={revealLoading}
-                aria-label={revealed !== undefined ? `Hide key ${ordinal}` : `Reveal key ${ordinal}`}
-                title={revealed !== undefined ? "Mask again" : "Show the full key"}
-                className="w-6 h-6 grid place-items-center rounded-md shrink-0 disabled:opacity-50"
-                style={{ color: styles.textTertiary }}
-              >
-                {revealLoading ? (
-                  <RefreshCw size={11} className="animate-spin" />
-                ) : revealed !== undefined ? (
-                  <EyeOff size={11} />
-                ) : (
-                  <Eye size={11} />
-                )}
-              </button>
-              {revealed !== undefined && (
+                  {revealed !== undefined ? (
+                    <span className="w-full break-all text-[11px] leading-snug py-1.5">
+                      {revealed}
+                    </span>
+                  ) : (
+                    <span className="w-full truncate">{k.masked ?? "—"}</span>
+                  )}
+                </div>
+                {/* THE eye toggle — the same bordered button as Key 1's: only
+                    the CLICKED row spins; every eye disables while any reveal
+                    fetch is in flight (no double-click can fire two). */}
                 <button
-                  onClick={() => void copySlotValue(revealed)}
-                  aria-label={`Copy key ${ordinal}`}
-                  title="Copy the full key"
-                  className="w-6 h-6 grid place-items-center rounded-md shrink-0"
-                  style={{ color: styles.textTertiary }}
+                  type="button"
+                  onClick={() => void revealSlot(k.slot)}
+                  disabled={revealLoadingSlot !== null}
+                  aria-label={revealed !== undefined ? `Hide key ${ordinal}` : `Reveal key ${ordinal}`}
+                  title={revealed !== undefined ? "Mask again" : "Show the full key"}
+                  className="h-10 w-10 grid place-items-center rounded-[10px] border-[1.5px] shrink-0 disabled:opacity-40"
+                  style={{
+                    background: styles.bg,
+                    borderColor: styles.border,
+                    color: revealed !== undefined ? styles.accent : styles.textTertiary,
+                  }}
                 >
-                  <Copy size={11} />
+                  {rowLoading ? (
+                    <RefreshCw size={13} className="animate-spin" />
+                  ) : revealed !== undefined ? (
+                    <EyeOff size={13} />
+                  ) : (
+                    <Eye size={13} />
+                  )}
                 </button>
-              )}
-              <button
-                onClick={() => {
-                  if (window.confirm(`Remove key ${ordinal}?`)) removeKey.mutate(k.slot);
-                }}
-                aria-label={`Remove key ${ordinal}`}
-                title="Remove key"
-                className="w-6 h-6 grid place-items-center rounded-md shrink-0"
-                style={{ color: styles.textTertiary }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha("#ef4444", 0.12))}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              >
-                <Trash2 size={11} />
-              </button>
+                {/* The Copy — the SAME animated fade/slide-in as Key 1's,
+                    mounted ONLY while revealed (the value is captured per
+                    render, so a fading-out Copy can never copy a stale key). */}
+                <AnimatePresence initial={false}>
+                  {revealed !== undefined && (
+                    <motion.div
+                      key={`copy-pool-key-${k.slot}`}
+                      initial={{ opacity: 0, width: 0 }}
+                      animate={{ opacity: 1, width: "auto" }}
+                      exit={{ opacity: 0, width: 0 }}
+                      transition={{ duration: 0.2, ease: "easeOut" }}
+                      className="overflow-hidden shrink-0"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => void copySlotValue(revealed)}
+                        aria-label={`Copy key ${ordinal}`}
+                        data-testid="copy-pool-key-button"
+                        title="Copy the full key"
+                        className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+                        style={{ borderColor: styles.border, color: styles.textSecondary }}
+                      >
+                        <Copy size={12} /> Copy
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                {/* The trash — the same bordered button family; hover turns
+                    red like every destructive affordance. Opens the styled
+                    ConfirmDialog (R95-A), never window.confirm. */}
+                <button
+                  type="button"
+                  onClick={() => setPendingRemoveSlot(k)}
+                  aria-label={`Remove key ${ordinal}`}
+                  title="Remove key"
+                  className="h-10 w-10 grid place-items-center rounded-[10px] border-[1.5px] shrink-0 transition-colors"
+                  style={{ borderColor: styles.border, color: styles.textTertiary }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = withAlpha("#ef4444", 0.12);
+                    e.currentTarget.style.borderColor = withAlpha("#ef4444", 0.5);
+                    e.currentTarget.style.color = "#ef4444";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.borderColor = styles.border;
+                    e.currentTarget.style.color = styles.textTertiary;
+                  }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
             </div>
           );
         })}
+        {/* R95-A: the pool-key removal confirm — the styled popup that
+            replaces the browser's window.confirm. */}
+        {pendingRemoveSlot !== null && (
+          <ConfirmDialog
+            title={`Remove key ${keyOrdinal(pendingRemoveSlot.slot, primaryHeld, heldSlotNumbers)}?`}
+            message="This key will no longer be used for automatic failover."
+            confirmLabel="Remove key"
+            danger
+            onConfirm={() => {
+              removeKey.mutate(pendingRemoveSlot.slot);
+              setPendingRemoveSlot(null);
+            }}
+            onClose={() => setPendingRemoveSlot(null)}
+          />
+        )}
         {/* ── The add row — always appends to the first free slot ≥ 1 ──────
             (R92-D3; the R47 Tauri overwrite fix rides the mutation above).
             A full pool replaces it with the honest note. */}
