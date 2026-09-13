@@ -539,7 +539,10 @@ describe("D6: browser-panel + computer-use trims", () => {
     // the viewport-announce line into the intro and tightening the action
     // parentheticals. Still ~32% below the pre-R70 4,056 the trim mandate
     // (R70-A issue #2) exists for.
-    expect(bp.length).toBeLessThan(2_850);
+    // R95-G: 2,854 measured — the navigate action gained the LOCAL-FILE
+    // vocabulary (R95-C: file:// + absolute local paths open natively —
+    // the owner's ask), a +80 net the wording tightened from +175.
+    expect(bp.length).toBeLessThan(2_900);
     expect(bp.length).toBeGreaterThan(1_200); // the discipline survived
     // The kept contract pieces.
     expect(bp).toContain("read_dom first, then click / type the SELECTOR PATHS it returns");

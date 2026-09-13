@@ -164,13 +164,12 @@ export function buildModelFallbackFetch(): (
  *    400 waiting to happen (the level is skipped entirely).
  *  · support.supported === true: the level maps onto the model's OWN effort
  *    ladder (mapThinkingLevelToEffort — "max" rides the highest supported
- *    effort, an unsupported level falls to the nearest lower one) AND a
- *    per-level reasoning.max_tokens BUDGET rides along (the owner's other
- *    report: "The models would apparently get stuck in the thinking loop…
- *    they won't even get out of the thinking" — bounding the reasoning
- *    tokens at the provider level caps the blast radius of a runaway
- *    model). Both merge into any existing reasoning object; a provider-set
- *    max_tokens is never overwritten.
+ *    effort, an unsupported level falls to the nearest lower one). The
+ *    per-level reasoning.max_tokens BUDGET rides only for ladder-less
+ *    reasoning models (see the live-fire correction note inside —
+ *    OpenRouter refuses effort + max_tokens TOGETHER). Both merge into
+ *    any existing reasoning object; a provider-set max_tokens is never
+ *    overwritten.
  */
 export function buildThinkingFetch(
   level: ThinkingLevel,
@@ -194,20 +193,35 @@ export function buildThinkingFetch(
           typeof body.reasoning === "object" && body.reasoning !== null
             ? (body.reasoning as Record<string, unknown>)
             : {};
-        // Effort: mapped onto the model's ladder when one was detected
-        // (a non-empty efforts list); verbatim otherwise (unknown support,
-        // or a reasoning-capable model whose provider names no discrete
-        // efforts — R95-B's plain reasoning-only catalog entries).
+        // ROUND-95 (R95-E + the R95-G live-fire correction): OpenRouter
+        // REJECTS a request carrying BOTH reasoning.effort and
+        // reasoning.max_tokens ("Only one of reasoning.effort and
+        // reasoning.max_tokens can be specified" — proven against the real
+        // API with nvidia/nemotron-3-super). The two knobs are MUTUALLY
+        // EXCLUSIVE by design:
+        //   · UNKNOWN support (null/absent — never block on a guess) → the
+        //     R50 wire shape: effort verbatim, no budget;
+        //   · supported + a detected effort ladder → the level MAPPED onto
+        //     the ladder (effort only — the thinking-loop watchdog covers
+        //     runaway reasoning);
+        //   · supported but NO ladder (the plain reasoning-only catalog
+        //     entries, e.g. nemotron-3.5-lightning) → the max_tokens BUDGET
+        //     only (the sole bound available for ladder-less reasoning);
+        //   · supported:false → nothing (gated above).
+        // A provider-set max_tokens always wins over ours in every branch.
         const efforts = support?.supported === true ? support.efforts : [];
-        const effort: string =
-          efforts.length > 0 ? mapThinkingLevelToEffort(level, efforts) : level;
-        // Budget: only for a DETECTED reasoning-capable model — unknown
-        // support keeps the R50 wire shape (no invented caps), and a
-        // provider-set max_tokens always wins over ours.
-        const budget = support?.supported === true ? REASONING_BUDGET_BY_LEVEL[level] : undefined;
+        const hasLadder = efforts.length > 0;
+        const effort: string | undefined =
+          support?.supported !== true || hasLadder
+            ? hasLadder
+              ? mapThinkingLevelToEffort(level, efforts)
+              : level
+            : undefined;
+        const budget =
+          support?.supported === true && !hasLadder ? REASONING_BUDGET_BY_LEVEL[level] : undefined;
         body.reasoning = {
           ...reasoning,
-          effort,
+          ...(effort !== undefined ? { effort } : {}),
           ...(reasoning.max_tokens === undefined && budget !== undefined ? { max_tokens: budget } : {}),
         };
         init = { ...init, body: JSON.stringify(body) };

@@ -151,7 +151,7 @@ export function readComposerSendFields(
   if (raw.thinkingLevel !== undefined) {
     if (typeof raw.thinkingLevel !== "string" || !THINKING_LEVELS.includes(raw.thinkingLevel as ThinkingLevel)) {
       reply.code(400).send(
-        errorBody("VALIDATION", "thinkingLevel must be one of default|low|high|max", {
+        errorBody("VALIDATION", "thinkingLevel must be one of default|low|medium|high|max", {
           field: "body.thinkingLevel",
         }),
       );

@@ -332,7 +332,7 @@ export const BROWSER_USE_SKILL_BODY = `# Skill: browser-use
 The embedded browser panel (browser_control) — a real webview the user watches live. It is NOT the user's desktop: never narrate panel actions as machine actions.
 
 ## Core loop
-1. navigate to the absolute http(s) URL. Omit sessionId → it drives THIS session's own tab (auto-opened in the panel).
+1. navigate to the absolute http(s) URL — or a LOCAL FILE (file:// URL or an absolute local path like C:\Users\me\page.html — local HTML opens natively in the panel). Omit sessionId → it drives THIS session's own tab (auto-opened in the panel).
 2. read_dom — the structured page outline (headings, links, buttons, inputs, forms with short selectors + each element's x/y/w/h position). This is how you know the page — it gives you the full content and spatial layout; screenshots only for visual questions pixels alone can answer.
 3. Act on DOM IDENTITY, never pixel coordinates: click by the returned selector or visible text; type into the returned selector.
 4. VERIFY with get_state (currentUrl, title, canBack/canForward) — the navigation you expected, not the one you hoped for; read (fresh server text) or read_dom when the check must be about content.

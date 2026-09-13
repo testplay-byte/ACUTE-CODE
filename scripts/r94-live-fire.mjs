@@ -25,7 +25,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 
-const REPO_ROOT = "/home/z/repos/ACUTE-CODE";
+// The repo root derived from THIS script's location (scripts/) — the old
+// hard-coded sandbox path broke on the first clone-path change (R95 lesson).
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MAIN_JS = join(REPO_ROOT, "agent-core", "dist", "main.js");
 const TOKEN = "r94-live-fire-token";
 if (!existsSync(MAIN_JS)) {

@@ -157,31 +157,32 @@ describe("R95-E: buildThinkingFetch (support-aware reasoning injection)", () => 
     }
   });
 
-  it("a detected ladder maps the level AND injects the per-level budget", async () => {
+  it("a detected ladder maps the level — effort ONLY (OpenRouter refuses effort + max_tokens together)", async () => {
     const { fetchMock, bodies } = capturingFetch();
     vi.stubGlobal("fetch", fetchMock);
     try {
       // A [low, medium] model: high falls to medium, max rides the highest
-      // rung (medium), low/medium hit their own rungs.
+      // rung (medium), low/medium hit their own rungs. NO max_tokens budget
+      // rides (the R95-G live-fire correction: OpenRouter rejects the pair).
       const support = reasoning(["low", "medium"]);
-      const cases: Array<[ThinkingLevel, string, number]> = [
-        ["low", "low", 2048],
-        ["medium", "medium", 4096],
-        ["high", "medium", 8192],
-        ["max", "medium", 16384],
+      const cases: Array<[ThinkingLevel, string]> = [
+        ["low", "low"],
+        ["medium", "medium"],
+        ["high", "medium"],
+        ["max", "medium"],
       ];
       for (const [level] of cases) {
         await buildThinkingFetch(level, support)("https://x.test/v1", baseBody());
       }
       const parsed = bodies.map((b) => JSON.parse(b) as { reasoning?: { effort?: string; max_tokens?: number } });
       expect(parsed.map((p) => p.reasoning?.effort)).toEqual(cases.map((c) => c[1]));
-      expect(parsed.map((p) => p.reasoning?.max_tokens)).toEqual(cases.map((c) => c[2]));
+      expect(parsed.map((p) => p.reasoning?.max_tokens)).toEqual([undefined, undefined, undefined, undefined]);
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it("a high-capable ladder keeps high/max on high (max = highest + the bigger budget)", async () => {
+  it("a high-capable ladder keeps high/max on high (effort only, no budget)", async () => {
     const { fetchMock, bodies } = capturingFetch();
     vi.stubGlobal("fetch", fetchMock);
     try {
@@ -189,20 +190,23 @@ describe("R95-E: buildThinkingFetch (support-aware reasoning injection)", () => 
       await buildThinkingFetch("high", support)("https://x.test/v1", baseBody());
       await buildThinkingFetch("max", support)("https://x.test/v1", baseBody());
       const parsed = bodies.map((b) => JSON.parse(b) as { reasoning?: { effort?: string; max_tokens?: number } });
-      expect(parsed[0]?.reasoning).toEqual({ effort: "high", max_tokens: 8192 });
-      expect(parsed[1]?.reasoning).toEqual({ effort: "high", max_tokens: 16384 });
+      expect(parsed[0]?.reasoning).toEqual({ effort: "high" });
+      expect(parsed[1]?.reasoning).toEqual({ effort: "high" });
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it("supported with NO discrete efforts → verbatim effort + the budget (no ladder to map)", async () => {
+  it("supported with NO discrete efforts → the max_tokens budget ONLY (no effort key)", async () => {
     const { fetchMock, bodies } = capturingFetch();
     vi.stubGlobal("fetch", fetchMock);
     try {
+      // The ladder-less shape (e.g. nemotron-3.5-lightning: reasoning, no
+      // reasoning_effort) — the budget is the ONLY knob (OpenRouter refuses
+      // the pair, so no effort rides along).
       await buildThinkingFetch("high", { supported: true, efforts: [] })("https://x.test/v1", baseBody());
       const body = JSON.parse(bodies[0]) as { reasoning?: { effort?: string; max_tokens?: number } };
-      expect(body.reasoning).toEqual({ effort: "high", max_tokens: 8192 });
+      expect(body.reasoning).toEqual({ max_tokens: 8192 });
     } finally {
       vi.unstubAllGlobals();
     }
