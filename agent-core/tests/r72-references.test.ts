@@ -134,7 +134,8 @@ function captureSkillFilesLog<T>(fn: () => T): { result: T; logged: string } {
 function buildReadSkill(root: string, agentId: string) {
   const toolDeps = { db, sessionId: "sess_r72c", agentId } as ToolDeps;
   const tools = skillsPlugin.createTools({ root, toolDeps }) as ToolDefinition[];
-  expect(tools.map((t) => t.name)).toEqual(["read_skill"]);
+  // ROUND-96 (R96-D): the plugin now declares read_skill + search_skills.
+  expect(tools.map((t) => t.name)).toEqual(["read_skill", "search_skills"]);
   return tools[0]!;
 }
 

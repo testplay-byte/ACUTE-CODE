@@ -24,20 +24,39 @@ export const execPlugin: PluginDefinition = {
       {
         name: "run_command",
         description:
-          "Run a terminal command inside the project root. Read-only and build/test commands run automatically (ls, cat, grep, git status/diff/log, npm/pnpm test/build/lint, cargo check/build) — but ONLY while every path they touch stays INSIDE the project root (anything under /, ~, .. or another drive asks first). Any other command also asks the owner for permission and waits for their decision — blocked commands (sudo, rm -rf, curl, dev servers) are refused outright. LONG-RUNNING/SERVER commands: launch them detached (Windows: `start /B <cmd> > <log> 2>&1`; Unix: `<cmd> > <log> 2>&1 &`) — the call returns immediately with a background-job id; then VERIFY the process actually started by polling job_status (or reading the log file) instead of waiting or re-running.",
+          "Run a terminal command inside the project root. BATCH related commands into ONE call — chain them ('cmd1 && cmd2', or ';' when later steps should run regardless) instead of one command per call — and issue INDEPENDENT tool calls (reads, searches) in parallel in the same message; only wait for a result when the next step genuinely depends on it. Read-only and build/test commands run automatically (ls, cat, grep, git status/diff/log, npm/pnpm test/build/lint, cargo check/build) — but ONLY while every path they touch stays INSIDE the project root (anything under /, ~, .. or another drive asks first). Any other command also asks the owner for permission and waits for their decision — blocked commands (sudo, rm -rf, curl, dev servers) are refused outright. timeout_ms (optional, 1000-600000) bounds a long command before the hard kill (default 60000). LONG-RUNNING/SERVER commands: launch them detached (Windows: `start /B <cmd> > <log> 2>&1`; Unix: `<cmd> > <log> 2>&1 &`) — the call returns immediately with a background-job id; then VERIFY the process actually started by polling job_status (or reading the log file) instead of waiting or re-running.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
-            command: { type: "string", description: "The shell command to execute" },
+            command: { type: "string", description: "The shell command to execute — chain related commands with && or ;" },
+            timeout_ms: { type: "integer", description: "Hard watchdog in milliseconds (1000-600000; default 60000). The command is killed and reported as a timeout when it exceeds this" },
           },
           required: ["command"],
         }),
-        execute: async (input) =>
-          runCommand(
+        execute: async (input) => {
+          // ROUND-96 (R96-C): the explicit timeout_ms contract (the owner:
+          // "It will run multiple commands in a single go… rather than running
+          // one command and then waiting" — chained commands get one bounded
+          // call instead of several blind ones). Validated honestly: a
+          // non-integer or out-of-range value is an error, never a silent
+          // clamp that would surprise the model.
+          const rawTimeout = input.timeout_ms;
+          let timeoutMs: number | undefined;
+          if (rawTimeout !== undefined) {
+            if (typeof rawTimeout !== "number" || !Number.isInteger(rawTimeout) || rawTimeout < 1000 || rawTimeout > 600000) {
+              return {
+                ok: false,
+                output: `run_command 'timeout_ms' must be an integer between 1000 and 600000 (got ${JSON.stringify(rawTimeout)})`,
+              };
+            }
+            timeoutMs = rawTimeout;
+          }
+          return runCommand(
             root,
             typeof input.command === "string" ? input.command : "",
             toolDeps !== undefined ? buildApprovalDeps(toolDeps) : undefined,
             {
+              ...(timeoutMs !== undefined ? { timeoutMs } : {}),
               // ROUND-52 (R52-a): background jobs bind to the project so the
               // UI's jobs view can scope them.
               projectId: toolDeps?.projectId ?? null,
@@ -58,7 +77,8 @@ export const execPlugin: PluginDefinition = {
                   }
                 : {}),
             },
-          ),
+          );
+        },
       },
       // ── ROUND-52 (R52-a): BACKGROUND-JOB SUPERVISION ─────────────────────
       // The owner's round-52 case: `start /B node server.js > server.log 2>&1`

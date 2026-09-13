@@ -49,7 +49,8 @@
  */
 
 /** The provider-failure classes (R71-d design: A6; R94-D1 added the
- * seventh — malformed_response; R95-E added the eighth — thinking_loop). */
+ * seventh — malformed_response; R95-E added the eighth — thinking_loop;
+ * ROUND-96 (R96-B) added the ninth — request_shape). */
 export type ProviderErrorClass =
   | "context_window_exceeded"
   | "auth"
@@ -58,6 +59,7 @@ export type ProviderErrorClass =
   | "timeout"
   | "malformed_response"
   | "thinking_loop"
+  | "request_shape"
   | "unknown";
 
 export interface ProviderErrorClassification {
@@ -99,6 +101,25 @@ const RATE_LIMIT_PATTERNS: readonly RegExp[] = [
   /\brate[ _-]?limit/i,
   /\btoo\s+many\s+requests\b/i,
   /\b(?:requests|tokens|TPM|RPM|quota)[ _-]?(?:limit|exceeded|exhausted)\b/i,
+];
+
+/** ROUND-96 (R96-B, the owner's report: "The agent completed its task
+ * properly and finished the chat properly but after it completed it, it said
+ * that there was an error… Code: PROVIDER_ERROR / Error: The last message
+ * must have role=user. / Attempts: 2" — model deepseek-v4.1-flash:free @
+ * OpenRouter): message shapes that mean the provider rejected the REQUEST'S
+ * MESSAGE STRUCTURE — deterministic 4xx failures that NO retry can heal (the
+ * same request will fail the same way; the R94-D1 unknown-progress retry
+ * burned a second attempt on exactly this shape). Matched EARLY (before the
+ * status/pattern classes — the wording is unambiguous) so the honest class
+ * chip says `request shape` and the ladder/key-swap/overflow paths all skip
+ * it: attempts must be 1. */
+const REQUEST_SHAPE_PATTERNS: readonly RegExp[] = [
+  // DeepSeek@OpenRouter's literal rejection (the owner's verbatim error).
+  /\blast message must (?:have|be) role[ =`'"*]*user\b/i,
+  // Siblings: the same contract phrased as "messages must end with…".
+  /\bmessages? (?:must|should|need to) (?:end|finish) with (?:a |the )?(?:a )?(?:`)?user(?:`)?[- ](?:role )?message\b/i,
+  /\b(?:final|last) message (?:must|should) (?:be|have) (?:a |the )?user\b/i,
 ];
 
 /** Message shapes that mean connection/transport failure. */
@@ -250,6 +271,10 @@ export const CLASS_MESSAGES: Record<ProviderErrorClass, string> = {
   // progress (normally the ThinkingLoopError's own message rides through
   // honestUserMessage as the real text).
   thinking_loop: "the model got stuck in a reasoning loop — thinking with no text, tool call, or finish",
+  // ROUND-96 (R96-B): the request's message STRUCTURE was rejected (e.g.
+  // "The last message must have role=user") — deterministic, fail-fast,
+  // never retried (attempts stays 1).
+  request_shape: "invalid request shape — the provider rejected the message ordering (deterministic; not retried)",
   unknown: "unclassified provider error",
 };
 
@@ -320,6 +345,17 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
   if (errorName === "ThinkingLoopError") {
     return { class: "thinking_loop", userMessage: honestUserMessage(message, "thinking_loop") };
   }
+  // 0.5. ROUND-96 (R96-B): the request-shape class — "The last message must
+  // have role=user" and siblings. Checked BEFORE timeout/status/pattern
+  // classes: the wording is unambiguous, the failure is DETERMINISTIC (no
+  // ladder, no key swap, no overflow recovery — attempts must stay 1), and a
+  // misfiled `unknown` would re-burn the R94-D1 progress retry on a request
+  // that can never succeed unchanged. The runtime's R96-B messages-shape
+  // guarantee makes this class unreachable in practice; it stays as the
+  // honest classification for any path that slips past it.
+  if (REQUEST_SHAPE_PATTERNS.some((re) => re.test(message))) {
+    return { class: "request_shape", userMessage: honestUserMessage(message, "request_shape") };
+  }
   // 1. Abort/timeout shapes first — TimeoutError/AbortError are unambiguous,
   // and no later pattern should steal them.
   if (
@@ -388,6 +424,73 @@ export function providerErrorDetail(error: unknown, apiKey: string): string {
   // covers every real provider error body (OpenRouter 429s, NVIDIA NIM
   // validation dumps) while keeping frames/rows bounded.
   return scrubbed.length > 4000 ? `${scrubbed.slice(0, 4000)}…` : scrubbed;
+}
+
+/* ── ROUND-96 (R96-B): the 429 Retry-After honor ────────────────────────── */
+
+/** ROUND-96 (R96-B, the owner: "There might be some rate limiting on the
+ * models... try to look into that properly too and manage them
+ * accordingly"): the cap on a provider-advised Retry-After wait. Anything
+ * longer falls back to the resolved schedule's rung — a daily-quota Reset
+ * (hours) must not pin a turn to a single in-flight wait longer than the
+ * ladder's own longest rung territory; the honest 10-minute ceiling keeps
+ * the wait inside the owner's configured world. */
+export const MAX_RETRY_AFTER_MS = 10 * 60_000;
+
+/** Parse one Retry-After value: delta-seconds ("5", "0.5") or the
+ * HTTP-date form ("Sun, 14 Sep 2026 12:00:00 GMT"). Pure; null on garbage. */
+function parseRetryAfterMs(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    if (!Number.isFinite(seconds)) return null;
+    return Math.min(Math.max(seconds * 1000, 0), MAX_RETRY_AFTER_MS);
+  }
+  const when = Date.parse(trimmed);
+  if (!Number.isNaN(when)) {
+    const delta = when - Date.now();
+    return delta <= 0 ? 0 : Math.min(delta, MAX_RETRY_AFTER_MS);
+  }
+  return null;
+}
+
+/** ROUND-96 (R96-B): extract the provider-advised Retry-After wait from a
+ * (possibly RetryError-wrapped) provider error — the AI SDK surfaces 4xx/429
+ * bodies as APICallError{ responseHeaders }, and an exhausted internal retry
+ * keeps the FINAL attempt's headers under lastError. Pure; null when the
+ * error carries no usable header (the caller falls back to the schedule's
+ * rung). Bounded shallow walk (depth ≤ 4, cycle-guarded) — the extractStatus
+ * idiom. */
+export function extractRetryAfterMs(error: unknown): number | null {
+  const seen = new Set<unknown>();
+  const walk = (value: unknown, depth: number): number | null => {
+    if (value === null || typeof value !== "object" || depth > 4) return null;
+    if (seen.has(value)) return null;
+    seen.add(value);
+    try {
+      const record = value as Record<string, unknown>;
+      const headers = record.responseHeaders;
+      if (typeof headers === "object" && headers !== null) {
+        for (const [key, raw] of Object.entries(headers as Record<string, unknown>)) {
+          if (key.toLowerCase() !== "retry-after" || typeof raw !== "string" || raw.trim() === "") {
+            continue;
+          }
+          const parsed = parseRetryAfterMs(raw);
+          if (parsed !== null) return parsed;
+        }
+      }
+      for (const child of [record.lastError, record.cause, record.error]) {
+        const found = walk(child, depth + 1);
+        if (found !== null) return found;
+      }
+    } catch {
+      /* unreachable-object guard — treat as no header */
+    }
+    return null;
+  };
+  // The unwrapped error first (a RetryError's lastError carries the final
+  // attempt's headers); the raw wrapper second (a bare APICallError).
+  return walk(unwrapRetryError(error), 0) ?? walk(error, 0);
 }
 
 /** R71-e2 D4: the user-facing PROVIDER_ERROR message — the existing prefix

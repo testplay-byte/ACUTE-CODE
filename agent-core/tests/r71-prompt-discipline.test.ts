@@ -107,8 +107,14 @@ describe("D1: the section exists, in the designed position", () => {
     // agentic-loop (the loop's failure rule points at it) — discipline
     // follows recovery, still before file-editing (the R71-d design
     // position, one slot later than originally pinned).
+    // ROUND-96 (R96-D): the BATCH + COMPLETION discipline pair now sits
+    // between the agentic-loop and recovery (the owner's batching +
+    // completion directives) — engineering-discipline keeps its position
+    // AFTER recovery, now four slots after the loop.
     expect(PROMPT_SECTION_IDS[i - 1]).toBe("recovery");
-    expect(PROMPT_SECTION_IDS[i - 2]).toBe("agentic-loop");
+    expect(PROMPT_SECTION_IDS[i - 2]).toBe("completion-discipline");
+    expect(PROMPT_SECTION_IDS[i - 3]).toBe("batch-discipline");
+    expect(PROMPT_SECTION_IDS[i - 4]).toBe("agentic-loop");
     expect(PROMPT_SECTION_IDS[i + 1]).toBe("file-editing");
   });
 
@@ -118,7 +124,11 @@ describe("D1: the section exists, in the designed position", () => {
       if (stamped[stamped.length - 1] !== entry.sectionId) stamped.push(entry.sectionId as string);
     }
     expect(stamped.indexOf("engineering-discipline")).toBe(stamped.indexOf("recovery") + 1);
-    expect(stamped.indexOf("recovery")).toBe(stamped.indexOf("agentic-loop") + 1);
+    // ROUND-96 (R96-D): recovery follows the batch + completion pair, which
+    // follows the agentic loop.
+    expect(stamped.indexOf("recovery")).toBe(stamped.indexOf("completion-discipline") + 1);
+    expect(stamped.indexOf("completion-discipline")).toBe(stamped.indexOf("batch-discipline") + 1);
+    expect(stamped.indexOf("batch-discipline")).toBe(stamped.indexOf("agentic-loop") + 1);
   });
 
   it("the composed prompt orders AGENTIC LOOP → RECOVERY PROTOCOL → ENGINEERING DISCIPLINE → FILE EDITING RULES", () => {
@@ -388,7 +398,7 @@ describe("PLAN mode: every discipline surface composes (read-only vocabulary)", 
 // ── D6: the size budget ──────────────────────────────────────────────────────
 
 describe("D6: the size budget (the 22K hard bound + the section window)", () => {
-  it("the DEFAULT full-tools composition stays ≤ 22,000 chars", () => {
+  it("the DEFAULT full-tools composition stays ≤ 23,000 chars", () => {
     // The 22K bound guards the BUILT-IN system prompt — the composition a
     // real session composes before any project-injected dynamic content
     // (custom rules have their own 32K cap; the memory digest, index
@@ -403,8 +413,16 @@ describe("D6: the size budget (the 22K hard bound + the section window)", () => 
     // flags + receipts/tags/anti-question + sub-agent lines) exceeds the
     // ~1.8K headroom the maximal leaves under 22K, so the bound is pinned
     // where it can honestly hold.
+    // ROUND-96 (R96-D): 22,000 → 23,000 — the owner-directed discipline
+    // trio (BATCH + COMPLETION behind the loop, PRECISION behind code
+    // navigation — research memo §9 notes (d)/(f)) adds ~1.9K of mandated
+    // content; the sections were TRIMMED to their load-bearing lines
+    // (every phrase the round's content pins assert survived), and the
+    // bound moves to hold the owner's explicit asks rather than degrading
+    // them under an arbitrary pre-R96 number. The cap still guards against
+    // unbounded growth (the budget discipline itself is R71's point).
     const composed = buildProjectSystemPrompt(ctxFor());
-    expect(composed.length).toBeLessThanOrEqual(22_000);
+    expect(composed.length).toBeLessThanOrEqual(23_000);
     expect(composed.length).toBeGreaterThan(15_000); // the R71 delta is real content, not a gutting
   });
 

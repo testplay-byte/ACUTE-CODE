@@ -357,6 +357,17 @@ function buildModel(input: ChatTurnInput): LanguageModel {
 export interface ChatToolCall {
   name: string;
   argsSummary: string;
+  /** ROUND-96 (R96-B, the owner's loop-guard report: "the model was reading
+   * a file: it read the first half, then the second, then the fourth… our
+   * loop guard stopped it while it was clearly not stuck"): the RAW tool
+   * arguments (the SDK's `input` object), threaded for EXACT-CALL IDENTITY —
+   * the display `argsSummary` deliberately DROPS every non-string arg
+   * (summarizeArgs), so paged reads of one file (read_file offset 1 / 5000 /
+   * 10000…) rendered IDENTICAL summaries and the R51 guard false-positived
+   * on healthy paging. The guard compares the canonical RAW args; every
+   * display/persisted surface keeps using argsSummary (raw args are NEVER
+   * persisted or emitted — write bodies and paths ride them). */
+  args?: unknown;
   ok: boolean;
   /** Round-34: compact model-facing output summary (persisted for history). */
   outputSummary?: string;
@@ -575,6 +586,9 @@ function extractToolCalls(steps: Array<unknown>): ChatToolCall[] {
       calls.push({
         name: r.toolName,
         argsSummary: summarizeArgs(r.input),
+        // ROUND-96 (R96-B): the RAW input rides the call — the loop guard's
+        // exact-match identity (see ChatToolCall.args). Never persisted.
+        args: r.input,
         ok:
           typeof r.output === "object" && r.output !== null && "ok" in r.output
             ? Boolean((r.output as { ok: unknown }).ok)
@@ -687,8 +701,15 @@ export type StreamChatEvent =
    * arguments (AI SDK v7 `tool-input-delta`). The client accumulates these
    * per toolCallId and renders the partial file content as it grows. */
   | { type: "tool-input-delta"; toolCallId: string; inputTextDelta: string }
-  | { type: "tool-call"; toolName: string; argsSummary: string }
-  | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean; outputSummary?: string }
+  /** ROUND-96 (R96-B): the RAW tool arguments for exact-call identity — the
+   * loop guard's repeat detection needs them (paged reads differ by offset,
+   * not by the string-only display summary). Consumed by the runtime's guard
+   * feed ONLY; never forwarded over SSE (the runtime strips the field before
+   * emitting) and never persisted. */
+  | { type: "tool-call"; toolName: string; argsSummary: string; args?: unknown }
+  /** ROUND-96 (R96-B): same raw-args threading on the result (the guard
+   * fires per EXECUTED call — the result is the honest per-call feed). */
+  | { type: "tool-result"; toolName: string; argsSummary: string; args?: unknown; ok: boolean; outputSummary?: string }
   | {
       type: "finish";
       usage: { inputTokens: number; outputTokens: number; totalTokens: number };
@@ -861,7 +882,7 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
       };
     } else if (part.type === "tool-call") {
       const argsSummary = summarizeArgs(part.input);
-      yield { type: "tool-call", toolName: part.toolName, argsSummary };
+      yield { type: "tool-call", toolName: part.toolName, argsSummary, args: part.input };
     } else if (part.type === "tool-result") {
       const output = part.output as unknown;
       const ok =
@@ -872,6 +893,8 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
         type: "tool-result",
         toolName: part.toolName,
         argsSummary: summarizeArgs(part.input),
+        // ROUND-96 (R96-B): the raw input for the guard's exact-match identity.
+        args: part.input,
         ok,
         outputSummary: summarizeToolOutput(part.output, part.toolName),
       };

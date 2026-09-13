@@ -125,7 +125,8 @@ describe("ROUND-52 (R52-f): the plugin registry", () => {
     }
     // The skills plugin declares read_skill on a live db.
     const skills = await BUILT_IN_PLUGINS.find((p) => p.id === "core-skills")?.createTools({ root: tempDir, toolDeps: stubDeps });
-    expect(skills?.map((t) => t.name)).toEqual(["read_skill"]);
+    // ROUND-96 (R96-D): the plugin declares the loader + the discovery tool.
+    expect(skills?.map((t) => t.name)).toEqual(["read_skill", "search_skills"]);
     // Without deps the delegation plugin declares NOTHING (the keyring/chat
     // gate — the historical R36 semantics preserved through the registry).
     const bare = await BUILT_IN_PLUGINS[BUILT_IN_PLUGINS.length - 1].createTools({ root: tempDir });

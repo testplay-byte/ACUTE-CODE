@@ -132,7 +132,9 @@ function globalRootWith(skills: Record<string, string>): string {
 function buildReadSkill(root: string, agentId: string) {
   const toolDeps = { db, sessionId: "sess_r70b", agentId } as ToolDeps;
   const tools = skillsPlugin.createTools({ root, toolDeps }) as ToolDefinition[];
-  expect(tools.map((t) => t.name)).toEqual(["read_skill"]);
+  // ROUND-96 (R96-D): the plugin now declares TWO tools — read_skill (the
+  // loader) + search_skills (the keyword discovery tool).
+  expect(tools.map((t) => t.name)).toEqual(["read_skill", "search_skills"]);
   return tools[0]!;
 }
 
@@ -522,7 +524,12 @@ describe("R70-b D2: the seven new built-in skills", () => {
     ["performance", "skill_builtin_performance"],
   ];
 
-  it("all TWENTY builtins seed (computer-use + the seven R70-b + the four R71-e3 + the six R72-b + the two R73-d additions), ordered by sort_order", () => {
+  // ROUND-96 (R96-D) RE-PIN: the builtin family grew 20 → 24 (planning,
+  // ui-design, error-testing, large-project-navigation — see
+  // tests/r96-prompts-skills.test.ts for the four new skills' own pins;
+  // their bodies deliberately EXCEED this block's 800-2200/60-line band —
+  // the R96-D task spec's 40-120-line format).
+  it("all TWENTY-FOUR builtins seed (computer-use + the seven R70-b + the four R71-e3 + the six R72-b + the two R73-d + the four R96-D additions), ordered by sort_order", () => {
     const skills = listSkills(db);
     const builtins = skills.filter((s) => s.source === "builtin");
     expect(builtins.map((s) => s.name)).toEqual([
@@ -546,9 +553,13 @@ describe("R70-b D2: the seven new built-in skills", () => {
       "refactoring",
       "spec-planning",
       "performance",
+      "planning",
+      "ui-design",
+      "error-testing",
+      "large-project-navigation",
     ]);
     expect(builtins.map((s) => s.sortOrder)).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
     ]);
     expect(builtins.every((s) => s.enabled)).toBe(true);
   });
@@ -849,7 +860,7 @@ describe("R70-b wiring: prepareTurn feeds the prompt SKILLS section from the sha
     const sessionId = createSession(db, { agentId: agent.id, mode: "single", projectId: project.id }).id;
 
     const system = await runTurnAndCaptureSystem(sessionId);
-    expect(system).toContain("## SKILLS (load with read_skill)");
+    expect(system).toContain("## SKILLS (load with read_skill, search with search_skills)");
     expect(system).toContain("**code-review**");
     expect(system).not.toContain("**debugging**");
     expect(system).not.toContain("**deploy-flow**"); // the file skill is filtered out
@@ -870,7 +881,10 @@ describe("R70-b wiring: prepareTurn feeds the prompt SKILLS section from the sha
     const sessionId = createSession(db, { agentId: agent.id, mode: "single", projectId: project.id }).id;
 
     const system = await runTurnAndCaptureSystem(sessionId);
-    for (const name of ["code-review", "debugging", "testing", "git-workflow", "web-research", "project-init", "browser-use", "deploy-flow", "tdd", "api-design", "frontend-craft", "typescript-craft", "security-review", "refactoring", "spec-planning", "performance"]) {
+    // ROUND-96 (R96-D): the four new owner-named skills ride the same
+    // listing (24 skills total here — computer-use still gated off; the
+    // R96-D budget keeps the whole seeded core intact by design).
+    for (const name of ["code-review", "debugging", "testing", "git-workflow", "web-research", "project-init", "browser-use", "deploy-flow", "tdd", "api-design", "frontend-craft", "typescript-craft", "security-review", "refactoring", "spec-planning", "performance", "planning", "ui-design", "error-testing", "large-project-navigation"]) {
       expect(system).toContain(`**${name}**`);
     }
     expect(system).not.toContain("**computer-use**"); // D4 still gates (switch off)

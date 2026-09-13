@@ -964,20 +964,25 @@ describe("streamed turn runtime (round-16)", () => {
     const streamKeyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY });
 
     const emitted: Array<{ type: string }> = [];
-    // Mock that CALLS TOOLS but never signals completion — the outer loop
+    // Mock that CALLS TOOLS and never produces final text — the outer loop
     // continues up to maxOuterLoops (5).
     // ROUND-51 (R51-f): the args VARY per iteration. The original fixture
     // repeated the IDENTICAL list_dir call every iteration — exactly the
-    // no-progress loop the new loop-hygiene guard exists to stop (it would
-    // nudge at 3 and halt the turn at 5 before the cap event fired). The
-    // test's intent is unchanged: tool-using iterations without a completion
-    // signal run to the maxOuterLoops cap.
+    // no-progress loop the loop-hygiene guard exists to warn on (it would
+    // nudge at 3 under R96-B's warn-only contract). The test's intent is
+    // unchanged: tool-using iterations without a completion signal run to
+    // the maxOuterLoops cap.
+    // ROUND-96 (R96-B): the per-iteration "still working" TEXT is GONE —
+    // under the new completion rule (research finding #1: a tool-using
+    // iteration with non-empty text is the model's OWN stop) text+tools
+    // ends the turn after ONE iteration. The loop-continuing shape is
+    // TOOLS WITHOUT TEXT (the model is mid-work — see the runtime's
+    // "Tools only, no text — the model is mid-work" path).
     let streamCalls = 0;
     const chatStream = async function* (): AsyncGenerator<import("../src/agents/chat").StreamChatEvent> {
       streamCalls += 1;
-      yield { type: "tool-call", toolName: "list_dir", argsSummary: `path: ./iter-${streamCalls}` };
-      yield { type: "tool-result", toolName: "list_dir", argsSummary: `path: ./iter-${streamCalls}`, ok: true };
-      yield { type: "text-delta", delta: "still working" };
+      yield { type: "tool-call", toolName: "list_dir", argsSummary: `path: ./iter-${streamCalls}`, args: { path: `./iter-${streamCalls}` } };
+      yield { type: "tool-result", toolName: "list_dir", argsSummary: `path: ./iter-${streamCalls}`, args: { path: `./iter-${streamCalls}` }, ok: true };
       yield { type: "finish", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
     };
 

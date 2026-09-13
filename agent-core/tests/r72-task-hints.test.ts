@@ -360,7 +360,7 @@ describe("R72-a D3: both turn paths carry the advisory line (prepareTurn wiring)
     // agent.skills=["debugging"] → exactly one effective skill → one hint.
     const sessionId = newSession(["debugging"]);
     const system = await runStreamedTurnAndCaptureSystem(sessionId, "my test keeps failing, fix this bug");
-    expect(system).toContain("## SKILLS (load with read_skill)");
+    expect(system).toContain("## SKILLS (load with read_skill, search with search_skills)");
     expect(system).toContain("**debugging**");
     expect(system).toContain(
       "Task signal: this request looks like it matches **debugging** — consider calling read_skill with that name FIRST and following it for the rest of the task.",
@@ -370,7 +370,7 @@ describe("R72-a D3: both turn paths carry the advisory line (prepareTurn wiring)
   it("STREAMED path: an unrelated message → no advisory line at all (the matcher stays silent)", async () => {
     const sessionId = newSession(["debugging"]);
     const system = await runStreamedTurnAndCaptureSystem(sessionId, "what is the capital of France");
-    expect(system).toContain("## SKILLS (load with read_skill)"); // the index is still there
+    expect(system).toContain("## SKILLS (load with read_skill, search with search_skills)"); // the index is still there (R96-D: search_skills joined the header)
     expect(system).not.toContain("Task signal:");
   });
 
@@ -405,7 +405,7 @@ describe("R72-a D3: both turn paths carry the advisory line (prepareTurn wiring)
     // set → NO effective skills → no SKILLS section → nothing to hint.
     const offSession = newSession(["computer-use"]);
     const offSystem = await runStreamedTurnAndCaptureSystem(offSession, "open Notepad and type into that window");
-    expect(offSystem).not.toContain("## SKILLS (load with read_skill)");
+    expect(offSystem).not.toContain("## SKILLS (load with read_skill, search with search_skills)");
     expect(offSystem).not.toContain("Task signal:");
 
     // Master switch ON: computer-use becomes effective and the verbatim
@@ -413,7 +413,7 @@ describe("R72-a D3: both turn paths carry the advisory line (prepareTurn wiring)
     setComputerUseSettings(db, { enabled: true });
     const onSession = newSession(["computer-use"]);
     const onSystem = await runStreamedTurnAndCaptureSystem(onSession, "open Notepad and type into that window");
-    expect(onSystem).toContain("## SKILLS (load with read_skill)");
+    expect(onSystem).toContain("## SKILLS (load with read_skill, search with search_skills)");
     expect(onSystem).toContain(
       "Task signal: this request looks like it matches **computer-use** — consider calling read_skill with that name FIRST and following it for the rest of the task.",
     );

@@ -112,6 +112,12 @@ const EXPECTED_TWENTY: ReadonlyArray<string> = [
   "refactoring",
   "spec-planning",
   "performance",
+  // ROUND-96 (R96-D): the four owner-named additions (their own pins live
+  // in tests/r96-prompts-skills.test.ts).
+  "planning",
+  "ui-design",
+  "error-testing",
+  "large-project-navigation",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,11 +148,16 @@ describe("R73-d D1: two new methodology builtins (18 → 20)", () => {
       "skill_builtin_security_review",
       "skill_builtin_refactoring",
       ...R73_D_BUILTINS.map((b) => b.id),
+      // ROUND-96 (R96-D): the four owner-named additions.
+      "skill_builtin_planning",
+      "skill_builtin_ui_design",
+      "skill_builtin_error_testing",
+      "skill_builtin_large_project_navigation",
     ]);
-    expect(builtins.map((s) => s.sortOrder)).toEqual(Array.from({ length: 20 }, (_, i) => i));
+    expect(builtins.map((s) => s.sortOrder)).toEqual(Array.from({ length: 24 }, (_, i) => i));
     expect(builtins.every((s) => s.enabled)).toBe(true);
-    // sortOrders are unique across all twenty (the listing order contract).
-    expect(new Set(builtins.map((s) => s.sortOrder)).size).toBe(20);
+    // sortOrders are unique across all twenty-four (the listing order contract).
+    expect(new Set(builtins.map((s) => s.sortOrder)).size).toBe(24);
   });
 
   it.each(R73_D_BUILTINS)(
@@ -174,13 +185,13 @@ describe("R73-d D1: two new methodology builtins (18 → 20)", () => {
     const descriptions = listSkills(db)
       .filter((s) => s.source === "builtin")
       .map((s) => s.description);
-    expect(descriptions).toHaveLength(20);
-    expect(new Set(descriptions).size).toBe(20);
+    expect(descriptions).toHaveLength(24);
+    expect(new Set(descriptions).size).toBe(24);
   });
 
   it("the two new names are lowercase slugs that do not shadow older builtins (the naming contract)", () => {
     const names = listSkills(db).filter((s) => s.source === "builtin").map((s) => s.name);
-    expect(new Set(names).size).toBe(20);
+    expect(new Set(names).size).toBe(24);
     for (const name of R73_D_BUILTINS.map((b) => b.name)) {
       expect(name).toMatch(/^[a-z0-9][a-z0-9-]{1,63}$/);
     }
@@ -296,26 +307,27 @@ describe("R73-d D2: the two new bodies (discipline contracts)", () => {
 // D3 — the INSERT OR IGNORE contract, twenty-strong
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("R73-d D3: INSERT OR IGNORE with 20 builtins", () => {
-  it("an explicit re-seed is idempotent: still exactly 20 rows, unique names, unique ids", () => {
+describe("R73-d D3: INSERT OR IGNORE with 24 builtins", () => {
+  it("an explicit re-seed is idempotent: still exactly 24 rows, unique names, unique ids", () => {
     seedBuiltinSkills(db);
     seedBuiltinSkills(db);
     const rows = db.prepare("SELECT * FROM skills").all() as Array<{ id: string; name: string; source: string }>;
     const builtins = rows.filter((r) => r.source === "builtin");
-    expect(builtins).toHaveLength(20);
-    expect(new Set(builtins.map((r) => r.id)).size).toBe(20);
-    expect(new Set(builtins.map((r) => r.name)).size).toBe(20);
+    expect(builtins).toHaveLength(24);
+    expect(new Set(builtins.map((r) => r.id)).size).toBe(24);
+    expect(new Set(builtins.map((r) => r.name)).size).toBe(24);
   });
 
-  it("deleted new-builtin rows revive on reopen (an existing pre-R73 DB converges on 20)", () => {
+  it("deleted new-builtin rows revive on reopen (an existing pre-R96 DB converges on 24)", () => {
     const path = join(tempDir, "converge.db");
     const existing = openDatabase(path); // an "existing user DB" — already seeded
     try {
-      // The user nukes the two R73-d rows and one older one (say, by hand).
+      // The user nukes the two R73-d rows and two others (say, by hand).
       existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_spec_planning");
       existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_performance");
       existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_tdd");
-      expect(listSkills(existing).filter((s) => s.source === "builtin")).toHaveLength(17);
+      existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_ui_design");
+      expect(listSkills(existing).filter((s) => s.source === "builtin")).toHaveLength(20);
     } finally {
       existing.close();
     }
@@ -323,7 +335,7 @@ describe("R73-d D3: INSERT OR IGNORE with 20 builtins", () => {
     const reopened = openDatabase(path);
     try {
       const builtins = listSkills(reopened).filter((s) => s.source === "builtin");
-      expect(builtins).toHaveLength(20);
+      expect(builtins).toHaveLength(24);
       expect(getSkill(reopened, "skill_builtin_spec_planning")?.name).toBe("spec-planning");
       expect(getSkill(reopened, "skill_builtin_spec_planning")?.body).toContain("A spec is a DECISION DOCUMENT");
       expect(getSkill(reopened, "skill_builtin_performance")?.body).toContain(
@@ -349,7 +361,7 @@ describe("R73-d D3: INSERT OR IGNORE with 20 builtins", () => {
   it("disabling a new builtin hides it from the enabled set without deleting the row", () => {
     updateSkill(db, "skill_builtin_spec_planning", { enabled: false });
     expect(listEnabledSkills(db).map((s) => s.name)).not.toContain("spec-planning");
-    expect(listSkills(db).filter((s) => s.source === "builtin")).toHaveLength(20);
+    expect(listSkills(db).filter((s) => s.source === "builtin")).toHaveLength(24);
     // Re-enable restores it (the row never left).
     updateSkill(db, "skill_builtin_spec_planning", { enabled: true });
     expect(listEnabledSkills(db).map((s) => s.name)).toContain("spec-planning");
@@ -372,14 +384,14 @@ describe("R73-d D4: the two new descriptions ride the prompt SKILLS section verb
     };
   }
 
-  it("all twenty builtins render as '- **name** — description' with the FULL new descriptions", () => {
+  it("all twenty-four builtins render as '- **name** — description' with the FULL new descriptions", () => {
     const builtins = listSkills(db)
       .filter((s) => s.source === "builtin")
       .map((s) => ({ name: s.name, description: s.description }));
-    expect(builtins).toHaveLength(20);
+    expect(builtins).toHaveLength(24);
 
     const section = buildSectionText(promptCtx(builtins), "skills") ?? "";
-    expect(section).toContain("## SKILLS (load with read_skill)");
+    expect(section).toContain("## SKILLS (load with read_skill, search with search_skills)");
     expect(section).toContain("call read_skill with its name FIRST");
     for (const skill of builtins) {
       expect(section).toContain(`- **${skill.name}** — ${skill.description}`);
@@ -392,9 +404,9 @@ describe("R73-d D4: the two new descriptions ride the prompt SKILLS section verb
     expect(section).toContain("A skill body that appears truncated after context compaction can be RELOADED: call read_skill again.");
   });
 
-  it("the DB round-trip: a seeded DB lists all TWENTY through listSkills AND listEnabledSkills", () => {
-    expect(listSkills(db).filter((s) => s.source === "builtin")).toHaveLength(20);
-    expect(listEnabledSkills(db)).toHaveLength(20);
+  it("the DB round-trip: a seeded DB lists all TWENTY-FOUR through listSkills AND listEnabledSkills", () => {
+    expect(listSkills(db).filter((s) => s.source === "builtin")).toHaveLength(24);
+    expect(listEnabledSkills(db)).toHaveLength(24);
     for (const expected of R73_D_BUILTINS) {
       const viaList = listSkills(db).find((s) => s.name === expected.name);
       expect(viaList?.id).toBe(expected.id);

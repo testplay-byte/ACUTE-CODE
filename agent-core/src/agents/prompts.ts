@@ -52,6 +52,28 @@
  * discipline for R94-E's window_action + windows_overview (exact
  * title/pid targeting) and the app_ref re-resolution rule. Additions are
  * paid for by trims in the same sections — the prompt stays tight.
+ *
+ * ROUND-96 (R96-D, the prompts+skills round — the owner: "Make our agent
+ * much smarter and much more capable… like modern agentic coding IDEs",
+ * "If the user, for example, in an HTML file tells it to change a specific
+ * text from this to this, then it will not try to analyze the whole HTML…
+ * It will run multiple commands in a single go… batch commands", and the
+ * skills directive: "a planning skill, a UI skill, an error-testing skill…
+ * the agent can request which skills it wants… It can search for the skills
+ * too if it needs to"). Three new sections (research memo
+ * docs/research/agent-architectures-r96.md §9 notes (d)/(f), the Claude
+ * Code / OpenCode convergence): BATCH DISCIPLINE + COMPLETION DISCIPLINE
+ * slot in behind the agentic loop (batched independent calls in ONE
+ * response, chained shell commands, the explicit "Task complete." ending,
+ * never pad or restart finished work); PRECISION DISCIPLINE slots in
+ * behind code navigation (target before you read, exact anchors from
+ * CURRENT content, verify after editing, and the "change X to Y in file F"
+ * recipe that NEVER analyzes the whole project). The loop's VERIFY phase
+ * gains on-disk verification (re-read / run / browser screenshot when
+ * visual). The SKILLS section header now names BOTH read_skill and the new
+ * search_skills tool, and the listing is BUDGETED (SKILLS_LIST_MAX entries
+ * / SKILLS_SECTION_CHAR_BUDGET chars; over budget keeps the seeded core
+ * first and says so — "…and M more — search_skills to discover them").
  */
 
 import type { PermissionMode } from "shared";
@@ -227,6 +249,38 @@ export interface TaggedLine {
   sectionId?: SectionId;
 }
 
+/* ── ROUND-96 (R96-D): the SKILLS listing budget ─────────────────────────
+ *
+ * The owner: "All of these skills will not be sent into the prompt by
+ * default but the agent can request which skills it wants… It can search
+ * for the skills too if it needs to." The listing stays names+descriptions
+ * ONLY (bodies load on demand) — but even names+descriptions must not grow
+ * without bound once user/file skills accumulate. Two caps:
+ *
+ *   · SKILLS_LISTED_MAX — at most this many entries in the prompt listing;
+ *   · SKILLS_SECTION_CHAR_BUDGET — the total chars of the list lines.
+ *
+ * MEASURED (round-96): the 20 builtins seeded through R95 list at ~9.4K
+ * chars; the four R96-D additions bring the 24-builtin family to ~11.2K.
+ * The task's suggested ~8K budget would cut the SEEDED CORE's tail on a
+ * DEFAULT install (spec-planning/performance would drop out of every
+ * fresh session) — contradicting both the "seeded core first" stability
+ * rule and the R70 wiring pin ("every enabled skill rides the section").
+ * So the char budget sits ABOVE the seeded family's measured footprint:
+ * both caps engage only for EXTRA skills (user + file), which is the "if
+ * there are many skills" intent. Over budget the head survives (the
+ * resolver's stable order — seeded core first), the tail drops, and the
+ * honest "…and M more — search_skills to discover them" line replaces it. */
+
+/** ROUND-96 (R96-D): max skills listed in the prompt's SKILLS section —
+ * the 24 seeded builtins + 8 of headroom for user/file skills; beyond this
+ * the listing points at search_skills. */
+export const SKILLS_LISTED_MAX = 32;
+
+/** ROUND-96 (R96-D): char budget for the SKILLS listing lines (see the
+ * measured rationale above — the seeded core fits, extras engage the cap). */
+export const SKILLS_SECTION_CHAR_BUDGET = 12_000;
+
 /**
  * The single ordered builder (ROUND-50 R50-c1). Every line of the composed
  * prompt is pushed here in EXACTLY the pre-R50 order; only the section TAG
@@ -384,12 +438,21 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   ident("2. EXPLORE — understand before acting: ONE message with the independent discovery calls BATCHED in parallel (list_dir / search_files / search_code before read_file; the MOST SPECIFIC tool for each). Do not re-explore between steps or re-read files already in context.");
   ident("3. ACT — the FEWEST steps that genuinely complete the work; every call must earn its place. Prefer editing existing files over creating new ones. A successful write_file/edit_file response is itself confirmation the save landed — re-read only when something indicates a problem (an error, a surprising result, a high-stakes edit).");
   // The adversarial-review affordance only makes sense when delegation exists.
+  // ROUND-96 (R96-D): the VERIFY phase gains ON-DISK verification — re-read
+  // the changed range, run the check, screenshot via the browser tools when
+  // the change is VISUAL (the owner's "verify before done" doctrine from
+  // the v0.93 report; Anthropic's best-practices: "have Claude show evidence
+  // rather than asserting success — the test output, the command it ran and
+  // what it returned, or a screenshot").
   if (ctx.toolNames.includes("delegate_task")) {
-    ident("4. VERIFY — after code edits, run the project's checks before claiming done (touched tests, typecheck, lint — see FILE EDITING RULES); for 3+ file edits, consider a delegate_task adversarial review. Confirm steps from their tool results; re-check only what indicates a problem.");
+    ident("4. VERIFY — after code edits, verify the change ON DISK before claiming done: run the project's checks (touched tests, typecheck, lint — see FILE EDITING RULES) or re-read the changed range; for 3+ file edits, consider a delegate_task adversarial review. Confirm steps from their tool results; re-check only what indicates a problem.");
   } else {
-    ident("4. VERIFY — after code edits, run the project's checks before claiming done (touched tests, typecheck, lint — see FILE EDITING RULES). Confirm steps from their tool results; re-check only what indicates a problem.");
+    ident("4. VERIFY — after code edits, verify the change ON DISK before claiming done: run the project's checks (touched tests, typecheck, lint — see FILE EDITING RULES) or re-read the changed range; for VISUAL changes, screenshot via the browser tools and look at the result. Confirm steps from their tool results; re-check only what indicates a problem.");
   }
-  ident("5. FINISH — ONLY when the work is GENUINELY complete AND verified: a brief 1–3 sentence summary. A summary after one tool call is a FAILURE; so is stopping early on a multi-step task.");
+  // ROUND-96 (R96-D): the FINISH phase names the explicit completion line
+  // ("Task complete." — the exact phrase runtime's COMPLETION_SIGNAL knows)
+  // and points at the COMPLETION DISCIPLINE section directly below.
+  ident("5. FINISH — ONLY when the work is GENUINELY complete AND verified: a brief 1–3 sentence summary, then end with the explicit completion line: Task complete. (see COMPLETION DISCIPLINE below). A summary after one tool call is a FAILURE; so is stopping early on a multi-step task.");
   ident("");
   ident("Rules:");
   ident("- Proceed autonomously — do NOT ask the user for confirmation between steps.");
@@ -406,6 +469,36 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // place. ROUND-70 (R70-c): the outer-iteration cap is now mentioned
   // honestly too (the turn continues across them — keep working within).
   ident(`- Multi-step tasks are EXPECTED (4–7+ tool calls); up to ${ctx.maxTurns ?? 80} tool round-trips per iteration and ${ctx.maxOuterLoops ?? 5} outer iterations exist — keep working within them. But every call must earn its place: FEWEST steps that genuinely complete and verify the work, not step count for its own sake.`);
+  ident("");
+
+  // ── Batch discipline (ROUND-96, R96-D) ────────────────────────────────
+  // The owner: "It will run multiple commands in a single go… batch
+  // commands." The executor already parallelizes one step's calls (the
+  // installed ai@7.0.73 runs them under Promise.all — verified in the R96-A
+  // research); what was missing is the PROMPT half of the field's
+  // convergence (Anthropic's <use_parallel_tool_calls> guidance adapted to
+  // our tool names, research memo note (d)). Static + unconditional.
+  beginSection("batch-discipline");
+  ident("## BATCH DISCIPLINE");
+  ident("- BATCH INDEPENDENT CALLS: whenever tool calls do NOT depend on each other's results, issue them ALL in ONE response — three files to read means three read_file calls in one message; collect the results, then reason over them TOGETHER.");
+  ident("- DEPENDENT CALLS WAIT: a call that needs a previous result (search → read the hit; read → edit what you read) waits for it — batch the independent, sequence the rest.");
+  ident("- CHAIN SHELL COMMANDS: related shell work is ONE run_command (`a && b`) — a chain stops at the first failure, so order the links deliberately.");
+  ident("- ONE-CALL-ONE-WAIT IS THE ANTI-PATTERN: batched discovery then one reasoning pass over all results is the fast shape.");
+  ident("");
+
+  // ── Completion discipline (ROUND-96, R96-D) ────────────────────────────
+  // The owner's "much smarter and much more capable" bar, distilled into
+  // the ending contract: a concise verified summary, the explicit
+  // completion line (the exact phrase runtime's COMPLETION_SIGNAL regex
+  // recognizes — "Task complete."), never padding, never restarting
+  // finished work. Research memo §9 row 1 (the field ends on the model's
+  // own stop; this section teaches the model to STOP WELL).
+  beginSection("completion-discipline");
+  ident("## COMPLETION DISCIPLINE");
+  ident("- DONE means VERIFIED (the loop's VERIFY phase) with nothing required remaining. Then reply ONCE — what changed (the files), the verification receipts, any next step — and END WITH THE LINE: Task complete.");
+  ident("- NEVER pad finished work: no re-running checks that passed, no unasked-for polish edits, no restating the diff in prose.");
+  ident("- NEVER restart finished work: once the completion line is sent, STOP — the next user message is a new task.");
+  ident("- If something REMAINS, keep working; name what remains only when you finish or genuinely block.");
   ident("");
 
   // ── Recovery protocol (ROUND-94, R94-G) ────────────────────────────────
@@ -504,6 +597,22 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   ident("- ALWAYS search before assuming a file exists or doesn't exist.");
   ident("");
 
+  // ── Precision discipline (ROUND-96, R96-D) ──────────────────────────────
+  // The owner's example, verbatim: "If the user, for example, in an HTML
+  // file tells it to change a specific text from this to this, then it
+  // will not try to analyze the whole HTML" — the target-a-file/change-a-
+  // string contract, generalized (research memo note (f): the Claude Code
+  // precision trio + our read_file whole-small-file shape). Static and
+  // unconditional — precision is core process, not a gated capability.
+  beginSection("precision-discipline");
+  ident("## PRECISION DISCIPLINE (target before you read)");
+  ident("- TARGET THE FILE FIRST: when the request names a file (or a close variant), FIND it — search_files / search_code — never walk the project to find one named file.");
+  ident("- READ ONLY WHAT THE TASK NEEDS: read_file returns small files WHOLE — one call beats five partial reads. For a large file, search_code the anchor, then read the targeted range.");
+  ident("- EDITS USE EXACT ANCHORS from the CURRENT content — copied from your latest read, never from memory; if an anchor misses, re-read and retry the text's actual variant — one character off is a miss.");
+  ident("- AFTER EDITING, VERIFY: re-read the changed range or run the check that proves it — a change LANDING is not a change being RIGHT.");
+  ident("- \"CHANGE X TO Y IN FILE F\": search → read F → edit the exact text → verify. NEVER analyze the whole project (or a whole HTML file) when one file and one string are named; NEVER rewrite a file to change one line.");
+  ident("");
+
   // ── Git discipline ──────────────────────────────────────────────────────
   if (ctx.toolNames.includes("git_status")) {
     beginSection("git");
@@ -557,12 +666,41 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // The system prompt lists ONLY name + one-line description; the body
   // loads on demand via read_skill (the doc-09 pattern — token-lean,
   // keeps long procedures out of context until they're needed).
+  //
+  // ROUND-96 (R96-D): BUDGETED LISTING (research memo §2.6 — Claude Code
+  // caps its skill listing at 1% of the context window; we cap by COUNT and
+  // CHARS — see SKILLS_LISTED_MAX / SKILLS_SECTION_CHAR_BUDGET above). The
+  // listing stays names+descriptions ONLY (the owner re-confirmed: "All of
+  // these skills will not be sent into the prompt by default but the agent
+  // can request which skills it wants"). Over budget the list keeps its
+  // head — ctx.skills arrives in the resolver's STABLE order (enabled DB
+  // skills by sort_order — the seeded core first — then file skills), so
+  // what drops is the tail, and the honest overflow note points at
+  // search_skills (the R96-D discovery tool). read_skill and search_skills
+  // still resolve the FULL index — the caps bound only the PROMPT listing,
+  // never the loadable set.
   if (ctx.skills !== undefined && ctx.skills.length > 0) {
     beginSection("skills");
-    ident("## SKILLS (load with read_skill)");
-    ident("Capability modules available in this project. When a task matches one, call read_skill with its name FIRST and follow its instructions for the rest of the task:");
+    ident("## SKILLS (load with read_skill, search with search_skills)");
+    ident("Capability modules available in this project. When a task matches one, call read_skill with its name FIRST and follow its instructions for the rest of the task. The list below is the high-signal index — when it does not obviously cover what you need, call search_skills with a keyword (a tool, a phase, a craft) to find more:");
+    let remaining = SKILLS_SECTION_CHAR_BUDGET;
+    let listed = 0;
+    let hidden = 0;
     for (const skill of ctx.skills) {
-      ident(`- **${skill.name}** — ${skill.description}`);
+      const line = `- **${skill.name}** — ${skill.description}`;
+      // The FIRST skill always lists (degenerate guard: a budget smaller
+      // than one line must not produce a header-only section). Both caps —
+      // the entry count and the char budget — engage only after it.
+      if (listed > 0 && (listed >= SKILLS_LISTED_MAX || remaining - line.length < 0)) {
+        hidden = ctx.skills.length - listed;
+        break;
+      }
+      remaining -= line.length;
+      listed += 1;
+      ident(line);
+    }
+    if (hidden > 0) {
+      ident(`- …and ${hidden} more — search_skills to discover them`);
     }
     // ROUND-72 (R72-a, D2): the per-turn task signal — one advisory line
     // AFTER the skill list, naming the top deterministic matches (at most

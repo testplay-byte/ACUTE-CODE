@@ -60,6 +60,13 @@ export const TOOL_NAMES = [
   // (computerUse.enabled, default OFF), not allowlist vocabulary; MCP
   // tools are dynamic (mcp__<server>__<tool>).
   "read_skill",
+  // ROUND-96 (R96-D): the skills DISCOVERY tool (search_skills — fuzzy
+  // search over names/descriptions/references; the SKILLS section is
+  // budget-capped, so discovery is the index's search leg). Same family as
+  // read_skill: a global capability, settings-independent; migration 0036
+  // appends it to allowlists that already list read_skill (a skill-reading
+  // agent is a skill-searching agent — user curation is never widened).
+  "search_skills",
   // ROUND-66 (R66, B3): the GENERAL image-analysis tool — describe any
   // local/URL image with the dedicated vision model (Settings → Image
   // Analysis; honest refusal while unconfigured). Always registered (not

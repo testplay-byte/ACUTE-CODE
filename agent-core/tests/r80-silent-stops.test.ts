@@ -230,17 +230,22 @@ describe("R80-A2: the request guard stop (200 requests — never a silent ok:tru
     });
     // maxOuterLoops 250 so the loop can run past 200 iterations; each
     // iteration yields a DISTINCT tool call (varied args — no loop-guard
-    // repeat streak) and no completion signal text.
+    // repeat streak).
+    // ROUND-96 (R96-B): NO per-iteration text — under the new completion
+    // rule a tool-using iteration with non-empty text is the model's own
+    // STOP (the turn would end after ONE iteration, never reaching the
+    // 200-request guard). The mid-work shape (tools only) keeps the loop
+    // running to the cap the test exists to prove.
     const { sessionId, keyring } = setup("R80-Req", { model: "test/r80-2", maxOuterLoops: 250 });
     let calls = 0;
     const chatStream = async function* (): AsyncGenerator<StreamChatEvent> {
       calls += 1;
-      yield { type: "text-delta", delta: `step ${calls}\n` } as StreamChatEvent;
-      yield { type: "tool-call", toolName: "echo", argsSummary: `{"n":${calls}}` } as StreamChatEvent;
+      yield { type: "tool-call", toolName: "echo", argsSummary: `{"n":${calls}}`, args: { n: calls } } as StreamChatEvent;
       yield {
         type: "tool-result",
         toolName: "echo",
         argsSummary: `{"n":${calls}}`,
+        args: { n: calls },
         ok: true,
       } as StreamChatEvent;
       yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } } as StreamChatEvent;

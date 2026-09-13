@@ -68,7 +68,7 @@ afterAll(() => {
   }
 });
 
-/** The twenty builtins in fixed order — ids are the INSERT OR IGNORE keys. */
+/** The twenty-four builtins in fixed order — ids are the INSERT OR IGNORE keys. */
 const EXPECTED_BUILTINS: ReadonlyArray<{ name: string; id: string; sortOrder: number }> = [
   { name: "computer-use", id: "skill_builtin_computer_use", sortOrder: 0 },
   { name: "code-review", id: "skill_builtin_code_review", sortOrder: 1 },
@@ -92,6 +92,12 @@ const EXPECTED_BUILTINS: ReadonlyArray<{ name: string; id: string; sortOrder: nu
   // R73-d: the two methodology additions ride the same fixed-id contract.
   { name: "spec-planning", id: "skill_builtin_spec_planning", sortOrder: 18 },
   { name: "performance", id: "skill_builtin_performance", sortOrder: 19 },
+  // ROUND-96 (R96-D): the four owner-named additions ride the same fixed-id
+  // contract (their own body pins live in tests/r96-prompts-skills.test.ts).
+  { name: "planning", id: "skill_builtin_planning", sortOrder: 20 },
+  { name: "ui-design", id: "skill_builtin_ui_design", sortOrder: 21 },
+  { name: "error-testing", id: "skill_builtin_error_testing", sortOrder: 22 },
+  { name: "large-project-navigation", id: "skill_builtin_large_project_navigation", sortOrder: 23 },
 ];
 
 /** One verbatim trigger phrase per description — the surface a user/agent
@@ -119,6 +125,11 @@ const TRIGGER_PHRASES: ReadonlyArray<[name: string, phrase: string]> = [
   // R73-d: the two methodology additions carry their own verbatim triggers.
   ["spec-planning", "'write a spec'"],
   ["performance", "'make it faster'"],
+  // ROUND-96 (R96-D): the four owner-named additions carry their own verbatim triggers.
+  ["planning", "'work through this list'"],
+  ["ui-design", "'this looks off'"],
+  ["error-testing", "'it worked yesterday'"],
+  ["large-project-navigation", "'where is X implemented'"],
 ];
 
 /** The negative scope disambiguates the nearest adjacent skill. */
@@ -145,6 +156,11 @@ const NEGATIVE_SCOPES: ReadonlyArray<[name: string, notFor: string]> = [
   // R73-d: the two methodology additions disambiguate their nearest neighbors.
   ["spec-planning", "quick fixes"],
   ["performance", "code style"],
+  // ROUND-96 (R96-D): the four owner-named additions disambiguate their nearest neighbors.
+  ["planning", "spec-planning"],
+  ["ui-design", "frontend-craft"],
+  ["error-testing", "code-review"],
+  ["large-project-navigation", "one-file edits"],
 ];
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -152,7 +168,7 @@ const NEGATIVE_SCOPES: ReadonlyArray<[name: string, notFor: string]> = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R71-e3 D1: trigger-rich descriptions (the C1 fix)", () => {
-  it("TWENTY builtins seed in the fixed order with the fixed ids", () => {
+  it("TWENTY-FOUR builtins seed in the fixed order with the fixed ids", () => {
     const builtins = listSkills(db).filter((s) => s.source === "builtin");
     expect(builtins.map((s) => s.name)).toEqual(EXPECTED_BUILTINS.map((b) => b.name));
     expect(builtins.map((s) => s.id)).toEqual(EXPECTED_BUILTINS.map((b) => b.id));
@@ -189,12 +205,12 @@ describe("R71-e3 D1: trigger-rich descriptions (the C1 fix)", () => {
     expect(skill?.description).toMatch(new RegExp(`not for [^.]*(\\(|${notFor.replace(/[()]/g, "\\$&")})`, "i"));
   });
 
-  it("the twenty descriptions are distinct (no copy-paste trigger surface)", () => {
+  it("the twenty-four descriptions are distinct (no copy-paste trigger surface)", () => {
     const descriptions = listSkills(db)
       .filter((s) => s.source === "builtin")
       .map((s) => s.description);
     expect(new Set(descriptions).size).toBe(descriptions.length);
-    expect(descriptions).toHaveLength(20);
+    expect(descriptions).toHaveLength(24);
   });
 });
 
@@ -390,15 +406,15 @@ describe("R71-e3 D2: the four new built-in skills", () => {
 // D3 — the INSERT OR IGNORE contract, twenty-strong (R72-b + R73-d re-pins)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("R71-e3 D3: INSERT OR IGNORE with 20 builtins", () => {
+describe("R71-e3 D3: INSERT OR IGNORE with 24 builtins", () => {
   it("an explicit re-seed is idempotent: still exactly 20 rows, unique names, unique ids", () => {
     seedBuiltinSkills(db);
     seedBuiltinSkills(db);
     const rows = db.prepare("SELECT * FROM skills").all() as Array<{ id: string; name: string; source: string }>;
     const builtins = rows.filter((r) => r.source === "builtin");
-    expect(builtins).toHaveLength(20);
-    expect(new Set(builtins.map((r) => r.id)).size).toBe(20);
-    expect(new Set(builtins.map((r) => r.name)).size).toBe(20);
+    expect(builtins).toHaveLength(24);
+    expect(new Set(builtins.map((r) => r.id)).size).toBe(24);
+    expect(new Set(builtins.map((r) => r.name)).size).toBe(24);
   });
 
   it("a deleted NEW builtin row revives on reopen (an existing pre-R73 DB converges on 20)", () => {
@@ -410,7 +426,8 @@ describe("R71-e3 D3: INSERT OR IGNORE with 20 builtins", () => {
       existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_ship_gate");
       existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_tdd");
       existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_spec_planning");
-      expect(listSkills(existing).filter((s) => s.source === "builtin")).toHaveLength(16);
+      existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_planning");
+      expect(listSkills(existing).filter((s) => s.source === "builtin")).toHaveLength(19);
     } finally {
       existing.close();
     }
@@ -418,7 +435,7 @@ describe("R71-e3 D3: INSERT OR IGNORE with 20 builtins", () => {
     const reopened = openDatabase(path);
     try {
       const builtins = listSkills(reopened).filter((s) => s.source === "builtin");
-      expect(builtins).toHaveLength(20);
+      expect(builtins).toHaveLength(24);
       expect(getSkill(reopened, "skill_builtin_focused_fix")?.name).toBe("focused-fix");
       expect(getSkill(reopened, "skill_builtin_focused_fix")?.body).toContain("NO FIXES WITHOUT COMPLETING");
       expect(getSkill(reopened, "skill_builtin_ship_gate")?.body).toContain("GATE REPORT");
@@ -460,14 +477,14 @@ describe("R71-e3 D4: descriptions ride the prompt SKILLS section verbatim", () =
     };
   }
 
-  it("all twenty builtins render as '- **name** — description' with the FULL new descriptions", () => {
+  it("all twenty-four builtins render as '- **name** — description' with the FULL new descriptions", () => {
     const builtins = listSkills(db)
       .filter((s) => s.source === "builtin")
       .map((s) => ({ name: s.name, description: s.description }));
-    expect(builtins).toHaveLength(20);
+    expect(builtins).toHaveLength(24);
 
     const section = buildSectionText(promptCtx(builtins), "skills") ?? "";
-    expect(section).toContain("## SKILLS (load with read_skill)");
+    expect(section).toContain("## SKILLS (load with read_skill, search with search_skills)");
     expect(section).toContain("call read_skill with its name FIRST");
     for (const skill of builtins) {
       expect(section).toContain(`- **${skill.name}** — ${skill.description}`);

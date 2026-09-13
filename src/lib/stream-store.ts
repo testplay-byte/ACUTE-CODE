@@ -991,6 +991,45 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
         text,
         (event: StreamTurnEvent) => {
           handleStreamEvent(sessionId, event);
+          // ── ROUND-96 (R96-B, the owner's stuck stop button: "at the bottom
+          // it was still showing me the option to stop generation… after
+          // that it was still showing that the generation is going on. I had
+          // to switch to another project and come back"): a TERMINAL frame is
+          // the server's own verdict that the turn is over — the busy state
+          // retires HERE, not only in the finally below. The finally remains
+          // the owner of the rest (liveTurn freezing, queue handoff) and
+          // re-clearing there is idempotent; but when the connection hangs
+          // AFTER a terminal frame (a proxy that never closes, a route
+          // stuck in its tail), the reader never settles, the finally never
+          // runs, and the stop affordance used to linger forever. ──
+          if (event.type === "done" || event.type === "error" || event.type === "stopped") {
+            const live = get().bySession[sessionId];
+            if (live?.streamBusy === true) {
+              patchSession(sessionId, { streamBusy: false, lastLiveEndMs: Date.now() });
+            }
+            // And the WATCHDOG for the never-settling stream: if the fetch
+            // promise still has not settled 8s after the terminal frame
+            // (the finally never ran), force the rest of the terminal
+            // cleanup — the turn is over regardless of the socket's mood.
+            // (The done frame's liveTurn is LEFT ALONE — the panel's fold
+            // handoff owns it exactly like the finally would; only the
+            // error/stopped terminal shapes freeze the visible work.)
+            setTimeout(() => {
+              const after = get().bySession[sessionId];
+              if (after === undefined) return;
+              const busyStuck = after.streamBusy === true;
+              const turnStuck =
+                event.type !== "done" && after.liveTurn !== null && !after.liveTurn.stopped;
+              if (busyStuck || turnStuck) {
+                patchSession(sessionId, {
+                  ...(busyStuck ? { streamBusy: false, lastLiveEndMs: Date.now() } : {}),
+                  ...(turnStuck && after.liveTurn !== null
+                    ? { liveTurn: { ...after.liveTurn, stopped: true } }
+                    : {}),
+                });
+              }
+            }, 8_000);
+          }
         },
         {
           model: opts?.model,

@@ -81,6 +81,10 @@ export const TOOL_CATALOG = [
   // computer-use tools are SETTINGS-GATED (Settings → Computer Use), not
   // agent-form vocabulary; MCP tools are dynamic (mcp__<server>__<tool>).
   "read_skill",
+  // ROUND-96 (R96-D): the skills DISCOVERY tool (search_skills — fuzzy
+  // search over the skills index; the SKILLS section is budget-capped, so
+  // discovery is its search leg). Same family as read_skill.
+  "search_skills",
   // ROUND-66 (R66, B3): the general image-analysis tool (local file or URL
   // → the dedicated vision model — Settings → Image Analysis). Always
   // registered like web_fetch, so it is allowlist vocabulary.

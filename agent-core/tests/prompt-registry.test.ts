@@ -202,10 +202,14 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     expect(PROMPT_SECTION_IDS).toContain("project-memory");
     // R71-e1: the discipline section slots in right behind the agentic
     // loop's failure doctrine — R94-G moved that doctrine into its own
-    // RECOVERY PROTOCOL section directly after the loop, so discipline
-    // follows recovery (still before file-editing; the R71-d design
-    // position, one slot later).
-    expect(PROMPT_SECTION_IDS.indexOf("recovery")).toBe(PROMPT_SECTION_IDS.indexOf("agentic-loop") + 1);
+    // RECOVERY PROTOCOL section, and ROUND-96 (R96-D) slotted the BATCH +
+    // COMPLETION execution doctrines between the loop and it (the loop's
+    // how-to-run and how-to-end teachings ride directly behind the loop
+    // itself). Discipline still follows recovery (still before
+    // file-editing; the R71-d design position).
+    expect(PROMPT_SECTION_IDS.indexOf("batch-discipline")).toBe(PROMPT_SECTION_IDS.indexOf("agentic-loop") + 1);
+    expect(PROMPT_SECTION_IDS.indexOf("completion-discipline")).toBe(PROMPT_SECTION_IDS.indexOf("batch-discipline") + 1);
+    expect(PROMPT_SECTION_IDS.indexOf("recovery")).toBe(PROMPT_SECTION_IDS.indexOf("completion-discipline") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("engineering-discipline")).toBe(PROMPT_SECTION_IDS.indexOf("recovery") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("engineering-discipline")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("file-editing"));
     // R94-G: the CAPABILITIES section (hasVisionPath) sits between the
@@ -225,6 +229,11 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     expect(PROMPT_SECTION_IDS).not.toContain("efficiency");
     expect(PROMPT_SECTION_IDS).not.toContain("task-planning");
     expect(PROMPT_SECTION_IDS).not.toContain("todo-tracking");
+  });
+
+  it("ROUND-96 (R96-D): PRECISION DISCIPLINE slots in behind code navigation, before git", () => {
+    expect(PROMPT_SECTION_IDS.indexOf("precision-discipline")).toBe(PROMPT_SECTION_IDS.indexOf("code-navigation") + 1);
+    expect(PROMPT_SECTION_IDS.indexOf("precision-discipline")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("git"));
   });
 
   it("COMPLETENESS: the ids stamped by buildTaggedPromptLines are exactly the registry ids, in registry order", () => {
@@ -299,6 +308,16 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // and the computer-use R94-E discipline (the WINDOWS line for
     // window_action/windows_overview + the app_ref re-resolution half of
     // the refusals rule, paid for by tightening BIG APPS/tab-walk/intro).
+    // Regenerated AGAIN in R96-D (deliberately — the precision/batch/
+    // completion round for the owner's v0.93.0 report: the BATCH +
+    // COMPLETION DISCIPLINE pair behind the agentic loop, PRECISION
+    // DISCIPLINE behind code navigation, the loop's VERIFY phase on-disk
+    // + visual-screenshot lines, the FINISH phase's completion-line
+    // pointer, and the SKILLS header naming search_skills. Additions-only
+    // except the loop's VERIFY/FINISH phase lines (rewritten to the
+    // verification doctrine) and the batch-section trims made to keep the
+    // D6 budget honest (the r71 D6 bound moved 22K → 23K — see that
+    // suite's ROUND-96 note).
     // R59 CI fix: normalize \r\n → \n on BOTH sides before comparing — the
     // fixture is committed with LF, but a Windows checkout with autocrlf
     // rewrites it to CRLF (the R57 CI lesson: never let line endings decide

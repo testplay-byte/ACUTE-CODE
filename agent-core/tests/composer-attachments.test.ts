@@ -802,10 +802,16 @@ describe("runtime threading (ROUND-50 R50-c1)", () => {
       call += 1;
       if (call === 1) {
         // A tool-using iteration (tools keep the outer loop going).
+        // ROUND-96 (R96-B): NO text on iteration 1 — under the new completion
+        // rule a tool-using iteration with non-empty text is the model's own
+        // STOP (the turn would end after ONE iteration and never exercise
+        // the cross-iteration accumulation this test exists to prove). The
+        // mid-work shape (tools only) keeps the loop honest.
         yield { type: "tool-call", toolName: "read_file", argsSummary: "path: a.ts" };
         yield { type: "tool-result", toolName: "read_file", argsSummary: "path: a.ts", ok: true };
+      } else {
+        yield { type: "text-delta", delta: "Done." };
       }
-      yield { type: "text-delta", delta: call === 1 ? "working…" : "Done." };
       yield {
         type: "finish",
         usage: {

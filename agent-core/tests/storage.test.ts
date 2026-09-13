@@ -206,6 +206,9 @@ describe("openDatabase", () => {
       // honest default until a reasoning-capable catalog merge touches the
       // row; the runtime never blocks on it).
       { version: 35, name: "0035_model_reasoning_support.sql" },
+      // ROUND-96 (R96-D): the skills-discovery tool joins the allowlist
+      // vocabulary (the read_skill companion rule).
+      { version: 36, name: "0036_search_skills_tool.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
@@ -260,6 +263,10 @@ describe("template seeding", () => {
           // the computer-use tools are deliberately NOT here: they are the
           // settings-gated surface, not allowlist vocabulary).
           "read_skill",
+          // ROUND-96 (R96-D): the skills-discovery tool — seeded via
+          // TOOL_NAMES (existing DBs get it appended by migration 0036;
+          // the read_skill companion rule).
+          "search_skills",
           // ROUND-66 (R66, B3): the general image-analysis tool — seeded via
           // TOOL_NAMES (existing DBs get it appended by migration 0026).
           "analyze_image",

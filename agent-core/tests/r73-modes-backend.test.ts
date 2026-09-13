@@ -121,7 +121,7 @@ const TWO_MODES = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R73-b D1: the registry + the two composed sections", () => {
-  it("the registry pins 27 sections (25 pre-R94 + ROUND-94 recovery + capabilities), the R73 pair sitting DIRECTLY after skills", () => {
+  it("the registry pins 30 sections (25 pre-R94 + ROUND-94 recovery + capabilities + the R96 discipline trio), the R73 pair sitting DIRECTLY after skills", () => {
     // ROUND-79 (R79-a): 23 → 24 — the background-tasks section (the per-turn
     // uncollected-delegation reminder) joined the registry directly after
     // active-mode. The count pin is versioned by design: every section round
@@ -132,8 +132,10 @@ describe("R73-b D1: the registry + the two composed sections", () => {
     // ROUND-94 (R94-G): 25 → 27 — the recovery section (the tool-failure
     // doctrine, directly after agentic-loop) + the capabilities section
     // (hasVisionPath, directly after browser-panel).
-    expect(PROMPT_SECTION_IDS.length).toBe(27);
-    expect(PROMPT_REGISTRY.length).toBe(27);
+    // ROUND-96 (R96-D): 27 → 30 — the BATCH + COMPLETION discipline pair
+    // (behind agentic-loop) + PRECISION DISCIPLINE (behind code-navigation).
+    expect(PROMPT_SECTION_IDS.length).toBe(30);
+    expect(PROMPT_REGISTRY.length).toBe(30);
     expect(PROMPT_SECTION_IDS.indexOf("task-modes")).toBe(PROMPT_SECTION_IDS.indexOf("skills") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBe(PROMPT_SECTION_IDS.indexOf("task-modes") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("computer-use"));
@@ -480,8 +482,10 @@ describe("R73-b D3: sessions.activeMode + migration 0027", () => {
       ) as string[];
 
     // Template with read_skill: switch_mode appended at the tail (a
-    // mode-capable agent is one that can read skills).
-    expect(row("agt_tpl_coder")).toEqual(["list_dir", "read_file", "read_skill", "switch_mode"]);
+    // mode-capable agent is one that can read skills) — and ROUND-96's
+    // migration 0036 appends search_skills after it (a skill-reading agent
+    // is a skill-searching agent; the same read_skill companion rule).
+    expect(row("agt_tpl_coder")).toEqual(["list_dir", "read_file", "read_skill", "switch_mode", "search_skills"]);
     // [] row means ALL tools — untouched (the 0019 lesson).
     expect(row("agt_default_nova")).toEqual([]);
     // Template without read_skill: no mode-capable baseline — untouched.
@@ -496,14 +500,15 @@ describe("R73-b D3: sessions.activeMode + migration 0027", () => {
     expect(audit).toEqual({ actor: "migration-0027", action: "agent.tools.append", decision: "applied" });
     expect(reopened.prepare("SELECT version FROM schema_migrations WHERE version = 27").get()).toBeDefined();
 
-    // Idempotent on reopen.
+    // Idempotent on reopen (R96: 5 — switch_mode + search_skills both stay;
+    // neither migration re-appends).
     reopened.close();
     const again = openDatabase(path);
     expect(
       JSON.parse(
         (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
       ) as string[],
-    ).toHaveLength(4);
+    ).toHaveLength(5);
     again.close();
   });
 

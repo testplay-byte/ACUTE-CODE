@@ -47,6 +47,20 @@
  * fresh AND existing DBs converge on 20; user edits to the two new rows
  * persist like every other builtin; deleted rows get the new text on
  * revive (the R71/R72 upgrade-path note, unchanged).
+ *
+ * ROUND-96 (R96-D, the prompts+skills round — the owner: "There should be
+ * proper skills for this: a planning skill, a UI skill, an error-testing
+ * skill, various other kinds of skills"): FOUR new builtins (24 total,
+ * sortOrder 20-23): planning, ui-design, error-testing,
+ * large-project-navigation. Deliberately BIGGER than the R71/R72 house
+ * band (the owner's ask is capability, not brevity): 40-120 lines each
+ * with the WHEN TO USE / PROCEDURE / ANTI-PATTERNS structure, iron laws
+ * in caps, output-format blocks, ACUTE's real tool names, no emoji;
+ * descriptions keep the trigger-rich house convention. ui-design mirrors
+ * the app's OWN design docs (docs/design/ui-direction.md +
+ * DESIGN-SYSTEM.md — "the demos ARE the design spec"). Same INSERT OR
+ * IGNORE contract — fresh AND existing DBs converge on 24; user edits
+ * persist; deleted rows revive with the new text.
  */
 import type { SqliteDatabase } from "./db.js";
 
@@ -729,6 +743,184 @@ Every claim carries a receipt: BEFORE and AFTER, same machine, same command, war
 ## Stop condition
 Stop when the target is met ("p95 under 200ms") or the next bottleneck is not worth its complexity — optimization has diminishing returns, complexity does not.`;
 
+/* ── ROUND-96 (R96-D): the FOUR owner-named builtins ──────────────────────────
+ *
+ * The owner's directive, verbatim: "There should be proper skills for this:
+ * a planning skill, a UI skill, an error-testing skill, various other kinds
+ * of skills which it can utilize whenever it feels like." The four bodies
+ * below are deliberately bigger than the R71/R72 house band (40-120 lines,
+ * WHEN TO USE / PROCEDURE / ANTI-PATTERNS) — the R96-D task spec's format —
+ * while keeping the house voice: iron laws in caps, imperative lines,
+ * anti-rationalization tables quoting the model's own excuses, pre-built
+ * output blocks, ACUTE's real tool names, no emoji. */
+
+export const PLANNING_SKILL_BODY = `# Skill: planning
+
+IRON LAW: A TASK TOO BIG FOR ONE STEP GETS A PLAN BEFORE THE FIRST EDIT. Decompose, track, finish what you start — or say you will not.
+
+## When to use
+- The request names a FEATURE or spans several files: "build the settings page", "add X end-to-end", "migrate the handlers", "work through this list".
+- You cannot yet name the files you will touch — that is an exploration milestone, not a reason to skip planning.
+- A surprise invalidated the current approach mid-task (a failing test, a hidden dependency, a changed constraint) — re-plan instead of improvising.
+
+## Procedure
+1. DEFINE DONE FIRST — one sentence, checkable ("the route exists, validates input, and its tests pass"). A done you cannot check is not done.
+2. DECOMPOSE into milestones of roughly 1-5 tool calls each, each ending in a VERIFIABLE state (a file written, a test green, a command run). Milestones are checkpoints, not wishes.
+3. WRITE THE LIST with todo_write — the FULL list every time (a snapshot, not a delta):
+   - one item per milestone, phrased as an OUTCOME ("POST /x validates and its 400 test passes"), never as an activity ("work on validation");
+   - exactly ONE item in_progress at a time; complete items the moment they finish — never batch completions.
+4. EXPLORE deliberately: batch the independent discovery calls (search_files / search_code / read_file of the AGENTS.md) in ONE message; read only what the milestones need (see PRECISION DISCIPLINE in the system prompt).
+5. EXECUTE in order — but verify at each milestone boundary (run the narrowest check that proves it), not only at the end. A milestone that cannot be verified was not decomposed, it was guessed.
+6. RE-PLAN ON SURPRISE: when reality disagrees with the plan (an unexpected failure, a file that looks nothing like assumed), STOP, re-read the evidence, rewrite the todo list, then continue. A stale plan followed blindly is worse than no plan.
+7. CLOSE THE LIST: every item completed (or consciously dropped, with the reason stated) before the final summary. Finishing with open items means the task is not done.
+
+## When NOT to plan (act instead)
+- One file, one behavior, obvious shape — just do it (trivial tasks skip the list).
+- You could describe the whole diff in one sentence — the plan would be the diff.
+- Pure questions / exploration — no list, just search and answer.
+
+## The plan-quality bar (self-check before executing)
+- Every item is a verifiable outcome — you can name the CHECK you will run at its end (a test, a command, a file on disk). If you cannot, the item is not decomposed yet.
+- The first item produces evidence within ~5 tool calls — long runways before the first checkpoint hide risk.
+- The LAST item includes the verification pass over the WHOLE feature, not just the final fragment (run the area's tests, not only the new one).
+- The list names the files when known and marks them ASSUMED otherwise — assumptions get confirmed before edits, not after.
+- Sequencing respects REAL dependencies only (B needs A's output) — independent items are candidates for BATCHED execution, not artificial order.
+- The list fits on one screen — fifteen micro-items means the decomposition is noise; five sharp milestones beats a checklist nobody reads.
+
+## Anti-patterns — each one means STOP
+- "I'll figure it out as I go" on a 5-file task → decompose first; retrofit is where bugs breed.
+- A plan of one item → that is the task itself, not a plan.
+- Planning forever without executing → the first milestone starts THIS turn; analysis paralysis is a failure mode too.
+- Items that cannot be verified ("improve the code") → rewrite as a checkable outcome or delete it.
+- Declaring done with in_progress items open → close them honestly or say what remains.
+- Following the stale plan after the ground moved → re-plan; the list serves the work, not the past.`;
+
+export const UI_DESIGN_SKILL_BODY = `# Skill: ui-design
+
+IRON LAW: THE DESIGN LANGUAGE IS WRITTEN DOWN — READ IT BEFORE RESTYLING ANYTHING. The app's own docs are the spec; taste is not.
+
+## When to use
+- The request is about how something LOOKS or FEELS: "make this look better", "fix the spacing", "this looks off", "polish this screen", "redesign this panel", "match the app's design".
+- A new screen or component must blend INTO the app, not stand out of it.
+- A visual bug: misalignment, inconsistent padding, wrong color in dark mode, broken narrow layout.
+
+## Procedure — the design pass, in order
+1. READ THE APP'S DESIGN DOCS FIRST, in this order: docs/design/ui-direction.md, then docs/design/DESIGN-SYSTEM.md — the theme system, the spacing scale, the typography scale, the motion language. If they are absent in this repo, say so and infer from the nearest existing screen instead.
+2. FIND THE NEAREST WELL-MADE SCREEN (search_files / read_file for the closest sibling) and follow its STRUCTURE: spacing rhythm, heading sizes, radii, states. Consistency with the neighbors beats novelty every time.
+3. HIERARCHY: ONE primary action per view; visual weight follows importance — size, contrast, and position decide what the eye hits first. Everything shouting means nothing heard.
+4. SPACING: only the app's scale tokens — never one-off arbitrary values. Related things group CLOSER; unrelated things separate MORE (proximity is meaning).
+5. TYPOGRAPHY: the documented sizes; at most one accent weight change per view; body text is readable first, clever second; machine data (paths, models, stats) is mono.
+6. COLOR: from the theme system only — the theme table and its CSS variables, never hard-coded hex; status colors come from the shared semantic set; check BOTH light and dark.
+7. RESPONSIVE: the layout must survive narrow widths — test the smallest realistic viewport; collapse gracefully (no horizontal scroll, no clipped text).
+8. STATES: hover, focus-visible, active, disabled, empty, loading, error — an interactive element without states is half-built; focus rings stay VISIBLE.
+9. SCREENSHOT-VERIFY: visual work is DONE when SEEN — browser_control screenshot on the changed screen at a normal AND a narrow viewport (set_viewport). Iterate until it looks right; never declare a visual change done from code alone.
+
+## Anti-patterns — each one means STOP
+- Hard-coded colors or sizes ("it looked right in my head") → the theme system or nothing.
+- New values between the scale's steps (17px in a 16px system) → use the scale.
+- Emoji as UI icons, decorative sparkles, "AI slop" → the house style is restrained.
+- Centered walls of text, all-caps body copy, five font sizes on one screen → cut.
+- Declaring a restyle done without looking at it → screenshot first (the iron law above).
+
+## The visual self-check (before "done")
+- SQUINT: the one primary action still reads first; nothing competes with it.
+- SPACING: every gap is a scale token; related things cluster; nothing floats equidistant.
+- DARK + LIGHT: both checked — borders, muted text, status colors all survive the flip.
+- NARROW: the smallest realistic viewport holds — no horizontal scroll, no clipped labels.
+- STATES: hover / focus-visible / disabled / empty / loading each show SOMETHING honest.
+- DENSITY: the screen is not emptier than its neighbors, nor denser — it matches the family.
+
+## Output format (fill before the restyle pass)
+UI PLAN
+TARGET: <screen/component + what "better" means, in the owner's words>
+NEAREST SIBLING: <the screen whose structure you are matching — path>
+SCALE: <the spacing/typography tokens you will use, all from the system>
+STATES: <hover/focus/disabled/empty/loading/error coverage>
+VERIFY: <the screenshot plan — which viewports, what to look for>`;
+
+export const ERROR_TESTING_SKILL_BODY = `# Skill: error-testing
+
+IRON LAW: NO FIX WITHOUT A REPRODUCTION, AND NO REPRODUCTION WITHOUT THE REAL ERROR READ FULLY. Diagnose systematically; verify with a targeted test.
+
+## When to use
+- Something fails and the cause is unknown: "this error", "why does this break", "it crashes when...", "it worked yesterday".
+- You are about to prove a fix and need the RIGHT test to prove it.
+
+## Procedure
+1. REPRODUCE FIRST. Run the failing case yourself (run_command — the exact failing test, the exact input). No reproduction = no fix — report what you know and what you still need.
+2. READ THE REAL ERROR — all of it, top to bottom, BEFORE any hypothesis:
+   - the message names a file and a line — open THAT spot, not a guess;
+   - "expected vs actual" is the whole bug in two values — diff them;
+   - stacks read TOP-DOWN — the first frame in YOUR code is usually the crime scene;
+   - an error name/code (ENOENT, TypeError, ECONNREFUSED, 401 vs 403) is a precise accusation — never paraphrase it into a vibe.
+   Never fix from a remembered or imagined error; re-run and read.
+3. ISOLATE: narrow to the smallest input and the FIRST wrong line. git_log / git_diff what changed recently; stub or comment out suspects ONE at a time and re-run; search_code the failing symbol upstream to where the bad value originates.
+4. ONE HYPOTHESIS AT A TIME. State it in one sentence ("X is null because Y only runs on first mount"), change ONE thing, re-run. Two simultaneous changes destroy the evidence.
+5. FIX the root cause minimally (edit_file, the style of the surrounding code).
+6. VERIFY WITH A TARGETED TEST: the reproduction case first — it must now pass; then the adjacent tests for that area; then write the REGRESSION test that fails without the fix and passes with it (an unguarded fix will regress).
+
+## Error-message literacy (the common shapes)
+- "Expected X, received Y" → compare the two values; the difference IS the bug.
+- "Cannot read property of undefined" → the OBJECT is undefined, not the property; find who failed to set it.
+- ENOENT / connection refused / 401 vs 403 → environment, config, or truth problems, not logic — verify the real path/URL/credentials.
+- Timeout / flaky → suspect order, time, randomness, shared state; isolate before believing.
+
+## Anti-patterns — each one means STOP
+- "I know what it is" without a reproduction → run it; confidence is not evidence.
+- Reading the first line of the error and fixing the first suspicious line → read to the bottom first.
+- Shotgunning changes until red turns green → one hypothesis at a time or you learn nothing.
+- Weakening or skipping the failing test to "fix" it → the test was right; the code is wrong.
+- "Works for me" without the exact command + output → that is not a receipt.
+- Fixing the SYMPTOM the error names while the CAUSE sits upstream → follow the bad value to its origin first.
+
+## Output format (fill before the fix)
+FAILURE REPORT: the exact error (quoted) + the reproduction command
+HYPOTHESIS: the one-sentence root cause
+FIX: the minimal change (path + what)
+VERIFY: the reproduction re-run (passing) + the regression test name`;
+
+export const LARGE_PROJECT_NAVIGATION_SKILL_BODY = `# Skill: large-project-navigation
+
+IRON LAW: ORIENT BY SEARCH, NOT BY LISTING. In a big codebase the directory walk is the slowest way to find anything — and the fastest way to drown your own context.
+
+## When to use
+- The codebase is large or unfamiliar (hundreds of files, deep directories), or any task that starts "where is...", "what calls...", "find every...".
+- You must touch an area you have not read this session.
+
+## Procedure
+1. ORIENT CHEAPLY, top-down:
+   - read the project's AGENTS.md / CLAUDE.md FIRST — it names the real commands and structure;
+   - index_project once if not indexed (the summary maps files and symbols without reads);
+   - search_files BY NAME when you know the file exists somewhere;
+   - search_code BY CONTENT for symbols and phrases ("the function that validates tokens").
+   list_dir only answers "what lives HERE" for a directory you are about to create in — never walk the tree to find a known name.
+2. MAP THE AREA YOU TOUCH: before editing, read the 2-4 files that matter plus their immediate imports — enough to see the local pattern (error style, naming, where tests live). Not the whole module.
+3. FOLLOW THE IMPORTS — and only those: the code's own imports are the map. Chase a symbol's definition when it matters; before changing a symbol's shape, search_code its usages — renames and signature changes REQUIRE the usage map first.
+4. KEEP A RUNNING MENTAL MODEL with todo_write: on multi-step work the list IS the map ("read auth.ts [done]", "handler in routes/x.ts next"). Re-entering the task later: read your todos before re-reading code.
+5. BUDGET YOUR CONTEXT DELIBERATELY:
+   - read narrowly — search first, then read the matched range (or the whole file only when it is small);
+   - NEVER re-read what is already in your context — find it in your earlier tool results;
+   - prefer search_code's matched lines over reading whole files to locate one string;
+   - memory_save the DURABLE facts you learned ("config lives in settings.ts") instead of re-deriving them next session.
+
+## Anti-patterns — each one means STOP
+- list_dir from the root "to see what's there" → the drowning pattern; search instead.
+- Reading a 2,000-line file to find one function → search_code the symbol, read the range.
+- Re-reading a file you read two steps ago → it is still in context; use it.
+- Guessing a path because typing it is faster than searching → one search beats three failed reads.
+- "Explore everything first" on every task → map only the area you touch.
+
+## Scale discipline (the hundreds-of-files reality)
+- A 300-file repo is navigated the same way as a 30-file one — the difference is that WASTEFUL reads now cost the task, not just tokens. The budget rules get stricter, not looser.
+- Trust the index and the searches; distrust your memory of file layout — verify paths with search_files before reading, and let a miss trigger a search, never a blind retry.
+- When a task spans many files, track them in the todo list ("touched: a.ts, b.ts"; "still to check: c.ts") — the list is the only reliable cross-step memory.
+
+## Output format (when the task is navigation or a report)
+ORIENTATION
+ENTRY POINTS: <the files that matter for this task, path:line where relevant>
+MAP: <what calls what — one line per edge>
+CONFIDENCE: <[KNOWN] read / [ASSUMED] inferred / [UNKNOWN] not yet found>`;
+
 const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "body" | "source" | "sortOrder">> = [
   {
     id: COMPUTER_USE_SKILL_ID,
@@ -909,6 +1101,44 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
     body: PERFORMANCE_SKILL_BODY,
     source: "builtin",
     sortOrder: 19,
+  },
+  // ROUND-96 (R96-D): the four owner-named builtins — fixed ids are the
+  // INSERT OR IGNORE keys; sortOrder 20-23 slots them after the R73 pair.
+  {
+    id: "skill_builtin_planning",
+    name: "planning",
+    description:
+      "Use when a task is too big for one step — 'build this feature', 'add X end-to-end', 'work through this list', 'migrate the module' — or a surprise invalidates the approach mid-task. Delivers task decomposition into verifiable milestones tracked with todo_write, the plan-vs-act decision, and re-planning on surprise. NOT for writing specs others will review (spec-planning) or single-file edits.",
+    body: PLANNING_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 20,
+  },
+  {
+    id: "skill_builtin_ui_design",
+    name: "ui-design",
+    description:
+      "Use when the request is about how something LOOKS or FEELS — 'make this look better', 'fix the spacing', 'polish this screen', 'this looks off', 'match the app's design'. Delivers the visual pass: hierarchy, spacing, typography, and color from the app's design docs (ui-direction.md, DESIGN-SYSTEM.md), responsive and state coverage, screenshot verification via the browser tools. NOT for component logic or state (frontend-craft).",
+    body: UI_DESIGN_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 21,
+  },
+  {
+    id: "skill_builtin_error_testing",
+    name: "error-testing",
+    description:
+      "Use when something FAILS and the cause is unknown — 'this error', 'why does this break', 'it crashes when', 'it worked yesterday' — or you are about to prove a fix. Delivers the systematic loop: reproduce first, read the REAL error fully, isolate with one hypothesis at a time, fix, then verify with a targeted test. NOT for writing whole suites (testing/tdd) or diff reviews (code-review).",
+    body: ERROR_TESTING_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 22,
+  },
+  {
+    id: "skill_builtin_large_project_navigation",
+    name: "large-project-navigation",
+    description:
+      "Use when the codebase is large or unfamiliar — 'where is X implemented', 'what calls this', 'find every usage', 'orient me in this repo' — or any multi-file task. Delivers search-first orientation (search_files/search_code over directory walks), import-following, the todo_write mental model, and context budgeting (read narrowly, never re-read). NOT for known single files or one-file edits.",
+    body: LARGE_PROJECT_NAVIGATION_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 23,
   },
 ];
 

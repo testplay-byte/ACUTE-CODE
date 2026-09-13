@@ -598,7 +598,7 @@ describe("D6: browser-panel + computer-use trims", () => {
       ctxFor({ skills: [{ name: "browser-use", description: "Drive the embedded browser panel." }] }),
       "skills",
     ) ?? "";
-    expect(skills).toContain("## SKILLS (load with read_skill)");
+    expect(skills).toContain("## SKILLS (load with read_skill, search with search_skills)");
     expect(skills).toContain("**browser-use** — Drive the embedded browser panel.");
     expect(skills).toContain("A skill body that appears truncated after context compaction can be RELOADED: call read_skill again.");
   });

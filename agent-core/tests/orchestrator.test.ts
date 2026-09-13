@@ -830,10 +830,14 @@ describe("ROUND-48 (R48-e1): sub-agent codes, signal forwarding, honest aborts",
     await promise;
     // Normalized through the SAME extractToolCalls conversion the post-call
     // audit list uses — live frames and persisted frames agree.
+    // ROUND-96 (R96-B): the RAW args ride the normalized call too (the
+    // loop-guard's exact-identity feed — display argsSummary, identity args).
     expect(snapshots).toEqual([
       {
         text: "step text",
-        toolCalls: [{ name: "read_file", argsSummary: "path: a.md", ok: true, outputSummary: "10 chars" }],
+        toolCalls: [
+          { name: "read_file", args: { path: "a.md" }, argsSummary: "path: a.md", ok: true, outputSummary: "10 chars" },
+        ],
       },
     ]);
   });

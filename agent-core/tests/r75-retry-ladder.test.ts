@@ -389,8 +389,13 @@ describe("R75: the sync ladder + the swallow fix", () => {
         // A tool call makes the loop ITERATE (a zero-tool reply ends the
         // turn) — the failure then lands on the LATER iteration, after
         // partial replies, which is exactly the swallow-fix case.
+        // ROUND-96 (R96-B): TOOLS ONLY — under the new completion rule a
+        // tool-using iteration with non-empty text is the model's own STOP,
+        // so a narrating iteration 1 would end the turn before the failing
+        // iteration 2 ever ran. The mid-work shape (no text) is what keeps
+        // the loop honest here.
         return {
-          text: "Part one is done — now for part two.",
+          text: "",
           usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
           toolCalls: [
             { name: "read_file", argsSummary: "path: README.md", ok: true, outputSummary: "200 chars" },
@@ -638,14 +643,15 @@ describe("R94-D1: the ONE unknown-class-with-PROGRESS retry", () => {
     const chat: ChatFn = async () => {
       chatCalls += 1;
       if (chatCalls === 1) {
-        // Iteration 1: a tool-using reply — the persisted progress. The
-        // text deliberately avoids COMPLETION_SIGNAL phrases ("done.",
-        // "task complete.", …) — a completion signal on a tool-using
-        // iteration with all todos done BREAKS the outer loop after this
-        // call (the runtime's inverted continueIfUnfinished), and this
-        // test needs the loop to CONTINUE to the failing iteration 2.
+        // Iteration 1: a tool-using reply — the persisted progress.
+        // ROUND-96 (R96-B): TOOLS ONLY — under the new completion rule a
+        // tool-using iteration with non-empty text is the model's own STOP
+        // (the loop breaks before the failing iteration 2 ever runs); the
+        // mid-work shape keeps the loop continuing, which is what this
+        // test needs (the pre-R96 comment's phrase-avoidance note is now
+        // structural: NO text at all).
         return {
-          text: "Part one executed; continuing with the second half.",
+          text: "",
           usage: { inputTokens: 10, outputTokens: 10, totalTokens: 20 },
           toolCalls: [
             { name: "read_file", argsSummary: "path: README.md", ok: true, outputSummary: "200 chars" },

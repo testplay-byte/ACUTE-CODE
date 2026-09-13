@@ -91,10 +91,13 @@ describe("R71-e2 D1: read_file truncation markers teach the exact next call", ()
   const mk = (i: number): string => `L${i}-` + "z".repeat(96);
 
   it("the >256KB marker carries the byte count, boundary lines, TOTAL line count, and offset=<first omitted line>", () => {
-    // 3000 lines × 103 bytes ≈ 309KB — over the 256KB cap.
+    // ROUND-96 (R96-C): the DEFAULT read is whole-file-first (~48KB budget,
+    // page 1 + marker beyond); the R70-a/R71-e2 head+tail marker machinery
+    // now belongs to EXPLICIT offset/limit windows — pinned here through
+    // one. 3000 lines × 103 bytes ≈ 309KB — over the 256KB cap.
     const content = Array.from({ length: 3000 }, (_, i) => mk(i + 1)).join("\n") + "\n";
     writeFileSync(join(tempDir, "r71-big.txt"), content, "utf8");
-    const result = readFileWindow(tempDir, "r71-big.txt");
+    const result = readFileWindow(tempDir, "r71-big.txt", { offset: 1, limit: 3000 });
     expect(result.ok).toBe(true);
     const output = result.output;
 

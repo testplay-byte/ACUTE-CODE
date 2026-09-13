@@ -209,13 +209,18 @@ describe("R70-a D2: readFileWindow — line numbers + pagination", () => {
     expect(past.output).toBe("offset 99 is beyond end of file ('five.txt' has 5 lines)");
   });
 
-  it("oversized window (> 256KB content) keeps head ~32KB + tail ~32KB with an honest marker that points at offset/limit", () => {
+  it("an oversized EXPLICIT window (> 256KB content) keeps head ~32KB + tail ~32KB with an honest marker that points at offset/limit", () => {
+    // ROUND-96 (R96-C): the DEFAULT read (no offset/limit) is now
+    // WHOLE-FILE-FIRST — a ~48KB budget, page 1 + marker beyond (pinned by
+    // r96-tools-precision.test.ts). The R70-a head+tail machinery survives
+    // for EXPLICIT windows (targeted re-reads / huge-file paging), which is
+    // what this test now exercises.
     // 3000 lines × 103 bytes ≈ 309KB — over the 256KB cap.
     const mk = (i: number): string => `L${i}-` + "z".repeat(96);
     const content = Array.from({ length: 3000 }, (_, i) => mk(i + 1)).join("\n") + "\n";
     writeFileSync(join(tempDir, "big.txt"), content, "utf8");
 
-    const result = readFileWindow(tempDir, "big.txt");
+    const result = readFileWindow(tempDir, "big.txt", { offset: 1, limit: 3000 });
     expect(result.ok).toBe(true);
     const output = result.output;
     // The head starts at line 1…

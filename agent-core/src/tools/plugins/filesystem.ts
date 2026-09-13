@@ -10,6 +10,7 @@ import {
   createDir,
   deleteFile,
   editFile,
+  editFileMulti,
   listDir,
   readFileWindow,
   resolveInsideRoot,
@@ -23,7 +24,9 @@ import { editFailureSuffix, isEditAnchorFailure, recordEditFailure, resetEditStr
 // root-level files stay readCustomRules' job — no double-billing).
 import { conventionReminder, findDeepestConvention, shouldInject } from "../dir-conventions.js";
 import { recordSnapshot } from "../../storage/snapshots.js";
-import type { PluginDefinition, ToolDefinition } from "../registry.js";
+// ROUND-96 (R96-C): the atomic batch shape + the uniform result type.
+import type { EditOp } from "../fs-ops.js";
+import type { PluginDefinition, ToolDefinition, ToolResult } from "../registry.js";
 
 export const filesystemPlugin: PluginDefinition = {
   id: "core-filesystem",
@@ -54,13 +57,21 @@ export const filesystemPlugin: PluginDefinition = {
         // Read parity) + offset/limit pagination for large files. The content
         // after each line-number prefix is byte-exact — the model strips the
         // prefix when building edit_file anchors.
+        // ROUND-96 (R96-C): the description now teaches WHOLE-FILE-FIRST —
+        // the owner's bug class was a modest HTML file read in needless
+        // parts ("it could have read the whole HTML file in a single go but
+        // it split the HTML file into multiple parts"). The old copy taught
+        // paging ("page through with offset… instead of re-reading the whole
+        // file") — exactly backwards. Files under ~48KB return WHOLE in one
+        // call; only genuinely large files page, and the truncation marker
+        // then carries the exact continuation.
         description:
-          "Read a text file's content, with line numbers (cat -n style: right-aligned line number + two spaces + content). Path is relative to the project root. Read BEFORE editing so you know the exact current text, and cite locations as path:line. The line-number prefix is NOT part of the file — when building edit_file oldString/newString, copy ONLY the content after the prefix. Large files: page through with offset (1-based start line, default 1) and limit (number of lines) instead of re-reading the whole file. When output is truncated, the marker carries the file's total line count and the EXACT next call — 'use offset=N to continue' — so page from there instead of guessing. read_file may append a [conventions from <dir>/AGENTS.md] reminder when a deeper directory carries its own AGENTS.md/CLAUDE.md — it is a reminder, not file content.",
+          "Reads a text file with line numbers (cat -n style: right-aligned line number + two spaces + content). Path is relative to the project root. Files under ~48KB return the WHOLE file in one call — prefer that; do NOT page small files or read them in parts. Only genuinely large files page: the result then ends with a truncation marker carrying the file's total line count and the EXACT next call ('use offset=N to continue') — page from there, don't guess. Read BEFORE editing so you know the exact current text, and cite locations as path:line. For targeted re-reads of a known region use offset (1-based start line) and limit (number of lines). The line-number prefix is NOT part of the file — when building edit_file anchors, copy ONLY the content after the prefix. read_file may append a [conventions from <dir>/AGENTS.md] reminder when a deeper directory carries its own AGENTS.md/CLAUDE.md — it is a reminder, not file content.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
             path: { type: "string", description: "File path relative to the project root" },
-            offset: { type: "integer", description: "1-based line number to start reading from (default 1)" },
+            offset: { type: "integer", description: "1-based line number to start reading from (default 1 — omit for the whole-file read)" },
             limit: { type: "integer", description: "Number of lines to return (default: whole file within the size cap)" },
           },
           required: ["path"],
@@ -128,31 +139,86 @@ export const filesystemPlugin: PluginDefinition = {
       },
       {
         name: "edit_file",
+        // ROUND-96 (R96-C): multi-edit + variant rungs. The owner: "It should
+        // be easily able to target the changes it needs to make in the
+        // files… It will try its variants." The contract (research §2.2 +
+        // §6.2, decision rows 4/5): exact-first doctrine, ONE fallback rung
+        // (whitespace-normalized), atomic batches, replaceAll, compact
+        // confirmation with no diff body (the UI renders diffs from the
+        // recorded snapshots).
         description:
-          "Replace ONE exact occurrence of oldString with newString in an existing file. The oldString must match exactly once — include enough surrounding lines to make it unique. If the edit fails, the error tells you why; consecutive failures escalate with concrete recovery steps — follow them (re-read the file, then anchor on CURRENT content).",
+          "Edit an existing file by exact string replacement. Read the file first and copy oldString EXACTLY from the current content — one whitespace character of difference misses. Include enough surrounding lines to make oldString match EXACTLY ONCE, or set replaceAll: true to replace every occurrence (the result reports the count). Exactly ONE fallback rung exists: when the exact anchor is absent, whitespace-normalized matching is tried once (runs of whitespace compared as a single space) and the result says so — anything else fails honestly; on failure re-read the file and re-anchor on CURRENT content. For several changes to one file pass edits: [{oldString, newString}, …] (max 32, optionally with replaceAll per item): every anchor is validated IN ORDER against the evolving content and applied in ONE atomic write — any failure names the failing index and leaves the file UNTOUCHED. Prefer edit_file over write_file for changing existing files.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
             path: { type: "string", description: "File path relative to the project root" },
-            oldString: { type: "string", description: "Exact existing text to replace" },
-            newString: { type: "string", description: "Replacement text" },
+            oldString: { type: "string", description: "Exact existing text to replace (single-edit form — mutually exclusive with edits)" },
+            newString: { type: "string", description: "Replacement text (single-edit form)" },
+            replaceAll: { type: "boolean", description: "Replace EVERY occurrence of oldString (default false = must match exactly once); the result reports the count" },
+            edits: {
+              type: "array",
+              description: "Atomic batch: [{oldString, newString, replaceAll?}, …] (max 32), applied in order in ONE write — all anchors must match or nothing is written",
+              items: {
+                type: "object",
+                properties: {
+                  oldString: { type: "string", description: "Exact existing text to replace" },
+                  newString: { type: "string", description: "Replacement text" },
+                  replaceAll: { type: "boolean", description: "Replace every occurrence of this oldString (default false)" },
+                },
+                required: ["oldString", "newString"],
+              },
+            },
           },
-          required: ["path", "oldString", "newString"],
+          required: ["path"],
         }),
         execute: async (input) => {
           const relPath = typeof input.path === "string" ? input.path : "";
-          // Record the "before" state
+          // Record the "before" state BEFORE the edit runs (the snapshot
+          // story keys on whole-file states — R96-C batches also land as ONE
+          // before/after pair).
           let beforeContent: string | null = null;
           try {
             const resolved = resolveInsideRoot(root, relPath);
             if (!("error" in resolved)) beforeContent = readFileSync(resolved.abs, "utf8");
           } catch { /* file doesn't exist — edit will fail anyway */ }
-          const result = editFile(
-            root,
-            relPath,
-            typeof input.oldString === "string" ? input.oldString : "",
-            typeof input.newString === "string" ? input.newString : "",
-          );
+          // ROUND-96 (R96-C): dispatch between the single-edit shorthand and
+          // the atomic edits[] batch (mutually exclusive — an ambiguous call
+          // is an honest error, never a guess).
+          const hasEdits = Array.isArray(input.edits);
+          const hasSingle = typeof input.oldString === "string" || typeof input.newString === "string";
+          let result: ToolResult;
+          if (hasEdits && hasSingle) {
+            result = {
+              ok: false,
+              output: `cannot edit '${relPath}': pass EITHER oldString/newString (single edit) OR edits (batch) — not both`,
+            };
+          } else if (hasEdits) {
+            const edits = (input.edits as unknown[]).map((raw) => {
+              const op = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
+              return {
+                oldString: op.oldString,
+                newString: op.newString,
+                ...(op.replaceAll === true ? { replaceAll: true } : {}),
+              };
+            });
+            result = editFileMulti(root, relPath, edits as EditOp[]);
+          } else if (hasSingle) {
+            if (typeof input.oldString !== "string" || typeof input.newString !== "string") {
+              result = {
+                ok: false,
+                output: `cannot edit '${relPath}': the single-edit form needs BOTH oldString and newString as strings`,
+              };
+            } else {
+              result = editFile(root, relPath, input.oldString, input.newString, {
+                replaceAll: input.replaceAll === true,
+              });
+            }
+          } else {
+            result = {
+              ok: false,
+              output: `cannot edit '${relPath}': missing oldString/newString (single edit) or edits (batch)`,
+            };
+          }
           // ROUND-71 (R71-e2, D2): per-session consecutive edit-failure
           // escalation (cline's progressive-failure pattern). A SUCCESS
           // resets the streak (the file view is proven current again); an

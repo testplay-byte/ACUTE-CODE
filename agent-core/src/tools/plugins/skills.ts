@@ -27,6 +27,20 @@
  * SAME effective-skills index first — the computer-use gate (D4) and the
  * agent allowlist (D5) keep working unchanged. DB skills carry no
  * references and say so honestly.
+ *
+ * ROUND-96 (R96-D): search_skills — the discovery half of the owner's
+ * directive ("It can search for the skills too if it needs to"). The
+ * prompt's SKILLS listing is BUDGETED (prompts.ts SKILLS_LISTED_MAX /
+ * SKILLS_SECTION_CHAR_BUDGET — over budget the tail drops to the honest
+ * "…and M more — search_skills to discover them" note), so the model needs
+ * a tool that reaches the FULL index on demand. search_skills takes a
+ * {query}, resolves the SAME effective-skills index read_skill uses
+ * (disabled DB rows, the computer-use gate, and the agent allowlist are
+ * excluded by construction), scores keyword matches over names +
+ * descriptions + reference titles, and returns the ranked matches capped
+ * at SEARCH_SKILLS_RESULT_CAP with the exact read_skill call to load each
+ * — mirroring read_skill's own "load with read_skill { name: … }" error
+ * convention. An honest no-match result names the alternatives.
  */
 import { jsonSchema } from "ai";
 import { getAgent } from "../../storage/agents.js";
@@ -38,6 +52,7 @@ import {
   readSkillReference,
   referenceNameRejection,
   resolveEffectiveSkills,
+  type EffectiveSkill,
 } from "../../storage/skills-files.js";
 import type { PluginDefinition, ToolDefinition } from "../registry.js";
 import type { ToolResult } from "../registry.js";
@@ -47,6 +62,29 @@ import type { ToolResult } from "../registry.js";
  * reference path trims with an HONEST marker instead (r71-e2's truncation
  * discipline: no silent cuts in new code). */
 const READ_SKILL_OUTPUT_BUDGET = 60_000;
+
+/** ROUND-96 (R96-D): max results search_skills returns (best-first) — the
+ * discovery listing stays a digest, not a dump; the cap matches the
+ * reference-listing conventions of the rest of the skills surface. */
+const SEARCH_SKILLS_RESULT_CAP = 8;
+
+/** ROUND-96 (R96-D): one search term's best contribution to a skill's
+ * score — exact name > name word > name prefix > name substring >
+ * description keyword > reference title. Deterministic and additive over
+ * the query's terms. A name-WORD hit (60) deliberately outranks an exact
+ * name hit on a DIFFERENT term plus a description hit (100+15): a
+ * multi-word query like "error testing" should rank the skill NAMED
+ * error-testing (two word hits, 120) above testing (exact + prose, 115). */
+function scoreTerm(skill: EffectiveSkill, term: string): number {
+  const name = skill.name.toLowerCase();
+  if (name === term) return 100;
+  if (name.split("-").includes(term)) return 60;
+  if (name.startsWith(term)) return 50;
+  if (name.includes(term)) return 30;
+  if (skill.description.toLowerCase().includes(term)) return 15;
+  if ((skill.references ?? []).some((r) => r.name.toLowerCase().includes(term))) return 10;
+  return 0;
+}
 
 /** Assemble a reference load's output: the skill + reference header, the
  * body, and — when the body would blow the output budget — an honest
@@ -62,18 +100,40 @@ function referenceOutput(skillName: string, referenceName: string, body: string)
   return `${header}${body.slice(0, shown)}${marker}`.slice(0, READ_SKILL_OUTPUT_BUDGET);
 }
 
+/** ROUND-96 (R96-D): resolve the session's effective skills ONCE per
+ * search_skills call — the exact index read_skill resolves through (same
+ * gates: disabled rows out, the computer-use master switch out, the
+ * agent's non-empty allowlist out), so search can never advertise a skill
+ * read_skill would refuse. */
+function effectiveSkillsForSession(
+  db: NonNullable<ToolDepsDb>,
+  agentId: string | undefined,
+  projectRoot: string,
+): EffectiveSkill[] {
+  const agent = agentId !== undefined ? getAgent(db, agentId) : undefined;
+  return resolveEffectiveSkills(db, {
+    projectRoot,
+    ...(agent?.skills !== undefined && agent.skills.length > 0 ? { agentSkills: agent.skills } : {}),
+  });
+}
+
+/** The minimal db shape effectiveSkillsForSession needs (the plugin's
+ * toolDeps.db is the better-sqlite3 Database — a structural alias keeps
+ * the helper honest without importing the type twice). */
+type ToolDepsDb = Parameters<typeof getSkill>[0];
+
 export const skillsPlugin: PluginDefinition = {
   id: "core-skills",
   name: "Skills",
-  version: "1.2.0",
+  version: "1.3.0",
   description:
-    "The read_skill progressive-disclosure loader for SKILL.md-style capability modules (database + file-based, with references/ depth).",
+    "The skills plugin: read_skill (the progressive-disclosure loader for SKILL.md-style capability modules — database + file-based, with references/ depth) and search_skills (the keyword discovery tool over the same effective index; R96-D).",
   category: "planning",
   createTools: (ctx): ToolDefinition[] => {
     const toolDeps = ctx.toolDeps;
     const projectRoot = ctx.root;
     // Declaration contexts (the catalog's db:null stub) still declare the
-    // tool — the skill LIST is db-dependent, the TOOL is a global
+    // tools — the skill LIST is db-dependent, the TOOLS are a global
     // capability. The db is guarded at EXECUTE time.
     if (toolDeps === undefined) return [];
     return [
@@ -201,6 +261,77 @@ export const skillsPlugin: PluginDefinition = {
           return {
             ok: true,
             output: `# Skill: ${skill.name}\n\n${row.body}`.slice(0, 60000),
+          };
+        },
+      },
+      // ROUND-96 (R96-D): search_skills — the discovery tool over the SAME
+      // effective index read_skill resolves (disabled rows, the
+      // computer-use master switch, and the agent allowlist are excluded by
+      // construction — search can never advertise what read_skill refuses).
+      // Keyword scoring: exact name > name prefix > name word > name
+      // substring > description > reference title; ranked best-first,
+      // capped, with the honest no-match result.
+      {
+        name: "search_skills",
+        description:
+          "Search the available skills by keyword — the system prompt's SKILLS list is budgeted and may be truncated, this tool searches the FULL set. Matches skill names, one-line descriptions, and reference titles; returns the ranked matches with the exact read_skill call to load each. Use it whenever the SKILLS list does not obviously cover what the task needs (a tool, a phase, a craft).",
+        inputSchema: jsonSchema({
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: "keywords to search for (space-separated; every word widens the match — 'ui design', 'error', 'planning')",
+            },
+          },
+          required: ["query"],
+        }),
+        execute: (input): ToolResult => {
+          const query = typeof input.query === "string" ? (input.query as string).trim() : "";
+          if (query === "") {
+            return {
+              ok: false,
+              output: "search_skills: query is required (one or more keywords to search skill names, descriptions, and reference titles)",
+            };
+          }
+          if (toolDeps.db === null || toolDeps.db === undefined) {
+            return { ok: false, output: "search_skills: no database in this context" };
+          }
+          const skills = effectiveSkillsForSession(toolDeps.db, toolDeps.agentId, projectRoot);
+          // Terms are lowercase keywords; a skill matches when ANY term
+          // hits, and ranks by the SUM of the terms' best contributions —
+          // multi-word queries reward skills that match more of the query.
+          const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 0);
+          const scored = skills
+            .map((skill) => {
+              const score = terms.reduce((sum, term) => sum + scoreTerm(skill, term), 0);
+              return { skill, score };
+            })
+            .filter((entry) => entry.score > 0)
+            // Deterministic order: score DESC, then name ASC.
+            .sort((a, b) => (a.score === b.score ? (a.skill.name < b.skill.name ? -1 : 1) : b.score - a.score));
+          if (scored.length === 0) {
+            return {
+              ok: true,
+              output:
+                `search_skills '${query}': no matches among the ${skills.length} skills available to this session. ` +
+                "Try a different keyword — a tool name ('test', 'plan', 'ui', 'error'), a phase, or a craft — or re-read the SKILLS list in the system prompt.",
+            };
+          }
+          const shown = scored.slice(0, SEARCH_SKILLS_RESULT_CAP);
+          const lines = shown.map(({ skill }) => {
+            const refs = skill.references ?? [];
+            const refNote = refs.length > 0 ? ` (references: ${refs.map((r) => r.name).join(", ")})` : "";
+            return `- **${skill.name}** — ${skill.description}${refNote} — load with read_skill { name: "${skill.name}" }`;
+          });
+          const overflow =
+            scored.length > SEARCH_SKILLS_RESULT_CAP
+              ? `\n…and ${scored.length - SEARCH_SKILLS_RESULT_CAP} more matches — narrow the query`
+              : "";
+          return {
+            ok: true,
+            output:
+              `search_skills '${query}': ${scored.length} match${scored.length === 1 ? "" : "es"} of ${skills.length} skills (best first):\n` +
+              `${lines.join("\n")}${overflow}`,
           };
         },
       },

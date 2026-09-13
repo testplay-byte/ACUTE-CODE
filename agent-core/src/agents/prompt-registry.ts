@@ -88,6 +88,24 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     dynamic: true, // maxTurns + maxOuterLoops + todo/delegate-gated lines
     bucket: "identity",
   },
+  // ROUND-96 (R96-D): the execution-doctrine pair behind the loop —
+  // BATCH DISCIPLINE (the owner: "It will run multiple commands in a single
+  // go… batch commands" — Anthropic's parallel-tool-use guidance adapted to
+  // our tool names; research memo note (d)) and COMPLETION DISCIPLINE (the
+  // explicit "Task complete." ending, never pad, never restart finished
+  // work — memo §9 row 1's model-side half). Both static + unconditional.
+  {
+    id: "batch-discipline",
+    description: "## BATCH DISCIPLINE — independent calls in ONE response, chained shell commands, no one-call-one-wait ping-pong (R96-D)",
+    dynamic: false,
+    bucket: "identity",
+  },
+  {
+    id: "completion-discipline",
+    description: "## COMPLETION DISCIPLINE — the concise verified summary + the explicit \"Task complete.\" line; never pad, never restart finished work (R96-D)",
+    dynamic: false,
+    bucket: "identity",
+  },
   // R70-c (D2): "efficiency", "task-planning" and "todo-tracking" are
   // REMOVED together with their prompts.ts blocks — the four-way overlap
   // consolidated into the merged AGENTIC LOOP (R70-A issue #2; the
@@ -122,6 +140,18 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     dynamic: false,
     bucket: "identity",
   },
+  // ROUND-96 (R96-D): the precision doctrine behind navigation — the
+  // owner's HTML example ("change a specific text from this to this… it
+  // will not try to analyze the whole HTML") generalized: target before
+  // you read, exact anchors from CURRENT content, verify after editing,
+  // never analyze the whole project when one file is named (research memo
+  // note (f)). Static + unconditional.
+  {
+    id: "precision-discipline",
+    description: "## PRECISION DISCIPLINE (target before you read) — search-first targeting, exact anchors, the change-X-to-Y-in-file-F recipe (R96-D)",
+    dynamic: false,
+    bucket: "identity",
+  },
   {
     id: "git",
     description: "## GIT (only when git_status is allowed)",
@@ -136,7 +166,7 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   },
   {
     id: "skills",
-    description: "## SKILLS (load with read_skill) — the enabled-skill index, progressive disclosure (R61)",
+    description: "## SKILLS (load with read_skill, search with search_skills) — the budgeted enabled-skill index, progressive disclosure (R61; R96-D budget + search_skills)",
     dynamic: true, // ctx.skills-gated
     bucket: "identity",
   },

@@ -228,7 +228,7 @@ describe("round-14 tools: create_dir / delete_file / search_files", () => {
 });
 
 describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () => {
-  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task; R44-a: +memory tools; R52-a: +job tools; R61: +read_skill; R66: +analyze_image; R73: +switch_mode; R87: +ask_user)", async () => {
+  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task; R44-a: +memory tools; R52-a: +job tools; R61: +read_skill; R66: +analyze_image; R73: +switch_mode; R87: +ask_user; R96: +search_skills)", async () => {
     const { TOOL_NAMES } = await import("../src/storage/agents");
     expect([...TOOL_NAMES].sort()).toEqual([
       "analyze_image",
@@ -256,6 +256,9 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
       "run_command",
       "search_code",
       "search_files",
+      // ROUND-96 (R96-D): the skills-discovery tool (migration 0036
+      // appends it to read_skill-capable template/default rows).
+      "search_skills",
       // ROUND-73 (R73-b): the task-mode posture switch — allowlist
       // vocabulary like read_skill (migration 0027 appends it to
       // read_skill-capable template/default rows).

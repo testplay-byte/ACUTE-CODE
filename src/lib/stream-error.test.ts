@@ -412,3 +412,92 @@ describe("streamSessionMessage non-2xx envelope preservation (ROUND-77)", () => 
     expect((seen[0] as { message: string }).message).toContain("sidecar answered HTTP 502");
   });
 });
+
+// ── ROUND-96 (R96-B): the stuck stop button — terminal frames retire the busy state
+// even when the connection never settles ───────────────────────────────────────
+// The owner's v0.93.0 report: "When the loop guard was activated it stopped it
+// but at the bottom it was still showing me the option to stop generation. I
+// clicked on it and it said 'Stopped by user' but after that it was still
+// showing that the generation is going on. I had to switch to another project
+// and come back and then it was fixed." The terminal frame is the server's own
+// verdict that the turn is over — the busy state must retire on the FRAME, not
+// only in the read-loop's finally (which a hanging connection never reaches).
+describe("R96-B: terminal frames retire streamBusy without the finally (the stuck stop button)", () => {
+  /** An SSE stream that emits ONE frame and then NEVER closes — the
+   * pathological connection the finally cannot reach. */
+  function hangingSseResponse(frame: string): Response {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(frame));
+        // Deliberately never close() and never enqueue again.
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  }
+
+  it("an error frame on a NEVER-CLOSING stream retires streamBusy AT THE FRAME (the stop affordance goes away without a project switch)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        hangingSseResponse(
+          'data: {"type":"error","status":502,"code":"LOOP_GUARD","message":"Loop guard: 5 identical consecutive calls to read_file — still running"}\n\n',
+        ),
+      ),
+    );
+
+    // Fake timers from the START so the watchdog's 8s setTimeout is a fake
+    // timer too (registering it under real timers would fire outside the
+    // test's clock — the lesson re-learned: arm the clock before the stream).
+    vi.useFakeTimers();
+    try {
+      // The startStream promise NEVER settles (the reader hangs) — drive the
+      // store via a floating promise.
+      void useStreamStore.getState().startStream("sess_r96_hang", "do the thing");
+      // The turn starts busy, the error frame arrives (microtasks flush
+      // inside the async timer advance)…
+      await vi.advanceTimersByTimeAsync(50);
+      const slice = useStreamStore.getState().bySession.sess_r96_hang;
+      expect(slice?.liveTurn).not.toBeNull();
+      // …and busy retired AT THE FRAME — no project switch needed.
+      expect(slice?.streamBusy).toBe(false);
+      expect(slice?.liveError).toMatchObject({ code: "LOOP_GUARD" });
+      expect(slice?.liveError?.message).toContain("still running");
+
+      // The 8s watchdog: the never-settling stream's liveTurn freezes as
+      // stopped (partial work stays visible) — the honest terminal shape.
+      await vi.advanceTimersByTimeAsync(8_000 + 100);
+      const after = useStreamStore.getState().bySession.sess_r96_hang;
+      expect(after?.streamBusy).toBe(false);
+      expect(after?.liveTurn?.stopped).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a done frame on a never-closing stream also retires busy immediately (every terminal frame, not just errors)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        hangingSseResponse(
+          'data: {"type":"done","assistantMessage":{"seq":9,"role":"assistant","agentId":"a","content":"Task complete.","ts":"2026-09-13T00:00:00.000Z"},"usage":{"agentId":"a","sessionId":"s","provider":"p","model":"m","inputTokens":1,"outputTokens":1,"cachedInputTokens":null,"costUsd":null,"ts":"2026-09-13T00:00:00.000Z"}}\n\n',
+        ),
+      ),
+    );
+
+    void useStreamStore.getState().startStream("sess_r96_hang2", "hello");
+    await vi.waitFor(() => {
+      expect(useStreamStreamBusy("sess_r96_hang2")).toBe(false);
+    });
+    // The done frame's content landed (the fold owns the render later).
+    expect(useStreamStore.getState().bySession.sess_r96_hang2?.liveError).toBeNull();
+  });
+});
+
+/** Test-local accessor (avoids repeating the optional chain). */
+function useStreamStreamBusy(sessionId: string): boolean | undefined {
+  return useStreamStore.getState().bySession[sessionId]?.streamBusy;
+}

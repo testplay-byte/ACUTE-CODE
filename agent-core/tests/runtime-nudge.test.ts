@@ -167,7 +167,11 @@ describe("ROUND-49: tool-intent nudge — the STREAMED path (the main agent's ro
       () => undefined,
     );
     expect(outcome.ok).toBe(true);
-    expect(call).toBe(3); // intent-stall → nudged tool call → completion
+    // ROUND-96 (R96-B): intent-stall → the ONE nudged iteration (which calls
+    // the tool) → the turn ENDS — its "Creating it now." narration + the tool
+    // call is the model's own stop under the new completion rule (the old
+    // phrase-gate needed a third "Done." iteration; text+tools now completes).
+    expect(call).toBe(2);
     // The nudge rode the second streamed call's message list (in-memory only).
     const lastMessage = seenMessages[1][seenMessages[1].length - 1];
     expect(lastMessage.role).toBe("user");

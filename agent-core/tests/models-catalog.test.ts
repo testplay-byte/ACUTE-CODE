@@ -352,8 +352,9 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
     // ROUND-73 (R73-b): 0027 appends switch_mode (the read_skill companion
     // rule — the list has read_skill by then) → 26; ROUND-87 (R87): 0033
     // appends ask_user (the todo_write companion rule — the list has
-    // todo_write by then) → 27.
-    expect(row("agt_tpl_coder")).toHaveLength(27);
+    // todo_write by then) → 27 — and ROUND-96's migration 0036 appends
+    // search_skills (the read_skill companion rule) → 28.
+    expect(row("agt_tpl_coder")).toHaveLength(28);
     expect(row("agt_tpl_coder")).toContain("analyze_image");
     expect(row("agt_default_nova")).toContain("delegate_task");
     expect(row("agt_default_nova")).toContain("browser_control");
@@ -366,7 +367,9 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
     // row with a non-empty list). ROUND-66 (R66): 0026 leaves it UNTOUCHED
     // — its list has no web_fetch (the general-capability companion rule).
     // ROUND-73 (R73-b): 0027 appends switch_mode (the mode-capable
-    // companion rule — the row HAS read_skill).
+    // companion rule — the row HAS read_skill). ROUND-96 (R96-D): 0036
+    // appends search_skills (the skills-discovery companion rule — the
+    // row HAS read_skill).
     expect(row("agt_tpl_already")).toEqual([
       "list_dir",
       "delegate_task",
@@ -376,6 +379,7 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
       "memory_list",
       "read_skill",
       "switch_mode",
+      "search_skills",
     ]);
     // idempotent on reopen
     db.close();
@@ -384,7 +388,7 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
       JSON.parse(
         (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
       ),
-    ).toHaveLength(27);
+    ).toHaveLength(28); // R96: +search_skills (migration 0036)
     again.close();
   });
 });
