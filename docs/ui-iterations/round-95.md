@@ -190,6 +190,12 @@ derive from the script location), the full pipeline: lint clean, both
 typechecks clean, root 3,258/3,258 (175 files), e2e 12/12, build green,
 license audit 134 clean.
 
+CI run 34774855473 + Release run 34774862744 both SUCCESS on 3f6bd20.
+v0.93.0 PUBLISHED (release 387996130, latest): ACUTE-CODE_0.93.0_x64-setup.exe
+37,616,713 B (sha256 32a75056…) + acute-launcher-kit-v0.93.0.zip 113,757 B
+(sha256 db295496…) — both verified against GitHub's server-side digests via
+fresh downloads; the kit scanned for real-key values (clean).
+
 ## §9 The owner's TEST CHECKLIST (v0.93.0)
 
 1. **Models & Providers** — the left rail is tall (scrolls only when
