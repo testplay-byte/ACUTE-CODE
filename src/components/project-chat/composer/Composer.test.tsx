@@ -31,7 +31,10 @@
  *  - computeFlyoutGeometry PURE unit tests (side + vertical clamping);
  *  - the flyout applies the measured geometry; the popover scrolls
  *    internally; the flyout carries the provider-name header chip;
- *  - the donut toolbar shows NO inline % label; the popover has a
+ *  - the donut toolbar shows NO inline value AT ALL — neither the % (R51-c)
+ *    nor the measured token count (ROUND-96 R96-H: the owner REVERSED the
+ *    R95-F inline readout — "It should not show that value alongside it";
+ *    every number is hover/popover-only now); the popover has a
  *    hover-bridge (grace-period close, cancellable from the popover) and the
  *    ring color grades accent → amber → danger;
  *  - the Session section splits Main agent / Sub-agents / Combined (with a
@@ -1248,8 +1251,10 @@ describe("Composer: thinking level (owner spec E)", () => {
         "MediumBalanced reasoning effort.",
       ]);
     });
+    // ROUND-96 (R96-F): the note NAMES THE SOURCE — the detected list IS the
+    // honest cap (the old "caps reasoning at medium" wording retired).
     expect(document.querySelector("[data-thinking-menu-note]")?.textContent).toBe(
-      "this model caps reasoning at medium",
+      "detected from provider: low, medium",
     );
     await sendSettled();
   });
@@ -1878,21 +1883,23 @@ describe("Composer: model picker — the R89 provider filter + last-used memory"
 
 // ── G. Context donut ────────────────────────────────────────────────────────
 describe("Composer: context donut (owner spec G)", () => {
-  it("renders the ring from GET /sessions/:id/context + the MEASURED readout — no inline % label (R51-c kept, R95-F)", async () => {
+  it("renders the ring from GET /sessions/:id/context — ICON-ONLY (no value beside it; R51-c kept, R95-F REVERSED by R96-H)", async () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
     const donut = await screen.findByRole("button", { name: /~42% of context window projected/ });
     // ROUND-51 (R51-c) KEPT: NO PERCENTAGE beside the ring — the % still
     // lives on the button's title/aria-label and inside the popover.
-    // ROUND-95 (R95-F, owner: the meter "does not properly show the actual
-    // context which is currently being used"): the MEASURED readout (the
-    // provider's own prompt size, labeled "measured") now rides BESIDE the
-    // ring at rest — replacing the icon-only contract this assertion used
-    // to pin. The ring itself stays the ~-labeled ESTIMATE (R83 one-rule:
-    // every number carries its basis, never conflated).
+    // ROUND-96 (R96-H) — the owner's seventh report REVERSED R95-F's inline
+    // MEASURED readout ("The context window was showing me how many tokens
+    // have been used and such… It should not show that value alongside
+    // it."): the ring renders ALONE at rest. The measured count moved to the
+    // hover popover (asserted in the popover test below), joining the % —
+    // the R51 icon-only contract, restored in full. The ring itself stays
+    // the ~-labeled ESTIMATE (R83 one-rule: every number carries its basis,
+    // never conflated).
     expect(document.querySelector("[data-donut-label]")).toBeNull();
-    expect(donut.textContent?.trim()).toBe("390kmeasured");
+    expect(donut.textContent?.trim()).toBe("");
     expect(donut.querySelector("svg")).toBeTruthy();
     // ROUND-83 (R83): the title is the honest two-number summary — the
     // projection LABELED with a ~ + the provider's measured number.

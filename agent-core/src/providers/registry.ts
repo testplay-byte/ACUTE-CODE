@@ -324,15 +324,26 @@ function parseModels(body: unknown): ModelSummary[] {
 /**
  * Fold a provider's raw reasoning-effort list into the shared
  * ReasoningEffortLevel vocabulary. OpenRouter's live ladder is wider than
- * the wire side (verified against the 2026-09 /api/v1/models snapshot):
- * "xhigh"/"max" normalize DOWN to "high" — a model that accepts a higher
- * tier accepts "high" — "none" is a DISABLE switch rather than an effort
- * and is dropped, and anything else unrecognized is dropped. Deduped and
- * ordered by the shared vocabulary so every stored blob is canonical.
+ * the R50-era wire side (verified against the 2026-09 /api/v1/models
+ * snapshot):
+ *
+ * ROUND-96 (R96-F, the owner: "I tested a model which supported high and
+ * max but it apparently did not detect that properly and was showing the
+ * default options. This should not happen"): "xhigh" and "max" are now
+ * REAL rungs — kept VERBATIM, never folded down (the R95 fold made a
+ * detected ['max','high','low'] model render exactly like the
+ * unknown-capabilities default). "none" is a DISABLE switch rather than an
+ * effort and is DROPPED, and anything else unrecognized is dropped.
+ * Deduped and ordered by the shared vocabulary so every stored blob is
+ * canonical.
  */
 export function normalizeReasoningEfforts(raw: readonly string[]): ReasoningEffortLevel[] {
-  const folded = raw.map((value) => (value === "xhigh" || value === "max" ? "high" : value));
-  return REASONING_EFFORT_LEVELS.filter((level) => folded.includes(level));
+  return REASONING_EFFORT_LEVELS.filter((level) => raw.includes(level));
+}
+
+/** Membership in the shared wire vocabulary (shared owns the truth). */
+function isReasoningEffortLevel(value: string): value is ReasoningEffortLevel {
+  return (REASONING_EFFORT_LEVELS as readonly string[]).includes(value);
 }
 
 /**
@@ -354,6 +365,13 @@ export function normalizeReasoningEfforts(raw: readonly string[]): ReasoningEffo
  *     carry the object with NO supported_efforts → supported with an
  *     empty ladder.
  *
+ * ROUND-96 (R96-F): `default_effort` is parsed too — the provider's own
+ * published default rung (live 2026-09-13: deepseek-v4.1-flash defaults
+ * "high" on ['max','high','low'], z-ai/glm-5.3 defaults "max",
+ * grok-4.6 "high", nemotron-3-super "medium"). Normalized through the same
+ * vocabulary membership as the ladder (a "none"/unrecognized default reads
+ * as ABSENT — "none" is a disable switch, not a rung). Absent → undefined.
+ *
  * Returns null when the entry carries NEITHER field — a provider that
  * exposes no reasoning metadata must stay UNKNOWN, never "unsupported"
  * (the never-block-on-null contract the runtime relies on).
@@ -373,7 +391,16 @@ function extractReasoningSupport(entry: Record<string, unknown>): ModelReasoning
   const efforts = Array.isArray(effortsRaw)
     ? normalizeReasoningEfforts(effortsRaw.filter((e): e is string => typeof e === "string"))
     : [];
-  return { supported, efforts };
+  const defaultRaw = hasReasoningObject
+    ? (reasoning as { default_effort?: unknown }).default_effort
+    : undefined;
+  const defaultEffort =
+    typeof defaultRaw === "string" && isReasoningEffortLevel(defaultRaw) ? defaultRaw : undefined;
+  return {
+    supported,
+    efforts,
+    ...(defaultEffort !== undefined ? { defaultEffort } : {}),
+  };
 }
 
 /**

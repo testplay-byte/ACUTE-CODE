@@ -14,7 +14,7 @@ import { useNativeOptionsMenu } from "./useNativeOptionsMenu";
  * ROUND-50 (R50-c2): the thinking-level button (owner: "Adjust the thinking
  * level… only four options: The default option, Low, High, Max"). A compact
  * Brain-icon button showing the current level; the menu offers EXACTLY the
- * four accepted levels. The selected level persists per session in
+ * accepted levels. The selected level persists per session in
  * localStorage (acute-thinking:<sessionId> — handled by the panel) and rides
  * every send as thinkingLevel.
  *
@@ -35,11 +35,20 @@ import { useNativeOptionsMenu } from "./useNativeOptionsMenu";
  *    unknown for this model" footer note (never blocked on a guess);
  *  · supported: false — the button renders DISABLED ("No thinking") with an
  *    honest tooltip; no menu at all (chat.ts injects no reasoning either);
- *  · supported: true — ONLY the levels the model's own ladder holds (a
- *    [low, medium] model offers Default/Low/Medium; a ladder without high
- *    hides High/Max with the cap note; a stored level the model doesn't
- *    support falls back VISUALLY to the nearest supported one — chat.ts
- *    maps the wire value anyway, the mapping is the safety net).
+ *  · supported: true — ONLY the rungs the model's own ladder holds, and a
+ *    stored level the model doesn't support falls back VISUALLY to the
+ *    nearest supported one (chat.ts maps the wire value anyway, the
+ *    mapping is the safety net).
+ *
+ * ROUND-96 (R96-F, the owner: "I tested a model which supported high and
+ * max but it apparently did not detect that properly and was showing the
+ * default options. This should not happen. It needs to be improved and
+ * handled better"): detection is VISIBLE — the footer note names its source
+ * ("detected from provider: low, high, max", plus "model default: …" when
+ * the provider publishes one), every rung rides VERBATIM (an X-High row
+ * appears for xhigh-ladder models, Max only when the ladder holds max), and
+ * the model's own default rung carries a quiet "default" mark so the owner
+ * can see what the model would use on its own.
  */
 export function ThinkingLevelButton({
   level,
@@ -70,7 +79,12 @@ export function ThinkingLevelButton({
       ...spec.options.map((option) => ({
         id: option.id,
         label: option.label,
-        desc: option.description,
+        // R96-F: the model's own default rung carries the quiet mark on the
+        // OVERLAY leg too (desc suffix — the overlay payload has no footer
+        // concept and its page is not this round's file set).
+        desc:
+          option.description +
+          (option.id === spec.defaultRow && option.id !== "default" ? " · the model's default" : ""),
         selected: option.id === displayLevel,
       })),
       // R95-E: the honest footer note rides the OVERLAY leg as a desc-only
@@ -184,6 +198,17 @@ export function ThinkingLevelButton({
                   style={{ color: isSelected ? styles.accent : styles.text }}
                 >
                   {option.label}
+                  {/* R96-F: the model's own default rung — a quiet "default"
+                      mark, never a shout. */}
+                  {option.id === spec.defaultRow && option.id !== "default" ? (
+                    <span
+                      data-thinking-default-rung
+                      className="ml-1.5 text-[9px] font-semibold uppercase tracking-wide"
+                      style={{ color: styles.textTertiary }}
+                    >
+                      default
+                    </span>
+                  ) : null}
                 </span>
                 <span className="text-[9.5px] min-w-0 truncate" style={{ color: styles.textTertiary }}>
                   {option.description}
@@ -192,9 +217,10 @@ export function ThinkingLevelButton({
               </button>
             );
           })}
-          {/* R95-E: the honest footer note — unknown capabilities, a ladder
-              that tops out below high, or a provider that lists no discrete
-              efforts. textTertiary, one small line, never a lie. */}
+          {/* R95-E → R96-F: the honest footer note — "capabilities unknown",
+              "no discrete efforts listed", or (the owner's ask) the VISIBLE
+              detection line naming the provider's ladder and its default.
+              textTertiary, one small line, never a lie. */}
           {spec.note !== null ? (
             <div
               data-thinking-menu-note

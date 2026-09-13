@@ -638,6 +638,20 @@ pub async fn menu_overlay_prewarm(app: AppHandle) -> Result<(), String> {
 /// R91-B1: `async` for the same deadlock reason as `menu_overlay_prewarm`
 /// above — the create-on-first-call branch builds a window, and a sync
 /// command doing that on the main thread is the documented Windows hang.
+///
+/// ROUND-96 (R96-G): the payload space grew a fourth kind — the USAGE rich
+/// card (`kind: "usage"`, the ContextDonut hover popover's structured
+/// content) — so hovering the token usage over the browser area rides THIS
+/// window instead of a DOM popover that can never paint above the tab
+/// webviews (the owner: "when I try to hover over the total number of token
+/// usage that has been done, it apparently hides the browser… This is not
+/// a great experience"). The Rust side needs NO new plumbing for it: the
+/// payload is forwarded opaquely (no size cap beyond the JSON-object shape
+/// check below — a usage card is ~2-4KB), and the geometry clamps already
+/// cover it (the card is 300 logical px wide and capped at the space above
+/// the composer). The overlay page also reports the usage card's pointer
+/// enter/leave back through the "menu-overlay-hover" event so the main
+/// window keeps its hover-grace close semantics across the window boundary.
 #[tauri::command]
 pub async fn menu_overlay_show(
     app: AppHandle,

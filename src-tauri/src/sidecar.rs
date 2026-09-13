@@ -101,6 +101,20 @@
 //!      plus any node.exe whose executable lives under $INSTDIR, so an
 //!      orphan left by an OLDER build (one without the job leash) can never
 //!      lock the files the new install is about to replace.
+//!
+//! ROUND-96 (R96-I) — THE PRE-INSTALL KILL ORDERING. The owner's v0.93
+//! report: the updater's installer hit "Error opening file for writing"
+//! on `win32 x64.node` and then `node.exe` (both clicked through with
+//! Ignore). R94-B's backstops DO fire in that race, but they fire LATE:
+//! the R91-E updater launched the installer FIRST and scheduled the app's
+//! exit 1.5s later, so the NSIS File instructions raced the teardown —
+//! and TerminateProcess closes file handles ASYNCHRONOUSLY, so "the kill
+//! was issued" is never "the files are writable"; the installer lost
+//! that beat twice. THE FIX INVERTS THE ORDERING: update.rs now calls
+//! `shutdown_before_install` BEFORE launching the installer — graceful
+//! ask → 5s bounded wait → taskkill /T /F on the tree → blocking reap +
+//! 300ms handle-release grace — and only then does the installer see the
+//! directory. See `shutdown_before_install` for the full contract.
 
 use std::{
     collections::VecDeque,
@@ -128,6 +142,23 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+/// R96-I: the pre-install KILL budget — how long the sidecar tree gets to
+/// honor the graceful shutdown ask before `taskkill /T /F` takes it. The
+/// normal exit path (SHUTDOWN_GRACE, 3s) answers to the user waiting on a
+/// quit; this one answers to the INSTALLER: Windows refuses to overwrite
+/// an executable or a loaded `.node` while ANY process in the tree holds
+/// it, and the owner's v0.93 report ("Error opening file for writing" on
+/// `win32 x64.node`, then `node.exe`) was exactly that race. 5s is
+/// generous for a node process winding down its terminal/computer-use
+/// children and still bounded for the update click that waits on it.
+const PRE_INSTALL_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+/// R96-I: after the tree is DEAD its file handles are not yet GONE —
+/// TerminateProcess closes them asynchronously, and `taskkill /T`'s walk
+/// can leave grandchildren a beat behind the root they were spawned
+/// under. A few hundred ms of grace between the reap and the installer
+/// launch is what turns "dead" into "writable" for the NSIS File
+/// instructions that follow.
+const HANDLE_RELEASE_GRACE: Duration = Duration::from_millis(300);
 /// `sidecar.log` rotates once past this size (checked once per process boot).
 const LOG_ROTATE_BYTES: u64 = 1024 * 1024;
 /// R54: startup auto-retries — the first attempt on a cold, freshly installed
@@ -320,16 +351,203 @@ pub fn shutdown(app: &AppHandle) {
     if let Some((port, token)) = running_endpoint {
         let _ = http_status("POST", port, "/internal/shutdown", Some(&token), None);
     }
-    let deadline = Instant::now() + SHUTDOWN_GRACE;
-    while child.try_wait().ok().flatten().is_none() {
-        if Instant::now() >= deadline {
-            kill_tree(&mut child);
-            break;
-        }
-        thread::sleep(POLL_INTERVAL);
+    // R96-I: the bounded-wait polling core is shared (wait_until_confirmed)
+    // with restart's teardown and the pre-install kill — the same wait this
+    // function used to inline as a bare loop.
+    let exited = wait_until_confirmed(
+        || child.try_wait().ok().flatten().is_some(),
+        Instant::now() + SHUTDOWN_GRACE,
+        POLL_INTERVAL,
+    );
+    if !exited {
+        kill_tree(&mut child);
     }
     let _ = child.wait();
     log_line("sidecar: shutdown complete");
+}
+
+/// R96-I: poll `probe` until it confirms (true) or `deadline` passes;
+/// returns whether the confirmation landed inside the budget. The pure
+/// scheduling core shared by every bounded wait in this module (the §2.4
+/// exit path, restart_sidecar's teardown, and the pre-install kill) so the
+/// poll/deadline arithmetic is pinned by unit tests with fake probes
+/// instead of re-inlined — and re-drifted — at each call site.
+fn wait_until_confirmed(
+    mut probe: impl FnMut() -> bool,
+    deadline: Instant,
+    poll_interval: Duration,
+) -> bool {
+    loop {
+        if probe() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(poll_interval);
+    }
+}
+
+/// R96-I: what the pre-install kill needs from the thing it is killing — a
+/// four-move contract with the REAL implementation over the sidecar child
+/// (ChildKillTarget below) and a recording fake in the tests, so the
+/// ORDERING is pinned without a real process.
+trait InstallKillTarget {
+    /// (a) the graceful ask — the authed `POST /internal/shutdown`.
+    fn signal_graceful(&mut self);
+    /// (b) has the target exited on its own?
+    fn has_exited(&mut self) -> bool;
+    /// (c) force-kill the whole tree.
+    fn kill_tree_now(&mut self);
+    /// (d) collect the final status (a blocking reap).
+    fn reap(&mut self);
+}
+
+/// R96-I: how a pre-install kill ended — the shape update.rs logs and the
+/// unit tests assert.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum InstallKillOutcome {
+    /// No live child existed (never started, or a failed startup already
+    /// reaped it) — nothing held the install directory.
+    NoChild,
+    /// The tree exited on its own inside the bounded wait.
+    Graceful { waited_ms: u128 },
+    /// The bounded wait expired and the tree was force-killed.
+    TaskKilled { waited_ms: u128 },
+}
+
+impl InstallKillOutcome {
+    /// The one-line truth for sidecar.log's update-flow trail (used by this
+    /// module and by update.rs's own launch line).
+    pub(crate) fn describe(&self) -> String {
+        match self {
+            InstallKillOutcome::NoChild => "no live child — nothing held the install dir".into(),
+            InstallKillOutcome::Graceful { waited_ms } => {
+                format!("the sidecar tree exited gracefully after {waited_ms}ms")
+            }
+            InstallKillOutcome::TaskKilled { waited_ms } => format!(
+                "the sidecar tree ignored the graceful ask for {waited_ms}ms — taskkill /T /F took the tree"
+            ),
+        }
+    }
+}
+
+/// THE R96-I PRE-INSTALL KILL ORDERING — the fix for the owner's v0.93
+/// installer report ("Error opening file for writing" on `win32 x64.node`,
+/// then `node.exe`, both clicked through with Ignore).
+///
+/// WHY (root cause): the R91-E updater launched the installer FIRST
+/// (ShellExecute "open") and scheduled the app's own exit 1.5s LATER — so
+/// the NSIS File instructions raced the sidecar teardown: `node.exe` (the
+/// sidecar itself) and every native `.node` module it had loaded
+/// (better-sqlite3 and friends ride the same node process) were still OPEN
+/// when the installer tried to overwrite them. R94-B's backstops do fire in
+/// that race (the kill-on-close Job Object, the NSIS PREINSTALL hook) but
+/// TerminateProcess closes file handles ASYNCHRONOUSLY — "kill issued" is
+/// not "files writable", and the installer lost the beat twice.
+///
+/// THE CONTRACT (what this guarantees to update.rs, which must call it
+/// BEFORE launching the installer):
+///   (a) the graceful ask — the authed `POST /internal/shutdown`, the same
+///       first move the normal stop path makes;
+///   (b) a BOUNDED wait (PRE_INSTALL_SHUTDOWN_GRACE, 5s) polling the child
+///       for a real exit;
+///   (c) `taskkill /T /F` on the whole tree if (b) expires — the same
+///       kill_tree the exit path uses; `/T` covers the sidecar's own
+///       children (terminal jobs, computer-use PowerShell helpers), the
+///       holders of the loaded `.node` modules;
+///   (d) a blocking reap, then HANDLE_RELEASE_GRACE (300ms) so the kernel
+///       finishes closing the dead tree's file handles — only then may the
+///       installer be handed the directory.
+/// When this returns, nothing the app spawned holds the install dir.
+///
+/// Residual edges (covered by the R94-B backstops, listed for honesty): a
+/// child spawned by a handshake still IN FLIGHT is not visible here —
+/// `state.child` is set only after the ready line — but the Job Object
+/// leash kills it when the app exits, and the NSIS PREINSTALL hook
+/// force-kills node.exe under $INSTDIR before the first File instruction
+/// either way. `taskkill` failing is likewise backstopped (kill_tree falls
+/// back to `child.kill()`; the job + hook remain).
+pub(crate) fn shutdown_before_install(app: &AppHandle) -> InstallKillOutcome {
+    let state = app.state::<SidecarState>();
+    // Capture the endpoint BEFORE the phase flip (endpoint() reads Running)
+    // — same care as shutdown().
+    let running_endpoint = endpoint(app);
+    // Take the child first so the monitor thread stops claiming it.
+    let child = state.child.lock().unwrap_or_else(|p| p.into_inner()).take();
+    *state.phase.write().unwrap_or_else(|p| p.into_inner()) = SidecarPhase::Stopped;
+    let Some(child) = child else {
+        log_line("update: pre-install kill — no live child, nothing held the install dir");
+        return InstallKillOutcome::NoChild;
+    };
+    log_line("update: killing the sidecar tree before the installer launches");
+    let mut target = ChildKillTarget {
+        child,
+        endpoint: running_endpoint,
+    };
+    let outcome = install_kill_sequence(
+        &mut target,
+        PRE_INSTALL_SHUTDOWN_GRACE,
+        POLL_INTERVAL,
+        HANDLE_RELEASE_GRACE,
+    );
+    log_line(&format!("update: pre-install kill — {}", outcome.describe()));
+    outcome
+}
+
+/// The REAL InstallKillTarget — the sidecar child plus its loopback
+/// endpoint (captured before the phase flip), one method per contract move.
+struct ChildKillTarget {
+    child: Child,
+    endpoint: Option<(u16, String)>,
+}
+
+impl InstallKillTarget for ChildKillTarget {
+    fn signal_graceful(&mut self) {
+        if let Some((port, token)) = &self.endpoint {
+            let _ = http_status("POST", *port, "/internal/shutdown", Some(token.as_str()), None);
+        }
+    }
+    fn has_exited(&mut self) -> bool {
+        self.child.try_wait().ok().flatten().is_some()
+    }
+    fn kill_tree_now(&mut self) {
+        kill_tree(&mut self.child);
+    }
+    fn reap(&mut self) {
+        let _ = self.child.wait();
+    }
+}
+
+/// The R96-I ordering core: (a) graceful ask, (b) bounded wait polling the
+/// exit probe, (c) tree force-kill on expiry, (d) reap, then the
+/// handle-release grace. PURE ORCHESTRATION over the trait — no OS calls of
+/// its own — so the unit tests pin the ORDER (the ask before any probe, the
+/// kill only after the budget is spent, the reap always last) without a
+/// real process.
+fn install_kill_sequence(
+    target: &mut dyn InstallKillTarget,
+    grace: Duration,
+    poll_interval: Duration,
+    handle_release: Duration,
+) -> InstallKillOutcome {
+    target.signal_graceful();
+    let started = Instant::now();
+    let deadline = started + grace;
+    let exited = wait_until_confirmed(|| target.has_exited(), deadline, poll_interval);
+    let waited_ms = started.elapsed().as_millis();
+    let outcome = if exited {
+        InstallKillOutcome::Graceful { waited_ms }
+    } else {
+        target.kill_tree_now();
+        InstallKillOutcome::TaskKilled { waited_ms }
+    };
+    target.reap();
+    // (d) the handle-release grace: after the reap, before the caller may
+    // launch the installer, the kernel needs the beat to finish closing
+    // the dead tree's file handles.
+    thread::sleep(handle_release);
+    outcome
 }
 
 /// `{port, token}` for the webview — the only channel through which the token
@@ -404,18 +622,19 @@ pub fn restart_sidecar(app: AppHandle, state: State<SidecarState>) -> Result<Str
         }
     }
 
-    // Graceful teardown of any existing child (same shape as shutdown()).
+    // Graceful teardown of any existing child (same shape as shutdown();
+    // R96-I: the bounded-wait core is shared via wait_until_confirmed).
     if let Some((port, token)) = endpoint(&app) {
         let _ = http_status("POST", port, "/internal/shutdown", Some(&token), None);
     }
     if let Some(mut child) = state.child.lock().unwrap_or_else(|p| p.into_inner()).take() {
-        let deadline = Instant::now() + SHUTDOWN_GRACE;
-        while child.try_wait().ok().flatten().is_none() {
-            if Instant::now() >= deadline {
-                kill_tree(&mut child);
-                break;
-            }
-            thread::sleep(POLL_INTERVAL);
+        let exited = wait_until_confirmed(
+            || child.try_wait().ok().flatten().is_some(),
+            Instant::now() + SHUTDOWN_GRACE,
+            POLL_INTERVAL,
+        );
+        if !exited {
+            kill_tree(&mut child);
         }
         let _ = child.wait();
     }
@@ -937,14 +1156,15 @@ fn health_poll(child: &mut Child, port: u16) -> Result<(), String> {
 }
 
 /// Kill the whole process tree: `taskkill /T /F` on Windows, plain kill
-/// elsewhere.
+/// elsewhere. The command line itself is built by `taskkill_tree_args` so
+/// the TREE/FORCE/PID contract is unit-testable on every platform (the
+/// call site below is the Windows-gated half).
 fn kill_tree(child: &mut Child) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let pid = child.id();
         let killed = Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .args(taskkill_tree_args(child.id()))
             .creation_flags(CREATE_NO_WINDOW)
             .output();
         if killed.is_err() {
@@ -953,6 +1173,27 @@ fn kill_tree(child: &mut Child) {
     }
     #[cfg(not(windows))]
     let _ = child.kill();
+}
+
+/// R96-I: the exact `taskkill` command line that force-kills a whole
+/// process TREE rooted at `pid`. PURE (a function of the pid alone, no OS
+/// call) so the kill contract is unit-testable on any platform:
+///   · `/T` — walk the TREE: the sidecar's own children (terminal jobs,
+///     computer-use PowerShell helpers) ride the same kill, because a
+///     helper holding a `.node` module loaded from $INSTDIR outlives a
+///     root-only kill and keeps the installer's files locked;
+///   · `/F` — force: the sidecar is a console-less child with no message
+///     pump to answer a graceful WM_CLOSE anyway;
+///   · `/PID <pid>` — the sidecar root, never a global image-name kill.
+/// Compiled on every platform (the tests run anywhere); only the call
+/// site above is Windows-gated, which leaves this unused — and allowed —
+/// on the others.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn taskkill_tree_args(pid: u32) -> Vec<String> {
+    ["/T", "/F", "/PID", &pid.to_string()]
+        .iter()
+        .map(|arg| arg.to_string())
+        .collect()
 }
 
 // ── R94-B: the app-lifetime Job Object (Windows) ─────────────────────────
@@ -1118,8 +1359,12 @@ pub(crate) fn http_status(
 
 #[cfg(test)]
 mod tests {
-    use super::simplified_path;
+    use super::{
+        simplified_path, taskkill_tree_args, wait_until_confirmed, InstallKillOutcome,
+        HANDLE_RELEASE_GRACE,
+    };
     use std::path::Path;
+    use std::time::{Duration, Instant};
 
     /// The owner's exact 0.54.0 failure shape: Tauri's resource_dir handed
     /// back a verbatim path and node's module resolver died on it. The fix
@@ -1151,6 +1396,167 @@ mod tests {
         assert_eq!(
             simplified_path(Path::new("relative/path")),
             Path::new("relative/path")
+        );
+    }
+
+    // ── R96-I: the pre-install kill's pure parts ──────────────────────────
+
+    /// The tree-kill command line: /T walks the sidecar's own children
+    /// (terminal jobs, PowerShell helpers — the holders of the loaded
+    /// `.node` modules), /F forces, /PID scopes to the sidecar root. A
+    /// root-only or graceful-only kill is exactly what the owner's
+    /// locked-file report shows a missed tree looks like.
+    #[test]
+    fn taskkill_tree_command_is_tree_forced_and_pid_scoped() {
+        assert_eq!(taskkill_tree_args(4242), ["/T", "/F", "/PID", "4242"]);
+        assert_eq!(taskkill_tree_args(u32::MAX), ["/T", "/F", "/PID", "4294967295"]);
+    }
+
+    #[test]
+    fn wait_until_confirmed_returns_true_on_first_probe() {
+        let confirmed = wait_until_confirmed(
+            || true,
+            Instant::now() + Duration::from_millis(1_000),
+            Duration::from_millis(50),
+        );
+        assert!(confirmed);
+    }
+
+    #[test]
+    fn wait_until_confirmed_times_out_when_never_confirmed() {
+        let confirmed = wait_until_confirmed(
+            || false,
+            Instant::now() + Duration::from_millis(40),
+            Duration::from_millis(5),
+        );
+        assert!(!confirmed);
+    }
+
+    #[test]
+    fn wait_until_confirmed_polls_until_the_probe_flips() {
+        let mut probes = 0u32;
+        let confirmed = wait_until_confirmed(
+            || {
+                probes += 1;
+                probes >= 3
+            },
+            Instant::now() + Duration::from_millis(1_000),
+            Duration::from_millis(1),
+        );
+        assert!(confirmed);
+        assert_eq!(probes, 3);
+    }
+
+    /// The "few hundred ms" handle-release contract: long enough for the
+    /// kernel to finish closing a terminated tree's file handles (the gap
+    /// R94-B's backstops still lost the installer's race in), short enough
+    /// that the update click doesn't feel stalled.
+    #[test]
+    fn handle_release_grace_is_a_few_hundred_ms() {
+        let ms = HANDLE_RELEASE_GRACE.as_millis();
+        assert!(ms >= 100 && ms <= 1_000, "HANDLE_RELEASE_GRACE was {ms}ms");
+    }
+
+    #[test]
+    fn outcome_descriptions_say_what_happened() {
+        assert!(InstallKillOutcome::NoChild.describe().contains("no live child"));
+        assert!(InstallKillOutcome::Graceful { waited_ms: 821 }
+            .describe()
+            .contains("gracefully after 821ms"));
+        assert!(InstallKillOutcome::TaskKilled { waited_ms: 5_123 }
+            .describe()
+            .contains("taskkill /T /F"));
+    }
+
+    /// A recording InstallKillTarget — every contract move appends its name,
+    /// and `exits_after: Some(n)` makes `has_exited` flip true on the n-th
+    /// probe (None = never exits, forcing the taskkill fallback).
+    #[derive(Default)]
+    struct RecordingTarget {
+        calls: Vec<&'static str>,
+        exits_after: Option<u32>,
+        probes: u32,
+    }
+
+    impl super::InstallKillTarget for RecordingTarget {
+        fn signal_graceful(&mut self) {
+            self.calls.push("ask");
+        }
+        fn has_exited(&mut self) -> bool {
+            self.probes += 1;
+            self.calls.push("probe");
+            match self.exits_after {
+                Some(n) => self.probes >= n,
+                None => false,
+            }
+        }
+        fn kill_tree_now(&mut self) {
+            self.calls.push("taskkill-tree");
+        }
+        fn reap(&mut self) {
+            self.calls.push("reap");
+        }
+    }
+
+    /// THE R96-I ORDERING CONTRACT, pinned without a real process: the
+    /// graceful ask fires BEFORE any probe, the tree force-kill never fires
+    /// on the graceful path, and the reap always runs before the sequence
+    /// returns.
+    #[test]
+    fn install_kill_ordering_graceful_path() {
+        let mut target = RecordingTarget {
+            exits_after: Some(2),
+            ..Default::default()
+        };
+        let outcome = super::install_kill_sequence(
+            &mut target,
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+            Duration::ZERO,
+        );
+        match outcome {
+            InstallKillOutcome::Graceful { waited_ms } => assert!(waited_ms < 5_000),
+            other => panic!("expected Graceful, got {other:?}"),
+        }
+        assert_eq!(target.calls, ["ask", "probe", "probe", "reap"]);
+    }
+
+    /// The fallback path: when the bounded wait expires, the ask still came
+    /// first, the probes ran for the whole budget, and the tree kill + reap
+    /// follow in order. (Grace 50ms/poll 5ms ≈ ten probes — enough slack
+    /// that a briefly stalled CI runner cannot flake the probe count.)
+    #[test]
+    fn install_kill_ordering_taskkill_fallback_path() {
+        let mut target = RecordingTarget {
+            exits_after: None,
+            ..Default::default()
+        };
+        let outcome = super::install_kill_sequence(
+            &mut target,
+            Duration::from_millis(50),
+            Duration::from_millis(5),
+            Duration::ZERO,
+        );
+        match outcome {
+            InstallKillOutcome::TaskKilled { waited_ms } => assert!(waited_ms >= 50),
+            other => panic!("expected TaskKilled, got {other:?}"),
+        }
+        let calls = target.calls;
+        assert_eq!(*calls.last().unwrap(), "reap");
+        assert_eq!(calls.iter().filter(|c| *c == "ask").count(), 1);
+        assert_eq!(calls.iter().filter(|c| *c == "taskkill-tree").count(), 1);
+        assert!(
+            calls.iter().filter(|c| *c == "probe").count() >= 2,
+            "the budget must be spent polling, not skipped"
+        );
+        let ask_at = calls.iter().position(|c| *c == "ask").unwrap();
+        let first_probe = calls.iter().position(|c| *c == "probe").unwrap();
+        let last_probe = calls.iter().rposition(|c| *c == "probe").unwrap();
+        let kill_at = calls.iter().position(|c| *c == "taskkill-tree").unwrap();
+        assert!(ask_at < first_probe, "the graceful ask must precede every probe");
+        assert!(
+            last_probe < kill_at,
+            "the tree kill only after the budget is spent"
         );
     }
 }

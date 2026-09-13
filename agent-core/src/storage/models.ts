@@ -156,7 +156,8 @@ function isReasoningEffortLevel(value: string): value is ReasoningEffortLevel {
  * shape-invalid JSON reads back as null (unknown) — never throws, never
  * trusts. Effort strings outside the shared vocabulary are dropped, so a
  * hand-edited database can never smuggle an unsupported value past the
- * row mapper. */
+ * row mapper; the same membership rule applies to defaultEffort (ROUND-96
+ * R96-F: a "none"/out-of-vocabulary default reads as absent). */
 function parseReasoningSupport(raw: string | null): ModelReasoningSupport | null {
   if (raw === null || raw.trim() === "") return null;
   let parsed: unknown;
@@ -174,7 +175,16 @@ function parseReasoningSupport(raw: string | null): ModelReasoningSupport | null
     (effort): effort is ReasoningEffortLevel =>
       typeof effort === "string" && isReasoningEffortLevel(effort),
   );
-  return { supported: record.supported, efforts };
+  // ROUND-96 (R96-F): the provider's published default rung — same
+  // vocabulary membership, dropped (never trusted) when invalid.
+  const rawDefault = record.defaultEffort;
+  const defaultEffort =
+    typeof rawDefault === "string" && isReasoningEffortLevel(rawDefault) ? rawDefault : undefined;
+  return {
+    supported: record.supported,
+    efforts,
+    ...(defaultEffort !== undefined ? { defaultEffort } : {}),
+  };
 }
 
 /** Canonical serialization for the reasoning_support column: deduped and
@@ -182,12 +192,21 @@ function parseReasoningSupport(raw: string | null): ModelReasoningSupport | null
  * byte-identical blobs (row comparisons + tests stay deterministic). Values
  * outside the vocabulary are dropped — the route gate has already 400'd
  * them for API callers; direct-storage callers get the same normalization
- * for free. */
+ * for free. ROUND-96 (R96-F): defaultEffort rides when present (and
+ * within the vocabulary — parse and serialize agree on canonical bytes). */
 function serializeReasoningSupport(value: ModelReasoningSupport): string {
   const efforts = REASONING_EFFORT_LEVELS.filter((level) =>
     (value.efforts as readonly string[]).includes(level),
   );
-  return JSON.stringify({ supported: value.supported, efforts });
+  const defaultEffort =
+    value.defaultEffort !== undefined && isReasoningEffortLevel(value.defaultEffort)
+      ? value.defaultEffort
+      : undefined;
+  return JSON.stringify({
+    supported: value.supported,
+    efforts,
+    ...(defaultEffort !== undefined ? { defaultEffort } : {}),
+  });
 }
 
 function toModel(row: ModelRow): ModelRecord {
@@ -669,7 +688,14 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: true,
-    reasoningSupport: { supported: true, efforts: ["minimal", "low", "medium", "high"] },
+    // ROUND-96 (R96-F): the LIVE 2026-09-13 ladder — ["max","high","medium",
+    // "low","minimal","none"] with default "high" (the R95 fold hid the max
+    // rung; "none" is dropped at the merge edge).
+    reasoningSupport: {
+      supported: true,
+      efforts: ["minimal", "low", "medium", "high", "max"],
+      defaultEffort: "high",
+    },
   },
   {
     modelId: "nvidia/nemotron-3.5-lightning:free",
@@ -822,7 +848,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: false,
-    reasoningSupport: { supported: true, efforts: ["low", "medium"] },
+    reasoningSupport: { supported: true, efforts: ["low", "medium"], defaultEffort: "medium" },
   },
   {
     modelId: "nvidia/nemotron-3-ultra-550b-a55b:free",
@@ -836,7 +862,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: false,
-    reasoningSupport: { supported: true, efforts: ["medium", "high"] },
+    reasoningSupport: { supported: true, efforts: ["medium", "high"], defaultEffort: "high" },
   },
   {
     modelId: "nvidia/nemotron-3.5-content-safety:free",
@@ -878,7 +904,14 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: true,
-    reasoningSupport: { supported: true, efforts: ["minimal", "low", "medium", "high"] },
+    // ROUND-96 (R96-F): the LIVE 2026-09-13 ladder — ["max","high","medium",
+    // "low","minimal","none"] with default "high" (the R95 fold hid the max
+    // rung; "none" is dropped at the merge edge).
+    reasoningSupport: {
+      supported: true,
+      efforts: ["minimal", "low", "medium", "high", "max"],
+      defaultEffort: "high",
+    },
   },
 ];
 
@@ -938,7 +971,13 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
-    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"] },
+    // ROUND-96 (R96-F): the LIVE 2026-09-13 ladder — ["xhigh","high","medium",
+    // "low","none"] with default "medium" ("none" dropped at the merge edge).
+    reasoningSupport: {
+      supported: true,
+      efforts: ["low", "medium", "high", "xhigh"],
+      defaultEffort: "medium",
+    },
   },
   {
     modelId: "openai/gpt-5.1",
@@ -952,7 +991,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
-    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"] },
+    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"], defaultEffort: "medium" },
   },
   {
     modelId: "openai/gpt-5-mini",
@@ -966,7 +1005,8 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
-    reasoningSupport: { supported: true, efforts: ["minimal", "low", "medium", "high"] },
+    // ROUND-96 (R96-F): live default "medium" on ["high","medium","low","minimal"].
+    reasoningSupport: { supported: true, efforts: ["minimal", "low", "medium", "high"], defaultEffort: "medium" },
   },
   {
     modelId: "openai/gpt-5-nano",
@@ -980,7 +1020,8 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
-    reasoningSupport: { supported: true, efforts: ["minimal", "low", "medium", "high"] },
+    // ROUND-96 (R96-F): live default "medium" on ["high","medium","low","minimal"].
+    reasoningSupport: { supported: true, efforts: ["minimal", "low", "medium", "high"], defaultEffort: "medium" },
   },
   {
     modelId: "openai/o4-mini",
@@ -1064,7 +1105,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
-    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"] },
+    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"], defaultEffort: "medium" },
   },
   {
     modelId: "google/gemini-3.7-flash",
@@ -1078,7 +1119,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
-    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"] },
+    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"], defaultEffort: "medium" },
   },
   {
     modelId: "google/gemini-2.5-pro",
@@ -1120,7 +1161,14 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
-    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"] },
+    // ROUND-96 (R96-F): the LIVE 2026-09-13 ladder — ["xhigh","high","medium",
+    // "low"] with default "high" (the R95 fold flattened it to
+    // ["low","medium","high"], hiding the model's actual top rung).
+    reasoningSupport: {
+      supported: true,
+      efforts: ["low", "medium", "high", "xhigh"],
+      defaultEffort: "high",
+    },
   },
   {
     modelId: "x-ai/grok-build-0.1",

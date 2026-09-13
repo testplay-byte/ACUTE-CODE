@@ -107,6 +107,157 @@ done for the round; the workstream map follows.
   VLM pass for the surfaces that changed).
 - CI green on the final push; v0.94.0 released with sha256-verified assets.
 
+## §3 Workstream E — the thinking area finally follows its own stream
+
+**The root cause (the third report was right — it was never the scroller):**
+a LIVE thinking entry in a segment with NO tool entries (the norm at every
+turn's start — the model thinks before it acts) rendered via
+`BareWorkingEntries`, which never passes `live` down. No `live` → no
+auto-expand, no stick-to-bottom, no jump pill. The R95-D machinery was
+correct but unreachable for thinking-first turns.
+
+**The fix (commit ee1cf82):** the live-section's `isWork` check gained the
+clause "the segment carrying the LIVE entry renders as a live
+WorkingSection" — a thinking-first turn now gets the "Working" header, the
+auto-expanding row, the stick-to-bottom scroller, and the inner
+"Jump to latest" pill. Pinned by the R96-E regression test (a live thinking
+turn with no tool entries → the live section + the scroller + the follow).
+
+## §4 Workstream B — the agent core loop reliability
+
+**The loop guard is WARN-ONLY and identity-honest (commit 02c7b80).**
+The R51 guard compared the DISPLAY summary — and `summarizeArgs` DROPS
+every numeric arg, so `read_file {offset:1}` and `{offset:5000}` rendered
+identical ("path: big.html") and the guard STOPPED the owner's healthy
+paged read at call 5. The R96 guard:
+- compares the RAW args (threaded through `ChatToolCall.args` in both the
+  sync and streamed adapters; display/persisted surfaces keep using the
+  summary — raw args never persist or emit);
+- NEVER stops (the owner: "it will only warn the user and it will pass the
+  generation"): identical calls warn at 3 and re-warn every 3 more;
+  consecutive failures warn at 6; the model repeating the EXACT same final
+  text warns at 3 (any tool activity resets it — the owner's loop shape is
+  text-only repetition);
+- warns honestly: a persisted `turn.warning` event + a live SSE
+  `{type:"turn.warning"}` frame — never a "generation failed" card over a
+  passing turn; LOOP_GUARD is retired as a PRODUCED outcome code (legacy
+  rows still render).
+The owner's exact paged-read shape (offsets 1/5000/10000/…/35000 of one
+file, identical summaries) is pinned in BOTH paths: zero warnings.
+
+**Completion = the model's own stop (the "role=user" fix).** The
+`continueIfUnfinished` phrase gate was the outlier (research finding #1:
+every mature system ends on the model's tool-less stop) and the direct
+cause of the owner's report — a tool-using final iteration without a magic
+phrase forced an assistant-last continuation DeepSeek@OpenRouter rejected
+with "The last message must have role=user" (attempts: 2, over WORK THAT
+WAS ALREADY DONE). Now:
+- a tool-using iteration with non-empty text ENDS the turn (the phrase
+  survives only as the ONE todos-continuation's heuristic: unfinished
+  todos + a signal-less text → exactly one user-role continuation);
+- the MESSAGES-SHAPE GUARANTEE: at every provider-call boundary, an
+  assistant-last outgoing list gains a user-role nudge — the shape can
+  never reach the wire;
+- deterministic request-shape errors classify FAIL-FAST (no blind
+  retries);
+- a post-completion continuation's failure KEEPS the completed answer:
+  ok:true + a turn.warning ("continuation failed after the completed
+  answer — the answer above stands"), never "Generation failed" over
+  finished work;
+- the sync path's abort-vs-completion race fixed: a stopped child reports
+  the honest stop even when its in-flight answer completed (the R48-e1
+  contract restored under the new break order).
+
+**The stuck stop button.** Every terminal SSE frame (done | error |
+stopped) now retires `streamBusy` AT THE FRAME — not only in the read
+loop's finally, which a hanging connection never reaches — plus an 8s
+watchdog force-cleans a never-settling stream (freezing the live turn as
+stopped so partial work stays visible). Pinned with a never-closing-stream
+regression test (the owner's "had to switch to another project and come
+back" report is dead).
+
+## §5 Workstream C — the tools precision + power round (commit 02c7b80)
+
+- **read_file is WHOLE-file-first**: under a 48KB budget the entire file
+  returns in one call (the owner: "it could have read the whole HTML file
+  in a single go"); only genuinely large files page — and the marker then
+  carries the file's total line count + the EXACT next call. The
+  description no longer TEACHES paging.
+- **search_code has ripgrep semantics**: `output_mode`
+  (content / files_with_matches / count), context lines, first-class
+  regex (the legacy `/pattern/` form still parses), .gitignore-respecting
+  walk, binary + oversize skips, per-file match grouping with "…N more in
+  this file" truncation, and honest truncation flags — the model can
+  TARGET without reading everything (the owner's "smarter techniques
+  rather than checking each and every single file").
+- **edit_file is surgical**: atomic `edits[]` batches (all anchors
+  validated in sequence, one write, the failing index reported, NO partial
+  application), `replaceAll` with the count, and the ONE variant rung —
+  whitespace-normalized matching, named in the output when it fires (the
+  owner: "It will try its variants"). The model-facing output confirms
+  precisely ("Edited path: 2 replacements, +12 −3 lines").
+- **write_file** snapshots new-file creates (before=null) so the UI's
+  diff story covers creates too.
+
+## §6 Workstream D — the prompts + skills system (commit 02c7b80)
+
+- **Three owner-directed prompt sections** (composed behind the loop and
+  code-navigation, every phrase content-pinned): BATCH DISCIPLINE ("issue
+  them ALL in ONE response… `a && b`… one-call-one-wait is the
+  anti-pattern"), COMPLETION DISCIPLINE (the explicit "Task complete."
+  ending line — the exact phrase the runtime's heuristic knows — never
+  pad, never restart), PRECISION DISCIPLINE (the owner's own example:
+  "CHANGE X TO Y IN FILE F: search → read F → edit the exact text →
+  verify. NEVER analyze the whole project (or a whole HTML file) when one
+  file and one string are named"). The D6 budget held by trimming to the
+  load-bearing lines; the bound moved 22K → 23K with the rationale
+  documented in both the section and the pin.
+- **Four owner-named seeded skills**: `planning` (decompose → todo_write
+  → verify per milestone → re-plan on surprise), `ui-design` (the app's
+  design docs as spec + screenshot verification), `error-testing`
+  (reproduce → read the REAL error → one hypothesis → targeted test),
+  `large-project-navigation` (search-first orientation, import-following,
+  context budgeting, the todo list as cross-step memory).
+- **The `search_skills` discovery tool** (fuzzy over names + descriptions
+  + reference titles, ranked, capped at 8, honest no-match, the
+  computer-use gate respected) — the owner's "It can search for the
+  skills too if it needs to."
+- **The SKILLS listing is BUDGET-CAPPED** (count + char budgets; the
+  seeded core lists intact on default installs; over budget → the honest
+  "…and M more — search_skills to discover them").
+- Migration 0036 + TOOL_NAMES + TOOL_CATALOG carry search_skills (the
+  read_skill companion rule — a skill-reading agent is a skill-searching
+  agent; user curation never widened).
+
+## §7 Workstream I — the installer's locked files (src-tauri)
+
+The v0.93 updater launched the installer BEFORE the sidecar teardown
+finished; `TerminateProcess` closes handles asynchronously, so "kill
+issued" ≠ "files writable" and the NSIS File instructions lost the race
+twice (`win32 x64.node`, then `node.exe`). The new contract in
+`update.rs` → `sidecar::shutdown_before_install`, enforced BEFORE the
+installer launches: (a) graceful `POST /internal/shutdown` ask, (b) a
+bounded 5s wait polling for a REAL exit, (c) the process-tree taskkill
+(terminal jobs + PowerShell helpers included), (d) a 300ms
+handle-release grace — only then does the installer run. Eight new unit
+tests pin the ordering (graceful and fallback shapes); `cargo check` is
+CI's gate (no Rust toolchain in the sandbox — honestly noted).
+
+## §8 Verification so far (B/C/D/E/I)
+
+- `pnpm lint` clean; both typechecks clean (root + agent-core).
+- **agent-core: 2,203/2,203 tests** (106 files) — including the rewritten
+  loop-guard suite (16 tests: the warn-only contract, the paged-read pins
+  in both paths), the r96-prompts-skills suite (35: sections, budget,
+  skills, search_skills), the r96-tools-precision + r96-search-precision
+  suites (C's 40+), and the ~40 updated contract pins (completion
+  semantics, tool counts, section counts, the golden regenerated with the
+  R96 note).
+- **frontend: 1,149/1,149** — including the R96-E thinking-first test
+  and the stuck-stop-button hanging-stream regressions.
+- Workstreams F (reasoning ladders), G (browser), H (chat diffs) are in
+  flight; J (live-fire) and K (release) follow.
+
 ## §9 The owner's TEST CHECKLIST (what to try on v0.94.0)
 
 1. Send a simple build task (the coffee-timer class) and WATCH THE THINKING

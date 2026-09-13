@@ -114,6 +114,16 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running the tauri application")
         .run(|app, event| {
+            // The app's ONE exit funnel (R53 §2.4): plain quits AND update
+            // exits both land here — update.rs schedules `app.exit(0)`
+            // 1.5s after the installer launches. Since R96-I the update path
+            // kills the sidecar tree BEFORE the installer is ever launched
+            // (sidecar::shutdown_before_install in update.rs), so by the time
+            // this runs on an update exit the child is already reaped and
+            // shutdown() returns at its `let Some(…)` — the no-op backstop it
+            // is for every other exit. RunEvent::ExitRequested is
+            // deliberately NOT handled: nothing here prevents an exit, so a
+            // second kill wired into it would only duplicate this one.
             if let tauri::RunEvent::Exit = event {
                 sidecar::shutdown(app);
             }

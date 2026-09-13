@@ -7,7 +7,7 @@
  *    root (escape / missing project → per-file error, never a 500), absolute
  *    paths read as-is (user-picked files).
  *  - Both send routes (POST /sessions/:id/messages and /messages/stream):
- *    thinkingLevel validation (default|low|high|max), attachments validation
+ *    thinkingLevel validation (default|low|high|max|xhigh|medium), attachments validation
  *    (≤20 items, non-empty name ≤200 chars, text capped to 128KB), and the
  *    persisted message.user payload carrying `attachments`.
  *  - The runtime threads thinkingLevel into the chat adapter input and
@@ -461,9 +461,10 @@ describe("POST /api/v1/attachments/upload (ROUND-67 R67-A)", () => {
 // ── Send-route validation: thinkingLevel + attachments ──────────────────────
 
 describe("composer send-field validation (ROUND-50 R50-c1)", () => {
-  // ROUND-95 (R95-E): "medium" joins the accepted set (models whose detected
-  // ladder tops out below high offer it — shared's THINKING_LEVELS widened).
-  it.each(["default", "low", "medium", "high", "max"] as const)(
+  // ROUND-95 (R95-E): "medium" joins the accepted set; ROUND-96 (R96-F):
+  // "xhigh" too (models whose detected ladders carry it offer the rung —
+  // shared's THINKING_LEVELS widened).
+  it.each(["default", "low", "medium", "high", "xhigh", "max"] as const)(
     "POST /messages accepts thinkingLevel %s (validated against the shared vocabulary)",
     async (level) => {
       const sessionId = await makeSession();

@@ -13,6 +13,22 @@ import { withAlpha } from "../../dashboard/helpers";
 import { useTimeoutClear } from "../../../hooks/use-timeout-clear";
 import { useScrollFade } from "../../../lib/useScrollFade";
 import { useDismiss } from "./composer-utils";
+// ROUND-96 (R96-G): the popover's OVERLAY-WINDOW ladder — a DOM popover can
+// never paint above the OS-level browser webview, so inside the Tauri shell
+// the usage card rides the owned transparent menu-overlay window instead
+// (the R90-C2/R92-A vehicle) and hovering the token usage never pauses the
+// browser behind the "menu is open" caption.
+import { isNativeBrowserAvailable } from "../../../lib/native-browser";
+import {
+  estimateUsageCardHeight,
+  hideMenuOverlay,
+  onMenuOverlayClose,
+  onMenuOverlayHover,
+  showMenuOverlay,
+  type UsageCardPayload,
+  type UsageLinePayload,
+  type UsageSectionPayload,
+} from "../../../lib/menu-overlay";
 
 // ── ROUND-51 (R51-c): donut color grading ────────────────────────────────────
 
@@ -75,6 +91,119 @@ const VIEWPORT_MARGIN_PX = 12;
 const POPOVER_MIN_HEIGHT_PX = 120;
 /** The context report's live-refresh cadence while a turn streams. */
 export const CONTEXT_LIVE_REFETCH_MS = 2_500;
+
+/** R96-G: the menu-overlay window's page paints a 6px padding around the
+ * card — the OS window must reserve it on both axes (the R92-A menus' same
+ * OVERLAY_CARD_PADDING arithmetic). */
+const OVERLAY_WINDOW_PADDING_PX = 6;
+
+// ── ROUND-96 (R96-G): the usage card payload (pure — exported for tests) ─────
+
+/** One usage line (the exported type is the payload's). */
+function line(label: string, value: string, opts: { note?: string; strong?: boolean } = {}): UsageLinePayload {
+  return { label, value, ...opts };
+}
+
+/** One session group compressed to a single read-out line (the DOM popover
+ * carries the full Turns/calls/tokens/cost rows; the overlay card is a
+ * hover READ — the group's headline numbers, the DOM one a click away). */
+function sessionLine(label: string, totals: SessionUsageTotals): UsageLinePayload {
+  const activity =
+    totals.providerCalls !== undefined
+      ? `${totals.requests} turns · ${totals.providerCalls} calls`
+      : `${totals.requests} turns`;
+  return line(label, `${fmtTokens(totals.inputTokens)} ↑ · ${fmtTokens(totals.outputTokens)} ↓`, {
+    note: totals.costUsd > 0 ? `${activity} · $${totals.costUsd.toFixed(4)}` : activity,
+  });
+}
+
+/**
+ * ROUND-96 (R96-G): the ContextDonut popover's content as the structured
+ * usage-card payload the overlay window renders — the measured/estimated
+ * rows, the model line, the breakdown, the cache line, the session split,
+ * and the compaction/provenance note (the owner's named rows), all
+ * JSON-safe strings. `null` when there is nothing to say yet (the same
+ * empty/loading states the DOM popover shows). Pure; exported for tests.
+ */
+export function buildUsageCardSections(
+  data: SessionContextReport | null,
+  opts: { isError: boolean; sessionId: string | null },
+): { title: string; sections: UsageSectionPayload[]; note?: string } | null {
+  if (data === null) {
+    const why = opts.isError
+      ? "context report unavailable"
+      : opts.sessionId === null
+        ? "starts with the first message"
+        : "loading context report…";
+    return { title: "Context window usage", sections: [{ title: "Report", lines: [line("Status", why)] }] };
+  }
+  const window_ = data.contextWindow;
+  const pct = window_ > 0 ? Math.min(100, (data.usedTokens / window_) * 100) : 0;
+  const windowLines: UsageLinePayload[] = [
+    line("Projected", `~${Math.round(pct)}%`, { strong: true }),
+    line("Estimated", `${fmtTokens(data.usedTokens)} / ${fmtTokens(window_)}`, { note: "of window" }),
+  ];
+  if (data.actual != null) {
+    windowLines.push(line("Measured", fmtTokens(data.actual.inputTokens), { strong: true, note: "at last request" }));
+  } else {
+    windowLines.push(line("Measured", "not yet", { note: "the first reply reports it" }));
+  }
+  windowLines.push(
+    line(
+      "Model",
+      data.actual != null && data.actual.model !== data.model
+        ? `next ${data.model} · measured ${data.actual.model}`
+        : data.model,
+    ),
+  );
+  const sections: UsageSectionPayload[] = [{ title: "Window", lines: windowLines }];
+  sections.push({
+    title: "Breakdown",
+    lines: [
+      line("Messages", fmtTokens(data.breakdown.messages)),
+      line("System prompt", fmtTokens(data.breakdown.systemPrompt)),
+      line("System tools", fmtTokens(data.breakdown.systemTools)),
+      line("MCP tools", fmtTokens(data.breakdown.mcpTools)),
+      line("Memory & skills", fmtTokens(data.breakdown.memory)),
+      line("Meta & project", fmtTokens(data.breakdown.meta)),
+    ],
+  });
+  const hitRate = data.cache.hitRate !== null ? `${Math.round(data.cache.hitRate * 100)}%` : "—";
+  sections.push({
+    title: "Cache",
+    lines: [
+      line("Hit rate", hitRate, {
+        note: data.cache.hitRate === null && data.cache.inputTokens > 0 ? "not reported by this provider" : undefined,
+      }),
+      ...(data.cache.inputTokens > 0
+        ? [line("Cached input", `${fmtTokens(data.cache.cachedInputTokens)} / ${fmtTokens(data.cache.inputTokens)}`)]
+        : []),
+    ],
+  });
+  const split = data.usage ?? null;
+  const mainTotals = split?.main ?? data.sessionTotals;
+  const subagentTotals = split?.subagents ?? { inputTokens: 0, outputTokens: 0, requests: 0, costUsd: 0 };
+  const combinedTotals = split?.combined ?? mainTotals;
+  sections.push({
+    title: "Session",
+    lines: [
+      sessionLine("Main agent", mainTotals),
+      sessionLine("Sub-agents", subagentTotals),
+      sessionLine("Combined", combinedTotals),
+    ],
+  });
+  const noteParts: string[] = [];
+  if (data.compaction !== undefined) {
+    noteParts.push(
+      `compacted · ${data.compaction.droppedMessages} messages summarized · ~${fmtTokens(data.compaction.tokensSaved)} saved`,
+    );
+  }
+  if (data.contextWindowSource === "override") noteParts.push(`${fmtTokens(window_)} window · your override`);
+  else if (data.contextWindowSource === "catalog") noteParts.push(`${fmtTokens(window_)} window · catalog default`);
+  else if (data.contextWindowSource === "default")
+    noteParts.push(`${fmtTokens(window_)} window assumed — set it in Settings → Models`);
+  return { title: "Context window usage", sections, note: noteParts.length > 0 ? noteParts.join(" · ") : undefined };
+}
 
 /** SVG donut ring — the toolbar icon and the popover's big donut share the math.
  * ROUND-83 (R83): optional `markerFrac` draws a thin radial TICK at a given
@@ -353,6 +482,113 @@ export function ContextDonut({
     setPinned(false);
   }, triggerWrapRef);
 
+  // ── ROUND-96 (R96-G): the popover's OVERLAY-WINDOW ladder ────────────────
+  // Owner: "when I try to hover over the total number of token usage that has
+  // been done, it apparently hides the browser and says, 'Browser paused
+  // while the menu is open.' This is not a great experience." A DOM popover
+  // can never paint above the OS-level browser webview, so inside the Tauri
+  // shell the usage card rides the R90-C2/R92-A MENU OVERLAY WINDOW (an
+  // owned transparent OS window that DOES ride above the webview) and the
+  // browser never pauses. `overlayLeg`:
+  //  · "pending" — the overlay attempt is not resolved yet (web mode never
+  //                resolves it — the isNativeBrowserAvailable() check below
+  //                short-circuits the gate); the DOM portal stays DOWN so
+  //                it can never flash for a frame (a one-frame portal over
+  //                the panel would re-fire the very webview guard this
+  //                ladder retires).
+  //  · "overlay" — the overlay window IS the popover; the DOM portal must
+  //                not render (a hidden duplicate would fire the guard).
+  //  · "dom"     — the overlay command failed → the plain DOM popover, the
+  //                pre-R96 behavior, for the REST of this open (a live data
+  //                refresh never re-attempts mid-hover and flashes it).
+  // The render-time gate (domLeg below) short-circuits on
+  // isNativeBrowserAvailable() so WEB mode renders the portal on the very
+  // first paint, exactly as before — every web-mode test lives on that leg.
+  const [overlayLeg, setOverlayLeg] = useState<"pending" | "overlay" | "dom">("pending");
+  /** Whether THIS popover's overlay window is the one currently up (the
+   * shared window is a singleton; the subscriptions below only act on it). */
+  const overlayUpRef = useRef(false);
+  /** R92-A's open-request token: a close (or unmount) landing between the
+   * show invoke and its resolution must not flip the leg back on. */
+  const overlayReqRef = useRef(0);
+  /** True while the show invoke is unresolved (the unmount cleanup must take
+   * the window down in that window of time too). */
+  const overlayInFlightRef = useRef(false);
+  /** True once THIS open's overlay attempt failed — data refreshes while the
+   * DOM fallback shows must not re-attempt (the flash). Reset on close. */
+  const overlayFailedRef = useRef(false);
+
+  const closeOverlayLeg = useCallback((): void => {
+    overlayReqRef.current += 1;
+    if (overlayUpRef.current || overlayInFlightRef.current) hideMenuOverlay();
+    overlayUpRef.current = false;
+    overlayInFlightRef.current = false;
+    overlayFailedRef.current = false;
+    setOverlayLeg("pending");
+  }, []);
+
+  /** The full close (both legs) — the dismissal paths' one call. The pinned
+   * mirror (pinnedRef) resets so a later hover can re-open either leg. */
+  const closePopover = useCallback((): void => {
+    clearCloseTimer();
+    cancelOpenIntent();
+    pinnedRef.current = false;
+    setPinned(false);
+    setOpen(false);
+  }, []);
+
+  // The overlay page's hover bridge (pointer enter/leave over the CARD, which
+  // lives in ITS window now): mapped onto the SAME close-grace timer the DOM
+  // popover uses — parking the pointer on the card keeps it open, leaving
+  // closes it (the R51 hover-bridge problem, restated across the boundary).
+  useEffect(
+    () =>
+      onMenuOverlayHover((hovering) => {
+        if (!overlayUpRef.current) return;
+        if (hovering) clearCloseTimer();
+        else if (!pinnedRef.current) scheduleClose();
+      }),
+    [],
+  );
+
+  // The overlay page's own close request (Escape while it somehow holds
+  // focus — it is built focusable(false); the main window's Escape rides
+  // useDismiss below, the belt to these braces).
+  useEffect(
+    () =>
+      onMenuOverlayClose(() => {
+        if (!overlayUpRef.current) return;
+        closePopover();
+      }),
+    [closePopover],
+  );
+
+  // While the OVERLAY window is the popover, the main window owns the
+  // dismissal gestures useDismiss provides for the DOM leg: any mousedown
+  // here is by definition outside the card's own OS window. Escape already
+  // rides useDismiss (its key handler is not ref-gated). A mousedown on the
+  // trigger wrapper (the donut button) is exempt — that is the pin toggle,
+  // not a dismiss (useDismiss semantics).
+  useEffect(() => {
+    if (overlayLeg !== "overlay") return;
+    const onDown = (e: MouseEvent): void => {
+      const el = triggerWrapRef.current;
+      if (el !== null && el.contains(e.target as Node)) return;
+      closePopover();
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [overlayLeg, closePopover]);
+
+  // Unmount while the overlay is up (chat/session switch) or while its show
+  // is still in flight: take the window down and invalidate the request.
+  useEffect(() => {
+    return () => {
+      overlayReqRef.current += 1;
+      if (overlayUpRef.current || overlayInFlightRef.current) hideMenuOverlay();
+    };
+  }, []);
+
   // ── ROUND-64 (R64-c): the viewport-clipped fixed layer ──────────────────
   // Owner: "when I click on the context window… it is not shown at the very
   // top. It gets cut off and it does not show properly" — the old popover
@@ -477,6 +713,86 @@ export function ContextDonut({
   const subagentTotals = split?.subagents ?? ZERO_TOTALS;
   const combinedTotals = split?.combined ?? mainTotals;
 
+  // ── R96-G: the overlay ladder's SHOW/REFRESH effect ─────────────────────
+  // Opens with the overlay attempt (the payload mirrors the DOM popover's
+  // content from the SAME report above), re-delivers the payload when the
+  // live report refreshes while the overlay is up (the window is already up
+  // — showMenuOverlay repositions + re-emits, no hide/show flash), and takes
+  // the window down the moment `open` drops. Lives here (after the report
+  // + data derivations) because it reads `data`/`report.isError`.
+  useEffect(() => {
+    if (!open) {
+      closeOverlayLeg();
+      return;
+    }
+    if (!isNativeBrowserAvailable()) return; // web/test mode → the DOM popover
+    if (overlayFailedRef.current) return; // this open already fell back to the DOM leg
+    const rect = triggerWrapRef.current?.getBoundingClientRect() ?? null;
+    if (rect === null) return;
+    const built = buildUsageCardSections(data, { isError: report.isError, sessionId });
+    if (built === null) return;
+    const payload: UsageCardPayload = {
+      kind: "usage",
+      title: built.title,
+      width: POPOVER_WIDTH_PX,
+      sections: built.sections,
+      ...(built.note !== undefined ? { note: built.note } : {}),
+      theme: {
+        card: styles.card,
+        border: styles.border,
+        softShadow: styles.softShadow,
+        text: styles.text,
+        textSecondary: styles.textSecondary,
+        textTertiary: styles.textTertiary,
+        accent: styles.accent,
+        subtleHover: styles.subtleHover,
+        isDark: styles.isDark,
+      },
+    };
+    // The DOM popover's geometry, mirrored: left-clamped, POPOVER_GAP_PX above
+    // the button, capped at the space that exists above (the estimate never
+    // pushes the window off the top of the screen — the card scrolls).
+    const vw = window.innerWidth;
+    const left = Math.min(
+      Math.max(VIEWPORT_MARGIN_PX, rect.left),
+      Math.max(VIEWPORT_MARGIN_PX, vw - POPOVER_WIDTH_PX - VIEWPORT_MARGIN_PX),
+    );
+    const maxHeight = Math.max(POPOVER_MIN_HEIGHT_PX, rect.top - POPOVER_GAP_PX - VIEWPORT_MARGIN_PX);
+    const cardHeight = Math.min(estimateUsageCardHeight(payload), maxHeight);
+    const windowWidth = POPOVER_WIDTH_PX + 2 * OVERLAY_WINDOW_PADDING_PX;
+    const anchor = {
+      left,
+      top: Math.max(0, rect.top - POPOVER_GAP_PX - cardHeight - 2 * OVERLAY_WINDOW_PADDING_PX),
+      width: windowWidth,
+      height: cardHeight + 2 * OVERLAY_WINDOW_PADDING_PX,
+    };
+    if (overlayUpRef.current) {
+      // Already up — a live data refresh re-delivers in place.
+      void showMenuOverlay(anchor, payload).catch(() => {});
+      return;
+    }
+    overlayReqRef.current += 1;
+    const seq = overlayReqRef.current;
+    overlayInFlightRef.current = true;
+    setOverlayLeg("pending");
+    void showMenuOverlay(anchor, payload).then((ok) => {
+      overlayInFlightRef.current = false;
+      if (seq !== overlayReqRef.current) {
+        if (ok) hideMenuOverlay(); // closed while the show was in flight
+        return;
+      }
+      if (ok) {
+        overlayUpRef.current = true;
+        setOverlayLeg("overlay");
+      } else {
+        // The command failed (the R91 deadlock class): the DOM popover is
+        // the honest fallback for the rest of this open, exactly as pre-R96.
+        overlayFailedRef.current = true;
+        setOverlayLeg("dom");
+      }
+    });
+  }, [open, data, report.isError, sessionId, styles, closeOverlayLeg]);
+
   // ROUND-64 (R64-c): the scroll treatment — the auto-scroll/useScrollFade
   // pair every long panel uses (scrollbar appears only while scrolling),
   // plus top/bottom card-gradient fades that render ONLY when the content
@@ -541,12 +857,14 @@ export function ContextDonut({
       >
         {/* ROUND-51 (R51-c): icon-only in the toolbar (owner: "no need to
             show the actual percentage used") — the % lives in the popover.
-            ROUND-95 (R95-F, owner: the donut "does not properly show the
-            actual context which is currently being used"): the MEASURED
-            readout — the provider's own prompt size from the last request —
-            rides BESIDE the ring at rest (no hover needed), clearly labeled
-            "measured" so it can never be mistaken for the ring's estimate
-            (the R83 one-rule: every number carries its basis). */}
+            ROUND-95 (R95-F) rode the MEASURED readout beside the ring;
+            ROUND-96 (R96-H) REVERSED that per the owner's seventh report:
+            "The context window was showing me how many tokens have been
+            used and such, but it is not how we wanted it to be. It should
+            not show that value alongside it." The ring renders ALONE at
+            rest; every number — the measured count included — lives in the
+            hover popover (+ the button's title tooltip), the R51 contract
+            the R95-F inline readout broke. */}
         <DonutRing
           size={22}
           stroke={3}
@@ -555,16 +873,6 @@ export function ContextDonut({
           color={ringColor}
           track={report.isError ? withAlpha(SEMANTIC_COLORS.danger, 0.4) : styles.subtle}
         />
-        {data !== null && data.actual != null ? (
-          <span className="flex items-baseline gap-0.5" data-context-measured-inline>
-            <span className="font-mono text-[10px] font-bold" style={{ color: styles.text }}>
-              {fmtTokens(data.actual.inputTokens)}
-            </span>
-            <span className="text-[9px] font-semibold" style={{ color: styles.textTertiary }}>
-              measured
-            </span>
-          </span>
-        ) : null}
       </button>
       {/* ROUND-64 (R64-c): the popover in a document.body PORTAL — a fixed
           layer positioned from the trigger's rect, so tall content opens
@@ -572,8 +880,14 @@ export function ContextDonut({
           chat's overflow ancestors. Border/l&f rework (owner: "its border is
           not good… improve its borders' look and feel"): borderStrong edge,
           rounded-2xl, bentoShadow + a 1px inner top highlight, and a slim
-          3px accent strip along the top. */}
-      {open && pos !== null
+          3px accent strip along the top.
+          ROUND-96 (R96-G): the portal renders ONLY on the DOM leg — web
+          mode short-circuits the gate (first paint, byte-identical to the
+          pre-R96 behavior); in the Tauri shell the overlay window holds the
+          popover, and a duplicate DOM portal (even for the one frame before
+          the show resolves) would fire the webview guard and pause the
+          browser: the exact report this round retires. */}
+      {open && pos !== null && (!isNativeBrowserAvailable() || overlayLeg === "dom")
         ? createPortal(
             <div
               ref={popoverRef}

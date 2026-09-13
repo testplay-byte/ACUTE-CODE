@@ -16,12 +16,13 @@
  *    unknown rows, null for no row at all.
  *  · API validation: POST /providers/:id/models + PATCH /models/:id accept
  *    reasoningSupport (null or {supported, efforts} within the shared
- *    vocabulary); a raw provider ladder value ("xhigh") is a 400 naming the
+ *    vocabulary); a raw provider ladder value ("none") is a 400 naming the
  *    field — normalization happens at the catalog-merge edge only.
  *  · live-catalog detection: GET /providers/:id/models parses OpenRouter's
- *    supported_parameters/reasoning fields (normalized: xhigh/max → high,
- *    none dropped), merges onto existing NULL rows (owner-set rows never
- *    touched), and leaves providers without the metadata UNKNOWN.
+ *    supported_parameters/reasoning fields (normalized: xhigh/max kept
+ *    VERBATIM per R96-F, none dropped; default_effort parsed), merges onto
+ *    existing NULL rows (owner-set rows never touched), and leaves providers
+ *    without the metadata UNKNOWN.
  *  · add-model prefill: POST /providers/:id/models prefills reasoningSupport
  *    from the live catalog for NEW rows only (existing rows keep their
  *    stored value on absent); a failed catalog fetch never fails the add.
@@ -42,6 +43,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import Database from "better-sqlite3";
 import { ProviderKeyring, clearModelCache, normalizeReasoningEfforts } from "../src/providers/registry";
+// ROUND-96 (R96-F): the models-config route's legacy auto-refresh cooldown
+// map is module-level state — reset it between tests like the model cache.
+import { clearLegacyReasoningRefreshState } from "../src/routes/providers";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { createProviderRecord } from "../src/storage/providers";
 import {
@@ -64,6 +68,7 @@ let app: FastifyInstance;
 
 beforeEach(() => {
   clearModelCache();
+  clearLegacyReasoningRefreshState();
   if (tempDir === "") tempDir = mkdtempSync(join(tmpdir(), "acute-r95b-"));
   db = openDatabase(join(tempDir, `${randomUUID()}.db`));
   createProviderRecord(db, { id: GW_ID, name: "Test Gateway", baseUrl: "https://gw.example.test/v1" });
@@ -134,18 +139,27 @@ function openRouterModelsPayload(): Record<string, unknown> {
 }
 
 describe("shared vocabulary (the wire contract)", () => {
-  it("pins REASONING_EFFORT_LEVELS to the four wire-side values, lowest → highest", () => {
-    expect(REASONING_EFFORT_LEVELS).toEqual(["minimal", "low", "medium", "high"]);
+  it("pins REASONING_EFFORT_LEVELS to the SIX wire-side values, lowest → highest", () => {
+    // ROUND-96 (R96-F): xhigh + max joined — the model's OWN rungs are kept
+    // verbatim (the owner: "I tested a model which supported high and max but
+    // it apparently did not detect that properly").
+    expect(REASONING_EFFORT_LEVELS).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
   });
 });
 
 describe("normalizeReasoningEfforts (the catalog-merge edge)", () => {
-  it("folds xhigh/max down to high and drops none + unrecognized values, deduped + ordered", () => {
+  it("keeps xhigh/max VERBATIM, drops none + unrecognized values, deduped + ordered", () => {
     expect(normalizeReasoningEfforts(["max", "xhigh", "high", "medium", "low"])).toEqual([
       "low",
       "medium",
       "high",
+      "xhigh",
+      "max",
     ]);
+    // The owner's model (deepseek-v4.1-flash, live 2026-09-13) survives
+    // verbatim — NOT folded to [low, high].
+    expect(normalizeReasoningEfforts(["max", "high", "low"])).toEqual(["low", "high", "max"]);
+    expect(normalizeReasoningEfforts(["xhigh", "high"])).toEqual(["high", "xhigh"]);
     expect(normalizeReasoningEfforts(["high", "none"])).toEqual(["high"]);
     expect(normalizeReasoningEfforts(["ultra", "minimal"])).toEqual(["minimal"]);
     expect(normalizeReasoningEfforts(["high", "high", "low"])).toEqual(["low", "high"]);
@@ -240,16 +254,17 @@ describe("R95-B: storage round-trip (the reasoning_support contract)", () => {
     });
   });
 
-  it("serializes canonically: direct-storage values are deduped + vocabulary-ordered (xhigh dropped)", () => {
+  it("serializes canonically: direct-storage values are deduped + vocabulary-ordered (xhigh KEPT — R96-F)", () => {
     // A deliberate out-of-vocabulary effort fed STRAIGHT to the storage layer
     // (the route gate 400s these — this pins the deeper defensive contract):
     // the cast stands in for a hand-edited database / non-route caller.
+    // ROUND-96 (R96-F): "xhigh" is IN the vocabulary now — kept verbatim.
     const rawEfforts = ["high", "low", "high", "xhigh"] as unknown as ReasoningEffortLevel[];
     const row = upsertModel(db, "openrouter", {
       modelId: "test/reasoner",
       reasoningSupport: { supported: true, efforts: rawEfforts },
     });
-    expect(row.reasoningSupport).toEqual({ supported: true, efforts: ["low", "high"] });
+    expect(row.reasoningSupport).toEqual({ supported: true, efforts: ["low", "high", "xhigh"] });
   });
 
   it("INSERT without the field starts UNKNOWN (the honest default)", () => {
@@ -356,9 +371,12 @@ describe("R95-B: API validation (POST /providers/:id/models + PATCH /models/:id)
       { supported: "yes", efforts: [] }, // supported not a boolean
       { supported: true, efforts: "high" }, // efforts not an array
       { supported: true }, // efforts missing
-      { supported: true, efforts: ["xhigh"] }, // RAW provider ladder value —
-      { supported: true, efforts: ["none"] }, // must be normalized first
-      { supported: true, efforts: [42] },
+      { supported: true, efforts: ["none"] }, // RAW disable switch — must be
+      { supported: true, efforts: ["ultra"] }, // normalized first (R96-F:
+      { supported: true, efforts: [42] }, // xhigh/max ARE accepted now)
+      { supported: true, efforts: [], defaultEffort: "none" }, // a disable
+      { supported: true, efforts: [], defaultEffort: "ultra" }, // switch / junk
+      { supported: true, efforts: [], defaultEffort: 42 }, // is never a default
     ]) {
       const response = await authInject({
         method: "POST",
@@ -419,6 +437,14 @@ describe("R95-B: API validation (POST /providers/:id/models + PATCH /models/:id)
       reasoningSupport: { supported: true, efforts: ["high"] },
     });
     upsertModel(db, "openrouter", { modelId: "test/plain" });
+    // ROUND-96 (R96-F): the route now runs the legacy auto-refresh when a
+    // NULL-reasoning row is served — stub the catalog (no live calls in
+    // unit tests; an empty catalog merges nothing, pinning the honest
+    // unchanged serve).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 })),
+    );
     const response = await authInject({
       method: "GET",
       url: "/api/v1/providers/openrouter/models-config",
@@ -449,12 +475,14 @@ describe("R95-B: live-catalog detection (GET /providers/:id/models)", () => {
     expect(response.statusCode).toBe(200);
     const models = response.json().models as Array<{
       id: string;
-      reasoningSupport?: { supported: boolean; efforts: string[] };
+      reasoningSupport?: { supported: boolean; efforts: string[]; defaultEffort?: string };
     }>;
-    // The wide ladder (max/xhigh/…) folded into the wire vocabulary.
+    // ROUND-96 (R96-F): the wide ladder (max/xhigh/…) survives VERBATIM and
+    // the published default rides along.
     expect(models.find((m) => m.id === "test/reasoner")?.reasoningSupport).toEqual({
       supported: true,
-      efforts: ["low", "medium", "high"],
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "high",
     });
     // Plain reasoning-only entry: supported, empty ladder.
     expect(models.find((m) => m.id === "test/plain-reasoning")?.reasoningSupport).toEqual({
@@ -497,7 +525,8 @@ describe("R95-B: live-catalog detection (GET /providers/:id/models)", () => {
 
     expect(resolveModelReasoningSupport(db, "openrouter", "test/reasoner")).toEqual({
       supported: true,
-      efforts: ["low", "medium", "high"],
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "high",
     });
     expect(resolveModelReasoningSupport(db, "openrouter", "test/no-reasoning")).toEqual({
       supported: false,
@@ -519,7 +548,8 @@ describe("R95-B: live-catalog detection (GET /providers/:id/models)", () => {
     expect(again.statusCode).toBe(200);
     expect(resolveModelReasoningSupport(db, "openrouter", "test/reasoner")).toEqual({
       supported: true,
-      efforts: ["low", "medium", "high"],
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "high",
     });
   });
 
@@ -558,14 +588,17 @@ describe("R95-B: add-model prefill (POST /providers/:id/models)", () => {
       payload: { modelId: "test/reasoner" },
     });
     expect(response.statusCode).toBe(201);
-    // Detected + normalized from the live catalog.
+    // Detected + normalized from the live catalog (R96-F: verbatim ladder
+    // + the published default).
     expect(response.json().reasoningSupport).toEqual({
       supported: true,
-      efforts: ["low", "medium", "high"],
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "high",
     });
     expect(resolveModelReasoningSupport(db, "openrouter", "test/reasoner")).toEqual({
       supported: true,
-      efforts: ["low", "medium", "high"],
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "high",
     });
     // The detection used the catalog fetch.
     expect(fetchMock).toHaveBeenCalled();

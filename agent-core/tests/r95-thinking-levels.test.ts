@@ -129,15 +129,17 @@ describe("R95-E: buildThinkingFetch (support-aware reasoning injection)", () => 
     const { fetchMock, bodies } = capturingFetch();
     vi.stubGlobal("fetch", fetchMock);
     try {
-      for (const level of ["low", "medium", "high", "max"] as const) {
+      for (const level of ["low", "medium", "high", "xhigh", "max"] as const) {
         await buildThinkingFetch(level)("https://x.test/v1", baseBody());
       }
-      expect(bodies).toHaveLength(4);
+      expect(bodies).toHaveLength(5);
       const efforts = bodies.map((b) => (JSON.parse(b) as { reasoning?: { effort?: string } }).reasoning?.effort);
-      expect(efforts).toEqual(["low", "medium", "high", "max"]);
+      // R96-F: "xhigh" rides verbatim for unknown models too (the R50
+      // passthrough contract — never blocked on a guess).
+      expect(efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
       // No invented budgets for an unknown model — the R50 wire shape.
       const budgets = bodies.map((b) => (JSON.parse(b) as { reasoning?: { max_tokens?: number } }).reasoning?.max_tokens);
-      expect(budgets).toEqual([undefined, undefined, undefined, undefined]);
+      expect(budgets).toEqual([undefined, undefined, undefined, undefined, undefined]);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -169,6 +171,7 @@ describe("R95-E: buildThinkingFetch (support-aware reasoning injection)", () => 
         ["low", "low"],
         ["medium", "medium"],
         ["high", "medium"],
+        ["xhigh", "medium"],
         ["max", "medium"],
       ];
       for (const [level] of cases) {
@@ -176,13 +179,13 @@ describe("R95-E: buildThinkingFetch (support-aware reasoning injection)", () => 
       }
       const parsed = bodies.map((b) => JSON.parse(b) as { reasoning?: { effort?: string; max_tokens?: number } });
       expect(parsed.map((p) => p.reasoning?.effort)).toEqual(cases.map((c) => c[1]));
-      expect(parsed.map((p) => p.reasoning?.max_tokens)).toEqual([undefined, undefined, undefined, undefined]);
+      expect(parsed.map((p) => p.reasoning?.max_tokens)).toEqual([undefined, undefined, undefined, undefined, undefined]);
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it("a high-capable ladder keeps high/max on high (effort only, no budget)", async () => {
+  it("a ladder without max/xhigh tops out at high — high verbatim, max steps down to it (effort only, no budget)", async () => {
     const { fetchMock, bodies } = capturingFetch();
     vi.stubGlobal("fetch", fetchMock);
     try {
@@ -230,19 +233,42 @@ describe("R95-E: buildThinkingFetch (support-aware reasoning injection)", () => 
     }
   });
 
-  it("the budget table is exactly the specced ladder (medium at the midpoint)", () => {
-    expect(REASONING_BUDGET_BY_LEVEL).toEqual({ low: 2048, medium: 4096, high: 8192, max: 16384 });
+  it("the budget table is exactly the specced ladder (medium + xhigh at their midpoints)", () => {
+    // ROUND-96 (R96-F): xhigh joins at the 12288 midpoint between high
+    // (8192) and max (16384) — the rung is real on the wire now.
+    expect(REASONING_BUDGET_BY_LEVEL).toEqual({
+      low: 2048,
+      medium: 4096,
+      high: 8192,
+      xhigh: 12288,
+      max: 16384,
+    });
   });
 });
 
 /* ── mapThinkingLevelToEffort: the pure ladder mapping ────────────────────── */
 
-describe("R95-E: mapThinkingLevelToEffort (level → the model's own ladder)", () => {
-  it("max rides the HIGHEST supported effort on every ladder", () => {
+describe("R95-E → R96-F: mapThinkingLevelToEffort (level → the model's own ladder)", () => {
+  it("ROUND-96 (R96-F): a held rung rides VERBATIM — max on a ['max','high','low'] model is \"max\", NOT \"high\"", () => {
+    // The owner's exact report: "I tested a model which supported high and
+    // max but it apparently did not detect that properly" (deepseek
+    // v4.1-flash carries ['max','high','low'] live).
+    expect(mapThinkingLevelToEffort("max", ["low", "high", "max"])).toBe("max");
+    expect(mapThinkingLevelToEffort("high", ["low", "high", "max"])).toBe("high");
+    expect(mapThinkingLevelToEffort("low", ["low", "high", "max"])).toBe("low");
+    // xhigh — its own rung when held.
+    expect(mapThinkingLevelToEffort("xhigh", ["high", "xhigh"])).toBe("xhigh");
+    expect(mapThinkingLevelToEffort("high", ["high", "xhigh"])).toBe("high");
+    expect(mapThinkingLevelToEffort("xhigh", ["low", "medium", "high", "xhigh", "max"])).toBe("xhigh");
+  });
+
+  it("max rides the HIGHEST supported rung when the ladder holds no max (the step-down)", () => {
     expect(mapThinkingLevelToEffort("max", ["low"])).toBe("low");
     expect(mapThinkingLevelToEffort("max", ["low", "medium"])).toBe("medium");
     expect(mapThinkingLevelToEffort("max", ["medium", "high"])).toBe("high");
     expect(mapThinkingLevelToEffort("max", ["minimal", "low", "medium", "high"])).toBe("high");
+    // R96-F: the step-down walks max → xhigh → high → … on a mixed ladder.
+    expect(mapThinkingLevelToEffort("max", ["high", "xhigh"])).toBe("xhigh");
   });
 
   it("an exact rung maps to itself", () => {
@@ -251,15 +277,17 @@ describe("R95-E: mapThinkingLevelToEffort (level → the model's own ladder)", (
     expect(mapThinkingLevelToEffort("high", ["low", "medium", "high"])).toBe("high");
   });
 
-  it("an unsupported level falls to the NEAREST LOWER rung", () => {
+  it("an unsupported level falls to the NEAREST LOWER rung (never up)", () => {
     expect(mapThinkingLevelToEffort("high", ["low", "medium"])).toBe("medium");
     expect(mapThinkingLevelToEffort("high", ["minimal", "low"])).toBe("low");
     expect(mapThinkingLevelToEffort("medium", ["minimal", "low", "high"])).toBe("low");
+    expect(mapThinkingLevelToEffort("xhigh", ["low", "medium", "high"])).toBe("high");
   });
 
   it("no lower rung exists → the LOWEST supported effort stands in (never a 400)", () => {
     expect(mapThinkingLevelToEffort("low", ["medium", "high"])).toBe("medium");
     expect(mapThinkingLevelToEffort("medium", ["high"])).toBe("high");
+    expect(mapThinkingLevelToEffort("max", ["medium", "high"])).toBe("high");
   });
 });
 

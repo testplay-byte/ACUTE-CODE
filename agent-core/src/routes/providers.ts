@@ -23,7 +23,9 @@ import {
   resolveKeyPool,
   resolveProvider,
   testProviderConnection,
+  type ProviderKeyring,
 } from "../providers/registry.js";
+import type { SqliteDatabase } from "../storage/db.js";
 import {
   RESERVED_PROVIDER_IDS,
   clearProviderTombstone,
@@ -54,6 +56,74 @@ import {
 } from "./models.js";
 // ROUND-95 (R95-B): the reasoning-support wire type (shared owns it).
 import type { ModelReasoningSupport } from "shared";
+
+/* ── ROUND-96 (R96-F): the LEGACY reasoning auto-refresh ────────────────────
+ *
+ * The owner: "I tested a model which supported high and max but it
+ * apparently did not detect that properly and was showing the default
+ * options. This should not happen." Root cause #2: reasoningSupport is
+ * stored per-model (migration 0035), and the catalog merge ran ONLY inside
+ * GET /providers/:id/models — the Add Models dialog's route. Models added
+ * BEFORE R95 therefore stay NULL forever unless the owner happens to open
+ * that dialog: the composer's thinking menu reads their rows through GET
+ * /providers/:id/models-config and shows the unknown-capabilities default
+ * every session.
+ *
+ * The fix: models-config itself now opportunistically re-merges. When a
+ * served row still carries reasoningSupport === null AND the provider
+ * exposes a catalog, the route re-runs the SAME merge the dialog's route
+ * does (mergeReasoningSupport over fetchProviderModels' 5-minute cache).
+ * Best-effort by construction: a fetch failure is swallowed and the rows
+ * are served exactly as stored — never a failed request. NULL-guarded and
+ * provider-scoped exactly like the R95 merge (owner-set values are never
+ * touched), so once a row gains its detected ladder this is a no-op. */
+
+/** Cooldown for FAILED refresh attempts — mirrors the registry's 5-minute
+ * model cache window so a dead provider costs at most one 10s fetch per
+ * window, while successful fetches are already rate-limited by the cache
+ * itself. Module-level state, like the model cache. */
+const LEGACY_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
+const legacyRefreshFailures = new Map<string, number>();
+
+/** Test hook: the cooldown map is module-level state. */
+export function clearLegacyReasoningRefreshState(): void {
+  legacyRefreshFailures.clear();
+}
+
+/**
+ * ROUND-96 (R96-F): re-merge detected reasoning capability onto a
+ * provider's EXISTING rows whose reasoning_support is still NULL — the
+ * pre-R95-models path that never saw the Add Models dialog. Awaits the
+ * catalog fetch (the caller serves the merged rows in the SAME response —
+ * the owner's models gain their detected ladders on the first
+ * models-config read of a session, with no user action). Returns the
+ * number of rows updated (tests only; never surfaced).
+ */
+export async function refreshLegacyReasoningSupport(
+  db: SqliteDatabase,
+  keyring: ProviderKeyring,
+  providerId: string,
+): Promise<number> {
+  // Nothing left undetected → nothing to do (the steady state after one
+  // successful merge — zero overhead on every later read).
+  if (!listModels(db, providerId).some((row) => row.reasoningSupport === null)) return 0;
+  // No catalog to consult (unknown provider / no baseUrl configured).
+  const provider = resolveProvider(db, providerId);
+  if (provider === undefined || provider.baseUrl === null) return 0;
+  // A recent FAILURE cools this provider down — one dead-provider fetch
+  // per 5-minute window, never one per read.
+  const failedAt = legacyRefreshFailures.get(providerId);
+  if (failedAt !== undefined && Date.now() - failedAt < LEGACY_REFRESH_COOLDOWN_MS) return 0;
+  try {
+    const result = await fetchProviderModels(db, keyring, providerId);
+    if (result === undefined) return 0;
+    return mergeReasoningSupport(db, providerId, result.models);
+  } catch {
+    // Best-effort: a fetch failure leaves the rows exactly as stored.
+    legacyRefreshFailures.set(providerId, Date.now());
+    return 0;
+  }
+}
 
 export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext): void {
   const { db, keyring } = ctx;
@@ -477,6 +547,15 @@ export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext
     if (resolveProvider(db, id) === undefined) {
       return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
     }
+    // ROUND-96 (R96-F): the LEGACY auto-refresh — the composer's thinking
+    // menu reads THIS route's rows, so undetected pre-R95 rows are re-merged
+    // HERE (the same null-guarded merge the Add Models dialog's route runs,
+    // over the same 5-minute catalog cache). Best-effort: a fetch failure
+    // leaves the rows as stored and the response is unchanged. The awaited
+    // merge means the rows this response serves already carry their detected
+    // ladders — the owner's models upgrade on the first read of a session,
+    // with no user action at all.
+    await refreshLegacyReasoningSupport(db, keyring, id);
     return { models: listModels(db, id) };
   });
 

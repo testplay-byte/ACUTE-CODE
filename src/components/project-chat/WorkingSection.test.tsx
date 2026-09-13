@@ -16,7 +16,7 @@ import type { ReactElement } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
-import { BareWorkingEntries, WorkingSection, assignDelegateChildren } from "./WorkingSection";
+import { BareWorkingEntries, WorkingSection, assignDelegateChildren, toolStatusDetail } from "./WorkingSection";
 import {
   ApiError,
   fetchComputerFrameRaster,
@@ -1078,6 +1078,197 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
     );
 
     expect(screen.queryByTestId("live-write-pending-row")).toBeNull();
+  });
+});
+
+// ─── ROUND-96 (R96-H): the modern-IDE DIFF BLOCK + tool status details ─────
+//
+// The owner's ask (verbatim): "When it edits a file it does not show the
+// status properly, like which parts of the code it changed and how it
+// changed them. It was not precisely changing the things as modern IDEs do."
+// + "The chat window is not handled that well… The chat area should show the
+// details properly." The data source is UNCHANGED from R46-c — the (sessionId,
+// seq)-resolved file snapshot (GET /sessions/:id/checkpoints →
+// GET /sessions/:id/snapshots/:seq) — only the RENDER changed: hunks with
+// "@@ -l,c +l,c @@" headers, +/− gutter line numbers, NEW FILE for creates,
+// and honest tail notes instead of the old silent 200-line cut.
+
+/** An edit row whose output carries the R96-C confirmation line. */
+const R96_EDIT_TOOL: ToolUseEntry = {
+  seq: 4,
+  toolName: "edit_file",
+  argsSummary: "path: src/app.ts, content: 20 chars",
+  ok: true,
+  ts: "2026-08-28T10:00:04Z",
+  outputSummary: "Edited 'src/app.ts': 2 replacements, +12 −3 lines",
+};
+
+describe("R96-H diff blocks (modern-IDE shape)", () => {
+  it("an edit row expands into the unified diff: hunk header, red/green rows, BOTH-side gutter numbers", async () => {
+    vi.mocked(fetchSessionCheckpoints).mockResolvedValue([CP]);
+    vi.mocked(fetchSnapshot).mockResolvedValue(snapshotBody(true));
+    renderExpandedTool(EDIT_TOOL);
+
+    // The hunk header — the WHERE of the change (1 del + 1 add + 1 ctx row).
+    const header = await waitFor(() => {
+      const el = document.querySelector("[data-diff-hunk-header]");
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    expect(header.textContent).toBe("@@ -1,2 +1,2 @@");
+
+    // Red: the removed line, numbered on the OLD side only.
+    const del = document.querySelector('[data-diff-type="del"]');
+    expect(del?.textContent).toContain("old line");
+    expect(del?.querySelector("[data-diff-old]")?.textContent).toBe("1");
+    // Green: the added line, numbered on the NEW side only.
+    const add = document.querySelector('[data-diff-type="add"]');
+    expect(add?.textContent).toContain("new line");
+    expect(add?.querySelector("[data-diff-new]")?.textContent).toBe("1");
+    // Context carries BOTH numbers.
+    const ctx = document.querySelector('[data-diff-type="ctx"]');
+    expect(ctx?.textContent).toContain("shared");
+    expect(ctx?.querySelector("[data-diff-old]")?.textContent).toBe("2");
+    expect(ctx?.querySelector("[data-diff-new]")?.textContent).toBe("2");
+
+    // The stats chips (+1 / −1) in the card header.
+    expect(screen.getByText("+1")).toBeTruthy();
+    expect(screen.getByText("−1")).toBeTruthy();
+  });
+
+  it("a write_file CREATE renders the ALL-GREEN NEW FILE shape (no red, no old-side numbers)", async () => {
+    vi.mocked(fetchSessionCheckpoints).mockResolvedValue([CREATE_CP]);
+    vi.mocked(fetchSnapshot).mockResolvedValue(snapshotBody(false));
+    renderExpandedTool(WRITE_TOOL);
+
+    expect(await screen.findByText("new file body")).toBeTruthy();
+    expect(document.querySelector('[data-diff-kind="create"]')?.textContent).toBe("NEW FILE");
+    // Every row is an add; nothing red, nothing contextual.
+    expect(document.querySelectorAll('[data-diff-type="add"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-diff-type="del"]').length).toBe(0);
+    expect(document.querySelectorAll('[data-diff-type="ctx"]').length).toBe(0);
+    const add = document.querySelector('[data-diff-type="add"]');
+    expect(add?.querySelector("[data-diff-new]")?.textContent).toBe("1");
+    // The git-shape create header.
+    expect(document.querySelector("[data-diff-hunk-header]")?.textContent).toBe("@@ -0,0 +1,1 @@");
+  });
+
+  it("far-apart edits render as SEPARATE hunks, each located by its own header", async () => {
+    const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
+    const before = lines.join("\n");
+    const after = before.replace("line 5\n", "FIVE\n").replace("line 35\n", "THIRTYFIVE\n");
+    vi.mocked(fetchSessionCheckpoints).mockResolvedValue([CP]);
+    vi.mocked(fetchSnapshot).mockResolvedValue({
+      id: "snap_1",
+      sessionId: SESSION_ID,
+      seq: 4,
+      path: "src/app.ts",
+      toolName: "edit_file",
+      ts: "2026-08-28T10:00:04Z",
+      beforeContent: before,
+      afterContent: after,
+    });
+    renderExpandedTool(EDIT_TOOL);
+
+    await waitFor(() => {
+      expect(document.querySelectorAll("[data-diff-hunk-header]").length).toBe(2);
+    });
+    const headers = Array.from(document.querySelectorAll("[data-diff-hunk-header]")).map(
+      (h) => h.textContent,
+    );
+    // Hunk 1 around old line 5, hunk 2 around old line 35 — located, not one blob.
+    expect(headers[0]).toContain("-2,7");
+    expect(headers[1]).toContain("-32,7");
+    // Between the hunks the far context is COLLAPSED (no "line 12" anywhere).
+    expect(screen.queryByText("line 12")).toBeNull();
+  });
+
+  it("the collapsed edit row shows its +A −B chip AT REST (from the R96-C confirmation line)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: R96_EDIT_TOOL }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    // The tool row is COLLAPSED (never clicked — the snapshot is never fetched).
+    expect(vi.mocked(fetchSessionCheckpoints)).not.toHaveBeenCalled();
+    // Yet the stats chip renders: +12 green, −3 red.
+    const chip = document.querySelector('[data-tool-status="+12 −3"]');
+    expect(chip).toBeTruthy();
+    expect(chip?.textContent).toContain("+12");
+    expect(chip?.textContent).toContain("−3");
+  });
+});
+
+describe("R96-H tool status details (toolStatusDetail — pure, honest)", () => {
+  const detail = (toolName: string, ok: boolean | null, outputSummary?: string) =>
+    toolStatusDetail({ seq: 1, toolName, argsSummary: "x", ok, ts: "t", ...(outputSummary ? { outputSummary } : {}) });
+
+  it("run_command: ok:true renders exit 0; a stamped non-zero code renders exit N (danger)", () => {
+    expect(detail("run_command", true, "build output…")).toEqual({ label: "exit 0", tone: "muted" });
+    expect(detail("run_command", false, "boom\n[exit code: 127]")).toEqual({ label: "exit 127", tone: "danger" });
+  });
+
+  it("run_command honesty: background jobs and code-less failures render NOTHING (never an invented code)", () => {
+    expect(
+      detail("run_command", true, "…\n[background job job_1] The launching shell exited cleanly…"),
+    ).toBeNull();
+    expect(detail("run_command", false, "command timed out after 120s — killed the process tree")).toBeNull();
+  });
+
+  it("edit_file: the R96-C confirmation line parses into the +A −B stats chip", () => {
+    expect(detail("edit_file", true, "Edited 'src/app.ts': 2 replacements, +12 −3 lines")).toEqual({
+      label: "+12 −3",
+      tone: "diff",
+    });
+    expect(detail("edit_file", true, "Edited 'a.ts': 1 replacement, +1 −0 lines (whitespace-normalized rung on #1)")).toEqual({
+      label: "+1 −0",
+      tone: "diff",
+    });
+    // The legacy pre-R96-C summary shape carries no stats → no chip.
+    expect(detail("edit_file", true, "edited src/app.ts")).toBeNull();
+  });
+
+  it("read_file: the marker lines carry the file's true total; numbered whole reads count", () => {
+    expect(
+      detail("read_file", true, "     1  a\n…[file truncated: showing lines 1-100 of 2400 total (8 bytes omitted after line 100) — use offset=101 to continue]…"),
+    ).toEqual({ label: "2400 lines", tone: "muted" });
+    expect(detail("read_file", true, "     1  a\n     2  b\n[end of file: returned lines 1-2 of 2]")).toEqual({
+      label: "2 lines",
+      tone: "muted",
+    });
+    expect(detail("read_file", true, "     1  a\n     2  b\n     3  c")).toEqual({ label: "3 lines", tone: "muted" });
+  });
+
+  it("read_file honesty: a summary the 4K budget CUT renders nothing (a partial count would lie)", () => {
+    expect(detail("read_file", true, "…[truncated 12000 chars]…")).toBeNull();
+    expect(detail("read_file", true, "cannot read 'x': no such file")).toBeNull();
+  });
+
+  it("search_code / search_files: the counts from their own headers", () => {
+    expect(detail("search_code", true, "12 matches in 3 files for 'foo'")).toEqual({
+      label: "12 matches · 3 files",
+      tone: "muted",
+    });
+    expect(detail("search_code", true, "1 match in 1 file for 'foo'")).toEqual({
+      label: "1 match · 1 file",
+      tone: "muted",
+    });
+    expect(detail("search_code", true, "no content matches for 'foo'")).toEqual({
+      label: "0 matches",
+      tone: "muted",
+    });
+    expect(detail("search_files", true, "5 files matching 'foo' (newest first)")).toEqual({
+      label: "5 files",
+      tone: "muted",
+    });
+  });
+
+  it("in-flight rows (ok === null) and unknown summaries render nothing", () => {
+    expect(detail("run_command", null, undefined)).toBeNull();
+    expect(detail("list_dir", true, "src\nREADME.md")).toBeNull();
   });
 });
 

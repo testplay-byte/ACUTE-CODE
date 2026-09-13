@@ -48,23 +48,37 @@ export const PERMISSION_MODES: readonly PermissionMode[] = ["full", "ask", "plan
 /**
  * ROUND-50 (R50-c1, the composer's thinking-level selector): per-SEND
  * reasoning-effort hint. "default" = provider/model default (nothing
- * injected); low/high/max map to `reasoning.effort` on chat-completions
- * wire formats. NOT persisted — sub-agents never inherit it.
+ * injected); the other values map to `reasoning.effort` on
+ * chat-completions wire formats. NOT persisted — sub-agents never inherit it.
  *
  * ROUND-95 (R95-E): "medium" JOINS the vocabulary (additive — the R50
  * owner directive was "only four options", but the R95 owner report says
  * the levels were supposed to be MODEL-SPECIFIC: models whose detected
  * effort ladder is e.g. ["low","medium"] get a Medium option, and
  * chat.ts maps every level onto the model's own ladder — see
- * ModelReasoningSupport below and REASONING_EFFORT_LEVELS). Stored
- * per-session levels from older builds stay valid (the union only
- * widened); the classic Default/Low/High/Max set remains what a model
- * with UNKNOWN capabilities offers.
+ * ModelReasoningSupport below and REASONING_EFFORT_LEVELS).
+ *
+ * ROUND-96 (R96-F, the owner: "I tested a model which supported high and
+ * max but it apparently did not detect that properly and was showing the
+ * default options. This should not happen"): "xhigh" JOINS TOO — the
+ * picker must be able to offer the model's ACTUAL top rungs verbatim
+ * (OpenRouter's live 2026-09-13 catalog: x-ai/grok-4.6 and openai/gpt-5.2
+ * carry ["xhigh","high","medium","low"], z-ai/glm-5.2 ["xhigh","high"]).
+ * Stored per-session levels from older builds stay valid (the union only
+ * widened); the classic Default/Low/High/Max set remains what a model with
+ * UNKNOWN capabilities offers.
  */
-export type ThinkingLevel = "default" | "low" | "medium" | "high" | "max";
+export type ThinkingLevel = "default" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /** The accepted thinking-level values (validation source of truth). */
-export const THINKING_LEVELS: readonly ThinkingLevel[] = ["default", "low", "medium", "high", "max"];
+export const THINKING_LEVELS: readonly ThinkingLevel[] = [
+  "default",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
 
 /**
  * ROUND-50 (R50-c1): one attachment on an outgoing user message — picked via
@@ -134,19 +148,30 @@ export interface AgentRecord {
  * vocabulary — the values ACUTE may inject as `reasoning.effort` on
  * chat-completions requests. Ordered lowest → highest.
  *
- * Providers advertise coarser or wider subsets (OpenRouter's live catalog
- * lists e.g. ["high"], ["low","medium","high"], and some entries carry
- * "xhigh"/"max"/"none" — verified against the 2026-09 snapshot). Anything
- * a provider lists that falls outside this vocabulary is NORMALIZED at the
- * catalog-merge edge in agent-core (registry.ts): "xhigh"/"max" fold down
- * to "high" (a model accepting a higher tier accepts "high"), "none" is a
- * disable switch rather than an effort and is dropped. The stored metadata
- * therefore only ever contains these four.
+ * ROUND-96 (R96-F, the owner: "I tested a model which supported high and
+ * max but it apparently did not detect that properly and was showing the
+ * default options. This should not happen. It needs to be improved and
+ * handled better"): the vocabulary now keeps the provider's OWN rungs
+ * VERBATIM — "xhigh" and "max" are real ladder values (the R95 merge edge
+ * folded both DOWN to "high", which made a detected ['max','high','low']
+ * model render a menu IDENTICAL to the unknown-capabilities default — the
+ * exact invisibility the owner reported). "none" remains OUTSIDE the
+ * vocabulary: it is a DISABLE switch, not an effort, and is dropped at the
+ * catalog-merge edge (registry.ts normalizeReasoningEfforts). Anything
+ * else a provider lists that falls outside this vocabulary is dropped
+ * there too; the stored metadata therefore only ever contains these six.
  */
-export type ReasoningEffortLevel = "minimal" | "low" | "medium" | "high";
+export type ReasoningEffortLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /** The accepted reasoning-effort values (validation source of truth). */
-export const REASONING_EFFORT_LEVELS: readonly ReasoningEffortLevel[] = ["minimal", "low", "medium", "high"];
+export const REASONING_EFFORT_LEVELS: readonly ReasoningEffortLevel[] = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
 
 /**
  * ROUND-95 (R95-B): a model row's DETECTED reasoning capability, captured
@@ -168,6 +193,14 @@ export interface ModelReasoningSupport {
    * names no discrete efforts (e.g. OpenRouter's plain reasoning-only
    * entries) — effort selection then falls back to the global levels. */
   efforts: readonly ReasoningEffortLevel[];
+  /** ROUND-96 (R96-F): the provider's PUBLISHED default rung for the model
+   * (OpenRouter `reasoning.default_effort`), normalized by the same
+   * vocabulary rules as `efforts` (a "none"/out-of-vocabulary default
+   * reads as absent). Optional + absent = unknown — ACUTE never injects a
+   * default itself (a "Default" pick injects nothing and lets the provider
+   * apply its own); the field exists so the composer's menu can SAY which
+   * rung the model would use ("model default: max"). */
+  defaultEffort?: ReasoningEffortLevel;
 }
 
 /** One provider billing line for a completed model call. */

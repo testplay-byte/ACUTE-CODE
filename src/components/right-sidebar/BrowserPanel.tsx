@@ -11,8 +11,8 @@ import {
   Smartphone,
   Shrink,
   Expand,
-  X,
 } from "lucide-react";
+import { withAlpha } from "../dashboard/helpers";
 import { useRightSidebarStore, type RightSidebarTab } from "../../lib/right-sidebar-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import {
@@ -562,6 +562,31 @@ export function BrowserPanel({
    * manual address-bar Enter — the poll's reconcile only ADOPTED the
    * URL). User navigations never bump agentNavSeq (navigateUrl drives the
    * webview itself); the 4s poll stays as the backfill.
+   *
+   * ROUND-96 (R96-G) — AGENT-NAVIGATE == ADDRESS-BAR PARITY. The owner:
+   * "The agent was trying to open up the created html file in the
+   * right-side browser but apparently it was unable to do that. It typed in
+   * the correct URL and everything was proper about it but still the
+   * right-side browser in the project browser was not showing things
+   * properly… if I went on and manually pasted in the URL of the html
+   * file, it apparently did handle it properly." Root cause: this effect
+   * used to EARLY-RETURN whenever `lastCommandedUrlRef.current ===
+   * currentUrl` — an echo guard that treated "the webview is already AT
+   * that URL" as "nothing to do". But the manual path (navigateUrl) drives
+   * the webview UNCONDITIONALLY, so the two paths diverged exactly when
+   * the agent re-navigated to the URL the panel was already showing: the
+   * agent builds/edits a local HTML file and navigates to it again to
+   * refresh the preview — the sidecar records a same-URL "title-update"
+   * (no history push), the frame still bumps agentNavSeq, and the pre-R96
+   * effect suppressed the native drive → the panel kept rendering the
+   * STALE page while pasting the same URL in the address bar (the
+   * unconditional path) reloaded the fresh file. A same-URL navigate is a
+   * RELOAD in a real browser (typing the address again re-requests; a
+   * file:// page re-reads the file) — so the agent frame now drives the
+   * webview through the exact same unconditional command, and both paths
+   * converge. The back/forward/reload actions ride the same fix: a
+   * "reload" frame whose landed URL equals the commanded one no longer
+   * no-ops.
    */
   const agentNavSeq = state?.agentNavSeq ?? 0;
   const agentNavSeqRef = useRef(agentNavSeq);
@@ -569,7 +594,10 @@ export function BrowserPanel({
     if (agentNavSeq === agentNavSeqRef.current) return;
     agentNavSeqRef.current = agentNavSeq;
     if (agentNavSeq === 0 || currentUrl === null) return;
-    if (lastCommandedUrlRef.current === currentUrl) return; // echo of our own command
+    // R96-G: NO same-URL early return — the agent's frame is an INTENT to
+    // load the URL (fresh), exactly like an address-bar submit; the
+    // lastCommandedUrl bookkeeping below only feeds the onBrowserNavigated
+    // echo suppression (no duplicate history recording), never the drive.
     lastCommandedUrlRef.current = currentUrl;
     if (!nativeMode) return; // iframe path: the navSeq key remount handles it
     if (nativeReadyRef.current) {
@@ -1191,9 +1219,18 @@ export function BrowserPanel({
       // any in-page navigation so the history/address bar stay truthful.
       if (!/^(?:https?|file):\/\//i.test(url)) return;
       // Echo suppression: we caused this navigation (address bar, agent
-      // reconcile) — the store already knows; recording it again would add
-      // duplicate history entries.
-      if (lastCommandedUrlRef.current === url) return;
+      // reconcile) — recording it again would add duplicate history entries.
+      // R96-G: an echoed navigation still LANDED — clear the loading flag.
+      // Pre-R96 the echo branch returned without touching `loading`, and a
+      // file:// navigation (whose hook URL is byte-identical to the commanded
+      // one, unlike an http URL the Url crate re-serializes with a trailing
+      // slash) never reached handleLocationMessage — so after an agent or
+      // address-bar file navigation the spinner spun forever and the reload
+      // button sat on its stop glyph over a fully rendered page.
+      if (lastCommandedUrlRef.current === url) {
+        setLoading(tabId, false);
+        return;
+      }
       lastCommandedUrlRef.current = url;
       // The user clicked a link / submitted a form / got redirected INSIDE
       // the page. Record it into the server-side history so the agent's
@@ -1201,7 +1238,7 @@ export function BrowserPanel({
       // iframe path's acute:location handler below.
       void handleLocationMessage(tabId, url);
     });
-  }, [nativeMode, tabId, handleLocationMessage]);
+  }, [nativeMode, tabId, handleLocationMessage, setLoading]);
 
   // A tab opened WITH a url (openBrowser(projectId, url)) navigates once the
   // ticket exists.
@@ -1540,6 +1577,13 @@ export function BrowserPanel({
 
   const hasPage = state !== null && state.currentUrl !== null && state.ticket !== null;
 
+  // R96-G: the address field's focus ring — a real browser's bar visually
+  // commits to the typing hand (accent border + a soft accent halo). A REF
+  // already tracked focus for the draft-sync guard; the ring needs the
+  // re-render, so a small state mirrors it ("focus rings" — the round's
+  // native-feel pass).
+  const [addressFocused, setAddressFocused] = useState(false);
+
   const emptyState = (
     <div className="h-full grid place-items-center px-6 text-center" data-testid="browser-empty">
       <div>
@@ -1596,9 +1640,14 @@ export function BrowserPanel({
       {/* ── Chrome bar: navigation + address + explicit external actions.
           R60-D: the R59 rounded-card language — each panel row is a rounded
           card on the panel's ambient strip (the pop-out window's exact
-          rhythm, at side-panel scale). ── */}
+          rhythm, at side-panel scale).
+          R96-G: an honest LOADING edge — while the tab navigates, a subtle
+          accent progress line pulses along the bar's bottom (native-feel:
+          the round's owner wants the browser to read "as a part of our
+          application itself"), and it can never stick: the echo-suppressed
+          navigation hook now clears `loading` too (file:// pages included). ── */}
       <div
-        className="shrink-0 flex items-center gap-1 px-2 h-9 rounded-[12px] border"
+        className="relative shrink-0 flex items-center gap-1 px-2 h-9 rounded-[12px] border"
         style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.15)" : styles.card }}
       >
         <button
@@ -1633,20 +1682,31 @@ export function BrowserPanel({
           }}
           disabled={!hasPage}
           data-testid="browser-reload"
-          aria-label={state?.loading ? "Stop and reload" : "Reload"}
-          title={state?.loading ? "Stop (reloads)" : "Reload"}
+          aria-label="Reload"
+          title={state?.loading ? "Reload — the page is still loading" : "Reload"}
           className="w-6 h-6 grid place-items-center rounded-md transition-colors disabled:opacity-30"
           style={{ color: styles.textSecondary }}
           onMouseEnter={(e) => { if (hasPage) e.currentTarget.style.background = styles.subtleHover; }}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
-          {state?.loading ? <X size={13} /> : <RotateCw size={12} />}
+          {/* R96-G: the reload icon SPINS while the tab loads (the classic
+              browser affordance — the old X glyph read as a stop the click
+              never performed). */}
+          <RotateCw
+            size={12}
+            className={state?.loading ? "animate-spin" : undefined}
+            data-testid="browser-reload-icon"
+          />
         </button>
 
         <form onSubmit={onSubmit} className="flex-1 min-w-0 flex items-center">
           <div
-            className="flex-1 flex items-center gap-1.5 h-7 px-2.5 rounded-full border"
-            style={{ background: styles.card, borderColor: styles.border }}
+            className="flex-1 flex items-center gap-1.5 h-7 px-2.5 rounded-full border transition-colors"
+            style={{
+              background: styles.card,
+              borderColor: addressFocused ? styles.accent : styles.border,
+              boxShadow: addressFocused ? `0 0 0 2px ${withAlpha(styles.accent, 0.18)}` : undefined,
+            }}
           >
             {state?.loading ? (
               <LoaderCircle size={11} className="shrink-0 animate-spin" style={{ color: styles.accent }} data-testid="browser-spinner" />
@@ -1658,10 +1718,12 @@ export function BrowserPanel({
               onChange={(e) => setDraft(e.target.value)}
               onFocus={(e) => {
                 urlFocusedRef.current = true;
+                setAddressFocused(true);
                 e.target.select();
               }}
               onBlur={() => {
                 urlFocusedRef.current = false;
+                setAddressFocused(false);
                 // R58-b: a blurred field shows the live URL, never stale
                 // typing (the focus-guard suppressed the sync above).
                 if (currentUrl !== null) setDraft(currentUrl);
@@ -1719,6 +1781,21 @@ export function BrowserPanel({
         >
           <ExternalLink size={13} />
         </button>
+
+        {/* R96-G: the LOADING edge — a thin accent line pulsing along the
+            chrome bar's bottom while the tab navigates (animate-pulse; no
+            new deps). aria-hidden: the spinner in the bar already carries
+            the loading announcement for assistive tech. */}
+        {state?.loading ? (
+          <div
+            aria-hidden
+            data-testid="browser-progress"
+            className="animate-pulse absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
+            style={{
+              background: `linear-gradient(90deg, transparent, ${withAlpha(styles.accent, 0.55)}, transparent)`,
+            }}
+          />
+        ) : null}
       </div>
 
       {/* ── Viewport bar: the display-size controls (R43-10 core feature).

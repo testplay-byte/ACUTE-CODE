@@ -163,13 +163,25 @@ export function buildModelFallbackFetch(): (
  *    this model takes no reasoning parameter, so sending one is a provider
  *    400 waiting to happen (the level is skipped entirely).
  *  · support.supported === true: the level maps onto the model's OWN effort
- *    ladder (mapThinkingLevelToEffort — "max" rides the highest supported
- *    effort, an unsupported level falls to the nearest lower one). The
- *    per-level reasoning.max_tokens BUDGET rides only for ladder-less
- *    reasoning models (see the live-fire correction note inside —
- *    OpenRouter refuses effort + max_tokens TOGETHER). Both merge into
- *    any existing reasoning object; a provider-set max_tokens is never
- *    overwritten.
+ *    ladder (mapThinkingLevelToEffort — the chosen rung rides VERBATIM when
+ *    the ladder holds it, else it STEPS DOWN to the nearest supported rung
+ *    at-or-below; never up, never a 400). The per-level reasoning.max_tokens
+ *    BUDGET rides only for ladder-less reasoning models (see the live-fire
+ *    correction note inside — OpenRouter refuses effort + max_tokens
+ *    TOGETHER). Both merge into any existing reasoning object; a
+ *    provider-set max_tokens is never overwritten.
+ *
+ * ROUND-96 (R96-F, the owner: "I tested a model which supported high and
+ * max but it apparently did not detect that properly and was showing the
+ * default options"): the ladder vocabulary is the WIDER six-rung one —
+ * a ['max','high','low'] model (deepseek-v4.1-flash, live 2026-09-13) now
+ * receives reasoning.effort "max" VERBATIM on a Max pick, and an
+ * ['xhigh','high'] model receives "xhigh" (a Max pick steps down, a
+ * stored X-High pick rides verbatim). The R95 fold sent both to "high",
+ * which was the owner's exact report. defaultEffort
+ * (ModelReasoningSupport.defaultEffort) rides the support blob for the
+ * UI's honesty note only — a "Default" pick still injects NOTHING (the
+ * provider applies its own published default).
  */
 export function buildThinkingFetch(
   level: ThinkingLevel,
@@ -235,24 +247,35 @@ export function buildThinkingFetch(
 
 /** ROUND-95 (R95-E): the shared effort ladder's rank (lowest → highest) —
  * the ordering mapThinkingLevelToEffort walks. Mirrors REASONING_EFFORT_LEVELS
- * in shared/src (kept local: shared stays types-only). */
+ * in shared/src (kept local: shared stays types-only). ROUND-96 (R96-F):
+ * "xhigh" and "max" join as REAL rungs — a detected ['max','high','low']
+ * ladder keeps its own top; nothing folds down anymore. */
 const EFFORT_RANK: Record<ReasoningEffortLevel, number> = {
   minimal: 0,
   low: 1,
   medium: 2,
   high: 3,
+  xhigh: 4,
+  max: 5,
 };
 
 /**
- * ROUND-95 (R95-E): map a composer ThinkingLevel onto the model's OWN
- * supported efforts. "max" rides the HIGHEST supported effort (the owner's
- * "Maximum reasoning effort" means everything the model has); "low"/"medium"
- * /"high" target their own rung; an unmapped target falls to the NEAREST
- * LOWER supported effort, and when even that does not exist (e.g. "low" on a
- * ["medium","high"] model) the LOWEST supported effort stands in — never a
- * 400, never a silent skip. Pure; expects a NON-EMPTY efforts list (the
- * empty case is handled by the caller — verbatim passthrough).
- * Exported for tests.
+ * ROUND-95 (R95-E) → ROUND-96 (R96-F): map a composer ThinkingLevel onto
+ * the model's OWN supported efforts — the WIRE contract for what
+ * `reasoning.effort` carries:
+ *
+ *  · the chosen level rides VERBATIM when the ladder holds it (a
+ *    ['max','high','low'] model + Max → "max", NOT "high" — the R95 fold
+ *    was the owner's exact bug report);
+ *  · an unheld level STEPS DOWN to the nearest supported rung ≤ the chosen
+ *    one (max → xhigh → high → medium → low → minimal) — never up, never
+ *    a 400 (an ['xhigh','high'] model + Max → "xhigh");
+ *  · when even that does not exist (e.g. "low" on a ["medium","high"]
+ *    model) the LOWEST supported effort stands in — never a 400, never a
+ *    silent skip.
+ *
+ * Pure; expects a NON-EMPTY efforts list (the empty case is handled by the
+ * caller — verbatim passthrough there). Exported for tests.
  */
 export function mapThinkingLevelToEffort(
   level: ThinkingLevel,
@@ -264,13 +287,19 @@ export function mapThinkingLevelToEffort(
     // so it rides the LOWEST effort rather than a non-vocabulary value.
     return level === "default" ? "minimal" : (level as ReasoningEffortLevel);
   }
-  if (level === "max") {
-    // The highest supported effort — high > medium > low > minimal.
-    return efforts.reduce((best, e) => (EFFORT_RANK[e] > EFFORT_RANK[best] ? e : best), efforts[0]);
+  if (level === "default") {
+    // "default" injects nothing on the wire (buildThinkingFetch gates it
+    // out); this defensive branch keeps a direct call honest — the lowest
+    // supported rung stands in.
+    return efforts.reduce(
+      (lowest, e) => (EFFORT_RANK[e] < EFFORT_RANK[lowest] ? e : lowest),
+      efforts[0],
+    );
   }
-  const target = level as ReasoningEffortLevel; // "low" | "medium" | "high"
+  const target = level as ReasoningEffortLevel; // low | medium | high | xhigh | max
   if ((efforts as readonly string[]).includes(target)) return target;
-  // Nearest lower supported effort; when none is lower, the lowest one.
+  // Nearest supported rung at-or-below the chosen one; when none is lower,
+  // the lowest one.
   let fallback: ReasoningEffortLevel | null = null;
   for (const e of efforts) {
     if (EFFORT_RANK[e] < EFFORT_RANK[target] && (fallback === null || EFFORT_RANK[e] > EFFORT_RANK[fallback])) {
@@ -285,16 +314,19 @@ export function mapThinkingLevelToEffort(
  * ROUND-95 (R95-E): the per-level reasoning.max_tokens BUDGET for models
  * with DETECTED reasoning support — the provider-level bound on runaway
  * thinking (the owner: models "stuck in the thinking loop… think for way too
- * long, more than they even need to"). low caps at 2048, high at 8192, max at
- * 16384; "medium" (the R95-E addition for [low,medium]-ladder models) sits
- * at the 4096 midpoint. "default" injects nothing at all, so it has no
- * budget entry. Applied ONLY when a reasoning object is being injected in
- * the first place, and never over a provider-set max_tokens.
+ * long, more than they even need to"). low caps at 2048, medium at the
+ * 4096 midpoint, high at 8192, max at 16384; ROUND-96 (R96-F) adds xhigh
+ * at the 12288 midpoint between high and max (the rung is real now — the
+ * ladder vocabulary keeps the model's own top rungs verbatim).
+ * "default" injects nothing at all, so it has no budget entry. Applied ONLY
+ * when a reasoning object is being injected in the first place, and never
+ * over a provider-set max_tokens.
  */
 export const REASONING_BUDGET_BY_LEVEL: Readonly<Record<Exclude<ThinkingLevel, "default">, number>> = {
   low: 2048,
   medium: 4096,
   high: 8192,
+  xhigh: 12288,
   max: 16384,
 };
 

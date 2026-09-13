@@ -23,6 +23,14 @@
  *    reports (clicks land in ITS window, so the main window only hears
  *    about them through these events).
  *
+ * ROUND-96 (R96-G): the payload space grew one more kind — the USAGE rich
+ * card (UsageCardPayload below), the ContextDonut's hover popover riding the
+ * same window so hovering the token usage never pauses the embedded browser
+ * ("Browser paused while the menu is open" — the owner's report). It is a
+ * read-only card (no picks); `onMenuOverlayHover` bridges its pointer
+ * enter/leave back so the popover's hover-grace semantics survive the window
+ * boundary.
+ *
  * Outside the Tauri shell every function degrades to a no-op/false — the
  * DOM popover path is the default, tests included.
  */
@@ -111,6 +119,79 @@ export interface MenuPayload {
   theme: MenuTheme;
 }
 
+// ── ROUND-96 (R96-G): the USAGE rich card ────────────────────────────────────
+//
+// The owner: "when I try to hover over the total number of token usage that
+// has been done, it apparently hides the browser and says, 'Browser paused
+// while the menu is open.' This is not a great experience." The ContextDonut's
+// hover popover is a DOM overlay, and a DOM overlay can NEVER paint above the
+// OS-level browser webview — so its rect intersecting the panel correctly hid
+// the page behind that caption. The popover now rides the SAME overlay window
+// the R90-C2/R92-A menus use (an owned transparent OS window that DOES ride
+// above the webview) via this "usage" kind: a read-only, structured
+// label/value card mirroring the donut popover's content (JSON-safe strings
+// only — the payload crosses the process boundary as one JSON string).
+
+/** R96-G: one label/value line of a usage section. */
+export interface UsageLinePayload {
+  label: string;
+  value: string;
+  /** An optional tertiary note riding after the value (" · not reported by
+   * this provider"). */
+  note?: string;
+  /** The emphasized rows (the projected %, the MEASURED line) — primary text
+   * color + bolder value instead of the muted default. */
+  strong?: boolean;
+}
+
+/** R96-G: one titled section of the usage card (Window / Breakdown / Cache /
+ * Session totals — the donut popover's visual groups). */
+export interface UsageSectionPayload {
+  title: string;
+  lines: UsageLinePayload[];
+}
+
+/** R96-G: the usage rich card — the ContextDonut popover's content as a
+ * structured payload for the overlay window (no items, no picks: it is a
+ * hover READ, not a menu). */
+export interface UsageCardPayload {
+  kind: "usage";
+  title: string;
+  /** The card's CSS width (the DOM popover's 288). */
+  width: number;
+  sections: UsageSectionPayload[];
+  /** The one-line footnote under the sections (compaction / window
+   * provenance — the donut popover's note row). */
+  note?: string;
+  theme: MenuTheme;
+}
+
+/** Everything the overlay window can be asked to show (the menu kinds +
+ * R96-G's usage rich card). */
+export type MenuOverlayPayload = MenuPayload | UsageCardPayload;
+
+/** R96-G: the usage card's LAYOUT CONTRACT (px) — the OS window's height must
+ * be ESTIMATED in the main window (showMenuOverlay sizes the window), so the
+ * arithmetic lives HERE and MenuOverlayApp paints to the same numbers. The
+ * estimate is biased a touch TALL (a few px of card padding read as breathing
+ * room; an UNDER-estimate would clip the last row behind the card's scroll). */
+export const USAGE_CARD_CHROME_PX = 26; // the card head row + outer paddings
+export const USAGE_SECTION_TITLE_PX = 22; // one section's title row + its gap
+export const USAGE_LINE_PX = 17; // one label/value line
+export const USAGE_NOTE_PX = 20; // the footnote row + its gap
+
+/** R96-G: the overlay window's height for a usage card — the payload's own
+ * arithmetic (chrome + every section title + every line + the note), floored
+ * at the Rust command's 40px minimum. Pure; exported for tests. */
+export function estimateUsageCardHeight(payload: UsageCardPayload): number {
+  const sections = payload.sections.reduce(
+    (acc, s) => acc + USAGE_SECTION_TITLE_PX + s.lines.length * USAGE_LINE_PX,
+    0,
+  );
+  const note = payload.note !== undefined && payload.note !== "" ? USAGE_NOTE_PX : 0;
+  return Math.max(40, USAGE_CARD_CHROME_PX + sections + note);
+}
+
 /** A picked item as reported back (kind + the discriminated item). */
 export interface MenuPick {
   kind: "quick" | "subagents" | "options";
@@ -161,10 +242,13 @@ function anchorToScreen(
  * Show the menu overlay window at the anchor. Resolves FALSE whenever the
  * overlay path is unusable (web dev, no window metrics, a rejected
  * command) — the caller must then fall back to the plain DOM popover.
+ * R96-G: the payload may be a menu (quick/subagents/options) or the USAGE
+ * rich card (the ContextDonut popover) — the Rust side forwards the JSON
+ * string opaquely, so the kinds need no plumbing of their own.
  */
 export async function showMenuOverlay(
   anchor: { left: number; top: number; width: number; height: number },
-  payload: MenuPayload,
+  payload: MenuOverlayPayload,
 ): Promise<boolean> {
   const tauri = tauriGlobal();
   if (tauri === null) return false;
@@ -236,6 +320,36 @@ export function onMenuOverlayClose(callback: () => void): () => void {
   let alive = true;
   void tauri.event.listen("menu-overlay-close", () => {
     callback();
+  }).then((fn) => {
+    if (!alive) fn();
+    else unlisten = fn;
+  }).catch(() => {});
+  return () => {
+    alive = false;
+    unlisten?.();
+  };
+}
+
+/**
+ * R96-G: subscribe to the USAGE card's HOVER reports — the overlay window
+ * owns the pointer while it is over the card, so the main window's own
+ * mouseenter/mouseleave can no longer bridge the gap (the R51 hover-bridge
+ * problem, restated across an OS window boundary). The usage page emits
+ * `hovering: true` on card pointer-enter and `false` on pointer-leave; the
+ * ContextDonut maps them onto the SAME close-grace timer the DOM popover
+ * uses, so parking the pointer on the overlay card keeps it open exactly
+ * like hovering the DOM popover did. Returns an unlisten function.
+ */
+export function onMenuOverlayHover(callback: (hovering: boolean) => void): () => void {
+  const tauri = tauriGlobal();
+  if (tauri === null) return () => {};
+  let unlisten: (() => void) | null = null;
+  let alive = true;
+  void tauri.event.listen("menu-overlay-hover", (ev) => {
+    const payload = ev.payload as { hovering?: unknown } | null;
+    if (payload !== null && typeof payload === "object") {
+      callback(payload.hovering === true);
+    }
   }).then((fn) => {
     if (!alive) fn();
     else unlisten = fn;

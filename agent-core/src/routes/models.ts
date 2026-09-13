@@ -185,11 +185,19 @@ export function reasoningSupportValidationMessage(): string {
  *   · null    → null (clears back to UNKNOWN);
  *   · object  → {supported: boolean, efforts: ReasoningEffortLevel[]} —
  *               every effort must sit inside the shared vocabulary (a
- *               provider's wider ladder — "xhigh"/"max"/"none" — is
- *               normalized at the catalog-merge edge in registry.ts,
- *               never accepted raw); anything else is a 400 VALIDATION
- *               naming the field (never a silently dropped "successful"
- *               save, the R50-d discipline).
+ *               provider's wider ladder — "none" — is normalized at the
+ *               catalog-merge edge in registry.ts, never accepted raw);
+ *               anything else is a 400 VALIDATION naming the field (never
+ *               a silently dropped "successful" save, the R50-d
+ *               discipline).
+ *
+ * ROUND-96 (R96-F, the owner: "I tested a model which supported high and
+ * max but it apparently did not detect that properly"): the vocabulary is
+ * the WIDER six-rung one — "xhigh" and "max" are accepted verbatim (old
+ * rows' stored values included), and an OPTIONAL defaultEffort rides the
+ * object (the provider's published default rung — same vocabulary, or a
+ * 400 naming the field; "none" is never accepted as a default: it is a
+ * disable switch, not a rung).
  */
 export function readModelReasoningSupportField(
   raw: Record<string, unknown>,
@@ -208,9 +216,23 @@ export function readModelReasoningSupportField(
       return { ok: false, field: "reasoningSupport" };
     }
   }
+  // ROUND-96 (R96-F): the optional published-default rung — absent keeps
+  // the stored default, a valid vocabulary value sets it, anything else
+  // 400s (never a silent drop).
+  let defaultEffort: ReasoningEffortLevel | undefined;
+  if (record.defaultEffort !== undefined) {
+    if (typeof record.defaultEffort !== "string" || !isReasoningEffortLevel(record.defaultEffort)) {
+      return { ok: false, field: "reasoningSupport" };
+    }
+    defaultEffort = record.defaultEffort;
+  }
   return {
     ok: true,
-    value: { supported: record.supported, efforts: record.efforts as ReasoningEffortLevel[] },
+    value: {
+      supported: record.supported,
+      efforts: record.efforts as ReasoningEffortLevel[],
+      ...(defaultEffort !== undefined ? { defaultEffort } : {}),
+    },
   };
 }
 

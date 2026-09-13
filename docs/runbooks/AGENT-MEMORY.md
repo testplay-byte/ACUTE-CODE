@@ -1048,3 +1048,36 @@ validity. (The R95 fix: mutual exclusion by design — the ladder gets
 effort, ladder-less reasoning gets the budget; the constraint is now
 pinned in the test suite AND taught in the code comment where the next
 agent will look first.)
+
+### Lesson #97 — a guard fed a lossy DISPLAY summary false-positives on every argument the summary drops; and a guard that stops work must prove the work is actually stuck
+
+Two rules from R96-B, both bought with the owner's patience across THREE
+rounds of "the thinking/loop guard is still not proper":
+
+1. **IDENTITY INPUTS ≠ DISPLAY INPUTS.** The R51 loop guard compared
+`argsSummary` — a display string `summarizeArgs` builds by keeping ONLY
+string args ("content: 120 chars", "path: x"). It silently DROPS every
+numeric and nested arg, so `read_file {path, offset: 1, limit: 5000}` and
+`{path, offset: 5000, limit: 5000}` produced IDENTICAL summaries — and the
+guard stopped the owner's healthy paged read at the 5th "identical" call.
+The code even KNEW ("a rare false-positive that only ever produces a
+nudge/stop… the honest fix (threading raw args) belongs to a future
+chat.ts round") — the hedge became a three-round owner bug. RULE: any
+detector that decides "same" vs "different" must consume the RAW input
+(canonicalized), never a rendering built for humans; if you must ship the
+lossy version, the comment's "future round" needs a follow-up line item,
+not just a note.
+
+2. **A HARD STOP is a product decision the owner must own.** We built the
+stop because the R51 owner asked for step efficiency; the v0.93 owner
+reversed it flat ("The loop guard should not be one that will stop but it
+will only warn the user and it will pass the generation, pass the
+workflow"). The asymmetry: a false NEGATIVE (a real loop runs 20 extra
+calls) costs tokens; a false POSITIVE (healthy work stopped, "Generation
+failed" over finished work) costs TRUST — and the caps (maxTurns /
+maxOuterLoops / request guards) already bound the worst case. RULE: guards
+that interrupt user-visible work default to WARN + nudge; hard stops
+belong to true resource caps with honest cap messages, and the escalation
+from warn to stop needs the owner's explicit signature.
+(2026-09-13, round-96; the paged-read false positive + the
+identical-text detector + the warn-only rewrite.)

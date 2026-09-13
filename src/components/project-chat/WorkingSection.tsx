@@ -20,14 +20,15 @@ import {
   resolveSnapshotForTool,
   restoreCheckpoint,
   stopSessionTurn,
-  type DiffLine,
   type SubAgentStatus,
   type ToolUseEntry,
   type WorkingEntry,
-  computeUnifiedDiff,
   fetchSessionCheckpoints,
   fetchSnapshot,
 } from "../../lib/api";
+// ROUND-96 (R96-H): the modern-IDE diff engine — hunks, gutter line numbers,
+// honest caps (replaces api.ts's whole-file computeUnifiedDiff render here).
+import { computeUnifiedDiff, type UnifiedDiffResult } from "../../lib/unified-diff";
 import { pushLocalToast } from "../../hooks/use-notifications";
 import {
   selectSubAgentsLive,
@@ -682,7 +683,15 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
   // Code panel). The active project is set by ChatFocusLayout.
   const openFileInSidebar = useRightSidebarStore((s) => s.openFile);
   const activeProjectId = useRightSidebarStore((s) => s.activeProjectId);
-  const [diffLines, setDiffLines] = useState<DiffLine[] | null>(null);
+  // ROUND-96 (R96-H): the STRUCTURED diff (hunks + gutter numbers + honest
+  // caps) replaces the old DiffLine[] — null until the snapshot resolves.
+  const [diff, setDiff] = useState<UnifiedDiffResult | null>(null);
+  // True when the load FINISHED without a snapshot (older session, no-op) —
+  // distinct from null (still loading) so the effect never re-runs pointlessly.
+  const [miss, setMiss] = useState(false);
+  // The snapshot's shape: "create" (no before content — all-green NEW FILE
+  // diff), "delete" (no after — all-red), "edit" (red/green hunks).
+  const [kind, setKind] = useState<"edit" | "create" | "delete">("edit");
   const [loading, setLoading] = useState(false);
   // ROUND-46 (R46-c): the restore target — the resolved snapshot's id, armed
   // only when a full snapshot was fetched AND it carries before content.
@@ -704,29 +713,37 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
   const loadDiff = async () => {
     // ROUND-46 (R46-c) RACE FIX: while the checkpoints list is still in
     // flight, resolving against `?? []` finds nothing and bakes "no snapshot
-    // recorded" forever — the `diffLines !== null` guard below then blocks
+    // recorded" forever — the settled-state guard below then blocks
     // the re-run once the data actually arrives (the first diff card to
     // mount hit exactly this). Wait for the query; the effect re-fires on
     // the pending → settled transition (data arrival, and errors where
     // data stays undefined).
     if (checkpointsQuery.isLoading) return;
-    if (diffLines !== null || !sessionId) return;
+    if (diff !== null || miss || !sessionId) return;
     setLoading(true);
     try {
       const resolved = resolveSnapshotForTool(checkpointsQuery.data ?? [], path, tool.seq);
       const snap = resolved ? await fetchSnapshot(sessionId, resolved.seq) : null;
-      setDiffLines(snap ? computeUnifiedDiff(snap.beforeContent, snap.afterContent) : []);
-      // ROUND-46 (R46-c): Restore targets the snapshot's BEFORE content. A
-      // create (beforeContent === null) has nothing to go back to — and the
-      // backend's restore of a create DELETES the file (unlink branch) — so
-      // the action is deliberately NOT armed for creates.
-      setRestoreTarget(
-        snap !== null && snap.beforeContent !== null && resolved !== null
-          ? { id: resolved.id }
-          : null,
-      );
+      if (snap === null) {
+        setDiff(null);
+        setMiss(true);
+        setRestoreTarget(null);
+      } else {
+        setKind(snap.beforeContent === null ? "create" : snap.afterContent === null ? "delete" : "edit");
+        setDiff(computeUnifiedDiff(snap.beforeContent, snap.afterContent));
+        // ROUND-46 (R46-c): Restore targets the snapshot's BEFORE content. A
+        // create (beforeContent === null) has nothing to go back to — and the
+        // backend's restore of a create DELETES the file (unlink branch) — so
+        // the action is deliberately NOT armed for creates.
+        setRestoreTarget(
+          snap.beforeContent !== null && resolved !== null
+            ? { id: resolved.id }
+            : null,
+        );
+      }
     } catch {
-      setDiffLines([]);
+      setDiff(null);
+      setMiss(true);
       setRestoreTarget(null);
     } finally {
       setLoading(false);
@@ -795,7 +812,7 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
         </span>
       );
     }
-    if (restoreTarget === null || diffLines === null) return null;
+    if (restoreTarget === null || diff === null) return null;
     if (restoreState === "confirm") {
       return (
         <>
@@ -834,11 +851,11 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
     );
   })();
 
-  const added = diffLines?.filter((l) => l.type === "add").length;
-  const removed = diffLines?.filter((l) => l.type === "del").length;
+  const added = diff?.added;
+  const removed = diff?.removed;
 
   return (
-    <div className="min-w-0">
+    <div className="min-w-0" data-testid="diff-block">
       <div className="flex items-center gap-2 mb-1">
         {path ? (
           <span className="min-w-0 flex-1 truncate font-mono text-[10px]" style={{ color: styles.textTertiary }} title={path}>
@@ -847,7 +864,29 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
         ) : (
           <span className="flex-1" />
         )}
-        {diffLines !== null && added !== undefined && removed !== undefined ? (
+        {/* ROUND-96 (R96-H, owner: "like which parts of the code it changed
+            and how it changed them… as modern IDEs do"): the one-glance file
+            summary — NEW FILE for creates, the classic +N −M stats chip for
+            edits (the numbers come from the real before/after snapshot). */}
+        {kind === "create" ? (
+          <span
+            className="shrink-0 px-1.5 py-0.5 rounded-full text-[9.5px] font-bold"
+            style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
+            data-diff-kind="create"
+          >
+            NEW FILE
+          </span>
+        ) : null}
+        {kind === "delete" ? (
+          <span
+            className="shrink-0 px-1.5 py-0.5 rounded-full text-[9.5px] font-bold"
+            style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.1), color: SEMANTIC_COLORS.danger }}
+            data-diff-kind="delete"
+          >
+            DELETED FILE
+          </span>
+        ) : null}
+        {diff !== null && added !== undefined && removed !== undefined ? (
           <span className="shrink-0 flex items-center gap-1 font-mono text-[10px] font-bold">
             <span className="px-1.5 py-0.5 rounded-full" style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}>
               +{added}
@@ -877,46 +916,95 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
         <div className="px-3 py-2 text-[11px] font-mono" style={{ color: styles.textTertiary }}>
           loading diff…
         </div>
-      ) : diffLines === null ? null : diffLines.length === 0 ? (
+      ) : miss ? (
         <div className="px-3 py-2 text-[11px] font-mono" style={{ color: styles.textTertiary }}>
           no snapshot recorded for this change
         </div>
+      ) : diff === null ? null : diff.identical ? (
+        <div className="px-3 py-2 text-[11px] font-mono" style={{ color: styles.textTertiary }}>
+          no line changes between the recorded before and after
+        </div>
       ) : (
         <div
-          className="rounded-[10px] max-h-72 overflow-y-auto auto-scroll font-mono text-[11px] leading-[1.55] border"
+          className="rounded-[10px] max-h-96 overflow-y-auto auto-scroll font-mono text-[11px] leading-[1.55] border"
           style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.25)" : styles.bg }}
         >
-          {diffLines.map((line, i) => (
-            <div
-              key={i}
-              className="flex"
-              style={{
-                background:
-                  line.type === "add"
-                    ? withAlpha(SEMANTIC_COLORS.success, 0.07)
-                    : line.type === "del"
-                      ? withAlpha(SEMANTIC_COLORS.danger, 0.07)
-                      : "transparent",
-              }}
-            >
-              <span
-                className="w-3 shrink-0 select-none text-center"
+          {diff.hunks.map((hunk, hi) => (
+            <div key={`hunk-${hi}`}>
+              {/* The classic "@@ -l,c +l,c @@" hunk header — the WHERE of the
+                  change, at a glance (modern-IDE ask). Multiple hunks = the
+                  far-between edits each get their own located window. */}
+              <div
+                className="px-2 py-0.5 sticky top-0 text-[10px] select-none"
                 style={{
-                  color:
-                    line.type === "add"
-                      ? SEMANTIC_COLORS.success
-                      : line.type === "del"
-                        ? SEMANTIC_COLORS.danger
-                        : styles.textTertiary,
+                  background: styles.isDark ? "rgba(0,0,0,0.45)" : styles.subtle,
+                  color: styles.textTertiary,
                 }}
+                data-diff-hunk-header
               >
-                {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
-              </span>
-              <span className="flex-1 whitespace-pre-wrap break-words pr-3" style={{ color: styles.text }}>
-                {line.text || " "}
-              </span>
+                {hunk.header}
+              </div>
+              {hunk.rows.map((line, li) => (
+                <div
+                  key={`row-${hi}-${li}`}
+                  className="flex"
+                  data-diff-type={line.type}
+                  style={{
+                    background:
+                      line.type === "add"
+                        ? withAlpha(SEMANTIC_COLORS.success, 0.07)
+                        : line.type === "del"
+                          ? withAlpha(SEMANTIC_COLORS.danger, 0.07)
+                          : "transparent",
+                  }}
+                >
+                  {/* The +/− gutter numbers (old | new), then the marker. */}
+                  <span
+                    className="w-8 shrink-0 select-none text-right pr-1.5"
+                    data-diff-old={line.oldLine ?? ""}
+                    style={{ color: styles.textTertiary, opacity: line.oldLine === null ? 0 : 1 }}
+                  >
+                    {line.oldLine ?? ""}
+                  </span>
+                  <span
+                    className="w-8 shrink-0 select-none text-right pr-1.5"
+                    data-diff-new={line.newLine ?? ""}
+                    style={{ color: styles.textTertiary, opacity: line.newLine === null ? 0 : 1 }}
+                  >
+                    {line.newLine ?? ""}
+                  </span>
+                  <span
+                    className="w-3 shrink-0 select-none text-center"
+                    style={{
+                      color:
+                        line.type === "add"
+                          ? SEMANTIC_COLORS.success
+                          : line.type === "del"
+                            ? SEMANTIC_COLORS.danger
+                            : styles.textTertiary,
+                    }}
+                  >
+                    {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
+                  </span>
+                  <span className="flex-1 whitespace-pre-wrap break-words pr-3" style={{ color: styles.text }}>
+                    {line.text || " "}
+                  </span>
+                </div>
+              ))}
             </div>
           ))}
+          {/* Honest tail notes — never a silent cut (the old renderer
+              dropped lines past 200 with no marker). */}
+          {diff.truncated > 0 ? (
+            <div className="px-2 py-1 text-[10px]" style={{ color: styles.textTertiary }} data-diff-truncated>
+              …{diff.truncated} more line{diff.truncated === 1 ? "" : "s"} not shown
+            </div>
+          ) : null}
+          {diff.coarse ? (
+            <div className="px-2 py-1 text-[10px]" style={{ color: styles.textTertiary }} data-diff-coarse>
+              large change — shown as a block replacement, not a minimal diff
+            </div>
+          ) : null}
         </div>
       )}
       {restoreState === "restored" && (
@@ -1345,6 +1433,111 @@ function ApprovalRow({
 // ─── ToolLine: the universal one-line tool row ───────────────────────────────
 
 /**
+ * ROUND-96 (R96-H, owner: "The chat window is not handled that well… the
+ * chat area should show the details properly"): the tool row's one-glance
+ * STATUS DETAIL — what the call actually DID, parsed from the summary the
+ * tool itself already returned (the persisted event and the live SSE frame
+ * carry the same outputSummary, so live and folded rows agree).
+ *
+ * HONESTY CONTRACT — only what the data actually carries:
+ *  · run_command: the shell's exit code. Non-zero codes ride the output's
+ *    "[exit code: N]" line (the exec tool stamps them); ok:true IS exit 0
+ *    (the tool sets ok from the code). A background launch has no settled
+ *    code (the JOB outlives the launching shell) and a timeout/launch
+ *    failure has none either → NO chip, the ✗ alone stays honest.
+ *    Duration is NOT rendered: neither the SSE tool-result frame nor the
+ *    persisted event carries one — noted rather than invented.
+ *  · edit_file: the R96-C confirmation line ("Edited 'rel': N replacements,
+ *    +A −B lines") → the classic +A −B stats chip.
+ *  · read_file: the file's line count from the read markers ("of N total" /
+ *    "returned lines A-B of N"), or the numbered lines when the whole read
+ *    survived the 4K summary. A truncated summary (…[truncated N chars]…)
+ *    renders NOTHING — a partial count would lie.
+ *  · search_code: "N matches in M files" (or "0 matches" on the no-hit line).
+ *  · search_files: "N files matching".
+ * Pure; exported for tests (the assignDelegateChildren pattern).
+ */
+export function toolStatusDetail(
+  tool: ToolUseEntry,
+): { label: string; tone: "diff" | "danger" | "muted" } | null {
+  if (tool.ok === null) return null;
+  const out = tool.outputSummary ?? "";
+  switch (tool.toolName) {
+    case "run_command": {
+      if (out.includes("[background job")) return null;
+      const m = /\[exit code: (\d+)\]/.exec(out);
+      if (m !== null) return { label: `exit ${m[1]}`, tone: "danger" };
+      if (tool.ok === true) return { label: "exit 0", tone: "muted" };
+      return null;
+    }
+    case "edit_file": {
+      // R96-C editConfirmation: "Edited 'rel': N replacements, +A −B lines…"
+      const m = /(\d+) replacements?, \+(\d+) −(\d+) lines/.exec(out);
+      if (m === null) return null;
+      return { label: `+${m[2]} −${m[3]}`, tone: "diff" };
+    }
+    case "read_file": {
+      if (out.includes("…[truncated")) return null;
+      const total =
+        /of (\d+) total/.exec(out) ?? /returned lines \d+-\d+ of (\d+)\]/.exec(out);
+      if (total !== null) return { label: `${total[1]} lines`, tone: "muted" };
+      // Whole-file read under the budget: the output is cat -n numbered —
+      // count the "NNNNNN  " prefixed lines.
+      const numbered = out.split("\n").filter((l) => /^\s*\d+  /.test(l)).length;
+      return numbered > 0 ? { label: `${numbered} lines`, tone: "muted" } : null;
+    }
+    case "search_code": {
+      const m = /^(\d+) match(?:es)? in (\d+) file(?:s)?/.exec(out);
+      if (m !== null) {
+        return {
+          label: `${m[1]} match${m[1] === "1" ? "" : "es"} · ${m[2]} file${m[2] === "1" ? "" : "s"}`,
+          tone: "muted",
+        };
+      }
+      if (/^no content matches/.test(out)) return { label: "0 matches", tone: "muted" };
+      return null;
+    }
+    case "search_files": {
+      const m = /^(\d+) files? matching/.exec(out);
+      return m !== null ? { label: `${m[1]} file${m[1] === "1" ? "" : "s"}`, tone: "muted" } : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/** The rendered status-detail chip (toolStatusDetail's tone → styling). */
+function ToolStatusChip({ detail }: { detail: NonNullable<ReturnType<typeof toolStatusDetail>> }) {
+  const styles = useThemeStyles();
+  if (detail.tone === "diff") {
+    // The +/- pair — the diff card's own chip language (green/red).
+    const [plus, minus] = detail.label.split(" ");
+    return (
+      <span className="shrink-0 flex items-center gap-0.5 font-mono text-[10px] font-bold" data-tool-status={detail.label}>
+        <span className="px-1.5 py-0.5 rounded-full" style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}>
+          {plus}
+        </span>
+        <span className="px-1.5 py-0.5 rounded-full" style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.1), color: SEMANTIC_COLORS.danger }}>
+          {minus}
+        </span>
+      </span>
+    );
+  }
+  return (
+    <span
+      className="shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded-full"
+      style={{
+        background: styles.subtle,
+        color: detail.tone === "danger" ? SEMANTIC_COLORS.danger : styles.textTertiary,
+      }}
+      data-tool-status={detail.label}
+    >
+      {detail.label}
+    </span>
+  );
+}
+
+/**
  * ROUND-51 (R51-d, owner: "When the agents were called those areas should be
  * highlighted. When the file edits were made those areas should be
  * highlighted properly. Even if they are minimized, those should be
@@ -1424,6 +1617,10 @@ function ToolLine({
   const Icon = TOOL_ICONS[tool.toolName] ?? Terminal;
   const label = TOOL_LABELS[tool.toolName] ?? tool.toolName;
   const waitingApproval = tool.ok === null && !live && tool.toolName === "run_command";
+  // ROUND-96 (R96-H): the row's status detail (exit code / line count /
+  // match count / the edit's +A −B) — only what the tool's own summary
+  // carries (see toolStatusDetail's honesty contract).
+  const statusDetail = toolStatusDetail(tool);
 
   // ROUND-51 (R51-d): the chip tint per family. Delegations carry the accent
   // wash (the strongest signal — a sub-agent is working on the project);
@@ -1530,6 +1727,7 @@ function ToolLine({
         <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: styles.textTertiary }}>
           {tool.argsSummary}
         </span>
+        {statusDetail !== null ? <ToolStatusChip detail={statusDetail} /> : null}
         {rowAction === "open-subagent" ? (
           <span
             className="shrink-0 flex items-center gap-1 text-[10px] font-bold"

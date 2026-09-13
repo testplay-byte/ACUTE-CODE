@@ -61,18 +61,19 @@ export interface ModelOverride {
 /**
  * ROUND-95 (R95-E): a configured-model row AS THE WIRE SERVES IT — the
  * sidecar's ModelRecord (agent-core storage/models.ts) carries
- * `reasoningSupport` additively since R95-B, while src/lib/api.ts's
- * ProviderModelConfig mirror has not caught up yet (not this round's file
- * set). This local widening reads the field type-safely: every
- * ProviderModelConfig is structurally assignable (providerId + modelId are
- * required there; reasoningSupport is optional here), and the JSON the
- * sidecar actually sends carries the field.
+ * `reasoningSupport` additively since R95-B (src/lib/api.ts's
+ * ProviderModelConfig mirror caught up in R95-F). Kept as the local
+ * read-through: every ProviderModelConfig is structurally assignable
+ * (providerId + modelId are required there; reasoningSupport is optional
+ * here), and the JSON the sidecar actually sends carries the field —
+ * including ROUND-96's (R96-F) defaultEffort, which rides the shared
+ * ModelReasoningSupport type.
  */
 export interface ReasoningAwareModelRow {
   providerId: string;
   modelId: string;
-  /** The model's DETECTED reasoning capability (R95-B) — null/absent =
-   * unknown (never blocked on). */
+  /** The model's DETECTED reasoning capability (R95-B; R96-F added
+   * defaultEffort) — null/absent = unknown (never blocked on). */
   reasoningSupport?: ModelReasoningSupport | null;
 }
 
@@ -163,8 +164,9 @@ export function modeOption(id: PermissionMode): ModeOption {
 }
 
 // ── Thinking levels (owner, R50: "only four options: The default option,
-//    Low, High, Max"; R95-E: the vocabulary widened with "medium" for
-//    models whose DETECTED ladder tops out below high) ────────────────────
+//    Low, High, Max"; R95-E: "medium" joined for models whose DETECTED
+//    ladder includes it; R96-F: "xhigh" joined — the menu must offer the
+//    model's ACTUAL top rungs, not a folded subset) ────────────────────────
 
 export interface ThinkingOption {
   id: ThinkingLevel;
@@ -172,15 +174,16 @@ export interface ThinkingOption {
   description: string;
 }
 
-/** The FULL accepted vocabulary (validation + label source — R95-E added
- * "medium" for the models whose own ladder includes it). The classic menu
- * (a model with UNKNOWN capabilities) still offers the R50 four — see
- * thinkingMenuSpec. */
+/** The FULL accepted vocabulary (validation + label source). The classic
+ * menu (a model with UNKNOWN capabilities) still offers the R50 four — see
+ * thinkingMenuSpec. ROUND-96 (R96-F): "X-High" is the label for the xhigh
+ * rung (live OpenRouter carriers: grok-4.6, gpt-5.2, glm-5.2 …). */
 export const THINKING_OPTIONS: readonly ThinkingOption[] = [
   { id: "default", label: "Default", description: "The model's own reasoning default." },
   { id: "low", label: "Low", description: "Light reasoning — fastest replies." },
   { id: "medium", label: "Medium", description: "Balanced reasoning effort." },
   { id: "high", label: "High", description: "Deeper reasoning for complex work." },
+  { id: "xhigh", label: "X-High", description: "Extra-deep reasoning — the rung above high." },
   { id: "max", label: "Max", description: "Maximum reasoning effort." },
 ];
 
@@ -191,23 +194,46 @@ export function thinkingOption(id: ThinkingLevel): ThinkingOption {
 /** ROUND-95 (R95-E): the menu spec a model's DETECTED reasoning capability
  * yields — NEVER an option the model does not support (the owner: "Our
  * program should be able to properly detect the models' thinking options,
- * like which options it supports and such"). */
+ * like which options it supports and such").
+ *
+ * ROUND-96 (R96-F, the owner: "I tested a model which supported high and
+ * max but it apparently did not detect that properly and was showing the
+ * default options. This should not happen. It needs to be improved and
+ * handled better"): detection is now VISIBLE and lossless. */
 export interface ThinkingMenuSpec {
-  /** The levels the menu offers ("Default" always; then only supported
-   * rungs — "Low" for low OR minimal, "Medium" for medium, "High"/"Max"
- * for high, since max rides the highest supported effort). Empty only in
-   * the unsupported case. */
+  /** The levels the menu offers ("Default" always; then the model's ACTUAL
+   * rungs — "Low" for low OR minimal, "Medium" for medium, "High" for high,
+   * "X-High" for xhigh, "Max" for max — ROUND-96 keeps each rung VERBATIM
+   * instead of folding max/xhigh down to High). Empty only in the
+   * unsupported case. */
   options: readonly ThinkingOption[];
-  /** The honest footer note for the menu (null = none). */
+  /** The honest footer note for the menu (null = none). A detected ladder
+   * NAMES ITS SOURCE — "detected from provider: low, high, max" (+ "model
+   * default: …" when the provider publishes one) — so a detected model can
+   * never look like the unknown-capabilities default again. */
   note: string | null;
   /** True when the catalog says this model takes NO reasoning parameter at
    * all — the button renders disabled with an honest tooltip. */
   unsupported: boolean;
+  /** ROUND-96 (R96-F): the menu ROW matching the provider's published
+   * default rung (defaultEffort; minimal rides the Low row) — null when
+   * unknown or when the row is not offered. The button marks that row
+   * quietly ("default") so the owner can see what the model would use on
+   * its own. */
+  defaultRow: ThinkingLevel | null;
 }
 
+/** The classic R50 four — what a model with UNKNOWN capabilities or no
+ * detected discrete efforts offers (ROUND-96 keeps the set at four: medium
+ * and the xhigh rung appear only when a detected ladder holds them). */
+const CLASSIC_THINKING_OPTIONS: readonly ThinkingOption[] = THINKING_OPTIONS.filter(
+  (o) => o.id !== "medium" && o.id !== "xhigh",
+);
+
 /**
- * ROUND-95 (R95-E): derive the menu's option list from a model's DETECTED
- * reasoning support (R95-B's ModelReasoningSupport — null = UNKNOWN):
+ * ROUND-95 (R95-E) → ROUND-96 (R96-F): derive the menu's option list from a
+ * model's DETECTED reasoning support (R95-B's ModelReasoningSupport —
+ * null = UNKNOWN):
  *
  *  · null/absent — the R50 classic four (Default/Low/High/Max) + the honest
  *    "capabilities unknown" footer note. Never blocked on a guess.
@@ -215,12 +241,14 @@ export interface ThinkingMenuSpec {
  *  · supported: true, no discrete efforts — the classic four + a note that
  *    the provider lists no discrete efforts (levels go to the wire as-is,
  *    exactly the R50 behavior — R95-B's plain reasoning-only rows).
- *  · supported: true with a ladder — Default + the rungs the ladder holds:
- *    Low when low or minimal ∈ efforts, Medium when medium, High and Max when
- *    high (max maps to high + the bigger reasoning budget in chat.ts). When
- *    the ladder tops out below high, the note says so honestly ("this model
- *    caps reasoning at medium/low") — High/Max are hidden, never offered
- *    broken.
+ *  · supported: true with a ladder — Default + the rungs the ladder HOLDS,
+ *    each VERBATIM (Low for low/minimal, Medium, High, X-High for xhigh,
+ *    Max for max — the R95 fold offered Max on any high-capable model; the
+ *    owner's ['max','high','low'] report ended that). The footer note NAMES
+ *    the detection ("detected from provider: low, high, max") so a detected
+ *    model can never render like the unknown default again — the exact
+ *    invisibility the owner reported. A ladder that tops out below high
+ *    needs no separate cap note: the detected list IS the honest cap.
  *
  * Pure: the support blob in, the menu spec out (the button + tests consume
  * it; chat.ts carries the WIRE-side twin of the mapping — kept separate so
@@ -229,51 +257,66 @@ export interface ThinkingMenuSpec {
 export function thinkingMenuSpec(support: ModelReasoningSupport | null | undefined): ThinkingMenuSpec {
   if (support == null) {
     return {
-      options: THINKING_OPTIONS.filter((o) => o.id !== "medium"),
+      options: CLASSIC_THINKING_OPTIONS,
       note: "capabilities unknown for this model",
       unsupported: false,
+      defaultRow: null,
     };
   }
   if (support.supported === false) {
-    return { options: [], note: null, unsupported: true };
+    return { options: [], note: null, unsupported: true, defaultRow: null };
   }
   const efforts = support.efforts;
   if (efforts.length === 0) {
     return {
-      options: THINKING_OPTIONS.filter((o) => o.id !== "medium"),
+      options: CLASSIC_THINKING_OPTIONS,
       note: "this model supports reasoning; no discrete efforts listed",
       unsupported: false,
+      defaultRow: null,
     };
   }
-  const hasLow = (efforts as readonly string[]).includes("low") || (efforts as readonly string[]).includes("minimal");
-  const hasMedium = (efforts as readonly string[]).includes("medium");
-  const hasHigh = (efforts as readonly string[]).includes("high");
+  const has = (rung: string) => (efforts as readonly string[]).includes(rung);
   const options = THINKING_OPTIONS.filter(
     (o) =>
       o.id === "default" ||
-      (o.id === "low" && hasLow) ||
-      (o.id === "medium" && hasMedium) ||
-      ((o.id === "high" || o.id === "max") && hasHigh),
+      (o.id === "low" && (has("low") || has("minimal"))) ||
+      (o.id === "medium" && has("medium")) ||
+      (o.id === "high" && has("high")) ||
+      (o.id === "xhigh" && has("xhigh")) ||
+      (o.id === "max" && has("max")),
   );
-  // The honest cap note: the ladder's top rung, when it sits below high.
-  const cap =
-    hasHigh ? null : hasMedium ? "medium" : hasLow ? "low" : null;
-  return {
-    options,
-    note: cap !== null ? `this model caps reasoning at ${cap}` : null,
-    unsupported: false,
-  };
+  // ROUND-96 (R96-F): the note NAMES the source — the detected rungs in
+  // canonical order (efforts is vocabulary-ordered at the merge edge),
+  // plus the provider's published default when one exists.
+  const note =
+    `detected from provider: ${efforts.join(", ")}` +
+    (support.defaultEffort !== undefined ? ` (model default: ${support.defaultEffort})` : "");
+  // The quiet default-row mark: minimal rides the Low row; anything else
+  // only when that row is actually offered (a provider default outside its
+  // own ladder is rare — an unoffered row gets no mark).
+  const defaultCandidate: ThinkingLevel | null =
+    support.defaultEffort === undefined
+      ? null
+      : support.defaultEffort === "minimal"
+        ? "low"
+        : support.defaultEffort;
+  const defaultRow =
+    defaultCandidate !== null && options.some((o) => o.id === defaultCandidate)
+      ? defaultCandidate
+      : null;
+  return { options, note, unsupported: false, defaultRow };
 }
 
 /** The ladder rank a thinking level occupies (default < low < medium < high
- * < max) — displayThinkingLevel's ordering. Mirrors chat.ts's effort rank
- * (kept local: shared stays types-only). */
+ * < xhigh < max) — displayThinkingLevel's ordering. Mirrors chat.ts's
+ * effort rank (kept local: shared stays types-only). */
 const THINKING_RANK: Record<ThinkingLevel, number> = {
   default: 0,
   low: 1,
   medium: 2,
   high: 3,
-  max: 4,
+  xhigh: 4,
+  max: 5,
 };
 
 /**
