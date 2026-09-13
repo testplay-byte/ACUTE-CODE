@@ -35,18 +35,49 @@ import {
   updateProviderRecord,
 } from "../storage/providers.js";
 import {
+  findModelByProviderAndModelId,
   listModels,
+  mergeReasoningSupport,
   upsertModel,
 } from "../storage/models.js";
 import { listAgents, resetAgentsProvider } from "../storage/agents.js";
 import { errorBody } from "./helpers.js";
 // R84 (Wave 2-a): the shared R50-d model-config field gate (exported by
 // routes/models.ts — the upsert + PATCH routes validate identically).
-import { readModelNumericFields, readModelScalarFields, readTriStateField, isModelTriStateField } from "./models.js";
+import {
+  readModelNumericFields,
+  readModelScalarFields,
+  readTriStateField,
+  isModelTriStateField,
+  readModelReasoningSupportField,
+  reasoningSupportValidationMessage,
+} from "./models.js";
+// ROUND-95 (R95-B): the reasoning-support wire type (shared owns it).
+import type { ModelReasoningSupport } from "shared";
 
 export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext): void {
   const { db, keyring } = ctx;
   // ---- Providers (API.md §8) ---- keys never appear in any response.
+
+  /**
+   * ROUND-95 (R95-B): best-effort LIVE-catalog detection of ONE model's
+   * reasoning capability for the add-model prefill (POST
+   * /providers/:id/models). Rides the 5-minute registry cache — after the
+   * Add Models dialog's list fetch this is free — and must NEVER fail the
+   * add itself: any error (offline, 502, model absent from the catalog)
+   * leaves the row NULL, the non-blocking unknown.
+   */
+  const detectCatalogReasoningSupport = async (
+    providerId: string,
+    modelId: string,
+  ): Promise<ModelReasoningSupport | null> => {
+    try {
+      const result = await fetchProviderModels(db, keyring, providerId);
+      return result?.models.find((m) => m.id === modelId)?.reasoningSupport ?? null;
+    } catch {
+      return null;
+    }
+  };
 
   scope.get("/providers", async () => {
     return { providers: listProviderViews(db, keyring) };
@@ -322,6 +353,15 @@ export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext
       if (result === undefined) {
         return reply.code(404).send(errorBody("NOT_FOUND", `no provider with id ${id}`));
       }
+      // ROUND-95 (R95-B): opportunistically refresh reasoning detection —
+      // every successful live-catalog fetch merges the detected capability
+      // onto THIS provider's rows whose stored value is still NULL
+      // (unknown). NULL-guarded (owner-set values are never touched) and
+      // scoped to this provider; entries without reasoning metadata leave
+      // their rows unknown. Opening the Add Models dialog is the trigger
+      // that upgrades the owner's already-configured models to detected
+      // thinking options (storage/models.ts mergeReasoningSupport).
+      mergeReasoningSupport(db, id, result.models);
       return result;
     } catch (error) {
       // ProviderFetchError carries sanitized upstream context; anything
@@ -487,6 +527,32 @@ export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext
         ),
       );
     }
+    // ROUND-95 (R95-B): the reasoningSupport gate — same strict contract as
+    // PATCH /models/:id (the R50-d identical-validation discipline).
+    const reasoning = readModelReasoningSupportField(raw);
+    if (!reasoning.ok) {
+      return reply
+        .code(400)
+        .send(
+          errorBody("VALIDATION", reasoningSupportValidationMessage(), {
+            field: `body.${reasoning.field}`,
+          }),
+        );
+    }
+    // ROUND-95 (R95-B, the owner's "properly detect the models' thinking
+    // options"): catalog prefill — when the body leaves reasoningSupport
+    // ABSENT and the row is NEW, detect it from the LIVE catalog (the same
+    // GET {base}/models the Add Models dialog lists from). An EXISTING row
+    // keeps its stored value on absent (the R50-d keep contract — a re-add
+    // never clobbers what the owner set or cleared); an explicit body value
+    // always wins over detection.
+    let reasoningSupport: ModelReasoningSupport | null | undefined = reasoning.value;
+    if (
+      reasoningSupport === undefined &&
+      findModelByProviderAndModelId(db, id, raw.modelId.trim()) === undefined
+    ) {
+      reasoningSupport = await detectCatalogReasoningSupport(id, raw.modelId.trim());
+    }
     const model = upsertModel(db, id, {
       modelId: raw.modelId.trim(),
       displayName: typeof raw.displayName === "string" ? raw.displayName : undefined,
@@ -516,6 +582,10 @@ export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext
           : raw.sizeLabel === null || typeof raw.sizeLabel === "string"
             ? raw.sizeLabel
             : undefined,
+      // ROUND-95 (R95-B): the body's explicit value, or the live-catalog
+      // detection for a NEW row (undefined for an existing row keeps the
+      // stored value; null clears to unknown).
+      ...(reasoningSupport !== undefined ? { reasoningSupport } : {}),
       hidden: typeof raw.hidden === "boolean" ? raw.hidden : undefined,
     });
     return reply.code(201).send(model);

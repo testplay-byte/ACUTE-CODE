@@ -1,0 +1,29 @@
+-- 0035_model_reasoning_support.sql
+-- ROUND-95 (R95-B, owner: "The thinking level was supposed to be
+-- model-specific. Multiple models have different thinking levels … Our
+-- program should be able to properly detect the models' thinking options,
+-- like which options it supports and such"): the per-model REASONING
+-- capability column.
+--
+-- DESIGN: reasoning_support TEXT NULL holds a JSON blob
+--   {"supported": true, "efforts": ["low","medium","high"]}
+-- captured from the provider's LIVE catalog (OpenRouter /api/v1/models
+-- entries: `supported_parameters` contains "reasoning" when the model
+-- accepts one, and a `reasoning` object may carry `supported_efforts` —
+-- normalized into the shared ReasoningEffortLevel vocabulary at the merge
+-- edge in providers/registry.ts).
+--
+-- NULL = UNKNOWN (never detected). That is the honest default for every
+-- existing row: the static ROUND-43 catalog snapshot carries no reasoning
+-- metadata, and non-OpenRouter providers expose none at all. Consumers must
+-- NEVER block on unknown — the runtime falls back to the global
+-- thinking-level selector (R95-E wires that side).
+--
+-- No backfill in this migration: there is no code-side source of truth to
+-- prefill from (see above). Rows gain a value when the live catalog merge
+-- touches them — the R95-B add-model prefill (routes/providers.ts) and the
+-- NULL-guarded merge that runs when the live catalog is fetched (the same
+-- pass that fills a row whose stored value is still NULL, never one the
+-- owner has set or cleared by hand).
+
+ALTER TABLE models ADD COLUMN reasoning_support TEXT;

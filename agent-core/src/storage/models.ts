@@ -7,6 +7,15 @@
  */
 import { randomUUID } from "node:crypto";
 import type { SqliteDatabase } from "../storage/db.js";
+// ROUND-95 (R95-B): the per-model reasoning-capability column — shared owns
+// the vocabulary (ReasoningEffortLevel + REASONING_EFFORT_LEVELS) so the
+// sidecar's storage and the React frontend can never disagree about what
+// `reasoning.effort` may carry.
+import {
+  REASONING_EFFORT_LEVELS,
+  type ModelReasoningSupport,
+  type ReasoningEffortLevel,
+} from "shared";
 
 export interface ModelRecord {
   id: string;
@@ -50,6 +59,17 @@ export interface ModelRecord {
   /** ROUND-87 (R87): a human-facing parameter-size label ("70B",
    * "405B MoE") for the config dialog's detail row. null = unspecified. */
   sizeLabel: string | null;
+  /** ROUND-95 (R95-B, owner: "Our program should be able to properly detect
+   * the models' thinking options, like which options it supports and
+   * such"): the model's DETECTED reasoning capability, captured from the
+   * provider's LIVE catalog (OpenRouter /models entries:
+   * supported_parameters containing "reasoning" + the reasoning object's
+   * supported_efforts, normalized into the shared vocabulary) and stored
+   * as the reasoning_support JSON blob. null = UNKNOWN (never detected —
+   * the honest default for rows no reasoning-capable catalog has touched;
+   * consumers NEVER block on it — the runtime falls back to the global
+   * thinking-level selector, R95-E). */
+  reasoningSupport: ModelReasoningSupport | null;
   hidden: boolean;
   sortOrder: number;
   createdAt: string;
@@ -81,6 +101,10 @@ export interface ModelInput {
   supportsAudioOutput?: boolean | null;
   /** ROUND-87 (R87): null clears the size label, a string sets it. */
   sizeLabel?: string | null;
+  /** ROUND-95 (R95-B): the reasoning-capability blob — undefined keeps the
+   * stored value, null clears to unknown, a value sets it (serialized
+   * canonically: deduped + ordered by the shared vocabulary). */
+  reasoningSupport?: ModelReasoningSupport | null;
   hidden?: boolean;
   sortOrder?: number;
 }
@@ -108,6 +132,8 @@ interface ModelRow {
   supports_video_output: number | null;
   supports_audio_output: number | null;
   size_label: string | null;
+  /** ROUND-95 (R95-B): the ModelReasoningSupport JSON blob (null = unknown). */
+  reasoning_support: string | null;
   hidden: number;
   sort_order: number;
   created_at: string;
@@ -117,6 +143,51 @@ interface ModelRow {
 /** The tri-state column mapping: NULL → null (unknown), 0 → false, 1 → true. */
 function triState(value: number | null): boolean | null {
   return value === null ? null : value === 1;
+}
+
+/* ── ROUND-95 (R95-B): the reasoning_support JSON blob ───────────────────── */
+
+/** Membership in the shared wire vocabulary (validation source of truth). */
+function isReasoningEffortLevel(value: string): value is ReasoningEffortLevel {
+  return (REASONING_EFFORT_LEVELS as readonly string[]).includes(value);
+}
+
+/** Parse the reasoning_support blob defensively: absent, corrupt, or
+ * shape-invalid JSON reads back as null (unknown) — never throws, never
+ * trusts. Effort strings outside the shared vocabulary are dropped, so a
+ * hand-edited database can never smuggle an unsupported value past the
+ * row mapper. */
+function parseReasoningSupport(raw: string | null): ModelReasoningSupport | null {
+  if (raw === null || raw.trim() === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.supported !== "boolean" || !Array.isArray(record.efforts)) {
+    return null;
+  }
+  const efforts = record.efforts.filter(
+    (effort): effort is ReasoningEffortLevel =>
+      typeof effort === "string" && isReasoningEffortLevel(effort),
+  );
+  return { supported: record.supported, efforts };
+}
+
+/** Canonical serialization for the reasoning_support column: deduped and
+ * ordered by the shared vocabulary so equal capabilities always produce
+ * byte-identical blobs (row comparisons + tests stay deterministic). Values
+ * outside the vocabulary are dropped — the route gate has already 400'd
+ * them for API callers; direct-storage callers get the same normalization
+ * for free. */
+function serializeReasoningSupport(value: ModelReasoningSupport): string {
+  const efforts = REASONING_EFFORT_LEVELS.filter((level) =>
+    (value.efforts as readonly string[]).includes(level),
+  );
+  return JSON.stringify({ supported: value.supported, efforts });
 }
 
 function toModel(row: ModelRow): ModelRecord {
@@ -142,6 +213,9 @@ function toModel(row: ModelRow): ModelRecord {
     supportsVideoOutput: triState(row.supports_video_output),
     supportsAudioOutput: triState(row.supports_audio_output),
     sizeLabel: row.size_label ?? null,
+    // ROUND-95 (R95-B): the reasoning-capability blob (defensive parse —
+    // corrupt/absent → null = unknown).
+    reasoningSupport: parseReasoningSupport(row.reasoning_support),
     hidden: row.hidden === 1,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
@@ -218,6 +292,7 @@ export function upsertModel(
         supports_image_output = @supportsImageOutput,
         supports_video_output = @supportsVideoOutput,
         supports_audio_output = @supportsAudioOutput, size_label = @sizeLabel,
+        reasoning_support = @reasoningSupport,
         hidden = @hidden,
         sort_order = @sortOrder, updated_at = @updatedAt
       WHERE id = @id`,
@@ -249,6 +324,18 @@ export function upsertModel(
         typeof input.sizeLabel === "string"
           ? input.sizeLabel.trim() === "" ? null : input.sizeLabel.trim()
           : keep(input.sizeLabel, existing.size_label),
+      // ROUND-95 (R95-B): the reasoning-capability blob — undefined keeps
+      // the stored value, null clears to unknown, a value sets it
+      // (canonically serialized). Deliberately NO static-catalog prefill
+      // here: the snapshot carries no honest reasoning source for a fresh
+      // id — the LIVE catalog detection happens in the POST route
+      // (routes/providers.ts), which only pre-fills NEW rows.
+      reasoningSupport:
+        input.reasoningSupport === undefined
+          ? existing.reasoning_support
+          : input.reasoningSupport === null
+            ? null
+            : serializeReasoningSupport(input.reasoningSupport),
       hidden: (input.hidden ?? existing.hidden === 1) ? 1 : 0,
       sortOrder: keep(input.sortOrder, existing.sort_order),
       updatedAt: now,
@@ -265,14 +352,14 @@ export function upsertModel(
       supports_thinking, supports_vision, supports_tools, supports_audio,
       supports_video, supports_pdf, supports_text_output,
       supports_image_output, supports_video_output, supports_audio_output,
-      size_label, hidden, sort_order, created_at, updated_at
+      size_label, reasoning_support, hidden, sort_order, created_at, updated_at
     ) VALUES (
       @id, @providerId, @modelId, @displayName, @contextWindow, @maxOutputTokens,
       @inputPricePerMtok, @inputPriceCachedPerMtok, @outputPricePerMtok,
       @supportsThinking, @supportsVision, @supportsTools, @supportsAudio,
       @supportsVideo, @supportsPdf, @supportsTextOutput,
       @supportsImageOutput, @supportsVideoOutput, @supportsAudioOutput,
-      @sizeLabel, @hidden, @sortOrder, @createdAt, @updatedAt
+      @sizeLabel, @reasoningSupport, @hidden, @sortOrder, @createdAt, @updatedAt
     )`,
   ).run({
     id,
@@ -330,6 +417,11 @@ export function upsertModel(
       ? input.sizeLabel.trim()
       : input.sizeLabel === "" ? null
       : null,
+    // ROUND-95 (R95-B): caller-provided detection or UNKNOWN — no static
+    // prefill (the snapshot has no honest source; the POST route detects
+    // from the LIVE catalog for new rows).
+    reasoningSupport:
+      input.reasoningSupport == null ? null : serializeReasoningSupport(input.reasoningSupport),
     hidden: (input.hidden ?? false) ? 1 : 0,
     sortOrder: input.sortOrder ?? 0,
     createdAt: now,
@@ -355,6 +447,92 @@ export function deleteModel(db: SqliteDatabase, id: string): boolean {
 
 export function deleteModelsByProvider(db: SqliteDatabase, providerId: string): void {
   db.prepare("DELETE FROM models WHERE provider_id = ?").run(providerId);
+}
+
+/* ── ROUND-95 (R95-B): reasoning-capability resolution + catalog merge ────── */
+
+/**
+ * ROUND-95 (R95-B): the (provider_id, model_id) lookup behind the add-model
+ * prefill — tells the POST route whether the upsert is an INSERT (prefill
+ * from the live catalog) or an UPDATE (absent fields keep the stored value,
+ * the R50-d contract).
+ */
+export function findModelByProviderAndModelId(
+  db: SqliteDatabase,
+  providerId: string,
+  modelId: string,
+): ModelRecord | undefined {
+  const row = db
+    .prepare("SELECT * FROM models WHERE provider_id = ? AND model_id = ?")
+    .get(providerId, modelId) as ModelRow | undefined;
+  return row === undefined ? undefined : toModel(row);
+}
+
+/**
+ * ROUND-95 (R95-B, THE E-CONTRACT — the runtime/chat-adapter seam): resolve
+ * a model's DETECTED reasoning capability from its stored config row.
+ *
+ *   resolveModelReasoningSupport(db, providerId, modelId)
+ *     → ModelReasoningSupport | null
+ *
+ *   · a row with detected metadata → that value (never re-derived here —
+ *     detection happened at catalog-merge time; this is a plain read);
+ *   · a row whose metadata is still NULL, or no row at all (unknown
+ *     provider/model) → null = UNKNOWN.
+ *
+ * The consumer contract (R95-E wires it): NEVER block on null — unknown
+ * means "fall back to the global thinking-level selector". Even a
+ * `{supported: false}` verdict is advisory for the picker's UI (hide the
+ * unsupported efforts); the runtime keeps sending what the owner picked
+ * unless E decides to gate on `supported`.
+ */
+export function resolveModelReasoningSupport(
+  db: SqliteDatabase,
+  providerId: string,
+  modelId: string,
+): ModelReasoningSupport | null {
+  return findModelByProviderAndModelId(db, providerId, modelId)?.reasoningSupport ?? null;
+}
+
+/**
+ * ROUND-95 (R95-B): the NULL-GUARDED live-catalog merge — write detected
+ * reasoning capability onto this provider's EXISTING model rows whose
+ * reasoning_support is still NULL (unknown).
+ *
+ * · NULL-guarded exactly like the 0030 backfill: a row the owner has set
+ *   (or cleared and re-set) by hand is NEVER touched, and a second run with
+ *   the same catalog is a no-op (idempotent).
+ * · Entries whose catalog metadata is absent (reasoningSupport undefined —
+ *   a provider that exposes no reasoning fields, e.g. NVIDIA NIM) are
+ *   skipped: those rows stay UNKNOWN, never "unsupported".
+ * · Scoped to the provider the catalog was fetched FROM: a NIM row sharing
+ *   an OpenRouter model-id string must not inherit OpenRouter's metadata.
+ *
+ * Called from the GET /providers/:id/models route (routes/providers.ts)
+ * after every successful live-catalog fetch — opening the Add Models
+ * dialog is what upgrades existing rows to detected reasoning metadata.
+ * Returns the number of rows updated (tests only; never surfaced).
+ */
+export function mergeReasoningSupport(
+  db: SqliteDatabase,
+  providerId: string,
+  entries: ReadonlyArray<{ id: string; reasoningSupport?: ModelReasoningSupport }>,
+): number {
+  const stmt = db.prepare(
+    `UPDATE models SET reasoning_support = ?
+     WHERE provider_id = ? AND model_id = ? AND reasoning_support IS NULL`,
+  );
+  let updated = 0;
+  for (const entry of entries) {
+    if (entry.reasoningSupport === undefined) continue;
+    const res = stmt.run(
+      serializeReasoningSupport(entry.reasoningSupport),
+      providerId,
+      entry.id,
+    );
+    updated += res.changes;
+  }
+  return updated;
 }
 
 /** Look up pricing for a provider+model (round-24: cost tracking). */
@@ -416,6 +594,15 @@ export interface CatalogModel {
   supportsStructuredOutputs: boolean;
   /** image input modality. */
   supportsVision: boolean;
+  /** ROUND-95 (R95-B): the 2026-09-13 live-snapshot REASONING capability
+   * (supported_parameters "reasoning" + the reasoning object's
+   * supported_efforts, normalized into the shared vocabulary). OPTIONAL —
+   * absent = unknown: the three ids that have since left the live catalog
+   * (z-ai/glm-5.2:free, minimax/minimax-m3:free, …) carry no honest value.
+   * The LIVE catalog (GET /providers/:id/models + the add-model prefill)
+   * remains the authoritative detection path; this is the best-effort
+   * fallback for pickers showing not-yet-configured catalog models. */
+  reasoningSupport?: ModelReasoningSupport;
 }
 
 /**
@@ -482,6 +669,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: ["minimal", "low", "medium", "high"] },
   },
   {
     modelId: "nvidia/nemotron-3.5-lightning:free",
@@ -495,6 +683,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: false,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "poolside/laguna-s-2.1:free",
@@ -508,6 +697,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: false,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "cohere/north-mini-code:free",
@@ -521,6 +711,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: false,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "openrouter/free",
@@ -534,6 +725,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "dots-studio/dots-3-note-preview:free",
@@ -547,6 +739,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "google/gemma-4-26b-a4b-it:free",
@@ -560,6 +753,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "google/gemma-4-31b-it:free",
@@ -573,6 +767,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "liquid/lfm-2.5-2.6b:free",
@@ -586,6 +781,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: false,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "minimax/minimax-m2.7:free",
@@ -612,6 +808,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "nvidia/nemotron-3-super-120b-a12b:free",
@@ -625,6 +822,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: false,
+    reasoningSupport: { supported: true, efforts: ["low", "medium"] },
   },
   {
     modelId: "nvidia/nemotron-3-ultra-550b-a55b:free",
@@ -638,6 +836,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: false,
+    reasoningSupport: { supported: true, efforts: ["medium", "high"] },
   },
   {
     modelId: "nvidia/nemotron-3.5-content-safety:free",
@@ -651,6 +850,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: false,
     supportsStructuredOutputs: false,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "poolside/laguna-xs-2.1:free",
@@ -664,6 +864,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: false,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "thinkingmachines/inkling:free",
@@ -677,6 +878,7 @@ export const FREE_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: ["minimal", "low", "medium", "high"] },
   },
 ];
 
@@ -694,6 +896,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "anthropic/claude-sonnet-4.5",
@@ -707,6 +910,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "anthropic/claude-haiku-4.5",
@@ -720,6 +924,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "openai/gpt-5.2",
@@ -733,6 +938,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"] },
   },
   {
     modelId: "openai/gpt-5.1",
@@ -746,6 +952,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"] },
   },
   {
     modelId: "openai/gpt-5-mini",
@@ -759,6 +966,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: ["minimal", "low", "medium", "high"] },
   },
   {
     modelId: "openai/gpt-5-nano",
@@ -772,6 +980,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: ["minimal", "low", "medium", "high"] },
   },
   {
     modelId: "openai/o4-mini",
@@ -785,6 +994,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "openai/o3",
@@ -798,6 +1008,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "openai/gpt-4.1",
@@ -811,6 +1022,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: false, efforts: [] },
   },
   {
     modelId: "openai/gpt-4o",
@@ -824,6 +1036,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: false, efforts: [] },
   },
   {
     modelId: "openai/gpt-4o-mini",
@@ -837,6 +1050,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: false, efforts: [] },
   },
   {
     modelId: "google/gemini-3.1-pro-preview",
@@ -850,6 +1064,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"] },
   },
   {
     modelId: "google/gemini-3.7-flash",
@@ -863,6 +1078,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"] },
   },
   {
     modelId: "google/gemini-2.5-pro",
@@ -876,6 +1092,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "google/gemini-2.5-flash",
@@ -889,6 +1106,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "x-ai/grok-4.6",
@@ -902,6 +1120,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: ["low", "medium", "high"] },
   },
   {
     modelId: "x-ai/grok-build-0.1",
@@ -915,6 +1134,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "deepseek/deepseek-v3.2",
@@ -928,6 +1148,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: false,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "deepseek/deepseek-r1",
@@ -941,6 +1162,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: false,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "qwen/qwen3-max",
@@ -954,6 +1176,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: false,
+    reasoningSupport: { supported: false, efforts: [] },
   },
   {
     modelId: "qwen/qwen3-coder",
@@ -967,6 +1190,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: false,
+    reasoningSupport: { supported: false, efforts: [] },
   },
   {
     modelId: "moonshotai/kimi-k2-thinking",
@@ -980,6 +1204,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: false,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "moonshotai/kimi-k2",
@@ -993,6 +1218,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: false,
     supportsVision: false,
+    reasoningSupport: { supported: false, efforts: [] },
   },
   {
     modelId: "z-ai/glm-4.6",
@@ -1006,6 +1232,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: false,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "minimax/minimax-m2.7",
@@ -1019,6 +1246,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: false,
+    reasoningSupport: { supported: true, efforts: [] },
   },
   {
     modelId: "meta-llama/llama-4-maverick",
@@ -1032,6 +1260,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: false, efforts: [] },
   },
   {
     modelId: "mistralai/mistral-large-2512",
@@ -1045,6 +1274,7 @@ export const PAID_MODEL_CATALOG: readonly CatalogModel[] = [
     supportsTools: true,
     supportsStructuredOutputs: true,
     supportsVision: true,
+    reasoningSupport: { supported: false, efforts: [] },
   },
 ];
 

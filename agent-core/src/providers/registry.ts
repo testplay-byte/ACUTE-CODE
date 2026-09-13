@@ -9,6 +9,14 @@
  */
 import type Database from "better-sqlite3";
 import { scrubSecretShapes } from "../lib/secret-shapes.js";
+// ROUND-95 (R95-B): the per-model reasoning-capability vocabulary + blob
+// type live in shared (the wire contract both sides consume). Type-only —
+// the runtime const REASONING_EFFORT_LEVELS is used here for normalization.
+import {
+  REASONING_EFFORT_LEVELS,
+  type ModelReasoningSupport,
+  type ReasoningEffortLevel,
+} from "shared";
 import {
   getProviderRecord,
   listProviderRecords,
@@ -238,6 +246,16 @@ export function resolveProvider(db: SqliteDatabase, id: string): ProviderRecord 
 export interface ModelSummary {
   id: string;
   name: string;
+  /** ROUND-95 (R95-B): the model's DETECTED reasoning capability, read off
+   * the provider's /models catalog when it exposes one (OpenRouter:
+   * `supported_parameters` containing "reasoning" + the `reasoning`
+   * object — see extractReasoningSupport below). ABSENT = the catalog said
+   * nothing (a provider that exposes no reasoning metadata — NVIDIA NIM,
+   * Anthropic's own /v1/models, …): UNKNOWN, never "unsupported", and
+   * never something a consumer blocks on. Served additively by GET
+   * /providers/:id/models (the Add Models dialog) and consumed by the
+   * reasoning merge/prefill in routes/providers.ts. */
+  reasoningSupport?: ModelReasoningSupport;
 }
 
 export interface ProviderModelsResult {
@@ -284,12 +302,78 @@ function parseModels(body: unknown): ModelSummary[] {
   const models: ModelSummary[] = [];
   for (const entry of (body as { data: unknown[] }).data) {
     if (typeof entry !== "object" || entry === null) continue;
-    const id = (entry as Record<string, unknown>).id;
+    const record = entry as Record<string, unknown>;
+    const id = record.id;
     if (typeof id !== "string" || id === "") continue;
-    const name = (entry as Record<string, unknown>).name;
-    models.push({ id, name: typeof name === "string" && name !== "" ? name : id });
+    const name = record.name;
+    // ROUND-95 (R95-B): the reasoning bit rides along when the provider's
+    // catalog carries one (additive — absent for providers without the
+    // metadata).
+    const reasoning = extractReasoningSupport(record);
+    models.push({
+      id,
+      name: typeof name === "string" && name !== "" ? name : id,
+      ...(reasoning !== null ? { reasoningSupport: reasoning } : {}),
+    });
   }
   return models;
+}
+
+/* ── ROUND-95 (R95-B): catalog reasoning detection ─────────────────────── */
+
+/**
+ * Fold a provider's raw reasoning-effort list into the shared
+ * ReasoningEffortLevel vocabulary. OpenRouter's live ladder is wider than
+ * the wire side (verified against the 2026-09 /api/v1/models snapshot):
+ * "xhigh"/"max" normalize DOWN to "high" — a model that accepts a higher
+ * tier accepts "high" — "none" is a DISABLE switch rather than an effort
+ * and is dropped, and anything else unrecognized is dropped. Deduped and
+ * ordered by the shared vocabulary so every stored blob is canonical.
+ */
+export function normalizeReasoningEfforts(raw: readonly string[]): ReasoningEffortLevel[] {
+  const folded = raw.map((value) => (value === "xhigh" || value === "max" ? "high" : value));
+  return REASONING_EFFORT_LEVELS.filter((level) => folded.includes(level));
+}
+
+/**
+ * ROUND-95 (R95-B): read ONE catalog entry's reasoning capability — the
+ * OpenRouter /models shape (the only provider observed carrying these
+ * fields; any OpenAI-compatible gateway that mirrors the shape gets the
+ * same detection for free):
+ *   · supported_parameters: string[] — contains "reasoning" when the model
+ *     accepts the reasoning parameter (312 of 445 entries on the 2026-09
+ *     snapshot). AUTHORITATIVE when present: a few entries carry a `reasoning`
+ *     object without listing the parameter (rekaai/reka-edge,
+ *     qwen/qwen3-max, … — re-verified live) and those read as NOT supported,
+ *     while openrouter/auto* list the parameter with NO reasoning object
+ *     (supported, empty ladder);
+ *   · reasoning?: { mandatory?, default_enabled?, supported_efforts?:
+ *     string[], default_effort? } — the effort ladder when the provider
+ *     publishes one (e.g. ["max","xhigh","high","medium","low"],
+ *     ["high","medium","low"]); plain reasoning-only entries (deepseek-r1)
+ *     carry the object with NO supported_efforts → supported with an
+ *     empty ladder.
+ *
+ * Returns null when the entry carries NEITHER field — a provider that
+ * exposes no reasoning metadata must stay UNKNOWN, never "unsupported"
+ * (the never-block-on-null contract the runtime relies on).
+ */
+function extractReasoningSupport(entry: Record<string, unknown>): ModelReasoningSupport | null {
+  const params = entry.supported_parameters;
+  const reasoning = entry.reasoning;
+  const hasParams = Array.isArray(params);
+  const hasReasoningObject = typeof reasoning === "object" && reasoning !== null;
+  if (!hasParams && !hasReasoningObject) return null;
+  // supported_parameters is the authoritative signal when present; a bare
+  // reasoning object (no parameter list) still means supported.
+  const supported = hasParams ? (params as unknown[]).includes("reasoning") : true;
+  const effortsRaw = hasReasoningObject
+    ? (reasoning as { supported_efforts?: unknown }).supported_efforts
+    : undefined;
+  const efforts = Array.isArray(effortsRaw)
+    ? normalizeReasoningEfforts(effortsRaw.filter((e): e is string => typeof e === "string"))
+    : [];
+  return { supported, efforts };
 }
 
 /**
@@ -438,10 +522,17 @@ export async function testProviderConnection(
   }
   const latencyMs = Date.now() - startedAt;
   if (!response.ok) {
+    // ROUND-95 (R95-B, owner: "By just directly checking it, it does not
+    // give the actual error message which I got"): the reachability-only
+    // branch now surfaces the provider's REAL error body — the same
+    // upstreamErrorDetail call the model branch already made (scrubbed,
+    // 2000-char cap). The old bare "key rejected by provider (HTTP 401)"
+    // forced the owner to guess at what the provider actually said.
+    const detail = await upstreamErrorDetail(response, apiKey);
     if (response.status === 401 || response.status === 403) {
-      throw new ProviderTestError(`key rejected by provider (HTTP ${response.status})`);
+      throw new ProviderTestError(`key rejected by provider (HTTP ${response.status})${detail}`);
     }
-    throw new ProviderFetchError(`GET ${endpoint} answered HTTP ${response.status}`);
+    throw new ProviderFetchError(`GET ${endpoint} answered HTTP ${response.status}${detail}`);
   }
   try {
     await response.arrayBuffer();

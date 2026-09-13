@@ -201,6 +201,11 @@ describe("openDatabase", () => {
       // appended to template/default rows by the companion rule.
       { version: 33, name: "0033_ask_user_tool.sql" },
       { version: 34, name: "0034_computer_element_map.sql" },
+      // ROUND-95 (R95-B, the per-model thinking-level detection): the
+      // models.reasoning_support JSON-blob column (null = unknown — the
+      // honest default until a reasoning-capable catalog merge touches the
+      // row; the runtime never blocks on it).
+      { version: 35, name: "0035_model_reasoning_support.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

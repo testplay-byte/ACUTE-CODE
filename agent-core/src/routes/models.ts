@@ -31,6 +31,13 @@ import {
   updateModel,
 } from "../storage/models.js";
 import { errorBody } from "./helpers.js";
+// ROUND-95 (R95-B): the reasoning-support wire types (shared owns the
+// vocabulary — never re-declared locally).
+import {
+  REASONING_EFFORT_LEVELS,
+  type ModelReasoningSupport,
+  type ReasoningEffortLevel,
+} from "shared";
 
 /* ── ROUND-50 (R50-d): model-config field gate ────────────────────────────────
  *
@@ -154,6 +161,59 @@ export function isModelTriStateField(field: string): boolean {
   return (MODEL_TRISTATE_FIELDS as readonly string[]).includes(field);
 }
 
+/* ── ROUND-95 (R95-B): the reasoningSupport field gate ───────────────────── */
+
+/** Membership in the shared wire vocabulary (shared owns the truth). */
+function isReasoningEffortLevel(value: string): value is ReasoningEffortLevel {
+  return (REASONING_EFFORT_LEVELS as readonly string[]).includes(value);
+}
+
+/** The 400 message for a malformed reasoningSupport value (both routes). */
+export function reasoningSupportValidationMessage(): string {
+  return (
+    "reasoningSupport must be null or {supported: boolean, efforts: ReasoningEffortLevel[]} " +
+    `(efforts values: ${REASONING_EFFORT_LEVELS.join(", ")})`
+  );
+}
+
+/**
+ * ROUND-95 (R95-B, the owner's per-model thinking-level detection): strict
+ * gate for the reasoningSupport model-config field, shared by PATCH
+ * /models/:id (this module) and POST /providers/:id/models
+ * (routes/providers.ts — the R50-d identical-validation contract):
+ *   · absent  → undefined (upsert KEEPS the stored value);
+ *   · null    → null (clears back to UNKNOWN);
+ *   · object  → {supported: boolean, efforts: ReasoningEffortLevel[]} —
+ *               every effort must sit inside the shared vocabulary (a
+ *               provider's wider ladder — "xhigh"/"max"/"none" — is
+ *               normalized at the catalog-merge edge in registry.ts,
+ *               never accepted raw); anything else is a 400 VALIDATION
+ *               naming the field (never a silently dropped "successful"
+ *               save, the R50-d discipline).
+ */
+export function readModelReasoningSupportField(
+  raw: Record<string, unknown>,
+): { ok: true; value: ModelReasoningSupport | null | undefined } | { ok: false; field: string } {
+  const value = raw.reasoningSupport;
+  if (value === undefined) return { ok: true, value: undefined };
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, field: "reasoningSupport" };
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.supported !== "boolean") return { ok: false, field: "reasoningSupport" };
+  if (!Array.isArray(record.efforts)) return { ok: false, field: "reasoningSupport" };
+  for (const effort of record.efforts) {
+    if (typeof effort !== "string" || !isReasoningEffortLevel(effort)) {
+      return { ok: false, field: "reasoningSupport" };
+    }
+  }
+  return {
+    ok: true,
+    value: { supported: record.supported, efforts: record.efforts as ReasoningEffortLevel[] },
+  };
+}
+
 export function registerModelRoutes(scope: FastifyInstance, ctx: RouteContext): void {
   const { db, keyring } = ctx;
   scope.patch("/models/:id", async (request, reply) => {
@@ -192,6 +252,18 @@ export function registerModelRoutes(scope: FastifyInstance, ctx: RouteContext): 
           { field: `body.${scalars.field}` },
         ),
       );
+    }
+    // ROUND-95 (R95-B): the reasoningSupport gate — null clears to unknown,
+    // {supported, efforts} sets (efforts within the shared vocabulary).
+    const reasoning = readModelReasoningSupportField(raw);
+    if (!reasoning.ok) {
+      return reply
+        .code(400)
+        .send(
+          errorBody("VALIDATION", reasoningSupportValidationMessage(), {
+            field: `body.${reasoning.field}`,
+          }),
+        );
     }
     const patch: Record<string, unknown> = {};
     if (typeof raw.displayName === "string") patch.displayName = raw.displayName;
@@ -247,6 +319,12 @@ export function registerModelRoutes(scope: FastifyInstance, ctx: RouteContext): 
       if (raw.sizeLabel === null || typeof raw.sizeLabel === "string") {
         patch.sizeLabel = raw.sizeLabel;
       }
+    }
+    // ROUND-95 (R95-B): the reasoning-capability blob — value sets, null
+    // clears to unknown, absent keeps (the same tri-state contract; the
+    // storage layer serializes canonically).
+    if (reasoning.value !== undefined) {
+      patch.reasoningSupport = reasoning.value;
     }
     if (typeof raw.hidden === "boolean") patch.hidden = raw.hidden;
     const model = updateModel(db, id, patch);

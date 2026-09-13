@@ -114,6 +114,52 @@ export interface AgentRecord {
   temperature: number;
 }
 
+/* ── ROUND-95 (R95-B): per-model reasoning capability ───────────────────── */
+
+/**
+ * ROUND-95 (R95-B, owner: "The thinking level was supposed to be
+ * model-specific. Multiple models have different thinking levels … Our
+ * program should be able to properly detect the models' thinking options,
+ * like which options it supports and such"): the wire-side REASONING-EFFORT
+ * vocabulary — the values ACUTE may inject as `reasoning.effort` on
+ * chat-completions requests. Ordered lowest → highest.
+ *
+ * Providers advertise coarser or wider subsets (OpenRouter's live catalog
+ * lists e.g. ["high"], ["low","medium","high"], and some entries carry
+ * "xhigh"/"max"/"none" — verified against the 2026-09 snapshot). Anything
+ * a provider lists that falls outside this vocabulary is NORMALIZED at the
+ * catalog-merge edge in agent-core (registry.ts): "xhigh"/"max" fold down
+ * to "high" (a model accepting a higher tier accepts "high"), "none" is a
+ * disable switch rather than an effort and is dropped. The stored metadata
+ * therefore only ever contains these four.
+ */
+export type ReasoningEffortLevel = "minimal" | "low" | "medium" | "high";
+
+/** The accepted reasoning-effort values (validation source of truth). */
+export const REASONING_EFFORT_LEVELS: readonly ReasoningEffortLevel[] = ["minimal", "low", "medium", "high"];
+
+/**
+ * ROUND-95 (R95-B): a model row's DETECTED reasoning capability, captured
+ * from the provider's live catalog (OpenRouter /models entries:
+ * `supported_parameters` containing "reasoning" plus the `reasoning`
+ * object's `supported_efforts` list) and stored on the row as a JSON blob.
+ *
+ * `supported: false` = the catalog explicitly says the model takes no
+ * reasoning parameter. A null/absent ModelReasoningSupport = UNKNOWN (never
+ * detected — the honest default for non-OpenRouter providers, which expose
+ * no such metadata) — consumers must NEVER block on unknown: fall back to
+ * the global thinking-level selector.
+ */
+export interface ModelReasoningSupport {
+  /** The provider's catalog marks the model as reasoning-capable. */
+  supported: boolean;
+  /** The efforts the provider lists for this model, within the wire
+   * vocabulary. May be empty when the model is supported but the provider
+   * names no discrete efforts (e.g. OpenRouter's plain reasoning-only
+   * entries) — effort selection then falls back to the global levels. */
+  efforts: readonly ReasoningEffortLevel[];
+}
+
 /** One provider billing line for a completed model call. */
 export interface UsageRecord {
   /** The agent that authored the call — null for the R83 hidden-call rows
