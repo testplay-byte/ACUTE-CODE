@@ -1878,15 +1878,21 @@ describe("Composer: model picker — the R89 provider filter + last-used memory"
 
 // ── G. Context donut ────────────────────────────────────────────────────────
 describe("Composer: context donut (owner spec G)", () => {
-  it("renders the ring from GET /sessions/:id/context — ICON-ONLY, no inline % label (R51-c)", async () => {
+  it("renders the ring from GET /sessions/:id/context + the MEASURED readout — no inline % label (R51-c kept, R95-F)", async () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
 
     const donut = await screen.findByRole("button", { name: /~42% of context window projected/ });
-    // ROUND-51 (R51-c): the toolbar shows ONLY the ring — the % lives on the
-    // button's title/aria-label and inside the popover, never beside it.
+    // ROUND-51 (R51-c) KEPT: NO PERCENTAGE beside the ring — the % still
+    // lives on the button's title/aria-label and inside the popover.
+    // ROUND-95 (R95-F, owner: the meter "does not properly show the actual
+    // context which is currently being used"): the MEASURED readout (the
+    // provider's own prompt size, labeled "measured") now rides BESIDE the
+    // ring at rest — replacing the icon-only contract this assertion used
+    // to pin. The ring itself stays the ~-labeled ESTIMATE (R83 one-rule:
+    // every number carries its basis, never conflated).
     expect(document.querySelector("[data-donut-label]")).toBeNull();
-    expect(donut.textContent?.trim()).toBe("");
+    expect(donut.textContent?.trim()).toBe("390kmeasured");
     expect(donut.querySelector("svg")).toBeTruthy();
     // ROUND-83 (R83): the title is the honest two-number summary — the
     // projection LABELED with a ~ + the provider's measured number.
@@ -1910,7 +1916,10 @@ describe("Composer: context donut (owner spec G)", () => {
     expect(popover.textContent).toContain("~42% projected");
     // R91-H: the million tier — a 1,000,000-token window renders as 1m.
     expect(popover.textContent).toContain("420k / 1m tokens · estimated");
-    expect(popover.textContent).toContain("390k measured at last request");
+    // ROUND-95 (R95-F): the measured line was PROMOTED to a two-span row
+    // (bold number + label), so the DOM concatenates without the space this
+    // used to assert — number + basis still both pinned.
+    expect(popover.textContent).toContain("390kmeasured at last request");
     expect(popover.textContent).toContain("openrouter/ox-alpha");
     // The budget line (the compaction-line tick + the output reserve) and
     // the window's provenance.

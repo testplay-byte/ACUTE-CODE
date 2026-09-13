@@ -1,6 +1,7 @@
 import type {
   AgentRecord,
   MessageAttachment,
+  ModelReasoningSupport,
   PermissionMode,
   RunMode,
   SessionStatus,
@@ -2883,6 +2884,16 @@ export interface ProviderModelConfig {
   supportsVideoOutput: boolean | null;
   supportsAudioOutput: boolean | null;
   sizeLabel: string | null;
+  /** ROUND-95 (R95-F, the api-mirror catch-up R95-E flagged): the model's
+   * DETECTED reasoning capability (R95-B's ModelReasoningSupport — the
+   * sidecar's ModelRecord has carried `reasoningSupport` additively since
+   * R95-B, but this frontend mirror lacked the field, forcing Composer to
+   * read it through composer-utils' ReasoningAwareModelRow widening).
+   * Additive + optional: null/absent = UNKNOWN (never block on it — the
+   * thinking-level menu falls back to the global selector). With this
+   * field in place, that local widening type can be simplified/removed in
+   * a round that owns composer-utils.ts. */
+  reasoningSupport?: ModelReasoningSupport | null;
   hidden: boolean;
   sortOrder: number;
   createdAt: string;

@@ -540,7 +540,13 @@ export function ContextDonut({
         }}
       >
         {/* ROUND-51 (R51-c): icon-only in the toolbar (owner: "no need to
-            show the actual percentage used") — the % lives in the popover. */}
+            show the actual percentage used") — the % lives in the popover.
+            ROUND-95 (R95-F, owner: the donut "does not properly show the
+            actual context which is currently being used"): the MEASURED
+            readout — the provider's own prompt size from the last request —
+            rides BESIDE the ring at rest (no hover needed), clearly labeled
+            "measured" so it can never be mistaken for the ring's estimate
+            (the R83 one-rule: every number carries its basis). */}
         <DonutRing
           size={22}
           stroke={3}
@@ -549,6 +555,16 @@ export function ContextDonut({
           color={ringColor}
           track={report.isError ? withAlpha(SEMANTIC_COLORS.danger, 0.4) : styles.subtle}
         />
+        {data !== null && data.actual != null ? (
+          <span className="flex items-baseline gap-0.5" data-context-measured-inline>
+            <span className="font-mono text-[10px] font-bold" style={{ color: styles.text }}>
+              {fmtTokens(data.actual.inputTokens)}
+            </span>
+            <span className="text-[9px] font-semibold" style={{ color: styles.textTertiary }}>
+              measured
+            </span>
+          </span>
+        ) : null}
       </button>
       {/* ROUND-64 (R64-c): the popover in a document.body PORTAL — a fixed
           layer positioned from the trigger's rect, so tall content opens
@@ -636,27 +652,45 @@ export function ContextDonut({
                         <div className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
                           {fmtTokens(used)} / {fmtTokens(window_)} tokens · estimated
                         </div>
-                        {/* ROUND-83 (R83) §3.1: the MEASURED line — the
-                            provider's own prompt size for the last request
-                            (with its ts + model so a per-send model switch
-                            can never silently mix numbers). null before the
-                            first reply → "not yet measured", never 0. */}
-                        <div
-                          className="font-mono text-[9.5px] truncate"
-                          data-context-measured
-                          title={
-                            data.actual !== null && data.actual !== undefined
-                              ? `${fmtTokens(data.actual.inputTokens)} tokens · ${new Date(data.actual.at).toLocaleString()}`
-                              : undefined
-                          }
-                          style={{ color: styles.textSecondary }}
-                        >
-                          {data.actual !== null && data.actual !== undefined
-                            ? `${fmtTokens(data.actual.inputTokens)} measured at last request`
-                            : "not yet measured"}
-                        </div>
+                        {/* ROUND-83 (R83) §3.1 + ROUND-95 (R95-F): the MEASURED
+                            line — the provider's own prompt size for the
+                            last request, PROMOTED to a first-class row (it
+                            was a 9.5px tertiary line; the owner: "does not
+                            properly show the actual context which is
+                            currently being used"). `at` rides on the title;
+                            null before the first reply → the honest
+                            "not yet measured", never 0. */}
+                        {data.actual != null ? (
+                          <div
+                            className="flex min-w-0 items-baseline gap-1.5"
+                            data-context-measured
+                            title={`${fmtTokens(data.actual.inputTokens)} tokens · ${new Date(data.actual.at).toLocaleString()}`}
+                          >
+                            <span className="font-mono text-[11px] font-bold" style={{ color: styles.text }}>
+                              {fmtTokens(data.actual.inputTokens)}
+                            </span>
+                            <span className="shrink-0 text-[9.5px]" style={{ color: styles.textSecondary }}>
+                              measured at last request
+                            </span>
+                          </div>
+                        ) : (
+                          <div
+                            className="font-mono text-[9.5px]"
+                            data-context-measured
+                            style={{ color: styles.textSecondary }}
+                          >
+                            not yet measured — the first reply reports the provider's own count
+                          </div>
+                        )}
+                        {/* The model line. ROUND-95 (R95-F): a per-send model
+                            switch can never silently mix numbers — when the
+                            measured number came from a DIFFERENT model than
+                            the meter's current one, BOTH are named (the R83
+                            "at + model must ride" rule, made visible). */}
                         <div className="font-mono text-[9.5px] truncate" title={data.model} style={{ color: styles.textTertiary }}>
-                          {data.model}
+                          {data.actual != null && data.actual.model !== data.model
+                            ? `next send ${data.model} · measured ${data.actual.model}`
+                            : data.model}
                         </div>
                       </div>
                     </div>
