@@ -1,8 +1,13 @@
 import { Brain, Check, ChevronDown } from "lucide-react";
-import type { ThinkingLevel } from "shared";
+import type { ModelReasoningSupport, ThinkingLevel } from "shared";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
-import { THINKING_OPTIONS, thinkingOption, useDismiss } from "./composer-utils";
+import {
+  displayThinkingLevel,
+  thinkingOption,
+  thinkingMenuSpec,
+  useDismiss,
+} from "./composer-utils";
 import { useNativeOptionsMenu } from "./useNativeOptionsMenu";
 
 /**
@@ -19,35 +24,95 @@ import { useNativeOptionsMenu } from "./useNativeOptionsMenu";
  * (the DOM dropdown's w-56 right-aligned geometry used to cross into the
  * browser panel at the squeezed chat-column floor). The DOM dropdown below
  * is the web-mode / overlay-failed fallback, unchanged.
+ *
+ * ROUND-95 (R95-E, the owner: "The thinking level was supposed to be
+ * model-specific… Our program should be able to properly detect the models'
+ * thinking options, like which options it supports and such"): the menu is
+ * now MODEL-AWARE via the optional `reasoningSupport` prop (Composer
+ * resolves it for the CURRENT effective model from its provider's configured
+ * rows — R95-B's detected capability blob):
+ *  · null/absent (UNKNOWN) — the R50 classic four + an honest "capabilities
+ *    unknown for this model" footer note (never blocked on a guess);
+ *  · supported: false — the button renders DISABLED ("No thinking") with an
+ *    honest tooltip; no menu at all (chat.ts injects no reasoning either);
+ *  · supported: true — ONLY the levels the model's own ladder holds (a
+ *    [low, medium] model offers Default/Low/Medium; a ladder without high
+ *    hides High/Max with the cap note; a stored level the model doesn't
+ *    support falls back VISUALLY to the nearest supported one — chat.ts
+ *    maps the wire value anyway, the mapping is the safety net).
  */
 export function ThinkingLevelButton({
   level,
   onChange,
+  reasoningSupport = null,
 }: {
   level: ThinkingLevel;
   onChange: (level: ThinkingLevel) => void;
+  /** ROUND-95 (R95-E): the CURRENT effective model's detected reasoning
+   * capability (default null = unknown — the classic four). */
+  reasoningSupport?: ModelReasoningSupport | null;
 }) {
   const styles = useThemeStyles();
-  // R92-A: the overlay-first ladder — `open` is the DOM leg only.
+  // R95-E: the support-aware menu spec — options, footer note, and the
+  // unsupported verdict all derive from ONE place (composer-utils).
+  const spec = thinkingMenuSpec(reasoningSupport);
+  const displayLevel = displayThinkingLevel(level, spec.options);
+  const current = thinkingOption(displayLevel);
+
+  // R92-A: the overlay-first ladder — `open` is the DOM leg only. R95-E: a
+  // non-reasoning model never opens a menu at all (the button is disabled).
   const menu = useNativeOptionsMenu({
     title: "Thinking level",
     menuWidth: 224, // the DOM menu's w-56
     align: "right", // the DOM menu's right-0
     rowHeight: 42, // label + desc rows (quick-menu rhythm)
-    buildItems: () =>
-      THINKING_OPTIONS.map((option) => ({
+    buildItems: () => [
+      ...spec.options.map((option) => ({
         id: option.id,
         label: option.label,
         desc: option.description,
-        selected: option.id === level,
+        selected: option.id === displayLevel,
       })),
+      // R95-E: the honest footer note rides the OVERLAY leg as a desc-only
+      // pseudo-row (the overlay payload has no footer concept and its page
+      // is not this round's file set): an empty label + the note text, and
+      // onPick ignores the unknown id — the menu just closes, nothing
+      // changes. The DOM leg below renders a proper footer instead.
+      ...(spec.note !== null && !spec.unsupported
+        ? [{ id: "r95-thinking-note", label: "", desc: spec.note, selected: false }]
+        : []),
+    ],
     onPick: (id) => {
-      const option = THINKING_OPTIONS.find((o) => o.id === id);
+      const option = spec.options.find((o) => o.id === id);
       if (option !== undefined && option.id !== level) onChange(option.id);
     },
   });
   const menuRef = useDismiss(menu.open, () => menu.closeAll());
-  const current = thinkingOption(level);
+
+  // R95-E: the model takes no reasoning parameter — a disabled, honestly
+  // labeled button (the Brain icon keeps the composer's toolbar rhythm).
+  if (spec.unsupported) {
+    return (
+      <div className="relative shrink-0" ref={menuRef}>
+        <button
+          type="button"
+          disabled
+          aria-label="Thinking level: No thinking"
+          title="This model does not support reasoning"
+          className="flex items-center gap-1.5 h-7 px-2 rounded-[10px] text-[11px] font-semibold"
+          style={{ color: styles.textTertiary }}
+        >
+          <Brain size={12} className="shrink-0" style={{ color: styles.textTertiary }} />
+          <span
+            data-thinking-label
+            className="max-w-[240px] overflow-hidden whitespace-nowrap transition-all duration-200 @max-[500px]:max-w-0 @max-[500px]:opacity-0 @max-[500px]:-mr-1.5"
+          >
+            No thinking
+          </span>
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="relative shrink-0" ref={menuRef}>
@@ -82,7 +147,8 @@ export function ThinkingLevelButton({
         <ChevronDown size={10} className="shrink-0" />
       </button>
       {/* R92-A: the DOM dropdown renders ONLY on the web/fallback leg (see
-          ModeSwitcher's comment). */}
+          ModeSwitcher's comment). R95-E: the rows come from the support-aware
+          spec, and the note (when one exists) rides a small honest footer. */}
       {menu.open ? (
         <div
           role="menu"
@@ -90,8 +156,8 @@ export function ThinkingLevelButton({
           className="absolute bottom-9 right-0 w-56 rounded-2xl border p-1.5 z-50"
           style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
         >
-          {THINKING_OPTIONS.map((option) => {
-            const isSelected = option.id === level;
+          {spec.options.map((option) => {
+            const isSelected = option.id === displayLevel;
             return (
               <button
                 key={option.id}
@@ -126,6 +192,18 @@ export function ThinkingLevelButton({
               </button>
             );
           })}
+          {/* R95-E: the honest footer note — unknown capabilities, a ladder
+              that tops out below high, or a provider that lists no discrete
+              efforts. textTertiary, one small line, never a lie. */}
+          {spec.note !== null ? (
+            <div
+              data-thinking-menu-note
+              className="px-2 pt-1 pb-0.5 text-[9.5px] leading-tight"
+              style={{ color: styles.textTertiary }}
+            >
+              {spec.note}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

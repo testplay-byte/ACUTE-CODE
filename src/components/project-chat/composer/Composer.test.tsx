@@ -1220,6 +1220,57 @@ describe("Composer: thinking level (owner spec E)", () => {
     expect(vi.mocked(streamSessionMessage).mock.calls[0][3]?.thinkingLevel).toBe("high");
     await sendSettled();
   });
+
+  // ROUND-95 (R95-E, the owner: "The reasoning level… was supposed to be
+  // model-specific"): the composer resolves the CURRENT effective model's
+  // DETECTED reasoning capability from its provider's configured rows and
+  // the button offers ONLY what that model supports.
+  it("R95-E: a detected [low, medium] ladder offers Default/Low/Medium (High/Max hidden, cap note shown)", async () => {
+    // The agent fixture's model is "openrouter/ox-alpha" (provider openrouter)
+    // — give its config row a detected [low, medium] ladder; the extra
+    // reasoningSupport field is the R95-B wire addition (ProviderModelConfig's
+    // mirror type hasn't caught up — the composer reads it through its local
+    // widening, so cast through the wire shape here).
+    const row = {
+      ...modelConfigRow({ modelId: "openrouter/ox-alpha" }),
+      reasoningSupport: { supported: true, efforts: ["low", "medium"] },
+    };
+    vi.mocked(fetchProviderModelConfig).mockResolvedValue([row as ProviderModelConfig]);
+
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Thinking level: Default" }));
+    await waitFor(() => {
+      expect(screen.getAllByRole("menuitemradio").map((o) => o.textContent)).toEqual([
+        "DefaultThe model's own reasoning default.",
+        "LowLight reasoning — fastest replies.",
+        "MediumBalanced reasoning effort.",
+      ]);
+    });
+    expect(document.querySelector("[data-thinking-menu-note]")?.textContent).toBe(
+      "this model caps reasoning at medium",
+    );
+    await sendSettled();
+  });
+
+  it("R95-E: a model the catalog marks NOT reasoning-capable disables the button honestly", async () => {
+    const row = {
+      ...modelConfigRow({ modelId: "openrouter/ox-alpha" }),
+      reasoningSupport: { supported: false, efforts: [] },
+    };
+    vi.mocked(fetchProviderModelConfig).mockResolvedValue([row as ProviderModelConfig]);
+
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
+
+    const button = await waitFor(() =>
+      screen.getByRole("button", { name: "Thinking level: No thinking" }),
+    );
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(button.getAttribute("title")).toBe("This model does not support reasoning");
+    await sendSettled();
+  });
 });
 
 // ── F. Model selector ────────────────────────────────────────────────────────
@@ -1607,7 +1658,12 @@ describe("Composer: model selector respects the models config (ROUND-58 R58-d)",
   });
 
   it("a FAILING config fetch renders the honest error row — no catalog fallback (R64-d)", async () => {
-    vi.mocked(fetchProviderModelConfig).mockRejectedValueOnce(
+    // R95-E: the Composer itself now consumes the same
+    // fetchProviderModelConfig (the thinking button's capability query), so
+    // the mock must fail for EVERY call — a one-shot mockRejectedValueOnce
+    // would be eaten by the Composer's own mount query and the flyout would
+    // see the healthy default instead of the error under test.
+    vi.mocked(fetchProviderModelConfig).mockRejectedValue(
       new Error("models-config unreachable"),
     );
     await renderPanelWithConversation();

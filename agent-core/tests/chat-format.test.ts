@@ -245,7 +245,10 @@ describe("buildThinkingFetch (ROUND-50 R50-c1 — reasoning.effort injection)", 
       return new Response("{}", { status: 200 });
     });
     const { buildThinkingFetch } = await import("../src/agents/chat");
-    const wrapped = buildThinkingFetch("low", inner);
+    // ROUND-95 (R95-E): the signature gained the `support` parameter between
+    // level and inner — undefined here keeps the UNKNOWN-support behavior the
+    // original composition test pinned.
+    const wrapped = buildThinkingFetch("low", undefined, inner);
     await wrapped("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       body: JSON.stringify({ model: "z-ai/glm-5.2:free", messages: [] }),

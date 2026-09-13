@@ -49,7 +49,7 @@
  */
 
 /** The provider-failure classes (R71-d design: A6; R94-D1 added the
- * seventh — malformed_response). */
+ * seventh — malformed_response; R95-E added the eighth — thinking_loop). */
 export type ProviderErrorClass =
   | "context_window_exceeded"
   | "auth"
@@ -57,6 +57,7 @@ export type ProviderErrorClass =
   | "network"
   | "timeout"
   | "malformed_response"
+  | "thinking_loop"
   | "unknown";
 
 export interface ProviderErrorClassification {
@@ -244,6 +245,11 @@ export const CLASS_MESSAGES: Record<ProviderErrorClass, string> = {
   // when the real provider text is empty — the card normally shows the
   // provider's own words).
   malformed_response: "the provider returned a malformed response (known transient class on some endpoints)",
+  // ROUND-95 (R95-E): chat.ts's streamed thinking-loop watchdog — the
+  // honest line for a model that streamed pure reasoning with no visible
+  // progress (normally the ThinkingLoopError's own message rides through
+  // honestUserMessage as the real text).
+  thinking_loop: "the model got stuck in a reasoning loop — thinking with no text, tool call, or finish",
   unknown: "unclassified provider error",
 };
 
@@ -300,6 +306,20 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
   // The real error's own name ("TimeoutError" on the underlying abort, not
   // "AI_RetryError" on the wrapper) — the unwrap is what makes this read.
   const errorName = unwrapped instanceof Error ? unwrapped.name : "";
+  // 0. ROUND-95 (R95-E): chat.ts's dedicated ThinkingLoopError — thrown by
+  // the STREAMED adapter's reasoning-stall watchdog (the owner: "The models
+  // would apparently get stuck in the thinking loop… they won't even get out
+  // of the thinking"). Matched by the error's own NAME, the same idiom the
+  // TimeoutError/AbortError check below uses — the classifier stays free of
+  // chat.ts imports (this module is deliberately dependency-light: the
+  // retry ladder imports it without dragging the SDK adapter along). The
+  // class is NOT transient for the generic R75 ladder (waiting cannot heal a
+  // reasoning loop): the runtime's streamed catch gives it ONE dedicated
+  // de-escalating retry (thinking level forced down), then the honest
+  // terminal path — a second occurrence never rides the wait schedule.
+  if (errorName === "ThinkingLoopError") {
+    return { class: "thinking_loop", userMessage: honestUserMessage(message, "thinking_loop") };
+  }
   // 1. Abort/timeout shapes first — TimeoutError/AbortError are unambiguous,
   // and no later pattern should steal them.
   if (
@@ -408,6 +428,12 @@ export function providerFailureMessage(
  * class, and it is transient-in-practice on the endpoints that produce it
  * (a rerun typically succeeds). The ladder's existing rungs handle it with
  * no special-casing beyond this classification.
+ *
+ * ROUND-95 (R95-E): thinking_loop is deliberately NOT in this set — waiting
+ * cannot heal a reasoning loop. It has its own ONE-SHOT de-escalating retry
+ * in the streamed runner (retry with the thinking level forced to "low",
+ * visible as a meta.retry card), and a SECOND occurrence fails honestly
+ * through the terminal path instead of climbing the wait schedule.
  */
 export function isTransientApiFailure(classification: ProviderErrorClass): boolean {
   return (

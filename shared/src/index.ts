@@ -50,11 +50,21 @@ export const PERMISSION_MODES: readonly PermissionMode[] = ["full", "ask", "plan
  * reasoning-effort hint. "default" = provider/model default (nothing
  * injected); low/high/max map to `reasoning.effort` on chat-completions
  * wire formats. NOT persisted — sub-agents never inherit it.
+ *
+ * ROUND-95 (R95-E): "medium" JOINS the vocabulary (additive — the R50
+ * owner directive was "only four options", but the R95 owner report says
+ * the levels were supposed to be MODEL-SPECIFIC: models whose detected
+ * effort ladder is e.g. ["low","medium"] get a Medium option, and
+ * chat.ts maps every level onto the model's own ladder — see
+ * ModelReasoningSupport below and REASONING_EFFORT_LEVELS). Stored
+ * per-session levels from older builds stay valid (the union only
+ * widened); the classic Default/Low/High/Max set remains what a model
+ * with UNKNOWN capabilities offers.
  */
-export type ThinkingLevel = "default" | "low" | "high" | "max";
+export type ThinkingLevel = "default" | "low" | "medium" | "high" | "max";
 
-/** The 4 accepted thinking-level values (validation source of truth). */
-export const THINKING_LEVELS: readonly ThinkingLevel[] = ["default", "low", "high", "max"];
+/** The accepted thinking-level values (validation source of truth). */
+export const THINKING_LEVELS: readonly ThinkingLevel[] = ["default", "low", "medium", "high", "max"];
 
 /**
  * ROUND-50 (R50-c1): one attachment on an outgoing user message — picked via

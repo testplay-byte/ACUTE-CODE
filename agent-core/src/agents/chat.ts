@@ -7,7 +7,12 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText, streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from "ai";
-import type { MessageAttachment, ThinkingLevel } from "shared";
+import type {
+  MessageAttachment,
+  ModelReasoningSupport,
+  ReasoningEffortLevel,
+  ThinkingLevel,
+} from "shared";
 import { scrubSecretShapes } from "../lib/secret-shapes.js";
 
 export interface ChatTurnMessage {
@@ -63,8 +68,21 @@ export interface ChatTurnInput {
    * into the outgoing JSON body (see buildThinkingFetch); the
    * anthropic-messages and responses formats silently skip it (honest
    * limitation — those wire formats have no equivalent passthrough wired
-   * here yet). NOT persisted; sub-agents never inherit it. */
+   * here yet). NOT persisted; sub-agents never inherit it.
+   *
+   * ROUND-95 (R95-E): "medium" joins the vocabulary for models whose
+   * detected ladder tops out below high (see reasoningSupport). */
   thinkingLevel?: ThinkingLevel;
+  /** ROUND-95 (R95-E, THE R95-B E-CONTRACT): the model's DETECTED reasoning
+   * capability (resolveModelReasoningSupport — migration 0035's
+   * reasoning_support blob). Absent OR null = UNKNOWN — byte-identical R50
+   * behavior (the level injects verbatim, never blocked on a guess).
+   * `{supported: false}` → NO reasoning injected at all (the model takes no
+   * reasoning parameter — injecting one is a 400 waiting to happen).
+   * `{supported: true, efforts}` → the level maps onto the model's own
+   * effort ladder + a per-level reasoning.max_tokens budget (see
+   * buildThinkingFetch). */
+  reasoningSupport?: ModelReasoningSupport | null;
   /** ROUND-94 (R94-D1): mid-turn QUEUED-MESSAGE injection. When set, the
    * adapter wires a prepareStep into the SDK call; at every STEP boundary
    * where the PRIOR step completed a tool call (the owner's contract: after
@@ -131,20 +149,67 @@ export function buildModelFallbackFetch(): (
  * `inner` lets the OpenRouter free-model fallback wrapper compose UNDER this
  * one (thinking decides the effort, fallback decides the model chain) —
  * otherwise the global fetch is used. Exported for tests.
+ *
+ * ROUND-95 (R95-E, the owner: "The reasoning level… was supposed to be
+ * model-specific… Our program should be able to properly detect the models'
+ * thinking options"): the wrapper is now CAPABILITY-AWARE via `support`
+ * (ChatTurnInput.reasoningSupport — the R95-B storage contract):
+ *
+ *  · support null/absent (UNKNOWN — never block on a guess): the R50
+ *    behavior byte-for-byte — `reasoning.effort = level` verbatim, no
+ *    budget. Non-OpenRouter providers and undetected rows keep exactly
+ *    what they had.
+ *  · support.supported === false: NOTHING is injected — the catalog says
+ *    this model takes no reasoning parameter, so sending one is a provider
+ *    400 waiting to happen (the level is skipped entirely).
+ *  · support.supported === true: the level maps onto the model's OWN effort
+ *    ladder (mapThinkingLevelToEffort — "max" rides the highest supported
+ *    effort, an unsupported level falls to the nearest lower one) AND a
+ *    per-level reasoning.max_tokens BUDGET rides along (the owner's other
+ *    report: "The models would apparently get stuck in the thinking loop…
+ *    they won't even get out of the thinking" — bounding the reasoning
+ *    tokens at the provider level caps the blast radius of a runaway
+ *    model). Both merge into any existing reasoning object; a provider-set
+ *    max_tokens is never overwritten.
  */
 export function buildThinkingFetch(
   level: ThinkingLevel,
+  support?: ModelReasoningSupport | null,
   inner?: (url: string | URL | Request, init?: RequestInit) => Promise<Response>,
 ): (url: string | URL | Request, init?: RequestInit) => Promise<Response> {
   return async (url: string | URL | Request, init?: RequestInit) => {
-    if (typeof init?.body === "string" && init.body.length > 0) {
+    // R95-E: the supported:false gate lives INSIDE the wrapper too (the
+    // buildModel call site already refuses to wrap at all in that case —
+    // this is the belt to that brace, so a direct test/harness call can
+    // never smuggle a reasoning parameter into a non-reasoning model).
+    if (
+      typeof init?.body === "string" &&
+      init.body.length > 0 &&
+      level !== "default" &&
+      support?.supported !== false
+    ) {
       try {
         const body = JSON.parse(init.body) as Record<string, unknown>;
         const reasoning =
           typeof body.reasoning === "object" && body.reasoning !== null
             ? (body.reasoning as Record<string, unknown>)
             : {};
-        body.reasoning = { ...reasoning, effort: level };
+        // Effort: mapped onto the model's ladder when one was detected
+        // (a non-empty efforts list); verbatim otherwise (unknown support,
+        // or a reasoning-capable model whose provider names no discrete
+        // efforts — R95-B's plain reasoning-only catalog entries).
+        const efforts = support?.supported === true ? support.efforts : [];
+        const effort: string =
+          efforts.length > 0 ? mapThinkingLevelToEffort(level, efforts) : level;
+        // Budget: only for a DETECTED reasoning-capable model — unknown
+        // support keeps the R50 wire shape (no invented caps), and a
+        // provider-set max_tokens always wins over ours.
+        const budget = support?.supported === true ? REASONING_BUDGET_BY_LEVEL[level] : undefined;
+        body.reasoning = {
+          ...reasoning,
+          effort,
+          ...(reasoning.max_tokens === undefined && budget !== undefined ? { max_tokens: budget } : {}),
+        };
         init = { ...init, body: JSON.stringify(body) };
       } catch {
         // not JSON — pass through untouched
@@ -153,6 +218,71 @@ export function buildThinkingFetch(
     return inner !== undefined ? inner(url, init) : fetch(url, init);
   };
 }
+
+/** ROUND-95 (R95-E): the shared effort ladder's rank (lowest → highest) —
+ * the ordering mapThinkingLevelToEffort walks. Mirrors REASONING_EFFORT_LEVELS
+ * in shared/src (kept local: shared stays types-only). */
+const EFFORT_RANK: Record<ReasoningEffortLevel, number> = {
+  minimal: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+};
+
+/**
+ * ROUND-95 (R95-E): map a composer ThinkingLevel onto the model's OWN
+ * supported efforts. "max" rides the HIGHEST supported effort (the owner's
+ * "Maximum reasoning effort" means everything the model has); "low"/"medium"
+ * /"high" target their own rung; an unmapped target falls to the NEAREST
+ * LOWER supported effort, and when even that does not exist (e.g. "low" on a
+ * ["medium","high"] model) the LOWEST supported effort stands in — never a
+ * 400, never a silent skip. Pure; expects a NON-EMPTY efforts list (the
+ * empty case is handled by the caller — verbatim passthrough).
+ * Exported for tests.
+ */
+export function mapThinkingLevelToEffort(
+  level: ThinkingLevel,
+  efforts: readonly ReasoningEffortLevel[],
+): ReasoningEffortLevel {
+  if (efforts.length === 0) {
+    // Defensive direct-call shape (buildThinkingFetch passes only non-empty
+    // lists — verbatim passthrough there): "default" has no rung of its own,
+    // so it rides the LOWEST effort rather than a non-vocabulary value.
+    return level === "default" ? "minimal" : (level as ReasoningEffortLevel);
+  }
+  if (level === "max") {
+    // The highest supported effort — high > medium > low > minimal.
+    return efforts.reduce((best, e) => (EFFORT_RANK[e] > EFFORT_RANK[best] ? e : best), efforts[0]);
+  }
+  const target = level as ReasoningEffortLevel; // "low" | "medium" | "high"
+  if ((efforts as readonly string[]).includes(target)) return target;
+  // Nearest lower supported effort; when none is lower, the lowest one.
+  let fallback: ReasoningEffortLevel | null = null;
+  for (const e of efforts) {
+    if (EFFORT_RANK[e] < EFFORT_RANK[target] && (fallback === null || EFFORT_RANK[e] > EFFORT_RANK[fallback])) {
+      fallback = e;
+    }
+  }
+  if (fallback !== null) return fallback;
+  return efforts.reduce((lowest, e) => (EFFORT_RANK[e] < EFFORT_RANK[lowest] ? e : lowest), efforts[0]);
+}
+
+/**
+ * ROUND-95 (R95-E): the per-level reasoning.max_tokens BUDGET for models
+ * with DETECTED reasoning support — the provider-level bound on runaway
+ * thinking (the owner: models "stuck in the thinking loop… think for way too
+ * long, more than they even need to"). low caps at 2048, high at 8192, max at
+ * 16384; "medium" (the R95-E addition for [low,medium]-ladder models) sits
+ * at the 4096 midpoint. "default" injects nothing at all, so it has no
+ * budget entry. Applied ONLY when a reasoning object is being injected in
+ * the first place, and never over a provider-set max_tokens.
+ */
+export const REASONING_BUDGET_BY_LEVEL: Readonly<Record<Exclude<ThinkingLevel, "default">, number>> = {
+  low: 2048,
+  medium: 4096,
+  high: 8192,
+  max: 16384,
+};
 
 function buildModel(input: ChatTurnInput): LanguageModel {
   const format = resolveApiFormat(input.provider.apiFormat);
@@ -188,6 +318,11 @@ function buildModel(input: ChatTurnInput): LanguageModel {
     // both rewrite the same JSON body and are chat-completions-only; the
     // anthropic-messages/responses formats above silently skip the level
     // (no reasoning-effort passthrough wired there — honest limitation).
+    //
+    // ROUND-95 (R95-E): capability-aware — a model the catalog marks
+    // NOT reasoning-capable (support.supported === false) gets NO thinking
+    // wrapper at all (no reasoning key on the wire), and a detected ladder
+    // maps the level + budget inside the wrapper (buildThinkingFetch).
     ...((() => {
       const fallbackFetch =
         input.provider.id === "openrouter" &&
@@ -196,8 +331,8 @@ function buildModel(input: ChatTurnInput): LanguageModel {
           ? buildModelFallbackFetch()
           : undefined;
       const level = input.thinkingLevel;
-      if (level !== undefined && level !== "default") {
-        return { fetch: buildThinkingFetch(level, fallbackFetch) };
+      if (level !== undefined && level !== "default" && input.reasoningSupport?.supported !== false) {
+        return { fetch: buildThinkingFetch(level, input.reasoningSupport, fallbackFetch) };
       }
       return fallbackFetch !== undefined ? { fetch: fallbackFetch } : {};
     })()),
@@ -556,6 +691,43 @@ export interface StreamChatInput extends ChatTurnInput {
 
 export type StreamChatFn = (input: StreamChatInput) => AsyncGenerator<StreamChatEvent>;
 
+/* ── ROUND-95 (R95-E): the thinking-loop watchdog ─────────────────────────── */
+
+/** The reasoning-stall window: no text, tool activity, or finish for this
+ * long while reasoning keeps flowing = a likely thinking loop (the owner:
+ * "They will think for way too long, more than they even need to, and they
+ * won't even get out of the thinking"). */
+export const THINKING_STALL_MS = 120_000;
+
+/** The reasoning volume that qualifies a stall as a LOOP: below this the
+ * model may legitimately be chewing a hard problem inside one long burst. */
+export const THINKING_STALL_REASONING_BYTES = 24_000;
+
+/**
+ * ROUND-95 (R95-E): thrown by streamAiSdkChat's reasoning-stall watchdog
+ * when the model streamed >24KB of reasoning with NO text-delta, tool
+ * activity, or finish for 120s — the dedicated, honestly-named error for the
+ * thinking-loop failure mode. The runtime's classifier maps it to the
+ * `thinking_loop` class (error-classification.ts matches the error NAME,
+ * keeping that module free of chat.ts imports), and the streamed runner
+ * gives it ONE de-escalating retry (thinking level forced down) before the
+ * honest terminal path.
+ *
+ * STREAMED-path only for now (the owner's report is about the live chat);
+ * the SYNC sub-agent path (aiSdkChat/generateText) can adopt the same
+ * watchdog later — its per-step onStepFinish snapshots are the natural
+ * progress markers.
+ */
+export class ThinkingLoopError extends Error {
+  constructor() {
+    super(
+      "the model produced >24KB of reasoning with no text, tool call, or finish " +
+        "for 120s — likely stuck in a reasoning loop",
+    );
+    this.name = "ThinkingLoopError";
+  }
+}
+
 /**
  * Production streaming adapter: streamText over the same openai-compatible
  * provider, multi-step (tool round-trips) like generateText. fullStream parts
@@ -608,6 +780,14 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
   // no error. Zero finish-steps + content deltas streamed = truncation.
   let stepFinishCount = 0;
   let sawContentDelta = false;
+  // ROUND-95 (R95-E): the thinking-loop watchdog's state. `lastProgressTs` —
+  // the last part that was NOT a reasoning-delta (text, tool activity, a
+  // finish-step — every other part type); `reasoningBytesSinceProgress` — the
+  // reasoning-delta bytes accumulated since that mark. A model that keeps
+  // REASONING (and only reasoning) past the stall window with enough volume
+  // is looping, not thinking. Progress of ANY other kind resets both.
+  let lastProgressTs = Date.now();
+  let reasoningBytesSinceProgress = 0;
   for await (const part of result.fullStream) {
     // ROUND-75 (R75, the live 429 find): the SDK surfaces mid-stream
     // failures — provider errors AFTER its internal retries (429 rate
@@ -623,6 +803,23 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
     // provider text) and the transient-API ladder engages for real.
     if (part.type === "error") {
       throw (part as { error: unknown }).error;
+    }
+    if (part.type === "reasoning-delta") {
+      // ROUND-95 (R95-E): reasoning is the ONE part type that is not
+      // progress — accumulate it and check the stall. The abort happens
+      // cleanly BETWEEN parts: throwing from the for-await ends this
+      // generator (the SDK stream's implicit return() closes it), no signal
+      // needed — the runtime's existing error path owns the fallout.
+      reasoningBytesSinceProgress += part.text.length;
+      if (
+        Date.now() - lastProgressTs > THINKING_STALL_MS &&
+        reasoningBytesSinceProgress > THINKING_STALL_REASONING_BYTES
+      ) {
+        throw new ThinkingLoopError();
+      }
+    } else {
+      lastProgressTs = Date.now();
+      reasoningBytesSinceProgress = 0;
     }
     if (part.type === "text-delta") {
       sawContentDelta = true;

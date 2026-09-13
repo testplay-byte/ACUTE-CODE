@@ -6,7 +6,14 @@
  * message.user → tool.use (one per executed call, as each completes) →
  * message.assistant (with per-reply usage+ms stats) → usage_events row.
  */
-import type { MessageAttachment, PermissionMode, SessionStatus, ThinkingLevel, UsageRecord } from "shared";
+import type {
+  MessageAttachment,
+  ModelReasoningSupport,
+  PermissionMode,
+  SessionStatus,
+  ThinkingLevel,
+  UsageRecord,
+} from "shared";
 // ROUND-70 (R70-c, D1): environment grounding — os metadata + the git probe.
 import { execFile } from "node:child_process";
 import * as os from "node:os";
@@ -84,7 +91,7 @@ import { getIndexSummary } from "../storage/index.js";
 import { memoryDigest } from "../storage/memory.js";
 // ROUND-49: the memory master switch (Settings → Advanced).
 import { getMemorySettings, getDebugSettings, getRetrySettings } from "../storage/settings.js";
-import { getCatalogModel, lookupPricing } from "../storage/models.js";
+import { getCatalogModel, lookupPricing, resolveModelReasoningSupport } from "../storage/models.js";
 import { estimateMessageTokens, type ContextBudget } from "../context.js";
 // ROUND-46 (R46-b): context compaction — summarize the over-budget head
 // instead of silently dropping it.
@@ -894,6 +901,12 @@ interface PreparedTurn {
   /** ROUND-50 (R50-c1): the per-send thinking level, threaded to the chat
    * adapters (chat.ts buildModel). Not persisted. */
   thinkingLevel?: ThinkingLevel;
+  /** ROUND-95 (R95-E, THE R95-B E-CONTRACT): the EFFECTIVE model's detected
+   * reasoning capability (resolveModelReasoningSupport — null = unknown,
+   * NEVER blocked on). Threaded to the chat adapters so buildThinkingFetch
+   * can map the level onto the model's own effort ladder, and read by the
+   * streamed thinking-loop retry to de-escalate honestly. */
+  reasoningSupport: ModelReasoningSupport | null;
 }
 
 /**
@@ -1550,6 +1563,12 @@ async function prepareTurn(
     tools,
     system,
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+    // ROUND-95 (R95-E): the effective model's DETECTED reasoning capability
+    // — a plain storage read (null = unknown; the R95-B contract says the
+    // consumer NEVER blocks on it). Resolved for the OVERRIDE's provider+model
+    // when the send carried one, the agent's otherwise — the same pair the
+    // adapters below call with.
+    reasoningSupport: resolveModelReasoningSupport(db, effectiveProviderId, effectiveModelId),
   };
 }
 
@@ -1838,6 +1857,11 @@ export async function runSingleAgentTurn(
         // ROUND-50 (R50-c1): the per-send thinking level (chat-completions
         // reasoning.effort injection — see chat.ts buildThinkingFetch).
         ...(prepared.thinkingLevel !== undefined ? { thinkingLevel: prepared.thinkingLevel } : {}),
+        // ROUND-95 (R95-E): the model's detected reasoning capability — the
+        // sync sub-agent path threads it too, so a child's chat-completions
+        // call maps its (parent-inherited-absent, so usually absent) level
+        // onto the model's own ladder exactly like the streamed path would.
+        ...(prepared.reasoningSupport !== null ? { reasoningSupport: prepared.reasoningSupport } : {}),
         // ROUND-48 (R48-e1, stretch): LIVE per-step events. A single chat()
         // call can run maxTurns tool round-trips internally; without this
         // hook the parent UI sees nothing until the WHOLE call completes.
@@ -2695,6 +2719,20 @@ export async function runStreamedAgentTurn(
   // `attempts` arithmetic so the error card never under-reports what ran.
   let unknownProgressRetries = 0;
   let forceCompaction = false;
+  // ROUND-95 (R95-E): the thinking-loop state. `thinkingLoopRetries` — the
+  // ONE de-escalating retry a ThinkingLoopError buys (the streamed adapter's
+  // reasoning-stall watchdog, chat.ts — the owner: "The models would
+  // apparently get stuck in the thinking loop… they won't even get out of
+  // the thinking"); a SECOND occurrence fails honestly through the terminal
+  // path (waiting cannot heal a reasoning loop, so this class never rides
+  // the R75 wait schedule). `effectiveThinkingLevel` — the level the
+  // chatStream calls actually run with: the owner's pick until a
+  // thinking-loop retry DE-ESCALATES it (medium/high/max → low; an
+  // already-low/default level or a non-reasoning model → default, i.e.
+  // reasoning excluded — the only further step down there is). Counted in
+  // the same `attempts` arithmetic as the other retries.
+  let thinkingLoopRetries = 0;
+  let effectiveThinkingLevel = prepared.thinkingLevel;
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
     // ROUND-78 (R78, owner: "the message QUEUES and is auto-delivered right
@@ -3019,7 +3057,12 @@ export async function runStreamedAgentTurn(
         ...(tools !== undefined ? { tools } : {}),
         // ROUND-50 (R50-c1): the per-send thinking level (chat-completions
         // reasoning.effort injection — see chat.ts buildThinkingFetch).
-        ...(prepared.thinkingLevel !== undefined ? { thinkingLevel: prepared.thinkingLevel } : {}),
+        // ROUND-95 (R95-E): the EFFECTIVE level — the owner's pick until the
+        // thinking-loop retry de-escalates it — plus the model's DETECTED
+        // reasoning capability so the adapter maps the level onto the
+        // model's own effort ladder and bounds its reasoning budget.
+        ...(effectiveThinkingLevel !== undefined ? { thinkingLevel: effectiveThinkingLevel } : {}),
+        ...(prepared.reasoningSupport !== null ? { reasoningSupport: prepared.reasoningSupport } : {}),
         ...(signal !== undefined ? { signal } : {}),
         // ROUND-94 (R94-D1): the STEP-BOUNDARY claim the adapter's prepareStep
         // calls at every completed-tool-call boundary — the mid-turn
@@ -3286,6 +3329,77 @@ export async function runStreamedAgentTurn(
         });
         continue;
       }
+      // ── ROUND-95 (R95-E): the THINKING-LOOP de-escalating retry. The
+      // streamed adapter's reasoning-stall watchdog (chat.ts
+      // ThinkingLoopError — >24KB of reasoning with no text, tool call, or
+      // finish for 120s) classifies as `thinking_loop`, which is NOT a
+      // transient ladder class (waiting cannot heal a reasoning loop). The
+      // ONE bounded response: retry the iteration IMMEDIATELY with the
+      // effective thinking level DE-ESCALATED — medium/high/max drop to
+      // "low"; an already-low/default level, or a model the catalog marks
+      // NOT reasoning-capable, drops to "default" (reasoning excluded
+      // entirely — the only step further down). The meta.retry frame rides
+      // the existing card mechanism (same shape the ladder emits — the
+      // frontend needs no change), with the reason stating plainly that the
+      // model was stuck reasoning and the retry downgraded the thinking
+      // level. A SECOND ThinkingLoopError on the de-escalated retry falls
+      // through to the honest terminal path below (thinkingLoopRetries stays
+      // 1, attempts = 2 — the card never under-reports). ──
+      if (
+        classified.class === "thinking_loop" &&
+        thinkingLoopRetries === 0 &&
+        // A retry iteration must REMAIN (the overflow guard's rule).
+        outerIter < maxOuterLoops - 1
+      ) {
+        thinkingLoopRetries = 1;
+        // The de-escalation ladder (see the state comment above): supported
+        // === false or an already-minimal level → default (excluded);
+        // anything higher → low.
+        effectiveThinkingLevel =
+          prepared.reasoningSupport?.supported === false ||
+          prepared.thinkingLevel === undefined ||
+          prepared.thinkingLevel === "default" ||
+          prepared.thinkingLevel === "low"
+            ? "default"
+            : "low";
+        const downgradeNote =
+          effectiveThinkingLevel === "default"
+            ? "with reasoning excluded for the retry"
+            : "with the thinking level downgraded to low";
+        emit({
+          type: "meta.retry",
+          sessionId: session.id,
+          // The single extra attempt: 2 of 2 — the card the UI already
+          // renders (attempt/totalAttempts/waitMs/…), the same frame shape
+          // the ladder and the unknown-progress retry emit.
+          attempt: 2,
+          totalAttempts: 2,
+          waitMs: 0,
+          remainingMs: 0,
+          retryAt: Date.now(),
+          errorClass: classified.class,
+          classMessage,
+          providerError: scrubSecrets(providerErrorDetail(normalized, apiKey), keySecrets),
+          message: `${classMessage} — the model was stuck in a reasoning loop; retrying (attempt 2 of 2) immediately ${downgradeNote}`,
+        });
+        log("warn", "provider.thinking_loop_retry", {
+          sessionId: session.id,
+          agentId: agent.id,
+          providerId: provider.id,
+          model,
+          attempt: 2,
+          fromLevel: prepared.thinkingLevel ?? "default",
+          toLevel: effectiveThinkingLevel,
+        });
+        // The flushed partial reasoning/text persists now (the R75 flush
+        // precedent — the retry's re-assembled history keeps what the model
+        // already produced); the retry re-runs THIS iteration immediately
+        // (compensated like every recovery path — no wait to register, no
+        // outer-loop budget spent).
+        flushSegment(true);
+        outerIter -= 1;
+        continue;
+      }
       // ROUND-75 (R75): the TRANSIENT-API RETRY LADDER — the owner's spec.
       // rate_limit / network / timeout failures retry per the schedule
       // [immediate → 1.5 min → 5 min → 10 min → 30 min → terminal]; every
@@ -3507,7 +3621,9 @@ export async function runStreamedAgentTurn(
       // "failed after N attempts" when the ladder ran.
       // R94-D1: the ONE unknown-progress retry counts too — the card never
       // under-reports what ran.
-      const attempts = providerRetries + unknownProgressRetries + 1;
+      // R95-E: the ONE thinking-loop de-escalating retry counts as well
+      // (a second ThinkingLoopError lands here at attempts = 2).
+      const attempts = providerRetries + unknownProgressRetries + thinkingLoopRetries + 1;
       const message = providerFailureMessage(provider.id, session.id, classified, overflowRecovered, attempts);
       const errorTs = persistTurnError(db, {
         sessionId: session.id,

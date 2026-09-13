@@ -1,5 +1,10 @@
 import { useEffect, useRef, type RefObject } from "react";
-import type { MessageAttachment, PermissionMode, ThinkingLevel } from "shared";
+import type {
+  MessageAttachment,
+  ModelReasoningSupport,
+  PermissionMode,
+  ThinkingLevel,
+} from "shared";
 import type { AttachmentReadResult, TreeNode } from "../../../lib/api";
 
 /**
@@ -51,6 +56,24 @@ export interface ModelOverride {
   model: string;
   /** The provider whose catalog it was picked from (label + flyout check). */
   providerId: string;
+}
+
+/**
+ * ROUND-95 (R95-E): a configured-model row AS THE WIRE SERVES IT — the
+ * sidecar's ModelRecord (agent-core storage/models.ts) carries
+ * `reasoningSupport` additively since R95-B, while src/lib/api.ts's
+ * ProviderModelConfig mirror has not caught up yet (not this round's file
+ * set). This local widening reads the field type-safely: every
+ * ProviderModelConfig is structurally assignable (providerId + modelId are
+ * required there; reasoningSupport is optional here), and the JSON the
+ * sidecar actually sends carries the field.
+ */
+export interface ReasoningAwareModelRow {
+  providerId: string;
+  modelId: string;
+  /** The model's DETECTED reasoning capability (R95-B) — null/absent =
+   * unknown (never blocked on). */
+  reasoningSupport?: ModelReasoningSupport | null;
 }
 
 /** Convert a staged chip into the wire-format MessageAttachment for sending. */
@@ -139,8 +162,9 @@ export function modeOption(id: PermissionMode): ModeOption {
   return MODE_OPTIONS.find((m) => m.id === id) ?? MODE_OPTIONS[1];
 }
 
-// ── Thinking levels (owner: "only four options: The default option, Low,
-//    High, Max") ─────────────────────────────────────────────────────────────
+// ── Thinking levels (owner, R50: "only four options: The default option,
+//    Low, High, Max"; R95-E: the vocabulary widened with "medium" for
+//    models whose DETECTED ladder tops out below high) ────────────────────
 
 export interface ThinkingOption {
   id: ThinkingLevel;
@@ -148,16 +172,134 @@ export interface ThinkingOption {
   description: string;
 }
 
-/** EXACTLY the four accepted levels (owner directive — no "medium"/"extra"). */
+/** The FULL accepted vocabulary (validation + label source — R95-E added
+ * "medium" for the models whose own ladder includes it). The classic menu
+ * (a model with UNKNOWN capabilities) still offers the R50 four — see
+ * thinkingMenuSpec. */
 export const THINKING_OPTIONS: readonly ThinkingOption[] = [
   { id: "default", label: "Default", description: "The model's own reasoning default." },
   { id: "low", label: "Low", description: "Light reasoning — fastest replies." },
+  { id: "medium", label: "Medium", description: "Balanced reasoning effort." },
   { id: "high", label: "High", description: "Deeper reasoning for complex work." },
   { id: "max", label: "Max", description: "Maximum reasoning effort." },
 ];
 
 export function thinkingOption(id: ThinkingLevel): ThinkingOption {
   return THINKING_OPTIONS.find((t) => t.id === id) ?? THINKING_OPTIONS[0];
+}
+
+/** ROUND-95 (R95-E): the menu spec a model's DETECTED reasoning capability
+ * yields — NEVER an option the model does not support (the owner: "Our
+ * program should be able to properly detect the models' thinking options,
+ * like which options it supports and such"). */
+export interface ThinkingMenuSpec {
+  /** The levels the menu offers ("Default" always; then only supported
+   * rungs — "Low" for low OR minimal, "Medium" for medium, "High"/"Max"
+ * for high, since max rides the highest supported effort). Empty only in
+   * the unsupported case. */
+  options: readonly ThinkingOption[];
+  /** The honest footer note for the menu (null = none). */
+  note: string | null;
+  /** True when the catalog says this model takes NO reasoning parameter at
+   * all — the button renders disabled with an honest tooltip. */
+  unsupported: boolean;
+}
+
+/**
+ * ROUND-95 (R95-E): derive the menu's option list from a model's DETECTED
+ * reasoning support (R95-B's ModelReasoningSupport — null = UNKNOWN):
+ *
+ *  · null/absent — the R50 classic four (Default/Low/High/Max) + the honest
+ *    "capabilities unknown" footer note. Never blocked on a guess.
+ *  · supported: false — unsupported: true (the button disables; no menu).
+ *  · supported: true, no discrete efforts — the classic four + a note that
+ *    the provider lists no discrete efforts (levels go to the wire as-is,
+ *    exactly the R50 behavior — R95-B's plain reasoning-only rows).
+ *  · supported: true with a ladder — Default + the rungs the ladder holds:
+ *    Low when low or minimal ∈ efforts, Medium when medium, High and Max when
+ *    high (max maps to high + the bigger reasoning budget in chat.ts). When
+ *    the ladder tops out below high, the note says so honestly ("this model
+ *    caps reasoning at medium/low") — High/Max are hidden, never offered
+ *    broken.
+ *
+ * Pure: the support blob in, the menu spec out (the button + tests consume
+ * it; chat.ts carries the WIRE-side twin of the mapping — kept separate so
+ * shared stays types-only).
+ */
+export function thinkingMenuSpec(support: ModelReasoningSupport | null | undefined): ThinkingMenuSpec {
+  if (support == null) {
+    return {
+      options: THINKING_OPTIONS.filter((o) => o.id !== "medium"),
+      note: "capabilities unknown for this model",
+      unsupported: false,
+    };
+  }
+  if (support.supported === false) {
+    return { options: [], note: null, unsupported: true };
+  }
+  const efforts = support.efforts;
+  if (efforts.length === 0) {
+    return {
+      options: THINKING_OPTIONS.filter((o) => o.id !== "medium"),
+      note: "this model supports reasoning; no discrete efforts listed",
+      unsupported: false,
+    };
+  }
+  const hasLow = (efforts as readonly string[]).includes("low") || (efforts as readonly string[]).includes("minimal");
+  const hasMedium = (efforts as readonly string[]).includes("medium");
+  const hasHigh = (efforts as readonly string[]).includes("high");
+  const options = THINKING_OPTIONS.filter(
+    (o) =>
+      o.id === "default" ||
+      (o.id === "low" && hasLow) ||
+      (o.id === "medium" && hasMedium) ||
+      ((o.id === "high" || o.id === "max") && hasHigh),
+  );
+  // The honest cap note: the ladder's top rung, when it sits below high.
+  const cap =
+    hasHigh ? null : hasMedium ? "medium" : hasLow ? "low" : null;
+  return {
+    options,
+    note: cap !== null ? `this model caps reasoning at ${cap}` : null,
+    unsupported: false,
+  };
+}
+
+/** The ladder rank a thinking level occupies (default < low < medium < high
+ * < max) — displayThinkingLevel's ordering. Mirrors chat.ts's effort rank
+ * (kept local: shared stays types-only). */
+const THINKING_RANK: Record<ThinkingLevel, number> = {
+  default: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+  max: 4,
+};
+
+/**
+ * ROUND-95 (R95-E): the level the BUTTON should DISPLAY for a stored pick —
+ * the stored level itself when the menu offers it, else the nearest
+ * supported one BELOW it, else the LOWEST offered (chat.ts's wire-side
+ * mapping twin: "low" on a [medium, high] model rides medium). The stored
+ * value is never rewritten (the panel keeps what the owner picked for the
+ * next model that does support it); this is display-only honesty.
+ */
+export function displayThinkingLevel(
+  level: ThinkingLevel,
+  options: readonly ThinkingOption[],
+): ThinkingLevel {
+  if (options.some((o) => o.id === level)) return level;
+  const levels = options.filter((o) => o.id !== "default").map((o) => o.id);
+  if (levels.length === 0) return "default";
+  // The highest offered rung at-or-below the stored one; else the lowest rung.
+  let below: ThinkingLevel | null = null;
+  for (const id of levels) {
+    if (THINKING_RANK[id] <= THINKING_RANK[level] && (below === null || THINKING_RANK[id] > THINKING_RANK[below])) {
+      below = id;
+    }
+  }
+  if (below !== null) return below;
+  return levels.reduce((lowest, id) => (THINKING_RANK[id] < THINKING_RANK[lowest] ? id : lowest));
 }
 
 // ── Per-session localStorage persistence (thinking level + model override) ──

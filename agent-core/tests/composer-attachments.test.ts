@@ -461,8 +461,10 @@ describe("POST /api/v1/attachments/upload (ROUND-67 R67-A)", () => {
 // ── Send-route validation: thinkingLevel + attachments ──────────────────────
 
 describe("composer send-field validation (ROUND-50 R50-c1)", () => {
-  it.each(["default", "low", "high", "max"] as const)(
-    "POST /messages accepts thinkingLevel %s (validated against the 4 values)",
+  // ROUND-95 (R95-E): "medium" joins the accepted set (models whose detected
+  // ladder tops out below high offer it — shared's THINKING_LEVELS widened).
+  it.each(["default", "low", "medium", "high", "max"] as const)(
+    "POST /messages accepts thinkingLevel %s (validated against the shared vocabulary)",
     async (level) => {
       const sessionId = await makeSession();
       const response = await authInject({

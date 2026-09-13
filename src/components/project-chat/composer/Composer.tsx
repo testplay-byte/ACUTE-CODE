@@ -2,15 +2,18 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowUp, ListPlus, Play } from "lucide-react";
-import type { PermissionMode, ThinkingLevel } from "shared";
+import type { ModelReasoningSupport, PermissionMode, ThinkingLevel } from "shared";
 import {
+  fetchProviderModelConfig,
   ingestAttachmentPath,
   readAttachmentFiles,
   uploadAttachmentBytes,
@@ -41,6 +44,7 @@ import {
   type AtToken,
   type ComposerAttachment,
   type ModelOverride,
+  type ReasoningAwareModelRow,
 } from "./composer-utils";
 import { useProjectFilePaths } from "./useProjectFiles";
 
@@ -158,6 +162,40 @@ export function Composer({
   const [atHighlighted, setAtHighlighted] = useState(0);
   const localInputRef = useRef<HTMLTextAreaElement | null>(null);
   const textareaRef = inputRef ?? localInputRef;
+
+  // ROUND-95 (R95-E): the EFFECTIVE model pair, hoisted above the hooks —
+  // the thinking button's capability query keys on the provider that will
+  // serve the next send (the override's when present, the agent's otherwise
+  // — the same pair prepareTurn resolves server-side).
+  const effectiveModel = modelOverride?.model ?? agent?.model ?? null;
+  // ROUND-82 (R82): the override's provider — the donut's meter keys its
+  // window/pricing lookups on the provider that will serve the next send
+  // (override ?? the agent's).
+  const effectiveProviderId = modelOverride?.providerId ?? agent?.providerId ?? null;
+
+  // ROUND-95 (R95-E, the owner: "The thinking level was supposed to be
+  // model-specific"): the CURRENT effective model's DETECTED reasoning
+  // capability, resolved CLIENT-SIDE from the provider's configured model
+  // rows (the ["provider-models-config", id] family — the SAME key the
+  // ModelSelector's flyout and the Models & Providers page use, so the cache
+  // is shared and their invalidations keep this fresh). Live mode only:
+  // fixture mode keeps the classic four (no sidecar to ask). A missing row,
+  // a failed fetch, or a null field all read as UNKNOWN — never blocked on
+  // (the R95-B contract). The wire carries the field additively (R95-B);
+  // ReasoningAwareModelRow is the local widening (src/lib/api.ts's mirror
+  // type hasn't caught up — see composer-utils).
+  const { data: modelConfigRows } = useQuery({
+    queryKey: ["provider-models-config", effectiveProviderId],
+    queryFn: () => fetchProviderModelConfig(effectiveProviderId as string),
+    enabled: liveMode && effectiveProviderId !== null,
+    staleTime: 60_000, // the family's cached-listing convention
+  });
+  const reasoningSupport = useMemo<ModelReasoningSupport | null>(() => {
+    if (effectiveModel === null || effectiveProviderId === null) return null;
+    const rows = (modelConfigRows ?? []) as readonly ReasoningAwareModelRow[];
+    const row = rows.find((r) => r.providerId === effectiveProviderId && r.modelId === effectiveModel);
+    return row?.reasoningSupport ?? null;
+  }, [modelConfigRows, effectiveModel, effectiveProviderId]);
 
   const { files: projectFiles } = useProjectFilePaths(projectId);
   const atMatches = atToken !== null ? filterProjectFiles(projectFiles, atToken.query) : [];
@@ -472,11 +510,8 @@ export function Composer({
     }
   };
 
-  const effectiveModel = modelOverride?.model ?? agent?.model ?? null;
-  // ROUND-82 (R82): the override's provider — the donut's meter keys its
-  // window/pricing lookups on the provider that will serve the next send
-  // (override ?? the agent's).
-  const effectiveProviderId = modelOverride?.providerId ?? agent?.providerId ?? null;
+  // R95-E: effectiveModel/effectiveProviderId live above the hooks now (the
+  // capability query keys on them — see the R95-E block near the top).
 
   return (
     <div
@@ -621,7 +656,11 @@ export function Composer({
             liveMode={liveMode}
           />
           <ModelSelector agent={agent} override={modelOverride} onModelChange={onModelChange} disabled={!liveMode} />
-          <ThinkingLevelButton level={thinkingLevel} onChange={onThinkingLevelChange} />
+          <ThinkingLevelButton
+            level={thinkingLevel}
+            onChange={onThinkingLevelChange}
+            reasoningSupport={reasoningSupport}
+          />
         </div>
         </div>
         {/* R78: THE ACTION ANCHOR — a sibling of the wrapping area (never
