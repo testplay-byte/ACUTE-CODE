@@ -2140,4 +2140,77 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
       await screen.findByRole("button", { name: "Jump to the latest message" }, SLOW),
     ).toBeTruthy();
   });
+
+  // ── R96-E: the thinking-FIRST live segment ────────────────────────────────
+  // Owner (v0.93.0): "the thinking was still not proper. It was not
+  // auto-scrolling to the very bottom." Root cause: a live thought with NO
+  // tool entries yet — the norm at every turn's start — fell to
+  // BareWorkingEntries, which never passes `live` down: no auto-expand, no
+  // stick-to-bottom, no jump pill. The fix: the segment carrying the live
+  // entry renders as a LIVE WorkingSection.
+  function armLiveThinkingOnlyTurn(thinkingText: string, streamText: string): void {
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: {
+          liveTurn: {
+            startedAtMs: Date.now() - 3000,
+            working: [],
+            streamText,
+            streamThinking: thinkingText,
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+        },
+      },
+    });
+  }
+
+  it("R96-E: a thinking-first live turn (no tool entries yet) renders a LIVE working section — auto-expanded, with its own scroller and the live marker", async () => {
+    const scroller = await renderScrollPanel();
+    const scrollTo = vi.fn();
+    scroller.scrollTo = scrollTo;
+    armLiveThinkingOnlyTurn("the very first thought of the turn", "");
+
+    // The section header reads "Working" (a live section owns the thought —
+    // not the bare, live-less rendering of before).
+    expect(await screen.findByText("Working", {}, SLOW), "the live section header").toBeTruthy();
+
+    // The thought row is AUTO-EXPANDED (live) and its stick-to-bottom
+    // scroller is attached — the data-thinking-scroll body exists.
+    const inner = await waitFor(() => {
+      const el = document.querySelector("[data-thinking-scroll]") as HTMLElement | null;
+      expect(el, "the thinking scroller").toBeTruthy();
+      return el as HTMLElement;
+    }, SLOW);
+    await screen.findByText(/the very first thought of the turn/, {}, SLOW);
+
+    // Give the scroller a geometry and land it AT its bottom (scrollTop =
+    // scrollHeight - clientHeight = 1500 → distance 0 → PINNED) — growth
+    // then follows its own stream.
+    giveGeometry(inner);
+    inner.scrollTop = 1500;
+    fireEvent.scroll(inner);
+    scrollTo.mockClear();
+    armLiveThinkingOnlyTurn("the very first thought of the turn — and it keeps going", "");
+    await screen.findByText(/it keeps going/, {}, SLOW);
+
+    // While pinned at the thinking block's own bottom, no inner jump pill
+    // renders (it appears only when the user scrolls UP inside it).
+    expect(screen.queryByTestId("thinking-jump-latest")).toBeNull();
+  });
 });

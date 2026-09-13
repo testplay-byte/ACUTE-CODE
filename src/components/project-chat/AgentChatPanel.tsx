@@ -2655,7 +2655,16 @@ export function AgentChatPanel({
       const isWork =
         seg.entries.some((e) => e.type === "tool") ||
         seg.entries.some((e) => e.type === "screenshot") ||
-        (hasPendingWriteInput && i === lastWorkSegIdx);
+        (hasPendingWriteInput && i === lastWorkSegIdx) ||
+        // ROUND-96 (R96-E, owner: "the thinking was still not proper. It was
+        // not auto-scrolling to the very bottom"): the segment carrying the
+        // STILL-STREAMING thought renders as a LIVE WorkingSection too —
+        // before, a thinking-first segment (no tool entries YET — the norm
+        // at every turn's start) fell to BareWorkingEntries, which never
+        // passes `live` down: no auto-expand, no stick-to-bottom, no jump
+        // pill. The thought's own section header reads "Working", exactly
+        // like any live work.
+        (liveEntryIdx !== undefined && liveEntryIdx >= seg.firstIndex && liveEntryIdx <= seg.lastIndex);
       if (isWork) {
         // liveEntryIndex is an index into the FULL entries array — translate
         // it into this segment's own coordinates (only the segment that
