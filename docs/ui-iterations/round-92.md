@@ -1,4 +1,5 @@
-<!-- last-reviewed: 2026-09-11 round-92 -->
+<!-- last-reviewed: 2026-09-14 round-96 -->
+<!-- stamp refresh 2026-09-14 round-96: paths + links re-verified by docs:check; content unchanged — the R92 record is historical -->
 # Round 92 — the fourth-walkthrough round (v0.90.0)
 
 The owner's fourth end-to-end walkthrough of v0.89.0 confirmed the R91 wins

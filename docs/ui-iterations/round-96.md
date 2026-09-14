@@ -258,6 +258,19 @@ CI's gate (no Rust toolchain in the sandbox — honestly noted).
   the donut's hover-only pins (the owner's R95-F reversal documented).
 - CI runs the Windows gates (`cargo check` included — the Rust toolchain
   is absent in this sandbox, honestly noted in §7).
+- **CI 34796586539 SUCCESS + Release run 34796593336 SUCCESS on 34961ab**
+  (the tag push) — the Windows `cargo check` gate passed on the R96-I
+  kill-order round (the sandbox-honest gap closed by CI, the round's one
+  compile-level unknown).
+- **v0.94.0 PUBLISHED** (release 388103373, `make_latest`, published
+  2026-09-14T02:16:57Z): `ACUTE-CODE_0.94.0_x64-setup.exe` 37,660,082 B
+  (sha256 `118b0487d177182d4f2f68554194cb4ac1933ba168863c75c932361b4f487ae0`)
+  + `acute-launcher-kit-v0.94.0.zip` 115,232 B (sha256
+  `17fbddfccf0532a3fcd8d2dd2395313863a1c8240cab97ec7c12feee6ac63fdf`) —
+  both digests verified against freshly downloaded bytes (GitHub's
+  server-side asset digests, exactly what the in-app updater verifies
+  against); the kit scanned for real key values — clean (only prefix
+  teaching text); `/releases/latest` verified pointing at v0.94.0.
 
 ## §8b The LIVE-FIRE (R96-J, commit 96f5cdf) — the owner's directive:
 "test it in your own environment, give it a very large project"

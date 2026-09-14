@@ -291,11 +291,11 @@
   "suites": [
    {
     "name": "frontend",
-    "tests": 1026
+    "tests": 1193
    },
    {
     "name": "agent-core",
-    "tests": 1997
+    "tests": 2228
    },
    {
     "name": "sidecar e2e",
@@ -322,8 +322,8 @@
   "current": "R96 — the seventh-walkthrough round (the smarter agent + the browser experience), v0.93.0 → v0.94.0",
   "upcoming": [
    {
-    "title": "The owner's v0.93.0 walkthrough",
-    "detail": "The R95 test checklist lives in round-95.md §9. Standing follow-ups: the entry-renderer registry's WorkingSection wire-up, the sync-path thinking-loop watchdog, the pop-out address-bar bare-path normalization, the README round-index backfill (rounds 87-95)."
+    "title": "The owner's v0.94.0 walkthrough",
+    "detail": "The R96 test checklist lives in round-96.md §9. Standing follow-ups: the entry-renderer registry's WorkingSection wire-up, the sync-path thinking-loop watchdog, the pop-out address-bar bare-path normalization, the README round-index backfill (rounds 87-96)."
    }
   ],
   "principles": [
@@ -332,6 +332,6 @@
    "Quality over speed — every round verified before push"
   ]
  },
- "round": 95,
- "ci": "GREEN — CI 34774855473 and Release 34774862744 both SUCCESS on 3f6bd20 (lint, both typechecks, the 3,258-test root suite in 175 files, e2e 12/12, build, license audit 134, docs:check 201/0/0, version ×4). v0.93.0 PUBLISHED (release 387996130, latest, both assets verified with GitHub's server-side sha256 digests against freshly downloaded bytes; the launcher kit scanned — zero real-key values, only prefix teaching text). The REAL-API live-fire (r95-live-fire.mjs) passed ALL checks against real OpenRouter with the free Nemotron models — and caught the effort+max_tokens mutual-exclusion bug live, fixed the same round."
+ "round": 96,
+ "ci": "GREEN — CI 34796586539 and Release 34796593336 both SUCCESS on 34961ab (lint, both typechecks, agent-core 2,228/2,228 in 107 files, frontend 1,193/1,193, e2e 12/12, build, license audit, docs:check 203/0/0, version ×4 — and the Windows cargo check gate that landed the Rust round's kill-order). v0.94.0 PUBLISHED (release 388103373, latest, both assets verified with GitHub's server-side sha256 digests against freshly downloaded bytes — setup.exe 118b0487…, kit 17fbddfc…; the launcher kit scanned — zero real-key values, only prefix teaching text). The R96-J LIVE-FIRE (r96-live-fire.mjs) passed ALL checks against REAL OpenRouter over a 258-file synthetic project with the owner's exact model (deepseek-v4.1-flash, ladder ['max','high','low'] live): the precision edit landed exactly, the paged read tripped ZERO loop-guard warnings, the Max pick rode the wire VERBATIM, token usage stayed exact — and it caught two real bugs fixed in-round (the OpenRouter app-attribution headers X-Title/HTTP-Referer, and the unspecified-max_tokens pricing trap — the resolved output cap now rides the wire)."
 }
