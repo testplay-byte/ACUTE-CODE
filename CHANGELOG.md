@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-13 round-95 -->
+<!-- last-reviewed: 2026-09-14 round-97 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -20,6 +20,90 @@ ratings-driven prompt tuning, and the standing items (edit-linting, installer
 code-signing, the Files-tab polish, the browser agent's CDP-level trusted-input
 tier, the computer-use COM IUIAutomation bridge for the ACTION/MSAA legacy
 layers).
+
+## [0.95.0] - 2026-09-14 — the eighth-walkthrough round: context, freedom, states
+
+The owner's v0.94.0 walkthrough report, answered end to end — the context
+popup rebuilt with the Kilo-style bar, the thinking-loop guard set free
+(default OFF), the failure-usage truth, real syntax colors, the chat's
+customizability pair, a state-awareness sweep across every high-visibility
+surface, and the browser's own settings home (with a HOME button that
+actually works).
+
+### The context-window popup (the Kilo-style bar)
+- The usage card (the composer's token hover → the menu-overlay window) is
+  fully VISUAL again: the Kilo-style SEGMENTED BAR at the top (one segment
+  per category, compact counts flanking, the dimmed reserved-for-output
+  block), the donut + the SESSION COST headline (turns/calls), the
+  breakdown rows (palette dots + mini-bars), the cache hit-rate bar, and
+  the session TABLE (Main / Sub-agents / Combined × Turns / Calls / Sent /
+  Received / Cost). Hovering a segment highlights its row and vice versa
+  (the others dim) — Cursor's cross-highlight, Kilo's bar.
+- The DOM popover (web mode + the fallback leg) renders the same bar with
+  the same interaction — the two views are twins. Nothing is hidden.
+
+### The thinking loop (default OFF — the model thinks freely)
+- The R95 hardcoded watchdog is a SETTINGS domain: Settings → General →
+  "Thinking-loop guard", master switch DEFAULT OFF (per the owner's
+  directive), stall-seconds (30–600) + reasoning-KB (8–256) editable — the
+  inputs commit on blur/Enter, never per keystroke.
+- A guard stop renders the AMBER "Thinking stopped by the guard" card —
+  a brain icon, role=status, the explanation + the Settings pointer +
+  Retry — never red, never "Generation failed".
+
+### The failure-usage truth
+- A failed turn reports the tokens it actually spent: the error card's
+  "3.8k sent ↑ · 460 received ↓" chip (and Copy details) carries the
+  completed iterations + EVERY retried attempt's streamed-so-far (a ladder
+  that burned 50K on attempt 1 no longer reports only the instant final
+  death). A turn that spent nothing shows no fabricated 0/0 — on the live
+  card AND after a reload.
+
+### The chat window
+- REAL syntax colors: fenced code in answers AND in the thinking area
+  renders through Prism (27 grammars, the app's own light+dark palette,
+  MIT-licensed) — WITH the line-number gutter preserved (same rows as
+  plain blocks; multi-line tokens re-open their colors per line).
+- Customizable text size: Settings → Appearance → Text Size (Small tightens
+  a dense session, Large reads at distance — the answer, thinking, and
+  narration scale together, capped at ±12% so the rhythm holds; Medium is
+  the old look exactly).
+- Optional timestamps: Settings → Appearance → Timestamps (On hover reveals
+  a small time chip on every message — "14:05" today, "Aug 26 · 14:05"
+  older; Hidden is the clean default).
+
+### State awareness (no more false states)
+- The chat's FALSE GREETING is dead: opening a project with history shows a
+  chat-shaped skeleton while the log loads (never the "new chat" screen
+  flashing into messages), a fetch failure shows the retryable "Could not
+  load this conversation" card (never a cheerful empty chat), and a
+  populated transcript always wins.
+- The sidebar never flashes "Add your first project" while loading (skeleton
+  rows, then the honest empty); a failed projects fetch retries in place.
+- The dashboard never paints "0 Projects / 0 Tokens" zeros while loading
+  (StatCard skeletons until every source settles) and its error banner is
+  retryable.
+- Every settings card that fails its GET now shows the honest error +
+  Retry — the eternal "loading … settings…" line is dead.
+- Shared Skeleton primitives (SkeletonBlock/SkeletonRows) + the amber
+  `warning` semantic token join the design system.
+
+### The browser's settings home
+- Settings → Browser (its own section): the default search engine
+  (DuckDuckGo/Google/Bing/Brave), the homepage, the default zoom (25–300%),
+  and 1–12 editable quick links — all wired to the panel's behavior.
+- The HOME button (the address bar) works: it shows the quick-links screen
+  and STAYS there (the poll no longer bounces back to the page you left;
+  the native webview actually hides); any navigation — yours, a history
+  walk, or the agent's — takes the tab back over.
+- New browser sessions start at the default zoom; a tab you zoomed yourself
+  is never re-zoomed.
+
+### The round's discipline
+- A dedicated review agent audited the whole round's diff before release;
+  every finding (the HOME button's no-op, the usage contract's unpinned
+  halves, the code gutter's silent drop, and eight more) is fixed and
+  pinned by tests. Full suites: frontend 1,223 / e2e 12 / agent-core 2,255.
 
 ## [0.94.0] - 2026-09-14 — the seventh-walkthrough round: the smarter agent
 

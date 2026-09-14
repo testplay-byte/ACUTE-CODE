@@ -2706,3 +2706,25 @@ Work Log:
 
 Stage Summary:
 - v0.94.0: every ask of the owner's seventh report answered, live-verified where the ask touched the wire. AGENT-MEMORY #97 (identity inputs ≠ display inputs; hard stops are the owner's decision) recorded. The 15-min ntfy progress notifications ran throughout; the final THE-TASK-IS-DONE ping follows the release.
+
+---
+Task ID: R97 (the full round)
+Agent: main-orchestrator (Z.ai Code) + 5 workstream subagents (the audit, I-b, I-c, the review)
+Task: The eighth-walkthrough round — the owner's v0.94.0 report (10 itemized asks), v0.94.0 → v0.95.0
+
+Work Log:
+- R97-0: the sandbox had been CLEARED (both repos + the worklog gone) — restored from GitHub per the owner's directive (main PAT clone @ 19b2640, DASHBOARD PAT @ caf058b, pnpm 11.22.0 + deps + shared/agent-core builds); environment verified green against the R96 close-out numbers; notify.sh recreated; the first ping sent.
+- R97-B: round-97.md (the owner's 10 asks itemized, the workstream map, the Kilo/Cline/Cursor research verdict §1a, the verification gates) — commit 73bce1c.
+- R97-C: the context popup overhaul (768a0e2) — the segmented Kilo-style bar + the full visual card in BOTH the overlay window and the DOM popover; the session TABLE; the mutual hover-highlight.
+- R97-D: the thinking-loop guard as a Settings domain, DEFAULT OFF (d1939d2) — the owner's reversal of R95's hardcoded watchdog; the amber non-error card; the R95 suite re-pinned to the armed config.
+- R97-E: the failure usage truth (95ef983) — the symbol-carried so-far usage; failedUsage on the payload + the SSE frame; the chip.
+- R97-F: prismjs + the app's own palette (3657abf) — the thinking area's fenced code renders as real CodeBlocks.
+- R97-G: the dedicated Browser settings section (7047597) — the domain + the route + the tab + the panel wiring; 7 storage/route pins.
+- R97-H: the chat customizability pair (8a7895e) — the text-size ladder (three reading surfaces, ±12% cap) + the hover timestamps (the chip in the actions cluster + the turn footer); +5 tests.
+- R97-I: the state-awareness sweep, three parts — (d5803cd) the shared Skeleton primitives + the chat's skeleton/error/greeting gates (the audit's #1+#2: the false greeting dead); (1e7a715) the five settings cards' honest error gates + the color violations (the warning token, #e5484d, the suffix hexes) + DESIGN-SYSTEM; (40c164b) the sidebar/dashboard/project-view/usage gates; (ce9bcf0) the ten harness re-pins (the first-paint race — Lesson #98).
+- R97-J: the review pass — a dedicated agent audited 19b2640..HEAD (+5070/−390): verdict SHIP-WITH-FIXES, every finding fixed + pinned: M1 the HOME button (homeView + the poll anchor + the native webview hide — it was a no-op in native mode, a ≤4s flash in web), M2 the usage contract's runtime+frontend pins (3 runtime tests with the REAL adapter + the fold + the chip on both legs), m1-m8 + n2 (ProjectView's populated-wins, the dashboard's usage-error false zeros, 28 amber literals → the token, the code gutter via the token-stream line split, the commit-on-blur steppers, the zoomTouched sentinel, the ladder's per-attempt accumulation, the ChoiceCard dedup, the focus reveal).
+- The terminal-display artifact diagnosed during the review (the '[hoverSeg' phantom): the sandbox terminal eats '[h' sequences — raw-byte verification before "fixing" apparent syntax errors.
+- Full pipeline green before every push: lint, both typechecks, root 3,498/3,498, agent-core 2,255/2,255, e2e 12/12, docs:check 204/0/0, version ×4 at 0.95.0.
+
+Stage Summary:
+- v0.95.0: every ask of the owner's eighth report answered — the context popup is the Kilo-style bar + the full visual card again (nothing hidden, the session price shown), the model thinks freely by default, the stops that aren't errors aren't errors, the failures report their tokens, the thinking code is colored with gutters, the chat is customizable, the UI knows its states, and the browser has its settings home with a working HOME button. AGENT-MEMORY #98 (the first-paint race + the dead control) recorded. The per-stage ntfy notifications ran throughout; the final THE-TASK-IS-DONE ping follows the release.

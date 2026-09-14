@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-93 -->
+<!-- last-reviewed: 2026-09-12 round-97 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -1081,3 +1081,29 @@ belong to true resource caps with honest cap messages, and the escalation
 from warn to stop needs the owner's explicit signature.
 (2026-09-13, round-96; the paged-read false positive + the
 identical-text detector + the warn-only rewrite.)
+
+### Lesson #98 — a UI test that asserts at FIRST PAINT is a latent race; and a shipped control that does nothing is a dead setting wearing a button
+
+1. **The synchronous-assert race.** R97-I made the chat render a skeleton
+   until the session queries settle (the false greeting killed). TEN tests
+   broke — none of them wrong about the behavior they meant to pin: Composer,
+   ChatFocusLayout, and the layout contract all asserted the greeting or
+   the composer SYNCHRONOUSLY after `renderWithProviders`, which had always
+   worked only because the fixture backends resolved before the first
+   assert. RULE: any test that asserts on data-driven UI must await a READY
+   marker (`waitFor(() => expect(document.querySelector("[data-empty-state]")))`
+   or the element itself) — the first paint is a loading state now, and
+   adding a loading state to ANY surface retroactively races every
+   first-paint assert in the repo.
+2. **The dead control.** R97-G shipped the browser HOME button with a
+   Settings section around it — and the review pass found it was a NO-OP in
+   native mode (the webview painted over the home screen's DOM) and a
+   ≤4-second flash in web mode (the poll re-adopted the page we left). The
+   section LOOKED complete: the setting existed, the button rendered, the
+   tests passed. RULE: "no dead settings" means the CONTROL must be verified
+   end-to-end against the state machine that fights it (here: the 4s poll's
+   re-adopt + the native webview's Z-order), not just against the store it
+   writes. A control whose effect can be silently undone by a background
+   process needs that process named in its test.
+(2026-09-14, round-97; the state-awareness sweep's ten re-pins + the
+review's M1.)
