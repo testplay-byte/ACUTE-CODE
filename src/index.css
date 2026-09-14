@@ -690,3 +690,23 @@
 [data-mode="dark"] .acute-code-hl .token.inserted {
   color: #4ade80;
 }
+
+/* ── ROUND-97 (R97-H): the chat text-size ladder ────────────────────────────
+   The owner's chat "customizability" ask: one CSS variable (--ac-chat-scale,
+   set by Settings → Appearance → Text Size) scales the transcript's READING
+   surfaces — the answer text (.chat-prose), the thinking block
+   (.chat-thinking), and the interim narration (.chat-narration). Small
+   (0.92) tightens a dense working session; large (1.12) reads better at
+   distance. The scale composes with the density setting (padding) and is
+   capped at ±12% so the layout rhythm never breaks. Scoped to the
+   transcript root's data-chat-size attribute so nothing outside the chat
+   scales; medium renders NOTHING here — the pre-R97 sizes stay
+   byte-identical. */
+[data-chat-size="small"] .chat-prose,
+[data-chat-size="small"] .chat-thinking,
+[data-chat-size="small"] .chat-narration,
+[data-chat-size="large"] .chat-prose,
+[data-chat-size="large"] .chat-thinking,
+[data-chat-size="large"] .chat-narration {
+  font-size: calc(var(--chat-base-size, 12.5px) * var(--ac-chat-scale, 1));
+}

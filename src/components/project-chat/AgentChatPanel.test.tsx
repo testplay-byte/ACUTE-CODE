@@ -24,6 +24,7 @@ import { createFixtureSessions } from "../../lib/session-fixtures";
 import type { MessageRating, SessionEvent, SessionsBackend } from "../../lib/api";
 import { ApiError } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
+import { useThemeStore } from "../../lib/theme-store";
 import { useNotificationStreamStore } from "../../hooks/use-notifications";
 import { useSettingsStore } from "../../lib/settings-store";
 import { useStreamStore, type LiveTurn, type LiveTurnRetry, type TurnErrorInfo } from "../../lib/stream-store";
@@ -227,6 +228,37 @@ describe("AgentChatPanel revert-to-message (ROUND-44 R44-c)", () => {
     // Exactly TWO revert buttons — one per persisted user bubble (seq 1 + 3).
     const revertButtons = screen.getAllByRole("button", { name: "Revert to this message" });
     expect(revertButtons).toHaveLength(2);
+  });
+
+  it("R97-H: hover timestamps render ONLY when the setting is on (user bubbles + turn footers)", async () => {
+    await renderPanelWithConversation();
+    expect(await screen.findByText("first question about the parser", {}, SLOW)).toBeTruthy();
+
+    // Default ("hidden") — no chips anywhere in the transcript.
+    expect(document.querySelectorAll("[data-chat-timestamp]")).toHaveLength(0);
+
+    // "On hover" — every persisted item gains its chip: 2 user bubbles +
+    // 2 assistant turn footers.
+    useThemeStore.setState({ timestampsMode: "hover" });
+    await waitFor(() => {
+      expect(document.querySelectorAll("[data-chat-timestamp]")).toHaveLength(4);
+    });
+
+    // The fixture's ts (2026-08-26) is NOT today in any relevant run → the
+    // chip prefixes its short date; a today-run still shows the clock alone.
+    // Assert through the same date math the chip uses, never a hardcoded
+    // string, so the test holds in any timezone.
+    const fixtureTs = "2026-08-26T10:00:10Z";
+    const isToday = new Date().toDateString() === new Date(fixtureTs).toDateString();
+    const first = document.querySelector("[data-chat-timestamp]") as HTMLElement;
+    expect(first.textContent ?? "").toMatch(/^\S/);
+    if (!isToday) expect(first.textContent).toContain("·");
+
+    // Turning the setting back off removes every chip again.
+    useThemeStore.setState({ timestampsMode: "hidden" });
+    await waitFor(() => {
+      expect(document.querySelectorAll("[data-chat-timestamp]")).toHaveLength(0);
+    });
   });
 
   it("confirm flow (R77 semantics): the target message is REMOVED, its text returns to the composer, dialog + toast carry the new copy", async () => {

@@ -666,8 +666,8 @@ export function ThoughtRow({
               <div
                 ref={thoughtScrollRef}
                 data-thinking-scroll
-                className="rounded-[10px] px-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll"
-                style={{ background: styles.subtle, color: styles.textSecondary }}
+                className="chat-thinking rounded-[10px] px-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll"
+                style={{ background: styles.subtle, color: styles.textSecondary, ["--chat-base-size" as string]: "11px" } as React.CSSProperties}
               >
                 {/* The single content wrapper: the stick hook's
                     ResizeObserver observes it (growth past the max-h-64 cap
@@ -740,8 +740,13 @@ function NarrationRow({ content }: { content: string }) {
   // ROUND-43: min-w-0 + break-words — a long unbreakable token in a
   // narration can never widen the chat column (the owner's bottom-scrollbar
   // bug); it wraps like every other text row.
+  // R97-H: chat-narration rides the text-size ladder (Settings →
+  // Appearance → Text Size) with the answer + thinking surfaces.
   return (
-    <div className="min-w-0 break-words py-0.5 text-[12.5px] leading-[1.6]" style={{ color: styles.text }}>
+    <div
+      className="chat-narration min-w-0 break-words py-0.5 text-[12.5px] leading-[1.6]"
+      style={{ color: styles.text, ["--chat-base-size" as string]: "12.5px" } as React.CSSProperties}
+    >
       {content}
     </div>
   );

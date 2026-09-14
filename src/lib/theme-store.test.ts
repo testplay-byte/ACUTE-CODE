@@ -10,6 +10,8 @@ function reset() {
     density: "comfortable",
     sidebarTint: "subtle",
     activityMode: "detailed",
+    chatTextSize: "medium",
+    timestampsMode: "hidden",
   });
 }
 
@@ -45,7 +47,26 @@ describe("theme store", () => {
       density: "comfortable",
       sidebarTint: "subtle",
       activityMode: "detailed",
+      chatTextSize: "medium",
+      timestampsMode: "hidden",
     });
+  });
+
+  // R97-H: the chat customizability pair — text size + timestamps.
+  it("defaults to medium text + hidden timestamps (the pre-R97 look)", () => {
+    const s = useThemeStore.getState();
+    expect(s.chatTextSize).toBe("medium");
+    expect(s.timestampsMode).toBe("hidden");
+  });
+
+  it("setChatTextSize / setTimestampsMode flip and persist", () => {
+    useThemeStore.getState().setChatTextSize("large");
+    useThemeStore.getState().setTimestampsMode("hover");
+    expect(useThemeStore.getState().chatTextSize).toBe("large");
+    expect(useThemeStore.getState().timestampsMode).toBe("hover");
+    const raw = JSON.parse(localStorage.getItem("acute-code.theme")!);
+    expect(raw.state.chatTextSize).toBe("large");
+    expect(raw.state.timestampsMode).toBe("hover");
   });
 
   it("applyTheme mirrors the store onto the document element", () => {

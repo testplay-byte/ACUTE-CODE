@@ -24,6 +24,15 @@ export type SidebarTint = "subtle" | "warm" | "bold";
 /** ROUND-35 (owner: "in the settings I would like to see the ability of the
  * tool calls preferences"): how agent tool activity renders in the chat. */
 export type ActivityMode = "detailed" | "compact" | "hidden";
+/** ROUND-97 (R97-H, owner: the chat window's "overall functionality,
+ * usability, customizability"): the chat text size — small/medium/large ride
+ * a CSS variable on the transcript root so every text row scales together
+ * (the answer text, the thinking block, the tool lines). Default medium =
+ * the pre-R97 sizes byte-identical. */
+export type ChatTextSize = "small" | "medium" | "large";
+/** R97-H: message timestamps — a hover-visible time chip per bubble when on
+ * (default off = the current clean look). */
+export type TimestampsMode = "hidden" | "hover";
 
 interface ThemeState {
   themeId: ThemeId;
@@ -31,12 +40,17 @@ interface ThemeState {
   density: Density;
   sidebarTint: SidebarTint;
   activityMode: ActivityMode;
+  /** R97-H: the chat customizability pair. */
+  chatTextSize: ChatTextSize;
+  timestampsMode: TimestampsMode;
   setTheme: (id: ThemeId) => void;
   setMode: (mode: ThemeMode) => void;
   toggleMode: () => void;
   setDensity: (density: Density) => void;
   setSidebarTint: (tint: SidebarTint) => void;
   setActivityMode: (mode: ActivityMode) => void;
+  setChatTextSize: (size: ChatTextSize) => void;
+  setTimestampsMode: (mode: TimestampsMode) => void;
 }
 
 export const useThemeStore = create<ThemeState>()(
@@ -45,6 +59,9 @@ export const useThemeStore = create<ThemeState>()(
       themeId: "nova",
       mode: "dark",
       density: "comfortable",
+      // R97-H: the defaults keep the pre-R97 look byte-identical.
+      chatTextSize: "medium",
+      timestampsMode: "hidden",
       sidebarTint: "subtle",
       activityMode: "detailed",
       setTheme: (themeId) => set({ themeId }),
@@ -53,6 +70,8 @@ export const useThemeStore = create<ThemeState>()(
       setDensity: (density) => set({ density }),
       setSidebarTint: (sidebarTint) => set({ sidebarTint }),
       setActivityMode: (activityMode) => set({ activityMode }),
+      setChatTextSize: (chatTextSize) => set({ chatTextSize }),
+      setTimestampsMode: (timestampsMode) => set({ timestampsMode }),
     }),
     // version stays 1: zustand shallow-merges persisted state over the new
     // defaults, so existing users keep their theme/mode and gain the defaults.

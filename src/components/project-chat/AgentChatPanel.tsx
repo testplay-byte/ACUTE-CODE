@@ -307,6 +307,7 @@ function TurnFooter({
   usage,
   ms,
   model,
+  ts,
   fullCopyText,
 }: {
   sessionId: string | null;
@@ -317,6 +318,9 @@ function TurnFooter({
   usage?: { inputTokens: number; outputTokens: number };
   ms?: number;
   model?: string;
+  /** R97-H: the turn's start timestamp — feeds the hover time chip
+   * (rendered only when Settings → Appearance → Timestamps is "On hover"). */
+  ts?: string;
   /** ROUND-67 (R67-B, owner directive #2): the FULL-turn export text
    * (thinking + tool calls + outputs + final answer + model — built by
    * lib/turn-copy). Present ONLY when debug mode is enabled in Advanced
@@ -460,6 +464,9 @@ function TurnFooter({
   return (
     <div className="min-w-0" data-rating-footer>
       <div className="flex items-center gap-1">
+        {/* R97-H: the turn's hover time chip — the row's leftmost element,
+            revealed with the rest of the hover affordances. */}
+        <TimestampChip ts={ts} className="pt-0.5 pr-0.5" />
         <div className="opacity-0 group-hover:opacity-100 transition-opacity pt-0.5 flex items-center">
           <CopyButton text={copyText} />
           {/* ROUND-67 (R67-B): the second copy option — the whole turn
@@ -591,6 +598,36 @@ const itemKey = (item: ProjectChatItem): string => {
   }
 };
 
+/** R97-H (owner: the chat window's "overall functionality, usability,
+ * customizability"): the per-message TIMESTAMP — a hover-revealed time chip
+ * (Settings → Appearance → Timestamps). The default ("hidden") keeps the
+ * pre-R97 clean look byte-identical; "hover" fades the chip in beside the
+ * message, reusing the exact 10px-mono tertiary chip the error / stopped /
+ * queued cards already speak. Today renders the clock alone; an older day
+ * prefixes its short date so a reloaded session still reads unambiguously
+ * ("Aug 26 · 10:00"). Reads the timestampsMode straight from the store so
+ * call sites stay prop-light. */
+function TimestampChip({ ts, className = "" }: { ts: string | undefined; className?: string }) {
+  const styles = useThemeStyles();
+  const mode = useThemeStore((s) => s.timestampsMode);
+  if (mode !== "hover" || ts === undefined || ts === "") return null;
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return null;
+  const today = new Date().toDateString() === date.toDateString();
+  return (
+    <span
+      data-chat-timestamp
+      title="When this message was sent"
+      className={`font-mono text-[10px] shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 ${className}`}
+      style={{ color: styles.textTertiary }}
+    >
+      {today
+        ? formatTime(ts)
+        : `${date.toLocaleDateString([], { month: "short", day: "numeric" })} · ${formatTime(ts)}`}
+    </span>
+  );
+}
+
 /**
  * ROUND-44 (R44-c, owner directive: "complete the whole agentic coding
  * environment"): a user bubble's hover actions — Copy (round-16) plus Revert,
@@ -602,6 +639,7 @@ const itemKey = (item: ProjectChatItem): string => {
 function UserMessage({
   content,
   attachments,
+  ts,
   onRevert,
   revertDisabled,
 }: {
@@ -610,6 +648,9 @@ function UserMessage({
    * the user bubble — persisted items carry them from the event log; the
    * optimistic echo carries the staged chips until the refetch lands. */
   attachments?: AttachmentRef[];
+  /** R97-H: the event's timestamp — feeds the hover time chip (rendered
+   * only when Settings → Appearance → Timestamps is "On hover"). */
+  ts?: string;
   onRevert?: () => void;
   revertDisabled?: boolean;
 }) {
@@ -638,7 +679,10 @@ function UserMessage({
           relative room when the panel is squished (82% → 92% below 420px:
           the hover actions + the padding tiers already reclaimed the rest). */}
       <div className="flex items-end gap-1 max-w-[82%] @max-[420px]:max-w-[92%] min-w-0">
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity pb-0.5 shrink-0">
+        {/* R97-H: the hover time chip joins the actions cluster (the same
+            reveal animation — the cluster is already invisible until hover). */}
+        <div className="flex items-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity pb-0.5 shrink-0">
+          <TimestampChip ts={ts} className="pb-1 pr-0.5" />
           <CopyButton text={content} />
           {onRevert !== undefined ? (
             <button
@@ -778,7 +822,7 @@ function IntermediateAnswer({ content, projectId }: { content: string; projectId
   const trimmed = content.trim();
   if (trimmed === "") return null;
   return (
-    <div className="mt-1.5 min-w-0 break-words text-[13px] leading-[1.65]" style={{ color: styles.text }}>
+    <div className="chat-prose mt-1.5 min-w-0 break-words text-[13px] leading-[1.65]" style={{ color: styles.text, ["--chat-base-size" as string]: "13px" } as React.CSSProperties}>
       <ChatMarkdown content={content} projectId={projectId} />
     </div>
   );
@@ -846,7 +890,10 @@ function AssistantTurn({
         ),
       )}
       {item.finalText.trim() !== "" ? (
-        <div className={`min-w-0 break-words text-[13px] leading-[1.65] ${hasToolWork ? "mt-2" : ""}`} style={{ color: styles.text }}>
+        <div
+          className={`chat-prose min-w-0 break-words text-[13px] leading-[1.65] ${hasToolWork ? "mt-2" : ""}`}
+          style={{ color: styles.text, ["--chat-base-size" as string]: "13px" } as React.CSSProperties}
+        >
           {/* ROUND-64 (R64-c): full markdown formatting (headings, lists,
               tables, links…) via ChatMarkdown — the old RichText rendered
               bold/code only and printed everything else as raw text. */}
@@ -867,6 +914,7 @@ function AssistantTurn({
         usage={item.usage}
         ms={item.ms}
         model={item.model}
+        ts={item.ts}
         fullCopyText={
           debugMode === true
             ? buildFullTurnText({
@@ -1550,6 +1598,7 @@ const MessageRenderer = forwardRef<
         <div ref={ref}>
           <UserMessage
             content={item.content}
+            ts={item.ts}
             onRevert={onRevert}
             revertDisabled={revertDisabled}
             attachments={attachments ?? item.attachments}
@@ -1685,6 +1734,10 @@ export function AgentChatPanel({
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const density = useThemeStore((s) => s.density);
+  // R97-H: the chat customizability pair — the text size rides a CSS var on
+  // the transcript root; the timestamps mode is read by TimestampChip
+  // itself (user bubbles + turn footers).
+  const chatTextSize = useThemeStore((s) => s.chatTextSize);
 
   // ⌘K / Ctrl+K opens the CommandPalette (WS-H).
   useEffect(() => {
@@ -2884,7 +2937,15 @@ export function AgentChatPanel({
               R87-A1: horizontal padding lives IN CONTENT_COL_CLASS now
               (graduated px-6/md:px-12/xl:px-16 — see its doc note), so the
               density classes here carry py only. */}
-          <div className={`${density === "compact" ? "py-4" : "py-5"} ${CONTENT_COL_CLASS} min-h-full flex flex-col gap-5`}>
+          <div
+            className={`${density === "compact" ? "py-4" : "py-5"} ${CONTENT_COL_CLASS} min-h-full flex flex-col gap-5`}
+            style={
+              {
+                "--ac-chat-scale": chatTextSize === "small" ? "0.92" : chatTextSize === "large" ? "1.12" : "1",
+              } as React.CSSProperties
+            }
+            data-chat-size={chatTextSize}
+          >
             {/* ROUND-50 (R50-c2, owner: "When there is nothing, the very first
                 chat… almost centered but a bit more towards the bottom half of
                 the screen"): the greeting + suggestion chips sit ABOVE the
@@ -3112,7 +3173,10 @@ export function AgentChatPanel({
                   </div>
                 ) : null}
                 {liveTurn.streamText !== "" ? (
-                  <div className={`min-w-0 break-words text-[13px] leading-[1.65] ${liveTurn.working.length > 0 ? "mt-2" : ""}`} style={{ color: styles.text }}>
+                  <div
+                    className={`chat-prose min-w-0 break-words text-[13px] leading-[1.65] ${liveTurn.working.length > 0 ? "mt-2" : ""}`}
+                    style={{ color: styles.text, ["--chat-base-size" as string]: "13px" } as React.CSSProperties}
+                  >
                     {/* ROUND-64 (R64-c): ChatMarkdown — the LIVE answer also
                         renders full markdown; partial markdown mid-stream is
                         fine (the parser is line-based, so the text renders

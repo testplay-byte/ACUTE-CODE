@@ -51,6 +51,8 @@ beforeEach(() => {
     density: "comfortable",
     activityMode: "detailed",
     sidebarTint: "subtle",
+    chatTextSize: "medium",
+    timestampsMode: "hidden",
   });
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockClear();
@@ -206,19 +208,53 @@ describe("Appearance tab simplification (R62-2a)", () => {
     expect(useThemeStore.getState().activityMode).toBe("compact");
     expect(screen.getByRole("button", { name: /Compact/ }).getAttribute("aria-pressed")).toBe("true");
     expect(detailed.getAttribute("aria-pressed")).toBe("false");
-    fireEvent.click(screen.getByRole("button", { name: /Hidden/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Hidden Never show/ }));
     expect(useThemeStore.getState().activityMode).toBe("hidden");
+  });
+
+  // R97-H: the chat customizability sections.
+  it("Text Size cards switch the chatTextSize store field (medium default)", () => {
+    renderWithProviders(<SettingsPage />);
+
+    expect(screen.getByText("Text Size")).toBeTruthy();
+    expect(screen.getByText("The chat's reading surfaces — answers, thinking, narration.")).toBeTruthy();
+
+    // Medium is the active default.
+    const medium = screen.getByRole("button", { name: /Medium/ });
+    expect(medium.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: /Large/ }));
+    expect(useThemeStore.getState().chatTextSize).toBe("large");
+    expect(screen.getByRole("button", { name: /Large/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(medium.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(screen.getByRole("button", { name: /Small/ }));
+    expect(useThemeStore.getState().chatTextSize).toBe("small");
+  });
+
+  it("Timestamps cards switch the timestampsMode store field (hidden default)", () => {
+    renderWithProviders(<SettingsPage />);
+
+    expect(screen.getByText("Timestamps")).toBeTruthy();
+    const hidden = screen.getByRole("button", { name: /^Hidden The clean default/ });
+    expect(hidden.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: /On hover/ }));
+    expect(useThemeStore.getState().timestampsMode).toBe("hover");
+    expect(screen.getByRole("button", { name: /On hover/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(hidden.getAttribute("aria-pressed")).toBe("false");
   });
 
   it("the Sidebar Tint section is GONE from the UI (store field untouched)", () => {
     renderWithProviders(<SettingsPage />);
-
     expect(screen.queryByText("Sidebar Tint")).toBeNull();
     expect(screen.queryByRole("radiogroup", { name: "Sidebar tint strength" })).toBeNull();
     expect(screen.queryByRole("radio", { name: /sidebar tint/i })).toBeNull();
 
-    // The tab is exactly THREE sections now: Theme, Chat density, Tool activity.
-    expect(document.querySelectorAll("section").length).toBe(3);
+    // The tab is FIVE sections now: Theme, Chat density, Text Size (R97-H),
+    // Timestamps (R97-H), Tool activity — the R62 three + the R97-H chat
+    // customizability pair, each a real wired setting (never a dead card).
+    expect(document.querySelectorAll("section").length).toBe(5);
 
     // The removal is UI-ONLY — the theme-store field + setter survive
     // (useThemeSync/deriveThemeStyles still read sidebarTint).

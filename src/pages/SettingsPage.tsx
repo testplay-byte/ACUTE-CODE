@@ -164,6 +164,12 @@ function AppearanceTab() {
   // ROUND-35 (owner: tool calls preferences in settings).
   const activityMode = useThemeStore((s) => s.activityMode);
   const setActivityMode = useThemeStore((s) => s.setActivityMode);
+  // R97-H (owner: the chat window's "overall functionality, usability,
+  // customizability"): the text-size ladder + the hover timestamps.
+  const chatTextSize = useThemeStore((s) => s.chatTextSize);
+  const setChatTextSize = useThemeStore((s) => s.setChatTextSize);
+  const timestampsMode = useThemeStore((s) => s.timestampsMode);
+  const setTimestampsMode = useThemeStore((s) => s.setTimestampsMode);
 
   return (
     // ROUND-62 (R62-2a, owner: "in the settings in the appearence make it
@@ -299,6 +305,55 @@ function AppearanceTab() {
         </p>
       </section>
 
+      {/* ── R97-H: chat text size (the owner's customizability ask) ──── */}
+      <section>
+        <SectionTitle>Text Size</SectionTitle>
+        <p className="mt-0 mb-3 text-[12px]" style={{ color: styles.textSecondary }}>
+          The chat's reading surfaces — answers, thinking, narration.
+        </p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {(
+            [
+              { id: "small", label: "Small", desc: "Tightens a dense working session" },
+              { id: "medium", label: "Medium", desc: "The default reading size" },
+              { id: "large", label: "Large", desc: "Reads better at a distance" },
+            ] as const
+          ).map(({ id, label, desc }) => (
+            <ChoiceCard
+              key={id}
+              active={chatTextSize === id}
+              label={label}
+              desc={desc}
+              onSelect={() => setChatTextSize(id)}
+            />
+          ))}
+        </div>
+      </section>
+
+      {/* ── R97-H: message timestamps ────────────────────────────────── */}
+      <section>
+        <SectionTitle>Timestamps</SectionTitle>
+        <p className="mt-0 mb-3 text-[12px]" style={{ color: styles.textSecondary }}>
+          When a message was sent, revealed by hovering it.
+        </p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {(
+            [
+              { id: "hidden", label: "Hidden", desc: "The clean default — no time labels" },
+              { id: "hover", label: "On hover", desc: "Hovering a message reveals its time chip" },
+            ] as const
+          ).map(({ id, label, desc }) => (
+            <ChoiceCard
+              key={id}
+              active={timestampsMode === id}
+              label={label}
+              desc={desc}
+              onSelect={() => setTimestampsMode(id)}
+            />
+          ))}
+        </div>
+      </section>
+
       {/* ── Tool activity (ROUND-35: the owner's tool-calls preferences) ── */}
       <section>
         <SectionTitle>Tool activity</SectionTitle>
@@ -353,6 +408,55 @@ function AppearanceTab() {
         </div>
       </section>
     </div>
+  );
+}
+
+/** R97-H: the appearance tab's radio card — the exact Tool-activity card
+ * pattern (radio circle + bold label + one-line description, active accent
+ * ring) extracted so the two NEW sections (Text Size, Timestamps) speak the
+ * same design without duplicating the markup. */
+function ChoiceCard({
+  active,
+  label,
+  desc,
+  onSelect,
+}: {
+  active: boolean;
+  label: string;
+  desc: string;
+  onSelect: () => void;
+}) {
+  const styles = useThemeStyles();
+  return (
+    <button
+      onClick={onSelect}
+      aria-pressed={active}
+      className="relative rounded-[14px] border-[1.5px] p-3 text-left transition-all hover:-translate-y-px"
+      style={{
+        background: active ? withAlpha(styles.accent, 0.06) : styles.card,
+        borderColor: active ? styles.accent : styles.border,
+        boxShadow: active ? `0 0 0 3px ${withAlpha(styles.accent, 0.15)}` : "none",
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className="w-4 h-4 rounded-full border-[1.5px] grid place-items-center shrink-0"
+          style={{
+            borderColor: active ? styles.accent : styles.border,
+            background: active ? styles.accent : "transparent",
+          }}
+          aria-hidden
+        >
+          {active && <span className="w-1.5 h-1.5 rounded-full" style={{ background: styles.accentText }} />}
+        </span>
+        <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+          {label}
+        </span>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-snug" style={{ color: styles.textSecondary }}>
+        {desc}
+      </p>
+    </button>
   );
 }
 
