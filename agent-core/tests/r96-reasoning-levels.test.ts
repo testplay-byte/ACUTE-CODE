@@ -71,7 +71,7 @@ vi.mock("@ai-sdk/openai-compatible", () => ({
 vi.mock("@ai-sdk/anthropic", () => ({ createAnthropic: vi.fn() }));
 vi.mock("@ai-sdk/openai", () => ({ createOpenAI: vi.fn() }));
 
-import { aiSdkChat } from "../src/agents/chat";
+import { aiSdkChat , withAppAttribution, buildOutputCapFetch, buildModelFallbackFetch } from "../src/agents/chat";
 
 const baseInput = {
   apiKey: "sk-test",
@@ -473,5 +473,93 @@ describe("R96-F: the legacy auto-refresh (GET /providers/:id/models-config)", ()
     });
     expect(response.statusCode).toBe(200);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ── ROUND-96 (R96-J): the wire wrappers the live-fire forced ─────────────────
+// App attribution (the publisher-gated model catch) + the output cap (the
+// paid-model credits catch: OpenRouter prices an unspecified max_tokens at the
+// model's FULL default — "You requested up to 131072 tokens, but can only
+// afford 22738" — while a one-word reply needed a few hundred).
+describe("R96-J: withAppAttribution + buildOutputCapFetch (the live-fire wrappers)", () => {
+  const capturedFetch = () => {
+    const calls: Array<{ url: unknown; init: RequestInit | undefined }> = [];
+    const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
+      calls.push({ url, init });
+      return new Response("{}", { status: 200 });
+    });
+    return { fn, calls };
+  };
+
+  it("withAppAttribution adds X-Title + HTTP-Referer to EVERY call (never clobbering set headers)", async () => {
+    const { fn, calls } = capturedFetch();
+    const wrapped = withAppAttribution(fn);
+    await wrapped("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    await wrapped("https://other.example/v1/chat", {});
+    const h0 = new Headers(calls[0].init?.headers);
+    expect(h0.get("content-type")).toBe("application/json");
+    expect(h0.get("X-Title")).toBe("ACUTE-CODE");
+    expect(h0.get("HTTP-Referer")).toBe("https://github.com/testplay-byte/ACUTE-CODE");
+    expect(new Headers(calls[1].init?.headers).get("X-Title")).toBe("ACUTE-CODE");
+    // A provider-set title survives (attribution never clobbers).
+    const { fn: fn2, calls: calls2 } = capturedFetch();
+    const wrapped2 = withAppAttribution(fn2);
+    await wrapped2("https://x.example/v1", { headers: { "X-Title": "Provider Set" } });
+    expect(new Headers(calls2[0].init?.headers).get("X-Title")).toBe("Provider Set");
+  });
+
+  it("buildOutputCapFetch injects max_tokens ONLY when absent AND no reasoning budget rides the body", async () => {
+    const { fn, calls } = capturedFetch();
+    const wrapped = buildOutputCapFetch(8192, fn);
+    // No max_tokens, no reasoning → injected.
+    await wrapped("https://x/v1", { method: "POST", body: JSON.stringify({ model: "m", messages: [] }) });
+    expect(JSON.parse(String(calls[0].init?.body)).max_tokens).toBe(8192);
+    // A provider-set max_tokens is NEVER overwritten.
+    await wrapped("https://x/v1", { method: "POST", body: JSON.stringify({ model: "m", max_tokens: 100 }) });
+    expect(JSON.parse(String(calls[1].init?.body)).max_tokens).toBe(100);
+    // A ladder-less thinking budget (reasoning.max_tokens) owns the body —
+    // the cap wrapper STANDS DOWN (the R95 live-verified shape, lesson #96).
+    await wrapped("https://x/v1", {
+      method: "POST",
+      body: JSON.stringify({ model: "m", reasoning: { max_tokens: 4096 } }),
+    });
+    expect(JSON.parse(String(calls[2].init?.body)).max_tokens).toBeUndefined();
+    expect(JSON.parse(String(calls[2].init?.body)).reasoning).toEqual({ max_tokens: 4096 });
+    // An effort-only body (a ladder model) GETS the cap — the credits catch.
+    await wrapped("https://x/v1", {
+      method: "POST",
+      body: JSON.stringify({ model: "m", reasoning: { effort: "max" } }),
+    });
+    expect(JSON.parse(String(calls[3].init?.body)).max_tokens).toBe(8192);
+    expect(JSON.parse(String(calls[3].init?.body)).reasoning).toEqual({ effort: "max" });
+    // Non-JSON bodies pass through untouched.
+    await wrapped("https://x/v1", { method: "POST", body: "not-json" });
+    expect(calls[4].init?.body).toBe("not-json");
+  });
+
+  it("the wrappers COMPOSE: cap over thinking over fallback, attribution outermost — every layer's rewrite survives", async () => {
+    const { fn, calls } = capturedFetch();
+    // buildModelFallbackFetch delegates to the GLOBAL fetch (its production
+    // shape) — stub it so the composed chain lands in OUR capture.
+    vi.stubGlobal("fetch", fn);
+    try {
+    // The production chain shape: withAppAttribution(buildOutputCapFetch(8192, buildModelFallbackFetch()))
+    const chain = withAppAttribution(buildOutputCapFetch(8192, buildModelFallbackFetch()));
+    await chain("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({ model: "some/model:free", messages: [] }),
+    });
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.max_tokens).toBe(8192); // the cap injected
+    expect(body.models).toEqual(["some/model:free", "openrouter/free"]); // the fallback chain applied
+    expect(body.model).toBeUndefined();
+    expect(new Headers(calls[0].init?.headers).get("X-Title")).toBe("ACUTE-CODE"); // attribution outermost
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

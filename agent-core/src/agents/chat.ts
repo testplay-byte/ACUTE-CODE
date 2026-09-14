@@ -73,6 +73,12 @@ export interface ChatTurnInput {
    * ROUND-95 (R95-E): "medium" joins the vocabulary for models whose
    * detected ladder tops out below high (see reasoningSupport). */
   thinkingLevel?: ThinkingLevel;
+  /** ROUND-96 (R96-J, the live-fire catch #2): the model's configured output
+   * cap (resolveTurnBudget's maxOutputTokens — the row, the catalog, or the
+   * 32K default). Rides the wire as `max_tokens` when the SDK call sends
+   * none (OpenRouter prices an unspecified cap at the model's FULL default
+   * — the paid-model credits rejection; see buildOutputCapFetch). */
+  maxOutputTokens?: number;
   /** ROUND-95 (R95-E, THE R95-B E-CONTRACT): the model's DETECTED reasoning
    * capability (resolveModelReasoningSupport — migration 0035's
    * reasoning_support blob). Absent OR null = UNKNOWN — byte-identical R50
@@ -134,6 +140,73 @@ export function buildModelFallbackFetch(): (
       }
     }
     return fetch(url, init);
+  };
+}
+
+/** ROUND-96 (R96-J, the live-fire catch): the OpenRouter APP ATTRIBUTION
+ * headers ride EVERY outbound chat-completions call. OpenRouter's docs ask
+ * apps to identify themselves (X-Title + HTTP-Referer), and some publishers
+ * GATE their models on it — the live-fire's thinkingmachines/inkling-small:free
+ * (the only free max-ladder model) answered "is only available on agentic
+ * harnesses. Try plugging it into a coding agent or productivity app listed
+ * on openrouter.ai/apps" until the headers identified us. Harmless for other
+ * OpenAI-compatible providers (informational headers are ignored), and it
+ * is the honest thing a well-behaved OpenRouter app does anyway. Exported
+ * for tests. */
+export const APP_ATTRIBUTION_HEADERS: Readonly<Record<string, string>> = {
+  "X-Title": "ACUTE-CODE",
+  "HTTP-Referer": "https://github.com/testplay-byte/ACUTE-CODE",
+};
+
+export function withAppAttribution(
+  inner: ((url: string | URL | Request, init?: RequestInit) => Promise<Response>) | undefined,
+): (url: string | URL | Request, init?: RequestInit) => Promise<Response> {
+  return async (url: string | URL | Request, init?: RequestInit) => {
+    const headers = new Headers(init?.headers ?? undefined);
+    for (const [key, value] of Object.entries(APP_ATTRIBUTION_HEADERS)) {
+      if (headers.has(key) === false) headers.set(key, value);
+    }
+    const nextInit = { ...(init ?? {}), headers };
+    return inner !== undefined ? inner(url, nextInit) : fetch(url, nextInit);
+  };
+}
+
+/** ROUND-96 (R96-J, the live-fire catch #2): builds the fetch wrapper that
+ * injects the model's configured `max_tokens` onto the wire when the SDK
+ * call sends none. OpenRouter PRICES an unspecified max_tokens at the
+ * MODEL'S FULL default output ceiling — the live deepseek-v4.1-flash call
+ * (effort 'max', no max_tokens) was rejected with "This request requires
+ * more credits, or fewer max_tokens. You requested up to 131072 tokens, but
+ * can only afford 22738" even though a one-word reply needed a few hundred.
+ * Safety rules: a provider-set max_tokens is NEVER overwritten, and a body
+ * carrying `reasoning.max_tokens` (the ladder-less thinking budget — the
+ * R95 live-verified shape, lesson #96's XOR territory) is left ALONE.
+ * Non-JSON bodies pass through untouched. Exported for tests. */
+export function buildOutputCapFetch(
+  maxOutputTokens: number,
+  inner?: (url: string | URL | Request, init?: RequestInit) => Promise<Response>,
+): (url: string | URL | Request, init?: RequestInit) => Promise<Response> {
+  return async (url: string | URL | Request, init?: RequestInit) => {
+    let nextInit = init;
+    if (typeof init?.body === "string" && init.body.length > 0) {
+      try {
+        const body = JSON.parse(init.body) as Record<string, unknown>;
+        const reasoning =
+          typeof body.reasoning === "object" && body.reasoning !== null
+            ? (body.reasoning as { max_tokens?: unknown })
+            : null;
+        if (
+          typeof body.max_tokens !== "number" &&
+          (reasoning === null || reasoning.max_tokens === undefined)
+        ) {
+          body.max_tokens = maxOutputTokens;
+          nextInit = { ...init, body: JSON.stringify(body) };
+        }
+      } catch {
+        // not JSON — pass through untouched
+      }
+    }
+    return inner !== undefined ? inner(url, nextInit) : fetch(url, nextInit);
   };
 }
 
@@ -377,10 +450,27 @@ function buildModel(input: ChatTurnInput): LanguageModel {
           ? buildModelFallbackFetch()
           : undefined;
       const level = input.thinkingLevel;
+      let chain:
+        | ((url: string | URL | Request, init?: RequestInit) => Promise<Response>)
+        | undefined = fallbackFetch;
       if (level !== undefined && level !== "default" && input.reasoningSupport?.supported !== false) {
-        return { fetch: buildThinkingFetch(level, input.reasoningSupport, fallbackFetch) };
+        chain = buildThinkingFetch(level, input.reasoningSupport, fallbackFetch);
       }
-      return fallbackFetch !== undefined ? { fetch: fallbackFetch } : {};
+      // ROUND-96 (R96-J): the output cap rides UNDER the attribution wrapper
+      // and OVER the thinking/fallback chain (see buildOutputCapFetch — the
+      // paid-model credits catch) when the input carries the resolved budget
+      // number. NOTE: for a ladder-less thinking model the thinking wrapper
+      // injects reasoning.max_tokens — the cap wrapper then stands down for
+      // that body (the R95 live-verified shape owns it).
+      if (typeof input.maxOutputTokens === "number" && Number.isFinite(input.maxOutputTokens)) {
+        const prevChain = chain;
+        chain = buildOutputCapFetch(input.maxOutputTokens, prevChain);
+      }
+      // ROUND-96 (R96-J): the app-attribution wrapper rides OUTERMOST —
+      // every outbound chat-completions call identifies the app to
+      // OpenRouter (see withAppAttribution: the live-fire's
+      // publisher-gated model catch).
+      return { fetch: withAppAttribution(chain) };
     })()),
   });
   return provider.chatModel(input.model);

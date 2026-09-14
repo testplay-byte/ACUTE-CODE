@@ -274,7 +274,10 @@ describe("buildModel thinking wiring (ROUND-50 R50-c1)", () => {
     const withLevel = (createOpenAICompatibleMock.mock.calls[0] as unknown[])[0] as { fetch?: unknown };
     expect(typeof withLevel.fetch).toBe("function");
 
-    // "default" → NO fetch wrapper (the provider's own transport).
+    // "default" → no THINKING wrapper; ROUND-96 (R96-J): the app-attribution
+    // wrapper is ALWAYS present (every outbound call identifies the app —
+    // see chat.ts withAppAttribution), so fetch is now defined but carries
+    // NO body rewriting (the R50 contract holds: nothing injected).
     createOpenAICompatibleMock.mockClear();
     await aiSdkChat({
       ...baseInput,
@@ -282,13 +285,13 @@ describe("buildModel thinking wiring (ROUND-50 R50-c1)", () => {
       thinkingLevel: "default",
     });
     const atDefault = (createOpenAICompatibleMock.mock.calls[0] as unknown[])[0] as { fetch?: unknown };
-    expect(atDefault.fetch).toBeUndefined();
+    expect(typeof atDefault.fetch).toBe("function");
 
     // absent → same as default.
     createOpenAICompatibleMock.mockClear();
     await aiSdkChat({ ...baseInput, provider: { id: "prov", baseUrl: "https://api.prov.test/v1" } });
     const absent = (createOpenAICompatibleMock.mock.calls[0] as unknown[])[0] as { fetch?: unknown };
-    expect(absent.fetch).toBeUndefined();
+    expect(typeof absent.fetch).toBe("function");
 
     // anthropic-messages / responses formats silently skip the level (no
     // reasoning-effort passthrough wired there — honest limitation).
@@ -338,7 +341,8 @@ describe("buildModel thinking wiring (ROUND-50 R50-c1)", () => {
         thinkingLevel: "default",
       });
       const config = (createOpenAICompatibleMock.mock.calls[0] as unknown[])[0] as { fetch?: unknown };
-      expect(config.fetch).toBeUndefined();
+      // ROUND-96 (R96-J): the attribution wrapper is always present now.
+      expect(typeof config.fetch).toBe("function");
       const plain = JSON.stringify({ model: "m", messages: [] });
       expect(bodies[bodies.length - 1]).not.toBe(plain); // last captured was a "max" call
     } finally {

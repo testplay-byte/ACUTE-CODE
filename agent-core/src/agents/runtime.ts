@@ -2030,6 +2030,10 @@ export async function runSingleAgentTurn(
         // call maps its (parent-inherited-absent, so usually absent) level
         // onto the model's own ladder exactly like the streamed path would.
         ...(prepared.reasoningSupport !== null ? { reasoningSupport: prepared.reasoningSupport } : {}),
+        // ROUND-96 (R96-J): the resolved output cap rides the wire as
+        // max_tokens when the SDK sends none (the paid-model credits catch
+        // — OpenRouter prices an unspecified cap at the model's FULL default).
+        maxOutputTokens: budget.maxOutputTokens,
         // ROUND-48 (R48-e1, stretch): LIVE per-step events. A single chat()
         // call can run maxTurns tool round-trips internally; without this
         // hook the parent UI sees nothing until the WHOLE call completes.
@@ -3353,6 +3357,10 @@ export async function runStreamedAgentTurn(
         // model's own effort ladder and bounds its reasoning budget.
         ...(effectiveThinkingLevel !== undefined ? { thinkingLevel: effectiveThinkingLevel } : {}),
         ...(prepared.reasoningSupport !== null ? { reasoningSupport: prepared.reasoningSupport } : {}),
+        // ROUND-96 (R96-J): the resolved output cap rides the wire as
+        // max_tokens when the SDK sends none (the paid-model credits catch
+        // — OpenRouter prices an unspecified cap at the model's FULL default).
+        maxOutputTokens: budget.maxOutputTokens,
         ...(signal !== undefined ? { signal } : {}),
         // ROUND-94 (R94-D1): the STEP-BOUNDARY claim the adapter's prepareStep
         // calls at every completed-tool-call boundary — the mid-turn
