@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, screen } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { ChatFocusLayout, chatMinWidthFor, sidebarWidthCap } from "./ChatFocusLayout";
 import { getFixtureProjects } from "../../lib/project-fixtures";
 import { useProjectChatStore } from "../../lib/project-chat-store";
@@ -18,6 +18,11 @@ describe("ChatFocusLayout (Round 33 — headerless chat panel)", () => {
     const projects = await getFixtureProjects().list();
     const project = projects[0];
     renderWithProviders(<ChatFocusLayout project={project} />);
+    // R97-I re-pin: the greeting (with its composer) renders only after the
+    // session queries settle — await the ready state.
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: /message composer/i })).toBeTruthy(),
+    );
 
     // NONE of the old header affordances exist — the owner removed the whole
     // bar: no agent chip, no search button, no theme toggle in the chat.
@@ -33,6 +38,10 @@ describe("ChatFocusLayout (Round 33 — headerless chat panel)", () => {
     const projects = await getFixtureProjects().list();
     const project = projects[0];
     renderWithProviders(<ChatFocusLayout project={project} />);
+    // R97-I re-pin: same ready-state await.
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: /message composer/i })).toBeTruthy(),
+    );
     expect(screen.getByRole("textbox", { name: /message composer/i })).toBeTruthy();
   });
 });
@@ -184,6 +193,9 @@ describe("ChatFocusLayout rendered geometry (Round 43)", () => {
     const projects = await getFixtureProjects().list();
     renderWithProviders(<ChatFocusLayout project={projects[0]} />);
     act(() => MockResizeObserver.fire(2254));
+    // R97-I re-pin: await the ready state (the greeting's capped composer
+    // column renders only after the session queries settle).
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy());
 
     // Messages column AND composer share the SAME capped, centered column.
     const cols = Array.from(document.querySelectorAll("div")).filter((el) =>

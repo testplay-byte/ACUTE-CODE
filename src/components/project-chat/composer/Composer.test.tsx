@@ -325,10 +325,17 @@ beforeEach(() => {
   vi.mocked(dequeueSessionMessage).mockReset().mockResolvedValue(undefined);
 });
 
-/** Render the panel with an EMPTY transcript (no project-bound sessions). */
+/** Render the panel with an EMPTY transcript (no project-bound sessions).
+ * R97-I re-pin: the greeting (and its centered composer) renders only
+ * after the session queries settle — the chat-shaped skeleton holds the
+ * column while loading — so the harness awaits the READY state. */
 async function renderEmptyPanel() {
   const projects = await getFixtureProjects().list();
-  return renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+  const rendered = renderWithProviders(
+    <AgentChatPanel projectId={projects[0].id} project={projects[0]} />,
+  );
+  await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy());
+  return rendered;
 }
 
 /** Chat event exactly as the backend writes it. */
