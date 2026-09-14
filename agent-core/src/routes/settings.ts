@@ -26,10 +26,12 @@ import {
   getMemorySettings,
   getOrchestrationSettings,
   getRetrySettings,
+  getThinkingLoopSettings,
   setDebugSettings,
   setMemorySettings,
   setOrchestrationSettings,
   setRetrySettings,
+  setThinkingLoopSettings,
 } from "../storage/settings.js";
 import { errorBody } from "./helpers.js";
 
@@ -253,6 +255,72 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         ...(typeof raw.providerTimeoutSeconds === "number"
           ? { providerTimeoutSeconds: raw.providerTimeoutSeconds }
           : {}),
+      });
+    } catch (error) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
+          field: "body",
+        }),
+      );
+    }
+  });
+
+  // ── ROUND-97 (R97-D, owner: "give the user the option in the settings to
+  // turn it on or off. By default it will be turned off… also give the user
+  // the option and flexibility to edit the thinking loop management"): the
+  // thinking-loop guard's OWN settings domain. GET returns the full
+  // ThinkingLoopSettings; PUT accepts a partial patch. The streamed turn's
+  // watchdog reads these per call (enabled=false → NO guard at all — the
+  // model thinks as long as it needs to).
+
+  scope.get("/settings/thinking-loop", async () => {
+    return getThinkingLoopSettings(db);
+  });
+
+  scope.put("/settings/thinking-loop", async (request, reply) => {
+    const body: unknown = request.body;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+    }
+    const raw = body as Record<string, unknown>;
+    if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body.enabled must be a boolean", { field: "body.enabled" }));
+    }
+    if (
+      raw.stallSeconds !== undefined &&
+      (typeof raw.stallSeconds !== "number" ||
+        !Number.isInteger(raw.stallSeconds) ||
+        raw.stallSeconds < 30 ||
+        raw.stallSeconds > 600)
+    ) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "body.stallSeconds must be an integer between 30 and 600", {
+          field: "body.stallSeconds",
+        }),
+      );
+    }
+    if (
+      raw.reasoningBytesKB !== undefined &&
+      (typeof raw.reasoningBytesKB !== "number" ||
+        !Number.isInteger(raw.reasoningBytesKB) ||
+        raw.reasoningBytesKB < 8 ||
+        raw.reasoningBytesKB > 256)
+    ) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "body.reasoningBytesKB must be an integer between 8 and 256", {
+          field: "body.reasoningBytesKB",
+        }),
+      );
+    }
+    try {
+      return setThinkingLoopSettings(db, {
+        ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
+        ...(typeof raw.stallSeconds === "number" ? { stallSeconds: raw.stallSeconds } : {}),
+        ...(typeof raw.reasoningBytesKB === "number" ? { reasoningBytesKB: raw.reasoningBytesKB } : {}),
       });
     } catch (error) {
       return reply.code(400).send(

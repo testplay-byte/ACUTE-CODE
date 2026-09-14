@@ -100,6 +100,16 @@ export interface ChatTurnInput {
    * entirely (every existing caller + every test stub) → prepareStep is not
    * passed to the SDK at all. */
   consumeQueuedForStep?: () => QueuedStepMessage | null;
+  /** ROUND-97 (R97-D, owner: "give the user the option in the settings to
+   * turn it on or off. By default it will be turned off"): the thinking-loop
+   * guard's ARMING config, threaded by the runtime from
+   * getThinkingLoopSettings. `enabled: false` (the default) → NO watchdog at
+   * all — the model thinks as long as it needs to; `enabled: true` → the
+   * R95-E stall watchdog runs with THESE thresholds (stallMs +
+   * reasoningBytes, the conjunction). Absent → the same default-off
+   * behavior (the runtime always passes it on the streamed path; tests
+   * control it explicitly). */
+  thinkingLoop?: { enabled: boolean; stallMs: number; reasoningBytes: number };
 }
 
 /** Round-46: 10 minutes per provider call — generous enough for slow
@@ -945,6 +955,17 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
   // is looping, not thinking. Progress of ANY other kind resets both.
   let lastProgressTs = Date.now();
   let reasoningBytesSinceProgress = 0;
+  // ROUND-97 (R97-D, owner: "we should give the user the option in the
+  // settings to turn it on or off. By default it will be turned off so that
+  // the model can think as much as it needs to"): the guard is OPT-IN now.
+  // `thinkingLoop` absent or enabled:false → the watchdog NEVER fires (the
+  // checks below short-circuit on the disabled flags); enabled:true → the
+  // thresholds come from the SETTINGS the owner edited (stallMs from
+  // stallSeconds, reasoningBytes from reasoningBytesKB — not the R95
+  // hardcoded constants).
+  const loopEnabled = input.thinkingLoop?.enabled === true;
+  const loopStallMs = input.thinkingLoop?.stallMs ?? THINKING_STALL_MS;
+  const loopReasoningBytes = input.thinkingLoop?.reasoningBytes ?? THINKING_STALL_REASONING_BYTES;
   for await (const part of result.fullStream) {
     // ROUND-75 (R75, the live 429 find): the SDK surfaces mid-stream
     // failures — provider errors AFTER its internal retries (429 rate
@@ -967,10 +988,13 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
       // cleanly BETWEEN parts: throwing from the for-await ends this
       // generator (the SDK stream's implicit return() closes it), no signal
       // needed — the runtime's existing error path owns the fallout.
+      // ROUND-97 (R97-D): loopEnabled=false → no check at all — the model
+      // thinks as much as it needs to (the owner's default-off directive).
       reasoningBytesSinceProgress += part.text.length;
       if (
-        Date.now() - lastProgressTs > THINKING_STALL_MS &&
-        reasoningBytesSinceProgress > THINKING_STALL_REASONING_BYTES
+        loopEnabled &&
+        Date.now() - lastProgressTs > loopStallMs &&
+        reasoningBytesSinceProgress > loopReasoningBytes
       ) {
         throw new ThinkingLoopError();
       }

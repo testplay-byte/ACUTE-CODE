@@ -10,6 +10,7 @@ import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
   AlertTriangle,
   Braces,
+  Brain,
   Check,
   ChevronDown,
   Clock,
@@ -1071,6 +1072,85 @@ export function TurnErrorCard({
 }
 
 /**
+ * ROUND-97 (R97-D): the THINKING-STOPPED card — the thinking-loop guard's OWN
+ * presentation, deliberately NOT TurnErrorCard. The owner: "The thinking loop
+ * stopping and other things like that should not be shown as errors like
+ * 'generation failed.' These should be highlighted in a separate way." So:
+ * amber (never red), role=status (never alert), a Brain icon (never the
+ * warning triangle), "Thinking stopped" (never "Generation failed"), and the
+ * copy explains WHAT the guard is + WHERE to turn it off — the guard firing
+ * is a configured intervention, not a provider failure.
+ */
+export function ThinkingStoppedCard({
+  error,
+  onRetry,
+  disabled = false,
+}: {
+  /** The persisted error fold item OR the live error shape (the same subset
+   * TurnErrorCard accepts — code/message/ts + the optional detail fields). */
+  error: Pick<ErrorTurnItem, "code" | "message" | "ts"> &
+    Partial<Pick<ErrorTurnItem, "model" | "providerId" | "providerError" | "errorClass" | "attempts">>;
+  onRetry?: () => void;
+  disabled?: boolean;
+}) {
+  const styles = useThemeStyles();
+  return (
+    <motion.div variants={msgVariants} initial="initial" animate="animate" className="min-w-0">
+      <div
+        role="status"
+        data-testid="thinking-stopped-card"
+        className="rounded-[14px] border px-3.5 py-2.5 flex items-start gap-2.5"
+        style={{
+          borderColor: withAlpha("#f59e0b", 0.4),
+          background: withAlpha("#f59e0b", styles.isDark ? 0.09 : 0.05),
+        }}
+      >
+        <Brain size={14} className="mt-0.5 shrink-0" style={{ color: "#f59e0b" }} aria-hidden />
+        <div className="min-w-0 flex-1">
+          <div className="text-[12px] font-bold" style={{ color: "#f59e0b" }}>
+            Thinking stopped by the guard
+          </div>
+          <div className="mt-1 text-[11.5px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
+            The model kept reasoning with no text, tool call, or finish past your thresholds, so the thinking-loop
+            guard stopped it (one de-escalating retry was attempted first). This is not a provider failure — the
+            guard is a setting you control.
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            {error.model ? (
+              <span
+                className="font-mono text-[10.5px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate"
+                style={{ background: styles.subtle, color: styles.textTertiary }}
+                title={error.model}
+              >
+                {error.model}
+              </span>
+            ) : null}
+            <span className="text-[11px]" style={{ color: styles.textTertiary }}>
+              Turn it off or tune it in{" "}
+              <Link to="/settings?tab=advanced" className="font-bold underline" style={{ color: "#f59e0b" }}>
+                Settings → General
+              </Link>
+              .
+            </span>
+            {onRetry !== undefined ? (
+              <button
+                type="button"
+                onClick={onRetry}
+                disabled={disabled}
+                className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-colors disabled:opacity-50"
+                style={{ borderColor: withAlpha("#f59e0b", 0.4), color: "#f59e0b" }}
+              >
+                Retry
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+/**
  * ROUND-75 (R75, owner: transient API failures should retry visibly — "it
  * will set up a timer… it will stop, notify the user, and show the error
  * message"): the LIVE status card shown while the transient-API retry
@@ -1482,12 +1562,15 @@ const MessageRenderer = forwardRef<
     case "error":
       return (
         <div ref={ref}>
-          <TurnErrorCard
-            error={item}
-            sessionId={sessionId}
-            onRetry={onRetry}
-            disabled={retryDisabled}
-          />
+          {/* R97-D: the thinking-loop guard's stop is NOT an error — the amber
+              ThinkingStoppedCard replaces the red TurnErrorCard for the
+              thinking_loop class (the owner's "should not be shown as errors
+              like 'generation failed'" directive). */}
+          {item.errorClass === "thinking_loop" ? (
+            <ThinkingStoppedCard error={item} onRetry={onRetry} disabled={retryDisabled} />
+          ) : (
+            <TurnErrorCard error={item} sessionId={sessionId} onRetry={onRetry} disabled={retryDisabled} />
+          )}
         </div>
       );
   }
@@ -3082,14 +3165,24 @@ export function AgentChatPanel({
             {/* ── ROUND-43: LIVE error card — the stream failed. Rendered
                 immediately (before the refetch lands); the persisted
                 turn.error item takes over once the folded log carries it
-                (errorTs match above). User stops never set liveError. ── */}
+                (errorTs match above). User stops never set liveError.
+                R97-D: the thinking_loop class renders the AMBER
+                ThinkingStoppedCard instead (never "generation failed"). ── */}
             {liveError !== null && !liveErrorSuperseded ? (
-              <TurnErrorCard
-                error={liveError}
-                sessionId={activeSessionId}
-                onRetry={() => void runTurn(lastUserContent)}
-                disabled={busy}
-              />
+              liveError.errorClass === "thinking_loop" ? (
+                <ThinkingStoppedCard
+                  error={liveError}
+                  onRetry={() => void runTurn(lastUserContent)}
+                  disabled={busy}
+                />
+              ) : (
+                <TurnErrorCard
+                  error={liveError}
+                  sessionId={activeSessionId}
+                  onRetry={() => void runTurn(lastUserContent)}
+                  disabled={busy}
+                />
+              )
             ) : null}
 
             {/* ── R93-B1: the KEPT-QUEUE notice — the stream ended with

@@ -5,10 +5,13 @@ import {
   fetchDebugSettings,
   fetchMemorySettings,
   fetchRetrySettings,
+  fetchThinkingLoopSettings,
   updateDebugSettings,
   updateMemorySettings,
   updateRetrySettings,
+  updateThinkingLoopSettings,
   type RetrySettings,
+  type ThinkingLoopSettings,
 } from "../lib/api";
 import { Bot, Brain, Info, Minus, Monitor, Moon, Palette, Plus, PlugZap, RefreshCw, RotateCcw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Timer, Users } from "lucide-react";
 import { useThemeStore } from "../lib/theme-store";
@@ -405,9 +408,216 @@ function AdvancedTab() {
         </p>
       </div>
       <RetryConfigCard />
+      <ThinkingLoopCard />
       <DebugModeCard />
       <MemoryCard />
     </div>
+  );
+}
+
+/* ── ROUND-97 (R97-D): the THINKING-LOOP card — the owner's "give the user
+ * the option in the settings to turn it on or off. By default it will be
+ * turned off so that the model can think as much as it needs to" directive.
+ * The master switch (DEFAULT OFF — the model thinks freely; the R95-E
+ * watchdog only arms when ON) + the two editable thresholds it consults
+ * (the no-progress window and the reasoning volume — BOTH must hold). The
+ * RetryConfigCard pattern: shared query key, one mutation, honest error
+ * line, loading state, stepper-bounded numbers. */
+
+function ThinkingLoopCard() {
+  const styles = useThemeStyles();
+  const queryClient = useQueryClient();
+  const settingsQuery = useQuery({
+    queryKey: ["thinking-loop-settings"],
+    queryFn: fetchThinkingLoopSettings,
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const update = useMutation({
+    mutationFn: (patch: Partial<ThinkingLoopSettings>) => updateThinkingLoopSettings(patch),
+    onSuccess: () => {
+      setError(null);
+      // The engine reads these at TURN start — a flip applies to the next
+      // message (the same per-turn semantics as every other card here).
+      void queryClient.invalidateQueries({ queryKey: ["thinking-loop-settings"] });
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  const current = settingsQuery.data;
+  if (settingsQuery.isLoading || current === undefined) {
+    return (
+      <section
+        data-testid="thinking-loop-card"
+        className="rounded-lg p-4"
+        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      >
+        <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
+          loading thinking-loop settings…
+        </span>
+      </section>
+    );
+  }
+
+  const busy = update.isPending;
+
+  const setStallSeconds = (value: number) => {
+    const clamped = Math.min(600, Math.max(30, Math.round(value)));
+    if (clamped === current.stallSeconds) return;
+    update.mutate({ stallSeconds: clamped });
+  };
+
+  const setReasoningBytesKB = (value: number) => {
+    const clamped = Math.min(256, Math.max(8, Math.round(value)));
+    if (clamped === current.reasoningBytesKB) return;
+    update.mutate({ reasoningBytesKB: clamped });
+  };
+
+  const inputStyle = {
+    background: styles.subtle,
+    border: bdr("1.5px", styles.border),
+    color: styles.text,
+  } as const;
+
+  return (
+    <section
+      data-testid="thinking-loop-card"
+      className="rounded-lg p-4"
+      style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      aria-label="Thinking-loop guard"
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <Brain size={13} style={{ color: styles.accent, opacity: 0.7 }} />
+        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
+          Thinking-loop guard
+        </span>
+      </div>
+      {/* The master switch — OFF by default (the owner's directive: the model
+          thinks as much as it needs to). */}
+      <div className="flex items-start gap-3">
+        <div className="min-w-[200px] flex-1">
+          <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+            Stop stuck reasoning
+          </div>
+          <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+            When ON, a model that keeps reasoning with no text, tool call, or finish for the stall window below is
+            stopped (one de-escalating retry, then an honest notice). OFF (default) — the model thinks as long as it
+            needs to.
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={current.enabled}
+          aria-label="Toggle the thinking-loop guard"
+          data-testid="thinking-loop-switch"
+          disabled={busy}
+          onClick={() => update.mutate({ enabled: !current.enabled })}
+          className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
+          style={{
+            background: current.enabled ? styles.accent : withAlpha(styles.text, 0.18),
+            border: bdr("1.5px", current.enabled ? styles.accent : styles.border),
+          }}
+        >
+          <span
+            className="absolute top-1/2 block -translate-y-1/2 rounded-full shadow transition-all"
+            style={{
+              left: current.enabled ? "calc(100% - 21px)" : "3px",
+              height: 18,
+              width: 18,
+              background: current.enabled ? styles.accentText : styles.toggleActive,
+            }}
+          />
+        </button>
+      </div>
+
+      {/* The thresholds — editable only while the guard is ON (the honest
+          “nothing to edit while off” posture; they still render so the
+          contract is visible). */}
+      <div className="mt-4 pt-3" style={{ borderTop: bdr("1.5px", styles.border) }}>
+        <div className="mb-2.5 flex items-center gap-2">
+          <Timer size={12} style={{ color: styles.accent, opacity: 0.7 }} />
+          <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
+            Thresholds
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="min-w-[200px] flex-1">
+            <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+              Stall window
+            </div>
+            <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+              Seconds of pure reasoning with no progress before the guard fires (30–600).
+            </div>
+          </div>
+          <input
+            type="number"
+            min={30}
+            max={600}
+            step={30}
+            disabled={busy || !current.enabled}
+            data-testid="thinking-loop-stall"
+            aria-label="Stall window in seconds"
+            value={current.stallSeconds}
+            onChange={(e) => {
+              const parsed = Number(e.target.value);
+              if (Number.isFinite(parsed)) setStallSeconds(parsed);
+            }}
+            onBlur={(e) => {
+              const parsed = Number(e.target.value);
+              if (!Number.isFinite(parsed) || parsed < 30 || parsed > 600) {
+                e.target.value = String(current.stallSeconds);
+              }
+            }}
+            className="h-7 w-[84px] rounded-lg px-2 font-mono text-[11.5px] outline-none transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-60"
+            style={inputStyle}
+          />
+        </div>
+        <div className="mt-3 flex items-center gap-3">
+          <div className="min-w-[200px] flex-1">
+            <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+              Reasoning volume
+            </div>
+            <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+              KB of reasoning accumulated in that window before the guard fires (8–256). Both conditions must hold.
+            </div>
+          </div>
+          <input
+            type="number"
+            min={8}
+            max={256}
+            step={4}
+            disabled={busy || !current.enabled}
+            data-testid="thinking-loop-bytes"
+            aria-label="Reasoning volume in KB"
+            value={current.reasoningBytesKB}
+            onChange={(e) => {
+              const parsed = Number(e.target.value);
+              if (Number.isFinite(parsed)) setReasoningBytesKB(parsed);
+            }}
+            onBlur={(e) => {
+              const parsed = Number(e.target.value);
+              if (!Number.isFinite(parsed) || parsed < 8 || parsed > 256) {
+                e.target.value = String(current.reasoningBytesKB);
+              }
+            }}
+            className="h-7 w-[84px] rounded-lg px-2 font-mono text-[11.5px] outline-none transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-60"
+            style={inputStyle}
+          />
+        </div>
+      </div>
+
+      {error ? (
+        <div className="mt-2 text-[11px]" style={{ color: "#e5484d" }} role="alert">
+          {error}
+        </div>
+      ) : null}
+      <div className="mt-3 text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
+        {current.enabled
+          ? `The guard fires after ${current.stallSeconds}s of pure reasoning with ${current.reasoningBytesKB}KB accumulated — one de-escalating retry, then an honest amber notice (never a red “generation failed”).`
+          : "OFF — the model can think as much as it needs to. Turn it on only if a model ever gets stuck in a true reasoning loop."}
+      </div>
+    </section>
   );
 }
 

@@ -90,7 +90,7 @@ import { getIndexSummary } from "../storage/index.js";
 // ROUND-44 (R44-a): the project memory digest for prompt injection.
 import { memoryDigest } from "../storage/memory.js";
 // ROUND-49: the memory master switch (Settings → Advanced).
-import { getMemorySettings, getDebugSettings, getRetrySettings } from "../storage/settings.js";
+import { getMemorySettings, getDebugSettings, getRetrySettings, getThinkingLoopSettings } from "../storage/settings.js";
 import { getCatalogModel, lookupPricing, resolveModelReasoningSupport } from "../storage/models.js";
 import { estimateMessageTokens, type ContextBudget } from "../context.js";
 // ROUND-46 (R46-b): context compaction — summarize the over-budget head
@@ -3369,6 +3369,20 @@ export async function runStreamedAgentTurn(
         // live registered notify turn, so POST /queue 409s and the queue is
         // always empty there; wiring it would be dead code).
         consumeQueuedForStep,
+        // ROUND-97 (R97-D, owner: "we should give the user the option in the
+        // settings to turn it on or off. By default it will be turned off so
+        // that the model can think as much as it needs to"): the thinking-loop
+        // guard's ARMING config from Settings → General. enabled:false (the
+        // default) → NO watchdog in the adapter; enabled:true → the owner's
+        // own thresholds (stallSeconds → stallMs, reasoningBytesKB → bytes).
+        thinkingLoop: (() => {
+          const tl = getThinkingLoopSettings(db);
+          return {
+            enabled: tl.enabled,
+            stallMs: tl.stallSeconds * 1000,
+            reasoningBytes: tl.reasoningBytesKB * 1024,
+          };
+        })(),
       })) {
         // ROUND-94 (R94-D1): the claimed injection lands HERE — at the first
         // part observed after the claim, i.e. strictly after all of the

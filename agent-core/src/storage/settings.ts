@@ -466,3 +466,100 @@ export function setRetrySettings(db: SqliteDatabase, patch: Partial<RetrySetting
   }
   return getRetrySettings(db);
 }
+
+// ── ROUND-97 (R97-D): the thinking-loop guard settings ────────────────────────
+//
+// The owner's eighth report: "Currently the thinking loop is quite bad and it
+// does not allow the model to think as it needs to. I do feel like the thinking
+// loop functionality is a good thing to have but I think we should give the
+// user the option in the settings to turn it on or off. By default it will be
+// turned off so that the model can think as much as it needs to and can handle
+// the things better. Make sure to handle it like that and also give the user
+// the option and flexibility to edit the thinking loop management and handle
+// it better."
+//
+//   thinkingLoop.enabled          — the master switch (DEFAULT FALSE per the
+//                                   directive — the model thinks freely; the
+//                                   R95-E watchdog only arms when ON).
+//   thinkingLoop.stallSeconds     — the no-progress window that arms the
+//                                   watchdog (default 120s, clamp 30–600).
+//   thinkingLoop.reasoningBytesKB  — the reasoning volume that arms it (default
+//                                   24KB, clamp 8–256 — BOTH conditions must
+//                                   hold, the R95-E conjunction).
+
+export interface ThinkingLoopSettings {
+  enabled: boolean;
+  stallSeconds: number;
+  reasoningBytesKB: number;
+}
+
+export const THINKING_LOOP_DEFAULTS: ThinkingLoopSettings = {
+  enabled: false,
+  stallSeconds: 120,
+  reasoningBytesKB: 24,
+};
+
+const THINKING_LOOP_ENABLED_KEY = "thinkingLoop.enabled";
+const THINKING_LOOP_STALL_KEY = "thinkingLoop.stallSeconds";
+const THINKING_LOOP_BYTES_KEY = "thinkingLoop.reasoningBytesKB";
+
+export function getThinkingLoopSettings(db: SqliteDatabase): ThinkingLoopSettings {
+  return {
+    enabled: readBoolean(db, THINKING_LOOP_ENABLED_KEY, THINKING_LOOP_DEFAULTS.enabled),
+    stallSeconds: readNumber(
+      db,
+      THINKING_LOOP_STALL_KEY,
+      THINKING_LOOP_DEFAULTS.stallSeconds,
+      30,
+      600,
+    ),
+    reasoningBytesKB: readNumber(
+      db,
+      THINKING_LOOP_BYTES_KEY,
+      THINKING_LOOP_DEFAULTS.reasoningBytesKB,
+      8,
+      256,
+    ),
+  };
+}
+
+/** Partial patch (the setRetrySettings pattern): only provided keys write; a
+ * bad type or an out-of-bounds number throws (the route maps that to a 400
+ * VALIDATION). The clamps match getThinkingLoopSettings's reads. */
+export function setThinkingLoopSettings(
+  db: SqliteDatabase,
+  patch: Partial<ThinkingLoopSettings>,
+): ThinkingLoopSettings {
+  const upsert = db.prepare(
+    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  );
+  if (patch.enabled !== undefined) {
+    if (typeof patch.enabled !== "boolean") {
+      throw new Error("enabled must be a boolean");
+    }
+    upsert.run(THINKING_LOOP_ENABLED_KEY, String(patch.enabled));
+  }
+  if (patch.stallSeconds !== undefined) {
+    if (
+      typeof patch.stallSeconds !== "number" ||
+      !Number.isInteger(patch.stallSeconds) ||
+      patch.stallSeconds < 30 ||
+      patch.stallSeconds > 600
+    ) {
+      throw new Error("stallSeconds must be an integer between 30 and 600");
+    }
+    upsert.run(THINKING_LOOP_STALL_KEY, String(patch.stallSeconds));
+  }
+  if (patch.reasoningBytesKB !== undefined) {
+    if (
+      typeof patch.reasoningBytesKB !== "number" ||
+      !Number.isInteger(patch.reasoningBytesKB) ||
+      patch.reasoningBytesKB < 8 ||
+      patch.reasoningBytesKB > 256
+    ) {
+      throw new Error("reasoningBytesKB must be an integer between 8 and 256");
+    }
+    upsert.run(THINKING_LOOP_BYTES_KEY, String(patch.reasoningBytesKB));
+  }
+  return getThinkingLoopSettings(db);
+}

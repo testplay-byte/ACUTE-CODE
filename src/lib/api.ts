@@ -2664,6 +2664,35 @@ export async function updateRetrySettings(
   });
 }
 
+/** ROUND-97 (R97-D, owner: "give the user the option in the settings to turn
+ * it on or off. By default it will be turned off so that the model can think
+ * as much as it needs to… also give the user the option and flexibility to
+ * edit the thinking loop management"): the thinking-loop guard's settings
+ * domain — the master switch (DEFAULT OFF) + the two thresholds the streamed
+ * adapter's watchdog consults (the conjunction: a stall of stallSeconds
+ * with reasoningBytesKB accumulated and NO text/tool/finish progress). */
+export interface ThinkingLoopSettings {
+  /** The master switch — false by default (the model thinks freely). */
+  enabled: boolean;
+  /** The no-progress window that arms the watchdog (30–600s, default 120). */
+  stallSeconds: number;
+  /** The reasoning volume that arms it (8–256 KB, default 24). */
+  reasoningBytesKB: number;
+}
+
+export async function fetchThinkingLoopSettings(): Promise<ThinkingLoopSettings> {
+  return request<ThinkingLoopSettings>("/settings/thinking-loop");
+}
+
+export async function updateThinkingLoopSettings(
+  patch: Partial<ThinkingLoopSettings>,
+): Promise<ThinkingLoopSettings> {
+  return request<ThinkingLoopSettings>("/settings/thinking-loop", {
+    method: "PUT",
+    json: patch,
+  });
+}
+
 /** Key-pool slot info (masked — values never leave the sidecar). */
 export interface KeyPoolSlot {
   slot: number;

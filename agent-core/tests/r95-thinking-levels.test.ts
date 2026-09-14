@@ -301,6 +301,13 @@ const streamInput = {
   temperature: 0.2,
   maxTurns: 4,
   provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+  // ROUND-97 (R97-D, the owner's explicit reversal): the guard is OPT-IN now
+  // — "By default it will be turned off so that the model can think as much
+  // as it needs to." The R95 watchdog tests below pass the ARMED config
+  // explicitly (the R95 thresholds verbatim), so the pre-R97 behavior they
+  // pin is preserved as the ENABLED behavior; the default-off contract has
+  // its own tests in the R97-D block below.
+  thinkingLoop: { enabled: true, stallMs: 120_000, reasoningBytes: 24_000 },
 };
 
 describe("R95-E: streamAiSdkChat's thinking-loop watchdog", () => {
@@ -407,6 +414,118 @@ describe("R95-E: streamAiSdkChat's thinking-loop watchdog", () => {
     }));
     const events: string[] = [];
     for await (const event of streamAiSdkChat(streamInput)) {
+      events.push(event.type);
+    }
+    expect(events[events.length - 1]).toBe("finish");
+  });
+});
+
+/* ── ROUND-97 (R97-D): the guard is OPT-IN + the thresholds are the user's ─── */
+
+describe("R97-D: the thinking-loop guard's default-off + custom thresholds", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("DEFAULT OFF — no thinkingLoop config → the SAME endless-reasoning stream COMPLETES (the owner's reversal)", async () => {
+    // The owner, verbatim: "By default it will be turned off so that the
+    // model can think as much as it needs to." The exact stream that threw
+    // ThinkingLoopError in the R95 test above now finishes cleanly when the
+    // runtime passes no armed guard (the new default).
+    const now = { t: 1_700_000_000_000 };
+    vi.spyOn(Date, "now").mockImplementation(() => now.t);
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        for (let i = 0; i < 60; i++) {
+          now.t += 5_000;
+          yield { type: "reasoning-delta", text: "x".repeat(500) };
+        }
+        yield { type: "finish-step", usage: {} };
+      })(),
+      totalUsage: Promise.resolve({ inputTokens: 1, outputTokens: 2, totalTokens: 3 }),
+      usage: Promise.resolve({ inputTokens: 1, outputTokens: 2, totalTokens: 3 }),
+    }));
+    const events: string[] = [];
+    for await (const event of streamAiSdkChat({ ...streamInput, thinkingLoop: undefined })) {
+      events.push(event.type);
+    }
+    expect(events[events.length - 1]).toBe("finish");
+    expect(events.filter((t) => t === "thinking-delta").length).toBe(60);
+  });
+
+  it("an explicitly DISABLED guard never fires either (enabled: false)", async () => {
+    const now = { t: 1_700_000_000_000 };
+    vi.spyOn(Date, "now").mockImplementation(() => now.t);
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        for (let i = 0; i < 60; i++) {
+          now.t += 5_000;
+          yield { type: "reasoning-delta", text: "x".repeat(500) };
+        }
+        yield { type: "finish-step", usage: {} };
+      })(),
+      totalUsage: Promise.resolve({ inputTokens: 1, outputTokens: 2, totalTokens: 3 }),
+      usage: Promise.resolve({ inputTokens: 1, outputTokens: 2, totalTokens: 3 }),
+    }));
+    const events: string[] = [];
+    for await (const event of streamAiSdkChat({
+      ...streamInput,
+      thinkingLoop: { enabled: false, stallMs: 120_000, reasoningBytes: 24_000 },
+    })) {
+      events.push(event.type);
+    }
+    expect(events[events.length - 1]).toBe("finish");
+  });
+
+  it("the CUSTOM thresholds govern — a 60s/8KB guard fires on a stream the R95 defaults would allow", async () => {
+    // The owner: "give the user the option and flexibility to edit the
+    // thinking loop management." A user who sets a 60s stall + 8KB volume
+    // catches this stream (80s of reasoning, 10KB accumulated) that the
+    // 120s/24KB defaults would NOT.
+    const now = { t: 1_700_000_000_000 };
+    vi.spyOn(Date, "now").mockImplementation(() => now.t);
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        for (let i = 0; i < 16; i++) {
+          now.t += 5_000;
+          yield { type: "reasoning-delta", text: "x".repeat(700) };
+        }
+        yield { type: "finish-step", usage: {} };
+      })(),
+      totalUsage: Promise.resolve({ inputTokens: 1, outputTokens: 2, totalTokens: 3 }),
+      usage: Promise.resolve({ inputTokens: 1, outputTokens: 2, totalTokens: 3 }),
+    }));
+    await expect(
+      (async () => {
+        for await (const _ of streamAiSdkChat({
+          ...streamInput,
+          thinkingLoop: { enabled: true, stallMs: 60_000, reasoningBytes: 8_000 },
+        })) {
+          /* drain */
+        }
+      })(),
+    ).rejects.toBeInstanceOf(ThinkingLoopError);
+  });
+
+  it("the custom thresholds can be LOOSER too — a 600s/256KB guard tolerates what the defaults catch", async () => {
+    const now = { t: 1_700_000_000_000 };
+    vi.spyOn(Date, "now").mockImplementation(() => now.t);
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        for (let i = 0; i < 60; i++) {
+          now.t += 5_000;
+          yield { type: "reasoning-delta", text: "x".repeat(500) };
+        }
+        yield { type: "finish-step", usage: {} };
+      })(),
+      totalUsage: Promise.resolve({ inputTokens: 1, outputTokens: 2, totalTokens: 3 }),
+      usage: Promise.resolve({ inputTokens: 1, outputTokens: 2, totalTokens: 3 }),
+    }));
+    const events: string[] = [];
+    for await (const event of streamAiSdkChat({
+      ...streamInput,
+      thinkingLoop: { enabled: true, stallMs: 600_000, reasoningBytes: 256_000 },
+    })) {
       events.push(event.type);
     }
     expect(events[events.length - 1]).toBe("finish");
