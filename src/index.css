@@ -605,3 +605,88 @@
 .auto-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ── ROUND-97 (R97-F): the Prism token palette ─────────────────────────────
+   The app paints its OWN .token.* colors (no Prism CSS imported) so the code
+   blocks follow the design system in BOTH modes: a restrained hue set —
+   keywords/punctuation/bold-names in the mode's strong text, strings in a
+   calm green, numbers in amber, comments in tertiary, functions/methods in
+   the theme's accent-adjacent blue. Scoped to .acute-code-hl (the CodeBlock
+   <pre> class) so the palette never leaks into user content elsewhere. */
+.acute-code-hl .token.comment,
+.acute-code-hl .token.prolog,
+.acute-code-hl .token.doctype,
+.acute-code-hl .token.cdata {
+  color: var(--ac-text-tertiary);
+  font-style: italic;
+}
+.acute-code-hl .token.punctuation {
+  color: color-mix(in srgb, var(--ac-text) 55%, transparent);
+}
+.acute-code-hl .token.keyword,
+.acute-code-hl .token.tag,
+.acute-code-hl .token.selector,
+.acute-code-hl .token.important,
+.acute-code-hl .token.atrule {
+  color: color-mix(in srgb, var(--ac-text) 88%, #c2410c 12%);
+  font-weight: 600;
+}
+.acute-code-hl .token.string,
+.acute-code-hl .token.char,
+.acute-code-hl .token.attr-value,
+.acute-code-hl .token.regex {
+  color: #0f7b3d;
+}
+[data-mode="dark"] .acute-code-hl .token.string,
+[data-mode="dark"] .acute-code-hl .token.char,
+[data-mode="dark"] .acute-code-hl .token.attr-value,
+[data-mode="dark"] .acute-code-hl .token.regex {
+  color: #4ade80;
+}
+.acute-code-hl .token.number,
+.acute-code-hl .token.boolean,
+.acute-code-hl .token.constant,
+.acute-code-hl .token.symbol {
+  color: #b45309;
+}
+[data-mode="dark"] .acute-code-hl .token.number,
+[data-mode="dark"] .acute-code-hl .token.boolean,
+[data-mode="dark"] .acute-code-hl .token.constant,
+[data-mode="dark"] .acute-code-hl .token.symbol {
+  color: #fbbf24;
+}
+.acute-code-hl .token.function,
+.acute-code-hl .token.class-name,
+.acute-code-hl .token.builtin,
+.acute-code-hl .token.property {
+  color: #1d4ed8;
+}
+[data-mode="dark"] .acute-code-hl .token.function,
+[data-mode="dark"] .acute-code-hl .token.class-name,
+[data-mode="dark"] .acute-code-hl .token.builtin,
+[data-mode="dark"] .acute-code-hl .token.property {
+  color: #7dd3fc;
+}
+.acute-code-hl .token.operator,
+.acute-code-hl .token.entity,
+.acute-code-hl .token.url {
+  color: color-mix(in srgb, var(--ac-text) 70%, transparent);
+}
+.acute-code-hl .token.attr-name,
+.acute-code-hl .token.variable {
+  color: #7c3aed;
+}
+[data-mode="dark"] .acute-code-hl .token.attr-name,
+[data-mode="dark"] .acute-code-hl .token.variable {
+  color: #c4b5fd;
+}
+/* diff — the +/- lines get their semantic greens/reds. */
+.acute-code-hl .token.deleted {
+  color: #dc2626;
+}
+.acute-code-hl .token.inserted {
+  color: #0f7b3d;
+}
+[data-mode="dark"] .acute-code-hl .token.inserted {
+  color: #4ade80;
+}

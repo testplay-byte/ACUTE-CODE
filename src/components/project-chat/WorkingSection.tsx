@@ -38,6 +38,9 @@ import {
 } from "../../lib/stream-store";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { SubAgentCard } from "./SubAgentCard";
+// R97-F: the thinking body renders fenced code blocks through the SAME
+// CodeBlock the answers use (syntax colors + the language badge + Copy).
+import { CodeBlock } from "./ChatMarkdown";
 // ROUND-95 (R95-D): the small-block stick-to-bottom primitive — the live
 // thinking block's body follows its own stream (see use-stick-to-bottom.ts).
 import { useStickToBottom } from "./use-stick-to-bottom";
@@ -510,6 +513,51 @@ function useLiveSeconds(startedAtMs: number | undefined, running: boolean): numb
  * → live rows auto-expand; completing (live→false) auto-collapses; a manual
  * tap always wins over the automation.
  */
+/** R97-F: split the thinking text on CLOSED ``` fences — the prose parts
+ * render as the quiet mono notes; each CLOSED fence renders as a CodeBlock
+ * ({lang, code}). An UNCLOSED trailing fence stays in the prose (the stream
+ * is still emitting it — the block never pops in/out mid-stream). Pure;
+ * exported for tests. */
+export function splitThinkingFences(
+  text: string,
+): Array<{ kind: "text"; text: string } | { kind: "code"; lang: string; code: string }> {
+  if (text === "") return [];
+  const parts: Array<{ kind: "text"; text: string } | { kind: "code"; lang: string; code: string }> = [];
+  const lines = text.split("\n");
+  let currentText: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const fence = /^\s{0,3}```(.*)$/.exec(lines[i]!);
+    if (fence === null) {
+      currentText.push(lines[i]!);
+      i += 1;
+      continue;
+    }
+    // A fence opened — find its closer.
+    const lang = fence[1]?.trim() ?? "";
+    let closer = -1;
+    for (let j = i + 1; j < lines.length; j += 1) {
+      if (/^\s{0,3}```\s*$/.test(lines[j]!)) {
+        closer = j;
+        break;
+      }
+    }
+    if (closer === -1) {
+      // UNCLOSED (still streaming): the rest stays prose — never a half block.
+      currentText.push(...lines.slice(i));
+      break;
+    }
+    if (currentText.length > 0) {
+      parts.push({ kind: "text", text: currentText.join("\n") });
+      currentText = [];
+    }
+    parts.push({ kind: "code", lang, code: lines.slice(i + 1, closer).join("\n") });
+    i = closer + 1;
+  }
+  if (currentText.length > 0) parts.push({ kind: "text", text: currentText.join("\n") });
+  return parts;
+}
+
 export function ThoughtRow({
   text,
   thinkingMs,
@@ -524,6 +572,15 @@ export function ThoughtRow({
   const userTouched = useRef(false);
   const prevLive = useRef(live);
   const trimmed = text.trim();
+  /* R97-F: the fence-split — the thinking text renders its fenced code blocks
+   * as REAL CodeBlocks (the owner: "in the thinking, if it shows a code
+   * block, then that code block should clearly be highlighted. It should
+   * clearly be formatted in colors and it should be properly shown"), while
+   * the prose between fences stays the quiet mono notes exactly as before.
+   * STREAMING-SAFE: an UNCLOSED fence (the model is still emitting it) does
+   * not flip into a code block until its closer arrives — the partial
+   * fence stays plain text so the block never pops in and out mid-stream. */
+  const fenceParts = useMemo(() => splitThinkingFences(trimmed), [trimmed]);
 
   // ── ROUND-95 (R95-D, owner: the thinking area "should be automatically
   //    scrolling if the user was at the very bottom of it but apparently it
@@ -614,8 +671,26 @@ export function ThoughtRow({
               >
                 {/* The single content wrapper: the stick hook's
                     ResizeObserver observes it (growth past the max-h-64 cap
-                    never changes the scroller's own box). */}
-                <div>{trimmed}</div>
+                    never changes the scroller's own box).
+                    R97-F: the fence-split — CLOSED ``` blocks render as REAL
+                    CodeBlocks (the syntax colors the owner asked for); the
+                    prose stays the quiet mono notes. */}
+                <div className="min-w-0">
+                  {fenceParts.length === 0 ? (
+                    <span>{trimmed}</span>
+                  ) : (
+                    fenceParts.map((part, pi) =>
+                      part.kind === "text" ? (
+                        <span key={pi} className="whitespace-pre-wrap break-words">
+                          {part.text}
+                          {pi < fenceParts.length - 1 ? "\n" : ""}
+                        </span>
+                      ) : (
+                        <CodeBlock key={pi} code={part.code} lang={part.lang === "" ? undefined : part.lang} />
+                      ),
+                    )
+                  )}
+                </div>
               </div>
               {/* ── R95-D: the INNER JUMP PILL — only while LIVE and
                   DETACHED from the block's own tail (the user scrolled up

@@ -1,10 +1,13 @@
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { Check, Copy, File, FileCode } from "lucide-react";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import type { ThemeStyles } from "../../lib/themes";
 import { withAlpha } from "../dashboard/helpers";
+// R97-F: the Prism-backed highlighter (the app's own token palette lives in
+// index.css — see src/lib/highlight.ts).
+import { highlightCode } from "../../lib/highlight";
 
 /**
  * ROUND-64 (R64-c, owner: "there was apparently no formatting of the response
@@ -67,12 +70,21 @@ import { withAlpha } from "../dashboard/helpers";
  * ROUND-95 (R95-F): optional `lang` — the fence's INFO STRING (```ts), now
  * captured by the scanner and badged in the header, so a code block's
  * language is visible at a glance (the pre-R95 header showed only the line
- * count; the language was silently discarded). */
+ * count; the language was silently discarded).
+ * ROUND-97 (R97-F): REAL SYNTAX COLORS — the owner: "in the thinking, if it
+ * shows a code block, then that code block should clearly be highlighted.
+ * It should clearly be formatted in colors and it should be properly
+ * shown." The body renders Prism's token spans (src/lib/highlight.ts — the
+ * app's own .token palette in index.css, light + dark); an unknown language
+ * or a pathological input falls back to the plain lines (never a crash). */
 export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   const styles = useThemeStyles();
   const resetAfter = useTimeoutClear();
   const [copied, setCopied] = useState(false);
   const lines = code.split("\n");
+  // R97-F: the highlighted HTML (null → the plain-lines fallback). Memoized
+  // on the exact inputs — a re-render with the same code never re-tokenizes.
+  const highlighted = useMemo(() => highlightCode(code, lang), [code, lang]);
   return (
     <div className="my-1.5 rounded-[12px] overflow-hidden border" style={{ borderColor: styles.border }}>
       <div
@@ -110,15 +122,30 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <pre className="overflow-x-auto p-3 font-mono text-[11.5px] leading-[1.6]" style={{ color: styles.text }}>
-        {lines.map((line, i) => (
-          <div key={i} className="flex">
-            <span className="w-7 shrink-0 text-right pr-3 select-none font-mono text-[10px] leading-[1.6]" style={{ color: styles.textTertiary }}>
-              {i + 1}
-            </span>
-            <span className="flex-1 whitespace-pre-wrap break-words">{line || " "}</span>
-          </div>
-        ))}
+      <pre
+        className="acute-code-hl overflow-x-auto p-3 font-mono text-[11.5px] leading-[1.6]"
+        style={{ color: styles.text }}
+      >
+        {highlighted !== null ? (
+          <code
+            data-code-highlighted
+            // R97-F: Prism's output — the app's OWN palette (index.css's
+            // .acute-code-hl .token.* rules; NO Prism CSS imported), so the
+            // colors follow the design system in both modes. The HTML comes
+            // from src/lib/highlight.ts's Prism.highlight over the exact
+            // code string — never user-facing HTML passthrough.
+            dangerouslySetInnerHTML={{ __html: highlighted }}
+          />
+        ) : (
+          lines.map((line, i) => (
+            <div key={i} className="flex">
+              <span className="w-7 shrink-0 text-right pr-3 select-none font-mono text-[10px] leading-[1.6]" style={{ color: styles.textTertiary }}>
+                {i + 1}
+              </span>
+              <span className="flex-1 whitespace-pre-wrap break-words">{line || " "}</span>
+            </div>
+          ))
+        )}
       </pre>
     </div>
   );

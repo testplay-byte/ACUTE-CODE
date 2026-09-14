@@ -487,17 +487,25 @@ describe("ROUND-95 (R95-F) inline robustness", () => {
 });
 
 describe("ROUND-95 (R95-F) block robustness", () => {
-  it("fenced code shows the language badge from the info string", () => {
+  it("fenced code shows the language badge from the info string — and R97-F highlights it", () => {
     renderMd("```tsx\nconst x = 1;\n```");
     expect(document.querySelector("[data-code-lang]")?.textContent).toBe("tsx");
+    // R97-F: a known language renders Prism's token spans (the colors); the
+    // code text still reads as textContent (split across token runs).
+    const highlighted = document.querySelector("[data-code-highlighted]");
+    expect(highlighted).toBeTruthy();
+    expect(highlighted?.textContent).toBe("const x = 1;");
+    expect(highlighted?.innerHTML).toContain("token keyword");
     // The marker + info string never print as code content.
-    expect(screen.getByText("const x = 1;")).toBeTruthy();
     expect(document.body.textContent).not.toContain("```tsx");
   });
 
-  it("a fence with no info string renders no badge", () => {
+  it("a fence with no info string renders no badge (and stays plain — no highlight)", () => {
     renderMd("```\nconst x = 1;\n```");
     expect(document.querySelector("[data-code-lang]")).toBeNull();
+    // No language → the plain-lines fallback, never a highlighted <code>.
+    expect(document.querySelector("[data-code-highlighted]")).toBeNull();
+    expect(screen.getByText("const x = 1;")).toBeTruthy();
   });
 
   it("table rows with MORE cells than the header keep the extras (no dropped data)", () => {
@@ -541,10 +549,14 @@ describe("ROUND-95 (R95-F) mid-stream tolerance (the live tail)", () => {
     expect(document.body.textContent).toContain("| a | b |");
   });
 
-  it("an unterminated fence at EOF keeps its language badge (streaming)", () => {
+  it("an unterminated fence at EOF keeps its language badge (streaming) — and highlights", () => {
     renderMd("```rust\nfn main() {");
     expect(document.querySelector("[data-code-lang]")?.textContent).toBe("rust");
-    expect(screen.getByText("fn main() {")).toBeTruthy();
+    // R97-F: the partial rust code highlights too; the text survives as
+    // textContent across the token runs.
+    const highlighted = document.querySelector("[data-code-highlighted]");
+    expect(highlighted).toBeTruthy();
+    expect(highlighted?.textContent).toContain("fn main() {");
   });
 });
 
