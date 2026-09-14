@@ -2,18 +2,22 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
 import {
+  fetchBrowserSettings,
   fetchDebugSettings,
   fetchMemorySettings,
   fetchRetrySettings,
   fetchThinkingLoopSettings,
+  updateBrowserSettings,
   updateDebugSettings,
   updateMemorySettings,
   updateRetrySettings,
   updateThinkingLoopSettings,
+  type BrowserQuickLink,
+  type BrowserSettings,
   type RetrySettings,
   type ThinkingLoopSettings,
 } from "../lib/api";
-import { Bot, Brain, Info, Minus, Monitor, Moon, Palette, Plus, PlugZap, RefreshCw, RotateCcw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Timer, Users } from "lucide-react";
+import { Bot, Brain, Globe, Info, Minus, Monitor, Moon, Palette, Plus, PlugZap, RefreshCw, RotateCcw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Timer, Trash2, Users } from "lucide-react";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
@@ -52,6 +56,10 @@ const TABS = [
   // the vision model's OWN home (provider + model + API key), split out of
   // Computer Use so it also serves the general analyze_image tool.
   { id: "vision", label: "Image Analysis", icon: ScanEye },
+  // ROUND-97 (R97-G, owner directive): the dedicated BROWSER section — the
+  // address-bar search engine, the homepage, the default zoom, and the
+  // editable quick links. Same id discipline (deep-link ?tab=browser).
+  { id: "browser", label: "Browser", icon: Globe },
   // ROUND-78 (R78-C, owner: "General Settings 重试配置"): the tab is
   // LABELED "General" now — the retry switches belong with the general
   // engine settings, not a scary "Advanced" bin. The id/deep-link STAYS
@@ -134,6 +142,7 @@ export function SettingsPage() {
         {tab === "mcp" && <McpTab />}
         {tab === "computeruse" && <ComputerUseTab />}
         {tab === "vision" && <ImageAnalysisTab />}
+        {tab === "browser" && <BrowserTab />}
         {tab === "advanced" && <AdvancedTab />}
         {tab === "about" && <AboutTab />}
       </div>
@@ -1163,5 +1172,274 @@ function MemoryCard() {
         </button>
       </div>
     </section>
+  );
+}
+
+
+/* ── ROUND-97 (R97-G): the BROWSER tab — the owner's dedicated browser section
+ * ("which I can use to edit some settings of the browsers, manage the
+ * browser"): the address-bar search engine, the homepage, the default zoom for
+ * new browser sessions, and the editable quick links (add / edit / remove /
+ * reorder up). All values wire straight into the panel's behavior (the engine
+ * is the address bar's query fallback; the homepage is the Home button's
+ * target; quick links render on the home page). The RetryConfigCard pattern:
+ * one query, one mutation, honest error + loading states. */
+
+const SEARCH_ENGINE_OPTIONS: ReadonlyArray<{ id: BrowserSettings["searchEngine"]; label: string; example: string }> = [
+  { id: "duckduckgo", label: "DuckDuckGo", example: "duckduckgo.com" },
+  { id: "google", label: "Google", example: "google.com" },
+  { id: "bing", label: "Bing", example: "bing.com" },
+  { id: "brave", label: "Brave", example: "search.brave.com" },
+];
+
+function BrowserTab() {
+  const styles = useThemeStyles();
+  const queryClient = useQueryClient();
+  const settingsQuery = useQuery({
+    queryKey: ["browser-settings"],
+    queryFn: fetchBrowserSettings,
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const update = useMutation({
+    mutationFn: (patch: Partial<BrowserSettings>) => updateBrowserSettings(patch),
+    onSuccess: () => {
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["browser-settings"] });
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  const current = settingsQuery.data;
+  if (settingsQuery.isLoading || current === undefined) {
+    return (
+      <div className="mx-auto flex max-w-2xl flex-col gap-4">
+        <section
+          data-testid="browser-settings-card"
+          className="rounded-lg p-4"
+          style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+        >
+          <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
+            loading browser settings…
+          </span>
+        </section>
+      </div>
+    );
+  }
+
+  const busy = update.isPending;
+  const inputStyle = {
+    background: styles.subtle,
+    border: bdr("1.5px", styles.border),
+    color: styles.text,
+  } as const;
+
+  const setQuickLinks = (links: BrowserQuickLink[]): void => {
+    update.mutate({ quickLinks: links });
+  };
+
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col gap-4">
+      <div className="pb-1">
+        <h2 className="text-[16px] font-black" style={{ color: styles.text }}>
+          Browser
+        </h2>
+        <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
+          The embedded browser's address bar, home page, default zoom, and quick links.
+        </p>
+      </div>
+
+      <section
+        data-testid="browser-settings-card"
+        className="rounded-lg p-4"
+        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+        aria-label="Browser settings"
+      >
+        {/* The search engine */}
+        <div className="mb-3 flex items-center gap-2">
+          <Globe size={13} style={{ color: styles.accent, opacity: 0.7 }} />
+          <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
+            Address bar
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="min-w-[200px] flex-1">
+            <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+              Search engine
+            </div>
+            <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+              Used when the address bar text is a query, not a URL.
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5 justify-end" data-testid="browser-engine-group">
+            {SEARCH_ENGINE_OPTIONS.map((opt) => {
+              const active = current.searchEngine === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  disabled={busy}
+                  data-testid={`browser-engine-${opt.id}`}
+                  aria-pressed={active}
+                  onClick={() => update.mutate({ searchEngine: opt.id })}
+                  className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-colors cursor-pointer disabled:opacity-50"
+                  style={{
+                    ...(active
+                      ? { background: withAlpha(styles.accent, 0.12), borderColor: styles.accent, color: styles.accent }
+                      : { borderColor: styles.border, color: styles.textSecondary }),
+                  }}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* The homepage */}
+        <div className="mt-4 pt-3" style={{ borderTop: bdr("1.5px", styles.border) }}>
+          <div className="flex items-center gap-3">
+            <div className="min-w-[200px] flex-1">
+              <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+                Home page
+              </div>
+              <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+                Where the Home button goes. Use <span className="font-mono">acute://home</span> for the quick-links page, or any URL / local path.
+              </div>
+            </div>
+            <input
+              type="text"
+              disabled={busy}
+              data-testid="browser-homepage"
+              aria-label="Home page URL"
+              defaultValue={current.homepage}
+              onBlur={(e) => {
+                const value = e.target.value.trim();
+                if (value !== current.homepage) update.mutate({ homepage: value });
+              }}
+              className="h-7 w-[220px] rounded-lg px-2 font-mono text-[11.5px] outline-none transition-colors shrink-0 disabled:opacity-60"
+              style={inputStyle}
+            />
+          </div>
+        </div>
+
+        {/* The default zoom */}
+        <div className="mt-4 pt-3" style={{ borderTop: bdr("1.5px", styles.border) }}>
+          <div className="flex items-center gap-3">
+            <div className="min-w-[200px] flex-1">
+              <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+                Default zoom
+              </div>
+              <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+                New browser sessions start at this zoom (25%–300%).
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0" data-testid="browser-zoom-group">
+              <button
+                type="button"
+                aria-label="Decrease default zoom"
+                disabled={busy || current.defaultZoom <= 0.25}
+                onClick={() => update.mutate({ defaultZoom: Math.max(0.25, Math.round((current.defaultZoom - 0.25) * 100) / 100) })}
+                className="h-7 w-7 grid place-items-center rounded-lg border transition-colors disabled:opacity-40 cursor-pointer"
+                style={inputStyle}
+              >
+                <Minus size={12} />
+              </button>
+              <span
+                data-testid="browser-zoom-value"
+                className="w-14 text-center text-[13px] font-mono font-bold"
+                style={{ color: styles.text }}
+              >
+                {Math.round(current.defaultZoom * 100)}%
+              </span>
+              <button
+                type="button"
+                aria-label="Increase default zoom"
+                disabled={busy || current.defaultZoom >= 3}
+                onClick={() => update.mutate({ defaultZoom: Math.min(3, Math.round((current.defaultZoom + 0.25) * 100) / 100) })}
+                className="h-7 w-7 grid place-items-center rounded-lg border transition-colors disabled:opacity-40 cursor-pointer"
+                style={inputStyle}
+              >
+                <Plus size={12} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* The quick links */}
+        <div className="mt-4 pt-3" style={{ borderTop: bdr("1.5px", styles.border) }}>
+          <div className="mb-2 flex items-center justify-between">
+            <div>
+              <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+                Quick links
+              </div>
+              <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+                The shortcuts on the home page ({current.quickLinks.length}/12).
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={busy || current.quickLinks.length >= 12}
+              data-testid="browser-quicklink-add"
+              onClick={() => setQuickLinks([...current.quickLinks, { label: "New link", url: "https://" }])}
+              className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+              style={{ borderColor: styles.border, color: styles.textSecondary }}
+            >
+              <Plus size={11} />
+              Add link
+            </button>
+          </div>
+          <div className="flex flex-col gap-1.5" data-testid="browser-quicklink-rows">
+            {current.quickLinks.map((link, i) => (
+              <div key={i} className="flex items-center gap-1.5" data-testid={`browser-quicklink-row-${i}`}>
+                <input
+                  type="text"
+                  disabled={busy}
+                  aria-label={`Quick link ${i + 1} label`}
+                  defaultValue={link.label}
+                  onBlur={(e) => {
+                    const next = [...current.quickLinks];
+                    next[i] = { ...next[i]!, label: e.target.value.trim() || link.label };
+                    if (next[i]!.label !== link.label) setQuickLinks(next);
+                  }}
+                  className="h-7 flex-1 min-w-0 rounded-lg px-2 text-[11.5px] outline-none transition-colors disabled:opacity-60"
+                  style={inputStyle}
+                />
+                <input
+                  type="text"
+                  disabled={busy}
+                  aria-label={`Quick link ${i + 1} URL`}
+                  defaultValue={link.url}
+                  onBlur={(e) => {
+                    const next = [...current.quickLinks];
+                    next[i] = { ...next[i]!, url: e.target.value.trim() || link.url };
+                    if (next[i]!.url !== link.url) setQuickLinks(next);
+                  }}
+                  className="h-7 flex-[2] min-w-0 rounded-lg px-2 font-mono text-[11px] outline-none transition-colors disabled:opacity-60"
+                  style={inputStyle}
+                />
+                <button
+                  type="button"
+                  disabled={busy || current.quickLinks.length <= 1}
+                  aria-label={`Remove quick link ${i + 1}`}
+                  data-testid={`browser-quicklink-remove-${i}`}
+                  onClick={() => setQuickLinks(current.quickLinks.filter((_, j) => j !== i))}
+                  className="h-7 w-7 grid place-items-center rounded-lg border shrink-0 transition-colors disabled:opacity-40 cursor-pointer"
+                  style={{ ...inputStyle, color: "#e5484d" }}
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {error ? (
+          <div className="mt-2 text-[11px]" style={{ color: "#e5484d" }} role="alert">
+            {error}
+          </div>
+        ) : null}
+      </section>
+    </div>
   );
 }

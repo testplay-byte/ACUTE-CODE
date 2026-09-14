@@ -2714,6 +2714,46 @@ export async function updateThinkingLoopSettings(
   });
 }
 
+/** ROUND-97 (R97-G, owner: "add a dedicated section in the settings for the
+ * browser… which I can use to edit some settings of the browsers, manage the
+ * browser"): the browser settings domain — the search engine (the address
+ * bar's query fallback), the homepage ("acute://home" = the panel's
+ * quick-links page), the default zoom for new browser sessions, and the
+ * editable quick links. */
+export interface BrowserQuickLink {
+  label: string;
+  url: string;
+}
+
+export interface BrowserSettings {
+  searchEngine: "duckduckgo" | "google" | "bing" | "brave";
+  homepage: string;
+  defaultZoom: number;
+  quickLinks: BrowserQuickLink[];
+}
+
+/** R97-G: the engine → search-URL template (the agent-core mirror — the
+ * panel's normalizeUrl builds the query fallback from the same table). */
+export const SEARCH_ENGINE_TEMPLATES: Record<BrowserSettings["searchEngine"], string> = {
+  duckduckgo: "https://duckduckgo.com/?q=",
+  google: "https://www.google.com/search?q=",
+  bing: "https://www.bing.com/search?q=",
+  brave: "https://search.brave.com/search?q=",
+};
+
+export async function fetchBrowserSettings(): Promise<BrowserSettings> {
+  return request<BrowserSettings>("/settings/browser");
+}
+
+export async function updateBrowserSettings(
+  patch: Partial<BrowserSettings>,
+): Promise<BrowserSettings> {
+  return request<BrowserSettings>("/settings/browser", {
+    method: "PUT",
+    json: patch,
+  });
+}
+
 /** Key-pool slot info (masked — values never leave the sidecar). */
 export interface KeyPoolSlot {
   slot: number;

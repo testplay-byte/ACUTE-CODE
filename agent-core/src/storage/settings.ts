@@ -563,3 +563,168 @@ export function setThinkingLoopSettings(
   }
   return getThinkingLoopSettings(db);
 }
+
+// ── ROUND-97 (R97-G): the browser settings domain ────────────────────────────
+//
+// The owner: "I would also like you to add a dedicated section in the settings
+// for the browser, like a dedicated browser section in the settings, which I
+// can use to edit some settings of the browsers, manage the browser, and
+// handle the browser in a bit more proper and better-managed way."
+//
+//   browser.searchEngine   — the address bar's QUERY fallback (default
+//                            duckduckgo — the pre-R97 hardcoded behavior).
+//   browser.homepage       — the Home button's target (default
+//                            "acute://home" = the panel's quick-links page).
+//   browser.defaultZoom    — new browser sessions start at this zoom
+//                            (0.25–3, default 1).
+//   browser.quickLinks     — the quick-links row on the home page (JSON
+//                            array of {label, url}; default = the R87 trio).
+
+export interface BrowserQuickLink {
+  label: string;
+  url: string;
+}
+
+export interface BrowserSettings {
+  searchEngine: "duckduckgo" | "google" | "bing" | "brave";
+  homepage: string;
+  defaultZoom: number;
+  quickLinks: BrowserQuickLink[];
+}
+
+export const BROWSER_SETTINGS_DEFAULTS: BrowserSettings = {
+  searchEngine: "duckduckgo",
+  homepage: "acute://home",
+  defaultZoom: 1,
+  quickLinks: [
+    { label: "GitHub", url: "https://github.com" },
+    { label: "MDN", url: "https://developer.mozilla.org" },
+    { label: "This app (dev)", url: "http://localhost:5173" },
+  ],
+};
+
+const BROWSER_SEARCH_ENGINE_KEY = "browser.searchEngine";
+const BROWSER_HOMEPAGE_KEY = "browser.homepage";
+const BROWSER_DEFAULT_ZOOM_KEY = "browser.defaultZoom";
+const BROWSER_QUICK_LINKS_KEY = "browser.quickLinks";
+
+const SEARCH_ENGINES: ReadonlySet<string> = new Set(["duckduckgo", "google", "bing", "brave"]);
+
+/** The engine → search-URL template (the frontend mirror lives in
+ * api.ts — the panel's normalizeUrl builds from the same table). */
+export const SEARCH_ENGINE_TEMPLATES: Record<BrowserSettings["searchEngine"], string> = {
+  duckduckgo: "https://duckduckgo.com/?q=",
+  google: "https://www.google.com/search?q=",
+  bing: "https://www.bing.com/search?q=",
+  brave: "https://search.brave.com/search?q=",
+};
+
+/** Reads the quickLinks JSON row defensively: absent/corrupt/out-of-shape
+ * entries fall back to the defaults (the readWaitMinutes pattern). */
+function readQuickLinks(db: SqliteDatabase): BrowserQuickLink[] {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(BROWSER_QUICK_LINKS_KEY) as
+    | { value: string }
+    | undefined;
+  if (row === undefined) return [...BROWSER_SETTINGS_DEFAULTS.quickLinks];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.value);
+  } catch {
+    return [...BROWSER_SETTINGS_DEFAULTS.quickLinks];
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > 12) {
+    return [...BROWSER_SETTINGS_DEFAULTS.quickLinks];
+  }
+  const out: BrowserQuickLink[] = [];
+  for (const entry of parsed) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const e = entry as { label?: unknown; url?: unknown };
+    if (typeof e.label !== "string" || typeof e.url !== "string") continue;
+    const label = e.label.trim().slice(0, 40);
+    const url = e.url.trim().slice(0, 500);
+    if (label === "" || url === "") continue;
+    out.push({ label, url });
+  }
+  return out.length > 0 ? out : [...BROWSER_SETTINGS_DEFAULTS.quickLinks];
+}
+
+/** The zoom is FRACTIONAL (0.25 steps) — readNumber's integer gate would
+ * round every 1.25/1.5 back to the default. This local read keeps two
+ * decimals and clamps into the same bounds the write validates. */
+function readDefaultZoom(db: SqliteDatabase): number {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(BROWSER_DEFAULT_ZOOM_KEY) as
+    | { value: string }
+    | undefined;
+  if (row === undefined) return BROWSER_SETTINGS_DEFAULTS.defaultZoom;
+  const parsed = Number(row.value);
+  if (!Number.isFinite(parsed)) return BROWSER_SETTINGS_DEFAULTS.defaultZoom;
+  return Math.min(3, Math.max(0.25, Math.round(parsed * 100) / 100));
+}
+
+export function getBrowserSettings(db: SqliteDatabase): BrowserSettings {
+  const engineRow = db.prepare("SELECT value FROM settings WHERE key = ?").get(BROWSER_SEARCH_ENGINE_KEY) as
+    | { value: string }
+    | undefined;
+  const searchEngine = SEARCH_ENGINES.has(engineRow?.value ?? "")
+    ? (engineRow!.value as BrowserSettings["searchEngine"])
+    : BROWSER_SETTINGS_DEFAULTS.searchEngine;
+  const homepageRow = db.prepare("SELECT value FROM settings WHERE key = ?").get(BROWSER_HOMEPAGE_KEY) as
+    | { value: string }
+    | undefined;
+  const homepage = typeof homepageRow?.value === "string" ? homepageRow.value.slice(0, 500) : BROWSER_SETTINGS_DEFAULTS.homepage;
+  return {
+    searchEngine,
+    homepage: homepage === "" ? BROWSER_SETTINGS_DEFAULTS.homepage : homepage,
+    defaultZoom: readDefaultZoom(db),
+    quickLinks: readQuickLinks(db),
+  };
+}
+
+/** Partial patch. Validation: the engine must be one of the four; the zoom an
+ * integer-ish 0.25–3 (two decimals); the quickLinks a 1–12 array of non-blank
+ * {label, url}. Throws map to the route's 400s. */
+export function setBrowserSettings(
+  db: SqliteDatabase,
+  patch: Partial<BrowserSettings>,
+): BrowserSettings {
+  const upsert = db.prepare(
+    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  );
+  if (patch.searchEngine !== undefined) {
+    if (!SEARCH_ENGINES.has(patch.searchEngine)) {
+      throw new Error("searchEngine must be one of duckduckgo, google, bing, brave");
+    }
+    upsert.run(BROWSER_SEARCH_ENGINE_KEY, patch.searchEngine);
+  }
+  if (patch.homepage !== undefined) {
+    if (typeof patch.homepage !== "string" || patch.homepage.length > 500) {
+      throw new Error("homepage must be a string of at most 500 characters");
+    }
+    upsert.run(BROWSER_HOMEPAGE_KEY, patch.homepage.trim());
+  }
+  if (patch.defaultZoom !== undefined) {
+    if (typeof patch.defaultZoom !== "number" || !Number.isFinite(patch.defaultZoom) || patch.defaultZoom < 0.25 || patch.defaultZoom > 3) {
+      throw new Error("defaultZoom must be a number between 0.25 and 3");
+    }
+    upsert.run(BROWSER_DEFAULT_ZOOM_KEY, String(Math.round(patch.defaultZoom * 100) / 100));
+  }
+  if (patch.quickLinks !== undefined) {
+    if (!Array.isArray(patch.quickLinks) || patch.quickLinks.length === 0 || patch.quickLinks.length > 12) {
+      throw new Error("quickLinks must be an array of 1 to 12 links");
+    }
+    for (const link of patch.quickLinks) {
+      if (
+        typeof link !== "object" ||
+        link === null ||
+        typeof (link as { label?: unknown }).label !== "string" ||
+        (link as { label: string }).label.trim() === "" ||
+        typeof (link as { url?: unknown }).url !== "string" ||
+        (link as { url: string }).url.trim() === ""
+      ) {
+        throw new Error("quickLinks entries must be non-blank {label, url} objects");
+      }
+    }
+    upsert.run(BROWSER_QUICK_LINKS_KEY, JSON.stringify(patch.quickLinks));
+  }
+  return getBrowserSettings(db);
+}

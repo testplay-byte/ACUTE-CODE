@@ -6,15 +6,16 @@ import {
   Bot,
   CircleAlert,
   FolderOpen,
+  Globe,
   Info,
   LayoutDashboard,
   LoaderCircle,
   MessageSquare,
   Monitor,
   Palette,
-  Pencil,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   PlugZap,
   Plus,
   ScanEye,
@@ -256,6 +257,9 @@ const SETTINGS_SECTIONS = [
   // SettingsPage TABS so the ?tab=vision deep link lines up (the R44
   // unreachable-tab lesson applied at birth).
   { id: "vision", label: "Image Analysis", icon: ScanEye },
+  // ROUND-97 (R97-G, owner directive): the dedicated BROWSER section (same id
+  // as SettingsPage TABS so the ?tab=browser deep link lines up).
+  { id: "browser", label: "Browser", icon: Globe },
   { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
   // ROUND-87 (R87, owner directive): the About section — version, update
   // check, and the application-wide reset. Same id as SettingsPage TABS

@@ -325,6 +325,11 @@ interface BrowserTabStoreState {
   /** Surface a panel-level error (retry card) without a failed request. */
   setError: (tabId: string, error: string | null) => void;
   clearError: (tabId: string) => void;
+  /** R97-G: HOME navigation (Settings → Browser's homepage, "acute://home"):
+   * reset the tab's UI slice to the fresh home shape — the quick-links view.
+   * The server-side session stays (history is preserved for the ticket); only
+   * the panel's page state resets. */
+  goHome: (tabId: string) => void;
   /** Test-only: drop all tab state. */
   resetAll: () => void;
 }
@@ -607,5 +612,26 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
   setLoading: (tabId, loading) => set((s) => patchTabState(s, tabId, { loading })),
   setError: (tabId, error) => set((s) => patchTabState(s, tabId, { error })),
   clearError: (tabId) => set((s) => patchTabState(s, tabId, { error: null })),
+  // R97-G: HOME — the fresh home shape (idle, no URL, not loading, no error).
+  goHome: (tabId) =>
+    set((s) => {
+      const cur = s.tabs[tabId];
+      if (cur === undefined) return { tabs: s.tabs };
+      return {
+        tabs: {
+          ...s.tabs,
+          [tabId]: {
+            ...cur,
+            status: "idle",
+            currentUrl: null,
+            currentTitle: null,
+            canBack: false,
+            canForward: false,
+            loading: false,
+            error: null,
+          },
+        },
+      };
+    }),
   resetAll: () => set({ tabs: {} }),
 }));

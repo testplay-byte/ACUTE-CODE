@@ -22,11 +22,13 @@
 import type { FastifyInstance } from "fastify";
 import type { RouteContext } from "./context.js";
 import {
+  getBrowserSettings,
   getDebugSettings,
   getMemorySettings,
   getOrchestrationSettings,
   getRetrySettings,
   getThinkingLoopSettings,
+  setBrowserSettings,
   setDebugSettings,
   setMemorySettings,
   setOrchestrationSettings,
@@ -321,6 +323,45 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
         ...(typeof raw.stallSeconds === "number" ? { stallSeconds: raw.stallSeconds } : {}),
         ...(typeof raw.reasoningBytesKB === "number" ? { reasoningBytesKB: raw.reasoningBytesKB } : {}),
+      });
+    } catch (error) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
+          field: "body",
+        }),
+      );
+    }
+  });
+
+  // ── ROUND-97 (R97-G, owner: "add a dedicated section in the settings for
+  // the browser… which I can use to edit some settings of the browsers,
+  // manage the browser"): the BROWSER settings domain — the search engine
+  // (the address bar's query fallback), the homepage, the default zoom, and
+  // the editable quick links. GET returns the full BrowserSettings; PUT
+  // accepts a partial patch (the storage throw is the 400 backstop).
+
+  scope.get("/settings/browser", async () => {
+    return getBrowserSettings(db);
+  });
+
+  scope.put("/settings/browser", async (request, reply) => {
+    const body: unknown = request.body;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+    }
+    try {
+      const raw = body as Record<string, unknown>;
+      return setBrowserSettings(db, {
+        ...(typeof raw.searchEngine === "string"
+          ? { searchEngine: raw.searchEngine as "duckduckgo" | "google" | "bing" | "brave" }
+          : {}),
+        ...(typeof raw.homepage === "string" ? { homepage: raw.homepage } : {}),
+        ...(typeof raw.defaultZoom === "number" ? { defaultZoom: raw.defaultZoom } : {}),
+        ...(Array.isArray(raw.quickLinks)
+          ? { quickLinks: raw.quickLinks as Array<{ label: string; url: string }> }
+          : {}),
       });
     } catch (error) {
       return reply.code(400).send(

@@ -304,7 +304,9 @@ describe("BrowserPanel (R43-10 embedded browser)", () => {
     await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
     // R67/E4: the mint carries the projectId — the sidecar binds the
     // session's cookie profile to the project (per-project logins).
-    expect(calls[0]?.body).toEqual({ sessionId: "tab-test-1", projectId: "prj_test" });
+    // R97-G: the panel ALSO fetches the browser settings on mount — the
+    // mint is the first /browser/session POST, not necessarily calls[0].
+    expect(postCalls("/api/v1/browser/session")[0]?.body).toEqual({ sessionId: "tab-test-1", projectId: "prj_test" });
 
     // Empty state: quick links + hint copy, no iframe yet.
     expect(screen.getByTestId("browser-empty")).toBeTruthy();

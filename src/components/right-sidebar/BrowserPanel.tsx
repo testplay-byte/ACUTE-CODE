@@ -5,6 +5,7 @@ import {
   ArrowRight,
   ExternalLink,
   Globe,
+  Home,
   LoaderCircle,
   PanelTopOpen,
   RotateCw,
@@ -14,6 +15,10 @@ import {
 } from "lucide-react";
 import { withAlpha } from "../dashboard/helpers";
 import { useRightSidebarStore, type RightSidebarTab } from "../../lib/right-sidebar-store";
+// R97-G: the browser settings (the engine + the quick links + the homepage) —
+// the panel READS them; Settings → Browser owns the editing.
+import { useQuery } from "@tanstack/react-query";
+import { SEARCH_ENGINE_TEMPLATES, fetchBrowserSettings, type BrowserSettings } from "../../lib/api";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import {
   BROWSER_VIEWPORT_PRESETS,
@@ -227,7 +232,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   });
 }
 
-function normalizeUrl(raw: string): string {
+function normalizeUrl(raw: string, activeSearchEngine: "duckduckgo" | "google" | "bing" | "brave" = "duckduckgo"): string {
   const trimmed = raw.trim();
   if (trimmed === "") return "";
   // ROUND-95 (R95-C): a LOCAL PATH (Windows drive, POSIX absolute, UNC) or a
@@ -240,8 +245,10 @@ function normalizeUrl(raw: string): string {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
   // Looks like a domain (has a dot, no spaces)?
   if (/^[\w-]+(\.[\w-]+)+([/?#].*)?$/.test(trimmed)) return `https://${trimmed}`;
-  // Otherwise treat as a search query.
-  return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`;
+  // Otherwise treat as a search query — R97-G: the ENGINE from Settings →
+  // Browser (the pre-R97 hardcoded DuckDuckGo stays the default).
+  const engine = activeSearchEngine ?? "duckduckgo";
+  return `${SEARCH_ENGINE_TEMPLATES[engine]}${encodeURIComponent(trimmed)}`;
 }
 
 // ── ROUND-50 (R50-a): native-mode geometry ─────────────────────────────────
@@ -458,6 +465,15 @@ export function BrowserPanel({
   hidden?: boolean;
 }) {
   const styles = useThemeStyles();
+  // R97-G: the browser settings ride the panel (the address bar's query
+  // engine, the quick links, the homepage). Settings → Browser edits them.
+  const browserSettingsQuery = useQuery<BrowserSettings>({
+    queryKey: ["browser-settings"],
+    queryFn: fetchBrowserSettings,
+    staleTime: 30_000,
+    retry: false,
+  });
+  const browserSettings = browserSettingsQuery.data ?? null;
   const tabId = tab.id;
   const patchTab = useRightSidebarStore((s) => s.patchTab);
   const setBrowserUrl = useRightSidebarStore((s) => s.setBrowserUrl);
@@ -475,6 +491,29 @@ export function BrowserPanel({
   const handleOpenMessage = useBrowserTabStore((s) => s.handleOpenMessage);
   const setLoading = useBrowserTabStore((s) => s.setLoading);
   const clearError = useBrowserTabStore((s) => s.clearError);
+
+  // R97-G: the DEFAULT ZOOM applies to PRISTINE sessions exactly once — a
+  // tab whose zoom is still the untouched default (1) adopts the setting's
+  // zoom when it first arrives; a tab the user has zoomed (or a session the
+  // server already remembers at another zoom) is never touched. The ref
+  // guards per-tab, so the setting never re-applies mid-session.
+  const appliedDefaultZoomRef = useRef(false);
+  useEffect(() => {
+    if (appliedDefaultZoomRef.current) return;
+    if (browserSettings === null) return;
+    if (browserSettings.defaultZoom === 1) {
+      appliedDefaultZoomRef.current = true; // nothing to apply — the default IS 1
+      return;
+    }
+    const t = useBrowserTabStore.getState().tabs[tabId];
+    if (t === undefined) return;
+    if (t.viewport.zoom !== 1) {
+      appliedDefaultZoomRef.current = true; // already user- or server-shaped
+      return;
+    }
+    appliedDefaultZoomRef.current = true;
+    void setViewport(tabId, { zoom: browserSettings.defaultZoom });
+  }, [browserSettings, tabId, setViewport]);
 
   // ── ROUND-50 (R50-a): native-mode state ─────────────────────────────────
   // Checked per render (NOT module level) so tests can toggle the mocked
@@ -1244,7 +1283,7 @@ export function BrowserPanel({
   // ticket exists.
   useEffect(() => {
     if (state?.status === "ready" && state.ticket !== null && state.currentUrl === null && tab.browserUrl != null) {
-      navigateUrl(normalizeUrl(tab.browserUrl));
+      navigateUrl(normalizeUrl(tab.browserUrl, browserSettings?.searchEngine));
     }
     // Deps note: navigateUrl is intentionally omitted — it is a stable
     // useCallback over [tabId, nativeMode, store actions]; the guarded
@@ -1461,7 +1500,7 @@ export function BrowserPanel({
       useBrowserTabStore.getState().setError(tabId, `Cannot open this address: ${local.error}`);
       return;
     }
-    const url = normalizeUrl(draft);
+    const url = normalizeUrl(draft, browserSettings?.searchEngine);
     if (url === "") return;
     setDraft(url);
     navigateUrl(url);
@@ -1479,8 +1518,23 @@ export function BrowserPanel({
     navigateUrl(url);
   };
 
+  /** R97-G: the HOME navigation — the Home button's target from Settings →
+   * Browser. "acute://home" (the default) resets the tab to the home view
+   * (no page loaded — the quick-links screen); any URL or local path goes
+   * through the normal navigation chain. */
+  const onHome = () => {
+    const target = browserSettings?.homepage ?? "acute://home";
+    if (target === "acute://home") {
+      // Reset the tab to the home view (the quick-links screen).
+      useBrowserTabStore.getState().goHome(tabId);
+      setDraft("");
+      return;
+    }
+    onQuickLink(normalizeUrl(target, browserSettings?.searchEngine));
+  };
+
   const onOpenExternally = () => {
-    const url = currentUrl ?? normalizeUrl(draft);
+    const url = currentUrl ?? normalizeUrl(draft, browserSettings?.searchEngine);
     if (url === "") return;
     // R95-C: a local file belongs to the app's OWN browser — the OS handoff
     // is http/https-only by design (the Rust gate enforces the same).
@@ -1613,7 +1667,9 @@ export function BrowserPanel({
           )}
         </div>
         <div className="mt-4 flex items-center justify-center gap-2">
-          {QUICK_LINKS.map((link) => (
+          {/* R97-G: the quick links come from Settings → Browser (the owner's
+              editable list) — the hardcoded trio is only the DEFAULT. */}
+          {(browserSettings?.quickLinks ?? QUICK_LINKS).map((link) => (
             <button
               key={link.url}
               onClick={() => onQuickLink(link.url)}
@@ -1676,6 +1732,20 @@ export function BrowserPanel({
         >
           <ArrowRight size={13} />
         </button>
+        {/* R97-G: the HOME button — Settings → Browser's homepage target
+            ("acute://home" = this quick-links view; any URL goes there). */}
+        <button
+          onClick={onHome}
+          data-testid="browser-home"
+          aria-label="Home"
+          title="Home"
+          className="w-6 h-6 grid place-items-center rounded-md transition-colors"
+          style={{ color: styles.textSecondary }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          <Home size={13} />
+        </button>
         <button
           onClick={() => {
             if (state?.currentUrl != null) goDirection("reload");
@@ -1734,7 +1804,7 @@ export function BrowserPanel({
                 const text = e.clipboardData.getData("text").trim();
                 if (/^[\w-]+(\.[\w-]+)+([/?#].*)?$/.test(text)) {
                   e.preventDefault();
-                  onQuickLink(normalizeUrl(text));
+                  onQuickLink(normalizeUrl(text, browserSettings?.searchEngine));
                   return;
                 }
                 // R95-C: pasting a LOCAL PATH (a file:// URL or a Windows/
