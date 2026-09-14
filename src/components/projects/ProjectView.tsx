@@ -3,6 +3,7 @@ import { MessagesSquare } from "lucide-react";
 import { useProjects } from "../../hooks/use-projects";
 import { useSessions } from "../../hooks/use-sessions";
 import { formatWhen } from "../../lib/format";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { bdr, withAlpha } from "../dashboard/helpers";
 
@@ -30,6 +31,43 @@ export function ProjectView() {
     return (
       <div className="grid h-full place-items-center p-6">
         <div className="h-11 w-11 animate-pulse rounded-xl" style={{ background: styles.subtle }} />
+      </div>
+    );
+  }
+
+  // R97-I part 2 (owner: a UI "aware of its states"): a fetch ERROR is not
+  // "not found" — pre-R97 a failed projects query fell through to the
+  // misleading "Project not found" card, so a down sidecar read as a deleted
+  // project. This branch renders the honest, retryable error card instead
+  // (the ChatLoadErrorCard shape: role=alert, the danger token, one action).
+  if (projectsQuery.isError) {
+    return (
+      <div className="grid h-full place-items-center p-6">
+        <div
+          role="alert"
+          data-project-load-error
+          className="max-w-md rounded-[14px] border-[1.5px] px-4 py-3.5 text-center"
+          style={{
+            borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
+            background: withAlpha(SEMANTIC_COLORS.danger, 0.06),
+          }}
+        >
+          <p className="text-[13px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+            Could not load projects
+          </p>
+          <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
+            The project list failed to load — the sidecar may be down or the connection dropped.
+          </p>
+          <button
+            type="button"
+            onClick={() => void projectsQuery.refetch()}
+            aria-label="Retry loading projects"
+            className="mt-3 h-8 px-3.5 rounded-lg text-[12px] font-semibold border transition-opacity hover:opacity-85"
+            style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
@@ -112,6 +150,22 @@ export function ProjectView() {
         </h2>
         {sessionsQuery.isPending ? (
           <div className="h-[52px] w-full animate-pulse rounded-lg" style={{ background: styles.subtle }} />
+        ) : sessionsQuery.isError ? (
+          /* R97-I part 2: a failed sessions fetch is an ERROR, not the false
+             "No sessions yet" — one honest line in the empty-state box's own
+             shape, danger-tinted (role=alert). */
+          <div
+            role="alert"
+            data-project-sessions-error
+            className="rounded-lg px-3 py-4 text-[12px] font-semibold"
+            style={{
+              border: bdr("1.5px", withAlpha(SEMANTIC_COLORS.danger, 0.35)),
+              color: SEMANTIC_COLORS.danger,
+              background: withAlpha(SEMANTIC_COLORS.danger, 0.05),
+            }}
+          >
+            Could not load sessions — check that the sidecar is running.
+          </div>
         ) : sessions.length === 0 ? (
           <div
             className="rounded-lg px-3 py-4 text-[12px]"

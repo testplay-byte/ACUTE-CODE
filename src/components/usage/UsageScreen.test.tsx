@@ -271,6 +271,25 @@ describe("UsageScreen (ROUND-52 R52-b)", () => {
     expect(await screen.findByText(/No usage yet — start a conversation/i)).toBeTruthy();
     expect(screen.queryByText("Tokens")).toBeNull(); // stat cards stay hidden
   });
+
+  // R97-I part 2 (owner: a UI "aware of its states"): the error banner is
+  // RETRYABLE — pre-R97 it pointed at a full app reload for what one refetch
+  // fixes.
+  it("a failed fetch renders the retryable error banner — Retry re-drives the query", async () => {
+    vi.mocked(fetchDetailedUsage).mockRejectedValueOnce(new Error("sidecar down"));
+    renderUsageScreen();
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText(/Could not load usage analytics/i)).toBeTruthy();
+    const retry = screen.getByRole("button", { name: "Retry loading usage analytics" });
+
+    // Retry re-drives the query: the next fetch resolves and the screen
+    // recovers to its data view (the banner is gone).
+    vi.mocked(fetchDetailedUsage).mockResolvedValueOnce(seededDetailedUsage());
+    fireEvent.click(retry);
+    expect(await screen.findByText("Tokens")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });
 
 /* ── ROUND-64 (R64-e): the "API keys" section — per-key cards joining the

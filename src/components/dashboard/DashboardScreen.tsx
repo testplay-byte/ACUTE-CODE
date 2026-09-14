@@ -9,6 +9,7 @@ import { ease, fadeInUp, staggerContainer } from "../../lib/motion";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useGreeting, withAlpha } from "./helpers";
+import { SkeletonBlock } from "../shared/Skeletons";
 import { StatCard } from "./StatCard";
 import { TokenBarChart } from "./TokenBarChart";
 import { QuickActions } from "./QuickActions";
@@ -36,7 +37,19 @@ export function DashboardScreen() {
   const agentById = new Map((agentsQuery.data ?? []).map((a) => [a.id, a]));
   const totals = usage.data?.totals;
   const totalTokens = (totals?.inputTokens ?? 0) + (totals?.outputTokens ?? 0);
-  const loadError = sessionsQuery.isError || agentsQuery.isError;
+  // R97-I part 2 (owner: a UI "aware of its states"): the stat row stays a
+  // SKELETON until EVERY source has settled — pre-R97 it painted false zeros
+  // ("0" Projects / "0" Sessions) while the queries were still in flight.
+  // (usage rides isFetching: in demo mode the query is idle-but-pending,
+  // which is a settled state, not a loading one — same rule as the chart.)
+  const statsLoading =
+    projectsQuery.isPending ||
+    sessionsQuery.isPending ||
+    agentsQuery.isPending ||
+    (usage.isPending && usage.isFetching);
+  // R97-I part 2: a failed PROJECTS fetch now joins the banner — pre-R97 it
+  // was silently swallowed into the "0 Projects" stat card.
+  const loadError = sessionsQuery.isError || agentsQuery.isError || projectsQuery.isError;
 
   // Greeting split: "Good evening" → last word gets the accent highlight box
   const greetingWords = greeting.split(" ");
@@ -89,31 +102,52 @@ export function DashboardScreen() {
           </p>
         </motion.div>
 
-        {/* Stat cards — wizard recipe: card bg, softShadow, solid accent icon tiles */}
-        <motion.div
-          variants={staggerContainer}
-          initial="initial"
-          animate="animate"
-          className="mb-4 md:mb-6 grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4"
-        >
-          <StatCard value={String(projectCount)} label="Projects" icon={FolderOpen} styles={styles} />
-          <StatCard value={String(sessions.length)} label="Sessions" icon={MessageSquare} styles={styles} />
-          <StatCard
-            value={formatTokenCount(totalTokens)}
-            label="Tokens"
-            icon={Zap}
-            title={`${totals?.inputTokens ?? 0} in / ${totals?.outputTokens ?? 0} out · last 14 days`}
-            styles={styles}
-            highlight
-          />
-          <StatCard
-            value={String(totals?.requests ?? 0)}
-            label="Turns"
-            icon={Activity}
-            title="Turns over the last 14 days (one usage row per turn — the ROUND-83 honest relabel; provider calls live on the /usage screen)"
-            styles={styles}
-          />
-        </motion.div>
+        {/* Stat cards — wizard recipe: card bg, softShadow, solid accent icon tiles.
+            R97-I part 2: while any source is still loading the row is 4
+            StatCard-shaped skeleton blocks in the same grid (92px tall, 20px
+            radius, the hairline border — the UsageScreen loading recipe),
+            announced once by the role=status wrapper. NEVER false zeros. */}
+        {statsLoading ? (
+          <div
+            role="status"
+            aria-label="Loading workspace stats"
+            data-stats-skeleton
+            className="mb-4 md:mb-6 grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4"
+          >
+            {[0, 1, 2, 3].map((i) => (
+              <SkeletonBlock
+                key={i}
+                className="h-[92px] w-full border-[1.5px]"
+                style={{ borderColor: styles.borderSubtle, borderRadius: "20px" }}
+              />
+            ))}
+          </div>
+        ) : (
+          <motion.div
+            variants={staggerContainer}
+            initial="initial"
+            animate="animate"
+            className="mb-4 md:mb-6 grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4"
+          >
+            <StatCard value={String(projectCount)} label="Projects" icon={FolderOpen} styles={styles} />
+            <StatCard value={String(sessions.length)} label="Sessions" icon={MessageSquare} styles={styles} />
+            <StatCard
+              value={formatTokenCount(totalTokens)}
+              label="Tokens"
+              icon={Zap}
+              title={`${totals?.inputTokens ?? 0} in / ${totals?.outputTokens ?? 0} out · last 14 days`}
+              styles={styles}
+              highlight
+            />
+            <StatCard
+              value={String(totals?.requests ?? 0)}
+              label="Turns"
+              icon={Activity}
+              title="Turns over the last 14 days (one usage row per turn — the ROUND-83 honest relabel; provider calls live on the /usage screen)"
+              styles={styles}
+            />
+          </motion.div>
+        )}
 
         {/* Chart + Quick Actions — wizard card scale (24px radius, p-4/5) */}
         <div className="mb-4 md:mb-6 grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
@@ -130,14 +164,33 @@ export function DashboardScreen() {
         {loadError ? (
           <div
             role="alert"
-            className="mb-4 md:mb-6 rounded-[16px] border-[1.5px] px-4 py-3 text-[12px] font-medium"
+            className="mb-4 md:mb-6 rounded-[16px] border-[1.5px] px-4 py-3 text-[12px] font-medium flex flex-wrap items-center gap-x-3 gap-y-1"
             style={{
               borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3),
               background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
               color: SEMANTIC_COLORS.danger,
             }}
           >
-            Could not load live workspace data — check that the sidecar is running.
+            <span>
+              Could not load live workspace data — check that the sidecar is running.
+            </span>
+            {/* R97-I part 2: the banner is RETRYABLE — pre-R97 it named the
+                problem but offered no action. One click re-drives every
+                FAILED source (the errored ones only — settled sources keep
+                their data). */}
+            <button
+              type="button"
+              onClick={() => {
+                if (sessionsQuery.isError) void sessionsQuery.refetch();
+                if (agentsQuery.isError) void agentsQuery.refetch();
+                if (projectsQuery.isError) void projectsQuery.refetch();
+              }}
+              aria-label="Retry loading workspace data"
+              className="shrink-0 h-7 px-3 rounded-lg text-[11.5px] font-bold border transition-opacity hover:opacity-85"
+              style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+            >
+              Retry
+            </button>
           </div>
         ) : null}
 

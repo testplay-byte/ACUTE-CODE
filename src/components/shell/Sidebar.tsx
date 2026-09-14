@@ -40,6 +40,7 @@ import { useAgents } from "../../hooks/use-agents";
 import { useActiveStreams } from "../../lib/active-streams";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { withAlpha } from "../dashboard/helpers";
+import { SkeletonRows } from "../shared/Skeletons";
 import { NotificationBell } from "../notifications/NotificationBell";
 
 type TauriGlobal = {
@@ -690,42 +691,54 @@ function MinimizedRail({
           uses), then navigates — a rail tile is a shortcut INTO the project
           world, and the projects list lives in the full panel. */}
       <div className="flex flex-col items-center gap-1.5 py-0.5" data-testid="rail-projects">
-        {projects.slice(0, 10).map((project) => {
-          const active = activeProjectId === project.id;
-          const running = runningProjects.has(project.id);
-          return (
-            <button
-              key={project.id}
-              onClick={() => {
-                onExpand();
-                navigate(`/project/${project.id}/chat`);
-              }}
-              aria-label={`Open ${project.name}`}
-              title={project.name}
-              aria-current={active ? "page" : undefined}
-              className="relative w-10 h-10 shrink-0 grid place-items-center rounded-[12px] transition-all duration-200"
-              style={{
-                background: active ? withAlpha(project.color, 0.14) : "transparent",
-                border: active ? `1.5px solid ${withAlpha(project.color, 0.4)}` : "1.5px solid transparent",
-              }}
-              onMouseEnter={(e) => {
-                if (!active) e.currentTarget.style.background = styles.sidebarHover;
-              }}
-              onMouseLeave={(e) => {
-                if (!active) e.currentTarget.style.background = "transparent";
-              }}
-            >
-              <ProjectTile color={project.color} name={project.name} size={26} radius={8} fontSize={11} />
-              {running && (
-                <span
-                  aria-label="Running"
-                  className="absolute -top-0.5 -right-0.5 w-[10px] h-[10px] rounded-full border-2"
-                  style={{ background: styles.accent, borderColor: styles.sidebarBg }}
-                />
-              )}
-            </button>
-          );
-        })}
+        {projectsQuery.isPending ? (
+          /* R97-I part 2 (owner: a UI "aware of its states"): the projects
+             strip holds its SHAPE while the list is in flight — 4 skeleton
+             tiles in the real tile button's exact geometry (w-10 h-10, the
+             primitives' 12px radius), never a blank rail that reads as
+             "no projects". Decorative on purpose: the rail stays quiet; the
+             expanded sidebar owns the one role=status announcement. On
+             ERROR the rail renders nothing extra — the full sidebar owns the
+             retryable error surface. */
+          <SkeletonRows rows={4} rowClassName="w-10 h-10" gap={1.5} />
+        ) : (
+          projects.slice(0, 10).map((project) => {
+            const active = activeProjectId === project.id;
+            const running = runningProjects.has(project.id);
+            return (
+              <button
+                key={project.id}
+                onClick={() => {
+                  onExpand();
+                  navigate(`/project/${project.id}/chat`);
+                }}
+                aria-label={`Open ${project.name}`}
+                title={project.name}
+                aria-current={active ? "page" : undefined}
+                className="relative w-10 h-10 shrink-0 grid place-items-center rounded-[12px] transition-all duration-200"
+                style={{
+                  background: active ? withAlpha(project.color, 0.14) : "transparent",
+                  border: active ? `1.5px solid ${withAlpha(project.color, 0.4)}` : "1.5px solid transparent",
+                }}
+                onMouseEnter={(e) => {
+                  if (!active) e.currentTarget.style.background = styles.sidebarHover;
+                }}
+                onMouseLeave={(e) => {
+                  if (!active) e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <ProjectTile color={project.color} name={project.name} size={26} radius={8} fontSize={11} />
+                {running && (
+                  <span
+                    aria-label="Running"
+                    className="absolute -top-0.5 -right-0.5 w-[10px] h-[10px] rounded-full border-2"
+                    style={{ background: styles.accent, borderColor: styles.sidebarBg }}
+                  />
+                )}
+              </button>
+            );
+          })
+        )}
       </div>
 
       {/* Spacer pushes the footer icons to the bottom (the full sidebar's
@@ -937,6 +950,64 @@ function ProjectSection() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-2.5 pb-2 space-y-0.5" style={{ scrollbarWidth: "thin" }}>
+        {/* R97-I part 2 (owner: a UI "aware of its states") — LOADING: 4
+            skeleton rows in the real ProjectRow's exact geometry (h-11, the
+            primitives' 12px radius, the list's space-y-0.5 rhythm) hold the
+            section open while the query is in flight. Pre-R97 this area
+            flashed the FALSE "Add your first project" on every first paint. */}
+        {projectsQuery.isPending && (
+          <div role="status" aria-label="Loading projects" data-projects-skeleton>
+            <SkeletonRows rows={4} rowClassName="h-11" gap={0.5} />
+          </div>
+        )}
+
+        {/* R97-I part 2 — ERROR: an honest retryable row (role=alert, the
+            danger token, one action) instead of silently degrading to the
+            empty state. Retry re-drives BOTH sidebar queries — the sessions
+            note below rides this button (it carries no retry of its own). */}
+        {projectsQuery.isError && (
+          <div
+            role="alert"
+            data-projects-load-error
+            className="h-10 flex items-center justify-between gap-2 rounded-[12px] border-[1.5px] px-3"
+            style={{
+              borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
+              background: withAlpha(SEMANTIC_COLORS.danger, styles.isDark ? 0.08 : 0.05),
+            }}
+          >
+            <span className="text-[11.5px] font-bold truncate" style={{ color: SEMANTIC_COLORS.danger }}>
+              Projects failed to load
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                void projectsQuery.refetch();
+                void sessionsQuery.refetch();
+              }}
+              aria-label="Retry loading projects"
+              className="shrink-0 h-7 px-2.5 rounded-lg text-[11px] font-bold border transition-opacity hover:opacity-85"
+              style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* R97-I part 2 — the sessions join failed while projects still
+            render: one dimmed line under the list (role=alert so it is never
+            silent, but deliberately quiet — retry rides the projects error
+            row's button above). */}
+        {!projectsQuery.isPending && sessionsQuery.isError && (
+          <p
+            role="alert"
+            data-sessions-load-error
+            className="px-2 py-1.5 text-[10.5px]"
+            style={{ color: styles.textTertiary }}
+          >
+            Sessions failed to load — Retry above reloads them too.
+          </p>
+        )}
+
         {projects.map((project) => {
           const isExpanded = expandedProjects.includes(project.id);
           const isActive = activeProjectId === project.id;
@@ -989,7 +1060,11 @@ function ProjectSection() {
           );
         })}
 
-        {projects.length === 0 && (
+        {/* R97-I part 2 — the TRUE empty state: only when the list has
+            SETTLED (not pending, not failed) is "no projects" a fact.
+            Pre-R97 this button painted on every first paint + every fetch
+            failure. */}
+        {!projectsQuery.isPending && !projectsQuery.isError && projects.length === 0 && (
           <button
             onClick={() => setShowAddDialog(true)}
             className="h-10 w-full flex items-center justify-center gap-2 rounded-[14px] border-[1.5px] border-dashed text-[12px] font-bold transition-all hover:-translate-y-px"

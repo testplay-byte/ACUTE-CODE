@@ -176,15 +176,29 @@ export function UsageScreen() {
         ) : usage.isError ? (
           <div
             role="alert"
-            className="mb-4 md:mb-6 rounded-[16px] border-[1.5px] px-4 py-3 text-[12px] font-medium"
+            className="mb-4 md:mb-6 rounded-[16px] border-[1.5px] px-4 py-3 text-[12px] font-medium flex flex-wrap items-center gap-x-3 gap-y-1"
             style={{
               borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3),
               background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
               color: SEMANTIC_COLORS.danger,
             }}
           >
-            Could not load usage analytics — check that the sidecar is running,
-            then reload.
+            <span>
+              Could not load usage analytics — check that the sidecar is running,
+              then reload.
+            </span>
+            {/* R97-I part 2 (owner: a UI "aware of its states"): the banner
+                is RETRYABLE — pre-R97 it pointed at a full app reload for
+                what one refetch fixes. */}
+            <button
+              type="button"
+              onClick={() => void usage.refetch()}
+              aria-label="Retry loading usage analytics"
+              className="shrink-0 h-7 px-3 rounded-lg text-[11.5px] font-bold border transition-opacity hover:opacity-85"
+              style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+            >
+              Retry
+            </button>
           </div>
         ) : !hasData ? (
           <>

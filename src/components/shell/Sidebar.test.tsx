@@ -1,15 +1,35 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { Route, Routes } from "react-router";
 import { deriveSessionRowState, Sidebar } from "./Sidebar";
 import { ProjectView } from "../projects/ProjectView";
-import { getFixtureProjects } from "../../lib/project-fixtures";
+import { createFixtureProjects, getFixtureProjects } from "../../lib/project-fixtures";
 import { getFixtureSessions } from "../../lib/session-fixtures";
 import { useActiveStreams } from "../../lib/active-streams";
 import { useProjectChatStore } from "../../lib/project-chat-store";
-import type { Session } from "../../lib/api";
+import type { Project, ProjectsBackend, Session, SessionsBackend } from "../../lib/api";
 import { renderWithProviders, resetTestState } from "../../test-utils";
+
+/** R97-I part 2: per-test overrides for the sidebar's two list queries. A
+ * null holder DELEGATES to the real selector (demo fixtures), so every
+ * pre-existing test in this file keeps its exact behavior — the override is
+ * only installed to make a query hang/reject/recover on demand. */
+const projectsOverride = vi.hoisted((): { backend: ProjectsBackend | null } => ({
+  backend: null,
+}));
+const sessionsOverride = vi.hoisted((): { backend: SessionsBackend | null } => ({
+  backend: null,
+}));
+
+vi.mock("../../lib/api", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../lib/api")>();
+  return {
+    ...original,
+    getProjectsBackend: () => projectsOverride.backend ?? original.getProjectsBackend(),
+    getSessionsBackend: () => sessionsOverride.backend ?? original.getSessionsBackend(),
+  };
+});
 
 // Vitest globals are off, so RTL's auto-cleanup does not hook in — do it by hand.
 afterEach(cleanup);
@@ -18,6 +38,9 @@ beforeEach(() => {
   // demoData defaults true → the sidebar reads the fixture ProjectsBackend
   // (re-seeded here: ACUTE-CODE + marketing-site).
   resetTestState();
+  // R97-I part 2: start every test on the real fixture backends.
+  projectsOverride.backend = null;
+  sessionsOverride.backend = null;
 });
 
 describe("Sidebar projects section (fixture ProjectsBackend)", () => {
@@ -400,5 +423,146 @@ describe("Sidebar session rows (R43 depth pass: border + state-aware icons)", ()
     // runtime resets it on a user stop). The row returns to idle — the
     // sidebar never shows a phantom running indicator after a stop.
     expect(deriveSessionRowState(session("queued"), false)).toBe("idle");
+  });
+});
+
+/* ── R97-I part 2 (owner: a UI "aware of its states"): the sidebar + the
+ * project view's loading/error states. Loading holds a SKELETON (never a
+ * false "Add your first project" / "No sessions yet"); a failed fetch is an
+ * honest, retryable error surface (role=alert, the danger token, Retry). */
+describe("Sidebar + ProjectView state awareness (R97-I part 2)", () => {
+  /** The minimal shell the sidebar needs to render its projects section. */
+  function renderSidebar() {
+    return renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+        </Routes>
+      </>,
+    );
+  }
+
+  it("a pending projects query renders the SKELETON — never the false 'Add your first project'", async () => {
+    // list() never settles → the projects query stays pending forever.
+    projectsOverride.backend = {
+      ...createFixtureProjects([]),
+      list: () => new Promise<Project[]>(() => {}),
+    };
+    renderSidebar();
+
+    // 4 rows in the real ProjectRow's geometry hold the section open.
+    await waitFor(() => expect(document.querySelector("[data-projects-skeleton]")).toBeTruthy());
+    expect(screen.getByLabelText("Loading projects")).toBeTruthy();
+    expect(document.querySelectorAll("[data-projects-skeleton] .animate-pulse").length).toBe(4);
+    // The FALSE empty state must not paint while the list is still unknown.
+    expect(screen.queryByText("Add your first project")).toBeNull();
+  });
+
+  it("the empty state renders only once the list has SETTLED empty", async () => {
+    projectsOverride.backend = createFixtureProjects([]);
+    renderSidebar();
+
+    expect(await screen.findByText("Add your first project")).toBeTruthy();
+    expect(document.querySelector("[data-projects-skeleton]")).toBeNull();
+  });
+
+  it("a failed projects query renders the retryable ERROR ROW — retry recovers the list", async () => {
+    projectsOverride.backend = {
+      ...createFixtureProjects([]),
+      list: () => Promise.reject(new Error("sidecar down")),
+    };
+    renderSidebar();
+
+    await waitFor(() => expect(document.querySelector("[data-projects-load-error]")).toBeTruthy());
+    expect(screen.getByText("Projects failed to load")).toBeTruthy();
+    expect(screen.getByRole("alert", { hidden: true })).toBeTruthy();
+    // Not silently degraded to the empty state.
+    expect(screen.queryByText("Add your first project")).toBeNull();
+
+    // Retry re-drives the fetch: flip list() to a resolving backend and the
+    // real rows come back (the errored row is gone).
+    projectsOverride.backend = createFixtureProjects();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading projects", hidden: true }));
+    expect(await screen.findByText("ACUTE-CODE")).toBeTruthy();
+    expect(document.querySelector("[data-projects-load-error]")).toBeNull();
+  });
+
+  it("a failed SESSIONS query renders the dimmed note — the projects Retry re-drives it too", async () => {
+    // Both joins fail together (the sidecar is down); the projects error
+    // row's Retry is the ONE retry — it re-drives sessions as well.
+    const down = () => Promise.reject(new Error("sidecar down"));
+    projectsOverride.backend = { ...createFixtureProjects([]), list: down };
+    sessionsOverride.backend = { ...getFixtureSessions(), list: down };
+    renderSidebar();
+
+    await waitFor(() => expect(document.querySelector("[data-sessions-load-error]")).toBeTruthy());
+    expect(screen.getByText(/Sessions failed to load/i)).toBeTruthy();
+
+    // Recovery rides the SAME button: flip both backends, click Retry.
+    projectsOverride.backend = createFixtureProjects();
+    sessionsOverride.backend = getFixtureSessions();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading projects", hidden: true }));
+    await waitFor(() => expect(document.querySelector("[data-sessions-load-error]")).toBeNull());
+    expect(await screen.findByText("ACUTE-CODE")).toBeTruthy();
+  });
+
+  it("the minimized rail holds skeleton TILES while the projects load", async () => {
+    useProjectChatStore.setState({ appSidebarMinimized: true });
+    projectsOverride.backend = {
+      ...createFixtureProjects([]),
+      list: () => new Promise<Project[]>(() => {}),
+    };
+    renderSidebar();
+
+    const strip = await screen.findByTestId("rail-projects");
+    // 4 tiles in the real rail tile button's geometry (w-10 h-10), and no
+    // project tiles rendered beside them.
+    expect(strip.querySelectorAll(".animate-pulse").length).toBe(4);
+    expect(screen.queryByRole("button", { name: /^open /i, hidden: true })).toBeNull();
+  });
+
+  it("ProjectView shows the retryable ERROR CARD on a failed projects fetch — not 'Project not found'", async () => {
+    projectsOverride.backend = {
+      ...createFixtureProjects([]),
+      list: () => Promise.reject(new Error("sidecar down")),
+    };
+    renderWithProviders(
+      <Routes>
+        <Route path="/project/:id" element={<ProjectView />} />
+      </Routes>,
+      { route: "/project/prj_seed_acute" },
+    );
+
+    await waitFor(() => expect(document.querySelector("[data-project-load-error]")).toBeTruthy());
+    expect(screen.getByText("Could not load projects")).toBeTruthy();
+    // The pre-R97 lie: a fetch failure must NOT read as a missing project.
+    expect(screen.queryByText("Project not found")).toBeNull();
+
+    // Retry recovers: with the backend back, the project (a seeded id)
+    // honestly renders.
+    projectsOverride.backend = createFixtureProjects();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading projects" }));
+    expect(await screen.findByText("ACUTE-CODE")).toBeTruthy();
+    expect(document.querySelector("[data-project-load-error]")).toBeNull();
+  });
+
+  it("ProjectView shows a one-line error note instead of the false 'No sessions yet' on a failed sessions fetch", async () => {
+    projectsOverride.backend = createFixtureProjects();
+    sessionsOverride.backend = {
+      ...getFixtureSessions(),
+      list: () => Promise.reject(new Error("sidecar down")),
+    };
+    renderWithProviders(
+      <Routes>
+        <Route path="/project/:id" element={<ProjectView />} />
+      </Routes>,
+      { route: "/project/prj_seed_acute" },
+    );
+
+    expect(await screen.findByText(/Could not load sessions/i)).toBeTruthy();
+    expect(screen.queryByText("No sessions yet")).toBeNull();
+    // The project header itself rendered fine (only the sessions join failed).
+    expect(screen.getByText("ACUTE-CODE")).toBeTruthy();
   });
 });

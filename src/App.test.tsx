@@ -8,7 +8,7 @@ import { renderWithProviders, resetTestState } from "./test-utils";
 afterEach(cleanup);
 
 describe("App shell (owner round-8 structure)", () => {
-  it("renders the Dashboard shortcut, Navigation + Projects sections, Usage and Settings — and NO app name/logo/brand at the sidebar top", () => {
+  it("renders the Dashboard shortcut, Navigation + Projects sections, Usage and Settings — and NO app name/logo/brand at the sidebar top", async () => {
     resetTestState();
     renderWithProviders(<App />);
 
@@ -21,7 +21,11 @@ describe("App shell (owner round-8 structure)", () => {
     // Sidebar structure: NAVIGATION section header + Dashboard button + PROJECTS section + Usage + Settings.
     expect(screen.getByText("Navigation")).toBeTruthy();
     expect(screen.getByRole("button", { name: /^dashboard$/i })).toBeTruthy();
-    // "Projects" appears in the sidebar section header and the dashboard stat card.
+    // R97-I part 2 re-pin: the dashboard's stat cards render only after the
+    // workspace queries settle (the row is a skeleton while in flight — never
+    // false zeros), so await a label that only exists once the row is real
+    // before counting "Projects" (sidebar header + the stat card).
+    await screen.findByText("Tokens");
     expect(screen.getAllByText("Projects").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByRole("button", { name: /^usage$/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^settings$/i })).toBeTruthy();
