@@ -41,6 +41,7 @@ import {
   ContextDonut,
   buildUsageCardSections,
   contextDonutColor,
+  usageRingColorKey,
 } from "./ContextDonut";
 import { fetchSessionContext, type SessionContextReport } from "../../../lib/api";
 import { fmtTokens } from "../../../lib/format";
@@ -278,20 +279,41 @@ describe("ROUND-96 (R96-G) — the usage popover rides the overlay window (no br
     await waitFor(() => expect(overlayState.showCalls.length).toBeGreaterThan(0));
     const { anchor, payload } = overlayState.showCalls[0]!;
     // The overlay payload: the usage kind, the DOM popover's width, and the
-    // same numbers the DOM popover shows.
+    // same numbers the DOM popover shows. R97-C: the window rows now live in
+    // the DONUT header's line column; the sections are Breakdown / Cache /
+    // Session (the table).
     expect(payload.kind).toBe("usage");
     expect(payload.width).toBe(288);
-    const sections = payload.sections as Array<{
-      title: string;
-      lines: Array<{ label: string; value: string; note?: string }>;
-    }>;
-    const windowSection = sections.find((s) => s.title === "Window")!;
-    expect(windowSection.lines.map((l) => l.label)).toEqual(["Projected", "Estimated", "Measured", "Model"]);
-    expect(windowSection.lines[0]!.value).toBe("~20%"); // projected
-    expect(windowSection.lines[1]!.value).toBe(`${fmtTokens(40_000)} / ${fmtTokens(200_000)}`); // estimated
-    expect(windowSection.lines[2]!.value).toBe(fmtTokens(45_200)); // MEASURED — the provider's own count
-    expect(windowSection.lines[2]!.note).toBe("at last request");
-    expect(windowSection.lines[3]!.value).toBe("z-ai/glm-5.2:free"); // the model line
+    // R97-C: the visual payload — typed views over the JSON-safe record.
+    const contextBar = payload.contextBar as {
+      windowTokens: number;
+      usedTokens: number;
+      reservedTokens: number;
+      segments: Array<{ label: string; color: string }>;
+    } | undefined;
+    expect(contextBar).toBeDefined();
+    expect(contextBar!.segments.map((s) => s.label)).toEqual([
+      "Messages",
+      "System prompt",
+      "System tools",
+      "MCP tools",
+      "Memory & skills",
+      "Meta & project",
+    ]);
+    const headerLines = (payload.donut as { lines: Array<{ label: string; value: string; note?: string }> })
+      .lines;
+    expect(headerLines.map((l) => l.label)).toEqual([
+      "Projected",
+      "Estimated",
+      "Measured",
+      "Model",
+      "Session cost",
+    ]);
+    expect(headerLines[0]!.value).toBe("~20%"); // projected
+    expect(headerLines[1]!.value).toBe(`${fmtTokens(40_000)} / ${fmtTokens(200_000)}`); // estimated
+    expect(headerLines[2]!.value).toBe(fmtTokens(45_200)); // MEASURED — the provider's own count
+    expect(headerLines[2]!.note).toBe("at last request");
+    expect(headerLines[3]!.value).toBe("z-ai/glm-5.2:free"); // the model line
     expect(String(payload.note)).toContain("catalog default"); // window provenance
     // The anchor: the card's window — width = card + the page's 6px paddings,
     // positioned above the trigger, never off the top of the screen.
@@ -408,8 +430,8 @@ describe("ROUND-96 (R96-G) — the usage popover rides the overlay window (no br
   });
 });
 
-describe("ROUND-96 (R96-G) — buildUsageCardSections (the pure payload builder)", () => {
-  it("mirrors the popover's named rows: measured/estimated/model + the compaction note", () => {
+describe("ROUND-96 (R96-G) + ROUND-97 (R97-C) — buildUsageCardSections (the pure payload builder)", () => {
+  it("mirrors the popover's named rows: measured/estimated/model + the compaction note (now the DONUT header lines)", () => {
     const built = buildUsageCardSections(
       baseReport({
         compaction: { throughSeq: 30, droppedMessages: 12, tokensSaved: 18_400 },
@@ -418,9 +440,10 @@ describe("ROUND-96 (R96-G) — buildUsageCardSections (the pure payload builder)
       { isError: false, sessionId: "s1" },
     );
     expect(built).not.toBeNull();
-    const windowSection = built!.sections.find((s) => s.title === "Window")!;
-    expect(windowSection.lines[1]!.value).toBe(`${fmtTokens(40_000)} / ${fmtTokens(200_000)}`); // estimated
-    expect(windowSection.lines[2]!.value).toBe("not yet"); // honest pre-first-reply
+    // R97-C: the window rows moved INTO the donut header block's line column.
+    const headerLines = built!.donut!.lines;
+    expect(headerLines[1]!.value).toBe(`${fmtTokens(40_000)} / ${fmtTokens(200_000)}`); // estimated
+    expect(headerLines[2]!.value).toBe("not yet"); // honest pre-first-reply
     expect(built!.note).toContain("compacted");
     expect(built!.note).toContain("12 messages summarized");
     expect(built!.note).toContain("catalog default");
@@ -438,7 +461,7 @@ describe("ROUND-96 (R96-G) — buildUsageCardSections (the pure payload builder)
     );
   });
 
-  it("a per-send model switch names BOTH models (the R83 rule, carried into the overlay card)", () => {
+  it("a per-send model switch names BOTH models (the R83 rule, carried into the donut header)", () => {
     const built = buildUsageCardSections(
       baseReport({
         actual: {
@@ -451,11 +474,11 @@ describe("ROUND-96 (R96-G) — buildUsageCardSections (the pure payload builder)
       }),
       { isError: false, sessionId: "s1" },
     );
-    const model = built!.sections.find((s) => s.title === "Window")!.lines.find((l) => l.label === "Model")!;
+    const model = built!.donut!.lines.find((l) => l.label === "Model")!;
     expect(model.value).toBe("next z-ai/glm-5.2:free · measured openai/gpt-5.1");
   });
 
-  it("the session split carries the main/sub-agents/combined rows with the provider-call count", () => {
+  it("R97-C: the session split is the compact TABLE (Turns/Calls/Sent/Received/Cost per group)", () => {
     const built = buildUsageCardSections(
       baseReport({
         usage: {
@@ -467,9 +490,50 @@ describe("ROUND-96 (R96-G) — buildUsageCardSections (the pure payload builder)
       { isError: false, sessionId: "s1" },
     );
     const session = built!.sections.find((s) => s.title === "Session")!;
-    expect(session.lines.map((l) => l.label)).toEqual(["Main agent", "Sub-agents", "Combined"]);
-    expect(session.lines[0]!.note).toBe("3 turns · 7 calls · $0.0123");
-    expect(session.lines[1]!.note).toBe("1 turns");
+    expect(session.table).toBeDefined();
+    expect(session.table!.columns).toEqual(["Group", "Turns", "Calls", "Sent ↑", "Received ↓", "Cost"]);
+    expect(session.table!.rows.map((r) => r.label)).toEqual(["Main agent", "Sub-agents", "Combined"]);
+    expect(session.table!.rows[0]!.cells).toEqual(["3", "7", `${fmtTokens(45_200)} ↑`, `${fmtTokens(900)} ↓`, "$0.0123"]);
+    // A pre-R83 sidecar without providerCalls reads the honest em-dash.
+    expect(session.table!.rows[1]!.cells[1]).toBe("—");
+    expect(session.table!.rows[1]!.cells[4]).toBe("—"); // zero cost renders the em-dash
+    // The Combined row is the strong one.
+    expect(session.table!.rows[2]!.strong).toBe(true);
+    // The header's cost headline reads the COMBINED truth.
+    const costLine = built!.donut!.lines.find((l) => l.label === "Session cost")!;
+    expect(costLine.value).toBe("$0.0123");
+    expect(costLine.note).toBe("4 turns · 9 provider calls");
+  });
+
+  it("R97-C: the context bar segments mirror the breakdown (one colored segment per category + the reserve)", () => {
+    const built = buildUsageCardSections(
+      baseReport({ maxOutputTokens: 16_000 }),
+      { isError: false, sessionId: "s1" },
+    );
+    expect(built!.contextBar).toBeDefined();
+    expect(built!.contextBar!.windowTokens).toBe(200_000);
+    expect(built!.contextBar!.usedTokens).toBe(40_000);
+    expect(built!.contextBar!.reservedTokens).toBe(16_000);
+    expect(built!.contextBar!.usedPct).toBe(20);
+    expect(built!.contextBar!.segments.map((s) => s.label)).toEqual([
+      "Messages",
+      "System prompt",
+      "System tools",
+      "MCP tools",
+      "Memory & skills",
+      "Meta & project",
+    ]);
+    // The palette keys pair with the breakdown rows' barColor (the mutual
+    // hover-highlight contract).
+    const breakdown = built!.sections.find((s) => s.title === "Breakdown")!;
+    expect(breakdown.lines.map((l) => l.barColor)).toEqual(built!.contextBar!.segments.map((s) => s.color));
+    // The breakdown rows carry mini-bar fractions relative to usedTokens
+    // (the fixture's Messages = 34_500 of 40_000 used).
+    expect(breakdown.lines[0]!.barFrac).toBeCloseTo(34_500 / 40_000, 5);
+    // The donut's ring color follows the graded thresholds (20% → accent).
+    expect(built!.donut!.ringColor).toBe("accent");
+    expect(usageRingColorKey(130_000, 200_000)).toBe("warn");
+    expect(usageRingColorKey(195_000, 200_000)).toBe("danger");
   });
 
   it("the breakdown + cache sections mirror the popover's rows (cache honesty included)", () => {

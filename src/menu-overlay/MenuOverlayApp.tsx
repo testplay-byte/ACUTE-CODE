@@ -36,11 +36,15 @@ import {
   USAGE_LINE_PX,
   USAGE_NOTE_PX,
   USAGE_SECTION_TITLE_PX,
+  USAGE_TABLE_ROW_PX,
+  usageSegmentHex,
   type MenuOverlayPayload,
   type UsageCardPayload,
   type MenuItemPayload,
   type MenuPayload,
+  type UsageSegmentColor,
 } from "../lib/menu-overlay";
+import { formatTokenCount } from "../lib/format";
 
 /** The lucide icons the payload addresses by name (the quick menu's set +
  * R92-A: the composer option menus' rows). */
@@ -417,16 +421,21 @@ function withAlpha(color: string, alpha: number): string {
 }
 
 /**
- * ROUND-96 (R96-G): the USAGE rich card — the ContextDonut's hover popover
- * painted inside this OS window, so hovering the token usage reads ABOVE the
- * live embedded-browser webview instead of pausing it behind the R89-E5
- * guard's caption. A read-only twin of the DOM popover: the head row, the
- * titled sections of label/value lines, and the footnote — same theme
- * fields the menus use, same card rhythm (border, radius, shadow, 6px
- * padding), no rows to pick. The card FILLS the window (the main window
- * estimated its height from the same px contract the lines below paint to
- * — USAGE_* in lib/menu-overlay.ts) and scrolls when the estimate came in
- * short, never clipping silently.
+ * ROUND-96 (R96-G) → ROUND-97 (R97-C): the USAGE rich card — the ContextDonut's
+ * popover painted inside this OS window, so hovering the token usage reads
+ * ABOVE the live embedded-browser webview instead of pausing it behind the
+ * R89-E5 guard's caption. R97-C grew the card from the plain label/value
+ * sections into the full visual twin of the DOM popover — the DONUT header
+ * (ring + % + the window lines + the session-cost headline), the
+ * KILO-STYLE SEGMENTED CONTEXT BAR (one colored segment per category + the
+ * reserved-for-output block + the free track, used/window counts flanking),
+ * the breakdown rows with palette dots + mini-bars, the session TABLE with
+ * the Cost column, and the note footer. Hovering a bar segment highlights its
+ * breakdown row and vice versa (the Cursor-style mutual highlight).
+ *
+ * The card FILLS the window (the main window estimated its height from the
+ * same px contract the lines below paint to — USAGE_* in lib/menu-overlay.ts)
+ * and scrolls when the estimate came in short, never clipping silently.
  */
 function UsageCard({
   payload,
@@ -436,6 +445,20 @@ function UsageCard({
   reportHover: (hovering: boolean) => void;
 }): React.ReactElement {
   const t = payload.theme;
+  // R97-C: the mutual hover-highlight's shared state — the currently hovered
+  // category label (a bar segment OR its breakdown row owns it; both paint
+  // the highlight from the same string).
+  const [hoverSeg, setHoverSeg] = useState<string | null>(null);
+  const segHex = useCallback(
+    (color: UsageSegmentColor): string => usageSegmentHex(color, t.isDark, t.accent),
+    [t.isDark, t.accent],
+  );
+  const ringHex =
+    payload.donut?.ringColor === "danger"
+      ? "#ef4444"
+      : payload.donut?.ringColor === "warn"
+        ? "#f59e0b"
+        : t.accent;
   return (
     <div
       className="acute-menu-card"
@@ -483,6 +506,146 @@ function UsageCard({
         >
           {payload.title}
         </div>
+
+        {/* ── R97-C: the DONUT header block — the ring (graded color + the
+            budget tick + the % center) beside the window line column. */}
+        {payload.donut !== undefined ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+            <UsageDonutRing
+              used={payload.donut.used}
+              limit={payload.donut.limit}
+              markerFrac={payload.donut.markerFrac}
+              color={ringHex}
+              track={withAlpha(t.text, 0.12)}
+            />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              {payload.donut.lines.map((line, li) => (
+                <div
+                  key={`${li}-${line.label}`}
+                  style={{
+                    display: "flex",
+                    alignItems: "baseline",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    minHeight: USAGE_LINE_PX,
+                  }}
+                >
+                  <span style={{ fontSize: 10, color: t.textTertiary, whiteSpace: "nowrap" }}>{line.label}</span>
+                  <span
+                    style={{
+                      fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                      fontSize: 10.5,
+                      fontWeight: line.strong === true ? 700 : 500,
+                      color: line.strong === true ? t.text : t.textSecondary,
+                      textAlign: "right",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {line.value}
+                    {line.note !== undefined && line.note !== "" ? (
+                      <span style={{ fontWeight: 400, color: t.textTertiary }}> · {line.note}</span>
+                    ) : null}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {/* ── R97-C: the CONTEXT BAR — the Kilo-style segmented usage bar.
+            Used/window counts flank the track; each category paints its
+            colored segment (hover: the tooltip + the matching breakdown row
+            highlight); the output reserve paints its dimmed block; the rest
+            stays the free track. */}
+        {payload.contextBar !== undefined ? (
+          <div data-usage-context-bar style={{ marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span
+                style={{
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                  fontSize: 9.5,
+                  fontWeight: 700,
+                  color: t.text,
+                  fontVariantNumeric: "tabular-nums",
+                  flexShrink: 0,
+                }}
+              >
+                {formatTokenCount(payload.contextBar.usedTokens)}
+              </span>
+              <div
+                role="img"
+                aria-label={`context window ${Math.round(payload.contextBar.usedPct)}% used`}
+                style={{
+                  flex: 1,
+                  height: 6,
+                  borderRadius: 3,
+                  background: withAlpha(t.text, 0.1),
+                  overflow: "hidden",
+                  display: "flex",
+                }}
+              >
+                {payload.contextBar.segments.map((seg) => {
+                  const frac =
+                    payload.contextBar !== undefined && payload.contextBar.windowTokens > 0
+                      ? Math.min(1, seg.tokens / payload.contextBar.windowTokens)
+                      : 0;
+                  const lit = hoverSeg === seg.label;
+                  return (
+                    <div
+                      key={seg.label}
+                      title={`${seg.label} · ${formatTokenCount(seg.tokens)} tokens · ${Math.round(frac * 100)}% of window`}
+                      onMouseEnter={() => setHoverSeg(seg.label)}
+                      onMouseLeave={() => setHoverSeg(null)}
+                      style={{
+                        width: `${frac * 100}%`,
+                        height: "100%",
+                        background: segHex(seg.color),
+                        opacity: hoverSeg === null || lit ? 1 : 0.35,
+                        transition: "opacity 120ms ease",
+                        ...(lit ? { boxShadow: `0 0 0 1px ${withAlpha(segHex(seg.color), 0.6)}` } : {}),
+                      }}
+                    />
+                  );
+                })}
+                {/* The reserved-for-output block — dimmed, after the used
+                    segments, so "free" never reads as fully usable (Kilo's
+                    three-segment insight, restated on our category bar). */}
+                {payload.contextBar.windowTokens > 0 &&
+                payload.contextBar.reservedTokens > 0 ? (
+                  <div
+                    title={`Reserved for output · ${formatTokenCount(payload.contextBar.reservedTokens)} tokens`}
+                    style={{
+                      width: `${Math.min(
+                        100 - payload.contextBar.usedPct,
+                        (payload.contextBar.reservedTokens / payload.contextBar.windowTokens) * 100,
+                      )}%`,
+                      height: "100%",
+                      background: `repeating-linear-gradient(45deg, ${withAlpha(segHex("reserved"), 0.55)}, ${withAlpha(
+                        segHex("reserved"),
+                        0.55,
+                      )} 2px, ${withAlpha(segHex("reserved"), 0.25)} 2px, ${withAlpha(segHex("reserved"), 0.25)} 4px)`,
+                    }}
+                  />
+                ) : null}
+              </div>
+              <span
+                style={{
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                  fontSize: 9.5,
+                  fontWeight: 700,
+                  color: t.textTertiary,
+                  fontVariantNumeric: "tabular-nums",
+                  flexShrink: 0,
+                }}
+              >
+                {formatTokenCount(payload.contextBar.windowTokens)}
+              </span>
+            </div>
+          </div>
+        ) : null}
+
         {payload.sections.map((section, si) => (
           <div key={`${si}-${section.title}`} style={{ marginBottom: si === payload.sections.length - 1 ? 0 : 8 }}>
             <div
@@ -498,39 +661,199 @@ function UsageCard({
             >
               {section.title}
             </div>
-            {section.lines.map((line, li) => (
-              <div
-                key={`${li}-${line.label}`}
-                style={{
-                  display: "flex",
-                  alignItems: "baseline",
-                  justifyContent: "space-between",
-                  gap: 10,
-                  minHeight: USAGE_LINE_PX,
-                  paddingTop: 2,
-                  paddingBottom: 2,
-                }}
-              >
-                <span style={{ fontSize: 10.5, color: t.textSecondary, whiteSpace: "nowrap" }}>{line.label}</span>
-                <span
+            {section.lines.map((line, li) => {
+              const lit = hoverSeg !== null && line.label === hoverSeg;
+              return (
+                <div
+                  key={`${li}-${line.label}`}
+                  onMouseEnter={line.barColor !== undefined ? () => setHoverSeg(line.label) : undefined}
+                  onMouseLeave={line.barColor !== undefined ? () => setHoverSeg(null) : undefined}
                   style={{
-                    fontFamily: "var(--font-mono, ui-monospace, monospace)",
-                    fontSize: 10.5,
-                    fontWeight: line.strong === true ? 700 : 500,
-                    color: line.strong === true ? t.text : t.textSecondary,
-                    textAlign: "right",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    minHeight: USAGE_LINE_PX,
+                    paddingTop: 2,
+                    paddingBottom: 2,
+                    borderRadius: 5,
+                    ...(lit ? { background: withAlpha(t.text, 0.05) } : {}),
                   }}
                 >
-                  {line.value}
-                  {line.note !== undefined && line.note !== "" ? (
-                    <span style={{ fontWeight: 400, color: t.textTertiary }}> · {line.note}</span>
-                  ) : null}
-                </span>
+                  <span
+                    style={{
+                      fontSize: 10.5,
+                      color: lit ? t.text : t.textSecondary,
+                      whiteSpace: "nowrap",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 5,
+                      minWidth: 0,
+                    }}
+                  >
+                    {/* R97-C: the category DOT — the segment's palette color,
+                        the legend for the context bar above. */}
+                    {line.barColor !== undefined ? (
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: 999,
+                          background: segHex(line.barColor),
+                          flexShrink: 0,
+                          opacity: hoverSeg === null || lit ? 1 : 0.4,
+                          transition: "opacity 120ms ease",
+                        }}
+                      />
+                    ) : null}
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        ...(lit ? { fontWeight: 700 } : {}),
+                      }}
+                    >
+                      {line.label}
+                    </span>
+                  </span>
+                  <span
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      minWidth: 0,
+                    }}
+                  >
+                    {/* R97-C: the MINI-BAR — the line's share as a 3px bar
+                        in its palette color (the DOM popover's BreakdownRow,
+                        crossed over). */}
+                    {line.barFrac !== undefined && line.barColor !== undefined ? (
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 34,
+                          height: 3,
+                          borderRadius: 2,
+                          background: withAlpha(t.text, 0.1),
+                          overflow: "hidden",
+                          flexShrink: 0,
+                          display: "block",
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: "block",
+                            width: `${Math.max(2, Math.min(100, line.barFrac * 100))}%`,
+                            height: "100%",
+                            borderRadius: 2,
+                            background: segHex(line.barColor),
+                            opacity: hoverSeg === null || lit ? 1 : 0.4,
+                            transition: "opacity 120ms ease",
+                          }}
+                        />
+                      </span>
+                    ) : null}
+                    <span
+                      style={{
+                        fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                        fontSize: 10.5,
+                        fontWeight: line.strong === true ? 700 : 500,
+                        color: line.strong === true ? t.text : t.textSecondary,
+                        textAlign: "right",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {line.value}
+                      {line.note !== undefined && line.note !== "" ? (
+                        <span style={{ fontWeight: 400, color: t.textTertiary }}> · {line.note}</span>
+                      ) : null}
+                    </span>
+                  </span>
+                </div>
+              );
+            })}
+            {/* R97-C: the session TABLE — the compact split (Turns / Calls /
+                Sent / Received / Cost per group), the strong row emphasized. */}
+            {section.table !== undefined ? (
+              <div data-usage-table style={{ display: "flex", flexDirection: "column" }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0, 1.2fr) repeat(5, minmax(0, 1fr))",
+                    gap: "0 4px",
+                    paddingBottom: 2,
+                    marginBottom: 2,
+                    borderBottom: `1px solid ${t.border}`,
+                  }}
+                >
+                  {section.table.columns.map((col, ci) => (
+                    <span
+                      key={ci}
+                      style={{
+                        fontSize: 8.5,
+                        fontWeight: 700,
+                        textTransform: "uppercase" as const,
+                        letterSpacing: "0.06em",
+                        color: t.textTertiary,
+                        textAlign: ci === 0 ? "left" : "right",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {col}
+                    </span>
+                  ))}
+                </div>
+                {section.table.rows.map((row, ri) => (
+                  <div
+                    key={`${ri}-${row.label}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "minmax(0, 1.2fr) repeat(5, minmax(0, 1fr))",
+                      gap: "0 4px",
+                      alignItems: "baseline",
+                      minHeight: USAGE_TABLE_ROW_PX,
+                      paddingTop: 1,
+                      paddingBottom: 1,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: row.strong === true ? 700 : 500,
+                        color: row.strong === true ? t.text : t.textSecondary,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {row.label}
+                    </span>
+                    {row.cells.map((cell, ci) => (
+                      <span
+                        key={ci}
+                        style={{
+                          fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                          fontSize: 10,
+                          fontWeight: row.strong === true ? 700 : 500,
+                          color: row.strong === true ? t.text : t.textSecondary,
+                          textAlign: "right",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {cell}
+                      </span>
+                    ))}
+                  </div>
+                ))}
               </div>
-            ))}
+            ) : null}
           </div>
         ))}
         {payload.note !== undefined && payload.note !== "" ? (
@@ -553,13 +876,82 @@ function UsageCard({
   );
 }
 
+/** R97-C: the usage card's donut ring — the DOM popover's DonutRing as a
+ * self-contained SVG (this page does not import the composer's component;
+ * same math: the -90° origin, the graded color, the budget tick). */
+function UsageDonutRing({
+  used,
+  limit,
+  markerFrac,
+  color,
+  track,
+}: {
+  used: number;
+  limit: number;
+  markerFrac: number;
+  color: string;
+  track: string;
+}): React.ReactElement {
+  const size = 46;
+  const stroke = 5;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const frac = limit > 0 ? Math.min(1, used / limit) : 0;
+  const marker =
+    markerFrac > 0 && markerFrac < 1
+      ? (() => {
+          const angle = -Math.PI / 2 + markerFrac * 2 * Math.PI;
+          const cx = size / 2;
+          const cy = size / 2;
+          const x1 = cx + Math.cos(angle) * (r - stroke / 2 - 2);
+          const y1 = cy + Math.sin(angle) * (r - stroke / 2 - 2);
+          const x2 = cx + Math.cos(angle) * (r + stroke / 2 + 2);
+          const y2 = cy + Math.sin(angle) * (r + stroke / 2 + 2);
+          return (
+            <line x1={x1} y1={y1} x2={x2} y2={y2} strokeWidth={1.5} stroke={track} strokeLinecap="round" />
+          );
+        })()
+      : null;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }} aria-hidden>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={track} strokeWidth={stroke} />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke={color}
+        strokeWidth={stroke}
+        strokeDasharray={`${frac * c} ${c}`}
+        strokeLinecap="round"
+        transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        style={{ transition: "stroke-dasharray 300ms ease-out" }}
+      />
+      {marker}
+      <text
+        x="50%"
+        y="50%"
+        dominantBaseline="central"
+        textAnchor="middle"
+        fontSize={10}
+        fontWeight={700}
+        fill={color}
+        fontFamily="var(--font-mono, ui-monospace, monospace)"
+      >
+        {limit > 0 ? Math.round(Math.min(100, (used / limit) * 100)) : 0}%
+      </text>
+    </svg>
+  );
+}
+
 /*
  * The px contract's honesty guard: the estimator (lib/menu-overlay.ts) and
  * this card MUST agree on how tall a usage card is — the constants imported
  * above are the same ones the estimator sums (USAGE_LINE_PX is the lines'
  * minHeight, USAGE_SECTION_TITLE_PX the section title's, USAGE_NOTE_PX the
- * footnote's; USAGE_CARD_CHROME_PX covers the head strip + title row + the
- * card paddings painted around them here). A drift between the two sides
- * shows up as clipped rows or dead card space — pinned by menu-overlay.test.
+ * footnote's, USAGE_TABLE_ROW_PX the session table's rows; USAGE_CARD_CHROME_PX
+ * covers the head strip + title row + the card paddings painted around them
+ * here). A drift between the two sides shows up as clipped rows or dead card
+ * space — pinned by menu-overlay.test.
  */
 void USAGE_CARD_CHROME_PX;

@@ -25,9 +25,14 @@ import {
   onMenuOverlayClose,
   onMenuOverlayHover,
   showMenuOverlay,
+  usageSegmentHex,
   type UsageCardPayload,
+  type UsageContextBarPayload,
+  type UsageDonutPayload,
   type UsageLinePayload,
+  type UsageSegmentColor,
   type UsageSectionPayload,
+  type UsageTableRowPayload,
 } from "../../../lib/menu-overlay";
 
 // ── ROUND-51 (R51-c): donut color grading ────────────────────────────────────
@@ -97,38 +102,74 @@ export const CONTEXT_LIVE_REFETCH_MS = 2_500;
  * OVERLAY_CARD_PADDING arithmetic). */
 const OVERLAY_WINDOW_PADDING_PX = 6;
 
-// ── ROUND-96 (R96-G): the usage card payload (pure — exported for tests) ─────
+// ── ROUND-96 (R96-G) + ROUND-97 (R97-C): the usage card payload (pure — exported for tests) ─────
 
 /** One usage line (the exported type is the payload's). */
-function line(label: string, value: string, opts: { note?: string; strong?: boolean } = {}): UsageLinePayload {
+function line(
+  label: string,
+  value: string,
+  opts: { note?: string; strong?: boolean; barFrac?: number; barColor?: UsageSegmentColor } = {},
+): UsageLinePayload {
   return { label, value, ...opts };
 }
 
-/** One session group compressed to a single read-out line (the DOM popover
- * carries the full Turns/calls/tokens/cost rows; the overlay card is a
- * hover READ — the group's headline numbers, the DOM one a click away). */
-function sessionLine(label: string, totals: SessionUsageTotals): UsageLinePayload {
-  const activity =
-    totals.providerCalls !== undefined
-      ? `${totals.requests} turns · ${totals.providerCalls} calls`
-      : `${totals.requests} turns`;
-  return line(label, `${fmtTokens(totals.inputTokens)} ↑ · ${fmtTokens(totals.outputTokens)} ↓`, {
-    note: totals.costUsd > 0 ? `${activity} · $${totals.costUsd.toFixed(4)}` : activity,
-  });
+/** R97-C: the six context categories, their display order, and their PALETTE
+ * KEYS — the single mapping both views (the overlay card + the DOM popover)
+ * paint the context-bar segments and the breakdown rows from. Messages rides
+ * the theme accent (the dominant segment reads as the app's own color);
+ * the rest are fixed distinguishable hues (see usageSegmentHex). */
+const BREAKDOWN_CATEGORIES: ReadonlyArray<{
+  label: string;
+  key: "messages" | "systemPrompt" | "systemTools" | "mcpTools" | "memory" | "meta";
+  color: UsageSegmentColor;
+}> = [
+  { label: "Messages", key: "messages", color: "accent" },
+  { label: "System prompt", key: "systemPrompt", color: "blue" },
+  { label: "System tools", key: "systemTools", color: "teal" },
+  { label: "MCP tools", key: "mcpTools", color: "violet" },
+  { label: "Memory & skills", key: "memory", color: "amber" },
+  { label: "Meta & project", key: "meta", color: "rose" },
+];
+
+/** R97-C: the ring color key for a used/window fraction — the SAME grading
+ * the donut ring uses (contextDonutColor), expressed as the payload's
+ * JSON-safe key so the overlay renderer can paint it. Pure. */
+export function usageRingColorKey(usedTokens: number, windowTokens: number): "accent" | "warn" | "danger" {
+  if (windowTokens <= 0) return "accent";
+  const frac = Math.min(1, usedTokens / windowTokens);
+  if (frac > CONTEXT_DONUT_DANGER) return "danger";
+  if (frac >= CONTEXT_DONUT_WARN) return "warn";
+  return "accent";
+}
+
+/** The shape buildUsageCardSections returns (R97-C grew it from the plain
+ * sections into the full visual card: the context bar + the donut block +
+ * the sections + the note). */
+export interface UsageCardBuild {
+  title: string;
+  contextBar?: UsageContextBarPayload;
+  donut?: UsageDonutPayload & { lines: UsageLinePayload[] };
+  sections: UsageSectionPayload[];
+  note?: string;
 }
 
 /**
- * ROUND-96 (R96-G): the ContextDonut popover's content as the structured
- * usage-card payload the overlay window renders — the measured/estimated
- * rows, the model line, the breakdown, the cache line, the session split,
- * and the compaction/provenance note (the owner's named rows), all
- * JSON-safe strings. `null` when there is nothing to say yet (the same
- * empty/loading states the DOM popover shows). Pure; exported for tests.
+ * ROUND-96 (R96-G) → ROUND-97 (R97-C): the ContextDonut popover's content as
+ * the structured usage-card payload the overlay window renders — now the FULL
+ * visual card: the Kilo-style segmented context bar (one colored segment per
+ * category + the reserved-for-output block + the free track), the big donut
+ * with its header lines (projected / estimated / measured / model / the
+ * session cost headline), the breakdown rows with palette dots + mini-bars,
+ * the cache block, and the session TABLE (Turns / Calls / Sent / Received /
+ * Cost per Main / Sub-agents / Combined) — the owner's "well-formatted,
+ * well-understood, nothing hidden" directive. `null` never happens for a
+ * live report; the empty/loading states carry their own honest lines. Pure;
+ * exported for tests.
  */
 export function buildUsageCardSections(
   data: SessionContextReport | null,
   opts: { isError: boolean; sessionId: string | null },
-): { title: string; sections: UsageSectionPayload[]; note?: string } | null {
+): UsageCardBuild {
   if (data === null) {
     const why = opts.isError
       ? "context report unavailable"
@@ -139,16 +180,28 @@ export function buildUsageCardSections(
   }
   const window_ = data.contextWindow;
   const pct = window_ > 0 ? Math.min(100, (data.usedTokens / window_) * 100) : 0;
-  const windowLines: UsageLinePayload[] = [
+  // R97-C: the session split (main / sub-agents / combined) — the TABLE rows +
+  // the header's cost headline both read from these (a pre-R51 sidecar falls
+  // back to the flat sessionTotals with honest zero sub-agents).
+  const split = data.usage ?? null;
+  const mainTotals = split?.main ?? data.sessionTotals;
+  const subagentTotals = split?.subagents ?? { inputTokens: 0, outputTokens: 0, requests: 0, costUsd: 0 };
+  const combinedTotals = split?.combined ?? mainTotals;
+
+  // ── R97-C: the DONUT header block — the ring + its line column (the DOM
+  // popover's header twin: projected / estimated / measured / model / the
+  // session cost headline — the owner's "show the proper price used in this
+  // session" ask, always visible at the top, not buried).
+  const headerLines: UsageLinePayload[] = [
     line("Projected", `~${Math.round(pct)}%`, { strong: true }),
     line("Estimated", `${fmtTokens(data.usedTokens)} / ${fmtTokens(window_)}`, { note: "of window" }),
   ];
   if (data.actual != null) {
-    windowLines.push(line("Measured", fmtTokens(data.actual.inputTokens), { strong: true, note: "at last request" }));
+    headerLines.push(line("Measured", fmtTokens(data.actual.inputTokens), { strong: true, note: "at last request" }));
   } else {
-    windowLines.push(line("Measured", "not yet", { note: "the first reply reports it" }));
+    headerLines.push(line("Measured", "not yet", { note: "the first reply reports it" }));
   }
-  windowLines.push(
+  headerLines.push(
     line(
       "Model",
       data.actual != null && data.actual.model !== data.model
@@ -156,41 +209,102 @@ export function buildUsageCardSections(
         : data.model,
     ),
   );
-  const sections: UsageSectionPayload[] = [{ title: "Window", lines: windowLines }];
-  sections.push({
-    title: "Breakdown",
-    lines: [
-      line("Messages", fmtTokens(data.breakdown.messages)),
-      line("System prompt", fmtTokens(data.breakdown.systemPrompt)),
-      line("System tools", fmtTokens(data.breakdown.systemTools)),
-      line("MCP tools", fmtTokens(data.breakdown.mcpTools)),
-      line("Memory & skills", fmtTokens(data.breakdown.memory)),
-      line("Meta & project", fmtTokens(data.breakdown.meta)),
-    ],
-  });
+  const sessionActivity =
+    combinedTotals.providerCalls !== undefined
+      ? `${combinedTotals.requests} turns · ${combinedTotals.providerCalls} provider calls`
+      : `${combinedTotals.requests} turns`;
+  headerLines.push(
+    line(
+      "Session cost",
+      combinedTotals.costUsd > 0 ? `$${combinedTotals.costUsd.toFixed(4)}` : "$0",
+      { note: sessionActivity },
+    ),
+  );
+  const available = data.available ?? null;
+  const markerFrac =
+    available !== null && window_ > 0 && available > 0 && available < window_ ? available / window_ : 0;
+  const donut: UsageDonutPayload & { lines: UsageLinePayload[] } = {
+    used: data.usedTokens,
+    limit: window_,
+    markerFrac,
+    ringColor: usageRingColorKey(data.usedTokens, window_),
+    lines: headerLines,
+  };
+
+  // ── R97-C: the CONTEXT BAR — the Kilo-style segmented usage bar (the
+  // owner's named element). One colored segment per category (the palette
+  // keys mirror the breakdown rows), the reserved-for-output dimmed block,
+  // and the free space as the track.
+  const contextBar: UsageContextBarPayload = {
+    usedTokens: data.usedTokens,
+    windowTokens: window_,
+    reservedTokens: data.maxOutputTokens ?? 0,
+    usedPct: pct,
+    segments: BREAKDOWN_CATEGORIES.map((cat) => ({
+      label: cat.label,
+      tokens: data.breakdown[cat.key],
+      color: cat.color,
+    })),
+  };
+
+  // ── the sections: Breakdown (dots + mini-bars) / Cache / Session (table).
+  const sections: UsageSectionPayload[] = [
+    {
+      title: "Breakdown",
+      lines: BREAKDOWN_CATEGORIES.map((cat) => {
+        const value = data.breakdown[cat.key];
+        return line(cat.label, fmtTokens(value), {
+          barFrac: data.usedTokens > 0 ? Math.min(1, value / data.usedTokens) : 0,
+          barColor: cat.color,
+        });
+      }),
+    },
+  ];
   const hitRate = data.cache.hitRate !== null ? `${Math.round(data.cache.hitRate * 100)}%` : "—";
   sections.push({
     title: "Cache",
     lines: [
       line("Hit rate", hitRate, {
         note: data.cache.hitRate === null && data.cache.inputTokens > 0 ? "not reported by this provider" : undefined,
+        barFrac: data.cache.hitRate !== null ? Math.max(0.02, data.cache.hitRate) : undefined,
+        barColor: "teal",
       }),
       ...(data.cache.inputTokens > 0
         ? [line("Cached input", `${fmtTokens(data.cache.cachedInputTokens)} / ${fmtTokens(data.cache.inputTokens)}`)]
         : []),
     ],
   });
-  const split = data.usage ?? null;
-  const mainTotals = split?.main ?? data.sessionTotals;
-  const subagentTotals = split?.subagents ?? { inputTokens: 0, outputTokens: 0, requests: 0, costUsd: 0 };
-  const combinedTotals = split?.combined ?? mainTotals;
+  // R97-C: the session split as a compact TABLE — the DOM popover's UsageGroup
+  // rows (Turns / Provider calls / Tokens sent ↑ / received ↓ / Cost per
+  // group), the owner's "the actual main sessions stats and the sub-agent
+  // sessions stats kept separate BUT also shown combined" contract, now with
+  // the COST column as a first-class cell.
+  const tableRow = (
+    label: string,
+    totals: SessionUsageTotals,
+    strong: boolean,
+  ): UsageTableRowPayload => ({
+    label,
+    strong,
+    cells: [
+      String(totals.requests),
+      totals.providerCalls !== undefined ? String(totals.providerCalls) : "—",
+      `${fmtTokens(totals.inputTokens)} ↑`,
+      `${fmtTokens(totals.outputTokens)} ↓`,
+      totals.costUsd > 0 ? `$${totals.costUsd.toFixed(4)}` : "—",
+    ],
+  });
   sections.push({
     title: "Session",
-    lines: [
-      sessionLine("Main agent", mainTotals),
-      sessionLine("Sub-agents", subagentTotals),
-      sessionLine("Combined", combinedTotals),
-    ],
+    lines: [],
+    table: {
+      columns: ["Group", "Turns", "Calls", "Sent ↑", "Received ↓", "Cost"],
+      rows: [
+        tableRow("Main agent", mainTotals, false),
+        tableRow("Sub-agents", subagentTotals, false),
+        tableRow("Combined", combinedTotals, true),
+      ],
+    },
   });
   const noteParts: string[] = [];
   if (data.compaction !== undefined) {
@@ -202,7 +316,13 @@ export function buildUsageCardSections(
   else if (data.contextWindowSource === "catalog") noteParts.push(`${fmtTokens(window_)} window · catalog default`);
   else if (data.contextWindowSource === "default")
     noteParts.push(`${fmtTokens(window_)} window assumed — set it in Settings → Models`);
-  return { title: "Context window usage", sections, note: noteParts.length > 0 ? noteParts.join(" · ") : undefined };
+  return {
+    title: "Context window usage",
+    contextBar,
+    donut,
+    sections,
+    note: noteParts.length > 0 ? noteParts.join(" · ") : undefined,
+  };
 }
 
 /** SVG donut ring — the toolbar icon and the popover's big donut share the math.
@@ -283,31 +403,140 @@ function DonutRing({
   );
 }
 
-/** One breakdown row: label · tokens · a mini-bar relative to usedTokens. */
+/** One breakdown row: label · tokens · a mini-bar relative to usedTokens.
+ * R97-C: the row carries its PALETTE DOT (the context bar's segment color —
+ * the legend) + the mutual hover-highlight (hovering the row lights its bar
+ * segment and vice versa; the Cursor interaction, mirrored on the DOM leg). */
 function BreakdownRow({
   label,
   value,
   usedTokens,
   note,
+  color,
+  lit,
+  dimmed,
+  onHover,
 }: {
   label: string;
   value: number;
   usedTokens: number;
   note?: string;
+  color: UsageSegmentColor;
+  lit: boolean;
+  dimmed: boolean;
+  onHover: (label: string | null) => void;
 }) {
   const styles = useThemeStyles();
   const pct = usedTokens > 0 ? Math.max(2, (value / usedTokens) * 100) : 0;
+  const hex = usageSegmentHex(color, styles.isDark, styles.accent);
   return (
-    <div className="flex items-center gap-2" data-breakdown-row={label}>
-      <span className="text-[10.5px] min-w-0 flex-1 truncate" style={{ color: styles.textSecondary }}>
+    <div
+      className="flex items-center gap-2 rounded-md px-1 -mx-1 transition-colors"
+      data-breakdown-row={label}
+      onMouseEnter={() => onHover(label)}
+      onMouseLeave={() => onHover(null)}
+      style={{ background: lit ? withAlpha(styles.text, 0.05) : "transparent" }}
+    >
+      <span
+        aria-hidden
+        className="shrink-0 rounded-full transition-opacity"
+        style={{
+          width: 6,
+          height: 6,
+          background: hex,
+          opacity: dimmed ? 0.4 : 1,
+        }}
+      />
+      <span
+        className="text-[10.5px] min-w-0 flex-1 truncate"
+        style={{ color: lit ? styles.text : styles.textSecondary, fontWeight: lit ? 700 : 400 }}
+      >
         {label}
       </span>
       <span className="font-mono text-[10px] shrink-0" style={{ color: styles.textTertiary }}>
         {note ?? fmtTokens(value)}
       </span>
       <div className="w-16 h-[3px] rounded-full overflow-hidden shrink-0" style={{ background: styles.subtle }}>
-        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: styles.accent }} />
+        <div
+          className="h-full rounded-full transition-opacity"
+          style={{ width: `${pct}%`, background: hex, opacity: dimmed ? 0.4 : 1 }}
+        />
       </div>
+    </div>
+  );
+}
+
+/** R97-C: the DOM popover's CONTEXT BAR — the segmented usage bar, the exact
+ * twin of the overlay card's (one colored segment per category + the reserved
+ * block + the free track, used/window counts flanking, the mutual
+ * hover-highlight against the breakdown rows below). */
+function ContextBar({
+  bar,
+  hoverSeg,
+  onHover,
+}: {
+  bar: UsageContextBarPayload;
+  hoverSeg: string | null;
+  onHover: (label: string | null) => void;
+}) {
+  const styles = useThemeStyles();
+  const reservedHex = usageSegmentHex("reserved", styles.isDark, styles.accent);
+  return (
+    <div className="flex items-center gap-2 px-1 pb-2 mb-1" data-context-bar>
+      <span
+        className="font-mono text-[10px] font-bold shrink-0 tabular-nums"
+        style={{ color: styles.text }}
+        title={`${fmtTokens(bar.usedTokens)} tokens used (estimated)`}
+      >
+        {fmtTokens(bar.usedTokens)}
+      </span>
+      <div
+        role="img"
+        aria-label={`context window usage ${Math.round(bar.usedPct)}%`}
+        className="flex-1 h-[6px] rounded-[3px] overflow-hidden flex"
+        style={{ background: withAlpha(styles.text, 0.1) }}
+      >
+        {bar.segments.map((seg) => {
+          const frac = bar.windowTokens > 0 ? Math.min(1, seg.tokens / bar.windowTokens) : 0;
+          const lit = hoverSeg === seg.label;
+          return (
+            <div
+              key={seg.label}
+              className="transition-opacity duration-100"
+              title={`${seg.label} · ${fmtTokens(seg.tokens)} tokens · ${Math.round(frac * 100)}% of window`}
+              onMouseEnter={() => onHover(seg.label)}
+              onMouseLeave={() => onHover(null)}
+              style={{
+                width: `${frac * 100}%`,
+                background: usageSegmentHex(seg.color, styles.isDark, styles.accent),
+                opacity: hoverSeg === null || lit ? 1 : 0.35,
+                ...(lit ? { boxShadow: `0 0 0 1px ${withAlpha(styles.accent, 0.35)}` } : {}),
+              }}
+            />
+          );
+        })}
+        {/* The reserved-for-output block — dimmed + hatched, so "free"
+            never reads as fully usable (Kilo's three-segment insight). */}
+        {bar.windowTokens > 0 && bar.reservedTokens > 0 ? (
+          <div
+            title={`Reserved for output · ${fmtTokens(bar.reservedTokens)} tokens`}
+            style={{
+              width: `${Math.min(100 - bar.usedPct, (bar.reservedTokens / bar.windowTokens) * 100)}%`,
+              background: `repeating-linear-gradient(45deg, ${withAlpha(reservedHex, 0.55)}, ${withAlpha(
+                reservedHex,
+                0.55,
+              )} 2px, ${withAlpha(reservedHex, 0.25)} 2px, ${withAlpha(reservedHex, 0.25)} 4px)`,
+            }}
+          />
+        ) : null}
+      </div>
+      <span
+        className="font-mono text-[10px] font-bold shrink-0 tabular-nums"
+        style={{ color: styles.textTertiary }}
+        title={`${fmtTokens(bar.windowTokens)} token window`}
+      >
+        {fmtTokens(bar.windowTokens)}
+      </span>
     </div>
   );
 }
@@ -439,6 +668,10 @@ export function ContextDonut({
   const styles = useThemeStyles();
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
+  // R97-C: the mutual hover-highlight's state — the currently hovered category
+  // label, shared by the context bar's segments and the breakdown rows (the
+  // Cursor-style cross-highlight, on both the DOM leg and the overlay twin).
+  const [hoverSeg, setHoverSeg] = useState<string | null>(null);
   // ROUND-51 (R51-c): the shared close timer + a pinned mirror the timeout
   // callback can read at fire time (state would be stale in the closure).
   const pinnedRef = useRef(false);
@@ -730,11 +963,14 @@ export function ContextDonut({
     const rect = triggerWrapRef.current?.getBoundingClientRect() ?? null;
     if (rect === null) return;
     const built = buildUsageCardSections(data, { isError: report.isError, sessionId });
-    if (built === null) return;
     const payload: UsageCardPayload = {
       kind: "usage",
       title: built.title,
       width: POPOVER_WIDTH_PX,
+      // R97-C: the full visual card — the context bar + the donut header
+      // cross the payload boundary with the sections now.
+      ...(built.contextBar !== undefined ? { contextBar: built.contextBar } : {}),
+      ...(built.donut !== undefined ? { donut: built.donut } : {}),
       sections: built.sections,
       ...(built.note !== undefined ? { note: built.note } : {}),
       theme: {
@@ -1049,19 +1285,45 @@ export function ContextDonut({
                         </span>
                       </div>
                     ) : null}
-                    {/* Breakdown slices */}
+                    {/* R97-C: THE CONTEXT BAR — the Kilo-style segmented usage
+                        bar, the owner's named element ("in the Kilo Code at the
+                        very top, it shows the stats of the various things used
+                        … in bar format"). The twin of the overlay card's. */}
+                    <ContextBar
+                      bar={{
+                        usedTokens: used,
+                        windowTokens: window_,
+                        reservedTokens: data.maxOutputTokens ?? 0,
+                        usedPct: pct ?? 0,
+                        segments: BREAKDOWN_CATEGORIES.map((cat) => ({
+                          label: cat.label,
+                          tokens: data.breakdown[cat.key],
+                          color: cat.color,
+                        })),
+                      }}
+                      hoverSeg={hoverSeg}
+                      onHover={setHoverSeg}
+                    />
+                    {/* Breakdown slices — R97-C: the palette dots + the mutual
+                        hover-highlight against the context bar's segments. */}
                     <div className="flex flex-col gap-1.5 px-1 pb-2">
-                      <BreakdownRow label="Messages" value={data.breakdown.messages} usedTokens={used} />
-                      <BreakdownRow label="System prompt" value={data.breakdown.systemPrompt} usedTokens={used} />
-                      <BreakdownRow label="System tools" value={data.breakdown.systemTools} usedTokens={used} />
-                      <BreakdownRow
-                        label="MCP tools"
-                        value={data.breakdown.mcpTools}
-                        usedTokens={used}
-                        note={data.breakdown.mcpTools === 0 ? "none configured" : fmtTokens(data.breakdown.mcpTools)}
-                      />
-                      <BreakdownRow label="Memory & skills" value={data.breakdown.memory} usedTokens={used} />
-                      <BreakdownRow label="Meta & project" value={data.breakdown.meta} usedTokens={used} />
+                      {BREAKDOWN_CATEGORIES.map((cat) => (
+                        <BreakdownRow
+                          key={cat.label}
+                          label={cat.label}
+                          value={data.breakdown[cat.key]}
+                          usedTokens={used}
+                          note={
+                            cat.key === "mcpTools" && data.breakdown.mcpTools === 0
+                              ? "none configured"
+                              : undefined
+                          }
+                          color={cat.color}
+                          lit={hoverSeg === cat.label}
+                          dimmed={hoverSeg !== null && hoverSeg !== cat.label}
+                          onHover={setHoverSeg}
+                        />
+                      ))}
                     </div>
                     {/* Cache line */}
                     <div

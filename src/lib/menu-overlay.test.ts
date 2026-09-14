@@ -20,14 +20,19 @@
 import { describe, expect, it } from "vitest";
 import {
   USAGE_CARD_CHROME_PX,
+  USAGE_CONTEXT_BAR_PX,
+  USAGE_DONUT_PX,
   USAGE_LINE_PX,
   USAGE_NOTE_PX,
   USAGE_SECTION_TITLE_PX,
+  USAGE_TABLE_HEAD_PX,
+  USAGE_TABLE_ROW_PX,
   estimateUsageCardHeight,
   onMenuOverlayClose,
   onMenuOverlayHover,
   onMenuOverlayPick,
   showMenuOverlay,
+  usageSegmentHex,
   type UsageCardPayload,
   type UsageSectionPayload,
 } from "./menu-overlay";
@@ -101,6 +106,76 @@ describe("ROUND-96 (R96-G) — the usage payload contract", () => {
     // The floor: a degenerate card never asks for a sub-40px window (the
     // Rust clamp would refuse it anyway).
     expect(estimateUsageCardHeight(usagePayload([]))).toBe(40);
+  });
+
+  it("R97-C: the estimator sums the context bar + the donut header + the session table", () => {
+    const visual = {
+      ...usagePayload([
+        {
+          ...section("Session", 0),
+          table: {
+            columns: ["Group", "Turns", "Calls", "Sent ↑", "Received ↓", "Cost"],
+            rows: [
+              { label: "Main agent", cells: ["3", "7", "45.2K ↑", "900 ↓", "$0.0123"] },
+              { label: "Sub-agents", cells: ["1", "—", "1K ↑", "200 ↓", "—"] },
+              { label: "Combined", cells: ["4", "9", "46.2K ↑", "1.1K ↓", "$0.0123"], strong: true },
+            ],
+          },
+        },
+      ]),
+      contextBar: {
+        usedTokens: 40_000,
+        windowTokens: 200_000,
+        reservedTokens: 16_000,
+        usedPct: 20,
+        segments: [],
+      },
+      donut: {
+        used: 40_000,
+        limit: 200_000,
+        markerFrac: 0.8,
+        ringColor: "accent" as const,
+        lines: [
+          { label: "Projected", value: "~20%", strong: true },
+          { label: "Estimated", value: "40K / 200K", note: "of window" },
+          { label: "Measured", value: "45.2K", note: "at last request", strong: true },
+          { label: "Model", value: "z-ai/glm-5.2:free" },
+          { label: "Session cost", value: "$0.0123", note: "4 turns · 9 provider calls" },
+        ],
+      },
+    } satisfies UsageCardPayload;
+    expect(estimateUsageCardHeight(visual)).toBe(
+      USAGE_CARD_CHROME_PX +
+        USAGE_CONTEXT_BAR_PX +
+        // the donut block: 5 header lines (5*17=85) beat the 54px floor
+        5 * USAGE_LINE_PX + 10 +
+        USAGE_SECTION_TITLE_PX +
+        USAGE_TABLE_HEAD_PX +
+        3 * USAGE_TABLE_ROW_PX,
+    );
+    // A donut with FEW lines still reserves the 54px ring block.
+    const small = {
+      ...visual,
+      donut: { ...visual.donut, lines: visual.donut.lines.slice(0, 2) },
+    } satisfies UsageCardPayload;
+    expect(estimateUsageCardHeight(small)).toBe(
+      USAGE_CARD_CHROME_PX +
+        USAGE_CONTEXT_BAR_PX +
+        USAGE_DONUT_PX +
+        USAGE_SECTION_TITLE_PX +
+        USAGE_TABLE_HEAD_PX +
+        3 * USAGE_TABLE_ROW_PX,
+    );
+  });
+
+  it("R97-C: usageSegmentHex resolves the palette (accent passes through; the fixed hues are theme-aware)", () => {
+    expect(usageSegmentHex("accent", true, "#ff6b35")).toBe("#ff6b35");
+    expect(usageSegmentHex("accent", false, "#ff6b35")).toBe("#ff6b35");
+    // The fixed hues pick their light/dark variants.
+    expect(usageSegmentHex("blue", false, "#ff6b35")).toBe("#3b82f6");
+    expect(usageSegmentHex("blue", true, "#ff6b35")).toBe("#60a5fa");
+    expect(usageSegmentHex("reserved", false, "#ff6b35")).toBe("#9ca3af");
+    expect(usageSegmentHex("rose", true, "#ff6b35")).toBe("#fb7185");
   });
 
   it("web mode: showMenuOverlay resolves FALSE (the DOM popover fallback) and the subscriptions are no-ops", async () => {

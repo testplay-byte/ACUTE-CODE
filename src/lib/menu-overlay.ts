@@ -132,7 +132,109 @@ export interface MenuPayload {
 // label/value card mirroring the donut popover's content (JSON-safe strings
 // only — the payload crosses the process boundary as one JSON string).
 
-/** R96-G: one label/value line of a usage section. */
+// ── ROUND-97 (R97-C): the context-bar palette + the visual payload ─────────
+//
+// The owner's eighth report: the usage card (R96-G) reads as a plain
+// label/value list — the DOM popover's visuals (the donut, the breakdown
+// mini-bars, the full session rows with cost) never crossed the payload
+// boundary. R97-C grows the payload into the full visual card, headed by
+// the Kilo-Code-style segmented context bar the owner named ("in the Kilo
+// Code at the very top, it shows the stats of the various things used, the
+// tokens used for, and such, in bar format" — one colored segment per
+// context category + the reserved-for-output block + the free track, with
+// the Cursor-style mutual hover-highlight between segments and rows).
+
+/** R97-C: the category-segment color palette — ONE palette shared by the
+ * overlay usage card and the DOM popover (the context bar's segments + the
+ * breakdown rows' dots/mini-bars paint from the SAME keys, so both views
+ * stay identical). Keys are JSON-safe (the payload crosses the process
+ * boundary); the hex values are theme-aware (light/dark variants chosen to
+ * stay distinguishable at 4-6px bar height on the card surface). */
+export type UsageSegmentColor =
+  | "accent"
+  | "blue"
+  | "teal"
+  | "violet"
+  | "amber"
+  | "rose"
+  | "reserved";
+
+/** R97-C: the palette itself. `accent` resolves to the THEME accent (the
+ * biggest segment — Messages — reads as the app's own color); the rest are
+ * fixed hues. `reserved` is the dimmed output-reserve segment (Kilo's
+ * insight: free space ≠ usable space — the max_output_tokens reserve gets
+ * its own muted block, never a category color). */
+const SEGMENT_PALETTE: Record<Exclude<UsageSegmentColor, "accent">, { light: string; dark: string }> = {
+  blue: { light: "#3b82f6", dark: "#60a5fa" },
+  teal: { light: "#0d9488", dark: "#2dd4bf" },
+  violet: { light: "#8b5cf6", dark: "#a78bfa" },
+  amber: { light: "#d97706", dark: "#fbbf24" },
+  rose: { light: "#e11d48", dark: "#fb7185" },
+  reserved: { light: "#9ca3af", dark: "#6b7280" },
+};
+
+/** R97-C: resolve a segment key to a paintable hex. Pure; exported for the
+ * DOM popover + the overlay renderer + tests. */
+export function usageSegmentHex(color: UsageSegmentColor, isDark: boolean, accent: string): string {
+  if (color === "accent") return accent;
+  const entry = SEGMENT_PALETTE[color];
+  return isDark ? entry.dark : entry.light;
+}
+
+/** R97-C: one category segment of the context bar. */
+export interface UsageBarSegmentPayload {
+  /** The category label ("Messages", "System prompt", …). */
+  label: string;
+  /** The category's estimated tokens. */
+  tokens: number;
+  /** The palette key (see usageSegmentHex). */
+  color: UsageSegmentColor;
+}
+
+/** R97-C: the CONTEXT BAR — the owner's named Kilo-Code-style element: a
+ * horizontal bar of colored segments (one per context category) + the
+ * reserved-for-output block + free space as the track, used/window counts
+ * flanking in compact numerals. Hovering a segment (or its breakdown row)
+ * cross-highlights both (the Cursor interaction, mirrored). */
+export interface UsageContextBarPayload {
+  /** The sum of the category segments (== data.usedTokens, estimated). */
+  usedTokens: number;
+  /** The model's context window. */
+  windowTokens: number;
+  /** The output reserve (maxOutputTokens; 0 when unknown) — rendered as the
+   * dimmed reserved block so "free" never reads as fully usable. */
+  reservedTokens: number;
+  /** used/window * 100, clamped 0-100 (the bar's fill fraction). */
+  usedPct: number;
+  /** The category segments, in display order. */
+  segments: UsageBarSegmentPayload[];
+}
+
+/** R97-C: the big donut visual riding the card's header (the DOM popover's
+ * twin — ring + % center + the budget tick + the header's line column). */
+export interface UsageDonutPayload {
+  used: number;
+  limit: number;
+  /** The budget-line tick fraction (available/window; 0 hides it). */
+  markerFrac: number;
+  /** The graded ring color key — matches CONTEXT_DONUT_WARN/DANGER. */
+  ringColor: "accent" | "warn" | "danger";
+  /** The header's line rows beside the ring (projected / estimated /
+   * measured / model / the session cost headline — the DOM popover's header
+   * text column). */
+  lines: UsageLinePayload[];
+}
+
+/** R97-C: one row of the session table (Main agent / Sub-agents / Combined
+ * × Turns / Calls / Sent ↑ / Received ↓ / Cost). */
+export interface UsageTableRowPayload {
+  label: string;
+  cells: string[];
+  strong?: boolean;
+}
+
+/** R96-G: one label/value line of a usage section. R97-C adds the mini-bar
+ * fields (the breakdown rows + the cache hit-rate row paint a 3px bar). */
 export interface UsageLinePayload {
   label: string;
   value: string;
@@ -142,23 +244,43 @@ export interface UsageLinePayload {
   /** The emphasized rows (the projected %, the MEASURED line) — primary text
    * color + bolder value instead of the muted default. */
   strong?: boolean;
+  /** R97-C: the mini-bar fraction (0-1 of the line's own track). */
+  barFrac?: number;
+  /** R97-C: which palette color the dot + mini-bar paint (matches the
+   * context-bar segment of the same category — the hover-highlight pairing). */
+  barColor?: UsageSegmentColor;
 }
 
 /** R96-G: one titled section of the usage card (Window / Breakdown / Cache /
- * Session totals — the donut popover's visual groups). */
+ * Session totals — the donut popover's visual groups). R97-C adds the
+ * optional compact table (the session split). */
 export interface UsageSectionPayload {
   title: string;
   lines: UsageLinePayload[];
+  /** R97-C: an optional compact table under the lines (the session split —
+   * Turns / Provider calls / Tokens sent ↑ / received ↓ / Cost per group;
+   * the DOM popover's UsageGroup rows, compacted). */
+  table?: {
+    columns: string[];
+    rows: UsageTableRowPayload[];
+  };
 }
 
 /** R96-G: the usage rich card — the ContextDonut popover's content as a
  * structured payload for the overlay window (no items, no picks: it is a
- * hover READ, not a menu). */
+ * hover READ, not a menu). R97-C grew the payload from the plain label/value
+ * sections into the full visual card: the context bar (the Kilo-style
+ * segmented usage bar), the big donut, per-line mini-bars, and the session
+ * table with cost — the DOM popover's richness crossed the boundary. */
 export interface UsageCardPayload {
   kind: "usage";
   title: string;
   /** The card's CSS width (the DOM popover's 288). */
   width: number;
+  /** R97-C: the Kilo-style segmented context bar (the card's headline). */
+  contextBar?: UsageContextBarPayload;
+  /** R97-C: the big donut (the header's visual anchor). */
+  donut?: UsageDonutPayload;
   sections: UsageSectionPayload[];
   /** The one-line footnote under the sections (compaction / window
    * provenance — the donut popover's note row). */
@@ -179,17 +301,38 @@ export const USAGE_CARD_CHROME_PX = 26; // the card head row + outer paddings
 export const USAGE_SECTION_TITLE_PX = 22; // one section's title row + its gap
 export const USAGE_LINE_PX = 17; // one label/value line
 export const USAGE_NOTE_PX = 20; // the footnote row + its gap
+/** R97-C: the context-bar block — the flanking counts row (16) + the bar
+ * itself (6) + its breathing room (8). */
+export const USAGE_CONTEXT_BAR_PX = 30;
+/** R97-C: the donut header block (the 46px ring + its vertical padding). */
+export const USAGE_DONUT_PX = 54;
+/** R97-C: one table row (the compact 10px cells + padding). */
+export const USAGE_TABLE_ROW_PX = 18;
+/** R97-C: the table's header row (same rhythm, +1 for the divider). */
+export const USAGE_TABLE_HEAD_PX = 19;
 
-/** R96-G: the overlay window's height for a usage card — the payload's own
- * arithmetic (chrome + every section title + every line + the note), floored
- * at the Rust command's 40px minimum. Pure; exported for tests. */
+/** R97-C: the overlay window's height for a usage card — the payload's own
+ * arithmetic (chrome + the context bar + the donut + every section title +
+ * every line + every table row + the note), floored at the Rust command's
+ * 40px minimum. Pure; exported for tests. */
 export function estimateUsageCardHeight(payload: UsageCardPayload): number {
+  const contextBar = payload.contextBar !== undefined ? USAGE_CONTEXT_BAR_PX : 0;
+  // The donut block: the header LINES stack beside the 46px ring — the
+  // block is whichever is taller (5-6 lines at 17px ≈ 85-102px) + padding.
+  const donut =
+    payload.donut !== undefined
+      ? Math.max(USAGE_DONUT_PX, payload.donut.lines.length * USAGE_LINE_PX + 10)
+      : 0;
   const sections = payload.sections.reduce(
-    (acc, s) => acc + USAGE_SECTION_TITLE_PX + s.lines.length * USAGE_LINE_PX,
+    (acc, s) =>
+      acc +
+      USAGE_SECTION_TITLE_PX +
+      s.lines.length * USAGE_LINE_PX +
+      (s.table !== undefined ? USAGE_TABLE_HEAD_PX + s.table.rows.length * USAGE_TABLE_ROW_PX : 0),
     0,
   );
   const note = payload.note !== undefined && payload.note !== "" ? USAGE_NOTE_PX : 0;
-  return Math.max(40, USAGE_CARD_CHROME_PX + sections + note);
+  return Math.max(40, USAGE_CARD_CHROME_PX + contextBar + donut + sections + note);
 }
 
 /** A picked item as reported back (kind + the discriminated item). */
