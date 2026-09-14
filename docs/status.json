@@ -3,7 +3,7 @@
  "product": {
   "name": "Acute",
   "tagline": "Local-first multi-agent engineering workbench",
-  "version": "0.93.0",
+  "version": "0.94.0",
   "availability": "Private build — not yet distributed",
   "chips": [
    "Windows desktop",
@@ -19,15 +19,15 @@
    "id": "coding",
    "title": "Coding",
    "state": "usable",
-   "progress": 89,
-   "summary": "Projects, 27 base tools (ask_user joined in R87) (15 plugin files incl. the 30-tool computer-use family) + skills/MCP/plugins, streaming chat, multi-turn continuation, codebase indexing, grep search, demo viewer"
+   "progress": 92,
+   "summary": "Projects, 28 base tools (search_skills joined in R96) + skills/MCP/plugins, streaming chat, whole-file-first reads, ripgrep-style search, atomic multi-edit, codebase indexing"
   },
   {
    "id": "agentic",
    "title": "Agentic system",
    "state": "building",
-   "progress": 77,
-   "summary": "Multi-turn agentic continuation with the R70 agent brain (env grounding, AGENTS.md conventions, one five-phase loop, verification discipline) + the R71 discipline & reliability layer (engineering-discipline prompt section, edit-failure escalation, provider-error classification + overflow recovery) + the R72 adaptive capability layer (deterministic task→skill hints, 18→20 builtin skills, references/ depth, per-directory conventions) + the R73 task-modes posture layer (six builtin posture modules + .acute/agents/*.md customs with shadowing + tool narrowing, the switch_mode tool, the composer picker + /mode slash, sessions.active_mode, the mode Task signal line, the generalized system-reminder renderer) + the R79 addressable-delegation tier (delegate_task task_id/background/resume: background children with the immediate receipt + the per-turn BACKGROUND TASKS reminder, resume wait/collect/retry, migration 0028); multi-agent orchestration owner-gated; computer use (desktop observation+actuation, separate vision model, kill switch) owner-gated + the R87 interactive tier (ask_user — the mid-task question card with options + custom answers, batched, 10-min timeout; the todo list rendered live in chat via todo-updated frames; the browser agent's read_dom per-element positions + panel-only screenshots)"
+   "progress": 82,
+   "summary": "Multi-turn agentic continuation with the R70 agent brain + the R71 discipline layer + the R73 task modes + the R79 delegation tier; R96: the warn-only loop guard with raw-args identity, completion = the model's own stop (the role=user fix), BATCH/COMPLETION/PRECISION prompt disciplines, 24 seeded skills + search_skills discovery, the R96 live-fire-verified wire (verbatim reasoning rungs, app attribution, the output cap)"
   },
   {
    "id": "automation",
@@ -280,6 +280,10 @@
   {
    "date": "2026-09-13",
    "label": "R95 — the sixth-walkthrough round: the Models & Providers overhaul, model-aware thinking + the loop guard, the native local-file browser, the chat robustness pass, the REAL-API live-fire. Shipped as v0.93.0."
+  },
+  {
+   "date": "2026-09-14",
+   "label": "Round 96 — the smarter-agent round (v0.94.0): live-fired over a 258-file project"
   }
  ],
  "quality": {
@@ -315,10 +319,7 @@
   }
  ],
  "plan": {
-  "current": {
-   "title": "R95 — the sixth-walkthrough round",
-   "detail": "The owner's v0.92.0 report, shipped as v0.93.0. (A) THE MODELS & PROVIDERS UI OVERHAUL: the taller fixed provider rail, sidebar-only back navigation, Key 2..N parity with Key 1 + styled ConfirmDialogs replacing every browser confirm, the add-then-configure picker (pencil gone, already-added hidden), hidden-at-bottom LIVE animated sorting with scroll persistence, the one-Test-button three-option single-row scope picker, provider delete at the TOP with the dedicated confirmation, model-card separation. (B) THE PROVIDER-TEST TRUTH: the reachability probe now carries the provider's raw upstream error body. (C) MODEL-AWARE THINKING: migration 0035 captures per-model reasoning capability from OpenRouter's supported_parameters (verified against the live catalog), the thinking menu adapts to each model's ladder, the wire mapping never sends an unsupported effort, and reasoning budgets bound ladder-less models — effort XOR max_tokens on the wire (the mutual exclusion OpenRouter enforces, caught by the live-fire). (D) THE THINKING-LOOP GUARD: >120s of pure reasoning with >24KB accumulated → ThinkingLoopError → one de-escalating retry with the visible meta.retry card. (E) THE NATIVE BROWSER OPENS LOCAL FILES: file:// end-to-end (Rust parse_web_url, panel path normalization, the ticket-gated local-file route, the agent tool's bare-path navigate + disk-backed read) — the owner's 'proper native browser' directive. (F) THE CHAT: the thinking area stick-to-bottom + inner jump pill, the nested-scroll chaining fix (the chat pill no longer appears while reading the thinking tail), three markdown bugs fixed with regression pins, the context donut's measured-usage prominence, the entry-renderer registry. (G) THE REAL-API LIVE-FIRE (scripts/r95-live-fire.mjs): the built sidecar through a recording proxy against REAL OpenRouter with the free Nemotron models — SKILLS section verified in the live system prompt, the effort mapping verified on the wire, token usage EXACTLY matching the provider's numbers (zero deviation). Full pipeline: lint, both typechecks, 3,258/3,258 (175 files), e2e 12/12, build, license 134, docs:check."
-  },
+  "current": "R96 — the seventh-walkthrough round (the smarter agent + the browser experience), v0.93.0 → v0.94.0",
   "upcoming": [
    {
     "title": "The owner's v0.93.0 walkthrough",

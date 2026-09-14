@@ -2689,3 +2689,20 @@ locally (no cargo in the sandbox — CI's Windows build is the gate).
 **Docs:** round-95.md (§9 = the owner's TEST CHECKLIST), CHANGELOG
 0.93.0, status.json round 95, HANDOFF header, this entry, AGENT-MEMORY
 #96, the version ×4 at 0.93.0.
+
+---
+Task ID: R96 (the full round)
+Agent: main-orchestrator (Z.ai Code) + 5 workstream subagents (research, B/C/D, F/G/H, I)
+Task: The seventh-walkthrough round — the owner's v0.93.0 report (18 itemized asks), v0.93.0 → v0.94.0
+
+Work Log:
+- R96-0: environment verified at e2734b4 (v0.93.0 released); the report itemized into 18 asks with the survey's root causes (the loop guard's argsSummary identity hole; the phrase-gate's assistant-last continuations; the thinking-first live segment missing `live`; the folded max→high ladder; the donut popover pausing the browser).
+- R96-A: the research subagent produced docs/research/agent-architectures-r96.md (728 lines — Claude Code/Kilo/OpenCode/Cline/Aider/Goose, live-fetched; the §9 adopt/reject table drove C+D).
+- R96-E: the thinking-first live-segment fix (ee1cf82) — BareWorkingEntries never passed `live`; the live entry's segment renders as a live WorkingSection now.
+- R96-B/C/D: the core+tools+prompts wave (02c7b80). Three parallel subagents hit the orchestrator's dispatch deadline mid-flight (the lesson #95 pattern — twice this round); their +2228 lines were inventoried, verified, and their tails finished inline: the streamed postFinalContinuation branch, the streamed completion rule, the loopGuardStop deletions, the abort-vs-completion race, the stuck-stop-button fix (frame-time retirement + the 8s watchdog), the four skill bodies' quality bar, the TOOL_NAMES/migration-0036/TOOL_CATALOG trio (a real enforcement gap the permission pins caught), and ~40 contract-pin updates (the golden regenerated with the R96 note; D6 22K→23K documented).
+- R96-F/G/H/I (7bc5817): the reasoning ladders verbatim (F), the browser overlay card + nav parity (G), the chat diff blocks + the donut hover-only (H), the installer kill-order (I — the only subagent that finished its dispatch cleanly).
+- R96-J: the live-fire (96f5cdf) — a 258-file synthetic project against REAL OpenRouter; the precision task, the paged-read silence, the wire shapes, the skills surface, token truth all verified live; TWO real bugs caught + fixed + unit-pinned (the app-attribution headers; the max_tokens output cap).
+- Full pipeline green before every push: lint, both typechecks, agent-core 2,228/2,228, frontend 1,193/1,193.
+
+Stage Summary:
+- v0.94.0: every ask of the owner's seventh report answered, live-verified where the ask touched the wire. AGENT-MEMORY #97 (identity inputs ≠ display inputs; hard stops are the owner's decision) recorded. The 15-min ntfy progress notifications ran throughout; the final THE-TASK-IS-DONE ping follows the release.

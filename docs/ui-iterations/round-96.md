@@ -243,20 +243,71 @@ handle-release grace — only then does the installer run. Eight new unit
 tests pin the ordering (graceful and fallback shapes); `cargo check` is
 CI's gate (no Rust toolchain in the sandbox — honestly noted).
 
-## §8 Verification so far (B/C/D/E/I)
+## §8 Verification (the full pipeline)
 
 - `pnpm lint` clean; both typechecks clean (root + agent-core).
-- **agent-core: 2,203/2,203 tests** (106 files) — including the rewritten
-  loop-guard suite (16 tests: the warn-only contract, the paged-read pins
-  in both paths), the r96-prompts-skills suite (35: sections, budget,
-  skills, search_skills), the r96-tools-precision + r96-search-precision
-  suites (C's 40+), and the ~40 updated contract pins (completion
-  semantics, tool counts, section counts, the golden regenerated with the
-  R96 note).
-- **frontend: 1,149/1,149** — including the R96-E thinking-first test
-  and the stuck-stop-button hanging-stream regressions.
-- Workstreams F (reasoning ladders), G (browser), H (chat diffs) are in
-  flight; J (live-fire) and K (release) follow.
+- **agent-core: 2,228/2,228 tests** (107 files) — including the rewritten
+  loop-guard suite (16: the warn-only contract, the paged-read pins in both
+  paths), the r96-prompts-skills suite (35), the r96-tools-precision +
+  r96-search-precision suites (C's), the r96-reasoning-levels suite (23:
+  the verbatim ladders, the legacy auto-refresh, the attribution + output
+  cap wrappers), and the updated contract pins (completion semantics, tool
+  counts, section counts, the golden regenerated with the R96 note).
+- **frontend: 1,193/1,193** — including the R96-E thinking-first test, the
+  stuck-stop-button hanging-stream regressions, the diff-block renders, and
+  the donut's hover-only pins (the owner's R95-F reversal documented).
+- CI runs the Windows gates (`cargo check` included — the Rust toolchain
+  is absent in this sandbox, honestly noted in §7).
+
+## §8b The LIVE-FIRE (R96-J, commit 96f5cdf) — the owner's directive:
+"test it in your own environment, give it a very large project"
+
+`scripts/r96-live-fire.mjs`: the BUILT sidecar through a recording proxy
+against REAL OpenRouter, over a **258-file synthetic project** (a widget /
+service / util / test tree + a ~200KB paged-read file + the planted
+precision target — all synthetic paths, nothing in this repo). The checks,
+with the live outcomes:
+
+1. **The precision task** ("In the file `src/widgets/timer-panel.js` (a SYNTHETIC path inside the temp project — not a repo path), change
+   'Coffee Timer' to 'Tea Timer' — both places — and nothing else"):
+   ✓ completes with a done frame (no post-completion error, no role=user
+   failure), ✓ ZERO loop-guard warnings, ✓ the disk file changed EXACTLY
+   (both occurrences, nothing else), ✓ the tool sequence TARGETED the named
+   file (a read+edit of timer-panel, no project-root listing, ≤8 reads),
+   ✓ TOKEN TRUTH (the app's finish-frame totals == the provider's reported
+   usage — the R95 zero-deviation standard held on the multi-step turn).
+2. **The paged read** ("read data/big-log.txt from beginning to end"): ✓
+   completes, ✓ ZERO loop-guard warnings across the pages — the owner's
+   false-positive report is closed live, not just in unit tests.
+3. **The reasoning wire shapes**: ✓ the owner's exact model
+   (deepseek/deepseek-v4.1-flash, ladder ['max','high','low'] live) with a
+   Max pick sends `reasoning.effort: "max"` VERBATIM (the folded-default
+   report closed); ✓ a ['low','medium'] model steps a Max pick down to
+   "medium"; ✓ a ladder-less model rides the budget only (the R95 XOR
+   preserved).
+4. **The skills surface**: ✓ the live system prompt carries the SKILLS
+   header naming both tools + the four new seeded skills + the three
+   discipline sections.
+5. **Batching measured** (the research's open question): the free Nemotron
+   models did NOT batch tool calls through the openai-compatible path in
+   this run (0 multi-tool messages) — the executor parallelizes whatever
+   the model emits (research finding #3); the prompt guidance is the
+   lever, the model decides. Informational, honestly reported.
+
+**The two REAL bugs the live-fire caught (both fixed + unit-pinned):**
+- **App attribution**: OpenRouter publishers gate models on app identity
+  ("thinkingmachines/inkling-small:free is only available on agentic
+  harnesses" — a routing-layer policy; verified live that our headers do
+  not unlock it for unlisted apps, honestly documented). Every outbound
+  chat-completions call now carries `X-Title` + `HTTP-Referer`
+  (`withAppAttribution`, outermost in the wrapper chain).
+- **The output cap**: OpenRouter PRICES an unspecified max_tokens at the
+  model's FULL default ceiling — the owner's exact model was rejected with
+  "You requested up to 131072 tokens, but can only afford 22738" (a
+  one-word reply!). The resolved maxOutputTokens budget now rides the wire
+  as `max_tokens` (`buildOutputCapFetch` — never overwriting a
+  provider-set cap, standing down when the ladder-less reasoning budget
+  owns the body per lesson #96's XOR).
 
 ## §9 The owner's TEST CHECKLIST (what to try on v0.94.0)
 

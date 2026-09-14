@@ -21,6 +21,81 @@ code-signing, the Files-tab polish, the browser agent's CDP-level trusted-input
 tier, the computer-use COM IUIAutomation bridge for the ACTION/MSAA legacy
 layers).
 
+## [0.94.0] - 2026-09-14 — the seventh-walkthrough round: the smarter agent
+
+The owner's v0.93.0 walkthrough report, answered end to end — the agent
+capability round (precision tools, batch discipline, the skills system), the
+loop-guard rewrite, and a REAL-API live-fire over a 258-file project that
+caught two genuine wire bugs.
+
+### The agent core
+- **The loop guard is WARN-ONLY**: it never stops a generation (it warns in
+  chat + nudges the model); and it now compares RAW tool arguments, so
+  legitimately paging through one large file (different offsets) never trips
+  it again — the false positive that stopped healthy reads is closed in both
+  turn paths.
+- **Completion is the model's own stop**: a tool-using turn that produces its
+  final text ends there (no more forced continuations that some providers
+  reject with "The last message must have role=user"). A failed
+  post-completion continuation keeps the completed answer — never a
+  "Generation failed" card over finished work.
+- **The stuck stop button**: every terminal frame retires the stop
+  affordance immediately, plus a watchdog for never-settling connections.
+- Deterministic request-shape errors fail fast (no blind retries).
+
+### The tools (precision + power)
+- read_file returns whole files under a 48KB budget (no more needless
+  split reads of modest HTML files); paging only for genuinely large files.
+- search_code gains ripgrep semantics: output modes (content /
+  files-with-matches / count), context lines, first-class regex,
+  .gitignore respect, binary skipping, per-file grouping.
+- edit_file: atomic multi-edit batches (all-or-nothing, the failing index
+  reported), replaceAll, and a whitespace-normalized fallback rung.
+- write_file snapshots creates, so the chat can diff them.
+
+### The chat window
+- edit_file/write_file rows render collapsible red/green unified-diff
+  cards (stats chip, new-file shape, scrollable).
+- Tool lines carry richer status; the context donut shows NO inline value
+  (hover-only — the numbers live in the popover, which rides the overlay
+  window).
+
+### The browser
+- Hovering the token usage opens the card in the overlay window — the
+  browser never pauses for it ("Browser paused while the menu is open" is
+  gone for the usage hover).
+- Agent-driven navigation now matches pasting the URL manually (including
+  local file:// pages re-reading the disk when the agent rebuilds and
+  re-navigates).
+- An honest loading edge while a tab navigates.
+
+### Reasoning levels (model-aware, verbatim)
+- The thinking menu offers ONLY the model's own detected rungs and NAMES
+  THE SOURCE ("detected from provider: low, high, max" + the model's
+  default); xhigh/max are real rungs now — the wire sends the model's own
+  token verbatim (a max pick on a max model sends "max"), stepping down
+  only when the ladder lacks the pick.
+- Models added before the thinking-detection round auto-refresh their
+  detected capabilities from the provider catalog.
+
+### The skills system
+- Four new built-in skills: planning, ui-design, error-testing,
+  large-project-navigation.
+- A search_skills discovery tool (the prompt lists names + descriptions;
+  bodies load on demand via read_skill; the listing is budget-capped).
+- The prompt gains BATCH, COMPLETION, and PRECISION discipline sections.
+
+### The wire (the live-fire catches)
+- Every outbound call carries OpenRouter app-attribution headers.
+- The configured output cap rides the wire as max_tokens (OpenRouter prices
+  an unspecified cap at the model's FULL default — paid models on
+  credit-limited accounts were being rejected for requests they could
+  afford).
+- The installer kills the sidecar tree BEFORE launching the updater's
+  installer (graceful ask → bounded wait → tree kill → handle-release
+  grace) — the "Error opening file for writing: win32 x64.node / node.exe"
+  race.
+
 ## [0.93.0] - 2026-09-13 — the sixth-walkthrough round
 
 The owner's v0.92.0 walkthrough report, answered end to end — and verified
