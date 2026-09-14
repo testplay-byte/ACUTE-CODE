@@ -629,4 +629,60 @@ describe("General tab + Auto-retry card (ROUND-78 R78-C)", () => {
     );
     await waitFor(() => expect(screen.getByTestId("retry-max-attempts").textContent).toBe("6"));
   });
+
+  /* ── R97-I part 3 (the state-awareness sweep): the card's honest ERROR
+   * gate. The pre-R97 `isLoading || current === undefined` gate swallowed a
+   * failed GET into an ETERNAL "loading retry settings…" (data undefined
+   * never resolves) — a 401 looked like latency. Now the card renders the
+   * retryable error (role=alert, same section testid) and a successful
+   * Retry flows back into the normal card. */
+  it("R97-I: a 401 on the GET renders the honest error card (role=alert + Retry) instead of hanging on \"loading retry settings…\"; a successful Retry recovers the card", async () => {
+    // Phase 1: the retry GET hits the bearer wall. The describe's stub does
+    // not serve thinking-loop either — patch that too, so the retry card is
+    // the ONE honest error on the tab and the role=alert query stays unique.
+    let failRetryGet = true;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/v1/settings/thinking-loop")) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ enabled: false, stallSeconds: 120, reasoningBytesKB: 24 }),
+        } as unknown as Response;
+      }
+      if (url.includes("/api/v1/settings/retry") && (init?.method ?? "GET") === "GET" && failRetryGet) {
+        return {
+          ok: false,
+          status: 401,
+          text: async () =>
+            JSON.stringify({ error: { code: "UNAUTHORIZED", message: "no token" } }),
+        } as unknown as Response;
+      }
+      return original(input, init);
+    }) as typeof fetch;
+
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
+
+    // The honest error replaces the eternal loading line — inside the SAME
+    // section (the testid survives), carrying the cause + the Retry button.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Could not load retry settings");
+    expect(alert.textContent).toContain("no token");
+    expect(alert.closest("section")?.getAttribute("data-testid")).toBe("retry-settings-card");
+    expect(screen.queryByText("loading retry settings…")).toBeNull();
+    const retryButton = screen.getByRole("button", { name: "Retry loading retry settings" });
+    // No dead switches while the card has nothing real to show.
+    expect(screen.queryByTestId("retry-switch-autoRetryRateLimit")).toBeNull();
+
+    // Phase 2: the sidecar recovers — flipping the mock + clicking Retry
+    // re-drives the GET and the normal card (switches + schedule) returns.
+    failRetryGet = false;
+    fireEvent.click(retryButton);
+    const rateLimit = await screen.findByRole("switch", { name: "Toggle auto-retry for rate limits (429)" });
+    expect(rateLimit.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("retry-max-attempts").textContent).toBe("6");
+  });
 });

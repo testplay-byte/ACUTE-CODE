@@ -7,6 +7,11 @@ import { formatTime } from "../../lib/format";
 import { useSendMessage, useSession } from "../../hooks/use-sessions";
 import { ease, fadeInUp } from "../../lib/motion";
 import { useThemeStyles } from "../../lib/use-theme-styles";
+// R97-I part 3 (the design-system color sweep): the session-status chips
+// ride the semantic tokens + withAlpha — the banned string-suffix alpha
+// hexes ("#ef44441a" / "#22c55e14") and their bare hex twins are gone.
+import { withAlpha } from "../dashboard/helpers";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/controls";
 
@@ -116,9 +121,9 @@ export function ChatView({ session, agent }: { session: Session; agent: Agent | 
           className="ml-auto shrink-0 rounded-lg px-1.5 py-0.5 font-mono text-[10px]"
           style={
             session.status === "failed"
-              ? { color: "#ef4444", backgroundColor: "#ef44441a" }
+              ? { color: SEMANTIC_COLORS.danger, backgroundColor: withAlpha(SEMANTIC_COLORS.danger, 0.1) }
               : session.status === "running"
-                ? { color: "#22c55e", backgroundColor: "#22c55e14" }
+                ? { color: SEMANTIC_COLORS.success, backgroundColor: withAlpha(SEMANTIC_COLORS.success, 0.08) }
                 : { color: styles.textSecondary, backgroundColor: styles.inputBg }
           }
         >

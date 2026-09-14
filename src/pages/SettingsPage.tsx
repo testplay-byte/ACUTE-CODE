@@ -21,6 +21,10 @@ import { Bot, Brain, Globe, Info, Minus, Monitor, Moon, Palette, Plus, PlugZap, 
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
+// R97-I part 3 (the state-awareness sweep): the settings cards' honest
+// error states ride the documented semantic tokens (§1/§6) — never a
+// divergent hardcoded red.
+import { SEMANTIC_COLORS } from "../lib/semantics";
 import { AgentsScreen } from "../components/agents/AgentsScreen";
 import { ModelsProvidersTab } from "../components/settings/ModelsProvidersTab";
 import { SubAgentsTab } from "../components/settings/SubAgentsTab";
@@ -528,6 +532,55 @@ function AdvancedTab() {
   );
 }
 
+/* ── R97-I part 3: the settings cards' shared ERROR state. The pre-R97 gate
+ * (`isLoading || current === undefined`) swallowed a failed GET into an
+ * ETERNAL "loading …" line — data undefined never resolves, so a 401 or a
+ * down sidecar looked like latency. Each card now renders this (the round's
+ * retryable-error shape, cf. AgentChatPanel's ChatLoadErrorCard: role=alert,
+ * the danger token via withAlpha, the exact cause, ONE Retry action that
+ * re-drives the query) INSIDE its own <section>, so the card's testid and
+ * column rhythm survive. */
+function SettingsLoadErrorCard({
+  what,
+  error,
+  onRetry,
+}: {
+  what: string;
+  error: unknown;
+  onRetry: () => void;
+}) {
+  const styles = useThemeStyles();
+  const cause = error instanceof Error ? error.message : String(error);
+  return (
+    <div
+      role="alert"
+      data-settings-load-error
+      className="rounded-[14px] border px-4 py-3.5"
+      style={{
+        borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
+        background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
+      }}
+    >
+      <div className="text-[12.5px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+        Could not load {what} settings
+      </div>
+      <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
+        The agent sidecar may be down or the request was rejected — {cause}. Nothing was changed; Retry
+        re-reads the saved value.
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        aria-label={`Retry loading ${what} settings`}
+        className="mt-3 h-8 cursor-pointer rounded-lg border px-3.5 text-[12px] font-semibold transition-opacity hover:opacity-85"
+        style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 /* ── ROUND-97 (R97-D): the THINKING-LOOP card — the owner's "give the user
  * the option in the settings to turn it on or off. By default it will be
  * turned off so that the model can think as much as it needs to" directive.
@@ -558,6 +611,24 @@ function ThinkingLoopCard() {
   });
 
   const current = settingsQuery.data;
+  // R97-I part 3: the ERROR branch comes FIRST — with the pre-R97 gate a
+  // failed GET (data undefined) hung on "loading…" forever. Stale data on a
+  // background-refetch failure still renders the card normally below.
+  if (settingsQuery.isError && current === undefined) {
+    return (
+      <section
+        data-testid="thinking-loop-card"
+        className="rounded-lg p-4"
+        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      >
+        <SettingsLoadErrorCard
+          what="thinking-loop"
+          error={settingsQuery.error}
+          onRetry={() => void settingsQuery.refetch()}
+        />
+      </section>
+    );
+  }
   if (settingsQuery.isLoading || current === undefined) {
     return (
       <section
@@ -721,7 +792,7 @@ function ThinkingLoopCard() {
       </div>
 
       {error ? (
-        <div className="mt-2 text-[11px]" style={{ color: "#e5484d" }} role="alert">
+        <div className="mt-2 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
           {error}
         </div>
       ) : null}
@@ -795,6 +866,24 @@ function RetryConfigCard() {
   });
 
   const current = settingsQuery.data;
+  // R97-I part 3: the ERROR branch comes FIRST — with the pre-R97 gate a
+  // failed GET (data undefined) hung on "loading…" forever. Stale data on a
+  // background-refetch failure still renders the card normally below.
+  if (settingsQuery.isError && current === undefined) {
+    return (
+      <section
+        data-testid="retry-settings-card"
+        className="rounded-lg p-4"
+        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      >
+        <SettingsLoadErrorCard
+          what="retry"
+          error={settingsQuery.error}
+          onRetry={() => void settingsQuery.refetch()}
+        />
+      </section>
+    );
+  }
   if (settingsQuery.isLoading || current === undefined) {
     return (
       <section
@@ -1069,7 +1158,7 @@ function RetryConfigCard() {
       </div>
 
       {error ? (
-        <div className="mt-2 text-[11px]" style={{ color: "#e5484d" }} role="alert">
+        <div className="mt-2 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
           {error}
         </div>
       ) : null}
@@ -1112,6 +1201,20 @@ function DebugModeCard() {
   });
 
   const current = settingsQuery.data;
+  // R97-I part 3: the ERROR branch comes FIRST — with the pre-R97 gate a
+  // failed GET (data undefined) hung on "loading…" forever. Stale data on a
+  // background-refetch failure still renders the card normally below.
+  if (settingsQuery.isError && current === undefined) {
+    return (
+      <section className="rounded-lg p-4" style={{ background: styles.card, border: bdr("1.5px", styles.border) }}>
+        <SettingsLoadErrorCard
+          what="debug"
+          error={settingsQuery.error}
+          onRetry={() => void settingsQuery.refetch()}
+        />
+      </section>
+    );
+  }
   if (settingsQuery.isLoading || current === undefined) {
     return (
       <section className="rounded-lg p-4" style={{ background: styles.card, border: bdr("1.5px", styles.border) }}>
@@ -1149,7 +1252,7 @@ function DebugModeCard() {
             the next message you send.
           </div>
           {error ? (
-            <div className="mt-1.5 text-[11px]" style={{ color: "#e5484d" }} role="alert">
+            <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
               {error}
             </div>
           ) : null}
@@ -1209,6 +1312,20 @@ function MemoryCard() {
   });
 
   const current = settingsQuery.data;
+  // R97-I part 3: the ERROR branch comes FIRST — with the pre-R97 gate a
+  // failed GET (data undefined) hung on "loading…" forever. Stale data on a
+  // background-refetch failure still renders the card normally below.
+  if (settingsQuery.isError && current === undefined) {
+    return (
+      <section className="rounded-lg p-4" style={{ background: styles.card, border: bdr("1.5px", styles.border) }}>
+        <SettingsLoadErrorCard
+          what="memory"
+          error={settingsQuery.error}
+          onRetry={() => void settingsQuery.refetch()}
+        />
+      </section>
+    );
+  }
   if (settingsQuery.isLoading || current === undefined) {
     return (
       <section className="rounded-lg p-4" style={{ background: styles.card, border: bdr("1.5px", styles.border) }}>
@@ -1245,7 +1362,7 @@ function MemoryCard() {
             memory tools are not offered. Saved memories are kept and restored when re-enabled.
           </div>
           {error ? (
-            <div className="mt-1.5 text-[11px]" style={{ color: "#e5484d" }} role="alert">
+            <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
               {error}
             </div>
           ) : null}
@@ -1315,6 +1432,26 @@ function BrowserTab() {
   });
 
   const current = settingsQuery.data;
+  // R97-I part 3: the ERROR branch comes FIRST — with the pre-R97 gate a
+  // failed GET (data undefined) hung on "loading…" forever. Stale data on a
+  // background-refetch failure still renders the card normally below.
+  if (settingsQuery.isError && current === undefined) {
+    return (
+      <div className="mx-auto flex max-w-2xl flex-col gap-4">
+        <section
+          data-testid="browser-settings-card"
+          className="rounded-lg p-4"
+          style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+        >
+          <SettingsLoadErrorCard
+            what="browser"
+            error={settingsQuery.error}
+            onRetry={() => void settingsQuery.refetch()}
+          />
+        </section>
+      </div>
+    );
+  }
   if (settingsQuery.isLoading || current === undefined) {
     return (
       <div className="mx-auto flex max-w-2xl flex-col gap-4">
@@ -1529,7 +1666,7 @@ function BrowserTab() {
                   data-testid={`browser-quicklink-remove-${i}`}
                   onClick={() => setQuickLinks(current.quickLinks.filter((_, j) => j !== i))}
                   className="h-7 w-7 grid place-items-center rounded-lg border shrink-0 transition-colors disabled:opacity-40 cursor-pointer"
-                  style={{ ...inputStyle, color: "#e5484d" }}
+                  style={{ ...inputStyle, color: SEMANTIC_COLORS.danger }}
                 >
                   <Trash2 size={11} />
                 </button>
@@ -1539,7 +1676,7 @@ function BrowserTab() {
         </div>
 
         {error ? (
-          <div className="mt-2 text-[11px]" style={{ color: "#e5484d" }} role="alert">
+          <div className="mt-2 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
             {error}
           </div>
         ) : null}

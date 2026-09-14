@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-14 round-97 -->
 # ACUTE-CODE Design System
 
 **Why this document exists (owner direction, round-16/2026-08-23):** "the UI
@@ -16,7 +16,9 @@ in the same round that changes the UI.
   themes (Nova Cream, Bento Blue, Midnight Lab, Sunset Pop, Mono Stone) ×
   light/dark; optional per-theme `accentDark`.
 - **Documented exceptions only**: `SEMANTIC_COLORS` (success `#22c55e`,
-  danger `#ef4444`) in `src/lib/semantics.ts`; file-type + syntax palettes
+  danger `#ef4444`, warning `#f59e0b` — R97-I: the amber for wait/attention
+  states — retry waits, queued messages, thinking-loop stops) in
+  `src/lib/semantics.ts`; file-type + syntax palettes
   in `src/components/project-chat/highlight.ts`; the code-panel traffic
   lights. Anything else hard-coded is a bug.
 - Alpha tints: `withAlpha(color, 0.08–0.13)` from
@@ -57,6 +59,12 @@ a slot here.
 
 ## 5. Component anatomy (inventory)
 
+- **Skeleton primitives (R97-I)**: `SkeletonBlock` / `SkeletonRows` in
+  `src/components/shared/Skeletons.tsx` — the ONE spelling for the §6
+  loading rule: decorative `aria-hidden` pulse blocks in the theme's
+  `subtle` surface; the call site owns the single `role="status"`
+  announcement. Loading states MUST use them, never ad-hoc `animate-pulse`
+  divs.
 - **Chat message (ROUND-37 turn model)**: user = accent bubble, right,
   rounded-2xl rounded-br-md, max-w-[85%], hover copy. Assistant = ONE
   header-less turn per user message: a borderless **Working section**
@@ -180,8 +188,9 @@ Drag handles: `role="separator"` + arrow-key resize + focus ring; chat
 handle sits on the chat's LEFT edge (drag right = shrink chat). Popovers:
 outside-click close, `aria-haspopup/expanded`, listbox semantics. ⌘K =
 TopBar file search. Buttons: active:scale-95, hover subtleHover. Loading:
-skeleton rows (Explorer), spinners, NEVER blank flashes. Errors: inline
-role=alert with the exact cause + retry; red only via SEMANTIC_COLORS.danger.
+the shared Skeleton primitives (§5) or spinners, NEVER blank flashes.
+Errors: inline role=alert with the exact cause + retry; red only via
+SEMANTIC_COLORS.danger.
 
 ## 7. Adding a screen (checklist)
 
