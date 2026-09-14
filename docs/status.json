@@ -291,7 +291,7 @@
   }
  ],
  "quality": {
-  "ci": "PENDING — the R97 tree (v0.95.0) pushed; CI + Release runs starting. Local gates all green first: lint, both typechecks, agent-core 2,255/2,255 in 111 files, frontend 1,223/1,223, e2e 12/12, docs:check 204/0/0, version ×4 agree on 0.95.0. This field syncs to the real run verdicts at close-out (the R96 pattern).",
+  "ci": "GREEN — CI 34879323837 and Release 34879322559 both SUCCESS on 52ffce2 (lint, both typechecks, agent-core 2,255/2,255 in 111 files, frontend 1,223/1,223, e2e 12/12, build, license audit, docs:check 204/0/0, version ×4 at 0.95.0). v0.95.0 PUBLISHED (release 388616224, latest — both assets verified with GitHub's server-side sha256 digests against freshly downloaded bytes: setup.exe e7aa1db1…, kit 83c0c0d9…; the launcher kit scanned — zero real-key values, only prefix teaching text). The R97 review pass (a dedicated audit of the round's full diff) landed SHIP-WITH-FIXES with every finding fixed + pinned before the release; the round's eight workstreams (C the Kilo-style context bar, D the thinking-loop default-off + the amber card, E the failure-usage truth, F the syntax colors with the gutter, G the browser settings home + the working HOME button, H the chat customizability, I the state-awareness sweep, J the review fixes) all live in the owner's TEST CHECKLIST at round-97.md §9.",
   "suites": [
    {
     "name": "frontend",
@@ -337,5 +337,5 @@
   ]
  },
  "round": 97,
- "ci": "PENDING — the R97 tree (v0.95.0) pushed; CI + Release runs starting. Local gates all green first: lint, both typechecks, agent-core 2,255/2,255 in 111 files, frontend 1,223/1,223, e2e 12/12, docs:check 204/0/0, version ×4 agree on 0.95.0. This field syncs to the real run verdicts at close-out (the R96 pattern)."
+ "ci": "GREEN — CI 34879323837 and Release 34879322559 both SUCCESS on 52ffce2 (lint, both typechecks, agent-core 2,255/2,255 in 111 files, frontend 1,223/1,223, e2e 12/12, build, license audit, docs:check 204/0/0, version ×4 at 0.95.0). v0.95.0 PUBLISHED (release 388616224, latest — both assets verified with GitHub's server-side sha256 digests against freshly downloaded bytes: setup.exe e7aa1db1…, kit 83c0c0d9…; the launcher kit scanned — zero real-key values, only prefix teaching text). The R97 review pass (a dedicated audit of the round's full diff) landed SHIP-WITH-FIXES with every finding fixed + pinned before the release; the round's eight workstreams (C the Kilo-style context bar, D the thinking-loop default-off + the amber card, E the failure-usage truth, F the syntax colors with the gutter, G the browser settings home + the working HOME button, H the chat customizability, I the state-awareness sweep, J the review fixes) all live in the owner's TEST CHECKLIST at round-97.md §9."
 }
