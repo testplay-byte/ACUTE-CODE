@@ -45,6 +45,9 @@ import {
   type UsageSegmentColor,
 } from "../lib/menu-overlay";
 import { formatTokenCount } from "../lib/format";
+// R97-J (m3): the danger/warn ring hexes ride the documented semantic tokens
+// (same values — one source of truth, not literals).
+import { SEMANTIC_COLORS } from "../lib/semantics";
 
 /** The lucide icons the payload addresses by name (the quick menu's set +
  * R92-A: the composer option menus' rows). */
@@ -455,9 +458,9 @@ function UsageCard({
   );
   const ringHex =
     payload.donut?.ringColor === "danger"
-      ? "#ef4444"
+      ? SEMANTIC_COLORS.danger
       : payload.donut?.ringColor === "warn"
-        ? "#f59e0b"
+        ? SEMANTIC_COLORS.warning
         : t.accent;
   return (
     <div

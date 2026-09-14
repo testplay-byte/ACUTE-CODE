@@ -113,3 +113,93 @@ export function highlightCode(code: string, lang: string | undefined): string | 
     return null;
   }
 }
+
+// ── R97-J (m4): the per-line split ─────────────────────────────────────────
+// The R97-F CodeBlock rendered Prism's whole-block HTML in ONE <code>, which
+// silently dropped the line-number gutter the plain fallback (and every
+// pre-R97 block) had — and made the two paths wrap differently. The honest
+// fix: split the TOKEN STREAM (never the output HTML — tokens span newlines:
+// block comments, template literals; naive string-splitting breaks their
+// spans) into one HTML string per line, re-opening the enclosing token
+// classes on each continuation line. The CodeBlock then renders the SAME
+// numbered rows as the fallback, colors included.
+
+/** One element of Prism's token stream. */
+type TokenNode = string | { type: string; alias?: string | string[]; content: TokenNode | TokenNode[] };
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function tokenClass(token: { type: string; alias?: string | string[] }): string {
+  // Prism's own stringify shape: type + aliases, space-joined.
+  const classes = [token.type];
+  if (token.alias !== undefined) {
+    if (Array.isArray(token.alias)) classes.push(...token.alias);
+    else classes.push(token.alias);
+  }
+  return classes.join(" ");
+}
+
+/** R97-J (m4): highlight + split → one HTML string per line (same span
+ * classes as highlightCode, re-opened across line breaks), or null when the
+ * language is unknown / the input is pathological (the caller falls back to
+ * the plain numbered rows — never a crash). Pure; exported for tests. */
+export function highlightLines(code: string, lang: string | undefined): string[] | null {
+  const grammarName = normalizeLang(lang);
+  if (grammarName === "none") return null;
+  const grammar = Prism.languages[grammarName];
+  if (grammar === undefined) return null;
+  try {
+    const tokens = Prism.tokenize(code, grammar) as TokenNode[];
+    const out: string[] = [];
+    let current = "";
+    const stack: string[] = [];
+
+    const openSpan = (cls: string): void => {
+      stack.push(cls);
+      current += `<span class="token ${cls}">`;
+    };
+    const closeSpan = (): void => {
+      stack.pop();
+      current += "</span>";
+    };
+    const newline = (): void => {
+      // Close this line's open spans, then re-open them on the next line so
+      // every line is standalone-valid HTML.
+      const open = [...stack];
+      for (let i = 0; i < open.length; i += 1) closeSpan();
+      out.push(current);
+      current = "";
+      for (const cls of open) openSpan(cls);
+    };
+    const emitText = (text: string): void => {
+      const parts = text.split("\n");
+      parts.forEach((part, i) => {
+        if (i > 0) newline();
+        current += escapeHtml(part);
+      });
+    };
+    const walk = (node: TokenNode): void => {
+      if (typeof node === "string") {
+        emitText(node);
+        return;
+      }
+      openSpan(tokenClass(node));
+      if (Array.isArray(node.content)) {
+        for (const child of node.content) walk(child);
+      } else {
+        walk(node.content);
+      }
+      closeSpan();
+    };
+
+    for (const token of tokens) walk(token);
+    for (let i = 0; i < stack.length; i += 1) closeSpan();
+    out.push(current);
+    return out;
+  } catch {
+    // A pathological input must never take the render down with it.
+    return null;
+  }
+}

@@ -241,9 +241,13 @@ describe("ChatMarkdown block rendering", () => {
     const copy = screen.getByRole("button", { name: "Copy code" });
     expect(copy).toBeTruthy();
     expect(screen.getByText("2 lines")).toBeTruthy();
-    // Line numbers 1 + 2 render (CodeBlock's gutter).
-    expect(screen.getByText("1")).toBeTruthy();
-    expect(screen.getByText("2")).toBeTruthy();
+    // Line numbers 1 + 2 render (CodeBlock's gutter). R97-J (m4) re-pin: the
+    // highlighted path numbers its rows too — a Prism "token number" span
+    // can also read as the bare text "1", so the gutters are asserted
+    // structurally (each highlighted line's gutter is its previous sibling).
+    const rows = Array.from(document.querySelectorAll("[data-code-highlighted]"));
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.previousElementSibling?.textContent)).toEqual(["1", "2"]);
     // The fence markers themselves never print.
     expect(document.body.textContent).not.toContain("```");
   });
@@ -506,6 +510,22 @@ describe("ROUND-95 (R95-F) block robustness", () => {
     // No language → the plain-lines fallback, never a highlighted <code>.
     expect(document.querySelector("[data-code-highlighted]")).toBeNull();
     expect(screen.getByText("const x = 1;")).toBeTruthy();
+  });
+
+  it("R97-J (m4): a highlighted MULTI-LINE block keeps the line-number gutter — the same rows as the plain path", () => {
+    renderMd("```ts\nconst a = 1;\n/* a comment\n   spanning lines */\nconst b = 2;\n```");
+    // One highlighted span per line — the gutter is back on known-language
+    // blocks (R97-F had silently dropped it for them).
+    const rows = Array.from(document.querySelectorAll("[data-code-highlighted]"));
+    expect(rows).toHaveLength(4);
+    // The union of the per-line spans reads the exact code (the multi-line
+    // comment re-opens its token spans on each continuation line).
+    expect(rows.map((r) => r.textContent).join("\n")).toBe(
+      "const a = 1;\n/* a comment\n   spanning lines */\nconst b = 2;",
+    );
+    // The comment's continuation lines carry the re-opened token class.
+    expect(rows[1].innerHTML).toContain("token comment");
+    expect(rows[2].innerHTML).toContain("token comment");
   });
 
   it("table rows with MORE cells than the header keep the extras (no dropped data)", () => {

@@ -493,10 +493,14 @@ export function BrowserPanel({
   const clearError = useBrowserTabStore((s) => s.clearError);
 
   // R97-G: the DEFAULT ZOOM applies to PRISTINE sessions exactly once — a
-  // tab whose zoom is still the untouched default (1) adopts the setting's
+  // tab whose zoom is still the untouched default adopts the setting's
   // zoom when it first arrives; a tab the user has zoomed (or a session the
-  // server already remembers at another zoom) is never touched. The ref
-  // guards per-tab, so the setting never re-applies mid-session.
+  // server already remembers at another zoom) is never touched.
+  // R97-J (m6) fix: "untouched" is now the store-persisted zoomTouched flag
+  // (set by any explicit zoom), not the zoom value — a user-shaped 1.0 is
+  // no longer indistinguishable from "never touched" (the old sentinel
+  // re-applied the default on EVERY panel remount), and because the flag
+  // lives in the tab slice it survives tab switches and panel remounts.
   const appliedDefaultZoomRef = useRef(false);
   useEffect(() => {
     if (appliedDefaultZoomRef.current) return;
@@ -507,11 +511,12 @@ export function BrowserPanel({
     }
     const t = useBrowserTabStore.getState().tabs[tabId];
     if (t === undefined) return;
-    if (t.viewport.zoom !== 1) {
+    if (t.zoomTouched || t.viewport.zoom !== 1) {
       appliedDefaultZoomRef.current = true; // already user- or server-shaped
       return;
     }
     appliedDefaultZoomRef.current = true;
+    // setViewport marks zoomTouched — this tab is never pristine again.
     void setViewport(tabId, { zoom: browserSettings.defaultZoom });
   }, [browserSettings, tabId, setViewport]);
 
@@ -915,7 +920,11 @@ export function BrowserPanel({
     const el = placeholderRef.current;
     setOverlayCoversPanel(el !== null && overlayCoversRect(el.getBoundingClientRect()));
   }, [overlaySeq]);
-  const webviewHidden = overlayCoversPanel || popoverTabId === tabId || hidden;
+  // R97-J (M1): while the tab sits on the HOME view the native webview
+  // must HIDE (it would paint over the home screen's DOM — the pre-fix
+  // HOME button never showed anything in native mode). Every navigation
+  // clears homeView (the store) and the show paths resume.
+  const webviewHidden = overlayCoversPanel || popoverTabId === tabId || hidden || (state?.homeView ?? false);
   useEffect(() => {
     if (!nativeMode || !nativeReadyRef.current) return;
     void nativeTabSetVisible(tabId, !webviewHidden).catch(nativeWarn);
@@ -1200,6 +1209,9 @@ export function BrowserPanel({
       // re-asserting here would fight the panel's own lifecycle.
       if (hiddenRef.current || !nativeReadyRef.current) return;
       if (useWebviewGuardStore.getState().popoverTabId === tabId) return;
+      // R97-J (M1): the home view legitimately hides the webview — the
+      // watchdog must not fight the HOME button by re-asserting the show.
+      if (useBrowserTabStore.getState().tabs[tabId]?.homeView) return;
       // R92-A: fresh guard evaluation BEFORE the geometric skip — see the
       // watchdog's header comment above. Sync by design; cheap (one DOM
       // sweep) at the 2s cadence.

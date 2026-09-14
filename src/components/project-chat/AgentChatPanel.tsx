@@ -619,7 +619,7 @@ function TimestampChip({ ts, className = "" }: { ts: string | undefined; classNa
     <span
       data-chat-timestamp
       title="When this message was sent"
-      className={`font-mono text-[10px] shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 ${className}`}
+      className={`font-mono text-[10px] shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${className}`}
       style={{ color: styles.textTertiary }}
     >
       {today
@@ -1132,7 +1132,7 @@ export function TurnErrorCard({
               <span
                 data-error-queued-kept
                 className="text-[11px] font-semibold px-2 py-0.5 rounded-md shrink-0"
-                style={{ background: withAlpha("#f59e0b", 0.12), color: "#f59e0b" }}
+                style={{ background: withAlpha(SEMANTIC_COLORS.warning, 0.12), color: SEMANTIC_COLORS.warning }}
                 title="They stay queued server-side and send with your next message"
               >
                 {error.queuedKept} message{error.queuedKept === 1 ? "" : "s"} kept — they&apos;ll send with your next message
@@ -1236,13 +1236,13 @@ export function ThinkingStoppedCard({
         data-testid="thinking-stopped-card"
         className="rounded-[14px] border px-3.5 py-2.5 flex items-start gap-2.5"
         style={{
-          borderColor: withAlpha("#f59e0b", 0.4),
-          background: withAlpha("#f59e0b", styles.isDark ? 0.09 : 0.05),
+          borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4),
+          background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.09 : 0.05),
         }}
       >
-        <Brain size={14} className="mt-0.5 shrink-0" style={{ color: "#f59e0b" }} aria-hidden />
+        <Brain size={14} className="mt-0.5 shrink-0" style={{ color: SEMANTIC_COLORS.warning }} aria-hidden />
         <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-bold" style={{ color: "#f59e0b" }}>
+          <div className="text-[12px] font-bold" style={{ color: SEMANTIC_COLORS.warning }}>
             Thinking stopped by the guard
           </div>
           <div className="mt-1 text-[11.5px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
@@ -1262,7 +1262,7 @@ export function ThinkingStoppedCard({
             ) : null}
             <span className="text-[11px]" style={{ color: styles.textTertiary }}>
               Turn it off or tune it in{" "}
-              <Link to="/settings?tab=advanced" className="font-bold underline" style={{ color: "#f59e0b" }}>
+              <Link to="/settings?tab=advanced" className="font-bold underline" style={{ color: SEMANTIC_COLORS.warning }}>
                 Settings → General
               </Link>
               .
@@ -1273,7 +1273,7 @@ export function ThinkingStoppedCard({
                 onClick={onRetry}
                 disabled={disabled}
                 className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-colors disabled:opacity-50"
-                style={{ borderColor: withAlpha("#f59e0b", 0.4), color: "#f59e0b" }}
+                style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4), color: SEMANTIC_COLORS.warning }}
               >
                 Retry
               </button>
@@ -1344,9 +1344,9 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
         data-retry-status-card
         className="rounded-[16px] border px-3.5 py-3 flex items-start gap-3"
         style={{
-          borderColor: withAlpha("#f59e0b", 0.4),
-          background: `linear-gradient(135deg, ${withAlpha("#f59e0b", styles.isDark ? 0.1 : 0.07)} 0%, ${withAlpha(
-            "#f59e0b",
+          borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4),
+          background: `linear-gradient(135deg, ${withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.1 : 0.07)} 0%, ${withAlpha(
+            SEMANTIC_COLORS.warning,
             styles.isDark ? 0.05 : 0.03,
           )} 100%)`,
         }}
@@ -1355,7 +1355,7 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
             soft circular chip instead of a bare floating glyph. */}
         <div
           className="w-7 h-7 rounded-full grid place-items-center shrink-0 mt-0.5"
-          style={{ background: withAlpha("#f59e0b", 0.16) }}
+          style={{ background: withAlpha(SEMANTIC_COLORS.warning, 0.16) }}
           aria-hidden
         >
           <RefreshCw size={13} className="ac-retry-spin" style={{ color: "#d97706" }} />
@@ -1380,9 +1380,9 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
                       background: isDone
                         ? withAlpha("#d97706", 0.55)
                         : isCurrent
-                          ? "#f59e0b"
+                          ? SEMANTIC_COLORS.warning
                           : "transparent",
-                      border: isCurrent || isDone ? "none" : `1px solid ${withAlpha("#f59e0b", 0.45)}`,
+                      border: isCurrent || isDone ? "none" : `1px solid ${withAlpha(SEMANTIC_COLORS.warning, 0.45)}`,
                     }}
                   />
                 );
@@ -1393,7 +1393,7 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
             <span
               className="text-[10px] font-mono px-2 py-0.5 rounded-full shrink-0 uppercase tracking-wide"
-              style={{ background: withAlpha("#f59e0b", 0.14), color: "#d97706" }}
+              style={{ background: withAlpha(SEMANTIC_COLORS.warning, 0.14), color: "#d97706" }}
               title={`provider error class: ${retry.errorClass}`}
             >
               {classLabel}
@@ -1430,7 +1430,7 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
                     aria-expanded={providerExpanded}
                     data-retry-provider-expand
                     className="mt-1 h-6 px-2 rounded-lg text-[11px] font-semibold border transition-colors shrink-0"
-                    style={{ borderColor: withAlpha("#f59e0b", 0.4), color: "#d97706" }}
+                    style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4), color: "#d97706" }}
                     title={
                       providerExpanded
                         ? "Collapse the provider text"
@@ -1444,7 +1444,7 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
                       data-retry-provider-error-full
                       className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10.5px] leading-[1.55] whitespace-pre-wrap break-words min-w-0"
                       style={{
-                        borderColor: withAlpha("#f59e0b", 0.3),
+                        borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.3),
                         background: styles.isDark ? "rgba(255,255,255,0.04)" : styles.subtle,
                         color: styles.textSecondary,
                       }}
@@ -1465,14 +1465,14 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
             </span>
             <div
               className="flex-1 min-w-[48px] h-1 rounded-full overflow-hidden"
-              style={{ background: withAlpha("#f59e0b", 0.16) }}
+              style={{ background: withAlpha(SEMANTIC_COLORS.warning, 0.16) }}
               aria-hidden
             >
               <div
                 className="h-full rounded-full"
                 style={{
                   width: `${waitFraction * 100}%`,
-                  background: "#f59e0b",
+                  background: SEMANTIC_COLORS.warning,
                   transition: "width 1s linear",
                 }}
               />
@@ -1562,8 +1562,8 @@ export function QueuedMessageChip({
         data-queued-seq={entry.seq}
         className="rounded-[14px] border px-3.5 py-2.5 flex items-start gap-2.5"
         style={{
-          borderColor: withAlpha("#f59e0b", 0.4),
-          background: withAlpha("#f59e0b", styles.isDark ? 0.08 : 0.05),
+          borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4),
+          background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.08 : 0.05),
         }}
       >
         <Clock size={13} className="mt-0.5 shrink-0" style={{ color: "#d97706" }} aria-hidden />
@@ -1592,7 +1592,7 @@ export function QueuedMessageChip({
                 title="Stop waiting — send this message as a new turn right away"
                 data-queued-send-now
                 className="h-6 px-2 rounded-lg text-[11px] font-semibold border transition-colors shrink-0"
-                style={{ borderColor: withAlpha("#f59e0b", 0.45), color: "#d97706" }}
+                style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.45), color: "#d97706" }}
               >
                 Send now
               </button>
@@ -3236,7 +3236,7 @@ export function AgentChatPanel({
                 {liveTurn.note !== null ? (
                   <div
                     className="mb-2 min-w-0 text-[11.5px] font-mono px-3 py-1.5 rounded-[10px] border"
-                    style={{ borderColor: withAlpha("#f59e0b", 0.35), color: styles.textSecondary, background: withAlpha("#f59e0b", 0.05) }}
+                    style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.35), color: styles.textSecondary, background: withAlpha(SEMANTIC_COLORS.warning, 0.05) }}
                   >
                     {liveTurn.note}
                   </div>
@@ -3393,9 +3393,9 @@ export function AgentChatPanel({
                 data-testid="queue-kept-notice"
                 className="mt-2 rounded-[12px] border px-3 py-2 text-[11.5px] font-semibold flex items-center gap-2"
                 style={{
-                  borderColor: withAlpha("#f59e0b", 0.35),
-                  background: withAlpha("#f59e0b", styles.isDark ? 0.08 : 0.05),
-                  color: "#f59e0b",
+                  borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.35),
+                  background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.08 : 0.05),
+                  color: SEMANTIC_COLORS.warning,
                 }}
               >
                 <Clock size={13} className="shrink-0" aria-hidden />

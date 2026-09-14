@@ -113,6 +113,29 @@ export interface BrowserTabUiState {
    * reconcile. User navigations never bump it (they drive the webview
    * themselves); history walks by the poll keep using navSeq. */
   agentNavSeq: number;
+  /** ROUND-97 (R97-J review fix, M1): TRUE while the tab sits on the HOME
+   * view (the Settings → Browser homepage; goHome set it). While set the
+   * poll NEVER re-adopts the page we left (the pre-fix web mode flashed
+   * home for ≤4s then bounced back; native mode never showed it at all —
+   * the still-visible webview painted over the DOM). ANY navigation — user
+   * address-bar/quick-link, history walk, the instant agent frame, or a poll
+   * that sees the server land on a DIFFERENT URL than the anchor below —
+   * clears it. */
+  homeView: boolean;
+  /** R97-J (M1): the URL the tab left when HOME was pressed — the poll's
+   * re-adopt suppression anchor. A poll seeing this exact URL keeps the
+   * home view (it is just the server's still-open page); any OTHER URL is
+   * an agent-side navigation and re-adopts (clearing homeView). */
+  homeAnchorUrl: string | null;
+  /** ROUND-97 (R97-J review fix, m6): TRUE once a zoom was EXPLICITLY set
+   * on this tab (the user's stepper, the agent's set_viewport, or this
+   * panel's own default-zoom application). The R97-G default-zoom effect
+   * treats the tab as pristine only while this is false AND the zoom is 1
+   * — closing the hole where a user- or server-shaped 1.0 zoom was
+   * indistinguishable from "never touched" and the default re-applied on
+   * every panel remount. Persists per tab slice (survives panel remounts —
+   * the store outlives the panel), so the setting applies ONCE per session. */
+  zoomTouched: boolean;
 }
 
 // ── sessionId hygiene ──────────────────────────────────────────────────────
@@ -353,6 +376,9 @@ function freshTab(sessionId: string): BrowserTabUiState {
     navSeq: 0,
     agentViewportSeq: 0,
     agentNavSeq: 0,
+    homeView: false,
+    homeAnchorUrl: null,
+    zoomTouched: false,
   };
 }
 
@@ -395,6 +421,8 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
         loading: true,
         navSeq: cur.navSeq + 1,
         agentNavSeq: cur.agentNavSeq + 1,
+        // R97-J (M1): an agent navigation always leaves the home view.
+        homeView: false,
       }),
     );
   },
@@ -431,7 +459,8 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
   },
   navigate: async (tabId, rawUrl) => {
     const tab = get().tabs[tabId] ?? get().ensureTab(tabId);
-    set((s) => patchTabState(s, tabId, { loading: true, error: null }));
+    // R97-J (M1): any user navigation leaves the home view.
+    set((s) => patchTabState(s, tabId, { loading: true, error: null, homeView: false }));
     try {
       const res = await browserNavigate(tab.sessionId, { url: rawUrl });
       set((s) => {
@@ -494,7 +523,7 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
     if (patch.preset === undefined && (patch.width !== undefined || patch.height !== undefined)) {
       optimistic.preset = "custom";
     }
-    set((s) => patchTabState(s, tabId, { viewport: optimistic }));
+    set((s) => patchTabState(s, tabId, { viewport: optimistic, ...(patch.zoom !== undefined ? { zoomTouched: true } : {}) }));
     try {
       const res = await putBrowserViewport(tab.sessionId, patch);
       set((s) => patchTabState(s, tabId, { viewport: res.viewport }));
@@ -531,7 +560,14 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
         });
         return;
       }
-      const followAgent = serverUrl !== null && serverUrl !== cur.currentUrl;
+      const followAgent =
+        serverUrl !== null &&
+        serverUrl !== cur.currentUrl &&
+        // R97-J (M1): while the tab sits on the HOME view, the poll must not
+        // re-adopt the page we left — UNLESS the server landed on a DIFFERENT
+        // URL (an agent navigation the instant frame missed — the SSE push
+        // normally clears homeView itself; this is the reconcile leg).
+        !(cur.homeView && serverUrl === cur.homeAnchorUrl);
       // ROUND-66 (R66, A5): the poll is also an agent-viewport detector — the
       // server viewport DIFFERS from the local one on a SIZE field (width /
       // height / preset / rotate; zoom applies in natural mode too, so a
@@ -558,8 +594,12 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
                 currentTitle: serverTitle,
                 loading: true,
                 navSeq: c.navSeq + 1,
+                // R97-J (M1): a followed navigation leaves the home view;
+                // staying home keeps the title clean (null), never the
+                // server page's stale one.
+                homeView: false,
               }
-            : { currentTitle: serverTitle ?? c.currentTitle }),
+            : { currentTitle: cur.homeView ? null : (serverTitle ?? c.currentTitle) }),
           viewport: viewportRes.viewport,
           ...(agentViewport ? { agentViewportSeq: c.agentViewportSeq + 1 } : {}),
         });
@@ -613,6 +653,9 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
   setError: (tabId, error) => set((s) => patchTabState(s, tabId, { error })),
   clearError: (tabId) => set((s) => patchTabState(s, tabId, { error: null })),
   // R97-G: HOME — the fresh home shape (idle, no URL, not loading, no error).
+  // R97-J (M1): homeView + the anchor make it STICK — the poll's re-adopt
+  // is suppressed for the page we left (see refresh), any navigation clears
+  // it, and the panel hides the native webview while it is set.
   goHome: (tabId) =>
     set((s) => {
       const cur = s.tabs[tabId];
@@ -629,6 +672,8 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
             canForward: false,
             loading: false,
             error: null,
+            homeView: true,
+            homeAnchorUrl: cur.currentUrl,
           },
         },
       };

@@ -48,8 +48,12 @@ export function DashboardScreen() {
     agentsQuery.isPending ||
     (usage.isPending && usage.isFetching);
   // R97-I part 2: a failed PROJECTS fetch now joins the banner — pre-R97 it
-  // was silently swallowed into the "0 Projects" stat card.
-  const loadError = sessionsQuery.isError || agentsQuery.isError || projectsQuery.isError;
+  // was silently swallowed into the "0 Projects" stat card. R97-J (m2):
+  // a failed USAGE fetch joins too — its absence used to paint false
+  // "0" Tokens / "0" Turns beside the chart's own error card (the exact
+  // false-zero the round kills).
+  const loadError =
+    sessionsQuery.isError || agentsQuery.isError || projectsQuery.isError || usage.isError;
 
   // Greeting split: "Good evening" → last word gets the accent highlight box
   const greetingWords = greeting.split(" ");
@@ -184,6 +188,9 @@ export function DashboardScreen() {
                 if (sessionsQuery.isError) void sessionsQuery.refetch();
                 if (agentsQuery.isError) void agentsQuery.refetch();
                 if (projectsQuery.isError) void projectsQuery.refetch();
+                // R97-J (m2): the usage source retries too (its failure
+                // joins loadError above).
+                if (usage.isError) void usage.refetch();
               }}
               aria-label="Retry loading workspace data"
               className="shrink-0 h-7 px-3 rounded-lg text-[11.5px] font-bold border transition-opacity hover:opacity-85"

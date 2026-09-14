@@ -3815,6 +3815,18 @@ export async function runStreamedAgentTurn(
       // owner switched OFF (Settings → General → retry config) skips it and
       // falls through to the honest terminal path (attempts stays 1, the
       // real provider text rides the error card).
+      //
+      // R97-J (m7): EVERY failed attempt's streamed-so-far is real spend —
+      // accumulate it HERE (once per catch, before any retry branch). The
+      // pre-fix terminal path read only the FINAL error's symbol, so a
+      // ladder whose attempt 1 streamed 50K tokens and died reported only
+      // attempt 2's instant death. The totals now carry the full burn; the
+      // terminal path below reports them directly.
+      const attemptUsage = readStreamPartialUsage(normalized);
+      if (attemptUsage !== null) {
+        totalInputTokens += attemptUsage.inputTokens;
+        totalOutputTokens += attemptUsage.outputTokens;
+      }
       if (
         isTransientApiFailure(classified.class) &&
         retryClassEnabled(classified.class) &&
@@ -4046,21 +4058,16 @@ export async function runStreamedAgentTurn(
       const attempts = providerRetries + unknownProgressRetries + thinkingLoopRetries + 1;
       const message = providerFailureMessage(provider.id, session.id, classified, overflowRecovered, attempts);
       // ROUND-97 (R97-E): the FAILED turn's real token spend — the completed
-      // iterations' totals PLUS the failed call's streamed-so-far (the
-      // adapter attaches it to every thrown error; a call that died before
-      // any usage accumulated reports the completed totals alone). The
-      // owner's "if a model fails, then it does not show me the total number
-      // of tokens sent, total number of tokens received" report.
-      const failedCallUsage = readStreamPartialUsage(normalized);
+      // iterations' totals PLUS every failed attempt's streamed-so-far (the
+      // catch above accumulates readStreamPartialUsage per attempt since
+      // R97-J m7, so the totals ARE the full burn; the final attempt's
+      // dribble rides in them). The owner's "if a model fails, then it does
+      // not show me the total number of tokens sent, total number of tokens
+      // received" report.
       const failedUsage =
-        failedCallUsage !== null
-          ? {
-              inputTokens: totalInputTokens + failedCallUsage.inputTokens,
-              outputTokens: totalOutputTokens + failedCallUsage.outputTokens,
-            }
-          : totalInputTokens > 0 || totalOutputTokens > 0
-            ? { inputTokens: totalInputTokens, outputTokens: totalOutputTokens }
-            : undefined;
+        totalInputTokens > 0 || totalOutputTokens > 0
+          ? { inputTokens: totalInputTokens, outputTokens: totalOutputTokens }
+          : undefined;
       const errorTs = persistTurnError(db, {
         sessionId: session.id,
         agentId: agent.id,

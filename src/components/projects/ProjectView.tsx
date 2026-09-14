@@ -40,7 +40,10 @@ export function ProjectView() {
   // misleading "Project not found" card, so a down sidecar read as a deleted
   // project. This branch renders the honest, retryable error card instead
   // (the ChatLoadErrorCard shape: role=alert, the danger token, one action).
-  if (projectsQuery.isError) {
+  // R97-J (m1) fix: the populated-wins rule — only when there is NO data at
+  // all (a failed background refetch with the list still cached renders the
+  // view normally, exactly like the chat transcript + the settings cards).
+  if (projectsQuery.isError && projectsQuery.data === undefined) {
     return (
       <div className="grid h-full place-items-center p-6">
         <div

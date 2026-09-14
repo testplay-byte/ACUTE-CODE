@@ -94,6 +94,42 @@ describe("toProjectChatItems: turn.error folding (ROUND-43)", () => {
     });
   });
 
+  it("R97-E (M2 pin): the payload's usage folds onto the error item — the FOLDED card's token line survives the reload", () => {
+    const events: SessionEvent[] = [
+      { seq: 1, type: "message.user", agentId: null, payload: { role: "user", content: "go" }, ts: "t1" },
+      {
+        seq: 2,
+        type: "turn.error",
+        agentId: null,
+        payload: {
+          code: "PROVIDER_ERROR",
+          message: "provider 'openrouter' call failed",
+          // The runtime's failedUsage composition (R97-E + the R97-J m7
+          // ladder accumulation) — one field, one typo from silence.
+          usage: { inputTokens: 3_800, outputTokens: 460 },
+        },
+        ts: "t2",
+      },
+    ];
+    const items = toProjectChatItems(events);
+    expect(items[1]).toMatchObject({
+      kind: "error",
+      usage: { inputTokens: 3_800, outputTokens: 460 },
+    });
+    // A malformed usage object folds to NO usage (never fabricated numbers).
+    const sparse = toProjectChatItems([
+      { seq: 1, type: "message.user", agentId: null, payload: { role: "user", content: "go" }, ts: "t1" },
+      {
+        seq: 2,
+        type: "turn.error",
+        agentId: null,
+        payload: { code: "PROVIDER_ERROR", message: "x", usage: { inputTokens: "lots" } },
+        ts: "t2",
+      },
+    ]);
+    expect((sparse[1] as { usage?: unknown }).usage).toBeUndefined();
+  });
+
   it("keeps the partial turn (tools) that ran before the failure", () => {
     const events: SessionEvent[] = [
       { seq: 1, type: "message.user", agentId: null, payload: { role: "user", content: "do it" }, ts: "t1" },

@@ -365,50 +365,25 @@ function AppearanceTab() {
           How the agent's tool activity appears in the chat.
         </p>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {/* R97-J (m8): the section rides the shared ChoiceCard now — the
+              R97-H extraction left this inline duplicate behind (byte-
+              identical markup). ROUND-62 (2-a): the tiny inline mock previews
+              are long gone — label + one-line description only. */}
           {(
             [
               { id: "detailed", label: "Detailed", desc: "Full timeline with diffs and command output" },
               { id: "compact", label: "Compact", desc: "One-line summary per turn" },
               { id: "hidden", label: "Hidden", desc: "Never show tool activity" },
             ] as const
-          ).map(({ id, label, desc }) => {
-            const active = activityMode === id;
-            return (
-              <button
-                key={id}
-                onClick={() => setActivityMode(id)}
-                aria-pressed={active}
-                className="relative rounded-[14px] border-[1.5px] p-3 text-left transition-all hover:-translate-y-px"
-                style={{
-                  background: active ? withAlpha(styles.accent, 0.06) : styles.card,
-                  borderColor: active ? styles.accent : styles.border,
-                  boxShadow: active ? `0 0 0 3px ${withAlpha(styles.accent, 0.15)}` : "none",
-                }}
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className="w-4 h-4 rounded-full border-[1.5px] grid place-items-center shrink-0"
-                    style={{
-                      borderColor: active ? styles.accent : styles.border,
-                      background: active ? styles.accent : "transparent",
-                    }}
-                    aria-hidden
-                  >
-                    {active && <span className="w-1.5 h-1.5 rounded-full" style={{ background: styles.accentText }} />}
-                  </span>
-                  <span className="text-[13px] font-bold" style={{ color: styles.text }}>
-                    {label}
-                  </span>
-                </div>
-                <p className="mt-1.5 text-[11px] leading-snug" style={{ color: styles.textSecondary }}>
-                  {desc}
-                </p>
-                {/* ROUND-62 (2-a): the tiny inline mock preview (the fake bars
-                    + the "— none —" block) is GONE — each card is just the
-                    label + one-line description. */}
-              </button>
-            );
-          })}
+          ).map(({ id, label, desc }) => (
+            <ChoiceCard
+              key={id}
+              active={activityMode === id}
+              label={label}
+              desc={desc}
+              onSelect={() => setActivityMode(id)}
+            />
+          ))}
         </div>
       </section>
     </div>
@@ -590,6 +565,67 @@ function SettingsLoadErrorCard({
  * RetryConfigCard pattern: shared query key, one mutation, honest error
  * line, loading state, stepper-bounded numbers. */
 
+/** R97-J (m5): a number input that COMMITs on blur/Enter, not per
+ * keystroke — typing "5" on the way to "55" no longer PUTs a clamped 30
+ * mid-edit (the homepage + quick-link inputs' discipline, applied to the
+ * threshold steppers). The draft is local until commit; Enter and blur both
+ * commit (clamped); Escape abandons. */
+function CommitNumberInput({
+  value,
+  min,
+  max,
+  step,
+  onCommit,
+  testId,
+  ariaLabel,
+  disabled,
+  style,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onCommit: (v: number) => void;
+  testId: string;
+  ariaLabel: string;
+  disabled: boolean;
+  style: React.CSSProperties;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => {
+    if (draft === null) return;
+    setDraft(null);
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) return; // abandoned — the input re-reads the store
+    const clamped = Math.min(max, Math.max(min, Math.round(parsed)));
+    if (clamped !== value) onCommit(clamped);
+  };
+  return (
+    <input
+      type="number"
+      min={min}
+      max={max}
+      step={step}
+      disabled={disabled}
+      data-testid={testId}
+      aria-label={ariaLabel}
+      value={draft ?? String(value)}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commit();
+        } else if (e.key === "Escape") {
+          setDraft(null);
+        }
+      }}
+      className="h-7 w-[84px] rounded-lg px-2 font-mono text-[11.5px] outline-none transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-60"
+      style={style}
+    />
+  );
+}
+
 function ThinkingLoopCard() {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
@@ -734,26 +770,15 @@ function ThinkingLoopCard() {
               Seconds of pure reasoning with no progress before the guard fires (30–600).
             </div>
           </div>
-          <input
-            type="number"
+          <CommitNumberInput
+            value={current.stallSeconds}
             min={30}
             max={600}
             step={30}
+            onCommit={setStallSeconds}
+            testId="thinking-loop-stall"
+            ariaLabel="Stall window in seconds"
             disabled={busy || !current.enabled}
-            data-testid="thinking-loop-stall"
-            aria-label="Stall window in seconds"
-            value={current.stallSeconds}
-            onChange={(e) => {
-              const parsed = Number(e.target.value);
-              if (Number.isFinite(parsed)) setStallSeconds(parsed);
-            }}
-            onBlur={(e) => {
-              const parsed = Number(e.target.value);
-              if (!Number.isFinite(parsed) || parsed < 30 || parsed > 600) {
-                e.target.value = String(current.stallSeconds);
-              }
-            }}
-            className="h-7 w-[84px] rounded-lg px-2 font-mono text-[11.5px] outline-none transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-60"
             style={inputStyle}
           />
         </div>
@@ -766,26 +791,15 @@ function ThinkingLoopCard() {
               KB of reasoning accumulated in that window before the guard fires (8–256). Both conditions must hold.
             </div>
           </div>
-          <input
-            type="number"
+          <CommitNumberInput
+            value={current.reasoningBytesKB}
             min={8}
             max={256}
             step={4}
+            onCommit={setReasoningBytesKB}
+            testId="thinking-loop-bytes"
+            ariaLabel="Reasoning volume in KB"
             disabled={busy || !current.enabled}
-            data-testid="thinking-loop-bytes"
-            aria-label="Reasoning volume in KB"
-            value={current.reasoningBytesKB}
-            onChange={(e) => {
-              const parsed = Number(e.target.value);
-              if (Number.isFinite(parsed)) setReasoningBytesKB(parsed);
-            }}
-            onBlur={(e) => {
-              const parsed = Number(e.target.value);
-              if (!Number.isFinite(parsed) || parsed < 8 || parsed > 256) {
-                e.target.value = String(current.reasoningBytesKB);
-              }
-            }}
-            className="h-7 w-[84px] rounded-lg px-2 font-mono text-[11.5px] outline-none transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-60"
             style={inputStyle}
           />
         </div>

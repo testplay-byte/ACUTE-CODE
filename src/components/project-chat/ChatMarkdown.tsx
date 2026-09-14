@@ -7,7 +7,7 @@ import type { ThemeStyles } from "../../lib/themes";
 import { withAlpha } from "../dashboard/helpers";
 // R97-F: the Prism-backed highlighter (the app's own token palette lives in
 // index.css — see src/lib/highlight.ts).
-import { highlightCode } from "../../lib/highlight";
+import { highlightLines } from "../../lib/highlight";
 
 /**
  * ROUND-64 (R64-c, owner: "there was apparently no formatting of the response
@@ -84,7 +84,11 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   const lines = code.split("\n");
   // R97-F: the highlighted HTML (null → the plain-lines fallback). Memoized
   // on the exact inputs — a re-render with the same code never re-tokenizes.
-  const highlighted = useMemo(() => highlightCode(code, lang), [code, lang]);
+  // R97-J (m4): the per-line split — the SAME numbered rows as the plain
+  // fallback, colors included (tokens that span lines re-open their spans
+  // on each continuation line; see highlightLines). The pre-R97-F gutter
+  // is back on highlighted blocks, and both paths wrap identically.
+  const highlightedLines = useMemo(() => highlightLines(code, lang), [code, lang]);
   return (
     <div className="my-1.5 rounded-[12px] overflow-hidden border" style={{ borderColor: styles.border }}>
       <div
@@ -126,26 +130,36 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
         className="acute-code-hl overflow-x-auto p-3 font-mono text-[11.5px] leading-[1.6]"
         style={{ color: styles.text }}
       >
-        {highlighted !== null ? (
-          <code
-            data-code-highlighted
-            // R97-F: Prism's output — the app's OWN palette (index.css's
-            // .acute-code-hl .token.* rules; NO Prism CSS imported), so the
-            // colors follow the design system in both modes. The HTML comes
-            // from src/lib/highlight.ts's Prism.highlight over the exact
-            // code string — never user-facing HTML passthrough.
-            dangerouslySetInnerHTML={{ __html: highlighted }}
-          />
-        ) : (
-          lines.map((line, i) => (
-            <div key={i} className="flex">
-              <span className="w-7 shrink-0 text-right pr-3 select-none font-mono text-[10px] leading-[1.6]" style={{ color: styles.textTertiary }}>
-                {i + 1}
-              </span>
-              <span className="flex-1 whitespace-pre-wrap break-words">{line || " "}</span>
-            </div>
-          ))
-        )}
+        {highlightedLines !== null
+          ? highlightedLines.map((html, i) => (
+              <div key={i} className="flex">
+                <span
+                  className="w-7 shrink-0 text-right pr-3 select-none font-mono text-[10px] leading-[1.6]"
+                  style={{ color: styles.textTertiary }}
+                >
+                  {i + 1}
+                </span>
+                <span
+                  data-code-highlighted
+                  // R97-F + R97-J (m4): Prism's per-line output — the app's
+                  // OWN palette (index.css's .acute-code-hl .token.* rules;
+                  // NO Prism CSS imported), so the colors follow the design
+                  // system in both modes. The HTML comes from
+                  // src/lib/highlight.ts's token-stream split over the exact
+                  // code string — never user-facing HTML passthrough.
+                  className="flex-1 whitespace-pre-wrap break-words min-w-0"
+                  dangerouslySetInnerHTML={{ __html: html || "&nbsp;" }}
+                />
+              </div>
+            ))
+          : lines.map((line, i) => (
+              <div key={i} className="flex">
+                <span className="w-7 shrink-0 text-right pr-3 select-none font-mono text-[10px] leading-[1.6]" style={{ color: styles.textTertiary }}>
+                  {i + 1}
+                </span>
+                <span className="flex-1 whitespace-pre-wrap break-words">{line || " "}</span>
+              </div>
+            ))}
       </pre>
     </div>
   );

@@ -45,6 +45,48 @@ describe("TurnErrorCard (ROUND-43)", () => {
     expect(screen.getByRole("alert")).toBeTruthy();
   });
 
+  it("R97-E (M2 pin): the FOLDED error with usage renders the token-spend chip — nothing fabricated without it", () => {
+    // The persisted leg: ErrorTurnItem.usage arrives from the folded
+    // turn.error payload (the api.ts mapping, pinned in stream-error.test).
+    const { unmount } = renderWithProviders(
+      <TurnErrorCard error={{ ...ERROR_ITEM, usage: { inputTokens: 3_800, outputTokens: 460 } }} sessionId="sess_x" onRetry={() => undefined} />,
+    );
+    const chip = document.querySelector("[data-error-usage]") as HTMLElement;
+    expect(chip).toBeTruthy();
+    expect(chip.textContent).toBe("3.8k sent ↑ · 460 received ↓");
+
+    // Copy details carries the exact numbers too.
+    expect(chip.title).toContain("tokens this failed turn actually spent");
+
+    // The SAME card without usage renders NO chip (never a fake 0/0).
+    unmount();
+    cleanup();
+    renderWithProviders(<TurnErrorCard error={ERROR_ITEM} sessionId="sess_x" onRetry={() => undefined} />);
+    expect(document.querySelector("[data-error-usage]")).toBeNull();
+  });
+
+  it("R97-E (M2 pin): the LIVE error shape (the SSE frame's details.usage) renders the same chip", () => {
+    // The live leg: the stream-store maps the error frame's details.usage
+    // onto the live error card's input (defensively shaped — the same
+    // Pick<> the folded item satisfies).
+    renderWithProviders(
+      <TurnErrorCard
+        error={{
+          code: "PROVIDER_ERROR",
+          message: "provider 'openrouter' call failed for session sess_x",
+          model: "z-ai/glm-5.2:free",
+          usage: { inputTokens: 1_500, outputTokens: 120 },
+          ts: "2026-08-26T14:05:00.000Z",
+        }}
+        sessionId="sess_x"
+        onRetry={() => undefined}
+      />,
+    );
+    const chip = document.querySelector("[data-error-usage]") as HTMLElement;
+    expect(chip).toBeTruthy();
+    expect(chip.textContent).toBe("1.5k sent ↑ · 120 received ↓");
+  });
+
   it("Retry re-invokes the send path with the same failed user message", () => {
     const onRetry = vi.fn();
     renderWithProviders(<TurnErrorCard error={ERROR_ITEM} sessionId="sess_x" onRetry={onRetry} />);
