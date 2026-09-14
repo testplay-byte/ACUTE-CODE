@@ -21,7 +21,7 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { AgentChatPanel } from "./AgentChatPanel";
 import { getFixtureProjects } from "../../lib/project-fixtures";
 import { createFixtureSessions } from "../../lib/session-fixtures";
-import type { MessageRating, SessionEvent, SessionsBackend } from "../../lib/api";
+import type { MessageRating, Session, SessionEvent, SessionsBackend } from "../../lib/api";
 import { ApiError } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
 import { useThemeStore } from "../../lib/theme-store";
@@ -160,6 +160,10 @@ describe("AgentChatPanel layout contract (Round 43)", () => {
 
   it("reading column is capped + centered, and the composer shares the SAME column", async () => {
     await renderPanel();
+    // R97-I re-pin: the greeting renders only after the session queries
+    // settle (the chat-shaped skeleton holds the column while loading) —
+    // await the READY state before counting the capped columns.
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy());
     const cols = Array.from(document.querySelectorAll("div")).filter((el) =>
       el.className.includes("max-w-[1080px]"),
     );
@@ -168,6 +172,48 @@ describe("AgentChatPanel layout contract (Round 43)", () => {
       expect(col.className).toContain("mx-auto");
       expect(col.className).toContain("w-full");
     }
+  });
+
+  it("R97-I: a loading conversation holds the SKELETON — the greeting never paints on a fetch in flight", async () => {
+    const projects = await getFixtureProjects().list();
+    const base = createFixtureSessions([]);
+    // list() never settles → the sessions query stays pending forever.
+    customBackend.backend = {
+      ...base,
+      list: () => new Promise<Session[]>(() => {}),
+    };
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+
+    await waitFor(() =>
+      expect(document.querySelector("[data-transcript-skeleton]")).toBeTruthy(),
+    );
+    // The FALSE greeting is the round's headline fix — it must not render
+    // while the history is still unknown.
+    expect(document.querySelector("[data-empty-state]")).toBeNull();
+    // The skeleton announces itself exactly once (role=status container).
+    expect(screen.getByLabelText("Loading conversation")).toBeTruthy();
+  });
+
+  it("R97-I: a fetch failure renders the retryable ERROR CARD — never the cheerful empty chat", async () => {
+    const projects = await getFixtureProjects().list();
+    const base = createFixtureSessions([]);
+    customBackend.backend = {
+      ...base,
+      list: () => Promise.reject(new Error("sidecar down")),
+    };
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+
+    await waitFor(() => expect(document.querySelector("[data-chat-load-error]")).toBeTruthy());
+    expect(document.querySelector("[data-empty-state]")).toBeNull();
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    // Retry re-drives the fetch: flip list() back to a resolving backend and
+    // click — the greeting then renders (the recovered ready state).
+    const base2 = createFixtureSessions([]);
+    customBackend.backend.list = base2.list;
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading the conversation" }));
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy());
+    expect(document.querySelector("[data-chat-load-error]")).toBeNull();
   });
 });
 

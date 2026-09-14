@@ -62,6 +62,7 @@ import {
 import { TodoFloat } from "./TodoFloat";
 import { AcuteLogo } from "../shell/Sidebar";
 import { ClampedText } from "../shared/ClampedText";
+import { SkeletonBlock } from "../shared/Skeletons";
 import {
   type AttachmentRef,
   type AssistantTurnItem,
@@ -625,6 +626,70 @@ function TimestampChip({ ts, className = "" }: { ts: string | undefined; classNa
         ? formatTime(ts)
         : `${date.toLocaleDateString([], { month: "short", day: "numeric" })} · ${formatTime(ts)}`}
     </span>
+  );
+}
+
+/** R97-I: the chat-shaped LOADING state — alternating user (right, accent
+ * tint) + assistant (left, subtle) bubble rows stacked toward the composer,
+ * mirroring the real transcript's rhythm so the swap to real content reads
+ * as continuation, not a flash. Decorative (the container announces
+ * "Loading conversation" once). */
+function TranscriptSkeleton() {
+  const styles = useThemeStyles();
+  const bubbleTint = withAlpha(styles.accent, styles.isDark ? 0.16 : 0.11);
+  return (
+    <div className="flex flex-col gap-4" aria-hidden>
+      <div className="flex justify-end">
+        <SkeletonBlock className="h-10 w-[38%] max-w-[300px] rounded-[16px] rounded-br-[5px]" style={{ background: bubbleTint }} />
+      </div>
+      <div className="flex flex-col gap-2">
+        <SkeletonBlock className="h-3.5 w-[52%] max-w-[420px] rounded-full" />
+        <SkeletonBlock className="h-3.5 w-[44%] max-w-[380px] rounded-full" />
+      </div>
+      <div className="flex justify-end">
+        <SkeletonBlock className="h-10 w-[30%] max-w-[240px] rounded-[16px] rounded-br-[5px]" style={{ background: bubbleTint }} />
+      </div>
+      <div className="flex flex-col gap-2">
+        <SkeletonBlock className="h-3.5 w-[58%] max-w-[460px] rounded-full" />
+        <SkeletonBlock className="h-3.5 w-[36%] max-w-[300px] rounded-full" />
+      </div>
+    </div>
+  );
+}
+
+/** R97-I: the chat's honest ERROR state — the pre-R97 panel degraded every
+ * fetch failure into the cheerful "new chat" greeting. This card (the
+ * DESIGN-SYSTEM §6 shape: role=alert, the danger token, the exact cause,
+ * one action) replaces it on the empty transcript; a populated transcript
+ * with a background-refetch failure still renders normally. */
+function ChatLoadErrorCard({ onRetry }: { onRetry: () => void }) {
+  const styles = useThemeStyles();
+  return (
+    <div
+      role="alert"
+      data-chat-load-error
+      className="max-w-md rounded-[14px] border px-4 py-3.5 text-center"
+      style={{
+        borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
+        background: withAlpha(SEMANTIC_COLORS.danger, styles.isDark ? 0.08 : 0.05),
+      }}
+    >
+      <div className="text-[12.5px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+        Could not load this conversation
+      </div>
+      <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
+        The session history failed to load — the agent sidecar may be down or the connection dropped. Your messages are safe on disk.
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        aria-label="Retry loading the conversation"
+        className="mt-3 h-8 px-3.5 rounded-lg text-[12px] font-semibold border transition-opacity hover:opacity-85"
+        style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+      >
+        Retry
+      </button>
+    </div>
   );
 }
 
@@ -1702,7 +1767,12 @@ export function AgentChatPanel({
   // latest session, matching the sidebar's default navigation target.
   const [searchParams, setSearchParams] = useSearchParams();
   const sessionIdParam = searchParams.get("session");
-  const sessions = useSessions().data ?? [];
+  // R97-I (owner: "I want the UI to be aware of its states"): the query
+  // OBJECTS are captured (not just .data) so the transcript can render its
+  // honest loading / error states instead of a false greeting while the
+  // log arrives — see chatHistoryLoading / chatHistoryError below.
+  const sessionsQuery = useSessions();
+  const sessions = sessionsQuery.data ?? [];
   const projectSessions = useMemo(
     () =>
       sessions
@@ -1721,10 +1791,30 @@ export function AgentChatPanel({
     return projectSessions[0] ?? null;
   }, [projectSessions, sessionIdParam]);
   const sessionDetail = useSession(session?.id ?? null);
+  // R97-I: the three-state gate. LOADING = the sessions list is still
+  // arriving OR a session is selected and its log is (a fresh session's
+  // detail query is disabled — session null → not loading). ERROR = a fetch
+  // actually failed with NOTHING to render (stale data from a background
+  // refetch failure still renders the transcript normally). Both flags are
+  // only consulted on the empty-transcript branch — a populated transcript
+  // always wins.
+  const chatHistoryLoading =
+    sessionsQuery.isPending || (session !== null && sessionDetail.isPending);
+  const chatHistoryError =
+    (sessionsQuery.isError && sessionsQuery.data === undefined) ||
+    (session !== null && sessionDetail.isError && sessionDetail.data === undefined);
+  const retryChatLoad = () => {
+    void sessionsQuery.refetch();
+    if (session !== null) void sessionDetail.refetch();
+  };
 
   // Agent resolution (round-14): the SESSION's bound agent wins; for NEW
   // sessions the hamburger picker's choice (persisted) applies; else first.
-  const agents = useAgents(false).data ?? [];
+  // R97-I: the query object is captured so the empty state never flashes the
+  // FALSE "Create an agent in Settings first" line while the list is still
+  // in flight (it used to paint on every first mount, then vanish).
+  const agentsQuery = useAgents(false);
+  const agents = agentsQuery.data ?? [];
   const selectedAgentId = useProjectChatStore((s) => s.selectedAgentId);
   const agent =
     agents.find((a) => a.id === session?.agentId) ??
@@ -2952,8 +3042,28 @@ export function AgentChatPanel({
                 composer; the composer is centered horizontally and pushed
                 below the vertical middle by the 45/55 flex spacers (it
                 reflows with the pane — never absolutely positioned); the
-                bottom spacer keeps filling so there is no dead gap below. */}
+                bottom spacer keeps filling so there is no dead gap below.
+                R97-I (owner: "aware of its states"): the greeting is now the
+                THIRD state, not the only one — while the log loads a
+                chat-shaped skeleton holds the column, and a fetch failure
+                renders the retryable error card. The false greeting on a
+                project WITH history (then the messages popping in over it)
+                is dead. */}
             {items.length === 0 && !pendingEcho ? (
+              chatHistoryLoading ? (
+                <div
+                  className="flex-1 min-h-0 flex flex-col justify-end pb-6"
+                  role="status"
+                  aria-label="Loading conversation"
+                  data-transcript-skeleton
+                >
+                  <TranscriptSkeleton />
+                </div>
+              ) : chatHistoryError ? (
+                <div className="flex-1 min-h-0 grid place-items-center">
+                  <ChatLoadErrorCard onRetry={retryChatLoad} />
+                </div>
+              ) : (
               <div
                 data-empty-state
                 className="flex-1 min-h-0 flex flex-col items-center text-center"
@@ -2968,7 +3078,7 @@ export function AgentChatPanel({
                     <div className="text-[12.5px] mt-2 leading-relaxed" style={{ color: styles.textSecondary }}>
                       {agent?.name ?? "Acute"} · {agent?.model ?? "no model"} · streaming replies with live tool calls
                     </div>
-                    {agents.length === 0 ? (
+                    {agents.length === 0 && !agentsQuery.isPending && !agentsQuery.isError ? (
                       <div className="text-[12px] mt-3" style={{ color: styles.textSecondary }}>
                         Create an agent in{" "}
                         <Link to="/settings" style={{ color: styles.accent }}>
@@ -3017,6 +3127,7 @@ export function AgentChatPanel({
                 <div className={CONTENT_COL_PADLESS_CLASS}>{renderComposer(true)}</div>
                 <div className="flex-[0.55] min-h-8" aria-hidden />
               </div>
+              )
             ) : null}
 
             {/* ROUND-39: top spacer grows when content is short, pushing
