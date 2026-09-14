@@ -64,7 +64,7 @@ import type {
 // queued-message injection builds its model-facing user message there);
 // this module — assembleHistory — imports it back (see chat.ts's section
 // header for the move's rationale).
-import { isStickyResultTool, renderAttachments } from "./chat.js";
+import { isStickyResultTool, renderAttachments, readStreamPartialUsage } from "./chat.js";
 import { buildProjectSystemPrompt, readCustomRules, type PromptEnvironment } from "./prompts.js";
 // ROUND-94 (R94-G wiring): the vision-capability gate for the prompt's
 // CAPABILITIES section — the SAME sessionHasVisionPath the screenshot tools
@@ -994,6 +994,12 @@ export function persistTurnError(
      * ran (1 = no ladder). Additive payload field — the error card renders
      * "failed after N attempts" only when > 1. */
     attempts?: number;
+    /** ROUND-97 (R97-E): the tokens the FAILED turn actually spent — the
+     * completed iterations' totals + the failed call's streamed-so-far (the
+     * owner: "if a model fails, then it does not show me the total number of
+     * tokens sent, total number of tokens received…"). Additive payload
+     * field; the error card renders the line when present. */
+    usage?: { inputTokens: number; outputTokens: number };
   },
 ): string {
   const event = appendSessionEvent(db, args.sessionId, {
@@ -1008,6 +1014,7 @@ export function persistTurnError(
       userSeq: args.userSeq,
       ...(args.errorClass !== undefined ? { errorClass: args.errorClass } : {}),
       ...(args.attempts !== undefined ? { attempts: args.attempts } : {}),
+      ...(args.usage !== undefined ? { usage: args.usage } : {}),
     },
   });
   // The turn is over (not mid-flight) — `queued` keeps the session open for
@@ -4038,6 +4045,22 @@ export async function runStreamedAgentTurn(
       // (a second ThinkingLoopError lands here at attempts = 2).
       const attempts = providerRetries + unknownProgressRetries + thinkingLoopRetries + 1;
       const message = providerFailureMessage(provider.id, session.id, classified, overflowRecovered, attempts);
+      // ROUND-97 (R97-E): the FAILED turn's real token spend — the completed
+      // iterations' totals PLUS the failed call's streamed-so-far (the
+      // adapter attaches it to every thrown error; a call that died before
+      // any usage accumulated reports the completed totals alone). The
+      // owner's "if a model fails, then it does not show me the total number
+      // of tokens sent, total number of tokens received" report.
+      const failedCallUsage = readStreamPartialUsage(normalized);
+      const failedUsage =
+        failedCallUsage !== null
+          ? {
+              inputTokens: totalInputTokens + failedCallUsage.inputTokens,
+              outputTokens: totalOutputTokens + failedCallUsage.outputTokens,
+            }
+          : totalInputTokens > 0 || totalOutputTokens > 0
+            ? { inputTokens: totalInputTokens, outputTokens: totalOutputTokens }
+            : undefined;
       const errorTs = persistTurnError(db, {
         sessionId: session.id,
         agentId: agent.id,
@@ -4049,6 +4072,7 @@ export async function runStreamedAgentTurn(
         providerError: providerErrorText,
         errorClass: classified.class,
         attempts,
+        ...(failedUsage !== undefined ? { usage: failedUsage } : {}),
         keySecrets,
       });
       return {
@@ -4067,6 +4091,10 @@ export async function runStreamedAgentTurn(
           // card's "failed after N attempts" line + the task_failed
           // notification's body both read it.
           attempts,
+          // R97-E: the FAILED turn's real token spend — the live error card's
+          // "Tokens sent ↑ / received ↓" line reads it (the persisted
+          // turn.error carries the same number; the folded card matches).
+          ...(failedUsage !== undefined ? { usage: failedUsage } : {}),
           // ROUND-43: the persisted event's ts — the live UI matches on it to
           // swap the streamed error card for the folded one (no duplicates).
           errorTs,

@@ -895,6 +895,44 @@ export class ThinkingLoopError extends Error {
   }
 }
 
+// ── ROUND-97 (R97-E): the PARTIAL USAGE a thrown stream error carries ─────────
+//
+// The owner: "if a model fails, then it does not show me the total number of
+// tokens sent, total number of tokens received, and such info. It should
+// show that info properly." The streamed adapter accumulates per-step usage
+// as parts arrive — but a mid-stream failure THREW it away (the runtime never
+// saw a finish event). Every error leaving streamAiSdkChat now carries the
+// accumulated so-far on a symbol property; the runtime's error path reads it
+// and rides it into the persisted turn.error + the SSE error frame, so the
+// failure card can show the REAL spend of the failed call.
+
+const STREAM_PARTIAL_USAGE = Symbol("acute.streamPartialUsage");
+
+export interface StreamPartialUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** R97-E: attach the so-far usage to a thrown error (no-op on non-objects —
+ * a string throw keeps flowing unchanged). */
+function attachStreamPartialUsage(error: unknown, usage: StreamPartialUsage): void {
+  if (typeof error === "object" && error !== null) {
+    (error as { [STREAM_PARTIAL_USAGE]?: StreamPartialUsage })[STREAM_PARTIAL_USAGE] = usage;
+  }
+}
+
+/** R97-E: read the partial usage a stream error carries (null when the error
+ * left the adapter before any usage accumulated, or never came from it —
+ * a {0,0} carry also reads null: the card renders NO token line rather than
+ * a fake "0 sent · 0 received"). */
+export function readStreamPartialUsage(error: unknown): StreamPartialUsage | null {
+  if (typeof error !== "object" || error === null) return null;
+  const usage = (error as { [STREAM_PARTIAL_USAGE]?: StreamPartialUsage })[STREAM_PARTIAL_USAGE];
+  if (usage === undefined) return null;
+  if (usage.inputTokens <= 0 && usage.outputTokens <= 0) return null;
+  return usage;
+}
+
 /**
  * Production streaming adapter: streamText over the same openai-compatible
  * provider, multi-step (tool round-trips) like generateText. fullStream parts
@@ -966,110 +1004,120 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
   const loopEnabled = input.thinkingLoop?.enabled === true;
   const loopStallMs = input.thinkingLoop?.stallMs ?? THINKING_STALL_MS;
   const loopReasoningBytes = input.thinkingLoop?.reasoningBytes ?? THINKING_STALL_REASONING_BYTES;
-  for await (const part of result.fullStream) {
-    // ROUND-75 (R75, the live 429 find): the SDK surfaces mid-stream
-    // failures — provider errors AFTER its internal retries (429 rate
-    // limits, 5xx, timeouts) — as ERROR PARTS on the fullStream, not
-    // iterator throws (agentic steps with tools especially). The parts
-    // were silently skipped here, so the only error the runtime ever saw
-    // was the generic NoOutputGenerated rejection at the totals await
-    // below — "Check the stream for errors", no status, no message
-    // patterns → class unknown → NO retry ladder on REAL rate limits
-    // (exactly the "stops halfway, no error class" failure the owner
-    // reported). Re-throw the ORIGINAL error: the runtime's classifier
-    // sees the true shape (APICallError{statusCode}/RetryError with the
-    // provider text) and the transient-API ladder engages for real.
-    if (part.type === "error") {
-      throw (part as { error: unknown }).error;
-    }
-    if (part.type === "reasoning-delta") {
-      // ROUND-95 (R95-E): reasoning is the ONE part type that is not
-      // progress — accumulate it and check the stall. The abort happens
-      // cleanly BETWEEN parts: throwing from the for-await ends this
-      // generator (the SDK stream's implicit return() closes it), no signal
-      // needed — the runtime's existing error path owns the fallout.
-      // ROUND-97 (R97-D): loopEnabled=false → no check at all — the model
-      // thinks as much as it needs to (the owner's default-off directive).
-      reasoningBytesSinceProgress += part.text.length;
-      if (
-        loopEnabled &&
-        Date.now() - lastProgressTs > loopStallMs &&
-        reasoningBytesSinceProgress > loopReasoningBytes
-      ) {
-        throw new ThinkingLoopError();
+  // ROUND-97 (R97-E): every error leaving this loop carries the SO-FAR usage
+  // (stepInput/stepOutput) — the owner's "if a model fails, it does not show
+  // me the total number of tokens sent, total number of tokens received"
+  // report. The wrap covers mid-stream error parts, the SDK's iterator
+  // throws, AND the post-loop truncation error below.
+  try {
+      for await (const part of result.fullStream) {
+      // ROUND-75 (R75, the live 429 find): the SDK surfaces mid-stream
+      // failures — provider errors AFTER its internal retries (429 rate
+      // limits, 5xx, timeouts) — as ERROR PARTS on the fullStream, not
+      // iterator throws (agentic steps with tools especially). The parts
+      // were silently skipped here, so the only error the runtime ever saw
+      // was the generic NoOutputGenerated rejection at the totals await
+      // below — "Check the stream for errors", no status, no message
+      // patterns → class unknown → NO retry ladder on REAL rate limits
+      // (exactly the "stops halfway, no error class" failure the owner
+      // reported). Re-throw the ORIGINAL error: the runtime's classifier
+      // sees the true shape (APICallError{statusCode}/RetryError with the
+      // provider text) and the transient-API ladder engages for real.
+      if (part.type === "error") {
+        throw (part as { error: unknown }).error;
       }
-    } else {
-      lastProgressTs = Date.now();
-      reasoningBytesSinceProgress = 0;
-    }
-    if (part.type === "text-delta") {
-      sawContentDelta = true;
-      yield { type: "text-delta", delta: part.text };
-    } else if (part.type === "reasoning-delta") {
-      sawContentDelta = true;
-      // ROUND-35: thinking tokens stream as a separate channel so the UI can
-      // render them in a muted, collapsible block apart from the answer.
-      yield { type: "thinking-delta", delta: part.text };
-    } else if (part.type === "tool-input-start") {
-      sawContentDelta = true;
-      // ROUND-58 (R58-c): the model started generating a tool call's JSON
-      // arguments — emit immediately so the UI can open a live preview row.
-      // (fullStream part shape: {id, toolName} — normalized to toolCallId
-      // here so nothing downstream sees SDK types.)
-      yield { type: "tool-input-start", toolCallId: part.id, toolName: part.toolName };
-    } else if (part.type === "tool-input-delta") {
-      // ROUND-58 (R58-c): a chunk of the streamed JSON arguments — forwarded
-      // verbatim; the client accumulates per toolCallId. (fullStream part
-      // shape: {id, delta}.)
-      yield {
-        type: "tool-input-delta",
-        toolCallId: part.id,
-        inputTextDelta: part.delta,
-      };
-    } else if (part.type === "tool-call") {
-      const argsSummary = summarizeArgs(part.input);
-      yield { type: "tool-call", toolName: part.toolName, argsSummary, args: part.input };
-    } else if (part.type === "tool-result") {
-      const output = part.output as unknown;
-      const ok =
-        typeof output === "object" && output !== null && "ok" in output
-          ? Boolean((output as { ok: unknown }).ok)
-          : true;
-      yield {
-        type: "tool-result",
-        toolName: part.toolName,
-        argsSummary: summarizeArgs(part.input),
-        // ROUND-96 (R96-B): the raw input for the guard's exact-match identity.
-        args: part.input,
-        ok,
-        outputSummary: summarizeToolOutput(part.output, part.toolName),
-      };
-    } else if (part.type === "finish-step") {
-      stepFinishCount += 1;
-      const stepUsage = (part as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
-      if (stepUsage) {
-        stepInput += stepUsage.inputTokens ?? 0;
-        stepOutput += stepUsage.outputTokens ?? 0;
-        stepCached +=
-          (part as { usage?: { inputTokenDetails?: { cacheReadTokens?: number } } }).usage
-            ?.inputTokenDetails?.cacheReadTokens ?? 0;
+      if (part.type === "reasoning-delta") {
+        // ROUND-95 (R95-E): reasoning is the ONE part type that is not
+        // progress — accumulate it and check the stall. The abort happens
+        // cleanly BETWEEN parts: throwing from the for-await ends this
+        // generator (the SDK stream's implicit return() closes it), no signal
+        // needed — the runtime's existing error path owns the fallout.
+        // ROUND-97 (R97-D): loopEnabled=false → no check at all — the model
+        // thinks as much as it needs to (the owner's default-off directive).
+        reasoningBytesSinceProgress += part.text.length;
+        if (
+          loopEnabled &&
+          Date.now() - lastProgressTs > loopStallMs &&
+          reasoningBytesSinceProgress > loopReasoningBytes
+        ) {
+          throw new ThinkingLoopError();
+        }
+      } else {
+        lastProgressTs = Date.now();
+        reasoningBytesSinceProgress = 0;
+      }
+      if (part.type === "text-delta") {
+        sawContentDelta = true;
+        yield { type: "text-delta", delta: part.text };
+      } else if (part.type === "reasoning-delta") {
+        sawContentDelta = true;
+        // ROUND-35: thinking tokens stream as a separate channel so the UI can
+        // render them in a muted, collapsible block apart from the answer.
+        yield { type: "thinking-delta", delta: part.text };
+      } else if (part.type === "tool-input-start") {
+        sawContentDelta = true;
+        // ROUND-58 (R58-c): the model started generating a tool call's JSON
+        // arguments — emit immediately so the UI can open a live preview row.
+        // (fullStream part shape: {id, toolName} — normalized to toolCallId
+        // here so nothing downstream sees SDK types.)
+        yield { type: "tool-input-start", toolCallId: part.id, toolName: part.toolName };
+      } else if (part.type === "tool-input-delta") {
+        // ROUND-58 (R58-c): a chunk of the streamed JSON arguments — forwarded
+        // verbatim; the client accumulates per toolCallId. (fullStream part
+        // shape: {id, delta}.)
+        yield {
+          type: "tool-input-delta",
+          toolCallId: part.id,
+          inputTextDelta: part.delta,
+        };
+      } else if (part.type === "tool-call") {
+        const argsSummary = summarizeArgs(part.input);
+        yield { type: "tool-call", toolName: part.toolName, argsSummary, args: part.input };
+      } else if (part.type === "tool-result") {
+        const output = part.output as unknown;
+        const ok =
+          typeof output === "object" && output !== null && "ok" in output
+            ? Boolean((output as { ok: unknown }).ok)
+            : true;
+        yield {
+          type: "tool-result",
+          toolName: part.toolName,
+          argsSummary: summarizeArgs(part.input),
+          // ROUND-96 (R96-B): the raw input for the guard's exact-match identity.
+          args: part.input,
+          ok,
+          outputSummary: summarizeToolOutput(part.output, part.toolName),
+        };
+      } else if (part.type === "finish-step") {
+        stepFinishCount += 1;
+        const stepUsage = (part as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
+        if (stepUsage) {
+          stepInput += stepUsage.inputTokens ?? 0;
+          stepOutput += stepUsage.outputTokens ?? 0;
+          stepCached +=
+            (part as { usage?: { inputTokenDetails?: { cacheReadTokens?: number } } }).usage
+              ?.inputTokenDetails?.cacheReadTokens ?? 0;
+        }
       }
     }
-  }
-  // ROUND-80 (R80): the silent-truncation guard — zero finish-step parts
-  // while content deltas streamed means the provider closed the stream
-  // mid-response without an error part (the clean-close drop). Throw the
-  // honest truncation error INSTEAD of synthesizing a finish: the runtime's
-  // classifier reads it as `network` (transient → the retry ladder can
-  // wait it out), the partial text is preserved by the R75 flush, and the
-  // owner sees a real error card instead of a chat that just stops.
-  // Conservative by design: only fires when content WAS streaming (a
-  // contentless empty stream stays on the existing NoOutputGenerated /
-  // R77 NO_OUTPUT paths — no false positives on legitimately-empty replies).
-  if (stepFinishCount === 0 && sawContentDelta) {
-    throw new Error(
-      "provider stream ended without a finish signal — the connection closed mid-response (truncated output)",
-    );
+    // ROUND-80 (R80): the silent-truncation guard — zero finish-step parts
+    // while content deltas streamed means the provider closed the stream
+    // mid-response without an error part (the clean-close drop). Throw the
+    // honest truncation error INSTEAD of synthesizing a finish: the runtime's
+    // classifier reads it as `network` (transient → the retry ladder can
+    // wait it out), the partial text is preserved by the R75 flush, and the
+    // owner sees a real error card instead of a chat that just stops.
+    // Conservative by design: only fires when content WAS streaming (a
+    // contentless empty stream stays on the existing NoOutputGenerated /
+    // R77 NO_OUTPUT paths — no false positives on legitimately-empty replies).
+    if (stepFinishCount === 0 && sawContentDelta) {
+      throw new Error(
+        "provider stream ended without a finish signal — the connection closed mid-response (truncated output)",
+      );
+    }
+    } catch (streamError) {
+      attachStreamPartialUsage(streamError, { inputTokens: stepInput, outputTokens: stepOutput });
+    throw streamError;
   }
   const totals = (await result.totalUsage) ?? (await result.usage);
   usage.inputTokens = Math.max(totals.inputTokens ?? 0, stepInput);

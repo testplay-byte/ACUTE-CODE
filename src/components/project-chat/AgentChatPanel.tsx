@@ -913,7 +913,10 @@ export function TurnErrorCard({
   /** The persisted fold item OR a live shape (code/message/model/ts). */
   error: Pick<ErrorTurnItem, "code" | "message" | "ts"> &
     Partial<
-      Pick<ErrorTurnItem, "model" | "providerId" | "providerError" | "errorClass" | "attempts">
+      Pick<
+        ErrorTurnItem,
+        "model" | "providerId" | "providerError" | "errorClass" | "attempts" | "usage"
+      >
     > & {
       /** R93-B1: live-only — the stranded-queue count (the error frame's
        * details). The folded card re-derives it from nothing (the folded
@@ -944,6 +947,10 @@ export function TurnErrorCard({
     ...(error.providerId ? [`Provider: ${error.providerId}`] : []),
     ...(error.errorClass !== undefined ? [`Class: ${error.errorClass}`] : []),
     ...(error.attempts !== undefined ? [`Attempts: ${error.attempts}`] : []),
+    // R97-E: the real spend rides the copied details too.
+    ...(error.usage
+      ? [`Tokens sent: ${error.usage.inputTokens}`, `Tokens received: ${error.usage.outputTokens}`]
+      : []),
     `Code: ${error.code}`,
     `Error: ${reason}`,
     `Time: ${error.ts}`,
@@ -985,6 +992,21 @@ export function TurnErrorCard({
                 title={error.model}
               >
                 {error.model}
+              </span>
+            ) : null}
+            {/* R97-E: the failed turn's REAL spend — the owner: "if a model
+                fails, then it does not show me the total number of tokens
+                sent, total number of tokens received… It should show that
+                info properly." Rendered whenever any usage accumulated
+                (completed iterations + the failed call's so-far). */}
+            {error.usage ? (
+              <span
+                data-error-usage
+                className="font-mono text-[10.5px] px-1.5 py-0.5 rounded-md shrink-0"
+                style={{ background: styles.subtle, color: styles.textSecondary }}
+                title="The tokens this failed turn actually spent (completed iterations + the failed call's streamed-so-far)"
+              >
+                {fmtTokens(error.usage.inputTokens)} sent ↑ · {fmtTokens(error.usage.outputTokens)} received ↓
               </span>
             ) : null}
             <span className="text-[11.5px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>

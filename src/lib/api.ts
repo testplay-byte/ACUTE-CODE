@@ -1188,6 +1188,12 @@ export interface ErrorTurnItem {
   /** ROUND-75 (R75): total attempts when the transient-API retry ladder ran
    * (1 = no ladder) — the card's "failed after N attempts" line. */
   attempts?: number;
+  /** ROUND-97 (R97-E): the tokens the failed turn actually spent (the
+   * completed iterations' totals + the failed call's streamed-so-far) — the
+   * card's "Tokens sent ↑ / received ↓" line (the owner: "if a model fails,
+   * then it does not show me the total number of tokens sent, total number
+   * of tokens received… It should show that info properly"). */
+  usage?: { inputTokens: number; outputTokens: number };
   ts: string;
 }
 
@@ -1791,6 +1797,20 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
         typeof payload.attempts === "number" && Number.isFinite(payload.attempts) && payload.attempts > 1
           ? payload.attempts
           : undefined;
+      // R97-E: the failed turn's real token spend (the runtime attaches it
+      // to the persisted payload when any usage accumulated).
+      const usageRaw =
+        payload.usage && typeof payload.usage === "object"
+          ? (payload.usage as { inputTokens?: unknown; outputTokens?: unknown })
+          : undefined;
+      const usage =
+        usageRaw !== undefined &&
+        typeof usageRaw.inputTokens === "number" &&
+        Number.isFinite(usageRaw.inputTokens) &&
+        typeof usageRaw.outputTokens === "number" &&
+        Number.isFinite(usageRaw.outputTokens)
+          ? { inputTokens: usageRaw.inputTokens, outputTokens: usageRaw.outputTokens }
+          : undefined;
       items.push({
         kind: "error",
         seq: event.seq,
@@ -1802,6 +1822,7 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
         ...(userSeq !== undefined ? { userSeq } : {}),
         ...(errorClass !== undefined ? { errorClass } : {}),
         ...(attempts !== undefined ? { attempts } : {}),
+        ...(usage !== undefined ? { usage } : {}),
         ts: event.ts,
       });
       continue;

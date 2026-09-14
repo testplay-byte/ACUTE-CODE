@@ -238,6 +238,11 @@ export interface TurnErrorInfo {
    * attempts — the card renders the cause word + "failed after N attempts". */
   errorClass?: string;
   attempts?: number;
+  /** ROUND-97 (R97-E): the tokens the failed turn actually spent (completed
+   * iterations + the failed call's streamed-so-far) — the card renders
+   * "Tokens sent ↑ / received ↓" when present (the owner: "if a model
+   * fails, then it does not show me the total number of tokens sent…"). */
+  usage?: { inputTokens: number; outputTokens: number };
   /** The ts of the PERSISTED turn.error event, when the backend recorded
    * one — used to swap the live card for the folded one without a flash or
    * a duplicate. */
@@ -1996,6 +2001,20 @@ function handleStreamEvent(
       details && typeof details.queuedKept === "number" && Number.isFinite(details.queuedKept) && details.queuedKept > 0
         ? details.queuedKept
         : undefined;
+    // R97-E: the failed turn's real token spend (the backend attaches it to
+    // the frame's details when any usage accumulated).
+    const usageRaw =
+      details && typeof details.usage === "object" && details.usage !== null
+        ? (details.usage as { inputTokens?: unknown; outputTokens?: unknown })
+        : undefined;
+    const usage =
+      usageRaw !== undefined &&
+      typeof usageRaw.inputTokens === "number" &&
+      Number.isFinite(usageRaw.inputTokens) &&
+      typeof usageRaw.outputTokens === "number" &&
+      Number.isFinite(usageRaw.outputTokens)
+        ? { inputTokens: usageRaw.inputTokens, outputTokens: usageRaw.outputTokens }
+        : undefined;
     patchSession(sessionId, {
       liveError: {
         code: event.code,
@@ -2006,6 +2025,7 @@ function handleStreamEvent(
         ...(errorTs !== undefined ? { errorTs } : {}),
         ...(errorClass !== undefined ? { errorClass } : {}),
         ...(attempts !== undefined ? { attempts } : {}),
+        ...(usage !== undefined ? { usage } : {}),
         ...(queuedKept !== undefined ? { queuedKept } : {}),
         ts: new Date().toISOString(),
       },
