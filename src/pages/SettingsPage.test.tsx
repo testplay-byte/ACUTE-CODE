@@ -746,17 +746,21 @@ describe("Functionality tab + Auto-retry card (ROUND-78 R78-C, R98-I1)", () => {
 
 /* ── ROUND-98 (R98-E1/E3): the Prompts tab's deep-link render branch. The
  * describe's 401 stub covers the sections GET — the honest error card (not
- * an eternal loader) is exactly what a logged-out browser should see. */
-describe("Prompts tab (ROUND-98 R98-E)", () => {
-  it("?tab=prompts deep-links to the Prompts tab: the h1 adapts, the tab root mounts, and the 401'd sections GET renders the honest error card + Retry", async () => {
+ * an eternal loader) is exactly what a logged-out browser should see.
+ * ROUND-99 (R99-F): the tab's own h2 is the "System prompt" framing title
+ * (the project-wide redesign) and it SURVIVES the error gate. */
+describe("Prompts tab (ROUND-98 R98-E / ROUND-99 R99-F)", () => {
+  it("?tab=prompts deep-links to the Prompts tab: the h1 adapts, the System prompt framing mounts, and the 401'd sections GET renders the honest error card + Retry", async () => {
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=prompts" });
 
     // The header adapts to the section (h1) while the tab renders its own
-    // h2; the tab's root mounts in the standard max-w column branch (the
-    // form-tabs container, not the api tab's viewport-locked one).
+    // framing h2 (R99-F: "System prompt", the project-wide scope — it mounts
+    // with the manager card once the picker's projects resolve); the tab's
+    // root mounts in the standard max-w column branch (the form-tabs
+    // container, not the api tab's viewport-locked one).
     expect(screen.getByRole("heading", { level: 1, name: "Prompts" })).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 2, name: "Prompts" })).toBeTruthy();
     expect(screen.getByTestId("prompts-tab")).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 2, name: "System prompt" })).toBeTruthy();
     // The picker defaults to the FIRST registered project (the demo fixture
     // set rides getProjectsBackend) and the sections GET hits the 401 stub.
     expect(await screen.findByTestId("prompt-sections-error")).toBeTruthy();

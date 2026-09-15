@@ -72,6 +72,17 @@ bug.
 - Chat route: borderless surfaces + gaps; the transcript is a centered
   column (max-w-[1080px]) with graduated padding; panels flank.
 - App routes: bento cards on the app background; 12–16px gutters.
+- **Master-detail-lite** (round-99 F, Settings → Prompts): a scope-grouped,
+  searchable master list (~300px, its own `max-h` + the app's thin pill
+  scrollbar — the long-list discipline) beside the selected row's detail
+  pane, inside the page's normal scrolling column — NOT the api tab's
+  viewport-locked two-pane (reserve that for wide forms). Below `md` the
+  panes STACK: list first, the selected row hides while its editor is open,
+  and a "← All sections"-style back affordance on the detail header closes
+  it (`hidden md:flex` toggling — never both `hidden` and `flex` in one
+  class list). The active row uses the provider-list grammar: `aria-current`,
+  `bg-accent-soft` wash + 2.5px accent bar on the CSS-var leg, hover via
+  `hover:bg-hover`.
 - Popovers/flyouts: 12px radius, `border-strong`, `bentoShadow`, 1.5–2px
   border, outside-click close, `aria` semantics (DESIGN-SYSTEM §6).
 - Dialogs: Radix center, 12px radius, header/body/footer zones, base
