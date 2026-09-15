@@ -36,7 +36,8 @@ Thumbs.db
 # installer (release.yml fetches the pinned ~300 MB cab + extracts it here —
 # never committed; the same discipline as the sidecar staging above). The
 # -extract dir is the cab's intermediate unpack area, also CI-only.
-/src-tauri/webview2-runtime/
+/src-tauri/webview2-runtime/*
+!/src-tauri/webview2-runtime/README.md
 /src-tauri/webview2-runtime-extract/
 
 # tooling caches
