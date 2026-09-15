@@ -244,8 +244,11 @@ was the app's single point of failure. Since R99 the installer carries the
 WebView2 **Fixed Version Runtime** and the app always runs its own engine:
 
 - `src-tauri/tauri.conf.json` pins
-  `bundle.windows.webviewInstallMode = { mode: "fixedRuntime", path:
-  "webview2-runtime" }` AND maps `"webview2-runtime/": "webview2-runtime/"`
+  `bundle.windows.webviewInstallMode = { type: "fixedRuntime", path:
+  "webview2-runtime" }` (the serde tag field is `type` — writing `mode`
+  fails CI's `tauri-build` with `missing field \`type\``; the R99-A first
+  push shipped exactly that bug and CI caught it) AND maps
+  `"webview2-runtime/": "webview2-runtime/"`
   in `bundle.resources` — the bundler does NOT auto-add the runtime dir
   as a resource; without the resources row the installed app points at an
   empty path. The app runtime resolves the folder RELATIVE TO THE

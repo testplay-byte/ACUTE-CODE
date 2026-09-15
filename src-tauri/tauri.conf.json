@@ -36,7 +36,7 @@
     },
     "windows": {
       "webviewInstallMode": {
-        "mode": "fixedRuntime",
+        "type": "fixedRuntime",
         "path": "webview2-runtime"
       },
       "nsis": {

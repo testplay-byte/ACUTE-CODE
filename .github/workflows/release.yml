@@ -181,7 +181,9 @@ jobs:
       # BROWSER ENGINE WITH THE APP.
       #
       # WHY: tauri.conf.json pins bundle.windows.webviewInstallMode to
-      # { mode: "fixedRuntime", path: "webview2-runtime" } and the bundler
+      # { type: "fixedRuntime", path: "webview2-runtime" } (the serde tag field
+      # is `type` — the R99-A first push wrote `mode` and CI's tauri-build
+      # failed with "missing field `type`"; the re-pin) and the bundler
       # does NOT auto-add the runtime dir as a resource — the resources map
       # carries "webview2-runtime/": "webview2-runtime/" so the installer
       # places the files at exactly the relative path the app runtime
