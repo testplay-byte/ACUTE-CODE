@@ -41,6 +41,17 @@
  * body ≤ 60,000 chars, ≤ 32 file skills PER SOURCE (honest skip beyond —
  * logged, not surfaced as an error; one broken source never breaks a turn).
  *
+ * ROUND-98 (R98-E2, the always-load tier): frontmatter `always-load: true`
+ * (the exact lowercase spelling; anything else is false) pins a file skill
+ * into the same tier as a pinned DB row — its FULL BODY rides the system
+ * prompt every turn ("## ALWAYS-ON SKILLS", prompts.ts). Precedence is
+ * unchanged: a DB row (pinned or not) SHADOWS a same-name file, so the
+ * documented override path for a file skill's pin is a DB row with that
+ * name. The body loads from the SAME source read_skill uses (the file on
+ * disk at resolve time); a vanished file degrades to the honest failure
+ * NOTE in the body slot — the ALWAYS-ON section shows the model the truth,
+ * never silence.
+ *
  * ROUND-72 (R72-c): REFERENCES DEPTH — dir-form skills may carry a
  * `references/` subdirectory of deeper .md files (one level, the Agent
  * Skills standard). Discovery lists them as METADATA ONLY (name = stem,
@@ -119,6 +130,9 @@ export interface FileSkillRecord {
   name: string;
   description: string;
   source: FileSkillSource;
+  /** R98-E2: frontmatter `always-load: true` — the file-skill reach of the
+   * always-load tier (same composition as a pinned DB row). */
+  alwaysLoad: boolean;
   /** Absolute path of the SKILL.md / <name>.md file (bodies are read from
    * disk at CALL time — see readFileSkillBody). */
   filePath: string;
@@ -299,10 +313,15 @@ function discoverFromDir(
     const description =
       frontmatter?.get("description")?.trim().slice(0, FILE_SKILL_DESC_CAP) ||
       (source === "project-file" ? GENERIC_PROJECT_DESCRIPTION : GENERIC_GLOBAL_DESCRIPTION);
+    // R98-E2: the always-load tier's file-side reach — `always-load: true`
+    // (the exact lowercase spelling "true"; anything else reads as false —
+    // fail-soft like every frontmatter tolerance here).
+    const alwaysLoad = frontmatter?.get("always-load")?.trim().toLowerCase() === "true";
     out.push({
       name,
       description,
       source,
+      alwaysLoad,
       filePath: candidate.filePath,
       scope,
       references:
@@ -504,6 +523,17 @@ export interface EffectiveSkill {
    * via readSkillReference. Additive: the prompt SKILLS section still maps
    * to name + description only. */
   references?: ReadonlyArray<FileSkillReference>;
+  /** R98-E2: the ALWAYS-LOAD tier — set ONLY on pinned skills (DB row with
+   * always_load=1 or file skill with `always-load: true` frontmatter, after
+   * the DB-shadows-file precedence). Unpinned entries omit the field so
+   * every pre-R98 consumer shape is unchanged. */
+  alwaysLoad?: boolean;
+  /** R98-E2: pinned skills ONLY — the full body that rides the system
+   * prompt's "## ALWAYS-ON SKILLS" section, loaded HERE from the same
+   * source read_skill uses (the DB row / readFileSkillBody). A failed file
+   * read degrades to the honest failure NOTE (the model learns the file is
+   * gone — never silence, never a stale cache). Unpinned entries omit it. */
+  body?: string;
 }
 
 export interface ResolveSkillOptions {
@@ -530,6 +560,12 @@ export interface ResolveSkillOptions {
  * GATED OUT while the master switch is off — R70-b D4, its tools are dark
  * so the discipline must not be advertised), then file skills where no DB
  * row shadows the name, then the agent allowlist filter (D5).
+ *
+ * R98-E2: a pinned skill (DB always_load=1, or `always-load: true` in a
+ * file skill's frontmatter where no DB row shadows it) carries
+ * `alwaysLoad: true` + its FULL `body` — the payload prompts.ts composes
+ * into "## ALWAYS-ON SKILLS". The shadow rule covers the flag exactly as
+ * it covers the body: a DB row of the same name (pinned or not) wins.
  */
 export function resolveEffectiveSkills(db: SqliteDatabase, opts: ResolveSkillOptions = {}): EffectiveSkill[] {
   const computerUseEnabled = getComputerUseSettings(db).enabled;
@@ -546,11 +582,29 @@ export function resolveEffectiveSkills(db: SqliteDatabase, opts: ResolveSkillOpt
     // allowlist (advertising discipline for dark tools is dishonest
     // even when the owner explicitly lists the name).
     if (!computerUseEnabled && skill.id === COMPUTER_USE_SKILL_ID) continue;
-    out.push({ name: skill.name, description: skill.description, source: skill.source, id: skill.id });
+    out.push({
+      name: skill.name,
+      description: skill.description,
+      source: skill.source,
+      id: skill.id,
+      // R98-E2: pinned DB rows carry the body straight from the row —
+      // the exact text read_skill would return for them.
+      ...(skill.alwaysLoad ? { alwaysLoad: true, body: skill.body } : {}),
+    });
   }
   for (const fileSkill of discoverFileSkills(opts.projectRoot, opts.globalRoot, opts.projectScope ?? "project")) {
     if (seen.has(fileSkill.name)) continue; // DB > file, project > global
     seen.add(fileSkill.name);
+    // R98-E2: a pinned FILE skill's body rides the same tier, read from
+    // disk HERE (the same readFileSkillBody read_skill loads through at
+    // call time). A vanished/unreadable file degrades to the honest note
+    // — the ALWAYS-ON section then tells the model the truth instead of
+    // silently skipping the pin.
+    let pinnedBody: string | undefined;
+    if (fileSkill.alwaysLoad) {
+      const loaded = readFileSkillBody(fileSkill.filePath);
+      pinnedBody = loaded.ok ? loaded.body : loaded.note;
+    }
     out.push({
       name: fileSkill.name,
       description: fileSkill.description,
@@ -560,6 +614,7 @@ export function resolveEffectiveSkills(db: SqliteDatabase, opts: ResolveSkillOpt
       // R72-c: the references metadata rides the effective index so
       // read_skill can advertise + load them; DB entries never set it.
       references: fileSkill.references,
+      ...(fileSkill.alwaysLoad ? { alwaysLoad: true, ...(pinnedBody !== undefined ? { body: pinnedBody } : {}) } : {}),
     });
   }
   const allow = opts.agentSkills !== undefined && opts.agentSkills.length > 0 ? new Set(opts.agentSkills) : null;
@@ -572,7 +627,10 @@ export function resolveEffectiveSkills(db: SqliteDatabase, opts: ResolveSkillOpt
  * file skills (provenance-marked, read-only). Additive over the previous
  * response — `filePath`/`projectName` are new, `source` gained two values,
  * and R72-c added `references` (file skills only, metadata: name/fileName/
- * bytes — reference CONTENT is never served here; read_skill loads it). */
+ * bytes — reference CONTENT is never served here; read_skill loads it).
+ * R98-E2 adds `alwaysLoad` (boolean, every row: DB rows read the column,
+ * file rows read the `always-load:` frontmatter — the Settings switch and
+ * the pinned-budget readout ride it). */
 export interface MergedSkillRecord {
   id: string;
   name: string;
@@ -580,6 +638,8 @@ export interface MergedSkillRecord {
   body: string;
   source: SkillProvenance;
   enabled: boolean;
+  /** R98-E2: the always-load tier (DB column / file frontmatter). */
+  alwaysLoad: boolean;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
@@ -616,6 +676,8 @@ export function listAllSkillsMerged(db: SqliteDatabase, opts: { globalRoot?: str
     body: skill.body,
     source: skill.source,
     enabled: skill.enabled,
+    // R98-E2: the DB column (the Settings switch PATCHes it back).
+    alwaysLoad: skill.alwaysLoad,
     sortOrder: skill.sortOrder,
     createdAt: skill.createdAt,
     updatedAt: skill.updatedAt,
@@ -642,6 +704,9 @@ export function listAllSkillsMerged(db: SqliteDatabase, opts: { globalRoot?: str
       body: body.ok ? body.body : "",
       source: fileSkill.source,
       enabled: true, // visibility follows the file's existence
+      // R98-E2: the file-side pin (frontmatter `always-load: true` — the
+      // switch on a file row is read-only: edit the SKILL.md).
+      alwaysLoad: fileSkill.alwaysLoad,
       sortOrder: 1000,
       createdAt: ts,
       updatedAt: ts,

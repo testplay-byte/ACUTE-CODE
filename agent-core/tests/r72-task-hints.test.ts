@@ -410,12 +410,18 @@ describe("R72-a D3: both turn paths carry the advisory line (prepareTurn wiring)
 
     // Master switch ON: computer-use becomes effective and the verbatim
     // phrasing in the message wins the hint.
+    // R98-E2 (honest re-pin): the message hits TWO verbatim quoted phrases
+    // in the skill's description ('open Notepad' + 'type into that window')
+    // → score ≥ 30, far above STRONG_TASK_HINT_SCORE (15) — this is exactly
+    // the STRONG-match case the round's phrasing upgrade targets, so the
+    // line now carries the "read it BEFORE starting" wording (prompts.ts
+    // R98-E2). The scorer itself (computeTaskHints) is untouched.
     setComputerUseSettings(db, { enabled: true });
     const onSession = newSession(["computer-use"]);
     const onSystem = await runStreamedTurnAndCaptureSystem(onSession, "open Notepad and type into that window");
     expect(onSystem).toContain("## SKILLS (load with read_skill, search with search_skills)");
     expect(onSystem).toContain(
-      "Task signal: this request looks like it matches **computer-use** — consider calling read_skill with that name FIRST and following it for the rest of the task.",
+      "Task signal: this request STRONGLY matches **computer-use** — read it BEFORE starting (read_skill with that name) and follow it for the rest of the task.",
     );
   });
 

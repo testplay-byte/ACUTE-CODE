@@ -1549,12 +1549,25 @@ async function prepareTurn(
   // prompt's SKILLS section and the task-hint matcher, so a hint can never
   // name a skill the section doesn't list (one resolver, one truth; the
   // computer-use gate + agent allowlist are respected by construction).
+  // ROUND-98 (R98-E2): the always-load tier rides the SAME resolution — the
+  // map no longer strips the pinned fields: a skill resolveEffectiveSkills
+  // marked alwaysLoad carries its FULL body (loaded from the same source
+  // read_skill uses), and prompts.ts composes it into the "## ALWAYS-ON
+  // SKILLS" section. This is the ONLY runtime change the tier needed — the
+  // resolution itself (DB column, file frontmatter, shadow precedence,
+  // gates) already lives in storage/skills-files.ts, so read_skill,
+  // search_skills, the prompt index, and the pinned bodies can never
+  // disagree. Unpinned entries keep the exact pre-R98 {name, description}
+  // shape (the fields are conditionally spread, never set to undefined).
   const effectiveSkills = resolveEffectiveSkills(db, {
     ...(project !== undefined ? { projectRoot: project.rootPath, projectScope: project.id } : {}),
     ...(agent.skills.length > 0 ? { agentSkills: agent.skills } : {}),
   }).map((skill) => ({
     name: skill.name,
     description: skill.description,
+    ...(skill.alwaysLoad === true
+      ? { alwaysLoad: true, ...(skill.body !== undefined ? { body: skill.body } : {}) }
+      : {}),
   }));
   // ROUND-72 (R72-a): the per-turn task hints — this turn's user message
   // scored against those same descriptions (pure deterministic matching,

@@ -209,6 +209,9 @@ describe("openDatabase", () => {
       // ROUND-96 (R96-D): the skills-discovery tool joins the allowlist
       // vocabulary (the read_skill companion rule).
       { version: 36, name: "0036_search_skills_tool.sql" },
+      // ROUND-98 (R98-E2): the always-load tier — skills.always_load
+      // (default 0: nothing rides the prompt until the owner pins).
+      { version: 37, name: "0037_skills_always_load.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

@@ -134,9 +134,14 @@ describe("R73-b D1: the registry + the two composed sections", () => {
     // (hasVisionPath, directly after browser-panel).
     // ROUND-96 (R96-D): 27 → 30 — the BATCH + COMPLETION discipline pair
     // (behind agentic-loop) + PRECISION DISCIPLINE (behind code-navigation).
-    expect(PROMPT_SECTION_IDS.length).toBe(30);
-    expect(PROMPT_REGISTRY.length).toBe(30);
-    expect(PROMPT_SECTION_IDS.indexOf("task-modes")).toBe(PROMPT_SECTION_IDS.indexOf("skills") + 1);
+    // ROUND-98 (R98-E2): 30 → 31 — the ALWAYS-ON SKILLS section (the pinned
+    // bodies) joined DIRECTLY after skills, pushing the R73 pair one back.
+    expect(PROMPT_SECTION_IDS.length).toBe(31);
+    expect(PROMPT_REGISTRY.length).toBe(31);
+    // R98-E2: always-on-skills sits DIRECTLY after skills (the "deep module
+    // follows its index" position — the R73 pair's own precedent).
+    expect(PROMPT_SECTION_IDS.indexOf("always-on-skills")).toBe(PROMPT_SECTION_IDS.indexOf("skills") + 1);
+    expect(PROMPT_SECTION_IDS.indexOf("task-modes")).toBe(PROMPT_SECTION_IDS.indexOf("always-on-skills") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBe(PROMPT_SECTION_IDS.indexOf("task-modes") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("computer-use"));
     // ROUND-79 (R79-a): background-tasks sits DIRECTLY after active-mode

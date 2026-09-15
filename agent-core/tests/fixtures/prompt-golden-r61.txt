@@ -143,7 +143,15 @@ Red flags — catch yourself thinking any of these → STOP and do the right thi
 Capability modules available in this project. When a task matches one, call read_skill with its name FIRST and follow its instructions for the rest of the task. The list below is the high-signal index — when it does not obviously cover what you need, call search_skills with a keyword (a tool, a phase, a craft) to find more:
 - **computer-use** — Observe and actuate the desktop GUI: accessibility-first element actions with screenshot-coordinate fallback.
 - **demo-skill** — A demonstration user skill.
+- **demo-pinned** — A demonstration always-load skill. (ALWAYS-ON — full body in the ALWAYS-ON SKILLS section below)
 - A skill body that appears truncated after context compaction can be RELOADED: call read_skill again.
+
+## ALWAYS-ON SKILLS (pinned — full bodies ride every turn)
+The owner pinned these skills: their FULL bodies are already below — no read_skill needed. Follow each one for EVERY task in its domain, every session. (Pinning spends tokens deliberately — the owner chose always-on.)
+### Skill: demo-pinned
+# Skill: demo-pinned
+
+R98-E2 GOLDEN PINNED BODY — this full body rides every turn because the owner pinned the skill (always_load). Follow it for every task in its domain.
 
 ## COMPUTER USE (desktop control)
 You observe and actuate the user's REAL desktop — follow the discipline:

@@ -74,6 +74,19 @@
  * search_skills tool, and the listing is BUDGETED (SKILLS_LIST_MAX entries
  * / SKILLS_SECTION_CHAR_BUDGET chars; over budget keeps the seeded core
  * first and says so — "…and M more — search_skills to discover them").
+ *
+ * ROUND-98 (R98-E2, the always-load tier — the owner: "there are some
+ * skills which it must follow every single time, every single session";
+ * the webpage-design failure: ui-design/frontend-craft were one-line index
+ * entries the model never read): ctx.skills entries may carry
+ * alwaysLoad + body — the pinned entries keep their index line (marked
+ * ALWAYS-ON) and a new "## ALWAYS-ON SKILLS" section composes their FULL
+ * BODIES directly after the index, inside ALWAYS_ON_SKILLS_CHAR_BUDGET
+ * (24,000 chars total, honest truncation markers naming what got cut).
+ * Zero pinned → byte-identical composition (r98-pinned). The task-hint
+ * advisory line gains the deterministic STRONG variant ("read it BEFORE
+ * starting") at score ≥ STRONG_TASK_HINT_SCORE — the R72 pins' exact
+ * wording is untouched below that floor.
  */
 
 import type { PermissionMode } from "shared";
@@ -116,8 +129,15 @@ export interface PromptContext {
   /** ROUND-61 (R61): enabled SKILLS (progressive disclosure — name +
    * one-line description only; the body loads via read_skill). Absent or
    * empty → no SKILLS section (byte-identical to pre-R61 for callers that
-   * don't pass it). */
-  skills?: ReadonlyArray<{ name: string; description: string }>;
+   * don't pass it).
+   * ROUND-98 (R98-E2, the owner: "there are some skills which it must follow
+   * every single time, every single session"): an entry may carry
+   * `alwaysLoad: true` + its full `body` — the ALWAYS-LOAD tier. Pinned
+   * entries ALSO ride the index lines (marked "always-on") and their FULL
+   * BODIES compose the "## ALWAYS-ON SKILLS" section directly after this
+   * one, inside ALWAYS_ON_SKILLS_CHAR_BUDGET. Absent/empty/unpinned →
+   * byte-identical composition (the golden's proof for the unpinned case). */
+  skills?: ReadonlyArray<{ name: string; description: string; alwaysLoad?: boolean; body?: string }>;
   /** ROUND-72 (R72-a): the per-turn TASK HINTS — the deterministic matches
    * (agents/task-hints.ts computeTaskHints) of THIS turn's user message
    * against the effective skills above. When non-empty, ONE advisory
@@ -280,6 +300,41 @@ export const SKILLS_LISTED_MAX = 32;
 /** ROUND-96 (R96-D): char budget for the SKILLS listing lines (see the
  * measured rationale above — the seeded core fits, extras engage the cap). */
 export const SKILLS_SECTION_CHAR_BUDGET = 12_000;
+
+/* ── ROUND-98 (R98-E2): the ALWAYS-ON SKILLS budget ─────────────────────────
+ *
+ * The owner: "there are some skills which it must follow every single time,
+ * every single session" — the webpage-design failure (ui-design and
+ * frontend-craft were one-line index entries the model never read). A
+ * PINNED skill (DB always_load=1 — the Settings switch — or a file skill's
+ * `always-load: true` frontmatter) rides its FULL BODY into the system
+ * prompt every turn, the activeTaskMode precedent (prompts.ts ~L776: the
+ * one place a mode body is ever composed — persistence is the whole
+ * difference between a mode and a skill; this is the skills-surface twin).
+ *
+ * Budgeted like every other prompt surface: ALWAYS_ON_SKILLS_CHAR_BUDGET is
+ * the TOTAL across ALL pinned bodies (24,000 — measured headroom for the
+ * two 40-120-line R96-D craft skills the motivating case pins, without
+ * handing the whole context window to the pin list). Each body is already
+ * bounded by its own 60K storage cap; the TOTAL engages first: the body
+ * that crosses the budget is truncated to the remainder with an HONEST
+ * marker naming the skill and both counts, and every pinned skill after it
+ * gets a one-line "omitted — read_skill" entry. Budgeted, counted, never
+ * silent. Pinned bodies ride the identity bucket with the rest of the
+ * skills surface. */
+
+/** ROUND-98 (R98-E2): total char budget across ALL pinned skill bodies (see
+ * the block comment above — the composition truncates honestly inside it). */
+export const ALWAYS_ON_SKILLS_CHAR_BUDGET = 24_000;
+
+/** ROUND-98 (R98-E2): a STRONG task hint's score floor — at/above it the
+ * advisory line upgrades to the "read it BEFORE starting" phrasing. 15 = a
+ * 3+-word verbatim quoted phrase (words × 5) or a 2-word phrase plus five
+ * token hits; the R72 advisory-line pins (scores 8-12) keep their exact
+ * "looks like it matches" wording, so the deterministic boundary sits above
+ * every pinned case (task-hints.ts computeTaskHints — phrase hits score
+ * word-count × 5). */
+const STRONG_TASK_HINT_SCORE = 15;
 
 /**
  * The single ordered builder (ROUND-50 R50-c1). Every line of the composed
@@ -687,7 +742,12 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     let listed = 0;
     let hidden = 0;
     for (const skill of ctx.skills) {
-      const line = `- **${skill.name}** — ${skill.description}`;
+      // R98-E2: a pinned entry carries the ALWAYS-ON marker in the index so
+      // the model connects the one-liner to the full body waiting directly
+      // below — read_skill on it is unnecessary (the body already rides).
+      const line =
+        `- **${skill.name}** — ${skill.description}` +
+        (skill.alwaysLoad === true ? " (ALWAYS-ON — full body in the ALWAYS-ON SKILLS section below)" : "");
       // The FIRST skill always lists (degenerate guard: a budget smaller
       // than one line must not produce a header-only section). Both caps —
       // the entry count and the char budget — engage only after it.
@@ -708,12 +768,23 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // "looks like" wording: it is a nudge to read_skill FIRST, never an
     // auto-loaded body. Renders only when hints exist AND the section does
     // (no skills list → no line); a single hint drops the parenthetical.
+    // ROUND-98 (R98-E2): a STRONG match (first.score ≥
+    // STRONG_TASK_HINT_SCORE — deterministic, keyed only on the score)
+    // upgrades the phrasing to "read it BEFORE starting": the
+    // webpage-design failure was the model skimming past a one-line index
+    // entry, so the strongest signal now says to actually read the body
+    // up front.
     if (ctx.taskHints !== undefined && ctx.taskHints.length > 0) {
       const [first, second] = ctx.taskHints;
+      const strong = first.score >= STRONG_TASK_HINT_SCORE;
       ident(
         second === undefined
-          ? `Task signal: this request looks like it matches **${first.skillName}** — consider calling read_skill with that name FIRST and following it for the rest of the task.`
-          : `Task signal: this request looks like it matches **${first.skillName}** (and possibly **${second.skillName}**) — consider calling read_skill with that name FIRST and following it for the rest of the task.`,
+          ? strong
+            ? `Task signal: this request STRONGLY matches **${first.skillName}** — read it BEFORE starting (read_skill with that name) and follow it for the rest of the task.`
+            : `Task signal: this request looks like it matches **${first.skillName}** — consider calling read_skill with that name FIRST and following it for the rest of the task.`
+          : strong
+            ? `Task signal: this request STRONGLY matches **${first.skillName}** (and possibly **${second.skillName}**) — read it BEFORE starting (read_skill with that name) and follow it for the rest of the task.`
+            : `Task signal: this request looks like it matches **${first.skillName}** (and possibly **${second.skillName}**) — consider calling read_skill with that name FIRST and following it for the rest of the task.`,
       );
     }
     // ROUND-70 (R70-c, D6): the reload affordance — R70-b made skill bodies
@@ -721,6 +792,53 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // one to 8K after heavy compaction; the recovery is a re-read.
     ident("- A skill body that appears truncated after context compaction can be RELOADED: call read_skill again.");
     ident("");
+  }
+
+  // ── Always-on skills (ROUND-98, R98-E2): the pinned bodies ────────────
+  // The owner: "there are some skills which it must follow every single
+  // time, every single session." Progressive disclosure stays the CONTRACT
+  // for every unpinned skill; a pinned skill is the owner's explicit
+  // opt-out for ONE module — its full body rides every turn, the
+  // activeTaskMode precedent (the ONE place a mode body composes; this is
+  // the skills-surface twin). Strictly gated: zero pinned → no section,
+  // byte-identical composition (the r98 zero-pinned pin). The bodies ride
+  // ctx.skills (runtime.ts threads them from resolveEffectiveSkills, which
+  // loads them from the same source read_skill uses) inside
+  // ALWAYS_ON_SKILLS_CHAR_BUDGET — the body that crosses the budget gets
+  // the honest truncation marker, every skill after it the one-line
+  // "omitted" entry. Budgeted, counted, never silent.
+  if (ctx.skills !== undefined && ctx.skills.some((skill) => skill.alwaysLoad === true)) {
+    beginSection("always-on-skills");
+    ident("## ALWAYS-ON SKILLS (pinned — full bodies ride every turn)");
+    ident(
+      "The owner pinned these skills: their FULL bodies are already below — no read_skill needed. Follow each one for EVERY task in its domain, every session. (Pinning spends tokens deliberately — the owner chose always-on.)",
+    );
+    let budget = ALWAYS_ON_SKILLS_CHAR_BUDGET;
+    for (const skill of ctx.skills) {
+      if (skill.alwaysLoad !== true) continue;
+      const body = skill.body ?? "";
+      if (budget <= 0) {
+        ident(
+          `- **${skill.name}** — omitted: the ${ALWAYS_ON_SKILLS_CHAR_BUDGET.toLocaleString("en-US")}-char always-on budget is exhausted (load it with read_skill).`,
+        );
+        continue;
+      }
+      ident(`### Skill: ${skill.name}`);
+      if (body.length <= budget) {
+        budget -= body.length;
+        // An empty body (the flag without a body — never the real storage
+        // shape) composes the header + separator alone, never a blank pile.
+        if (body !== "") ident(body);
+      } else {
+        const shown = body.slice(0, budget);
+        budget = 0;
+        ident(shown);
+        ident(
+          `…[always-on budget: ${skill.name} truncated at ${shown.length.toLocaleString("en-US")} of ${body.length.toLocaleString("en-US")} chars — the ${ALWAYS_ON_SKILLS_CHAR_BUDGET.toLocaleString("en-US")}-char always-on budget is exhausted; read_skill loads the full body]`,
+        );
+      }
+      ident("");
+    }
   }
 
   // ── Task modes (ROUND-73 R73-b / ROUND-81 posture self-selection): the
@@ -1314,6 +1432,33 @@ export function buildSectionText(ctx: PromptContext, sectionId: SectionId): stri
   const group: string[] = [];
   let capturing = false;
   for (const entry of effective) {
+    if (entry.sectionId === sectionId) {
+      capturing = true;
+      group.push(entry.line);
+    } else if (capturing) {
+      break; // the contiguous run ended
+    }
+  }
+  if (group.length === 0) return undefined;
+  if (group[group.length - 1] === "") group.pop();
+  return group.join("\n");
+}
+
+/**
+ * ROUND-98 (R98-E1, the prompt-customization UI): the BUILT-IN text of ONE
+ * section — the composition with NO overrides applied. The Prompts tab's
+ * editor shows this as the read-only DEFAULT reference next to the editable
+ * override textarea, so the owner can always see what reverting restores
+ * even while an override is active. Undefined when the section is absent
+ * from this ctx's composition (the same conditional-section honesty as
+ * buildSectionText).
+ */
+export function buildDefaultSectionText(ctx: PromptContext, sectionId: SectionId): string | undefined {
+  // Overrides deliberately NOT applied — the pure buildTaggedPromptLines run.
+  const lines = buildTaggedPromptLines(ctx);
+  const group: string[] = [];
+  let capturing = false;
+  for (const entry of lines) {
     if (entry.sectionId === sectionId) {
       capturing = true;
       group.push(entry.line);

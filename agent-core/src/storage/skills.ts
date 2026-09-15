@@ -61,6 +61,17 @@
  * DESIGN-SYSTEM.md — "the demos ARE the design spec"). Same INSERT OR
  * IGNORE contract — fresh AND existing DBs converge on 24; user edits
  * persist; deleted rows revive with the new text.
+ *
+ * ROUND-98 (R98-E2, the owner: "there are some skills which it must follow
+ * every single time, every single session" — the webpage-design failure
+ * where ui-design/frontend-craft were one-line index entries the model
+ * never read): the ALWAYS-LOAD tier. `alwaysLoad` (migration 0037, default
+ * 0) marks a skill whose FULL BODY rides the system prompt every turn
+ * (prompts.ts' "## ALWAYS-ON SKILLS" section) instead of waiting for
+ * read_skill. Builtins CAN be pinned — that is the point: the owner pins
+ * ui-design from the Settings UI (SkillsTab's per-row switch). The seed
+ * leaves every row 0; nothing rides until the owner opts in, so every
+ * existing project's prompt stays byte-identical (golden-pinned).
  */
 import type { SqliteDatabase } from "./db.js";
 
@@ -71,6 +82,10 @@ export interface SkillRecord {
   body: string;
   source: "builtin" | "user";
   enabled: boolean;
+  /** R98-E2: the always-load tier — true = the full body rides the system
+   * prompt every turn ("## ALWAYS-ON SKILLS", prompts.ts) instead of
+   * loading via read_skill on demand. Default false (migration 0037). */
+  alwaysLoad: boolean;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
@@ -83,6 +98,7 @@ interface SkillRow {
   body: string;
   source: string;
   enabled: number;
+  always_load: number;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -96,6 +112,7 @@ function toSkill(row: SkillRow): SkillRecord {
     body: row.body,
     source: row.source === "builtin" ? "builtin" : "user",
     enabled: row.enabled === 1,
+    alwaysLoad: row.always_load === 1,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1187,6 +1204,8 @@ export interface SkillInput {
   description?: string;
   body?: string;
   enabled?: boolean;
+  /** R98-E2: the always-load tier (default false). */
+  alwaysLoad?: boolean;
   sortOrder?: number;
 }
 
@@ -1206,14 +1225,16 @@ export function createSkill(db: SqliteDatabase, input: SkillInput): SkillRecord 
   const id = `skill_${name.replace(/-/g, "_")}_${Date.now().toString(36)}`;
   const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO skills (id, name, description, body, source, enabled, sort_order, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'user', ?, ?, ?, ?)`,
+    `INSERT INTO skills (id, name, description, body, source, enabled, always_load, sort_order, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'user', ?, ?, ?, ?, ?)`,
   ).run(
     id,
     name,
     (input.description ?? "").slice(0, 500),
     (input.body ?? "").slice(0, 60000),
     input.enabled === false ? 0 : 1,
+    // R98-E2: the always-load tier (0/1 — same boolean discipline as enabled).
+    input.alwaysLoad === true ? 1 : 0,
     input.sortOrder ?? 100,
     now,
     now,
@@ -1226,6 +1247,8 @@ export interface SkillPatch {
   description?: string;
   body?: string;
   enabled?: boolean;
+  /** R98-E2: pin/unpin (the SkillsTab switch PATCHes exactly this). */
+  alwaysLoad?: boolean;
   sortOrder?: number;
 }
 
@@ -1245,13 +1268,16 @@ export function updateSkill(db: SqliteDatabase, id: string, patch: SkillPatch): 
   }
   db.prepare(
     `UPDATE skills SET
-      name = ?, description = ?, body = ?, enabled = ?, sort_order = ?, updated_at = ?
+      name = ?, description = ?, body = ?, enabled = ?, always_load = ?, sort_order = ?, updated_at = ?
      WHERE id = ?`,
   ).run(
     patch.name?.trim() ?? existing.name,
     (patch.description ?? existing.description).slice(0, 500),
     (patch.body ?? existing.body).slice(0, 60000),
     (patch.enabled ?? existing.enabled) ? 1 : 0,
+    // R98-E2: the always-load tier rides the same partial-patch discipline
+    // (absent = keep the stored value).
+    (patch.alwaysLoad ?? existing.alwaysLoad) ? 1 : 0,
     patch.sortOrder ?? existing.sortOrder,
     now,
     id,

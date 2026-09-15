@@ -170,6 +170,23 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     dynamic: true, // ctx.skills-gated
     bucket: "identity",
   },
+  // ROUND-98 (R98-E2, the owner: "there are some skills which it must follow
+  // every single time, every single session" — the webpage-design failure:
+  // ui-design/frontend-craft were one-line index entries the model never
+  // read): the ALWAYS-ON tier. When ≥1 resolved skill is pinned (DB
+  // always_load=1 or file frontmatter `always-load: true`), this section
+  // carries the pinned skills' FULL BODIES inside the ALWAYS_ON_SKILLS_CHAR_BUDGET
+  // (24,000-char total, honest truncation markers — budgeted, counted,
+  // never silent). Strictly gated: zero pinned → no section, byte-identical
+  // composition (pinned by the r98 suite). Sits directly AFTER the skills
+  // INDEX — the "deep module follows its index" position the R73 pair
+  // (task-modes → active-mode) established.
+  {
+    id: "always-on-skills",
+    description: "## ALWAYS-ON SKILLS — the owner-pinned skills whose full bodies ride every turn, inside the 24,000-char budget (only when ≥1 resolved skill is pinned; R98-E2)",
+    dynamic: true, // gated on ctx.skills with alwaysLoad
+    bucket: "identity",
+  },
   // ROUND-73 (R73-b): the TASK-MODES pair — the posture tier over the skills
   // tier. "task-modes" is the INDEX (ids+names+descriptions, switch_mode
   // vocabulary, the per-turn Task signal line, the honest cleared-mode note);

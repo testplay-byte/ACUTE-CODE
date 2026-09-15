@@ -110,6 +110,10 @@ import { registerModeRoutes } from "./routes/modes.js";
 import { registerMemoryRoutes } from "./routes/memory.js";
 import { registerRatingRoutes } from "./routes/ratings.js";
 import { registerSkillRoutes } from "./routes/skills.js";
+// R98-E1: the prompt-customization domain (GET/PUT/DELETE /prompts/sections
+// + GET /prompts/preview — the Settings Prompts tab's backend over the
+// R59-F override engine).
+import { registerPromptRoutes } from "./routes/prompts.js";
 import { registerUsageRoutes } from "./routes/usage.js";
 // R87: the system domain (POST /system/reset — the application-wide reset).
 import { registerSystemRoutes } from "./routes/system.js";
@@ -1589,6 +1593,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       // R84 (Wave 2-a): the skills CRUD routes (R61 → R70-b → R72-c) —
       // extracted verbatim to routes/skills.ts; registration order preserved.
       registerSkillRoutes(scope, ctx);
+
+      // ROUND-98 (R98-E1): the PROMPT-CUSTOMIZATION routes — the Settings
+      // Prompts tab's backend (GET/PUT/DELETE /prompts/sections,
+      // GET /prompts/preview). Same bearer wall as everything else.
+      registerPromptRoutes(scope, ctx);
 
       // ── ROUND-61 (R61): MCP SERVERS — owner-configured stdio extensions ─
       // Commands are configuration, never model-writable; the manager

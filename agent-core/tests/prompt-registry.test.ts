@@ -92,6 +92,17 @@ const FULL_CTX = {
   skills: [
     { name: "computer-use", description: "Observe and actuate the desktop GUI: accessibility-first element actions with screenshot-coordinate fallback." },
     { name: "demo-skill", description: "A demonstration user skill." },
+    // ROUND-98 (R98-E2): the ALWAYS-LOAD tier's golden exercise — one pinned
+    // skill (alwaysLoad + body) so the new "## ALWAYS-ON SKILLS" section is
+    // BYTE-PINNED by the fixture (the zero-pinned byte-identity is pinned in
+    // tests/r98-always-load.test.ts instead: a ctx with no alwaysLoad flags
+    // composes byte-identically to the pre-R98 shape).
+    {
+      name: "demo-pinned",
+      description: "A demonstration always-load skill.",
+      alwaysLoad: true,
+      body: "# Skill: demo-pinned\n\nR98-E2 GOLDEN PINNED BODY — this full body rides every turn because the owner pinned the skill (always_load). Follow it for every task in its domain.",
+    },
   ],
   computerUse: { enabled: true, posture: "act" as const },
   // ROUND-94 (R94-G): the CAPABILITIES section's payload — the same
@@ -220,7 +231,13 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // (the posture tier rides the methodology tier — the modes index is the
     // switch_mode vocabulary, the skills index is the read_skill one, and
     // the two access paths sit adjacent).
-    expect(PROMPT_SECTION_IDS.indexOf("task-modes")).toBe(PROMPT_SECTION_IDS.indexOf("skills") + 1);
+    // ROUND-98 (R98-E2, honest re-pin): the ALWAYS-ON SKILLS section slots
+    // BETWEEN them — the "deep module follows its index" position the R73
+    // pair established (task-modes → active-mode); always-on-skills is the
+    // skills index's own deep-module tier (skills → always-on-skills →
+    // task-modes → active-mode).
+    expect(PROMPT_SECTION_IDS.indexOf("always-on-skills")).toBe(PROMPT_SECTION_IDS.indexOf("skills") + 1);
+    expect(PROMPT_SECTION_IDS.indexOf("task-modes")).toBe(PROMPT_SECTION_IDS.indexOf("always-on-skills") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBe(PROMPT_SECTION_IDS.indexOf("task-modes") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("active-mode")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("computer-use"));
     // R70-c (D2): the consolidated sections are RETIRED — the removal pin
@@ -318,6 +335,21 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // verification doctrine) and the batch-section trims made to keep the
     // D6 budget honest (the r71 D6 bound moved 22K → 23K — see that
     // suite's ROUND-96 note).
+    // Regenerated AGAIN in R98-E2 (deliberately — the always-load round for
+    // the owner's "there are some skills which it must follow every single
+    // time, every single session": FULL_CTX.skills gained ONE pinned entry
+    // (demo-pinned, alwaysLoad:true + body — see the ctx above) so the new
+    // "## ALWAYS-ON SKILLS" section is byte-pinned end-to-end. The verified
+    // diff was EXACTLY: (1) the demo-pinned INDEX line gains the
+    // "(ALWAYS-ON — full body in the ALWAYS-ON SKILLS section below)"
+    // marker; (2) the new section (header + intro + "### Skill:
+    // demo-pinned" + the pinned body) slots between the SKILLS reload line
+    // and "## COMPUTER USE". NOTHING else moved — the byte-diff was read
+    // before regenerating (git diff of the fixture), never blind. The
+    // zero-pinned composition (no alwaysLoad flags anywhere) stays
+    // byte-identical to the pre-R98 shape — pinned in
+    // tests/r98-always-load.test.ts, not here (this fixture now exercises
+    // the pinned case deliberately).
     // R59 CI fix: normalize \r\n → \n on BOTH sides before comparing — the
     // fixture is committed with LF, but a Windows checkout with autocrlf
     // rewrites it to CRLF (the R57 CI lesson: never let line endings decide
