@@ -1,0 +1,328 @@
+// @vitest-environment happy-dom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { clearUsageData, fetchUsageStats, type UsageStats, type UsageStatsDayBucket } from "../../lib/api";
+import { DataStatsPanel } from "./DataStatsPanel";
+import { useConfigStore } from "../../lib/config-store";
+import { renderWithProviders, resetTestState } from "../../test-utils";
+
+/**
+ * ROUND-99 (R99-E, owner: "the data and statistics… not that well handled…
+ * the clear usage data completely looks out of place… turn errors and tool
+ * failures… completely out of order"): the pins for the reordered panel —
+ * the GitHub-settings read (stats → heatmap → model charts → ONE unified
+ * agent-health section → the DANGER ZONE always LAST), the quiet health
+ * sub-blocks (severity via icon + number color, never a tinted card), the
+ * red-outlined no-fill danger zone (description-left / button-right), the
+ * anti-jitter kit (skeleton mirrors the ready geometry; tabular-nums on
+ * every number), and the untouched clear-flow contract (ConfirmDialog
+ * enumeration + success note + invalidations).
+ *
+ * The panel is a VIEW over GET /usage/stats + DELETE /usage/data — the api
+ * module is mocked exactly as the sidecar shapes it. Both mount sites
+ * (settings ?tab=data + the /usage screen) render THIS panel, so these
+ * pins hold for both.
+ */
+vi.mock("../../lib/api", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../lib/api")>();
+  return {
+    ...original,
+    fetchUsageStats: vi.fn(),
+    clearUsageData: vi.fn(),
+  };
+});
+
+afterEach(cleanup);
+
+beforeEach(() => {
+  resetTestState();
+  // The stats hook only runs against the live sidecar (demo mode has no
+  // usage log) — flip the store so the mocked fetch actually executes.
+  useConfigStore.setState({ demoData: false });
+  vi.mocked(fetchUsageStats).mockReset().mockResolvedValue(seedStats());
+  vi.mocked(clearUsageData).mockReset().mockResolvedValue({ deleted: 0 });
+});
+
+/** A two-week series (one model most days, two on every third day). */
+function seriesDays(): UsageStatsDayBucket[] {
+  const out: UsageStatsDayBucket[] = [];
+  for (let i = 13; i >= 0; i -= 1) {
+    const date = new Date(Date.UTC(2026, 8, 15 - i)).toISOString().slice(0, 10);
+    out.push({
+      date,
+      byModel:
+        i % 3 === 0
+          ? { "z-ai/glm-5.2:free": 12_000, "openai/gpt-5.1": 4_000 }
+          : { "z-ai/glm-5.2:free": 8_000 },
+    });
+  }
+  return out;
+}
+
+function seedStats(overrides: Partial<UsageStats> = {}): UsageStats {
+  return {
+    months: 12,
+    totals: {
+      inputTokens: 420_000,
+      outputTokens: 210_000,
+      totalTokens: 630_000,
+      costUsd: 12.34,
+      requests: 321,
+      providerCalls: 456,
+    },
+    peak: { date: "2026-08-14", tokens: 90_000 },
+    series: seriesDays(),
+    models: [
+      {
+        model: "z-ai/glm-5.2:free",
+        inputTokens: 300_000,
+        outputTokens: 150_000,
+        tokens: 450_000,
+        costUsd: 10,
+        calls: 200,
+        requests: 180,
+        providers: ["z-ai"],
+      },
+      {
+        model: "openai/gpt-5.1",
+        inputTokens: 120_000,
+        outputTokens: 60_000,
+        tokens: 180_000,
+        costUsd: 2.34,
+        calls: 100,
+        requests: 141,
+        providers: ["openai"],
+      },
+    ],
+    health: {
+      turnErrors: [{ name: "rate_limit", count: 3 }],
+      toolFailures: [{ name: "read_file", count: 2 }],
+    },
+    generatedAt: "2026-09-15T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function renderPanel() {
+  return renderWithProviders(<DataStatsPanel />);
+}
+
+/** a precedes b in document order. */
+function precedes(a: Element, b: Element): boolean {
+  return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+}
+
+describe("DataStatsPanel (R99-E — the section order + the danger zone)", () => {
+  it("renders the GitHub-settings order: stat cards → heatmap → stack chart → donut → agent health → danger zone LAST", async () => {
+    renderPanel();
+    const statValue = await screen.findByText("630K"); // the Tokens StatCard value
+    const heatmap = screen.getByTestId("usage-heatmap");
+    const stack = screen.getByTestId("model-stack-chart");
+    const donut = screen.getByTestId("model-donut");
+    const health = screen.getByTestId("agent-health-section");
+    const turnErrors = screen.getByTestId("stats-turn-errors");
+    const toolFailures = screen.getByTestId("stats-tool-failures");
+    const dangerZone = screen.getByTestId("clear-usage-card");
+
+    expect(precedes(statValue, heatmap)).toBe(true);
+    expect(precedes(heatmap, stack)).toBe(true);
+    expect(precedes(stack, donut)).toBe(true);
+    expect(precedes(donut, health)).toBe(true);
+    expect(precedes(health, turnErrors)).toBe(true);
+    expect(precedes(turnErrors, toolFailures)).toBe(true);
+    expect(precedes(toolFailures, dangerZone)).toBe(true);
+
+    // The danger zone is the LAST section of the panel (the ConfirmDialog
+    // renders only when armed — nothing may follow the zone at rest).
+    const panel = screen.getByTestId("data-stats-panel");
+    expect(panel.lastElementChild).toBe(dangerZone);
+  });
+
+  it("the unified Agent health section: one micro-header, both sub-blocks, their counts + issue rows + window aria-labels", async () => {
+    renderPanel();
+    await screen.findByTestId("agent-health-section");
+
+    // ONE section header (the 10–11px label-caps grammar — a styled div,
+    // never an invented h-tag).
+    expect(screen.getByText("Agent health")).toBeTruthy();
+    expect(screen.queryByText("Clear usage data")).toBeNull(); // no per-card title — the zone owns it
+
+    // Both sub-blocks keep their R98 testids + labels (deep-links ride).
+    const turnErrors = screen.getByTestId("stats-turn-errors");
+    const toolFailures = screen.getByTestId("stats-tool-failures");
+    expect(turnErrors.getAttribute("aria-label")).toBe("Turn errors");
+    expect(toolFailures.getAttribute("aria-label")).toBe("Tool failures");
+
+    // The counts — mono tabular-nums, severity color only on the number;
+    // the count line carries the window aria-label (the issue-row counts
+    // are plain mono numbers without one).
+    const turnCount = turnErrors.querySelector('[aria-label="3 turn errors in the last 12 months"]');
+    expect(turnCount).not.toBeNull();
+    expect(turnCount?.className).toContain("tabular-nums");
+    expect(turnCount?.textContent).toBe("3");
+    const toolCount = toolFailures.querySelector('[aria-label="2 tool failures in the last 12 months"]');
+    expect(toolCount).not.toBeNull();
+    expect(toolCount?.className).toContain("tabular-nums");
+    expect(toolCount?.textContent).toBe("2");
+
+    // The issue rows — compact mono rows (agent/tool name + count).
+    expect(within(turnErrors).getByText("rate_limit")).toBeTruthy();
+    expect(within(turnErrors).getAllByText("3").length).toBe(2); // the count line + the row
+    expect(within(toolFailures).getByText("read_file")).toBeTruthy();
+    expect(within(toolFailures).getAllByText("2").length).toBe(2);
+
+    // QUIET sub-blocks: plain card surface + hairline border — no semantic
+    // tint anywhere near the background (the R99-E "looks bad" smell).
+    expect(turnErrors.style.backgroundColor).not.toContain("rgba(245, 158, 11");
+    expect(toolFailures.style.backgroundColor).not.toContain("rgba(239, 68, 68");
+    expect(turnErrors.style.borderColor).not.toContain("245, 158, 11");
+    expect(toolFailures.style.borderColor).not.toContain("239, 68, 68");
+  });
+
+  it("clean window: both health sub-blocks stay rendered with their honest empty one-liners (stable layout, no content jumping)", async () => {
+    vi.mocked(fetchUsageStats).mockResolvedValue(
+      seedStats({ health: { turnErrors: [], toolFailures: [] } }),
+    );
+    renderPanel();
+    await screen.findByTestId("agent-health-section");
+
+    const turnErrors = screen.getByTestId("stats-turn-errors");
+    const toolFailures = screen.getByTestId("stats-tool-failures");
+    expect(within(turnErrors).getByText("No turn errors in the window — clean run.")).toBeTruthy();
+    expect(within(toolFailures).getByText("No tool failures in the window — clean run.")).toBeTruthy();
+
+    // The zero counts ride the window aria-label + tabular-nums.
+    const zero = turnErrors.querySelector('[aria-label="No turn errors in the last 12 months"]');
+    expect(zero?.className).toContain("tabular-nums");
+    expect(zero?.textContent).toBe("0");
+    expect(within(toolFailures).getByText("0")).toBeTruthy();
+  });
+
+  it("the danger zone is the QUIET GitHub pattern: red outline, NO filled background, NO shadow, description-left / button-right", async () => {
+    renderPanel();
+    const zone = await screen.findByTestId("clear-usage-card");
+
+    // Red-OUTLINED (withAlpha(danger, 0.4))…
+    expect(zone.style.borderColor).toBe("rgba(239, 68, 68, 0.4)");
+    // …but QUIET: no tinted fill, no shadow (the mid-flow danger card was
+    // the owner's "completely looks out of place" verdict).
+    expect(zone.style.backgroundColor).toBe("");
+    expect(zone.style.boxShadow).toBe("");
+
+    // The danger-tinted micro-header (the label-caps grammar).
+    expect(screen.getByText("Danger zone")).toBeTruthy();
+
+    // ONE row: the description LEFT, the red action button RIGHT (the
+    // button follows the description inside the row container).
+    const button = screen.getByTestId("clear-usage-button");
+    expect(button.textContent).toBe("Clear data…");
+    const row = button.parentElement as HTMLElement;
+    const description = row.querySelector("p");
+    expect(description).not.toBeNull();
+    expect(description?.textContent).toContain("deletes every usage event in the ledger");
+    expect(precedes(description as Element, button)).toBe(true);
+  });
+
+  it("the clear flow keeps its contract: Clear data… → the enumeration dialog → confirm → clearUsageData + the success note + the stats refetch", async () => {
+    vi.mocked(clearUsageData).mockResolvedValue({ deleted: 27 });
+    renderPanel();
+    await screen.findByTestId("clear-usage-card");
+
+    fireEvent.click(screen.getByTestId("clear-usage-button"));
+
+    // The ConfirmDialog — the exact enumeration (what dies vs. what stays).
+    expect(await screen.findByTestId("confirm-dialog")).toBeTruthy();
+    expect(
+      screen.getByText(/Sessions, conversations, agents, providers, and settings are NOT touched/),
+    ).toBeTruthy();
+
+    // The stats fetch count BEFORE the clear (the initial mount).
+    const fetchesBefore = vi.mocked(fetchUsageStats).mock.calls.length;
+
+    fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
+    await waitFor(() => expect(vi.mocked(clearUsageData)).toHaveBeenCalledTimes(1));
+
+    // The success note (verb matches the button 1:1) + the invalidation
+    // re-drives the panel's own query.
+    expect(await screen.findByTestId("clear-usage-success")).toBeTruthy();
+    expect(screen.getByTestId("clear-usage-success").textContent).toBe("Cleared 27 usage events");
+    await waitFor(() => {
+      expect(vi.mocked(fetchUsageStats).mock.calls.length).toBeGreaterThan(fetchesBefore);
+    });
+  });
+
+  it("the months picker drives the windowed query (12 default → 6) without a skeleton flash (keepPreviousData)", async () => {
+    renderPanel();
+    await screen.findByTestId("usage-heatmap");
+    expect(vi.mocked(fetchUsageStats)).toHaveBeenCalledWith(12);
+
+    // tabular-nums on the picker digits (the anti-jitter discipline).
+    const sixMonths = screen.getByRole("button", { name: "Last 6 months" });
+    expect(sixMonths.className).toContain("tabular-nums");
+
+    fireEvent.click(sixMonths);
+    expect(vi.mocked(fetchUsageStats)).toHaveBeenLastCalledWith(6);
+
+    // No skeleton flash mid-switch — the charts region stays mounted.
+    expect(screen.getByTestId("usage-heatmap")).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "Loading data and statistics" })).toBeNull();
+  });
+
+  it("tabular-nums discipline: the StatCard values + the pinned 92px height (the skeleton's exact geometry)", async () => {
+    renderPanel();
+    // The Tokens card — its title rides the card element itself.
+    const card = await screen.findByTitle(/Input \+ output tokens in the window/);
+    expect(card.className).toContain("h-[92px]");
+    const statValue = within(card).getByText("630K");
+    expect(statValue.className).toContain("tabular-nums");
+  });
+
+  it("the loading skeleton mirrors the READY geometry section-for-section (no layout shift on load)", async () => {
+    let resolveStats: (value: UsageStats) => void = () => {};
+    vi.mocked(fetchUsageStats).mockImplementationOnce(
+      () => new Promise<UsageStats>((resolve) => {
+        resolveStats = resolve;
+      }),
+    );
+    const { container } = renderPanel();
+
+    expect(await screen.findByRole("status", { name: "Loading data and statistics" })).toBeTruthy();
+    const panel = screen.getByTestId("data-stats-panel");
+
+    // The reserved heights — one block per ready section, in order (the
+    // bracket-bearing arbitrary classes are matched on className, not via
+    // the selector engine).
+    const pulses = Array.from(panel.querySelectorAll(".animate-pulse"));
+    expect(pulses.filter((el) => el.className.includes("h-[92px]")).length).toBe(4); // the stat cards
+    expect(pulses.some((el) => el.className.includes("h-[264px]"))).toBe(true); // the stack chart
+    expect(pulses.some((el) => el.className.includes("h-[96px]"))).toBe(true); // the danger zone
+    expect(container.querySelector('[data-testid="usage-heatmap"]')).toBeNull(); // no real charts yet
+
+    resolveStats(seedStats());
+    expect(await screen.findByTestId("usage-heatmap")).toBeTruthy();
+    expect(screen.getByTestId("clear-usage-card")).toBeTruthy();
+  });
+
+  it("a failed GET renders the honest retryable error card — Retry re-drives the query", async () => {
+    vi.mocked(fetchUsageStats).mockRejectedValueOnce(new Error("sidecar exploded"));
+    renderPanel();
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText(/sidecar exploded/)).toBeTruthy();
+    const retry = screen.getByRole("button", { name: "Retry loading data and statistics" });
+
+    vi.mocked(fetchUsageStats).mockResolvedValueOnce(seedStats());
+    fireEvent.click(retry);
+    expect(await screen.findByTestId("usage-heatmap")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("demo mode (the idle query): the honest empty panel, no fetch fired", async () => {
+    useConfigStore.setState({ demoData: true });
+    renderPanel();
+
+    expect(await screen.findByText(/No usage statistics available/i)).toBeTruthy();
+    expect(vi.mocked(fetchUsageStats)).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("clear-usage-card")).toBeNull();
+  });
+});

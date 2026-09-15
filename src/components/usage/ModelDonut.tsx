@@ -13,6 +13,10 @@ import { formatCompactTokens, formatCost, modelColor, shortModelName } from "./u
  * its share), and segment ↔ legend-row MUTUAL hover-highlight — hovering
  * either lights that model and dims every other segment AND row (the
  * round-97 context-bar contract, generalized).
+ *
+ * R99-E (anti-jitter kit): the card reserves its final height
+ * (min-h-[184px]/md:192px — header + the fixed 120px ring); legend rows
+ * truncate (never wrap-jitter) and every number renders tabular-nums.
  */
 
 const SIZE = 120;
@@ -55,18 +59,21 @@ export function ModelDonut({
   return (
     <div
       data-testid="model-donut"
-      className="rounded-[24px] border-[1.5px] p-4 md:p-5"
+      className="flex min-h-[184px] flex-col rounded-[24px] border-[1.5px] p-4 md:min-h-[192px] md:p-5"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
     >
-      <div className="mb-4 flex items-center gap-2">
+      <div className="mb-4 flex shrink-0 items-center gap-2">
         <ChartPie size={13} style={{ color: accent, opacity: 0.7 }} />
-        <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+        <span
+          className="text-[11px] font-bold uppercase leading-none tracking-widest"
+          style={{ color: textTertiary }}
+        >
           Model Usage · Share of Tokens
         </span>
       </div>
 
       {top === undefined || totalTokens === 0 ? (
-        <div className="flex h-[140px] flex-col items-center justify-center gap-1 text-center">
+        <div className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
           <p className="text-[12px] font-semibold" style={{ color: text }}>
             No model usage in this window
           </p>
@@ -118,7 +125,7 @@ export function ModelDonut({
                 <div className="font-mono text-[10px] font-semibold" style={{ color: textSecondary }}>
                   {shortModelName(top.model)}
                 </div>
-                <div className="text-[20px] font-black leading-tight tracking-tighter" style={{ color: text }}>
+                <div className="text-[20px] font-black leading-tight tabular-nums tracking-tighter" style={{ color: text }}>
                   {topSharePct}%
                 </div>
               </div>
@@ -147,11 +154,11 @@ export function ModelDonut({
                 <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: text }}>
                   {seg.model}
                 </span>
-                <span className="shrink-0 font-mono text-[11px] font-semibold" style={{ color: textSecondary }}>
+                <span className="shrink-0 font-mono text-[11px] font-semibold tabular-nums" style={{ color: textSecondary }}>
                   {formatCompactTokens(seg.tokens)}
                 </span>
                 <span
-                  className="shrink-0 font-mono text-[11px]"
+                  className="shrink-0 font-mono text-[11px] tabular-nums"
                   style={{ color: textTertiary, minWidth: 52, textAlign: "right" }}
                 >
                   {formatCost(seg.costUsd)}

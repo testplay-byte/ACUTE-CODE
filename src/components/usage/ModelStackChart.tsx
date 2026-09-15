@@ -19,6 +19,13 @@ import { formatCompactTokens, modelColor } from "./usage-helpers";
  * the INPUT/OUTPUT view — both stay on the usage screen by design (the
  * owner asked for the model-color graph; the input/output split answers a
  * different question).
+ *
+ * R99-E (anti-jitter kit): the card reserves its final height
+ * (min-h-[264px]/md:272px — header row + the fixed 150px bars + the 22px
+ * x-axis band, so a 7/30/90/365 switch only relabels, never reflows); the
+ * header never wraps (the label truncates, the picker is shrink-0) so the
+ * height is width-independent; every number — axis labels, tooltip rows,
+ * the range buttons — renders tabular-nums.
  */
 
 const RANGE_OPTIONS = [7, 30, 90, 365] as const;
@@ -76,13 +83,16 @@ export function ModelStackChart({
   return (
     <div
       data-testid="model-stack-chart"
-      className="rounded-[24px] border-[1.5px] p-4 md:p-5"
+      className="flex min-h-[264px] flex-col rounded-[24px] border-[1.5px] p-4 md:min-h-[272px] md:p-5"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
     >
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+      <div className="mb-4 flex shrink-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <Layers size={13} style={{ color: accent, opacity: 0.7 }} />
-          <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <span
+            className="truncate text-[11px] font-bold uppercase leading-none tracking-widest tabular-nums"
+            style={{ color: textTertiary }}
+          >
             Model Mix · {visible.length} {visible.length === 1 ? "day" : "days"}
           </span>
         </div>
@@ -104,7 +114,7 @@ export function ModelStackChart({
                 }}
                 aria-pressed={active}
                 aria-label={`Last ${option} days`}
-                className="cursor-pointer rounded-[10px] px-2.5 py-1.5 text-[12px] font-bold transition-colors duration-200"
+                className="cursor-pointer rounded-[10px] px-2.5 py-1.5 text-[12px] font-bold tabular-nums transition-colors duration-200"
                 style={{
                   backgroundColor: active ? accent : "transparent",
                   color: active ? styles.accentText : textSecondary,
@@ -154,6 +164,7 @@ export function ModelStackChart({
                     fill={textTertiary}
                     fontSize={9}
                     fontWeight={500}
+                    className="tabular-nums"
                   >
                     {formatCompactTokens(Math.round(maxTokens * pct))}
                   </text>
@@ -230,6 +241,7 @@ export function ModelStackChart({
                         fill={textTertiary}
                         fontSize={9}
                         fontWeight={500}
+                        className="tabular-nums"
                       >
                         {utcDateLabel(day.date)}
                       </text>
@@ -265,7 +277,7 @@ export function ModelStackChart({
                       <span className="text-[11px] font-bold" style={{ color: text }}>
                         {utcDateLabel(hovered.date)}
                       </span>
-                      <span className="text-[11px] font-bold" style={{ color: accent }}>
+                      <span className="text-[11px] font-bold tabular-nums" style={{ color: accent }}>
                         {dayTotal(hovered).toLocaleString()}
                       </span>
                     </div>
@@ -284,7 +296,7 @@ export function ModelStackChart({
                               {name}
                             </span>
                           </span>
-                          <span className="shrink-0 font-mono text-[10px] font-semibold" style={{ color }}>
+                          <span className="shrink-0 font-mono text-[10px] font-semibold tabular-nums" style={{ color }}>
                             {tokens.toLocaleString()}
                           </span>
                         </div>
@@ -294,11 +306,11 @@ export function ModelStackChart({
                       className="flex items-center justify-between pt-1"
                       style={{ borderTop: bdr("1px", border) }}
                     >
-                      <span className="text-[10px]" style={{ color: textSecondary }}>
+                      <span className="text-[10px] tabular-nums" style={{ color: textSecondary }}>
                         {Object.keys(hovered.byModel).length} model
                         {Object.keys(hovered.byModel).length === 1 ? "" : "s"}
                       </span>
-                      <span className="text-[10px] font-semibold" style={{ color: textSecondary }}>
+                      <span className="text-[10px] font-semibold tabular-nums" style={{ color: textSecondary }}>
                         {formatCompactTokens(dayTotal(hovered))} total
                       </span>
                     </div>

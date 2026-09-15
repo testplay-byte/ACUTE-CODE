@@ -18,6 +18,12 @@ import { formatCompactTokens } from "./usage-helpers";
  * DECORATIVE (aria-hidden — 371 cells would drown a screen reader); the
  * container carries exactly ONE aria-label summary. Per-cell hover titles
  * carry "YYYY-MM-DD · X tokens" for sighted inspection.
+ *
+ * R99-E (anti-jitter kit): the card reserves its final height
+ * (min-h-[184px]/md:192px — header + the fixed 98px grid + legend) and the
+ * header rows render leading-none so the height is data-independent; every
+ * number renders tabular-nums. The DataStatsPanel's loading skeleton
+ * mirrors this exact geometry.
  */
 
 const CELL = 10;
@@ -102,7 +108,7 @@ export function UsageHeatmap({
   return (
     <div
       data-testid="usage-heatmap"
-      className="rounded-[24px] border-[1.5px] p-4 md:p-5"
+      className="flex min-h-[184px] flex-col rounded-[24px] border-[1.5px] p-4 md:min-h-[192px] md:p-5"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
       aria-label={
         layout === null
@@ -110,20 +116,23 @@ export function UsageHeatmap({
           : `Token activity heatmap, ${formatCompactTokens(layout.totalTokens)} tokens over ${days.length} days`
       }
     >
-      <div className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="mb-4 flex shrink-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <CalendarDays size={13} style={{ color: accent, opacity: 0.7 }} />
-          <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <span
+            className="truncate text-[11px] font-bold uppercase leading-none tracking-widest tabular-nums"
+            style={{ color: textTertiary }}
+          >
             Token Activity · {days.length} {days.length === 1 ? "day" : "days"}
           </span>
         </div>
-        <span className="text-[11px] font-medium" style={{ color: textSecondary }}>
+        <span className="shrink-0 text-[11px] font-medium leading-none tabular-nums" style={{ color: textSecondary }}>
           {layout === null ? "…" : `${layout.totalTokens.toLocaleString()} total`}
         </span>
       </div>
 
       {layout === null ? (
-        <div className="flex h-[100px] flex-col items-center justify-center gap-1 text-center">
+        <div className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
           <p className="text-[12px] font-semibold" style={{ color: text }}>
             No usage recorded yet
           </p>
@@ -195,8 +204,8 @@ export function UsageHeatmap({
             </g>
           </svg>
           {/* The §6 legend — the ladder's five non-zero rungs. */}
-          <div className="mt-3 flex items-center justify-end gap-1.5">
-            <span className="text-[10px]" style={{ color: textTertiary }}>
+          <div className="mt-3 flex shrink-0 items-center justify-end gap-1.5">
+            <span className="text-[10px] leading-none" style={{ color: textTertiary }}>
               Less
             </span>
             {INTENSITY_ALPHAS.map((alpha) => (
@@ -207,7 +216,7 @@ export function UsageHeatmap({
                 style={{ backgroundColor: withAlpha(accent, alpha) }}
               />
             ))}
-            <span className="text-[10px]" style={{ color: textTertiary }}>
+            <span className="text-[10px] leading-none" style={{ color: textTertiary }}>
               More
             </span>
           </div>

@@ -77,10 +77,13 @@ bug.
 - Dialogs: Radix center, 12px radius, header/body/footer zones, base
   transform = end-state.
 
-## 6. The data-display grammar (round-98 I2 adds)
+## 6. The data-display grammar (round-98 I2 adds; round-99 E adds the
+anti-jitter + danger-zone rules)
 
-- **Stat cards**: big number (24px semibold) + label + one supporting
-  line; icon quiet-tinted; never a rainbow.
+- **Stat cards**: big number (22px black) + label + one supporting line;
+  icon quiet-tinted; never a rainbow. R99-E: pinned `h-[92px]` (the exact
+  height every StatCard-shaped skeleton reserves app-wide) and the value
+  renders `tabular-nums`.
 - **Charts**: theme accent for the primary series; per-model/per-category
   series get STABLE palette hues keyed by name (same name = same color,
   everywhere in the app — the model palette in
@@ -91,6 +94,21 @@ bug.
 - **Donut/ring**: 6px track, center hole carries the headline stat; segment
   hover = MUTUAL highlight with the legend row (the round-97 context-bar
   contract, generalized).
+- **Anti-jitter kit** (research §3.2): every numeric element renders
+  `tabular-nums` (digits hold width while values grow); chart wrappers
+  reserve their final height (`min-h` matching the fixed SVG geometry) so
+  loading→ready→window switches never reflow; the loading skeleton mirrors
+  the READY layout section-for-section (same heights, same order); legend
+  rows truncate instead of wrapping; a window switch settles with the
+  150ms opacity fade (MOTION §2 quick tier) — NEVER a layout animation of
+  a chart.
+- **Danger zone** (the GitHub settings pattern): destructive data actions
+  live in a LAST, quiet red-OUTLINED box — `1.5px withAlpha(danger, 0.4)`
+  border, NO filled background, NO shadow; a danger-tinted label-caps
+  micro-header; rows are description-left / red-action-button-right (the
+  button keeps its tint); the `ConfirmDialog` owns the exact enumeration
+  of what dies vs. what stays. Never interleave a destructive card with
+  benign content.
 
 ## 7. Chat turn anatomy (round-99 B — the research-driven chat redo)
 

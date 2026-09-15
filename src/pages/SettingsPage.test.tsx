@@ -28,6 +28,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { SettingsPage } from "./SettingsPage";
 import { resetTestState, renderWithProviders } from "../test-utils";
+import { useConfigStore } from "../lib/config-store";
 import { useThemeStore } from "../lib/theme-store";
 
 /** Every request 401s (the bearer wall) — queries fail soft, layout renders. */
@@ -541,6 +542,24 @@ describe("Functionality tab + Auto-retry card (ROUND-78 R78-C, R98-I1)", () => {
     const link = crossLink.querySelector("a");
     expect(link?.getAttribute("href")).toBe("/settings?tab=data");
     expect(link?.textContent).toContain("Data & Statistics");
+  });
+
+  it("R99-E: the ?tab=data deep-link mounts the shared DataStatsPanel — behind the 401 wall it renders the panel's honest retryable error (no data logic on the page itself)", async () => {
+    // The panel's query only runs against the live sidecar — flip the store
+    // so the 401-stubbed fetch actually executes (demo mode stays idle and
+    // would render the panel's empty state instead).
+    useConfigStore.setState({ demoData: false });
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=data" });
+
+    // The shared panel is the tab's whole body (the R98-I2 mount contract;
+    // its own pins live in DataStatsPanel.test.tsx).
+    expect(await screen.findByTestId("data-stats-panel")).toBeTruthy();
+
+    // The 401-stubbed fetch fails the panel's stats query — the honest
+    // error card with ONE Retry (the R97-I state-awareness contract).
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText(/Could not load data & statistics/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry loading data and statistics" })).toBeTruthy();
   });
 
   it("toggling a switch PUTs the PARTIAL patch ({autoRetryRateLimit:false}) and the switch flips OFF after the refetch — the other two stay untouched", async () => {

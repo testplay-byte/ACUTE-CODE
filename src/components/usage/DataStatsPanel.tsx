@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import {
   Activity,
   CircleDollarSign,
   HeartPulse,
-  Trash2,
+  ShieldCheck,
   TrendingUp,
   Wrench,
   Zap,
@@ -12,11 +13,12 @@ import {
 import { clearUsageData, type UsageStatsHealthIssue } from "../../lib/api";
 import { useUsageStats } from "../../hooks/use-usage";
 import { formatTokenCount } from "../../lib/format";
+import { ease } from "../../lib/motion";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { StatCard } from "../dashboard/StatCard";
 import { bdr, utcDateLabel, withAlpha } from "../dashboard/helpers";
-import { SkeletonBlock, SkeletonRows } from "../shared/Skeletons";
+import { SkeletonBlock } from "../shared/Skeletons";
 import { ConfirmDialog } from "../settings/ConfirmDialog";
 import { ModelDonut } from "./ModelDonut";
 import { ModelStackChart } from "./ModelStackChart";
@@ -26,10 +28,21 @@ import { formatCompactTokens, formatCost } from "./usage-helpers";
 /**
  * ROUND-98 (R98-I2, owner: "Data & statistics"): the ONE panel rendered in
  * BOTH the settings "Data & Statistics" tab AND the /usage screen — total
- * tokens, peak day, total cost and turns; the 12-month token-activity
- * heatmap; the per-day model-mix stacked chart + the model donut (color-
- * coded BY MODEL NAME — same name across providers is one model, same
- * color everywhere); agent health; and the clear-all-data danger card.
+ * tokens, peak day, total cost and turns; the token-activity heatmap; the
+ * per-day model-mix stacked chart + the model donut (color-coded BY MODEL
+ * NAME — same name across providers is one model, same color everywhere);
+ * agent health; and the clear-all-data danger zone.
+ *
+ * ROUND-99 (R99-E, owner: "the data and statistics… not that well handled…
+ * some things seem out of place"): the section ORDER is the GitHub-settings
+ * read — stats → heatmap → model charts → ONE unified "Agent health"
+ * section (two QUIET sub-blocks; severity rides the icon + number color,
+ * never a tinted card) → the DANGER ZONE always LAST (red-outlined quiet
+ * box, description-left / action-button-right; the exact enumeration lives
+ * in the ConfirmDialog as before). The anti-jitter kit (research §3.2):
+ * every chart wrapper reserves its final height so loading→ready→window
+ * switches never shift layout, the skeleton below mirrors the ready
+ * geometry section-for-section, and EVERY number renders tabular-nums.
  *
  * The panel OWNS its query (useUsageStats) + the months picker (6/12/24)
  * so both mount sites stay one-liners. State gates per R97-I: loading =
@@ -39,6 +52,32 @@ import { formatCompactTokens, formatCost } from "./usage-helpers";
  */
 
 const MONTHS_OPTIONS = [6, 12, 24] as const;
+
+/** The months-switch settle — opacity ONLY, 150ms (MOTION §2 quick tier).
+ * Keyed by the window so the swapped stats/heatmap/donut dip-and-settle
+ * like a native filter change; NEVER a layout animation (the charts keep
+ * fixed geometry, so there is nothing to animate but the ink). */
+function QuickFade({
+  windowKey,
+  children,
+  className,
+}: {
+  windowKey: number;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <motion.div
+      key={windowKey}
+      initial={{ opacity: 0.45 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.15, ease }}
+      className={className}
+    >
+      {children}
+    </motion.div>
+  );
+}
 
 export function DataStatsPanel() {
   const styles = useThemeStyles();
@@ -109,14 +148,28 @@ export function DataStatsPanel() {
         aria-label="Loading data and statistics"
         className="flex w-full flex-col gap-4"
       >
+        {/* R99-E anti-jitter: the skeleton mirrors the READY geometry
+            section-for-section (header → stat cards → heatmap → stack →
+            donut → agent health → danger zone — same heights, same order)
+            so the loading→ready swap never shifts the layout. */}
+        <SkeletonBlock className="h-[56px] rounded-[14px]" />
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
           {[0, 1, 2, 3].map((i) => (
             <SkeletonBlock key={i} className="h-[92px] rounded-[20px]" style={{ border: bdr("1.5px", border) }} />
           ))}
         </div>
-        <SkeletonBlock className="h-[150px] rounded-[24px]" style={{ border: bdr("1.5px", border) }} />
-        <SkeletonBlock className="h-[230px] rounded-[24px]" style={{ border: bdr("1.5px", border) }} />
-        <SkeletonRows rows={2} rowClassName="h-[64px] rounded-[16px]" />
+        <SkeletonBlock className="h-[184px] rounded-[24px] md:h-[192px]" style={{ border: bdr("1.5px", border) }} />
+        <SkeletonBlock className="h-[264px] rounded-[24px] md:h-[272px]" style={{ border: bdr("1.5px", border) }} />
+        <SkeletonBlock className="h-[184px] rounded-[24px] md:h-[192px]" style={{ border: bdr("1.5px", border) }} />
+        <div>
+          <SkeletonBlock className="mb-2.5 h-[13px] w-[120px] rounded-[5px]" />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
+            {[0, 1].map((i) => (
+              <SkeletonBlock key={i} className="h-[72px] rounded-[16px]" style={{ border: bdr("1.5px", border) }} />
+            ))}
+          </div>
+        </div>
+        <SkeletonBlock className="h-[96px] rounded-[16px]" style={{ border: bdr("1.5px", border) }} />
       </div>
     );
   }
@@ -147,7 +200,7 @@ export function DataStatsPanel() {
 
   return (
     <div data-testid="data-stats-panel" className="flex w-full flex-col gap-4">
-      {/* The months window picker — drives the whole panel's query. */}
+      {/* 1 — the months window picker (drives the whole panel's query). */}
       <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
         <div>
           <h2 className="text-[16px] font-black" style={{ color: text }}>
@@ -175,7 +228,7 @@ export function DataStatsPanel() {
                 }}
                 aria-pressed={active}
                 aria-label={`Last ${option} months`}
-                className="cursor-pointer rounded-[10px] px-2.5 py-1.5 text-[12px] font-bold transition-colors duration-200"
+                className="cursor-pointer rounded-[10px] px-2.5 py-1.5 text-[12px] font-bold tabular-nums transition-colors duration-200"
                 style={{ backgroundColor: active ? accent : "transparent", color: active ? accentText : textSecondary }}
               >
                 {option}mo
@@ -185,8 +238,9 @@ export function DataStatsPanel() {
         </div>
       </div>
 
-      {/* The headline stat cards (the dashboard StatCard primitive). */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
+      {/* 2 — the headline stat cards (the dashboard StatCard primitive;
+          h-[92px] + tabular-nums — the anti-jitter contract). */}
+      <QuickFade windowKey={months} className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
         <StatCard
           value={formatTokenCount(totals.totalTokens)}
           label="Tokens"
@@ -220,60 +274,87 @@ export function DataStatsPanel() {
           title={`Turns recorded in the window (one usage row per turn since R24) · ${totals.providerCalls.toLocaleString()} provider calls`}
           styles={styles}
         />
-      </div>
+      </QuickFade>
 
-      {/* The 12-month-style heatmap (accent ladder; model colors live in
+      {/* 3 — the token-activity heatmap (accent ladder; model colors live in
           the charts below). */}
-      <UsageHeatmap days={data.series} styles={styles} />
+      <QuickFade windowKey={months}>
+        <UsageHeatmap days={data.series} styles={styles} />
+      </QuickFade>
 
-      {/* The model view: daily stacked mix + the share donut. */}
+      {/* 4 — the model view: the daily stacked mix. NOT window-keyed — its
+          7/30/90/365 range + hover state are the user's own; the tail slice
+          is identical across window switches. */}
       <ModelStackChart days={data.series} models={data.models} styles={styles} />
-      <ModelDonut models={data.models} styles={styles} />
 
-      {/* Agent health — amber turn errors, danger tool failures; both are
-          honest one-liners when the window is clean (never fabricated). */}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
-        <HealthCard
-          testId="stats-turn-errors"
-          icon={<HeartPulse size={13} />}
-          title="Turn errors"
-          emptyLine="No turn errors in this window."
-          issues={data.health.turnErrors}
-          tone={SEMANTIC_COLORS.warning}
-          styles={styles}
-        />
-        <HealthCard
-          testId="stats-tool-failures"
-          icon={<Wrench size={13} />}
-          title="Tool failures"
-          emptyLine="No failed tool calls in this window."
-          issues={data.health.toolFailures}
-          tone={SEMANTIC_COLORS.danger}
-          styles={styles}
-        />
-      </div>
+      {/* 5 — the token-share donut. */}
+      <QuickFade windowKey={months}>
+        <ModelDonut models={data.models} styles={styles} />
+      </QuickFade>
 
-      {/* Clear all data — the danger card + the exact-enumeration confirm. */}
-      <section
-        data-testid="clear-usage-card"
-        className="rounded-[24px] border-[1.5px] p-4 md:p-5"
-        style={{
-          backgroundColor: card,
-          borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
-          boxShadow: softShadow,
-        }}
-        aria-label="Clear usage data"
-      >
-        <div className="mb-3 flex items-center gap-2">
-          <Trash2 size={13} style={{ color: SEMANTIC_COLORS.danger, opacity: 0.8 }} />
-          <span className="text-[12px] font-semibold" style={{ color: text }}>
-            Clear usage data
+      {/* 6 — Agent health: ONE section, two QUIET sub-blocks side-by-side
+          (1-col below md). Severity rides the icon + the number color ONLY —
+          never a tinted card (the R99-E verdict); both sub-blocks ALWAYS
+          render their honest empty one-liner so the layout is stable
+          window-over-window (no content jumping). */}
+      <section data-testid="agent-health-section" aria-label="Agent health">
+        <div className="mb-2.5 flex items-center gap-2">
+          <ShieldCheck size={13} style={{ color: accent, opacity: 0.7 }} aria-hidden />
+          <span
+            className="text-[11px] font-bold uppercase leading-none tracking-widest"
+            style={{ color: styles.textTertiary }}
+          >
+            Agent health
           </span>
         </div>
-        <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
+          <HealthBlock
+            testId="stats-turn-errors"
+            icon={<HeartPulse size={12} />}
+            label="Turn errors"
+            noun="turn errors"
+            emptyLine="No turn errors in the window — clean run."
+            issues={data.health.turnErrors}
+            tone={SEMANTIC_COLORS.warning}
+            months={months}
+            styles={styles}
+          />
+          <HealthBlock
+            testId="stats-tool-failures"
+            icon={<Wrench size={12} />}
+            label="Tool failures"
+            noun="tool failures"
+            emptyLine="No tool failures in the window — clean run."
+            issues={data.health.toolFailures}
+            tone={SEMANTIC_COLORS.danger}
+            months={months}
+            styles={styles}
+          />
+        </div>
+      </section>
+
+      {/* 7 — THE DANGER ZONE, always LAST (the GitHub settings pattern): a
+          quiet red-OUTLINED box — no filled background, no shadow — with the
+          description-left / red-action-button-right row. The exact
+          enumeration of what stays untouched lives in the ConfirmDialog. */}
+      <section
+        data-testid="clear-usage-card"
+        aria-label="Danger zone"
+        className="min-h-[96px] rounded-[16px] border-[1.5px] p-4"
+        style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4) }}
+      >
+        <div className="mb-2.5 flex items-center gap-2">
+          <span
+            className="text-[11px] font-bold uppercase leading-none tracking-widest"
+            style={{ color: SEMANTIC_COLORS.danger }}
+          >
+            Danger zone
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="max-w-[520px] text-[11.5px] leading-relaxed" style={{ color: textSecondary }}>
-            Wipes the usage ledger — every token count, cost, and model-history row. The
-            conversations themselves, your agents, providers, and settings are not touched.
+            Clear usage data — deletes every usage event in the ledger. Turns, sessions, and project
+            data are untouched.
           </p>
           <button
             type="button"
@@ -298,7 +379,7 @@ export function DataStatsPanel() {
         ) : null}
         {clearedCount !== null && !clear.isError ? (
           <div
-            className="mt-2 text-[11px] font-semibold"
+            className="mt-2 text-[11px] font-semibold tabular-nums"
             style={{ color: SEMANTIC_COLORS.success }}
             role="status"
             data-testid="clear-usage-success"
@@ -326,60 +407,70 @@ export function DataStatsPanel() {
   );
 }
 
-/** One agent-health card — semantic-tinted rows (amber turn errors, danger
- * tool failures); the empty state is the honest one-liner, never a
- * fabricated "healthy" row. */
-function HealthCard({
+/** One quiet agent-health sub-block — card surface + hairline border (NO
+ * semantic tint, NO shadow); the severity lives in the icon and the count
+ * color alone. The empty state is the honest one-liner, never a fabricated
+ * "healthy" row; the count line rides an aria-label that reads the window. */
+function HealthBlock({
   testId,
   icon,
-  title,
+  label,
+  noun,
   emptyLine,
   issues,
   tone,
+  months,
   styles,
 }: {
   testId: string;
   icon: React.ReactNode;
-  title: string;
+  label: string;
+  /** The aria-label noun — "turn errors" / "tool failures". */
+  noun: string;
   emptyLine: string;
   issues: UsageStatsHealthIssue[];
   tone: string;
+  months: number;
   styles: ReturnType<typeof useThemeStyles>;
 }) {
-  const { text, textSecondary, border, card, softShadow } = styles;
+  const { text, textSecondary, textTertiary, border, card } = styles;
+  const count = issues.reduce((sum, issue) => sum + issue.count, 0);
   return (
     <section
       data-testid={testId}
-      className="rounded-[24px] border-[1.5px] p-4"
-      style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
-      aria-label={title}
+      aria-label={label}
+      className="min-h-[72px] rounded-[16px] border-[1.5px] p-3.5"
+      style={{ backgroundColor: card, borderColor: border }}
     >
-      <div className="mb-3 flex items-center gap-2">
-        <span style={{ color: tone, opacity: 0.8 }}>{icon}</span>
-        <span className="text-[12px] font-semibold" style={{ color: text }}>
-          {title}
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 leading-none" style={{ color: tone, opacity: 0.85 }} aria-hidden>
+          {icon}
+        </span>
+        <span className="text-[12px] font-semibold leading-none" style={{ color: text }}>
+          {label}
         </span>
         <span
-          className="ml-auto rounded-full px-2 py-0.5 font-mono text-[10px] font-bold"
-          style={{ background: withAlpha(tone, 0.1), color: tone }}
+          className="ml-auto font-mono text-[12px] font-bold leading-none tabular-nums"
+          style={{ color: count > 0 ? tone : textTertiary }}
+          aria-label={`${count === 0 ? "No" : count.toLocaleString()} ${noun} in the last ${months} months`}
         >
-          {issues.reduce((sum, issue) => sum + issue.count, 0).toLocaleString()}
+          {count.toLocaleString()}
         </span>
       </div>
       {issues.length === 0 ? (
-        <p className="text-[11.5px]" style={{ color: textSecondary }}>
+        <p className="mt-2 text-[11.5px]" style={{ color: textSecondary }}>
           {emptyLine}
         </p>
       ) : (
-        <div className="space-y-1">
+        <div className="mt-2 space-y-1">
           {issues.map((issue) => (
-            <div key={issue.name} className="flex items-center justify-between gap-2 rounded-md px-1">
+            <div key={issue.name} className="flex items-center justify-between gap-2">
               <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: text }}>
                 {issue.name}
               </span>
               <span
-                className="shrink-0 rounded-full px-2 py-0.5 font-mono text-[10px] font-bold"
-                style={{ background: withAlpha(tone, 0.1), color: tone }}
+                className="shrink-0 font-mono text-[11px] font-semibold tabular-nums"
+                style={{ color: tone }}
               >
                 {issue.count.toLocaleString()}
               </span>

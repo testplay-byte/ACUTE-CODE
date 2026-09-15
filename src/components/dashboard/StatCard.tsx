@@ -8,6 +8,11 @@ import { scaleIn } from "../../lib/motion";
  * solid accent icon tile (w-10 h-10, full opacity — no translucent soup),
  * font-black value + uppercase tracked label. Hover = 2px lift + shadow
  * deepen. `highlight` fills the whole card with accent (the bold moment).
+ *
+ * R99-E (the usage anti-jitter kit, research §3.2): the card is pinned at
+ * h-[92px] — the height every StatCard-shaped skeleton across the app
+ * already reserves (dashboard, usage screen, the DataStatsPanel) — and the
+ * value renders tabular-nums so live-updating numbers hold their width.
  */
 export function StatCard({
   value,
@@ -31,7 +36,7 @@ export function StatCard({
   return (
     <motion.div
       variants={scaleIn}
-      className="relative cursor-default overflow-hidden rounded-[20px] border-[1.5px] p-4 transition-all duration-200"
+      className="relative flex h-[92px] cursor-default flex-col justify-center overflow-hidden rounded-[20px] border-[1.5px] p-4 transition-all duration-200"
       style={{
         backgroundColor: highlight ? accent : card,
         borderColor: highlight ? accent : border,
@@ -45,7 +50,7 @@ export function StatCard({
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div
-            className="truncate text-[22px] font-black tracking-tighter leading-none"
+            className="truncate text-[22px] font-black tabular-nums tracking-tighter leading-none"
             style={{ color: highlight ? accentText : text }}
           >
             {value}
