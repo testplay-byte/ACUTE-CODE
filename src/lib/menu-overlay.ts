@@ -208,10 +208,13 @@ export interface UsageContextBarPayload {
   usedPct: number;
   /** The category segments, in display order. */
   segments: UsageBarSegmentPayload[];
+  /** R98-C3: the pane's label ("Window composition") — the sectioned layout. */
+  label?: string;
 }
 
 /** R97-C: the big donut visual riding the card's header (the DOM popover's
- * twin — ring + % center + the budget tick + the header's line column). */
+ * twin — ring + % center + the budget tick + the header's line column).
+ * R98-C3: `label` names the pane ("Overview") — the sectioned layout. */
 export interface UsageDonutPayload {
   used: number;
   limit: number;
@@ -223,11 +226,16 @@ export interface UsageDonutPayload {
    * measured / model / the session cost headline — the DOM popover's header
    * text column). */
   lines: UsageLinePayload[];
+  /** R98-C3: the pane's label ("Overview") — the renderer paints it as the
+   * pane's uppercase tracked header. */
+  label?: string;
 }
 
 /** R97-C: one row of the session table (Main agent / Sub-agents / Combined
- * × Turns / Calls / Sent ↑ / Received ↓ / Cost). */
+ * × Turns / Calls / Sent ↑ / Received ↓ / Cost). R98-C3: `id` is the stable
+ * DOM-test pin key ("main" / "subagents" / "combined"). */
 export interface UsageTableRowPayload {
+  id?: string;
   label: string;
   cells: string[];
   strong?: boolean;
@@ -296,29 +304,43 @@ export type MenuOverlayPayload = MenuPayload | UsageCardPayload;
  * be ESTIMATED in the main window (showMenuOverlay sizes the window), so the
  * arithmetic lives HERE and MenuOverlayApp paints to the same numbers. The
  * estimate is biased a touch TALL (a few px of card padding read as breathing
- * room; an UNDER-estimate would clip the last row behind the card's scroll). */
-export const USAGE_CARD_CHROME_PX = 26; // the card head row + outer paddings
-export const USAGE_SECTION_TITLE_PX = 22; // one section's title row + its gap
+ * room; an UNDER-estimate would clip the last row behind the card's scroll).
+ *
+ * R98-C3: the card is a STACK OF SECTIONED PANES (the owner: "proper
+ * separation between the elements… a wider aspect ratio") — the chrome
+ * constants grew the pane overhead (border + padding + the gap below) and
+ * every visual block (donut / bar / section) is a pane now. */
+export const USAGE_CARD_CHROME_PX = 55; // strip + title row + outer paddings
+export const USAGE_SECTION_TITLE_PX = 17; // a pane's label row + its gap
+/** R98-C3: the per-pane overhead — border(2) + padding(18) + the gap below
+ * the pane (8). The LAST pane's gap is never subtracted (biased tall — the
+ * safe direction: a few px of breathing room, never a clipped row). */
+export const USAGE_PANE_PX = 28;
 export const USAGE_LINE_PX = 17; // one label/value line
 export const USAGE_NOTE_PX = 20; // the footnote row + its gap
-/** R97-C: the context-bar block — the flanking counts row (16) + the bar
+/** R97-C: the context-bar CONTENT — the flanking counts row (16) + the bar
  * itself (6) + its breathing room (8). */
 export const USAGE_CONTEXT_BAR_PX = 30;
-/** R97-C: the donut header block (the 46px ring + its vertical padding). */
+/** R97-C: the donut content — the 46px ring (+ breathing). */
 export const USAGE_DONUT_PX = 54;
 /** R97-C: one table row (the compact 10px cells + padding). */
 export const USAGE_TABLE_ROW_PX = 18;
 /** R97-C: the table's header row (same rhythm, +1 for the divider). */
 export const USAGE_TABLE_HEAD_PX = 19;
 
-/** R97-C: the overlay window's height for a usage card — the payload's own
- * arithmetic (chrome + the context bar + the donut + every section title +
- * every line + every table row + the note), floored at the Rust command's
- * 40px minimum. Pure; exported for tests. */
+/** R97-C → R98-C3: the overlay window's height for a usage card — the
+ * pane arithmetic: chrome + every pane's overhead + every pane's content
+ * (donut / bar / each section's lines + table) + the note), floored at the
+ * Rust command's 40px minimum. Pure; exported for tests. */
 export function estimateUsageCardHeight(payload: UsageCardPayload): number {
+  const panes =
+    (payload.contextBar !== undefined ? 1 : 0) +
+    (payload.donut !== undefined ? 1 : 0) +
+    payload.sections.length;
+  const paneOverhead = panes * USAGE_PANE_PX + panes * USAGE_SECTION_TITLE_PX;
   const contextBar = payload.contextBar !== undefined ? USAGE_CONTEXT_BAR_PX : 0;
-  // The donut block: the header LINES stack beside the 46px ring — the
-  // block is whichever is taller (5-6 lines at 17px ≈ 85-102px) + padding.
+  // The donut content: the header LINES stack beside the 46px ring — the
+  // block is whichever is taller (5-6 lines at 17px ≈ 85-102px) + breathing.
   const donut =
     payload.donut !== undefined
       ? Math.max(USAGE_DONUT_PX, payload.donut.lines.length * USAGE_LINE_PX + 10)
@@ -326,13 +348,12 @@ export function estimateUsageCardHeight(payload: UsageCardPayload): number {
   const sections = payload.sections.reduce(
     (acc, s) =>
       acc +
-      USAGE_SECTION_TITLE_PX +
       s.lines.length * USAGE_LINE_PX +
       (s.table !== undefined ? USAGE_TABLE_HEAD_PX + s.table.rows.length * USAGE_TABLE_ROW_PX : 0),
     0,
   );
   const note = payload.note !== undefined && payload.note !== "" ? USAGE_NOTE_PX : 0;
-  return Math.max(40, USAGE_CARD_CHROME_PX + contextBar + donut + sections + note);
+  return Math.max(40, USAGE_CARD_CHROME_PX + paneOverhead + contextBar + donut + sections + note);
 }
 
 /** A picked item as reported back (kind + the discriminated item). */

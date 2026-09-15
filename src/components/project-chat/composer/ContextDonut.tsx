@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -85,8 +85,10 @@ const NEVER_MS = 2 ** 31 - 1;
 
 // ── ROUND-64 (R64-c): the popover's viewport-clipped fixed layer ───────────
 
-/** The popover's width (Tailwind w-72). */
-const POPOVER_WIDTH_PX = 288;
+/** The popover's width. R98-C3 (owner: "you can use a wider aspect ratio
+ * for this too as needed… proper separation between the elements") — the
+ * cramped 288px single column became a 420px stack of sectioned panes. */
+const POPOVER_WIDTH_PX = 420;
 /** Gap between the popover's bottom edge and the donut button's top. */
 const POPOVER_GAP_PX = 10;
 /** Minimum breathing room from every viewport edge. */
@@ -229,6 +231,8 @@ export function buildUsageCardSections(
     markerFrac,
     ringColor: usageRingColorKey(data.usedTokens, window_),
     lines: headerLines,
+    // R98-C3: the pane's label — both legs paint it as the pane header.
+    label: "Overview",
   };
 
   // ── R97-C: the CONTEXT BAR — the Kilo-style segmented usage bar (the
@@ -245,6 +249,8 @@ export function buildUsageCardSections(
       tokens: data.breakdown[cat.key],
       color: cat.color,
     })),
+    // R98-C3: the pane's label — both legs paint it as the pane header.
+    label: "Window composition",
   };
 
   // ── the sections: Breakdown (dots + mini-bars) / Cache / Session (table).
@@ -278,12 +284,16 @@ export function buildUsageCardSections(
   // rows (Turns / Provider calls / Tokens sent ↑ / received ↓ / Cost per
   // group), the owner's "the actual main sessions stats and the sub-agent
   // sessions stats kept separate BUT also shown combined" contract, now with
-  // the COST column as a first-class cell.
+  // the COST column as a first-class cell. R98-C3: BOTH legs render this table
+  // (the DOM leg's stacked UsageGroup rows are dead — one spelling, twins by
+  // construction); rows carry stable ids for the DOM test pins.
   const tableRow = (
+    id: string,
     label: string,
     totals: SessionUsageTotals,
     strong: boolean,
   ): UsageTableRowPayload => ({
+    id,
     label,
     strong,
     cells: [
@@ -295,14 +305,14 @@ export function buildUsageCardSections(
     ],
   });
   sections.push({
-    title: "Session",
+    title: "Session totals",
     lines: [],
     table: {
       columns: ["Group", "Turns", "Calls", "Sent ↑", "Received ↓", "Cost"],
       rows: [
-        tableRow("Main agent", mainTotals, false),
-        tableRow("Sub-agents", subagentTotals, false),
-        tableRow("Combined", combinedTotals, true),
+        tableRow("main", "Main agent", mainTotals, false),
+        tableRow("subagents", "Sub-agents", subagentTotals, false),
+        tableRow("combined", "Combined", combinedTotals, true),
       ],
     },
   });
@@ -456,7 +466,9 @@ function BreakdownRow({
       <span className="font-mono text-[10px] shrink-0" style={{ color: styles.textTertiary }}>
         {note ?? fmtTokens(value)}
       </span>
-      <div className="w-16 h-[3px] rounded-full overflow-hidden shrink-0" style={{ background: styles.subtle }}>
+      {/* R98-C3: the mini-bar widened (w-16 → w-24) — the 420px pane gives
+          the share bars room to read. */}
+      <div className="w-24 h-[3px] rounded-full overflow-hidden shrink-0" style={{ background: styles.subtle }}>
         <div
           className="h-full rounded-full transition-opacity"
           style={{ width: `${pct}%`, background: hex, opacity: dimmed ? 0.4 : 1 }}
@@ -482,7 +494,7 @@ function ContextBar({
   const styles = useThemeStyles();
   const reservedHex = usageSegmentHex("reserved", styles.isDark, styles.accent);
   return (
-    <div className="flex items-center gap-2 px-1 pb-2 mb-1" data-context-bar>
+    <div className="flex items-center gap-2 px-0.5" data-context-bar>
       <span
         className="font-mono text-[10px] font-bold shrink-0 tabular-nums"
         style={{ color: styles.text }}
@@ -541,62 +553,93 @@ function ContextBar({
   );
 }
 
-/** A label · value row for the session-totals groups. */
-function StatRow({ label, value, title }: { label: string; value: string; title?: string }) {
+/** R98-C3 (owner: "proper separation between the elements… the whole
+ * layout of it needs to be adjusted properly") — THE PANE: the sectioned
+ * card the whole popover is built from on the DOM leg (the overlay card's
+ * twin paints the same recipe from the payload's label fields). A rounded
+ * inset group — the theme's subtle wash + a hairline border + the 9px
+ * uppercase tracked label — so each region (Overview / Window composition /
+ * Breakdown / Cache / Session totals) reads as its own visual block,
+ * separated by real space instead of the pre-R98 hairline-stacked column. */
+function Pane({ label, children }: { label: string; children: ReactNode }) {
   const styles = useThemeStyles();
   return (
-    <div className="flex items-center justify-between gap-2" title={title}>
-      <span className="text-[10.5px]" style={{ color: styles.textSecondary }}>
+    <section
+      data-pane={label}
+      className="rounded-[10px] border p-[9px] mb-2"
+      style={{ borderColor: styles.borderSubtle, background: styles.subtle }}
+    >
+      <div
+        className="text-[9px] font-bold uppercase tracking-[0.08em] mb-[6px]"
+        style={{ color: styles.textTertiary }}
+      >
         {label}
-      </span>
-      <span className="font-mono text-[10.5px] font-bold" style={{ color: styles.text }}>
-        {value}
-      </span>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** R98-C3: the session TABLE on the DOM leg — the SAME spelling as the
+ * overlay card's (one component now; the pre-R98 stacked UsageGroup rows are
+ * dead). The 6-column grid (Group / Turns / Calls / Sent ↑ / Received ↓ /
+ * Cost) reads scannably at the 420px width. */
+function UsageTable({ table }: { table: NonNullable<UsageSectionPayload["table"]> }) {
+  const styles = useThemeStyles();
+  return (
+    <div data-usage-table className="flex flex-col">
+      <div
+        className="grid gap-x-1 pb-1 mb-1 border-b"
+        style={{
+          gridTemplateColumns: "minmax(0, 1.2fr) repeat(5, minmax(0, 1fr))",
+          borderColor: styles.borderSubtle,
+        }}
+      >
+        {table.columns.map((col, ci) => (
+          <span
+            key={ci}
+            className="text-[8.5px] font-bold uppercase tracking-[0.06em] truncate"
+            style={{ color: styles.textTertiary, textAlign: ci === 0 ? "left" : "right" }}
+          >
+            {col}
+          </span>
+        ))}
+      </div>
+      {table.rows.map((row, ri) => (
+        <div
+          key={`${ri}-${row.label}`}
+          data-usage-row={row.id ?? row.label}
+          className="grid gap-x-1 items-baseline py-[1px]"
+          style={{ gridTemplateColumns: "minmax(0, 1.2fr) repeat(5, minmax(0, 1fr))" }}
+        >
+          <span
+            className="text-[10px] truncate"
+            style={{
+              color: row.strong === true ? styles.text : styles.textSecondary,
+              fontWeight: row.strong === true ? 700 : 500,
+            }}
+          >
+            {row.label}
+          </span>
+          {row.cells.map((cell, ci) => (
+            <span
+              key={ci}
+              className="font-mono text-[10px] truncate text-right"
+              style={{
+                color: row.strong === true ? styles.text : styles.textSecondary,
+                fontWeight: row.strong === true ? 700 : 500,
+              }}
+            >
+              {cell}
+            </span>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
 
 const ZERO_TOTALS: SessionUsageTotals = { inputTokens: 0, outputTokens: 0, requests: 0, costUsd: 0 };
-
-/**
- * ROUND-51 (R51-c): one usage group of the Session section (owner: "The
- * actual main sessions stats and the sub-agent sessions stats will be kept
- * separate. They will not be kept separate completely. They will be shown as
- * combined all together too.") — requests, tokens sent ↑ / received ↓, cost.
- * A group with no activity shows zeros (cost "—").
- */
-function UsageGroup({
-  label,
-  totals,
-  group,
-}: {
-  label: string;
-  totals: SessionUsageTotals;
-  group: "main" | "subagents" | "combined";
-}) {
-  const styles = useThemeStyles();
-  return (
-    <div
-      className={`flex flex-col gap-1 pt-1.5 ${group === "main" ? "" : "mt-1 border-t"}`}
-      style={group === "main" ? undefined : { borderColor: styles.borderSubtle }}
-      data-usage-group={group}
-    >
-      <div className="text-[9.5px] font-bold uppercase tracking-wider pb-0.5" style={{ color: styles.textTertiary }}>
-        {label}
-      </div>
-      {/* ROUND-83 (R83): "requests" counted TURNS since R24 (one usage row
-          per turn) — relabeled honestly, with the REAL provider-call count
-          beside it (a 5-iteration turn is 1 turn · 5 calls). */}
-      <StatRow label="Turns" value={String(totals.requests)} />
-      {totals.providerCalls !== undefined ? (
-        <StatRow label="Provider calls" value={String(totals.providerCalls)} />
-      ) : null}
-      <StatRow label="Tokens sent ↑" value={fmtTokens(totals.inputTokens)} />
-      <StatRow label="Tokens received ↓" value={fmtTokens(totals.outputTokens)} />
-      <StatRow label="Cost" value={totals.costUsd > 0 ? `$${totals.costUsd.toFixed(4)}` : "—"} />
-    </div>
-  );
-}
 
 /**
  * ROUND-50 (R50-c2): the context donut (owner: "It will show me the context
@@ -1172,198 +1215,230 @@ export function ContextDonut({
                   </div>
                 ) : (
                   <>
-                    {/* Big donut + % projected + used / window + the
-                        ROUND-83 measured line + budget marker + provenance */}
-                    <div
-                      className="flex items-center gap-3 px-1 pb-2 mb-2 border-b"
-                      style={{ borderColor: styles.borderSubtle }}
-                    >
-                      <div className="relative grid place-items-center shrink-0">
-                        <DonutRing
-                          size={46}
-                          stroke={5}
-                          used={used}
-                          limit={window_}
-                          color={ringColor}
-                          track={styles.subtle}
-                          markerFrac={markerFrac}
-                        />
-                        <span className="absolute font-mono text-[10px] font-bold" style={{ color: styles.text }}>
-                          {pct !== null ? Math.round(pct) : 0}%
-                        </span>
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-[12px] font-bold" style={{ color: styles.text }}>
-                          {/* ROUND-83: the tilde says PROJECTED — the estimate
-                              fills the ring live; the measured line below is
-                              the provider's own number. */}
-                          {pct !== null ? `~${Math.round(pct)}% projected` : "0% projected"}
-                        </div>
-                        <div className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-                          {fmtTokens(used)} / {fmtTokens(window_)} tokens · estimated
-                        </div>
-                        {/* ROUND-83 (R83) §3.1 + ROUND-95 (R95-F): the MEASURED
-                            line — the provider's own prompt size for the
-                            last request, PROMOTED to a first-class row (it
-                            was a 9.5px tertiary line; the owner: "does not
-                            properly show the actual context which is
-                            currently being used"). `at` rides on the title;
-                            null before the first reply → the honest
-                            "not yet measured", never 0. */}
-                        {data.actual != null ? (
-                          <div
-                            className="flex min-w-0 items-baseline gap-1.5"
-                            data-context-measured
-                            title={`${fmtTokens(data.actual.inputTokens)} tokens · ${new Date(data.actual.at).toLocaleString()}`}
-                          >
-                            <span className="font-mono text-[11px] font-bold" style={{ color: styles.text }}>
-                              {fmtTokens(data.actual.inputTokens)}
-                            </span>
-                            <span className="shrink-0 text-[9.5px]" style={{ color: styles.textSecondary }}>
-                              measured at last request
-                            </span>
-                          </div>
-                        ) : (
-                          <div
-                            className="font-mono text-[9.5px]"
-                            data-context-measured
-                            style={{ color: styles.textSecondary }}
-                          >
-                            not yet measured — the first reply reports the provider's own count
-                          </div>
-                        )}
-                        {/* The model line. ROUND-95 (R95-F): a per-send model
-                            switch can never silently mix numbers — when the
-                            measured number came from a DIFFERENT model than
-                            the meter's current one, BOTH are named (the R83
-                            "at + model must ride" rule, made visible). */}
-                        <div className="font-mono text-[9.5px] truncate" title={data.model} style={{ color: styles.textTertiary }}>
-                          {data.actual != null && data.actual.model !== data.model
-                            ? `next send ${data.model} · measured ${data.actual.model}`
-                            : data.model}
-                        </div>
-                      </div>
-                    </div>
-                    {/* ROUND-83 (R83): the budget line + window provenance —
-                        one row under the header. The tick on the ring + this
-                        note make the BEHAVIORAL line visible (the pre-R83
-                        donut's 85% danger color and the compaction trigger
-                        disagreed — different numerators AND denominators). */}
-                    {(markerFrac !== undefined && available !== null) || windowSourceNote !== null ? (
-                      <div
-                        className="flex flex-col gap-0.5 px-1 pb-2 mb-1"
-                        data-context-budget
-                        style={{ color: styles.textTertiary }}
-                      >
-                        {markerFrac !== undefined && available !== null ? (
-                          <div className="font-mono text-[9.5px]">
-                            compaction line {fmtTokens(available)} · reserve {fmtTokens(data?.maxOutputTokens ?? 0)} output
-                          </div>
-                        ) : null}
-                        {windowSourceNote !== null ? (
-                          <div className="font-mono text-[9.5px] truncate" data-context-window-source>
-                            {windowSourceNote}
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    {/* ROUND-83 (R83) §2.4: the compaction badge — the visible
-                        truth that older context was summarized (the ring DROPS
-                        after a compaction instead of lying high; tokensSaved
-                        is an estimate delta, hence the ~). */}
-                    {data.compaction !== undefined ? (
-                      <div
-                        className="flex items-center gap-1.5 px-1 py-1.5 mb-1 border-y"
-                        style={{ borderColor: styles.borderSubtle }}
-                        data-context-compaction
-                      >
-                        <span className="text-[10.5px] font-bold" style={{ color: styles.accent }}>
-                          Context compacted
-                        </span>
-                        <span className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-                          {data.compaction.droppedMessages} messages summarized · ~{fmtTokens(data.compaction.tokensSaved)} saved
-                        </span>
-                      </div>
-                    ) : null}
-                    {/* R97-C: THE CONTEXT BAR — the Kilo-style segmented usage
-                        bar, the owner's named element ("in the Kilo Code at the
-                        very top, it shows the stats of the various things used
-                        … in bar format"). The twin of the overlay card's. */}
-                    <ContextBar
-                      bar={{
-                        usedTokens: used,
-                        windowTokens: window_,
-                        reservedTokens: data.maxOutputTokens ?? 0,
-                        usedPct: pct ?? 0,
-                        segments: BREAKDOWN_CATEGORIES.map((cat) => ({
-                          label: cat.label,
-                          tokens: data.breakdown[cat.key],
-                          color: cat.color,
-                        })),
-                      }}
-                      hoverSeg={hoverSeg}
-                      onHover={setHoverSeg}
-                    />
-                    {/* Breakdown slices — R97-C: the palette dots + the mutual
-                        hover-highlight against the context bar's segments. */}
-                    <div className="flex flex-col gap-1.5 px-1 pb-2">
-                      {BREAKDOWN_CATEGORIES.map((cat) => (
-                        <BreakdownRow
-                          key={cat.label}
-                          label={cat.label}
-                          value={data.breakdown[cat.key]}
-                          usedTokens={used}
-                          note={
-                            cat.key === "mcpTools" && data.breakdown.mcpTools === 0
-                              ? "none configured"
-                              : undefined
-                          }
-                          color={cat.color}
-                          lit={hoverSeg === cat.label}
-                          dimmed={hoverSeg !== null && hoverSeg !== cat.label}
-                          onHover={setHoverSeg}
-                        />
-                      ))}
-                    </div>
-                    {/* Cache line */}
-                    <div
-                      className="flex items-center justify-between gap-2 px-1 py-1.5 mb-1 border-y"
-                      style={{ borderColor: styles.borderSubtle }}
-                      title={hitRateNote}
-                    >
-                      <span className="text-[10.5px]" style={{ color: styles.textSecondary }}>
-                        Cache hit rate
-                      </span>
-                      <span className="font-mono text-[10.5px] font-bold" style={{ color: styles.text }}>
-                        {hitRate}
-                        {data.cache.inputTokens > 0 ? (
-                          <span className="font-normal" style={{ color: styles.textTertiary }}>
-                            {" "}
-                            · {fmtTokens(data.cache.cachedInputTokens)} / {fmtTokens(data.cache.inputTokens)} cached
+                    {/* ── R98-C3: the OVERVIEW pane — the ring + its line
+                        column (projected / estimated / measured / model) +
+                        the budget + compaction lines, one visual block. */}
+                    <Pane label="Overview">
+                      <div className="flex items-center gap-3 pb-2">
+                        <div className="relative grid place-items-center shrink-0">
+                          <DonutRing
+                            size={46}
+                            stroke={5}
+                            used={used}
+                            limit={window_}
+                            color={ringColor}
+                            track={styles.subtle}
+                            markerFrac={markerFrac}
+                          />
+                          <span className="absolute font-mono text-[10px] font-bold" style={{ color: styles.text }}>
+                            {pct !== null ? Math.round(pct) : 0}%
                           </span>
-                        ) : null}
-                        {/* ROUND-83 (R83) §2.10: a null rate on a live session
-                            is the honest "not reported" — never a fabricated
-                            0%. */}
-                        {hitRateNote !== undefined ? (
-                          <span className="font-normal" style={{ color: styles.textTertiary }}>
-                            {" "}· {hitRateNote}
-                          </span>
-                        ) : null}
-                      </span>
-                    </div>
-                    {/* Session totals — Main agent / Sub-agents / Combined
-                        (owner, R51: separate BUT also combined). */}
-                    <div className="flex flex-col gap-1 px-1 pt-1" data-session-totals>
-                      <div
-                        className="font-mono text-[9px] font-bold uppercase tracking-widest pb-0.5"
-                        style={{ color: styles.textTertiary }}
-                      >
-                        Session
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-[12px] font-bold" style={{ color: styles.text }}>
+                            {/* ROUND-83: the tilde says PROJECTED — the estimate
+                                fills the ring live; the measured line below is
+                                the provider's own number. */}
+                            {pct !== null ? `~${Math.round(pct)}% projected` : "0% projected"}
+                          </div>
+                          <div className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+                            {fmtTokens(used)} / {fmtTokens(window_)} tokens · estimated
+                          </div>
+                          {/* ROUND-83 (R83) §3.1 + ROUND-95 (R95-F): the MEASURED
+                              line — the provider's own prompt size for the
+                              last request, PROMOTED to a first-class row. `at`
+                              rides on the title; null before the first reply →
+                              the honest "not yet measured", never 0. */}
+                          {data.actual != null ? (
+                            <div
+                              className="flex min-w-0 items-baseline gap-1.5"
+                              data-context-measured
+                              title={`${fmtTokens(data.actual.inputTokens)} tokens · ${new Date(data.actual.at).toLocaleString()}`}
+                            >
+                              <span className="font-mono text-[11px] font-bold" style={{ color: styles.text }}>
+                                {fmtTokens(data.actual.inputTokens)}
+                              </span>
+                              <span className="shrink-0 text-[9.5px]" style={{ color: styles.textSecondary }}>
+                                measured at last request
+                              </span>
+                            </div>
+                          ) : (
+                            <div
+                              className="font-mono text-[9.5px]"
+                              data-context-measured
+                              style={{ color: styles.textSecondary }}
+                            >
+                              not yet measured — the first reply reports the provider's own count
+                            </div>
+                          )}
+                          {/* The model line. ROUND-95 (R95-F): a per-send model
+                              switch can never silently mix numbers — when the
+                              measured number came from a DIFFERENT model than
+                              the meter's current one, BOTH are named. */}
+                          <div className="font-mono text-[9.5px] truncate" title={data.model} style={{ color: styles.textTertiary }}>
+                            {data.actual != null && data.actual.model !== data.model
+                              ? `next send ${data.model} · measured ${data.actual.model}`
+                              : data.model}
+                          </div>
+                        </div>
                       </div>
-                      <UsageGroup label="Main agent" totals={mainTotals} group="main" />
-                      <UsageGroup label="Sub-agents" totals={subagentTotals} group="subagents" />
-                      <UsageGroup label="Combined" totals={combinedTotals} group="combined" />
+                      {/* ROUND-83 (R83): the budget line + window provenance —
+                          the BEHAVIORAL line (the tick on the ring + this note
+                          agree). */}
+                      {(markerFrac !== undefined && available !== null) || windowSourceNote !== null ? (
+                        <div
+                          className="flex flex-col gap-0.5"
+                          data-context-budget
+                          style={{ color: styles.textTertiary }}
+                        >
+                          {markerFrac !== undefined && available !== null ? (
+                            <div className="font-mono text-[9.5px]">
+                              compaction line {fmtTokens(available)} · reserve {fmtTokens(data?.maxOutputTokens ?? 0)} output
+                            </div>
+                          ) : null}
+                          {windowSourceNote !== null ? (
+                            <div className="font-mono text-[9.5px] truncate" data-context-window-source>
+                              {windowSourceNote}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {/* ROUND-83 (R83) §2.4: the compaction badge — the visible
+                          truth that older context was summarized. */}
+                      {data.compaction !== undefined ? (
+                        <div
+                          className="flex items-center gap-1.5 pt-1.5 mt-1 border-t"
+                          style={{ borderColor: styles.borderSubtle }}
+                          data-context-compaction
+                        >
+                          <span className="text-[10.5px] font-bold" style={{ color: styles.accent }}>
+                            Context compacted
+                          </span>
+                          <span className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+                            {data.compaction.droppedMessages} messages summarized · ~{fmtTokens(data.compaction.tokensSaved)} saved
+                          </span>
+                        </div>
+                      ) : null}
+                    </Pane>
+                    {/* ── R98-C3: the WINDOW pane — the Kilo-style segmented
+                        usage bar (the owner's named element), its own block. */}
+                    <Pane label="Window composition">
+                      <ContextBar
+                        bar={{
+                          usedTokens: used,
+                          windowTokens: window_,
+                          reservedTokens: data.maxOutputTokens ?? 0,
+                          usedPct: pct ?? 0,
+                          segments: BREAKDOWN_CATEGORIES.map((cat) => ({
+                            label: cat.label,
+                            tokens: data.breakdown[cat.key],
+                            color: cat.color,
+                          })),
+                        }}
+                        hoverSeg={hoverSeg}
+                        onHover={setHoverSeg}
+                      />
+                    </Pane>
+                    {/* ── R98-C3: the BREAKDOWN pane — the palette dots + the
+                        wider mini-bars + the mutual hover-highlight. */}
+                    <Pane label="Breakdown">
+                      <div className="flex flex-col gap-1.5">
+                        {BREAKDOWN_CATEGORIES.map((cat) => (
+                          <BreakdownRow
+                            key={cat.label}
+                            label={cat.label}
+                            value={data.breakdown[cat.key]}
+                            usedTokens={used}
+                            note={
+                              cat.key === "mcpTools" && data.breakdown.mcpTools === 0
+                                ? "none configured"
+                                : undefined
+                            }
+                            color={cat.color}
+                            lit={hoverSeg === cat.label}
+                            dimmed={hoverSeg !== null && hoverSeg !== cat.label}
+                            onHover={setHoverSeg}
+                          />
+                        ))}
+                      </div>
+                    </Pane>
+                    {/* ── R98-C3: the CACHE pane. */}
+                    <Pane label="Cache">
+                      <div
+                        className="flex items-center justify-between gap-2"
+                        title={hitRateNote}
+                      >
+                        <span className="text-[10.5px]" style={{ color: styles.textSecondary }}>
+                          Cache hit rate
+                        </span>
+                        <span className="font-mono text-[10.5px] font-bold" style={{ color: styles.text }}>
+                          {hitRate}
+                          {data.cache.inputTokens > 0 ? (
+                            <span className="font-normal" style={{ color: styles.textTertiary }}>
+                              {" "}
+                              · {fmtTokens(data.cache.cachedInputTokens)} / {fmtTokens(data.cache.inputTokens)} cached
+                            </span>
+                          ) : null}
+                          {/* ROUND-83 (R83) §2.10: a null rate on a live session
+                              is the honest "not reported" — never a fabricated
+                              0%. */}
+                          {hitRateNote !== undefined ? (
+                            <span className="font-normal" style={{ color: styles.textTertiary }}>
+                              {" "}· {hitRateNote}
+                            </span>
+                          ) : null}
+                        </span>
+                      </div>
+                    </Pane>
+                    {/* ── R98-C3: the SESSION pane — the TABLE now on BOTH legs
+                        (one spelling; the pre-R98 stacked UsageGroup rows are
+                        dead). Owner R51: separate BUT also combined. */}
+                    <div data-session-totals>
+                      <Pane label="Session totals">
+                        <UsageTable
+                          table={{
+                            columns: ["Group", "Turns", "Calls", "Sent ↑", "Received ↓", "Cost"],
+                            rows: [
+                              {
+                                id: "main",
+                                label: "Main agent",
+                                strong: false,
+                                cells: [
+                                  String(mainTotals.requests),
+                                  mainTotals.providerCalls !== undefined ? String(mainTotals.providerCalls) : "—",
+                                  `${fmtTokens(mainTotals.inputTokens)} ↑`,
+                                  `${fmtTokens(mainTotals.outputTokens)} ↓`,
+                                  mainTotals.costUsd > 0 ? `$${mainTotals.costUsd.toFixed(4)}` : "—",
+                                ],
+                              },
+                              {
+                                id: "subagents",
+                                label: "Sub-agents",
+                                strong: false,
+                                cells: [
+                                  String(subagentTotals.requests),
+                                  subagentTotals.providerCalls !== undefined ? String(subagentTotals.providerCalls) : "—",
+                                  `${fmtTokens(subagentTotals.inputTokens)} ↑`,
+                                  `${fmtTokens(subagentTotals.outputTokens)} ↓`,
+                                  subagentTotals.costUsd > 0 ? `$${subagentTotals.costUsd.toFixed(4)}` : "—",
+                                ],
+                              },
+                              {
+                                id: "combined",
+                                label: "Combined",
+                                strong: true,
+                                cells: [
+                                  String(combinedTotals.requests),
+                                  combinedTotals.providerCalls !== undefined ? String(combinedTotals.providerCalls) : "—",
+                                  `${fmtTokens(combinedTotals.inputTokens)} ↑`,
+                                  `${fmtTokens(combinedTotals.outputTokens)} ↓`,
+                                  combinedTotals.costUsd > 0 ? `$${combinedTotals.costUsd.toFixed(4)}` : "—",
+                                ],
+                              },
+                            ],
+                          }}
+                        />
+                      </Pane>
                     </div>
                   </>
                 )}

@@ -24,6 +24,7 @@ import {
   USAGE_DONUT_PX,
   USAGE_LINE_PX,
   USAGE_NOTE_PX,
+  USAGE_PANE_PX,
   USAGE_SECTION_TITLE_PX,
   USAGE_TABLE_HEAD_PX,
   USAGE_TABLE_ROW_PX,
@@ -89,23 +90,28 @@ describe("ROUND-96 (R96-G) — the usage payload contract", () => {
     }
   });
 
-  it("the estimator sums the contract: chrome + every section title + every line (+ the note), floored at the Rust command's 40px minimum", () => {
+  it("the estimator sums the contract: chrome + every pane (overhead + label) + every line (+ the note), floored at the Rust command's 40px minimum", () => {
     const twoSections = usagePayload([section("Window", 4), section("Session", 3)]);
+    // R98-C3: every visual block is a PANE now — the per-pane overhead
+    // (USAGE_PANE_PX: border + padding + the gap below) + the pane's label
+    // row (USAGE_SECTION_TITLE_PX) + the content lines.
     expect(estimateUsageCardHeight(twoSections)).toBe(
-      USAGE_CARD_CHROME_PX + 2 * USAGE_SECTION_TITLE_PX + 7 * USAGE_LINE_PX,
+      USAGE_CARD_CHROME_PX + 2 * (USAGE_PANE_PX + USAGE_SECTION_TITLE_PX) + 7 * USAGE_LINE_PX,
     );
     // The note adds its row only when non-empty.
     const withNote = usagePayload([section("Window", 4)], "200k window · catalog default");
     expect(estimateUsageCardHeight(withNote)).toBe(
-      USAGE_CARD_CHROME_PX + USAGE_SECTION_TITLE_PX + 4 * USAGE_LINE_PX + USAGE_NOTE_PX,
+      USAGE_CARD_CHROME_PX + (USAGE_PANE_PX + USAGE_SECTION_TITLE_PX) + 4 * USAGE_LINE_PX + USAGE_NOTE_PX,
     );
     const emptyNote = usagePayload([section("Window", 4)], "");
     expect(estimateUsageCardHeight(emptyNote)).toBe(
-      USAGE_CARD_CHROME_PX + USAGE_SECTION_TITLE_PX + 4 * USAGE_LINE_PX,
+      USAGE_CARD_CHROME_PX + (USAGE_PANE_PX + USAGE_SECTION_TITLE_PX) + 4 * USAGE_LINE_PX,
     );
     // The floor: a degenerate card never asks for a sub-40px window (the
-    // Rust clamp would refuse it anyway).
-    expect(estimateUsageCardHeight(usagePayload([]))).toBe(40);
+    // Rust clamp would refuse it anyway). R98-C3: the sectioned chrome
+    // (55px) alone exceeds the Rust floor — an empty card IS the chrome.
+    expect(estimateUsageCardHeight(usagePayload([]))).toBe(USAGE_CARD_CHROME_PX);
+    expect(USAGE_CARD_CHROME_PX).toBeGreaterThanOrEqual(40);
   });
 
   it("R97-C: the estimator sums the context bar + the donut header + the session table", () => {
@@ -146,10 +152,12 @@ describe("ROUND-96 (R96-G) — the usage payload contract", () => {
     } satisfies UsageCardPayload;
     expect(estimateUsageCardHeight(visual)).toBe(
       USAGE_CARD_CHROME_PX +
+        // R98-C3: three panes (donut + bar + the one section) each pay the
+        // pane overhead + the label row.
+        3 * (USAGE_PANE_PX + USAGE_SECTION_TITLE_PX) +
         USAGE_CONTEXT_BAR_PX +
-        // the donut block: 5 header lines (5*17=85) beat the 54px floor
+        // the donut content: 5 header lines (5*17=85) beat the 54px floor
         5 * USAGE_LINE_PX + 10 +
-        USAGE_SECTION_TITLE_PX +
         USAGE_TABLE_HEAD_PX +
         3 * USAGE_TABLE_ROW_PX,
     );
@@ -160,9 +168,9 @@ describe("ROUND-96 (R96-G) — the usage payload contract", () => {
     } satisfies UsageCardPayload;
     expect(estimateUsageCardHeight(small)).toBe(
       USAGE_CARD_CHROME_PX +
+        3 * (USAGE_PANE_PX + USAGE_SECTION_TITLE_PX) +
         USAGE_CONTEXT_BAR_PX +
         USAGE_DONUT_PX +
-        USAGE_SECTION_TITLE_PX +
         USAGE_TABLE_HEAD_PX +
         3 * USAGE_TABLE_ROW_PX,
     );

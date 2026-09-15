@@ -281,9 +281,10 @@ describe("ROUND-96 (R96-G) — the usage popover rides the overlay window (no br
     // The overlay payload: the usage kind, the DOM popover's width, and the
     // same numbers the DOM popover shows. R97-C: the window rows now live in
     // the DONUT header's line column; the sections are Breakdown / Cache /
-    // Session (the table).
+    // Session totals (the table). R98-C3: the width is the 420px sectioned
+    // card (the owner's wider-aspect ask).
     expect(payload.kind).toBe("usage");
-    expect(payload.width).toBe(288);
+    expect(payload.width).toBe(420);
     // R97-C: the visual payload — typed views over the JSON-safe record.
     const contextBar = payload.contextBar as {
       windowTokens: number;
@@ -317,7 +318,7 @@ describe("ROUND-96 (R96-G) — the usage popover rides the overlay window (no br
     expect(String(payload.note)).toContain("catalog default"); // window provenance
     // The anchor: the card's window — width = card + the page's 6px paddings,
     // positioned above the trigger, never off the top of the screen.
-    expect(anchor.width).toBe(288 + 12);
+    expect(anchor.width).toBe(420 + 12);
     expect(anchor.top).toBeGreaterThanOrEqual(0);
     expect(anchor.height).toBeGreaterThanOrEqual(40);
     // THE point: no DOM popover portal exists to intersect the browser.
@@ -489,7 +490,7 @@ describe("ROUND-96 (R96-G) + ROUND-97 (R97-C) — buildUsageCardSections (the pu
       }),
       { isError: false, sessionId: "s1" },
     );
-    const session = built!.sections.find((s) => s.title === "Session")!;
+    const session = built!.sections.find((s) => s.title === "Session totals")!;
     expect(session.table).toBeDefined();
     expect(session.table!.columns).toEqual(["Group", "Turns", "Calls", "Sent ↑", "Received ↓", "Cost"]);
     expect(session.table!.rows.map((r) => r.label)).toEqual(["Main agent", "Sub-agents", "Combined"]);
@@ -511,6 +512,12 @@ describe("ROUND-96 (R96-G) + ROUND-97 (R97-C) — buildUsageCardSections (the pu
       { isError: false, sessionId: "s1" },
     );
     expect(built!.contextBar).toBeDefined();
+    // R98-C3: the sectioned card — the panes carry their labels in the
+    // payload so both legs (DOM popover + overlay window) paint the same
+    // headers, and the session section is titled for the pane grammar.
+    expect(built!.contextBar!.label).toBe("Window composition");
+    expect(built!.donut!.label).toBe("Overview");
+    expect(built!.sections.map((s) => s.title)).toEqual(["Breakdown", "Cache", "Session totals"]);
     expect(built!.contextBar!.windowTokens).toBe(200_000);
     expect(built!.contextBar!.usedTokens).toBe(40_000);
     expect(built!.contextBar!.reservedTokens).toBe(16_000);

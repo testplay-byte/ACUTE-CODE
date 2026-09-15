@@ -1961,19 +1961,21 @@ describe("Composer: context donut (owner spec G)", () => {
     expect(popover.textContent).toContain("82%");
     expect(popover.textContent).toContain("82k / 100k cached");
 
-    // Session section (ROUND-51 R51-c): Main agent / Sub-agents / Combined —
-    // each group with requests, tokens sent ↑ / received ↓, cost.
+    // Session section (ROUND-51 R51-c, R98-C3 the table): Main agent /
+    // Sub-agents / Combined — the 6-column table (Group / Turns / Calls /
+    // Sent ↑ / Received ↓ / Cost), one spelling shared with the overlay leg.
     const totals = popover.querySelector("[data-session-totals]") as HTMLElement;
     expect(totals.textContent).toContain("Main agent");
     expect(totals.textContent).toContain("Sub-agents");
     expect(totals.textContent).toContain("Combined");
     const group = (id: string): HTMLElement =>
-      totals.querySelector(`[data-usage-group="${id}"]`) as HTMLElement;
+      totals.querySelector(`[data-usage-row="${id}"]`) as HTMLElement;
     for (const id of ["main", "subagents", "combined"]) expect(group(id)).toBeTruthy();
-    expect(group("main").textContent).toContain("Turns");
+    // The columns are the table's header row.
+    expect(totals.textContent).toContain("Turns");
+    expect(totals.textContent).toContain("Calls");
     // ROUND-83 (R83): the real SDK-call count beside the turns (7 turns ·
     // 9 calls — the multi-iteration distinction, pinned).
-    expect(group("main").textContent).toContain("Provider calls");
     expect(group("main").textContent).toContain("9");
     expect(group("main").textContent).toContain("7");
     expect(group("main").textContent).toContain("250k");
@@ -2009,7 +2011,7 @@ describe("Composer: context donut (owner spec G)", () => {
     const popover = await screen.findByRole("dialog", { name: "Context window details" });
     const totals = popover.querySelector("[data-session-totals]") as HTMLElement;
     const group = (id: string): HTMLElement =>
-      totals.querySelector(`[data-usage-group="${id}"]`) as HTMLElement;
+      totals.querySelector(`[data-usage-row="${id}"]`) as HTMLElement;
     // Main falls back to the flat sessionTotals.
     expect(group("main").textContent).toContain("7");
     expect(group("main").textContent).toContain("250k");

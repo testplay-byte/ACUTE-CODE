@@ -462,6 +462,29 @@ function UsageCard({
       : payload.donut?.ringColor === "warn"
         ? SEMANTIC_COLORS.warning
         : t.accent;
+  // R98-C3: THE PANE — the sectioned card's building block, the DOM popover's
+  // Pane twin (subtle wash + hairline border + the 9px uppercase tracked
+  // label + the 8px gap below; the owner's "proper separation between the
+  // elements" ask, painted on the overlay leg).
+  const paneStyle: React.CSSProperties = {
+    borderRadius: 10,
+    border: `1px solid ${t.border}`,
+    background: withAlpha(t.text, 0.04),
+    padding: 9,
+    marginBottom: 8,
+  };
+  const paneLabelStyle: React.CSSProperties = {
+    fontSize: 9,
+    fontWeight: 700,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.08em",
+    color: t.textTertiary,
+    marginBottom: 5,
+    // The estimator's USAGE_SECTION_TITLE_PX (17) is this label's row
+    // height (12 label + 5 gap) — minHeight keeps the two sides honest.
+    minHeight: USAGE_SECTION_TITLE_PX,
+  };
+  const monoFamily = "var(--font-mono, ui-monospace, monospace)";
   return (
     <div
       className="acute-menu-card"
@@ -502,72 +525,71 @@ function UsageCard({
             fontSize: 11,
             fontWeight: 700,
             color: t.text,
-            paddingBottom: 6,
-            marginBottom: 6,
-            borderBottom: `1px solid ${t.border}`,
+            paddingBottom: 8,
           }}
         >
           {payload.title}
         </div>
 
-        {/* ── R97-C: the DONUT header block — the ring (graded color + the
-            budget tick + the % center) beside the window line column. */}
+        {/* ── R98-C3: the DONUT pane — the ring + the line column, inside its
+            own sectioned block (the DOM popover's Overview pane twin). */}
         {payload.donut !== undefined ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-            <UsageDonutRing
-              used={payload.donut.used}
-              limit={payload.donut.limit}
-              markerFrac={payload.donut.markerFrac}
-              color={ringHex}
-              track={withAlpha(t.text, 0.12)}
-            />
-            <div style={{ minWidth: 0, flex: 1 }}>
-              {payload.donut.lines.map((line, li) => (
-                <div
-                  key={`${li}-${line.label}`}
-                  style={{
-                    display: "flex",
-                    alignItems: "baseline",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    minHeight: USAGE_LINE_PX,
-                  }}
-                >
-                  <span style={{ fontSize: 10, color: t.textTertiary, whiteSpace: "nowrap" }}>{line.label}</span>
-                  <span
+          <div style={paneStyle} data-usage-pane="overview">
+            <div style={paneLabelStyle}>{payload.donut.label ?? "Overview"}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 2 }}>
+              <UsageDonutRing
+                used={payload.donut.used}
+                limit={payload.donut.limit}
+                markerFrac={payload.donut.markerFrac}
+                color={ringHex}
+                track={withAlpha(t.text, 0.12)}
+              />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                {payload.donut.lines.map((line, li) => (
+                  <div
+                    key={`${li}-${line.label}`}
                     style={{
-                      fontFamily: "var(--font-mono, ui-monospace, monospace)",
-                      fontSize: 10.5,
-                      fontWeight: line.strong === true ? 700 : 500,
-                      color: line.strong === true ? t.text : t.textSecondary,
-                      textAlign: "right",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
+                      display: "flex",
+                      alignItems: "baseline",
+                      justifyContent: "space-between",
+                      gap: 8,
+                      minHeight: USAGE_LINE_PX,
                     }}
                   >
-                    {line.value}
-                    {line.note !== undefined && line.note !== "" ? (
-                      <span style={{ fontWeight: 400, color: t.textTertiary }}> · {line.note}</span>
-                    ) : null}
-                  </span>
-                </div>
-              ))}
+                    <span style={{ fontSize: 10, color: t.textTertiary, whiteSpace: "nowrap" }}>{line.label}</span>
+                    <span
+                      style={{
+                        fontFamily: monoFamily,
+                        fontSize: 10.5,
+                        fontWeight: line.strong === true ? 700 : 500,
+                        color: line.strong === true ? t.text : t.textSecondary,
+                        textAlign: "right",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {line.value}
+                      {line.note !== undefined && line.note !== "" ? (
+                        <span style={{ fontWeight: 400, color: t.textTertiary }}> · {line.note}</span>
+                      ) : null}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         ) : null}
 
-        {/* ── R97-C: the CONTEXT BAR — the Kilo-style segmented usage bar.
-            Used/window counts flank the track; each category paints its
-            colored segment (hover: the tooltip + the matching breakdown row
-            highlight); the output reserve paints its dimmed block; the rest
-            stays the free track. */}
+        {/* ── R97-C → R98-C3: the CONTEXT BAR pane — the Kilo-style segmented
+            usage bar in its own sectioned block ("Window composition"). */}
         {payload.contextBar !== undefined ? (
-          <div data-usage-context-bar style={{ marginBottom: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={paneStyle} data-usage-pane="window">
+            <div style={paneLabelStyle}>{payload.contextBar.label ?? "Window composition"}</div>
+            <div data-usage-context-bar style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span
                 style={{
-                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                  fontFamily: monoFamily,
                   fontSize: 9.5,
                   fontWeight: 700,
                   color: t.text,
@@ -613,8 +635,7 @@ function UsageCard({
                   );
                 })}
                 {/* The reserved-for-output block — dimmed, after the used
-                    segments, so "free" never reads as fully usable (Kilo's
-                    three-segment insight, restated on our category bar). */}
+                    segments, so "free" never reads as fully usable. */}
                 {payload.contextBar.windowTokens > 0 &&
                 payload.contextBar.reservedTokens > 0 ? (
                   <div
@@ -635,7 +656,7 @@ function UsageCard({
               </div>
               <span
                 style={{
-                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                  fontFamily: monoFamily,
                   fontSize: 9.5,
                   fontWeight: 700,
                   color: t.textTertiary,
@@ -650,20 +671,8 @@ function UsageCard({
         ) : null}
 
         {payload.sections.map((section, si) => (
-          <div key={`${si}-${section.title}`} style={{ marginBottom: si === payload.sections.length - 1 ? 0 : 8 }}>
-            <div
-              style={{
-                fontSize: 9,
-                fontWeight: 700,
-                textTransform: "uppercase" as const,
-                letterSpacing: "0.08em",
-                color: t.textTertiary,
-                marginBottom: 3,
-                minHeight: USAGE_SECTION_TITLE_PX,
-              }}
-            >
-              {section.title}
-            </div>
+          <div key={`${si}-${section.title}`} style={paneStyle} data-usage-pane={section.title}>
+            <div style={paneLabelStyle}>{section.title}</div>
             {section.lines.map((line, li) => {
               const lit = hoverSeg !== null && line.label === hoverSeg;
               return (
@@ -728,14 +737,14 @@ function UsageCard({
                       minWidth: 0,
                     }}
                   >
-                    {/* R97-C: the MINI-BAR — the line's share as a 3px bar
-                        in its palette color (the DOM popover's BreakdownRow,
-                        crossed over). */}
+                    {/* R97-C → R98-C3: the MINI-BAR — the line's share as a 3px
+                        bar in its palette color, widened (34 → 56) for the
+                        420px card. */}
                     {line.barFrac !== undefined && line.barColor !== undefined ? (
                       <span
                         aria-hidden
                         style={{
-                          width: 34,
+                          width: 56,
                           height: 3,
                           borderRadius: 2,
                           background: withAlpha(t.text, 0.1),
@@ -759,7 +768,7 @@ function UsageCard({
                     ) : null}
                     <span
                       style={{
-                        fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                        fontFamily: monoFamily,
                         fontSize: 10.5,
                         fontWeight: line.strong === true ? 700 : 500,
                         color: line.strong === true ? t.text : t.textSecondary,
@@ -840,7 +849,7 @@ function UsageCard({
                       <span
                         key={ci}
                         style={{
-                          fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                          fontFamily: monoFamily,
                           fontSize: 10,
                           fontWeight: row.strong === true ? 700 : 500,
                           color: row.strong === true ? t.text : t.textSecondary,
@@ -862,11 +871,11 @@ function UsageCard({
         {payload.note !== undefined && payload.note !== "" ? (
           <div
             style={{
-              marginTop: 6,
+              marginTop: 2,
               paddingTop: 6,
               borderTop: `1px solid ${t.border}`,
               fontSize: 9.5,
-              fontFamily: "var(--font-mono, ui-monospace, monospace)",
+              fontFamily: monoFamily,
               color: t.textTertiary,
               minHeight: USAGE_NOTE_PX,
             }}
