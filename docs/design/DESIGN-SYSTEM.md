@@ -10,6 +10,12 @@ in the same round that changes the UI.
 
 ## 1. Source of truth
 
+- **The language layer (round-98)**: `docs/design-language/` — TOKENS
+  (the color pipeline + type/spacing ladders), MOTION (the animation
+  grammar + keyframe registry), COMPONENTS (the shared-primitive catalog),
+  WIZARD-DNA (the owner-approved aesthetic), WINDOW-CONTROLS (the app
+  frame), USAGE (the per-edit checklist + do-not list). Every UI edit
+  refers to it there first (owner round-98 directive).
 - **Colors**: NEVER hard-coded in components. Everything flows from
   `src/lib/themes.ts` (`THEMES` table) through `useThemeStyles()` /
   `deriveThemeStyles()` and the `--ac-*` CSS variables it bridges. Five
