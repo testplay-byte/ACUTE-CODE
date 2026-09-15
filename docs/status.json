@@ -299,7 +299,7 @@
     }
   ],
   "quality": {
-    "ci": "PENDING — the v0.97.0 runs land on the release commit (the R99 baseline proven in between: CI 329126c fully GREEN including cargo check + the Release dispatch on 34fe1e5 SUCCESS — the fixedRuntime engine-bundled installer chain is proven end to end)",
+    "ci": "GREEN — CI 35035134792 and Release 35035136469 both SUCCESS on b6dc571 (lint, both typechecks, the root suite 3,754/3,766 (12 env-skips) — agent-core 2,384/2,384, e2e 12/12, build, license audit, docs:check 214/0/0, version ×4 at 0.97.0). v0.97.0 PUBLISHED (release 389541687, latest — THE ENGINE-BUNDLED INSTALLER: setup.exe 270,884,416 B sha256 f502aaee… + kit 121,230 B sha256 dcfe82cd…, both digests verified against GitHub’s server-side values on freshly downloaded bytes via the authenticated asset API; the kit scanned clean — zero real-key values). The installer grew 38.7 MB → 258 MB: it now ships the WebView2 Fixed Version Runtime — the honest price of the self-contained browser (the owner’s directive). The R99 review pass: a full independent subagent review (ship-shape after 4 MINORs — all fixed + pinned in de5ed1a before the tag).",
     "suites": [
       {
         "name": "frontend",
@@ -349,5 +349,5 @@
     ]
   },
   "round": 99,
-  "ci": "PENDING — the v0.97.0 runs land on the release commit (the R99 baseline proven in between: CI 329126c fully GREEN including cargo check + the Release dispatch on 34fe1e5 SUCCESS — the fixedRuntime engine-bundled installer chain is proven end to end)"
+  "ci": "GREEN — CI 35035134792 and Release 35035136469 both SUCCESS on b6dc571 (lint, both typechecks, the root suite 3,754/3,766 (12 env-skips) — agent-core 2,384/2,384, e2e 12/12, build, license audit, docs:check 214/0/0, version ×4 at 0.97.0). v0.97.0 PUBLISHED (release 389541687, latest — THE ENGINE-BUNDLED INSTALLER: setup.exe 270,884,416 B sha256 f502aaee… + kit 121,230 B sha256 dcfe82cd…, both digests verified against GitHub’s server-side values on freshly downloaded bytes via the authenticated asset API; the kit scanned clean — zero real-key values). The installer grew 38.7 MB → 258 MB: it now ships the WebView2 Fixed Version Runtime — the honest price of the self-contained browser (the owner’s directive). The R99 review pass: a full independent subagent review (ship-shape after 4 MINORs — all fixed + pinned in de5ed1a before the tag)."
 }
