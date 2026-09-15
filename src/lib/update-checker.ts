@@ -84,11 +84,18 @@ export const useUpdateCheckerStore = create<UpdateCheckerState>()(
 );
 
 /** "0.96.0" vs "0.97.0" per-segment — the same tolerant tuple walk the
- * sidecar's /system/updates runs (leading v tolerated, short forms too). */
+ * sidecar's /system/updates runs (leading v tolerated, short forms too).
+ * R99-H review catch: PRE-RELEASE suffixes ("-rc.1", "+build.2") are
+ * stripped BEFORE the walk — the first-draft walk parsed "0.97.0-rc.1" as
+ * the tuple [0,97,0,1], ranking an rc ABOVE its own release, so the
+ * Sidebar's pending dot could never self-heal off a shipped rc. With the
+ * strip, "0.97.0-rc.1" == "0.97.0" for this comparison (not newer → the
+ * dot clears) — exactly the self-heal semantics. */
 export function isNewerVersion(candidate: string, current: string): boolean {
   const parse = (v: string): number[] =>
     v
       .replace(/^v/, "")
+      .split(/[-+]/, 1)[0]!
       .split(".")
       .map((part) => Number.parseInt(part, 10))
       .map((part) => (Number.isNaN(part) ? 0 : part));

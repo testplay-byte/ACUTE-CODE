@@ -197,7 +197,10 @@ pub async fn run_update_installer(
 // CredWriteW): enabling windows-sys's Win32_UI_Shell feature for one call
 // is a wider blast radius than six declared word/pointer arguments. No
 // structs, no GetLastError plumbing — ShellExecuteW reports success as a
-// return value > 31 and its own SE_ERR_* codes below that.
+// return value > 32 and its own SE_ERR_* codes at or below that (32 itself
+// is SE_ERR_DLLNOTFOUND — the R99-H review catch: a > 31 boundary would
+// misclassify a missing DLL as success and the app would exit in 1.5s
+// claiming an install that never ran).
 #[cfg(windows)]
 pub(crate) mod silent_launch {
     /// The parameter string for the silent leg: NSIS's `/S` (silent
@@ -248,8 +251,9 @@ pub(crate) mod silent_launch {
                 SW_SHOWNORMAL,
             )
         };
-        // Win32 contract: a value > 31 means success; 0..=31 is SE_ERR_*.
-        if result > 31 {
+        // Win32 contract: a value > 32 means success (an HINSTANCE);
+        // 0..=32 is SE_ERR_* — INCLUDING 32 = SE_ERR_DLLNOTFOUND.
+        if result > 32 {
             Ok(())
         } else {
             Err(describe_se_err(result))

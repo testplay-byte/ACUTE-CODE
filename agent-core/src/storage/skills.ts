@@ -786,7 +786,7 @@ IRON LAW: A TASK TOO BIG FOR ONE STEP GETS A PLAN BEFORE THE FIRST EDIT. Decompo
 3. WRITE THE LIST with todo_write — the FULL list every time (a snapshot, not a delta):
    - one item per milestone, phrased as an OUTCOME ("POST /x validates and its 400 test passes"), never as an activity ("work on validation");
    - exactly ONE item in_progress at a time; complete items the moment they finish — never batch completions.
-4. EXPLORE deliberately: batch the independent discovery calls (search_files / search_code / read_file of the AGENTS.md) in ONE message; read only what the milestones need (see PRECISION DISCIPLINE in the system prompt).
+4. EXPLORE deliberately: batch the independent discovery calls (search_files / search_code / read_file of the AGENTS.md) in ONE message; read only what the milestones need (see the Precision lines in COMPLETION DISCIPLINE in the system prompt).
 5. EXECUTE in order — but verify at each milestone boundary (run the narrowest check that proves it), not only at the end. A milestone that cannot be verified was not decomposed, it was guessed.
 6. RE-PLAN ON SURPRISE: when reality disagrees with the plan (an unexpected failure, a file that looks nothing like assumed), STOP, re-read the evidence, rewrite the todo list, then continue. A stale plan followed blindly is worse than no plan.
 7. CLOSE THE LIST: every item completed (or consciously dropped, with the reason stated) before the final summary. Finishing with open items means the task is not done.

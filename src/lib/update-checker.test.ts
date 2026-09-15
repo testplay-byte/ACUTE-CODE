@@ -84,6 +84,16 @@ describe("isNewerVersion (R99-C — the boot self-heal's tuple walk)", () => {
     expect(isNewerVersion("0.96.0", "0.96.0")).toBe(false);
     expect(isNewerVersion("0.95.9", "0.96.0")).toBe(false);
   });
+
+  it("R99-H review fix: pre-release suffixes never outrank their own release (the self-heal clears an rc once the release ships)", () => {
+    // The first-draft walk parsed "0.97.0-rc.1" as [0,97,0,1] — ranking an
+    // rc ABOVE "0.97.0" so the Sidebar dot could never heal off a shipped
+    // rc. With the strip, the rc equals its base (not newer → dot clears).
+    expect(isNewerVersion("0.97.0-rc.1", "0.97.0")).toBe(false);
+    expect(isNewerVersion("0.97.0-rc.1", "0.96.0")).toBe(true); // still newer than an OLDER release
+    expect(isNewerVersion("0.97.0+build.2", "0.97.0")).toBe(false);
+    expect(isNewerVersion("0.98.0-beta", "0.97.0")).toBe(true);
+  });
 });
 
 describe("syncPendingVersionFromResult (R99-C — one sync, two callers)", () => {
