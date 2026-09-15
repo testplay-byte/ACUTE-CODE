@@ -345,5 +345,5 @@
   ]
  },
  "round": 98,
- "ci": "PENDING — the v0.96.0 runs (CI + Release) fire on the tag; this row syncs GREEN when they land (the R96/R97 pattern)."
+ "ci": "GREEN — CI 34993547873 and Release 34993551131 both SUCCESS on 50a4b24 (lint, both typechecks, agent-core 2,370/2,370 in 119 files, frontend 3,651/3,651, e2e 12/12, build, license audit, docs:check 213/0/0); v0.96.0 PUBLISHED (release 389300285, latest, both assets sha256-verified against fresh downloads — setup.exe d5b13f3c…, kit 14e05082…; the kit scanned clean)."
 }

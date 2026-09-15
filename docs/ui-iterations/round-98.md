@@ -253,3 +253,19 @@ agent death.
 11. Settings → Functionality: the grouped nav + the internal categories.
 12. `node scripts/acute.mjs usage:stats` against the running app (the
     discovery file connects automatically).
+
+## §7 The close-out (post-plan additions)
+
+- CI run 34993547873 SUCCESS + Release run 34993551131 SUCCESS on 50a4b24 —
+  first try, both.
+- v0.96.0 PUBLISHED (release 389300285, draft→false, make_latest: true;
+  /releases/latest verified pointing at v0.96.0):
+  ACUTE-CODE_0.96.0_x64-setup.exe 38,712,285 B
+  (sha256 d5b13f3ce1da4c8bdde6199d6bb4eadf8a2d04d422d3711fb4b594f3a6bc3e00)
+  + acute-launcher-kit-v0.96.0.zip 118,952 B
+  (sha256 14e05082ac6c527718d41a77dd72a238b77057d672a7f8a75e623d71c5a8bbe1)
+  — both digests verified against GitHub's server-side values on freshly
+  downloaded bytes; the kit scanned clean (zero real-key values).
+- status.json's ci field synced GREEN; DASHBOARD truth-synced (68d7af0 —
+  documentation-only per the owner's directive: version 0.96.0, plan.current
+  → R98, the milestone, suites 3651/2370, the ciNote).
