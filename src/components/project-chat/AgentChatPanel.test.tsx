@@ -276,7 +276,7 @@ describe("AgentChatPanel revert-to-message (ROUND-44 R44-c)", () => {
     expect(revertButtons).toHaveLength(2);
   });
 
-  it("R97-H: hover timestamps render ONLY when the setting is on (user bubbles + turn footers)", async () => {
+  it("R97-H: hover timestamps render ONLY when the setting is on (user bubbles + assistant turn headers — R99-B re-pin: the chip moved from the footer to the turn header)", async () => {
     await renderPanelWithConversation();
     expect(await screen.findByText("first question about the parser", {}, SLOW)).toBeTruthy();
 
@@ -284,7 +284,8 @@ describe("AgentChatPanel revert-to-message (ROUND-44 R44-c)", () => {
     expect(document.querySelectorAll("[data-chat-timestamp]")).toHaveLength(0);
 
     // "On hover" — every persisted item gains its chip: 2 user bubbles +
-    // 2 assistant turn footers.
+    // 2 assistant turn HEADERS (R99-B: the timestamp rides the header row,
+    // one per turn — the count contract is unchanged).
     useThemeStore.setState({ timestampsMode: "hover" });
     await waitFor(() => {
       expect(document.querySelectorAll("[data-chat-timestamp]")).toHaveLength(4);
@@ -1257,6 +1258,264 @@ describe("AgentChatPanel full-conversation copy (ROUND-67 R67-B)", () => {
     expect(text).toContain("result: ok — read 12 lines");
     expect(text).toContain("--- FINAL ANSWER ---");
     expect(text).toContain("Here is the file's content.");
+  });
+});
+
+// ── R99-B: the chat-window visual overhaul — turn header, footer stats line,
+//    user-bubble cap, suggestion cards, the streaming caret ───────────────────
+describe("AgentChatPanel R99-B chat visual overhaul", () => {
+  const SLOW = { timeout: 5000 };
+
+  function messageEvent(
+    seq: number,
+    role: "user" | "assistant",
+    content: string,
+    ts: string,
+    extra: Record<string, unknown> = {},
+  ): SessionEvent {
+    return {
+      seq,
+      type: role === "user" ? "message.user" : "message.assistant",
+      agentId: "agt_scribe",
+      payload: { role, content, agentId: "agt_scribe", ts, ...extra },
+      ts,
+    };
+  }
+
+  /** One turn whose assistant event carries model + usage + ms (the header
+   * chip + the footer stats line both have real data to render). */
+  async function renderHeaderConversation(): Promise<void> {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r99_header",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "R99 header probe",
+          createdAt: "2026-09-12T10:00:00Z",
+          updatedAt: "2026-09-12T10:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "answer with the new anatomy", "2026-09-12T10:00:10Z"),
+          messageEvent(2, "assistant", "The redesigned answer.", "2026-09-12T10:00:20Z", {
+            model: "test/model-9",
+            ms: 4200,
+            usage: { inputTokens: 1200, outputTokens: 850 },
+          }),
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await screen.findByText("answer with the new anatomy", {}, SLOW);
+  }
+
+  it("the TURN HEADER renders the model identity chip — and NOTHING when the turn has no model and timestamps are hidden", async () => {
+    await renderHeaderConversation();
+
+    // ONE header for ONE turn: the accent dot + the model identity chip.
+    const headers = document.querySelectorAll('[data-testid="turn-header"]');
+    expect(headers).toHaveLength(1);
+    expect(headers[0].textContent).toContain("test/model-9");
+    // The identity marks are decorative (aria-hidden); the model chip is
+    // metadata, not a persona name header (the R37 verdict).
+    expect(headers[0].querySelector('[aria-hidden="true"]')).not.toBeNull();
+    // timestampsMode "hidden" (the default) → no timestamp in the header.
+    expect(headers[0].querySelector("[data-chat-timestamp]")).toBeNull();
+
+    // A turn with NO model (the plain fixture conversation) renders NO
+    // header at all — nothing to say, nothing shown. (cleanup() unmounts
+    // the first panel so its header cannot bleed into this assertion.)
+    cleanup();
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r99_nomodel",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "No-model probe",
+          createdAt: "2026-09-12T11:00:00Z",
+          updatedAt: "2026-09-12T11:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "plain question", "2026-09-12T11:00:10Z"),
+          messageEvent(2, "assistant", "plain answer", "2026-09-12T11:00:20Z"),
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await screen.findByText("plain answer", {}, SLOW);
+    expect(document.querySelector('[data-testid="turn-header"]')).toBeNull();
+  });
+
+  it("timestampsMode ON: the header carries the hover timestamp (tabular-nums) exactly once per turn", async () => {
+    await renderHeaderConversation();
+    useThemeStore.setState({ timestampsMode: "hover" });
+    await waitFor(() => {
+      const header = document.querySelector('[data-testid="turn-header"]');
+      expect(header).not.toBeNull();
+      const chip = header!.querySelector("[data-chat-timestamp]");
+      expect(chip).not.toBeNull();
+      expect(chip!.className).toContain("tabular-nums");
+    });
+    // One user bubble chip + one turn-header chip — the R97-H count contract.
+    expect(document.querySelectorAll("[data-chat-timestamp]")).toHaveLength(2);
+    useThemeStore.setState({ timestampsMode: "hidden" });
+  });
+
+  it("the footer's stats cluster is ONE mono tabular-nums line (time · in · out · tok/s) — no per-stat chips, no model", async () => {
+    await renderHeaderConversation();
+
+    const stats = await waitFor(() => {
+      const el = document.querySelector("[data-reply-stats]");
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    }, SLOW);
+    // The flattened grammar: 4.2s · ↑ 1.2k · ↓ 850 · 202 tok/s (middle-dot
+    // separated — ONE text node, never bordered chips).
+    expect(stats.textContent).toBe("4.2s · ↑ 1.2k · ↓ 850 · 202 tok/s");
+    expect(stats.className).toContain("font-mono");
+    expect(stats.className).toContain("tabular-nums");
+    // Right-aligned in the footer row.
+    expect(stats.className).toContain("ml-auto");
+    // The model identity lives in the HEADER now — the footer never repeats it.
+    const footer = document.querySelector("[data-rating-footer]");
+    expect(footer).not.toBeNull();
+    expect(footer!.textContent).not.toContain("test/model-9");
+  });
+
+  it("the user bubble caps at min(75%, 640px) of the reading column (a bubble, never a full-width document)", async () => {
+    await renderHeaderConversation();
+    const bubble = Array.from(document.querySelectorAll("div")).find((el) =>
+      el.className.includes("rounded-br-[5px]"),
+    );
+    expect(bubble).toBeTruthy();
+    const row = bubble!.parentElement;
+    expect(row).not.toBeNull();
+    expect(row!.className).toContain("max-w-[min(75%,640px)]");
+    // The squish tier keeps its wider relative room (R89-D2).
+    expect(row!.className).toContain("@max-[420px]:max-w-[92%]");
+  });
+
+  it("the empty-state suggestions are pill-cards (1.5px border, CSS-var hover leg) that fill the composer on click", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy(), SLOW);
+
+    const cards = screen.getAllByTestId("suggestion-card");
+    expect(cards).toHaveLength(4);
+    for (const card of cards) {
+      // Real buttons with the pill-card grammar: 1.5px border-line + the
+      // accent hover entirely on the CSS-var leg (no JS hover handlers).
+      expect(card.tagName).toBe("BUTTON");
+      expect(card.className).toContain("border-[1.5px]");
+      expect(card.className).toContain("border-line");
+      expect(card.className).toContain("hover:border-accent");
+      expect(card.className).toContain("hover:bg-accent-soft");
+      // The universal press contract.
+      expect(card.className).toContain("active:scale-95");
+    }
+    // Click behavior unchanged: the prompt fills the composer.
+    fireEvent.click(screen.getByRole("button", { name: /Explore this project/ }));
+    const composer = screen.getByLabelText("Message composer") as HTMLTextAreaElement;
+    await waitFor(() => expect(composer.value).toContain("Explore this project: list the top-level structure"));
+  });
+
+  it("the STREAMING CARET: a thin 2px ac-caret-pulse bar while the answer streams — gone the moment it settles", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r99_caret",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Caret probe",
+          createdAt: "2026-09-12T12:00:00Z",
+          updatedAt: "2026-09-12T12:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy(), SLOW);
+
+    const liveTurnBase: LiveTurn = {
+      startedAtMs: Date.now() - 3000,
+      working: [],
+      streamText: "The answer is still arriving",
+      streamThinking: "",
+      stopped: false,
+      stoppedByUser: false,
+      streamingToolInputs: [],
+      debugReport: null,
+      browserCheckpoint: null,
+      retry: null,
+      note: null,
+    };
+    useStreamStore.setState({
+      bySession: {
+        sess_r99_caret: {
+          liveTurn: liveTurnBase,
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+        },
+      },
+    });
+
+    // While streaming: the caret rides the answer's end — 2px wide, the
+    // soft pulse keyframe, decorative.
+    const caret = await waitFor(() => {
+      const el = document.querySelector('[data-testid="streaming-caret"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    }, SLOW);
+    expect(caret.className).toContain("ac-caret-pulse");
+    expect(caret.className).toContain("w-[2px]");
+    expect(caret.getAttribute("aria-hidden")).toBe("true");
+    // The LIVE turn also carries its header (the effective model chip).
+    const header = document.querySelector('[data-testid="turn-header"]');
+    expect(header).not.toBeNull();
+
+    // The stream settles (busy → false): the caret disappears — the stopped
+    // text keeps plain text, never a stuck cursor.
+    useStreamStore.setState({
+      bySession: {
+        sess_r99_caret: {
+          liveTurn: liveTurnBase,
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+        },
+      },
+    });
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="streaming-caret"]')).toBeNull();
+      // The streamed text itself stays.
+      expect(screen.getByText(/still arriving/)).toBeTruthy();
+    }, SLOW);
   });
 });
 

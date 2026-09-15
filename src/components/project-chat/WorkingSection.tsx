@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  Check,
   ChevronDown,
   FileCode2,
   Globe,
@@ -74,12 +75,35 @@ import { withAlpha } from "../dashboard/helpers";
  * > the commands… one line too and I can click them and I will see the
  * > expanded view."
  *
+ * R99-B (owner: "analyze which info is necessary to be shown in compressed
+ * view and in full view") — the COMPRESSED vs FULL information matrix this
+ * section implements:
+ *
+ *   COMPRESSED (the folded summary row — what the eye needs at a glance):
+ *     · status glyph — ✓ success while the work stands completed cleanly,
+ *       □ (Square, tertiary) for a stopped live section, ● pulsing accent
+ *       dot while it runs;
+ *     · step count — "Completed N steps" (every entry the section renders:
+ *     tools, thoughts, narration, approvals, captures — pluralized honestly);
+ *     · tool count — "· N tools" only when tools > 0;
+ *     · duration — the right-aligned mono tabular-nums chip (mm:ss — the
+ *       same formatClock the live clock speaks). LIVE rows keep "● Working"
+ *     with the actions counter + elapsed clock right-aligned instead.
+ *
+ *   FULL (expanded — the complete timeline, in order): every ThoughtRow
+ *     (one-line, expandable, fence-aware), NarrationRow interjections, each
+ *     ToolLine pill (leading outcome glyph ✓/✗/◌ + verb + target + the
+ *     one-line result summary; expansion reveals the full
+ *     DiffDetail/TerminalDetail/OutputDetail/DelegateDetail body),
+ *     ApprovalRow asks, inline ScreenshotRow captures, QuestionCard and
+ *     TodoCard.
+ *
  * Replaces the R32 ActivityBlock card: NO card chrome, NO icon tile, NO
  * "Completed N actions" banner — a borderless muted header
- * ("Working · 0:07" live / "Worked for 8s · 3 actions" done) over one-line
- * expandable rows (ThoughtRow / ToolLine / ApprovalRow / narration).
- * The turn's FINAL ANSWER renders OUTSIDE this section (in AgentChatPanel),
- * so collapsing the work never hides the answer.
+ * ("● Working · 0:07" live / "✓ Completed 8 steps · 3 tools · 1:12" done)
+ * over one-line expandable rows. The turn's FINAL ANSWER renders OUTSIDE
+ * this section (in AgentChatPanel), so collapsing the work never hides the
+ * answer.
  *
  * Sparkles/emoji iconography is deliberately absent (owner R37: "I really
  * hate the SVG icons… it looks ugly, bad, AI-generated").
@@ -1586,14 +1610,15 @@ export function toolStatusDetail(
   }
 }
 
-/** The rendered status-detail chip (toolStatusDetail's tone → styling). */
+/** The rendered status-detail chip (toolStatusDetail's tone → styling).
+ * R99-B: tabular-nums — the counts hold their width as they land. */
 function ToolStatusChip({ detail }: { detail: NonNullable<ReturnType<typeof toolStatusDetail>> }) {
   const styles = useThemeStyles();
   if (detail.tone === "diff") {
     // The +/- pair — the diff card's own chip language (green/red).
     const [plus, minus] = detail.label.split(" ");
     return (
-      <span className="shrink-0 flex items-center gap-0.5 font-mono text-[10px] font-bold" data-tool-status={detail.label}>
+      <span className="shrink-0 flex items-center gap-0.5 font-mono text-[10px] font-bold tabular-nums" data-tool-status={detail.label}>
         <span className="px-1.5 py-0.5 rounded-full" style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}>
           {plus}
         </span>
@@ -1605,7 +1630,7 @@ function ToolStatusChip({ detail }: { detail: NonNullable<ReturnType<typeof tool
   }
   return (
     <span
-      className="shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded-full"
+      className="shrink-0 font-mono text-[10px] tabular-nums px-1.5 py-0.5 rounded-full"
       style={{
         background: styles.subtle,
         color: detail.tone === "danger" ? SEMANTIC_COLORS.danger : styles.textTertiary,
@@ -1701,6 +1726,34 @@ function ToolLine({
   // match count / the edit's +A −B) — only what the tool's own summary
   // carries (see toolStatusDetail's honesty contract).
   const statusDetail = toolStatusDetail(tool);
+  // R99-B: the LEADING outcome glyph — ✓ success / ✗ failure / ◌ in-flight
+  // (amber while the call waits on an approval — TOKENS §4: warning IS the
+  // wait/attention semantic). The old TRAILING ✓/✗ span moved here so the
+  // collapsed row reads status → verb → target → summary, the research
+  // anatomy (VS Code/Cursor tool pills lead with the outcome). The status
+  // WORD rides the row's aria-label (a button's aria-label replaces interior
+  // content, so interior sr-only text would never be announced).
+  // DURATION HONESTY: no per-tool duration renders — neither the SSE
+  // tool-result frame nor the persisted event carries timing data (the
+  // R96-H noted-not-invented contract); the turn-level duration lives in
+  // the section header's chip.
+  const statusGlyph = tool.ok === false ? "✗" : tool.ok === null ? "◌" : "✓";
+  const statusColor =
+    tool.ok === false
+      ? SEMANTIC_COLORS.danger
+      : tool.ok === null
+        ? waitingApproval
+          ? AMBER
+          : styles.textTertiary
+        : SEMANTIC_COLORS.success;
+  const statusWord =
+    tool.ok === false
+      ? "failed"
+      : tool.ok === null
+        ? waitingApproval
+          ? "waiting for approval"
+          : "running"
+        : "completed";
 
   // ROUND-51 (R51-d): the chip tint per family. Delegations carry the accent
   // wash (the strongest signal — a sub-agent is working on the project);
@@ -1779,7 +1832,7 @@ function ToolLine({
         aria-label={
           rowAction === "open-subagent" && singleLiveChild !== null
             ? `Open sub-agent ${singleLiveChild.code} · ${singleLiveChild.title ?? "Sub-agent"} in sidebar`
-            : `${label} ${tool.argsSummary}`
+            : `${label} ${tool.argsSummary} — ${statusWord}`
         }
         title={
           rowAction === "open-subagent" && singleLiveChild !== null
@@ -1796,6 +1849,16 @@ function ToolLine({
         }}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
+        {/* R99-B: the leading outcome glyph (see the statusWord derive above
+            for the honesty/a11y notes). */}
+        <span
+          data-testid="tool-status-glyph"
+          className="shrink-0 w-3.5 text-center text-[10px] font-bold leading-none"
+          style={{ color: statusColor }}
+          aria-hidden="true"
+        >
+          {statusGlyph}
+        </span>
         {chipTone !== null ? (
           <ToolIconChip Icon={Icon} background={chipTone.background} color={chipTone.color} />
         ) : (
@@ -1816,23 +1879,7 @@ function ToolLine({
             live
             <PanelRightOpen size={11} />
           </span>
-        ) : (
-          <span
-            className="shrink-0 w-4 text-center text-[11px]"
-            style={{
-              color:
-                waitingApproval
-                  ? "#f59e0b"
-                  : tool.ok === false
-                    ? SEMANTIC_COLORS.danger
-                    : tool.ok === null
-                      ? styles.textTertiary
-                      : SEMANTIC_COLORS.success,
-            }}
-          >
-            {waitingApproval ? "…" : tool.ok === null ? "…" : tool.ok ? "✓" : "✗"}
-          </span>
-        )}
+        ) : null}
         {rowAction === "toggle" ? (
           <ChevronDown
             size={10}
@@ -2032,7 +2079,6 @@ export function WorkingSection({
 
   const liveSeconds = useLiveSeconds(startedAtMs, live && !stopped);
   const foldedSeconds = ts !== undefined && endTs !== undefined ? elapsedSeconds(ts, endTs) : 0;
-  const seconds = live ? liveSeconds : foldedSeconds;
 
   // ROUND-58 (R58-cf): in-flight tool-ARG streaming — write_file/edit_file
   // calls whose JSON args the model is still generating (a tool-input-start
@@ -2066,16 +2112,43 @@ export function WorkingSection({
     [hasDelegateRow, entries, delegateChildrenQuery.data],
   );
 
+  // ── R99-B: the header grammar (the COMPRESSED/FULL matrix in the file
+  // docblock). FOLDED: ✓ success glyph + "Completed N steps" + "· N tools" +
+  // the right-aligned duration chip. LIVE: ● pulsing accent dot + "Working"
+  // (+ the amber waiting note) with the actions counter + elapsed clock
+  // right-aligned. Every number is mono tabular-nums — counts and clocks
+  // grow without width jitter (the owner's anti-jitter discipline). A
+  // stopped live section keeps the Square glyph (the TurnStoppedCard mark).
+  // The status word rides the aria-label — the row button's aria-label
+  // REPLACES interior content for assistive tech, so an interior sr-only
+  // span would never be announced; the label says it outright. ──
+  const stepCount = entries.length;
+  const stepWord = stepCount === 1 ? "step" : "steps";
+  const toolWord = toolCount === 1 ? "tool" : "tools";
   const headerLabel = live
     ? stopped
       ? "Stopped"
       : "Working"
-    : `Worked for ${seconds}s`;
-  const actionSuffix = toolCount > 0 ? ` · ${toolCount} ${toolCount === 1 ? "action" : "actions"}` : "";
+    : `Completed ${stepCount} ${stepWord}`;
+  const toolSuffix = !live && toolCount > 0 ? ` · ${toolCount} ${toolWord}` : "";
+  const liveActionLabel =
+    live && toolCount > 0 ? `${toolCount} ${toolCount === 1 ? "action" : "actions"}` : "";
+  const liveClock =
+    live && !stopped && startedAtMs !== undefined ? formatClock(liveSeconds * 1000) : null;
+  const foldedClock =
+    !live && ts !== undefined && endTs !== undefined ? formatClock(foldedSeconds * 1000) : null;
+  const ariaSummary = live
+    ? `${headerLabel}${liveActionLabel !== "" ? ` · ${liveActionLabel}` : ""}${
+        liveClock !== null ? ` · ${liveClock}` : ""
+      }`
+    : `Completed ${stepCount} ${stepWord}${toolSuffix}${
+        foldedClock !== null ? ` · ${foldedClock}` : ""
+      }`;
 
   return (
     <div className="min-w-0">
       <div
+        data-testid="work-section-header"
         className="flex items-center gap-2 h-7 max-w-full cursor-pointer select-none"
         onClick={() => {
           userTouched.current = true;
@@ -2091,31 +2164,54 @@ export function WorkingSection({
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
-        aria-label={`${headerLabel}${actionSuffix}. ${expanded ? "Collapse" : "Expand"} work.`}
+        aria-label={`${ariaSummary}. ${expanded ? "Collapse" : "Expand"} work.`}
       >
         {live && !stopped ? (
           <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: styles.accent }} aria-hidden />
+        ) : live ? (
+          /* The stopped mark — the TurnStoppedCard's Square glyph (a stop is
+             a quiet terminal state, never a failure). */
+          <Square size={11} strokeWidth={2.5} className="shrink-0" style={{ color: styles.textTertiary }} aria-hidden />
         ) : (
-          <span className="w-1.5 h-1.5 shrink-0" aria-hidden />
+          /* The completed mark — success ✓ (the folded work stands done). */
+          <Check size={11} strokeWidth={2.5} className="shrink-0" style={{ color: SEMANTIC_COLORS.success }} aria-hidden />
         )}
         <span className="text-[11.5px] font-semibold truncate" style={{ color: styles.textSecondary }}>
           {headerLabel}
         </span>
-        {live && !stopped && startedAtMs !== undefined ? (
-          <span className="shrink-0 font-mono text-[10.5px]" style={{ color: styles.textTertiary }}>
-            {formatClock(liveSeconds * 1000)}
+        {!live && toolCount > 0 && !pendingApproval ? (
+          <span className="shrink-0 text-[10.5px] tabular-nums" style={{ color: styles.textTertiary }}>
+            · {toolCount} {toolWord}
           </span>
         ) : null}
         {pendingApproval ? (
-          <span className="shrink-0 text-[10.5px] font-semibold" style={{ color: "#f59e0b" }}>
+          <span className="shrink-0 text-[10.5px] font-semibold" style={{ color: AMBER }}>
             · waiting for approval
           </span>
-        ) : (
-          <span className="shrink-0 text-[10.5px]" style={{ color: styles.textTertiary }}>
-            {actionSuffix}
-          </span>
-        )}
+        ) : null}
         <span className="flex-1" />
+        {/* The right-aligned numeric cluster — actions + clock while LIVE,
+            the duration chip when folded (mono tabular-nums both). */}
+        {live && liveActionLabel !== "" ? (
+          <span className="shrink-0 font-mono text-[10.5px] tabular-nums" style={{ color: styles.textTertiary }}>
+            {liveActionLabel}
+          </span>
+        ) : null}
+        {liveClock !== null ? (
+          <span className="shrink-0 font-mono text-[10.5px] tabular-nums" style={{ color: styles.textTertiary }}>
+            {liveClock}
+          </span>
+        ) : null}
+        {!live && foldedClock !== null ? (
+          <span
+            data-testid="work-duration-chip"
+            className="shrink-0 font-mono text-[10px] tabular-nums px-1.5 py-0.5 rounded-full"
+            style={{ background: styles.subtle, color: styles.textTertiary }}
+            title="How long this work section ran"
+          >
+            {foldedClock}
+          </span>
+        ) : null}
         <motion.span animate={{ rotate: expanded ? 0 : -90 }} transition={{ duration: 0.18, ease: [0.25, 0.1, 0.25, 1] }} className="shrink-0">
           <ChevronDown size={12} style={{ color: styles.textTertiary }} />
         </motion.span>

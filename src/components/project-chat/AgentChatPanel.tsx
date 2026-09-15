@@ -136,7 +136,13 @@ import {
  * No avatar tiles, no name headers, no Sparkles iconography (owner: "I
  * really hate the SVG icons… AI-generated"). The live streaming view builds
  * the same shape: the Working section grows while the presumptive-final text
- * streams beneath it, and collapses to "Worked for Ns" when the turn ends.
+ * streams beneath it, and collapses to the folded summary when the turn ends.
+ * R99-B (the chat-window visual overhaul): turns now open with the compact
+ * TURN HEADER (AssistantTurnHeader — a 6px accent dot + the model identity
+ * chip + the hover timestamp). It is METADATA, not a persona name header:
+ * the R37 ban stands (no avatars, no "ACUTE" labels, no Sparkles) — the
+ * header anchors WHO answered (which model) and WHEN, per the research
+ * anatomy (model badge on the assistant row, VS Code/Claude convention).
  */
 
 /** ROUND-43 layout contract: the readable width of the chat's content column
@@ -240,41 +246,38 @@ function CopyButton({
   );
 }
 
-/** Per-reply stats chips (owner spec: time · in · out · tok/s). */
+/** Per-reply stats — R99-B: ONE mono tabular-nums line (time · in · out ·
+ * tok/s), middle-dot separated, subtle textTertiary, NO per-stat chip
+ * borders (the old chip strip bordered every number; the flattened line is
+ * the footer's quiet grammar — the model identity moved to the turn
+ * header). tabular-nums holds digit width steady while live values grow. */
 function ReplyStats({
   usage,
   ms,
-  model,
 }: {
   usage?: { inputTokens: number; outputTokens: number };
   ms?: number;
-  model?: string;
 }) {
   const styles = useThemeStyles();
   if (usage === undefined && ms === undefined) return null;
   const seconds = ms !== undefined ? ms / 1000 : undefined;
   const tps =
     usage && seconds && seconds > 0 ? usage.outputTokens / seconds : undefined;
-  const chips: string[] = [];
-  if (seconds !== undefined) chips.push(`${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`);
+  const parts: string[] = [];
+  if (seconds !== undefined) parts.push(`${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`);
   if (usage) {
-    chips.push(`↑ ${fmtTokens(usage.inputTokens)}`);
-    chips.push(`↓ ${fmtTokens(usage.outputTokens)}`);
+    parts.push(`↑ ${fmtTokens(usage.inputTokens)}`);
+    parts.push(`↓ ${fmtTokens(usage.outputTokens)}`);
   }
-  if (tps !== undefined) chips.push(`${tps < 10 ? tps.toFixed(1) : Math.round(tps)} tok/s`);
-  if (model) chips.push(model);
+  if (tps !== undefined) parts.push(`${tps < 10 ? tps.toFixed(1) : Math.round(tps)} tok/s`);
   return (
-    <div className="flex flex-wrap items-center gap-1.5 pt-1.5">
-      {chips.map((c) => (
-        <span
-          key={c}
-          className="text-[9.5px] font-mono px-1.5 py-0.5 rounded-md"
-          style={{ color: styles.textTertiary, background: styles.subtle }}
-        >
-          {c}
-        </span>
-      ))}
-    </div>
+    <span
+      data-reply-stats
+      className="ml-auto pl-2 shrink-0 font-mono text-[9.5px] tabular-nums whitespace-nowrap"
+      style={{ color: styles.textTertiary }}
+    >
+      {parts.join(" · ")}
+    </span>
   );
 }
 
@@ -307,8 +310,6 @@ function TurnFooter({
   copyText,
   usage,
   ms,
-  model,
-  ts,
   fullCopyText,
 }: {
   sessionId: string | null;
@@ -318,10 +319,6 @@ function TurnFooter({
   copyText: string;
   usage?: { inputTokens: number; outputTokens: number };
   ms?: number;
-  model?: string;
-  /** R97-H: the turn's start timestamp — feeds the hover time chip
-   * (rendered only when Settings → Appearance → Timestamps is "On hover"). */
-  ts?: string;
   /** ROUND-67 (R67-B, owner directive #2): the FULL-turn export text
    * (thinking + tool calls + outputs + final answer + model — built by
    * lib/turn-copy). Present ONLY when debug mode is enabled in Advanced
@@ -464,10 +461,11 @@ function TurnFooter({
 
   return (
     <div className="min-w-0" data-rating-footer>
-      <div className="flex items-center gap-1">
-        {/* R97-H: the turn's hover time chip — the row's leftmost element,
-            revealed with the rest of the hover affordances. */}
-        <TimestampChip ts={ts} className="pt-0.5 pr-0.5" />
+      {/* R99-B: ONE clean hover row — copy (+ the debug full-turn copy), the
+          thumbs cluster, then the stats line right-aligned (ReplyStats is a
+          single mono tabular-nums text now, never per-stat chips). The
+          timestamp + model identity moved UP to the turn header. */}
+      <div className="flex items-center gap-1 min-w-0">
         <div className="opacity-0 group-hover:opacity-100 transition-opacity pt-0.5 flex items-center">
           <CopyButton text={copyText} />
           {/* ROUND-67 (R67-B): the second copy option — the whole turn
@@ -519,7 +517,7 @@ function TurnFooter({
             ) : null}
           </div>
         ) : null}
-        <ReplyStats usage={usage} ms={ms} model={model} />
+        <ReplyStats usage={usage} ms={ms} />
       </div>
       {noteOpen ? (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5" data-rating-note>
@@ -619,13 +617,62 @@ function TimestampChip({ ts, className = "" }: { ts: string | undefined; classNa
     <span
       data-chat-timestamp
       title="When this message was sent"
-      className={`font-mono text-[10px] shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${className}`}
+      className={`font-mono text-[10px] tabular-nums shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${className}`}
       style={{ color: styles.textTertiary }}
     >
       {today
         ? formatTime(ts)
         : `${date.toLocaleDateString([], { month: "short", day: "numeric" })} · ${formatTime(ts)}`}
     </span>
+  );
+}
+
+/** R99-B (owner: the chat window "is not redesigned properly" — the
+ * research-driven turn anatomy): the compact TURN HEADER — ONE ~20px
+ * identity row at the top of every assistant turn (folded AND live).
+ * Anatomy: a 6px accent dot (the neutral minimal mark — avatars, persona
+ * name headers and Sparkles stay banned per the owner's R37 verdict) + the
+ * turn's MODEL as an identity chip (mono, subtle bg, truncate — the
+ * COMPONENTS §2 identity-chip grammar) + the hover timestamp right-aligned
+ * (TimestampChip, so the R97-H timestampsMode preference keeps its exact
+ * semantics: hidden = nothing, hover = fade in on turn hover).
+ *
+ * Honesty: a turn with no model AND no hover-renderable timestamp renders
+ * NO header at all (nothing to say). Intermediate streaming segments never
+ * get headers — this renders once per turn (and once per live block).
+ * A11y: the dot + model chip are decorative (aria-hidden) — the timestamp
+ * stays perceivable exactly as today. */
+function AssistantTurnHeader({ model, ts }: { model?: string; ts?: string }) {
+  const styles = useThemeStyles();
+  const mode = useThemeStore((s) => s.timestampsMode);
+  const tsValid =
+    ts !== undefined && ts !== "" && !Number.isNaN(Date.parse(ts));
+  if ((model === undefined || model === "") && !(mode === "hover" && tsValid)) {
+    return null;
+  }
+  return (
+    <div
+      data-testid="turn-header"
+      className="flex items-center gap-1.5 h-5 min-w-0 max-w-full"
+    >
+      <span
+        aria-hidden="true"
+        className="flex items-center gap-1.5 min-w-0"
+        title={model}
+      >
+        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: styles.accent }} />
+        {model !== undefined && model !== "" ? (
+          <span
+            className="shrink-0 min-w-0 truncate max-w-[240px] font-mono text-[10px] px-1.5 py-0.5 rounded-md"
+            style={{ background: styles.subtle, color: styles.textTertiary }}
+          >
+            {model}
+          </span>
+        ) : null}
+      </span>
+      <span className="flex-1" aria-hidden="true" />
+      <TimestampChip ts={ts} className="shrink-0" />
+    </div>
   );
 }
 
@@ -741,12 +788,18 @@ function UserMessage({
       {/* R89-D2: min-w-0 on the row + the bubble (flex children must be
           clampable or long tokens mint width at the 240px chat floor —
           "the content starts to show outside it"), and the bubble gets MORE
-          relative room when the panel is squished (82% → 92% below 420px:
-          the hover actions + the padding tiers already reclaimed the rest). */}
-      <div className="flex items-end gap-1 max-w-[82%] @max-[420px]:max-w-[92%] min-w-0">
+          relative room when the panel is squished (92% below 420px:
+          the hover actions + the padding tiers already reclaimed the rest).
+          R99-B (the research anatomy — user = INPUT, a bubble never a
+          document): the row caps at min(75%, 640px) of the reading column —
+          wide windows used to stretch the bubble to 82% (~885px), reading
+          like a full-width document instead of a message. */}
+      <div className="flex items-end gap-1 max-w-[min(75%,640px)] @max-[420px]:max-w-[92%] min-w-0">
         {/* R97-H: the hover time chip joins the actions cluster (the same
-            reveal animation — the cluster is already invisible until hover). */}
-        <div className="flex items-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity pb-0.5 shrink-0">
+            reveal animation — the cluster is already invisible until hover).
+            R99-B: ONE unified hover row — timestamp · copy · revert, gap-1,
+            tabular-nums on the time (see TimestampChip). */}
+        <div className="flex items-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity pb-0.5 shrink-0">
           <TimestampChip ts={ts} className="pb-1 pr-0.5" />
           <CopyButton text={content} />
           {onRevert !== undefined ? (
@@ -829,7 +882,7 @@ function UserMessage({
  * Owner: "It started to think and after thinking it showed me the bottom
  * response only. The above one was not shown." — intermediate assistant
  * text used to fold into the collapsible WorkingSection, so the earlier
- * response vanished behind "Worked for Ns". Pure; exported for tests. */
+ * response vanished behind the folded work summary. Pure; exported for tests. */
 export type WorkingSegment =
   | { kind: "text"; content: string; ts: string }
   | { kind: "work"; entries: WorkingEntry[]; firstIndex: number; lastIndex: number; startTs: string; endTs: string };
@@ -919,7 +972,7 @@ function AssistantTurn({
    * WorkingSection can open files / sub-agents in the right sidebar. */
   projectId: string;
   /** R37 review #4: true when this turn JUST finished while the user
-   * watched — it mounts collapsed ("Worked for Ns" + answer). */
+   * watched — it mounts collapsed (the folded summary + answer). */
   collapseHint?: boolean;
   /** ROUND-67 (R67-B): debug mode (the Functionality tab's settings — R98-I1
    * the advanced tab's label; the URL id stays "advanced") gates the footer's
@@ -932,6 +985,11 @@ function AssistantTurn({
   const hasToolWork = item.working.some((e) => e.type === "tool");
   return (
     <motion.div variants={msgVariants} initial="initial" animate="animate" className="group min-w-0">
+      {/* R99-B: the TURN HEADER — identity + timestamp above everything the
+          turn renders (working sections, intermediate answers, final answer).
+          Renders nothing when there is no model and no hover timestamp —
+          intermediate segments NEVER get their own header (turn-level only). */}
+      <AssistantTurnHeader model={item.model} ts={item.ts} />
       {segments.map((seg, i) =>
         seg.kind === "text" ? (
           <IntermediateAnswer key={`seg-text-${i}`} content={seg.content} projectId={projectId} />
@@ -978,8 +1036,6 @@ function AssistantTurn({
         copyText={item.finalText}
         usage={item.usage}
         ms={item.ms}
-        model={item.model}
-        ts={item.ts}
         fullCopyText={
           debugMode === true
             ? buildFullTurnText({
@@ -1931,7 +1987,7 @@ export function AgentChatPanel({
   const lastTurnStoppedByUser = streamSlice?.lastTurnStoppedByUser ?? false;
   const lastTurnStoppedTs = streamSlice?.lastTurnStoppedTs ?? null;
   // R37 review #4: turns that JUST finished while the user watched start
-  // collapsed ("Worked for Ns" + answer); cold-loaded sessions use the
+  // collapsed (the folded summary + answer); cold-loaded sessions use the
   // Detailed preference.
   const lastLiveEndRef = useRef(0);
   // Keep the ref in sync so MessageRenderer's collapseHint logic works
@@ -3093,29 +3149,24 @@ export function AgentChatPanel({
                   </div>
                   {agents.length > 0 ? (
                     <div className="flex flex-wrap items-center justify-center gap-2 max-w-lg">
+                      {/* R99-B (the empty-state anatomy): the suggestions are
+                          PILL-CARDS — 1.5px border-line, 12px inner-control
+                          radius, icon + label — with the hover on the CSS-var
+                          leg (hover:border-accent + hover:bg-accent-soft +
+                          hover:text-ink), retiring the row's old JS hover
+                          handlers (the TOKENS §1 rule-4 preference). Real
+                          buttons; click fills the composer exactly as before. */}
                       {SUGGESTIONS.map((s) => (
                         <button
                           key={s.label}
+                          data-testid="suggestion-card"
                           onClick={() => {
                             setInput(s.prompt);
                             inputRef.current?.focus();
                           }}
-                          className="flex items-center gap-2 h-9 px-3.5 rounded-full border text-[12px] font-medium transition-all hover:-translate-y-px"
-                          style={{
-                            borderColor: styles.border,
-                            background: styles.bg,
-                            color: styles.textSecondary,
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5);
-                            e.currentTarget.style.color = styles.text;
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.borderColor = styles.border;
-                            e.currentTarget.style.color = styles.textSecondary;
-                          }}
+                          className="flex items-center gap-2 h-9 px-3.5 rounded-xl border-[1.5px] border-line bg-bg text-muted text-[12px] font-medium transition-colors duration-150 hover:border-accent hover:bg-accent-soft hover:text-ink active:scale-95"
                         >
-                          <s.icon size={12} style={{ color: styles.accent }} className="shrink-0" />
+                          <s.icon size={12} className="shrink-0 text-accent" aria-hidden />
                           {s.label}
                         </button>
                       ))}
@@ -3244,6 +3295,16 @@ export function AgentChatPanel({
                     {liveTurn.note}
                   </div>
                 ) : null}
+                {/* R99-B: the LIVE turn's header — the same identity row the
+                    folded turn renders (the live→folded handoff is seamless:
+                    header → header). The model is the panel's EFFECTIVE one
+                    (the send carried it — LiveTurn has no model of its own,
+                    exactly like the debug full-copy below); the timestamp is
+                    the turn's wall-clock start. */}
+                <AssistantTurnHeader
+                  model={effectiveModel ?? undefined}
+                  ts={new Date(liveTurn.startedAtMs).toISOString()}
+                />
                 {liveSection}
                 {/* ── ROUND-78 (R78-D): the QUEUED chips — below the working
                     section (the messages wait BEHIND the current work), above
@@ -3297,8 +3358,14 @@ export function AgentChatPanel({
                         line-by-line as it arrives). */}
                     <ChatMarkdown content={liveTurn.streamText} projectId={projectId} />
                     {streamBusy && !liveTurn.stopped ? (
+                      /* R99-B: the thin streaming caret — a 2px accent bar,
+                         ~1em tall, breathing 1s ease opacity 1↔0.4
+                         (ac-caret-pulse — the MOTION registry's stream-caret
+                         slot). Removed the moment the stream completes or
+                         stops: the settled answer keeps plain text. */
                       <span
-                        className="inline-block w-[7px] h-[14px] ml-0.5 align-middle rounded-sm ac-caret-blink"
+                        data-testid="streaming-caret"
+                        className="inline-block w-[2px] h-[1em] ml-0.5 align-middle ac-caret-pulse"
                         style={{ background: styles.accent }}
                         aria-hidden
                       />

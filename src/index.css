@@ -471,6 +471,20 @@
   animation: ac-caret-blink 1s steps(2) infinite;
 }
 
+/* R99-B (the chat-answer caret): the soft PULSE — a 1s ease opacity breathe
+ * (1 → 0.4 → 1) on the thin 2px accent bar that trails the live answer. The
+ * terminal-style hard blink (ac-caret-blink) stays for SubAgentPanel; the
+ * chat's reading surface gets the calmer "I'm alive" signal. Reduced-motion:
+ * static + fully visible (the global neutralizer collapses it to end-state,
+ * and the explicit rule below guarantees it). */
+@keyframes ac-caret-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.ac-caret-pulse {
+  animation: ac-caret-pulse 1s ease-in-out infinite;
+}
+
 @keyframes ac-ellipsis-cycle {
   0% { content: ""; }
   33% { content: "."; }
@@ -557,6 +571,7 @@
   /* Keep the caret + ellipsis visible (static) instead of hidden by the
      duration-zero rule above. */
   .ac-caret-blink { animation: none !important; opacity: 1 !important; }
+  .ac-caret-pulse { animation: none !important; opacity: 1 !important; }
   .ac-retry-spin { animation: none !important; }
   .ac-ellipsis::after { animation: none !important; content: "..." !important; }
 }

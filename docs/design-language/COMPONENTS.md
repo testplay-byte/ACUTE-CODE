@@ -91,3 +91,45 @@ bug.
 - **Donut/ring**: 6px track, center hole carries the headline stat; segment
   hover = MUTUAL highlight with the legend row (the round-97 context-bar
   contract, generalized).
+
+## 7. Chat turn anatomy (round-99 B — the research-driven chat redo)
+
+The transcript's reading grammar (AI_IDE_UX research §1.1–1.2 + the owner's
+compressed-vs-full directive):
+
+- **User message = input**: right-aligned accent-tinted bubble, radius 16px
+  with the 5px br corner (the sanctioned shape), capped at
+  `min(75%, 640px)` of the reading column (92% below 420px — a bubble,
+  never a full-width document); ONE unified hover action row
+  (timestamp · copy · revert, `tabular-nums` on the time).
+- **Assistant turn = document**: borderless full-width markdown. The turn
+  HEADER is a ~20px identity row — a 6px accent dot + the turn's MODEL as
+  an identity chip (§2 grammar: mono, subtle bg, truncate) + the hover
+  timestamp right-aligned (`timestampsMode`-gated, R97-H). No avatars, no
+  persona name headers, no Sparkles (the R37 verdict stands — the header is
+  metadata, not a persona). One header per turn; intermediate streaming
+  segments never get one; a turn with nothing to say renders none.
+- **WorkingSection — the compressed/full matrix**: COMPRESSED (folded) =
+  status glyph (✓ success / □ stopped / ● pulsing live) + step count
+  ("Completed N steps", honestly pluralized) + "· N tools" when tools > 0 +
+  the right-aligned duration chip (mono `tabular-nums`, the live clock's
+  `m:ss` format); LIVE = "● Working" with the actions counter + elapsed
+  clock right-aligned. FULL (expanded) = every ThoughtRow / NarrationRow /
+  ToolLine / ApprovalRow / ScreenshotRow / QuestionCard / TodoCard in
+  timeline order.
+- **ToolLine (the collapsed tool pill)**: leading outcome glyph (✓ success /
+  ✗ danger / ◌ in-flight, amber while approval-waiting) + verb + mono
+  target + the one-line result summary (`exit 0`, `+N −M`, counts — only
+  what the tool's own output carries, R96-H honesty) + expand chevron; the
+  status word rides the row's `aria-label`. No per-tool duration — the data
+  does not exist (noted, never invented).
+- **Turn footer**: one hover row — copy (+ the debug-gated full-turn copy),
+  thumbs, then the stats line right-aligned as ONE mono `tabular-nums` text
+  (time · in · out · tok/s, middle-dot separated) — never per-stat chips.
+- **Numbers discipline**: every duration, count, rate, and timestamp the
+  chat renders is `tabular-nums` — digits hold their width while live
+  values grow (the anti-jitter rule, research §3.2).
+- **Empty state**: suggestions are pill-cards (1.5px `border-line`,
+  12px radius, icon + label) with the hover on the CSS-var leg
+  (`hover:border-accent` + `hover:bg-accent-soft`) — real buttons, click
+  fills the composer.

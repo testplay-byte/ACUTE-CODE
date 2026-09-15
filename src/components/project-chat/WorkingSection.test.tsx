@@ -35,6 +35,7 @@ import { useStreamStore } from "../../lib/stream-store";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 import { deriveThemeStyles } from "../../lib/themes";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { withAlpha } from "../dashboard/helpers";
 
 vi.mock("../../lib/api", async () => {
@@ -1522,8 +1523,10 @@ describe("inline screenshot rows (ROUND-68 R68-A)", () => {
     expect(screen.getByRole("img", { name: "Screenshot captured by screenshot" })).toBeTruthy();
     // INLINE = BETWEEN the tool rows: the row's DOM position sits after the
     // screenshot tool pill and before the zoom pill (compareDocumentPosition).
-    const firstTool = screen.getByRole("button", { name: "screenshot full display" }) as HTMLElement;
-    const secondTool = screen.getByRole("button", { name: "zoom region: 100,100 300x200" }) as HTMLElement;
+    // (R99-B re-pin: the tool rows' accessible names now carry the status
+    // word — "— completed" — so match on the prefix.)
+    const firstTool = screen.getByRole("button", { name: /^screenshot full display/ }) as HTMLElement;
+    const secondTool = screen.getByRole("button", { name: /^zoom region: 100,100 300x200/ }) as HTMLElement;
     expect(firstTool.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(row.compareDocumentPosition(secondTool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // No strip remnant: no "Screenshots" section header, no strip testid.
@@ -1531,7 +1534,7 @@ describe("inline screenshot rows (ROUND-68 R68-A)", () => {
     expect(container.querySelector('[data-testid="screenshot-strip"]')).toBeNull();
   });
 
-  it("the section still counts TOOLS only — a screenshot never inflates the actions suffix", async () => {
+  it("the section still counts TOOLS only — a screenshot never inflates the tool count (R99-B re-pin: steps count entries, tools count tool rows)", async () => {
     const entries: WorkingEntry[] = [
       { type: "tool", tool: { seq: 11, toolName: "screenshot", argsSummary: "full display", ok: true, ts: "t" } },
       { type: "screenshot", frameId: "f-1", tool: "screenshot", ts: "t2" },
@@ -1540,8 +1543,9 @@ describe("inline screenshot rows (ROUND-68 R68-A)", () => {
     renderWithProviders(
       <WorkingSection entries={entries} sessionId={SESSION_ID} projectId="proj_probe" defaultOpen />,
     );
-    // ONE tool row + two inline captures → "1 action" (not 3).
-    const header = screen.getByRole("button", { name: /Worked for .* · 1 action\./ });
+    // ONE tool row + two inline captures → "Completed 3 steps · 1 tool"
+    // (3 entries, 1 tool — the R99-B folded summary grammar).
+    const header = screen.getByRole("button", { name: /Completed 3 steps · 1 tool\./ });
     expect(header).toBeTruthy();
     const rows = await screen.findAllByTestId("screenshot-row");
     expect(rows).toHaveLength(2);
@@ -1552,5 +1556,188 @@ describe("inline screenshot rows (ROUND-68 R68-A)", () => {
       <BareWorkingEntries entries={[{ type: "screenshot", frameId: "f-1", tool: "screenshot", ts: "t" }]} />,
     );
     expect(container.querySelector('[data-testid="screenshot-row"]')).toBeNull();
+  });
+});
+
+// ─── R99-B: the chat visual overhaul — the compressed summary + tool rows ───
+describe("R99-B working-section summaries + tool-row anatomy", () => {
+  const theme = deriveThemeStyles("nova", true); // resetTestState pins nova + dark
+
+  /** A folded three-entry section: thought + read + run (ts/endTs 72s apart). */
+  const FOLDED_ENTRIES: WorkingEntry[] = [
+    { type: "thinking", text: "plan the change", ts: "2026-09-06T10:00:00Z", thinkingMs: 800 },
+    { type: "tool", tool: { seq: 21, toolName: "read_file", argsSummary: "path: src/app.ts", ok: true, ts: "2026-09-06T10:00:20Z", outputSummary: "of 42 total" } },
+    { type: "tool", tool: { seq: 22, toolName: "run_command", argsSummary: "cmd: pnpm test", ok: true, ts: "2026-09-06T10:00:40Z", outputSummary: "3 passed\n[exit code: 0]" } },
+  ];
+
+  it("the FOLDED summary row: ✓ success glyph + 'Completed N steps' + '· N tools' + the right-aligned mm:ss duration chip (tabular-nums)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={FOLDED_ENTRIES}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        ts="2026-09-06T10:00:00Z"
+        endTs="2026-09-06T10:01:12Z"
+      />,
+    );
+
+    // The compressed grammar: 3 steps · 2 tools · 1:12 (72s → m:ss, the live
+    // clock's own formatClock formatting).
+    const header = screen.getByTestId("work-section-header");
+    expect(header.textContent).toContain("Completed 3 steps");
+    expect(header.textContent).toContain("· 2 tools");
+    // The leading ✓ glyph — the lucide Check mark in the success color
+    // (SEMANTIC_COLORS.success — the de-slop spelling).
+    const glyphSvg = header.querySelector("svg");
+    expect(glyphSvg).not.toBeNull();
+    expect(glyphSvg!.style.color).toBe(SEMANTIC_COLORS.success);
+    // The row announces the outcome in its label (aria-label replaces
+    // interior content for AT — the word rides the label).
+    expect(header.getAttribute("aria-label")).toContain("Completed 3 steps · 2 tools · 1:12.");
+    // The duration chip: right-aligned, mono tabular-nums, m:ss.
+    const chip = screen.getByTestId("work-duration-chip");
+    expect(chip.textContent).toBe("1:12");
+    expect(chip.className).toContain("tabular-nums");
+    expect(chip.className).toContain("font-mono");
+    // The chip sits AFTER the flex-1 spacer → right-aligned.
+    const spacer = header.querySelector("span.flex-1");
+    expect(spacer).toBeTruthy();
+    expect(spacer!.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("honest pluralization + no duration when the fold carries no timestamps (never an invented 0:00)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: { seq: 31, toolName: "list_dir", argsSummary: "path: .", ok: true, ts: "t" } }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+      />,
+    );
+    const header = screen.getByTestId("work-section-header");
+    // ONE entry + ONE tool: "1 step · 1 tool" — pluralized honestly.
+    expect(header.textContent).toContain("Completed 1 step");
+    expect(header.textContent).toContain("· 1 tool");
+    // No ts/endTs on the section → no duration chip, never a fake 0:00.
+    expect(screen.queryByTestId("work-duration-chip")).toBeNull();
+  });
+
+  it("the LIVE header: 'Working' + the actions counter and elapsed clock RIGHT-ALIGNED (mono tabular-nums, no per-row jitter)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={FOLDED_ENTRIES}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        startedAtMs={Date.now() - 5_000}
+        defaultOpen
+      />,
+    );
+    const header = screen.getByTestId("work-section-header");
+    expect(header.textContent).toContain("Working");
+    // The right cluster: the actions counter + the elapsed clock, both mono
+    // tabular-nums (the counter pluralizes honestly: 2 tools → "2 actions").
+    const counter = header.querySelector("span.tabular-nums.font-mono, span.font-mono.tabular-nums");
+    expect(counter).not.toBeNull();
+    expect(counter!.textContent).toBe("2 actions");
+    // The clock rides the counter's sibling — m:ss with a leading zero minute
+    // (a ~5s-old turn → 0:0x whatever the tick caught).
+    const monoSpans = Array.from(header.querySelectorAll("span.font-mono"));
+    const clock = monoSpans.find((s) => /^0:0\d$/.test(s.textContent ?? ""));
+    expect(clock).toBeTruthy();
+    expect(clock!.className).toContain("tabular-nums");
+    // Both sit AFTER the flex-1 spacer (right-aligned, beside the chevron).
+    const spacer = header.querySelector("span.flex-1");
+    expect(spacer!.compareDocumentPosition(counter!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("a stopped LIVE section keeps the quiet Square glyph + 'Stopped' — never a success ✓", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={FOLDED_ENTRIES}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        stopped
+        startedAtMs={Date.now() - 5_000}
+      />,
+    );
+    const header = screen.getByTestId("work-section-header");
+    expect(header.textContent).toContain("Stopped");
+    // The aria-label carries the status word (the glyph is decorative — the
+    // label REPLACES interior content for AT, so the word must ride it).
+    expect(header.getAttribute("aria-label")).toMatch(/^Stopped\b/);
+  });
+
+  it("ToolLine: the LEADING outcome glyph (✓/✗/◌) + the status word in the row's aria-label; the result summary chip stays", () => {
+    renderWithProviders(
+      <WorkingSection entries={FOLDED_ENTRIES} sessionId={SESSION_ID} projectId="proj_probe" defaultOpen />,
+    );
+
+    // read_file with "of 42 total" → the leading ✓ + the "42 lines" summary.
+    const readRow = screen.getByRole("button", { name: /^Read path: src\/app\.ts — completed$/ });
+    expect(readRow.textContent).toContain("✓");
+    // The glyph LEADS the row (before the family icon + verb label).
+    const readGlyph = readRow.querySelector('[data-testid="tool-status-glyph"]');
+    expect(readGlyph).not.toBeNull();
+    const readLabel = Array.from(readRow.querySelectorAll("span")).find(
+      (s) => s.textContent === "Read",
+    );
+    expect(readLabel).toBeTruthy();
+    expect(readGlyph!.compareDocumentPosition(readLabel!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The one-line result summary the tool's own output carries (R96-H).
+    expect(readRow.querySelector('[data-tool-status="42 lines"]')).not.toBeNull();
+
+    // run_command "exit 0" → its summary chip + ✓.
+    const runRow = screen.getByRole("button", { name: /^Ran cmd: pnpm test — completed$/ });
+    expect(runRow.querySelector('[data-tool-status="exit 0"]')).not.toBeNull();
+
+    // A FAILED call: ✗ in the danger color + "failed" in the label.
+    renderWithProviders(
+      <WorkingSection
+        entries={[
+          {
+            type: "tool",
+            tool: { seq: 41, toolName: "run_command", argsSummary: "cmd: boom", ok: false, ts: "t", outputSummary: "[exit code: 1]" },
+          },
+        ]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    const failRow = screen.getByRole("button", { name: /^Ran cmd: boom — failed$/ });
+    const failGlyph = failRow.querySelector('[data-testid="tool-status-glyph"]') as HTMLElement | null;
+    expect(failGlyph!.textContent).toBe("✗");
+    expect(failGlyph!.style.color).toBe(SEMANTIC_COLORS.danger);
+
+    // An IN-FLIGHT call (ok === null): ◌ in the subtle tertiary tone.
+    renderWithProviders(
+      <WorkingSection
+        entries={[
+          { type: "tool", tool: { seq: 51, toolName: "read_file", argsSummary: "path: x.ts", ok: null, ts: "t" } },
+        ]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+      />,
+    );
+    const runGlyph = screen
+      .getAllByTestId("tool-status-glyph")
+      .find((g) => g.textContent === "◌");
+    expect(runGlyph).toBeTruthy();
+    // Whitespace-normalized — happy-dom re-serializes rgba() with spaces
+    // (the same treatment the R51-d chip tests use).
+    const tight = (v: string): string => v.replace(/\s+/g, "");
+    expect(tight(runGlyph!.style.color)).toBe(tight(theme.textTertiary));
+  });
+
+  it("R99-B numbers discipline: the numeric chips the tool rows render carry tabular-nums", () => {
+    renderWithProviders(
+      <WorkingSection entries={FOLDED_ENTRIES} sessionId={SESSION_ID} projectId="proj_probe" defaultOpen />,
+    );
+    const readRow = screen.getByRole("button", { name: /^Read path: src\/app\.ts — completed$/ });
+    const summary = readRow.querySelector('[data-tool-status="42 lines"]');
+    expect(summary!.className).toContain("tabular-nums");
   });
 });

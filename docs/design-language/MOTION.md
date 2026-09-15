@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-15 round-98 -->
+<!-- last-reviewed: 2026-09-15 round-99 -->
 # Motion — the animation grammar
 
 Serves DESIGN-SYSTEM §4 (motion). Owner direction (round-98): "animations
@@ -41,7 +41,7 @@ animations documented for everything."
 | `bounceDot` | continuous | thinking dots + streaming caret ("I'm alive") |
 | `auto-scroll` | continuous | scrollbars appear only while scrolling (`useScrollFade`) |
 | wizard step/fade set | base/deliberate | see WIZARD-DNA §3 |
-| `ac-caret` / `ac-ellipsis` | continuous | stream caret, retry "…" |
+| `ac-caret` / `ac-ellipsis` | continuous | stream caret, retry "…" — R99-B: the chat answer's caret is `ac-caret-pulse` (2px bar, 1s ease opacity 1↔0.4); the hard `ac-caret-blink` stays for SubAgentPanel's terminal-style rows |
 | line-reveal | base | streamed line entrance |
 | pixel-stream | quick | raster/image chunk reveal |
 | Radix dialog set | quick | overlays (base transform = end-state — lesson #30) |
