@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-15 round-98 -->
 
 # CLI-HARNESS — terminal chat sessions without the UI
 
@@ -31,8 +31,48 @@ The harness rides the same conventions as the rest of the CLI:
 - `NO_COLOR` — set to disable the chat commands' ANSI colors (they also
   disable themselves on non-TTY output, so `| jq` stays clean).
 
-Against the dev stack, nothing to configure. For a DEDICATED sidecar (scratch
-DB, spare port — the batteries' pattern):
+### Connecting to the installed app (R98-K portal discovery)
+
+When **both** env vars are unset, the harness auto-discovers a running app:
+the sidecar writes a small JSON discovery file — `<dbDir>/acute-portal.json`
+`{port, token, pid, startedAt}` — next to its SQLite database at boot (and
+removes it on graceful shutdown). The CLI checks, in order:
+
+1. `<repo>/.dev/acute-portal.json` — the dev stack (`pnpm dev:full` puts
+   `acute.db` in `.dev/`, so its sidecar's file lands there),
+2. the installed app's per-user state dir — `%APPDATA%\acute-code` on
+   Windows, `$XDG_DATA_HOME/acute-code` (default `~/.local/share/acute-code`)
+   elsewhere (the Rust shell's `state_dir()`).
+
+If a readable file is found, its port + token become the target and one dim
+stderr line says so:
+
+```
+(no ACUTE_BASE_URL/ACUTE_TOKEN set — using the running app on port 53124, discovered at /home/z/.local/share/acute-code/acute-portal.json)
+```
+
+Rules of the road:
+
+- **Explicit env vars always win** — the documented dev workflow (below) is
+  byte-identical to pre-R98. Discovery only runs when BOTH are unset; a
+  half-set pair never mixes a discovered value onto an explicit one.
+- The token rides the user-local file only — it is **never logged** (the
+  `ACUTE_READY` line stays port-only) and the file is written `0600`, the
+  same trust boundary as the shell's env injection.
+- A hard `SIGKILL` can leave a stale file; the next boot overwrites it
+  (last boot wins). A dead-but-present target surfaces as the ordinary
+  `unreachable … (is the sidecar running?)` error — same as a wrong
+  `ACUTE_BASE_URL`.
+
+So against a NORMALLY RUNNING installed app, nothing to configure at all:
+
+```bash
+node scripts/acute.mjs health
+node scripts/acute.mjs usage:stats --months 6
+```
+
+Against the dev stack, nothing to configure either. For a DEDICATED
+sidecar (scratch DB, spare port — the batteries' pattern):
 
 ```bash
 ACUTE_TOKEN=acute-dev-local ACUTE_DB_PATH=/tmp/acute-harness.db ACUTE_PORT=5199 \
@@ -47,6 +87,31 @@ export ACUTE_BASE_URL=http://127.0.0.1:5199 ACUTE_TOKEN=acute-dev-local
 All commands print error envelopes as one-liners (`404 NOT_FOUND: no session
 with id sess_x`) and exit non-zero; payload JSON stays on stdout with status
 lines on stderr, so `jq` pipelines keep working.
+
+### `usage:stats` — the Data & Statistics window (R98-K)
+
+```bash
+node scripts/acute.mjs usage:stats
+node scripts/acute.mjs usage:stats --months 6
+```
+
+`GET /usage/stats` rendered as a compact table: the window line (stderr),
+turns · provider calls · tokens (in/out) · cost, the peak day (or an honest
+"none" on an empty window), and one row per model (tokens-desc — the
+server's order) with tokens, real provider-call count, cost, and the
+provider ids that served it. `--months` mirrors the route's 1–24 window
+(default 12). The same numbers the in-app Data & Statistics tab renders,
+from the terminal — `--json`-free by design; use `raw GET /usage/stats` for
+the raw document.
+
+### `prompt:sections` / `prompt:show` — prompt-module inspection (offline)
+
+Already covered by the R59-F commands (`prompt:sections [--project <dir>]`,
+`prompt:show <id>`): they read the project's `.acute/prompts/` dir + the
+agent-core dist directly — NO sidecar needed — and additionally show which
+files WOULD override each section. The R98-K survey kept them OFFLINE on
+purpose (they work when nothing is running); there is no separate
+HTTP-backed `prompts:sections` variant to add.
 
 ### `chat:new` — create a session
 

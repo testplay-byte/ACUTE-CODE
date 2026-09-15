@@ -921,7 +921,7 @@ function AssistantTurn({
   /** R37 review #4: true when this turn JUST finished while the user
    * watched — it mounts collapsed ("Worked for Ns" + answer). */
   collapseHint?: boolean;
-  /** ROUND-67 (R67-B): debug mode (the General tab's settings — R78 renamed
+  /** ROUND-67 (R67-B): debug mode (the Functionality tab's settings — R98-I1
    * the advanced tab's label; the URL id stays "advanced") gates the footer's
    * second copy option — the full-turn export. Threaded from the panel's
    * ["debug-settings"] query via MessageRenderer. */
@@ -1263,7 +1263,10 @@ export function ThinkingStoppedCard({
             <span className="text-[11px]" style={{ color: styles.textTertiary }}>
               Turn it off or tune it in{" "}
               <Link to="/settings?tab=advanced" className="font-bold underline" style={{ color: SEMANTIC_COLORS.warning }}>
-                Settings → General
+                {/* R98-I1: the label follows the honest rename ("General" →
+                    "Functionality", the owner's word) — the URL id stays
+                    "advanced" (the load-bearing deep-link contract). */}
+                Settings → Functionality
               </Link>
               .
             </span>
@@ -1641,8 +1644,8 @@ const MessageRenderer = forwardRef<
     /** ROUND-50 (R50-c2): display-only attachment chips for user items —
      * from the persisted event log OR the optimistic pending echo. */
     attachments?: AttachmentRef[];
-    /** ROUND-67 (R67-B): debug mode (the General tab's settings — R78's
-     * rename of the old Advanced label) — threaded to
+    /** ROUND-67 (R67-B): debug mode (the Functionality tab's settings —
+     * R98-I1's rename of the old Advanced/General label) — threaded to
      * AssistantTurn so its footer can mount the second, full-turn copy
      * button (gated on the ["debug-settings"] query upstream). */
     debugMode?: boolean;
@@ -1942,9 +1945,9 @@ export function AgentChatPanel({
   const dataSource = liveMode ? "live" : "demo";
 
   // ROUND-67 (R67-B, the owner's second copy option): debug mode (Settings →
-  // General, R78's label rename of the old Advanced tab — the URL id stays
-  // "advanced") gates the "Copy full conversation (debug)" button on assistant
-  // replies. SHARED cache key ["debug-settings"] — the same one
+  // Functionality, R98-I1's rename of the old Advanced/General tab — the URL
+  // id stays "advanced") gates the "Copy full conversation (debug)" button on
+  // assistant replies. SHARED cache key ["debug-settings"] — the same one
   // SettingsPage's DebugModeCard uses, so flipping the switch there updates
   // this panel on the next focus (react-query refetch-on-window-focus) with
   // ONE sidecar call. Mirrors the ratings-query conditioning (liveMode off →

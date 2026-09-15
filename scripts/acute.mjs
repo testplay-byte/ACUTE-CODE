@@ -14,6 +14,9 @@
  *   agents [--all]                  agent registry (templates with --all)
  *   sessions                        recent sessions
  *   usage [days]                    usage summary (default 14 days)
+ *   usage:stats [--months N]        the Data & Statistics window (default
+ *                                   12, 1–24): totals / peak day / model
+ *                                   table (R98-K, GET /usage/stats)
  *   raw <METHOD> <path> [jsonBody]  authenticated raw request (escape hatch;
  *                                   status -> stderr, JSON body -> stdout)
  *
@@ -69,14 +72,29 @@
  *
  * Env: ACUTE_BASE_URL (default http://127.0.0.1:5178), ACUTE_TOKEN (default
  * acute-dev-local), NO_COLOR (disable the chat harness's ANSI colors).
- * See docs/runbooks/CLI-HARNESS.md for the long-session recipes.
+ * R98-K PORTAL DISCOVERY: when BOTH env vars are unset, the harness
+ * auto-discovers a RUNNING app via its discovery file (<dbDir>/acute-
+ * portal.json — the dev stack's .dev/ or the installed app's state dir; see
+ * scripts/acute-discovery.mjs) and uses its port + token, with a one-line
+ * notice on stderr. Explicit env vars always win (the documented dev
+ * workflow). See docs/runbooks/CLI-HARNESS.md ("Connecting to the installed
+ * app") for the long form.
  */
 import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+// R98-K (owner: "I want our application to be usable using the terminal
+// tool"): the portal-discovery resolver — a tiny extracted module so the
+// resolution logic is unit-testable without executing this script.
+import { resolvePortalDiscovery } from "./acute-discovery.mjs";
 
-const BASE = process.env.ACUTE_BASE_URL ?? "http://127.0.0.1:5178";
-const TOKEN = process.env.ACUTE_TOKEN ?? "acute-dev-local";
+// R98-K: `let` (not const) — the discovery pass below may overwrite these
+// when BOTH env vars are unset. Explicit env vars always win: the discovery
+// only runs when neither is set (a half-explicit pair keeps today's exact
+// behavior — mixing a discovered token onto an explicit base would be a
+// silent mismatch, so it is never attempted).
+let BASE = process.env.ACUTE_BASE_URL ?? "http://127.0.0.1:5178";
+let TOKEN = process.env.ACUTE_TOKEN ?? "acute-dev-local";
 
 async function call(method, path, body) {
   const res = await fetch(`${BASE}/api/v1${path}`, {
@@ -114,6 +132,25 @@ const red = ansi(31, 39);
 const green = ansi(32, 39);
 const yellow = ansi(33, 39);
 const cyan = ansi(36, 39);
+
+// ── R98-K: the PORTAL-DISCOVERY pass ──────────────────────────────────────
+// Only when BOTH env vars are unset (see the `let` note above). One dim
+// stderr line — pipe-safe, and honest for the OFFLINE commands too (the
+// wording names the TARGET, not a live connection: prompt:sections never
+// dials anything, it just shares the resolved BASE/TOKEN with the rest).
+if (process.env.ACUTE_BASE_URL === undefined && process.env.ACUTE_TOKEN === undefined) {
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const discovered = resolvePortalDiscovery(repoRoot);
+  if (discovered !== null) {
+    BASE = discovered.baseUrl;
+    TOKEN = discovered.token;
+    console.error(
+      dim(
+        `(no ACUTE_BASE_URL/ACUTE_TOKEN set — using the running app on port ${discovered.port}, discovered at ${discovered.file})`,
+      ),
+    );
+  }
+}
 
 /** One-line error for the API's {error:{code,message}} envelope (401/404/409…). */
 function fail(status, json) {
@@ -571,6 +608,45 @@ switch (cmd) {
     const { status, json } = await call("GET", `/usage/summary?days=${days}`);
     if (status !== 200) die(JSON.stringify(json));
     console.log(JSON.stringify(json, null, 1));
+    break;
+  }
+  // ── R98-K (owner: "I want our application to be usable using the terminal
+  // tool"): the Data & Statistics window as a compact terminal table — the
+  // same GET /usage/stats the in-app Data & Statistics tab renders, printed
+  // as totals / peak day / model rows (tokens-desc, the server's order).
+  // `--months N` mirrors the route's 1–24 window (default 12).
+  case "usage:stats": {
+    const { flags } = parseArgs(args);
+    const monthsRaw = Number(flagStr(flags, "months") ?? 12);
+    const months = Number.isFinite(monthsRaw) ? Math.min(Math.max(Math.trunc(monthsRaw), 1), 24) : 12;
+    const { status, json } = await callChecked("GET", `/usage/stats?months=${months}`);
+    if (status !== 200) fail(status, json);
+    const totals = json.totals ?? {};
+    const fmt = (n) => Number(n ?? 0).toLocaleString();
+    console.error(
+      dim(
+        `${months}-month window · generated ${String(json.generatedAt ?? "?")} · ${json.series?.length ?? 0} day buckets`,
+      ),
+    );
+    console.log(
+      `turns ${fmt(totals.requests)} · provider calls ${fmt(totals.providerCalls)} · ` +
+        `tokens ${fmt(totals.totalTokens)} (${fmt(totals.inputTokens)} in / ${fmt(totals.outputTokens)} out) · $${Number(totals.costUsd ?? 0).toFixed(2)}`,
+    );
+    const peak = json.peak ?? {};
+    console.log(
+      peak.date !== null && peak.date !== undefined
+        ? `peak day ${peak.date} — ${fmt(peak.tokens)} tokens`
+        : "peak day — none (no traffic in the window)",
+    );
+    const models = Array.isArray(json.models) ? json.models : [];
+    console.log(`${models.length} model(s):`);
+    for (const m of models) {
+      const providers = Array.isArray(m.providers) ? m.providers.join(",") : "";
+      console.log(
+        `  ${trunc(String(m.model ?? ""), 34).padEnd(34)} ${fmt(m.tokens).padStart(12)} tok  ` +
+          `${String(m.calls ?? 0).padStart(6)} calls  $${Number(m.costUsd ?? 0).toFixed(2).padStart(8)}  ${providers}`,
+      );
+    }
     break;
   }
   case "raw": {

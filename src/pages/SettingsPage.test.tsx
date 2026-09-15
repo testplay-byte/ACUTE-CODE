@@ -342,10 +342,13 @@ describe("Advanced tab (ROUND-65 R65)", () => {
     expect(screen.queryByText("Demo data (fixture adapter when the sidecar is unreachable)")).toBeNull();
     expect(screen.queryByText("Save connection")).toBeNull();
 
-    // R78: the header copy leads with the retry card (the tab is "General"
-    // now — auto-retry + debug + memory), and the memory card survives.
-    // R98-J: desktop notifications joined the list — the pin follows the copy.
-    expect(screen.getByText(/Auto-retry, desktop notifications, debug mode, and agent memory/)).toBeTruthy();
+    // R78: the header copy leads with the engine switches (the tab was
+    // "General" then). R98-I1: the copy now introduces the two category
+    // headers instead of enumerating every card ("grouped by category");
+    // the standing Sub-agents pointer survives the rework.
+    expect(
+      screen.getByText(/The engine's behavior switches, grouped by category/),
+    ).toBeTruthy();
     expect(screen.getByRole("switch", { name: "Toggle agent memory" })).toBeTruthy();
   });
 
@@ -389,13 +392,15 @@ describe("Advanced tab (ROUND-65 R65)", () => {
   });
 });
 
-// ── ROUND-78 (R78-C): the General tab + the Auto-retry card ──────────────────
-// The tab's LABEL is "General" (the URL id stays "advanced" — the deep-link
+// ── ROUND-78 (R78-C): the Functionality tab (née General) + the Auto-retry
+// card — R98-I1 renamed the label to "Functionality" (the owner's word) and
+// added the two category headers. The tab's LABEL is "Functionality" (the
+// URL id stays "advanced" — the deep-link
 // contract is load-bearing), and the RetryConfigCard (three per-failure-type
 // auto-retry switches against GET/PUT /settings/retry) mounts ABOVE the
 // DebugModeCard. The routed stub serves /settings/retry (mutable — PUT
 // patches the state like the server) + /settings/debug + /settings/memory.
-describe("General tab + Auto-retry card (ROUND-78 R78-C)", () => {
+describe("Functionality tab + Auto-retry card (ROUND-78 R78-C, R98-I1)", () => {
   // R80: the state models the CURRENT server shape — the three switches +
   // the customizable schedule (maxAttempts / waitMinutes /
   // providerTimeoutSeconds). The card renders the schedule from THIS data.
@@ -477,11 +482,12 @@ describe("General tab + Auto-retry card (ROUND-78 R78-C)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("the tab is GENERAL now (?tab=advanced unchanged): h1 General, the Auto-retry card mounts ABOVE the Debug mode card with all three switches", async () => {
+  it("R98-I1: the tab is FUNCTIONALITY now (?tab=advanced unchanged): h1 Functionality, the two category headers, the Auto-retry card ABOVE the Debug card, and the Data & insights cross-link", async () => {
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
 
     // The label rename — the h1 reads the TABS entry, the URL id is untouched.
-    expect(screen.getByRole("heading", { level: 1, name: "General" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "Functionality" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { level: 1, name: "General" })).toBeNull();
     expect(screen.queryByRole("heading", { level: 1, name: "Advanced" })).toBeNull();
 
     // The card + its three switches (all default ON — the R75 ladder stands).
@@ -513,6 +519,28 @@ describe("General tab + Auto-retry card (ROUND-78 R78-C)", () => {
     // R80: the footnote now renders the schedule FROM THE DATA (the R75
     // rungs no longer hardcoded) — "immediately" (run g 0) + the rest.
     expect(screen.getByText(/6 attempts: immediately, 1\.5 min, 5 min, 10 min, 30 min/)).toBeTruthy();
+
+    // R98-I1: the TWO category headers (the owner's "basic agent capabilities"
+    // + "data and statistics" categories) — SectionTitle h2s over the card
+    // clusters, "Basic agent capabilities" ABOVE the retry card, "Data &
+    // insights" below the memory card.
+    const basicHeader = screen.getByRole("heading", { level: 2, name: "Basic agent capabilities" });
+    expect(
+      (basicHeader.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+    const memoryCard = (await screen.findByRole("switch", { name: "Toggle agent memory" }))
+      .closest("section") as HTMLElement;
+    const insightsHeader = screen.getByRole("heading", { level: 2, name: "Data & insights" });
+    expect(
+      (memoryCard.compareDocumentPosition(insightsHeader) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+    // The Data & insights category's ONE card: the cross-link to the Data &
+    // Statistics tab (the inline-Link idiom, href ?tab=data — the deep-link
+    // contract) — no data logic duplicated on this tab.
+    const crossLink = screen.getByTestId("data-insights-crosslink-card");
+    const link = crossLink.querySelector("a");
+    expect(link?.getAttribute("href")).toBe("/settings?tab=data");
+    expect(link?.textContent).toContain("Data & Statistics");
   });
 
   it("toggling a switch PUTs the PARTIAL patch ({autoRetryRateLimit:false}) and the switch flips OFF after the refetch — the other two stay untouched", async () => {

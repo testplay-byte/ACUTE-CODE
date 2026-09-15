@@ -62,47 +62,69 @@ import { ComputerUseTab } from "../components/settings/ComputerUseTab";
 import { ImageAnalysisTab } from "../components/settings/ImageAnalysisTab";
 import { bdr, withAlpha } from "../components/dashboard/helpers";
 
+// R98-I1 (owner: "add a dedicated section for functionality… separate the
+// different side options into different categories, like basic agent
+// capabilities, data and statistics"): the GROUPED settings map. Every
+// entry carries a `group` (the five owner-named categories, in nav order:
+// Workspace → Agents & Skills → Integrations → Data & Statistics → System)
+// and the list is CLUSTERED by group — appearance | agents + subagents +
+// skills + prompts | api + mcp + computeruse + vision + browser | data |
+// advanced + about — so the sidebar's settings nav (the actual navigation,
+// R34) can render one header between clusters. The ids (and each cluster's
+// internal order) are UNTOUCHED — every ?tab=<id> deep link keeps working
+// (the URL contract is load-bearing, the R44 lesson). The Sidebar's
+// SETTINGS_SECTIONS mirrors this grouping EXACTLY (same names, same
+// clusters — the id-sync discipline extended to the group field).
+type SettingsGroup = "Workspace" | "Agents & Skills" | "Integrations" | "Data & Statistics" | "System";
+
 const TABS = [
-  { id: "appearance", label: "Appearance", icon: Palette },
-  { id: "agents", label: "Agents", icon: Bot },
-  { id: "api", label: "Models & Providers", icon: Server },
+  { id: "appearance", label: "Appearance", icon: Palette, group: "Workspace" },
+  { id: "agents", label: "Agents", icon: Bot, group: "Agents & Skills" },
   // ROUND-43 (R43-5, owner directive): the temporary sub-agent section —
   // dedicated API-key paste slots + model override. Deep-link ?tab=subagents.
-  { id: "subagents", label: "Sub-agents", icon: Users },
+  { id: "subagents", label: "Sub-agents", icon: Users, group: "Agents & Skills" },
   // ROUND-61 (R61, owner directive): the extensibility surface — skills,
   // MCP servers, and computer use (with its separate vision model).
-  { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "skills", label: "Skills", icon: Sparkles, group: "Agents & Skills" },
   // ROUND-98 (R98-E1/E3, owner directive): the prompt-customization section —
   // per-project system-prompt overrides + revert + drop + the live composed
   // preview. Sits beside Skills (the prompt-modules family). Deep-link
   // ?tab=prompts.
-  { id: "prompts", label: "Prompts", icon: FileText },
-  { id: "mcp", label: "MCP Servers", icon: PlugZap },
-  { id: "computeruse", label: "Computer Use", icon: Monitor },
+  { id: "prompts", label: "Prompts", icon: FileText, group: "Agents & Skills" },
+  { id: "api", label: "Models & Providers", icon: Server, group: "Integrations" },
+  { id: "mcp", label: "MCP Servers", icon: PlugZap, group: "Integrations" },
+  { id: "computeruse", label: "Computer Use", icon: Monitor, group: "Integrations" },
   // ROUND-66 (R66, owner directive): the dedicated image-analysis section —
   // the vision model's OWN home (provider + model + API key), split out of
   // Computer Use so it also serves the general analyze_image tool.
-  { id: "vision", label: "Image Analysis", icon: ScanEye },
+  { id: "vision", label: "Image Analysis", icon: ScanEye, group: "Integrations" },
   // ROUND-97 (R97-G, owner directive): the dedicated BROWSER section — the
   // address-bar search engine, the homepage, the default zoom, and the
   // editable quick links. Same id discipline (deep-link ?tab=browser).
-  { id: "browser", label: "Browser", icon: Globe },
+  { id: "browser", label: "Browser", icon: Globe, group: "Integrations" },
   // ROUND-98 (R98-I2, owner directive): the Data & Statistics section —
   // total tokens, peak day, the heatmap, the model-mix charts, agent
   // health, and clear-all-data (the same DataStatsPanel the /usage screen
-  // hosts). Same id discipline (deep-link ?tab=data).
-  { id: "data", label: "Data & Statistics", icon: BarChart3 },
-  // ROUND-78 (R78-C, owner: "General Settings 重试配置"): the tab is
-  // LABELED "General" now — the retry switches belong with the general
-  // engine settings, not a scary "Advanced" bin. The id/deep-link STAYS
+  // hosts). Same id discipline (deep-link ?tab=data). R98-I1: its OWN
+  // category in the grouped nav (the owner's "data and statistics").
+  { id: "data", label: "Data & Statistics", icon: BarChart3, group: "Data & Statistics" },
+  // ROUND-78 (R78-C, owner: "General Settings 重试配置"): the tab was
+  // LABELED "General" then. R98-I1 (owner: "add a dedicated section for
+  // functionality…"): the LABEL is "Functionality" now — the owner's word
+  // for the category the engine switches live in. The id/deep-link STAYS
   // "advanced" (every existing ?tab=advanced link + doc keeps working;
   // the URL contract is load-bearing — changing it would break deep links).
-  { id: "advanced", label: "General", icon: SlidersHorizontal },
+  { id: "advanced", label: "Functionality", icon: SlidersHorizontal, group: "System" },
   // ROUND-87 (R87, owner directive): the dedicated ABOUT section — the app
   // version, the update check (GitHub releases), and the application-wide
   // reset. Deep-link ?tab=about.
-  { id: "about", label: "About", icon: Info },
-] as const;
+  { id: "about", label: "About", icon: Info, group: "System" },
+] as const satisfies ReadonlyArray<{
+  id: string;
+  label: string;
+  icon: unknown;
+  group: SettingsGroup;
+}>;
 
 type TabId = (typeof TABS)[number]["id"];
 
@@ -487,7 +509,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
  * "api" tab (verified: zero imports anywhere in src/). Models & Providers
  * is the one provider surface now. */
 
-/* ── Advanced (URL id) / General (R78 label) ─────────────────────
+/* ── Advanced (URL id) / Functionality (R98-I1 label) ────────────────────
  * ROUND-58 (R58-d): the sub-agent cards NO LONGER render here (pre-R58 the
  * whole SubAgentsSection + the OrchestrationCard rendered on BOTH the
  * subagents tab AND here — the owner: "the subagent and advanced options are
@@ -501,41 +523,90 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
  * sense in web dev mode). The config-store fields survive untouched
  * (dev-mode wiring + tests read them); only this UI is gone.
  *
- * ROUND-78 (R78-C, owner: "General Settings 重试配置"): the tab's LABEL is
- * "General" now (the URL id stays "advanced" — every existing ?tab=advanced
+ * ROUND-78 (R78-C, owner: "General Settings 重试配置"): the tab's label was
+ * "General" then (the URL id stays "advanced" — every existing ?tab=advanced
  * deep link + doc keeps working; the URL contract is load-bearing) and it
  * gained the Auto-retry card (per-failure-type retry switches) ABOVE the
  * debug switch — retry behavior is a general engine setting, not an
- * advanced curiosity. The tab is now: Auto-retry + Debug mode + agent
- * memory. */
+ * advanced curiosity.
+ *
+ * ROUND-98 (R98-I1, owner: "add a dedicated section for functionality…
+ * separate the different side options into different categories, like basic
+ * agent capabilities, data and statistics"): the label is "Functionality"
+ * now (the owner's word) and the cards sit under TWO category headers —
+ * "Basic agent capabilities" (retry + thinking-loop + debug + memory +
+ * desktop notifications) and "Data & insights" (one cross-link card to the
+ * Data & Statistics tab, the owner's second category). */
 
 function AdvancedTab() {
   const styles = useThemeStyles();
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
-      {/* R78: short section header — the tab is now the general engine
-          settings (auto-retry + debug + memory), with a pointer to the
-          Sub-agents page that owns the rest. */}
+      {/* R98-I1: short section header — the tab is the engine's behavior
+          switches under its two categories, with the standing pointer to
+          the Sub-agents page that owns the rest. */}
       <div className="pb-1">
         <h2 className="text-[16px] font-black" style={{ color: styles.text }}>
-          General
+          Functionality
         </h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
-          Auto-retry, desktop notifications, debug mode, and agent memory. Sub-agent keys, model, parallelism, and
-          supervision live on the{" "}
+          The engine&apos;s behavior switches, grouped by category. Sub-agent keys, model, parallelism, and supervision
+          live on the{" "}
           <Link to="/settings?tab=subagents" className="font-bold underline" style={{ color: styles.accent }}>
             Sub-agents
           </Link>{" "}
           page.
         </p>
       </div>
+      {/* R98-I1 category header — the owner's "basic agent capabilities":
+          the five engine cards (retry, thinking-loop, debug, desktop
+          notifications, memory). */}
+      <SectionTitle>Basic agent capabilities</SectionTitle>
       <RetryConfigCard />
       <ThinkingLoopCard />
       <DebugModeCard />
       <DesktopNotificationsCard />
       <MemoryCard />
+      {/* R98-I1 category header — the owner's "data and statistics": one
+          cross-link card pointing at the Data & Statistics tab below. */}
+      <SectionTitle>Data &amp; insights</SectionTitle>
+      <DataInsightsCrossLinkCard />
     </div>
+  );
+}
+
+/* ── R98-I1: the Data & insights category's ONE card — a cross-link to the
+ * Data & Statistics tab (the owner's second category name, "data and
+ * statistics"). No existing cross-link CARD existed to copy (the only
+ * cross-links in the settings are inline Links in header copy, e.g. the
+ * Sub-agents pointer above), so this follows the tab's own card grammar —
+ * rounded-lg p-4, card bg, 1.5px border, the 13px accent icon + 12px
+ * semibold title row every card here uses — with that inline-Link idiom
+ * for the jump itself. */
+function DataInsightsCrossLinkCard() {
+  const styles = useThemeStyles();
+  return (
+    <section
+      data-testid="data-insights-crosslink-card"
+      className="rounded-lg p-4"
+      style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      aria-label="Data and insights"
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <BarChart3 size={13} style={{ color: styles.accent, opacity: 0.7 }} />
+        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
+          Data &amp; insights
+        </span>
+      </div>
+      <div className="text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
+        Total tokens, peak day, the activity heatmap, the model mix, and agent health live on the{" "}
+        <Link to="/settings?tab=data" className="font-bold underline" style={{ color: styles.accent }}>
+          Data &amp; Statistics
+        </Link>{" "}
+        tab — the usage ledger the engine records on every turn.
+      </div>
+    </section>
   );
 }
 

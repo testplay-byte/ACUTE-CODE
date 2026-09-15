@@ -238,46 +238,61 @@ export function AcuteLogo({
  */
 /** ROUND-34 (owner design frame 1a): the settings sections that REPLACE the
  * normal navigation when the sidebar is in settings mode. ids stay the
- * SettingsPage tab ids so ?tab= deep links keep working. */
+ * SettingsPage tab ids so ?tab= deep links keep working.
+ *
+ * ROUND-98 (R98-I1, owner: "separate the different side options into
+ * different categories"): every entry carries the same `group` as its
+ * SettingsPage TABS twin (the five owner-named categories) and the list is
+ * CLUSTERED by group in the same order — the full settings nav below renders
+ * one 11px uppercase group header between clusters. The ids (and each
+ * cluster's internal order) are UNTOUCHED; the minimized rail stays FLAT
+ * (icons only — no headers, the R66 B4 mirror contract).
+ * `group` is optional in the render (a groupless entry would render exactly
+ * as pre-R98 — the header only fires when the group value CHANGES). */
 const SETTINGS_SECTIONS = [
-  { id: "appearance", label: "Appearance", icon: Palette },
-  { id: "agents", label: "Agents", icon: Bot },
-  { id: "api", label: "Models & Providers", icon: Server },
+  { id: "appearance", label: "Appearance", icon: Palette, group: "Workspace" },
+  { id: "agents", label: "Agents", icon: Bot, group: "Agents & Skills" },
   // ROUND-44 (VLM pass): this entry was MISSING — the R43 Sub-agents tab
   // existed in SettingsPage TABS but the sidebar (the actual settings nav,
   // R34 design) never listed it, making the whole tab unreachable except by
   // hand-typing ?tab=subagents. Owners could not find the key pool at all.
-  { id: "subagents", label: "Sub-agents", icon: Users },
+  { id: "subagents", label: "Sub-agents", icon: Users, group: "Agents & Skills" },
   // ROUND-61 (R61, owner directive): the extensibility sections — skills
   // (multiple user-addable prompt modules), MCP servers (user-configured
   // stdio tool servers), computer use (the desktop-control master switch
   // + the separate vision model). Same ids as SettingsPage TABS so the
   // ?tab= deep links line up (the R44 lesson applied at birth).
-  { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "skills", label: "Skills", icon: Sparkles, group: "Agents & Skills" },
   // ROUND-98 (R98-E1/E3, owner directive): the prompt-customization section
   // (per-project system-prompt overrides + the live composed preview). Same
   // id as SettingsPage TABS so the ?tab=prompts deep link lines up — the
   // R44 unreachable-tab lesson applied at birth.
-  { id: "prompts", label: "Prompts", icon: FileText },
-  { id: "mcp", label: "MCP Servers", icon: PlugZap },
-  { id: "computeruse", label: "Computer Use", icon: Monitor },
+  { id: "prompts", label: "Prompts", icon: FileText, group: "Agents & Skills" },
+  { id: "api", label: "Models & Providers", icon: Server, group: "Integrations" },
+  { id: "mcp", label: "MCP Servers", icon: PlugZap, group: "Integrations" },
+  { id: "computeruse", label: "Computer Use", icon: Monitor, group: "Integrations" },
   // ROUND-66 (R66, owner directive): the dedicated image-analysis section
   // (the vision model's own home, split OUT of Computer Use). Same id as
   // SettingsPage TABS so the ?tab=vision deep link lines up (the R44
   // unreachable-tab lesson applied at birth).
-  { id: "vision", label: "Image Analysis", icon: ScanEye },
+  { id: "vision", label: "Image Analysis", icon: ScanEye, group: "Integrations" },
   // ROUND-97 (R97-G, owner directive): the dedicated BROWSER section (same id
   // as SettingsPage TABS so the ?tab=browser deep link lines up).
-  { id: "browser", label: "Browser", icon: Globe },
+  { id: "browser", label: "Browser", icon: Globe, group: "Integrations" },
   // ROUND-98 (R98-I2, owner directive): the Data & Statistics section (same
   // id as SettingsPage TABS so the ?tab=data deep link lines up — the R44
-  // unreachable-tab lesson applied at birth).
-  { id: "data", label: "Data & Statistics", icon: BarChart3 },
-  { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
+  // unreachable-tab lesson applied at birth). R98-I1: its OWN category in
+  // the grouped nav (the owner's "data and statistics").
+  { id: "data", label: "Data & Statistics", icon: BarChart3, group: "Data & Statistics" },
+  // R98-I1 (SettingsPage TABS twin): the label follows the honest rename —
+  // "Functionality" (the owner's word; it was "General" on the page side
+  // and "Advanced" here — one word now). The id STAYS "advanced" (the
+  // ?tab=advanced deep-link contract is load-bearing).
+  { id: "advanced", label: "Functionality", icon: SlidersHorizontal, group: "System" },
   // ROUND-87 (R87, owner directive): the About section — version, update
   // check, and the application-wide reset. Same id as SettingsPage TABS
   // so the ?tab=about deep link lines up.
-  { id: "about", label: "About", icon: Info },
+  { id: "about", label: "About", icon: Info, group: "System" },
 ] as const;
 
 export function Sidebar() {
@@ -445,44 +460,65 @@ export function Sidebar() {
           </button>
         </div>
         <nav className="flex-1 flex flex-col gap-1 px-2.5 pt-3 overflow-y-auto" aria-label="Settings sections">
-          {SETTINGS_SECTIONS.map(({ id, label, icon: Icon }) => {
+          {/* R98-I1: the GROUPED settings nav — one 11px uppercase tracked
+              header (textTertiary, the SectionTitle idiom) between category
+              clusters. The header fires only when the running `group` value
+              CHANGES (a groupless entry renders exactly as pre-R98), so the
+              five owner-named categories label their clusters without
+              touching the row grammar or the deep-link ids. */}
+          {SETTINGS_SECTIONS.map((section, index) => {
+            const { id, label, icon: Icon } = section;
             const active = activeTab === id;
+            const groupHeader =
+              index === 0 || section.group !== SETTINGS_SECTIONS[index - 1].group
+                ? section.group
+                : undefined;
             return (
-              <button
-                key={id}
-                onClick={() => navigate(`/settings?tab=${id}`)}
-                aria-current={active ? "true" : undefined}
-                className="relative h-11 flex items-center gap-2.5 px-2.5 rounded-[12px] transition-all duration-200 text-[13px] font-bold"
-                style={{
-                  background: active ? withAlpha(styles.accent, 0.12) : "transparent",
-                  color: active ? styles.text : styles.textSecondary,
-                }}
-                onMouseEnter={(e) => {
-                  if (!active) e.currentTarget.style.background = styles.sidebarHover;
-                }}
-                onMouseLeave={(e) => {
-                  if (!active) e.currentTarget.style.background = "transparent";
-                }}
-              >
-                {/* Active indicator bar — same language as session rows. */}
-                {active && (
-                  <span
-                    className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-full"
-                    style={{ background: styles.accent }}
-                    aria-hidden
-                  />
+              <Fragment key={id}>
+                {groupHeader !== undefined && (
+                  <div
+                    data-testid={`settings-group-${groupHeader}`}
+                    className="pt-2.5 pb-1 px-2.5 text-[11px] font-bold uppercase tracking-widest"
+                    style={{ color: styles.textTertiary }}
+                  >
+                    {groupHeader}
+                  </div>
                 )}
-                <span
-                  className="w-7 h-7 shrink-0 rounded-[9px] grid place-items-center"
+                <button
+                  onClick={() => navigate(`/settings?tab=${id}`)}
+                  aria-current={active ? "true" : undefined}
+                  className="relative h-11 flex items-center gap-2.5 px-2.5 rounded-[12px] transition-all duration-200 text-[13px] font-bold"
                   style={{
-                    background: active ? withAlpha(styles.accent, 0.14) : styles.inputBg,
-                    color: active ? styles.accent : styles.textSecondary,
+                    background: active ? withAlpha(styles.accent, 0.12) : "transparent",
+                    color: active ? styles.text : styles.textSecondary,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!active) e.currentTarget.style.background = styles.sidebarHover;
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!active) e.currentTarget.style.background = "transparent";
                   }}
                 >
-                  <Icon size={14} />
-                </span>
-                <span className="truncate">{label}</span>
-              </button>
+                  {/* Active indicator bar — same language as session rows. */}
+                  {active && (
+                    <span
+                      className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-full"
+                      style={{ background: styles.accent }}
+                      aria-hidden
+                    />
+                  )}
+                  <span
+                    className="w-7 h-7 shrink-0 rounded-[9px] grid place-items-center"
+                    style={{
+                      background: active ? withAlpha(styles.accent, 0.14) : styles.inputBg,
+                      color: active ? styles.accent : styles.textSecondary,
+                    }}
+                  >
+                    <Icon size={14} />
+                  </span>
+                  <span className="truncate">{label}</span>
+                </button>
+              </Fragment>
             );
           })}
           {/* The dashed "more coming" slot (owner design: future sections). */}
@@ -661,9 +697,11 @@ function MinimizedRail({
       {/* ROUND-66 (R66, B4): the SETTINGS rail — back-to-dashboard + the
           section icons (active = the ?tab= deep-link id), mirroring the
           expanded settings sidebar's list exactly (same ids, same order).
-          The projects nav is deliberately NOT here: minimizing a settings
-          page must not teleport the owner into the projects world (his
-          report, verbatim: "it shows me the wrong sidebar"). */}
+          R98-I1: the rail stays FLAT — icons only, no group headers (the
+          64px rail has no room for labels; the grouped nav is the expanded
+          panel's job). The projects nav is deliberately NOT here: minimizing
+          a settings page must not teleport the owner into the projects world
+          (his report, verbatim: "it shows me the wrong sidebar"). */}
       {variant === "settings" ? (
         <>
           {railBtn(

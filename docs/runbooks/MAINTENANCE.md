@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-15 round-98 -->
 # MAINTENANCE — how to find things and change things safely
 
 **Status:** normative · **Established:** round-44 (owner directive: "complete the
@@ -199,6 +199,11 @@ commit.
 3. The R44 VLM-pass bug: the R43 Sub-agents tab existed in TABS but not in the
    sidebar list, so it was unreachable except by hand-typing `?tab=subagents`.
    Both lists, always.
+4. **R98-I1: BOTH entries carry the same `group`** (one of Workspace /
+   Agents & Skills / Integrations / Data & Statistics / System) and the lists
+   are CLUSTERED by group — a new tab joins its cluster's position in BOTH
+   lists, so the sidebar's grouped nav and the deep-link ids stay in sync
+   (the id-sync discipline, extended to the group field).
 
 ### d) A new right-sidebar tab
 

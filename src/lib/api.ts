@@ -2645,6 +2645,57 @@ export async function deleteProjectMemory(
   });
 }
 
+/** ROUND-98 (R98-F1, the owner: "it definitely does not know or remember the
+ * things properly… implement our proper memory functionality"): the Memory
+ * panel's WRITE side. POST /projects/:id/memory — the add-memory form's
+ * save. kind absent → the sidecar's "note" default (the memory_save tool's
+ * contract); the row is sourced "owner" (distinguishable from agent saves
+ * in every row). An exact duplicate REFRESHES the existing row
+ * (deduplicated: true, 200) instead of inserting a twin (201) — the
+ * storage's saveMemoryWithDedup path, REST-visible now. */
+export interface CreateProjectMemoryInput {
+  kind?: ProjectMemory["kind"];
+  content: string;
+}
+
+export interface CreateProjectMemoryResult {
+  memory: ProjectMemory;
+  deduplicated: boolean;
+}
+
+export async function createProjectMemory(
+  projectId: string,
+  input: CreateProjectMemoryInput,
+): Promise<CreateProjectMemoryResult> {
+  return request<CreateProjectMemoryResult>(`/projects/${projectId}/memory`, {
+    method: "POST",
+    json: input,
+  });
+}
+
+/** ROUND-98 (R98-F1): PUT /projects/:id/memory/:memoryId — the per-row edit,
+ * a PARTIAL patch ({content?, kind?} — at least one; the PUT /settings/*
+ * grammar). The updated row comes back with a bumped updatedAt (it ranks
+ * like a fresh save). No importance field exists by design: the memory
+ * table's importance model IS the kind weight (decision > fact >
+ * preference > note), resolved server-side at digest/search time. */
+export interface UpdateProjectMemoryPatch {
+  content?: string;
+  kind?: ProjectMemory["kind"];
+}
+
+export async function updateProjectMemory(
+  projectId: string,
+  memoryId: string,
+  patch: UpdateProjectMemoryPatch,
+): Promise<ProjectMemory> {
+  const body = await request<{ memory: ProjectMemory }>(
+    `/projects/${projectId}/memory/${memoryId}`,
+    { method: "PUT", json: patch },
+  );
+  return body.memory;
+}
+
 /** ROUND-82 (R82, §2.4.5 — the NVIDIA sub-agent gap): the sub-agent model as
  * a PROVIDER-SCOPED reference. Reads are always normalized to this shape (a
  * legacy bare-string value reads as openrouter-scoped); null = inherit the

@@ -448,6 +448,175 @@ describe("GET/DELETE /projects/:id/memory", () => {
   });
 });
 
+/* ── ROUND-98 (R98-F1): the REST WRITE surface — POST /projects/:id/memory
+ * (the Memory panel's add form) + PUT /projects/:id/memory/:memoryId (the
+ * per-row edit). Pins: the validation 400s (kind ∉ the four, empty content,
+ * over-cap content, the empty PUT patch), the bearer wall on both verbs,
+ * the source "owner" provenance, the dedup path (an exact duplicate
+ * refreshes the row — 200 + deduplicated:true — instead of a twin insert),
+ * and the PUT's partial patches (content-only, kind-only, 404s). ───────── */
+
+describe("POST/PUT /projects/:id/memory (ROUND-98 R98-F1)", () => {
+  function authInject(options: {
+    method: "POST" | "PUT";
+    url: string;
+    payload?: Record<string, unknown> | string;
+  }) {
+    return app!.inject({
+      ...options,
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+    });
+  }
+
+  beforeEach(() => {
+    app = buildServer({ token: TOKEN, db });
+  });
+
+  it("POST creates a memory (201, source owner, trimmed content, blank kind → note) and the exact duplicate DEDUPS (200, one row, refreshed)", async () => {
+    const project = createProject(db, { name: "REST Write", rootPath: join(dir, "write-root") });
+
+    const created = await authInject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/memory`,
+      payload: { kind: "fact", content: "  the build is pnpm-based  " },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json();
+    expect(body.deduplicated).toBe(false);
+    expect(body.memory).toMatchObject({
+      projectId: project.id,
+      kind: "fact",
+      content: "the build is pnpm-based", // trimmed before storage
+      source: "owner", // the owner's manual save, distinguishable from agent saves
+    });
+
+    // A blank kind means ABSENT — the memory_save tool's documented default.
+    const defaulted = await authInject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/memory`,
+      payload: { content: "no kind given" },
+    });
+    expect(defaulted.statusCode).toBe(201);
+    expect(defaulted.json().memory.kind).toBe("note");
+
+    // The dedup path: the SAME content (case-insensitive) refreshes the
+    // row instead of inserting a twin — 200 + deduplicated:true + a bumped
+    // updatedAt + the NEW kind.
+    const duplicate = await authInject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/memory`,
+      payload: { kind: "decision", content: "The build is pnpm-based" },
+    });
+    expect(duplicate.statusCode).toBe(200);
+    const dedupBody = duplicate.json();
+    expect(dedupBody.deduplicated).toBe(true);
+    expect(dedupBody.memory.id).toBe(body.memory.id);
+    expect(dedupBody.memory.kind).toBe("decision");
+    expect(dedupBody.memory.updatedAt >= body.memory.updatedAt).toBe(true);
+    expect(listMemories(db, project.id)).toHaveLength(2); // no twin row
+  });
+
+  it("POST 400s on invalid bodies (bad kind, empty/over-cap content, non-object) and 404s unknown projects", async () => {
+    const project = createProject(db, { name: "REST Valid", rootPath: join(dir, "valid-root") });
+    const base = `/api/v1/projects/${project.id}/memory`;
+
+    const badKind = await authInject({ method: "POST", url: base, payload: { kind: "vibe", content: "x" } });
+    expect(badKind.statusCode).toBe(400);
+    expect(badKind.json().error.code).toBe("VALIDATION");
+    expect(badKind.json().error.message).toContain("fact | decision | preference | note");
+
+    const emptyContent = await authInject({ method: "POST", url: base, payload: { content: "   " } });
+    expect(emptyContent.statusCode).toBe(400);
+    expect(emptyContent.json().error.message).toContain("content must be a non-empty string");
+
+    const missingContent = await authInject({ method: "POST", url: base, payload: { kind: "fact" } });
+    expect(missingContent.statusCode).toBe(400);
+
+    const overCap = await authInject({
+      method: "POST",
+      url: base,
+      payload: { content: "x".repeat(MAX_MEMORY_CONTENT_CHARS + 1) },
+    });
+    expect(overCap.statusCode).toBe(400);
+    expect(overCap.json().error.message).toContain(
+      `content must be at most ${MAX_MEMORY_CONTENT_CHARS} characters`,
+    );
+    // Nothing was written by any of the rejected POSTs.
+    expect(listMemories(db, project.id)).toHaveLength(0);
+
+    const notObject = await app!.inject({
+      method: "POST",
+      url: base,
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      payload: "not json at all",
+    });
+    expect(notObject.statusCode).toBe(400);
+
+    const ghost = await authInject({ method: "POST", url: "/api/v1/projects/prj_ghost/memory", payload: { content: "x" } });
+    expect(ghost.statusCode).toBe(404);
+  });
+
+  it("POST requires the bearer token (the 401 wall)", async () => {
+    const project = createProject(db, { name: "REST Wall", rootPath: join(dir, "wall-root") });
+    const unauthed = await app!.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/memory`,
+      headers: { "content-type": "application/json" },
+      payload: { content: "never written" },
+    });
+    expect(unauthed.statusCode).toBe(401);
+    expect(listMemories(db, project.id)).toHaveLength(0);
+  });
+
+  it("PUT patches partially (content-only keeps kind; kind-only keeps content), bumps updatedAt, 400s the empty patch, 404s unknown ids + projects, and sits behind the bearer wall", async () => {
+    const project = createProject(db, { name: "REST Edit", rootPath: join(dir, "edit-root") });
+    const saved = saveMemory(db, { projectId: project.id, kind: "fact", content: "port 5178" });
+    const base = `/api/v1/projects/${project.id}/memory/${saved.id}`;
+
+    // Content-only patch: the kind survives.
+    const patched = await authInject({ method: "PUT", url: base, payload: { content: "port 5179" } });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().memory).toMatchObject({ kind: "fact", content: "port 5179" });
+    expect(patched.json().memory.updatedAt >= saved.updatedAt).toBe(true);
+
+    // Kind-only patch: the content survives.
+    const moved = await authInject({ method: "PUT", url: base, payload: { kind: "decision" } });
+    expect(moved.statusCode).toBe(200);
+    expect(moved.json().memory).toMatchObject({ kind: "decision", content: "port 5179" });
+
+    // The empty patch (and the all-null patch) is an honest 400.
+    const empty = await authInject({ method: "PUT", url: base, payload: {} });
+    expect(empty.statusCode).toBe(400);
+    expect(empty.json().error.message).toContain("provide at least one of content or kind");
+    const allNull = await authInject({ method: "PUT", url: base, payload: { content: null, kind: null } });
+    expect(allNull.statusCode).toBe(400);
+
+    // Validation on the PUT too: bad kind + empty content.
+    const badKind = await authInject({ method: "PUT", url: base, payload: { kind: "vibe" } });
+    expect(badKind.statusCode).toBe(400);
+    expect(badKind.json().error.message).toContain("fact | decision | preference | note");
+    const emptyContent = await authInject({ method: "PUT", url: base, payload: { content: "   " } });
+    expect(emptyContent.statusCode).toBe(400);
+
+    // Unknown memory id → the DELETE route's 404; unknown project too.
+    const ghostMemory = await authInject({ method: "PUT", url: `/api/v1/projects/${project.id}/memory/mem_ghost`, payload: { content: "x" } });
+    expect(ghostMemory.statusCode).toBe(404);
+    const ghostProject = await authInject({ method: "PUT", url: `/api/v1/projects/prj_ghost/memory/${saved.id}`, payload: { content: "x" } });
+    expect(ghostProject.statusCode).toBe(404);
+
+    // The bearer wall.
+    const unauthed = await app!.inject({
+      method: "PUT",
+      url: base,
+      headers: { "content-type": "application/json" },
+      payload: { content: "unauthorized" },
+    });
+    expect(unauthed.statusCode).toBe(401);
+    // The last AUTHORIZED state survived (kind decision, port 5179).
+    expect(listMemories(db, project.id)[0]).toMatchObject({ kind: "decision", content: "port 5179" });
+  });
+});
+
 /* ── Migration 0015 ───────────────────────────────────────────────────────── */
 
 /** Applies migrations 0001..0014 by hand — simulates a pre-ROUND-44 install. */

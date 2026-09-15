@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-15 round-98 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` +
@@ -269,9 +269,14 @@ confirm dialog).
 |---|---|
 | `GET /projects/:id/memory` | `{memories: [...]}` — newest-first, capped at 100; each `{id, projectId, kind, content, source, createdAt, updatedAt}` with `kind` ∈ fact\|decision\|preference\|note. `404` unknown project. |
 | `DELETE /projects/:id/memory/:memoryId` | `{ok:true}` · `404` unknown project or memoryId. |
+| `POST /projects/:id/memory` | **R98-F1** — `{kind?, content}` (the Memory tab's add form): kind absent/blank → `note` (the `memory_save` tool's contract), content trimmed + non-empty + ≤4000. `201 {memory, deduplicated:false}` on insert; an exact duplicate (case-insensitive) refreshes the row instead → `200 {memory, deduplicated:true}`. Rows are sourced `"owner"` (the agent's own saves stay `"agent"`). `400` invalid body · `404` unknown project. |
+| `PUT /projects/:id/memory/:memoryId` | **R98-F1** — partial patch `{content?, kind?}` (at least one): content re-validates like the POST, kind moves the row between the four, `updated_at` bumps (the row ranks like a fresh save). `200 {memory}` · `400` empty/invalid patch · `404` unknown project or memoryId. |
 
-There is deliberately **no REST create** — memory is the agent's channel
-(the `memory_save` tool); the routes exist to READ and prune.
+The AGENT's channel is still the `memory_save` tool — that is what writes
+memory during turns. The R98-F1 write routes are the OWNER's manual surface
+(the right-sidebar Memory tab's add/edit forms), the same read/prune
+ownership the GET/DELETE pair always had; REST-created rows are marked
+`source:"owner"` so the audit trail stays legible.
 
 **Agent tools 20–22:** `memory_save {content, kind?}` (content trimmed,
 capped at 4000 chars; kind validated case-insensitively) · `memory_recall

@@ -361,12 +361,14 @@ describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d, re-pinned
     // directive): the agent-core connection card itself is REMOVED from
     // Advanced (irrelevant in the desktop app) — Advanced keeps exactly the
     // debug-mode + memory cards.
-    // ROUND-78 (R78-C): the tab's LABEL is "General" now (the URL id stays
-    // "advanced" — the deep-link above is unchanged); the heading assertion
-    // follows the honest rename, the intent (no sub-agent duplication) stays.
+    // ROUND-78 (R78-C): the tab's label was "General" then. R98-I1 (the
+    // owner: "add a dedicated section for functionality…"): it is
+    // "Functionality" now (the URL id stays "advanced" — the deep-link
+    // above is unchanged); the heading assertion follows the honest rename,
+    // the intent (no sub-agent duplication) stays.
     cleanup();
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
-    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "General" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Functionality" })).toBeTruthy());
     await waitFor(() => expect(screen.getByText("Debug mode")).toBeTruthy());
     await waitFor(() => expect(screen.getByText("Agent memory")).toBeTruthy());
     expect(screen.queryByText("Agent core connection")).toBeNull();

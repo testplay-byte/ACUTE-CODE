@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-15 round-98 -->
 # PROJECT MEMORY — the agent memory system (implemented R44)
 
 **Status:** reference (implemented) · **Established:** round-44 · **Audience:**
@@ -40,23 +40,36 @@ project session — the no-deps pattern from `todo_write`.
 `buildProjectSystemPrompt` injects it as a
 `## Project memory (persisted across sessions)` section (after CODEBASE
 AWARENESS, before ENVIRONMENT) **only when non-empty**. The digest is
-newest-first `• [kind] content` lines capped at **~1500 chars with whole-line
-granularity** (an overflowing line is dropped whole; a single line longer than
-the whole budget is hard-sliced + ellipsized) — cheap, bounded, prompt-safe.
-The prompt also tells the agent when to save vs recall (gated on the
-`memory_save` tool being allowed).
+importance-ranked `• [kind] content` lines (kind weight × recency decay)
+capped at **~1500 chars with whole-line granularity** (an overflowing line is
+dropped whole; a single line longer than the whole budget is hard-sliced +
+ellipsized) — cheap, bounded, prompt-safe. The prompt also tells the agent
+when to save vs recall (gated on the `memory_save` tool being allowed), and
+**R98-F1** added the save-discipline line: durable decisions, corrections,
+and user preferences go into `memory_save` AS THEY ARE DISCOVERED — never
+batched for later (the golden fixture re-pinned).
 
-## The Memory tab + the delete route
+## The Memory tab + the REST surface
 
 Right sidebar → **Memory** (Brain icon; singleton tab, `openMemory`) renders
 `src/components/right-sidebar/MemoryPanel.tsx`: memories grouped by kind with
 colored chips, hover-revealed delete (with spinner), 5s polling, empty-state
 explaining what lands here, footer hint "Auto-loaded into every agent turn".
 
-REST surface: `GET /projects/:id/memory` (newest-first, cap 100) and
-`DELETE /projects/:id/memory/:memoryId` — read + prune only. There is
-deliberately **no REST create**: memory is the agent's channel, so what the
-agent saved is the audit trail of what it knew.
+**R98-F1 (owner: "implement our proper memory functionality")** — the panel
+gained the WRITE side: the header's `+` opens an add-memory form (kind picker
++ content textarea; the kind picker IS the importance control — the table's
+importance model is the kind weight, there is deliberately no importance
+column), and each row's Pencil expands an inline editor (content + kind).
+
+REST surface: `GET /projects/:id/memory` (newest-first, cap 100),
+`DELETE /projects/:id/memory/:memoryId`, plus the R98-F1 pair — `POST
+/projects/:id/memory` (201 insert / 200 dedup-refresh on an exact duplicate;
+rows sourced `"owner"`) and `PUT /projects/:id/memory/:memoryId` (partial
+content/kind patch). The AGENT's channel during turns is still the
+`memory_save` tool; the write routes are the owner's manual surface, and
+REST-created rows are marked `source:"owner"` so the audit trail stays
+legible.
 
 ## How to verify (the live-battery pattern)
 

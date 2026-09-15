@@ -53,7 +53,7 @@ src/
 │   │                         (retirement candidate, MODULARITY-ASSESSMENT §10)
 │   ├── settings/             SettingsPage = thin tab switch; self-contained tabs:
 │   │                         ModelsProviders (the big one), SubAgents, Skills,
-│   │                         Mcp, ComputerUse, ImageAnalysis (+ General card)
+│   │                         Mcp, ComputerUse, ImageAnalysis (+ Functionality card)
 │   ├── right-sidebar/        The panel dock: Browser, Terminal, Console, Files,
 │   │                         Memory, SubAgents panels (tabbed per
 │   │                         `${projectId}::${sessionId}`)

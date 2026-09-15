@@ -14,8 +14,9 @@ import { renderWithProviders, resetTestState } from "../../test-utils";
  *  · role=status (NEVER alert — this is a configured intervention, not a
  *    provider failure), the amber Brain presentation, and the copy carries
  *    NO "Generation failed" text anywhere.
- *  · The Settings pointer (Settings → General — where the guard's switch
- *    lives) + the model chip.
+ *  · The Settings pointer (Settings → Functionality — where the guard's
+ *    switch lives; R98-I1's honest rename of the old General label) + the
+ *    model chip.
  *  · The Retry affordance wires through when provided; nothing renders when
  *    it is not.
  */
@@ -50,7 +51,7 @@ describe("ThinkingStoppedCard (ROUND-97 R97-D)", () => {
 
   it("carries the Settings pointer + the model chip", () => {
     renderWithProviders(<ThinkingStoppedCard error={ERROR_FIXTURE} />);
-    const settingsLink = screen.getByText("Settings → General");
+    const settingsLink = screen.getByText("Settings → Functionality");
     expect(settingsLink.getAttribute("href")).toBe("/settings?tab=advanced");
     expect(screen.getByText(ERROR_FIXTURE.model)).toBeTruthy();
   });

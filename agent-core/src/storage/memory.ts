@@ -293,6 +293,61 @@ export function deleteMemory(
   return { ok: true };
 }
 
+/* ── ROUND-98 (R98-F1): the owner-facing edit surface ─────────────────────── */
+
+/** Partial-edit patch for updateMemory: both fields optional, at least one
+ * required (the ROUTE layer 400s the empty patch; this is the same partial
+ * grammar as PUT /settings/*). `kind` follows the save contract (absent or
+ * empty → keep the row's current kind; a present value validates through
+ * parseKind); `content` follows the save validation exactly (non-empty after
+ * trim, ≤ MAX_MEMORY_CONTENT_CHARS). */
+export interface UpdateMemoryPatch {
+  content?: string;
+  kind?: string;
+}
+
+/**
+ * ROUND-98 (R98-F1, the owner: "implement our proper memory functionality"):
+ * partial-edit one memory row — the REST PUT behind the Memory panel's
+ * per-row edit (content fixes + kind moves). Bumps updated_at so an edited
+ * row ranks like a fresh save (recency decay + newest-first listing).
+ * Validation is the SAME code path as save (throws the same readable
+ * errors); unknown id returns `{ ok: false, error }` — the deleteMemory
+ * convention. Note: the memory table has NO importance column (0015) — the
+ * kind weight IS the importance model (decision > fact > preference >
+ * note, KIND_WEIGHT below), so there is deliberately no importance field
+ * to patch.
+ */
+export function updateMemory(
+  db: SqliteDatabase,
+  id: string,
+  patch: UpdateMemoryPatch,
+): { ok: true; item: MemoryItem } | { ok: false; error: string } {
+  const row = db.prepare("SELECT rowid, * FROM memory WHERE id = ?").get(id) as
+    | (MemoryRow & { rowid: number })
+    | undefined;
+  if (row === undefined) return { ok: false, error: `no memory with id ${id}` };
+  // The same validation the save path runs — an edited row obeys the cap.
+  const content = patch.content !== undefined ? patch.content.trim() : row.content;
+  if (content === "") throw new Error("memory content must be a non-empty string");
+  if (content.length > MAX_MEMORY_CONTENT_CHARS) {
+    throw new Error(
+      `memory content too long (${content.length} chars, max ${MAX_MEMORY_CONTENT_CHARS}) — split it into multiple memories`,
+    );
+  }
+  // parseKind's absent/empty → "note" default would silently MOVE a row to
+  // note on a kind-less patch; only a PRESENT kind may change it.
+  const kind = patch.kind !== undefined && patch.kind.trim() !== "" ? parseKind(patch.kind) : row.kind;
+  const now = new Date().toISOString();
+  db.prepare("UPDATE memory SET kind = ?, content = ?, updated_at = ? WHERE rowid = ?").run(
+    kind,
+    content,
+    now,
+    row.rowid,
+  );
+  return { ok: true, item: { ...toMemory(row), kind, content, updatedAt: now } };
+}
+
 /**
  * Compact ranked digest for system-prompt injection (ROUND-46 v2): rows are
  * ordered by importance (kind weight) × recency decay — a durable recent

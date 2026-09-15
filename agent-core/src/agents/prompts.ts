@@ -1194,7 +1194,20 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     mem("Durable facts, decisions, and preferences saved for THIS project (newest first):");
     mem(ctx.memoryDigest);
     if (ctx.toolNames.includes("memory_save")) {
-      mem("Treat these as standing knowledge: they survive across sessions. Record NEW durable knowledge with memory_save (facts, decisions, owner preferences, gotchas) — never transient state. Use memory_recall to search beyond this summary.");
+      // R98-F1 (the owner: "it definitely does not know or remember the
+      // things properly"): the SAVE-DISCIPLINE line — durable decisions,
+      // corrections, and user preferences go into memory_save AS THEY ARE
+      // DISCOVERED, never batched for "later" (a batched save that never
+      // ran was exactly why the owner's corrections kept not sticking). It
+      // REPLACES the old generic "Record NEW durable knowledge with
+      // memory_save (facts, decisions, owner preferences, gotchas)" clause
+      // it subsumes — net +32 chars on a section the R71 D6 fixture never
+      // composes (no memoryDigest in its ctx, so the 23K DEFAULT budget is
+      // untouched; verified green after the change); the golden fixture
+      // re-pinned via UPDATE_GOLDEN=1.
+      mem(
+        "Treat these as standing knowledge: they survive across sessions. Save durable decisions, corrections, and user preferences with memory_save AS YOU DISCOVER THEM — do not batch them for later. Never transient state. Use memory_recall to search beyond this summary.",
+      );
     }
     mem("");
   }

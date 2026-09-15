@@ -222,7 +222,7 @@ Sample of indexed symbols (first 30):
 ## Project memory (persisted across sessions)
 Durable facts, decisions, and preferences saved for THIS project (newest first):
 - [fact] The build is pnpm-based.
-Treat these as standing knowledge: they survive across sessions. Record NEW durable knowledge with memory_save (facts, decisions, owner preferences, gotchas) — never transient state. Use memory_recall to search beyond this summary.
+Treat these as standing knowledge: they survive across sessions. Save durable decisions, corrections, and user preferences with memory_save AS YOU DISCOVER THEM — do not batch them for later. Never transient state. Use memory_recall to search beyond this summary.
 
 ## ENVIRONMENT
 - OS: Linux (release 6.5.0-r70c); shell: /bin/sh — run_command runs commands through that shell.

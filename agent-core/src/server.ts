@@ -5,7 +5,7 @@
  * later waves.
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyRequest } from "fastify";
 import { aiSdkChat, type ChatFn } from "./agents/chat.js";
 import { pickFiles, pickFolder } from "./dialogs.js";
@@ -83,7 +83,7 @@ import {
   sendPushToAll,
   vapidPublicKey,
 } from "./lib/web-push.js";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 // ROUND-43 (R43-10): embedded-browser proxy backend — all logic + routes live
 // in browser-proxy.ts; server.ts only mounts it on the scoped API surface.
 import { registerBrowserRoutes } from "./browser-proxy.js";
@@ -1934,6 +1934,54 @@ export interface StartServerOptions {
 export interface RunningSidecar {
   server: FastifyInstance;
   port: number;
+  /** ROUND-98 (R98-K): the discovery file startServer wrote (see
+   * writePortalDiscoveryFile) — absent when the write failed best-effort.
+   * Exposed for tests; the runtime never reads it back. */
+  discoveryFile?: string;
+}
+
+/* ── ROUND-98 (R98-K, owner: "I want our application to be usable using the
+ * terminal tool"): the PORTAL DISCOVERY FILE. startServer writes
+ * <dbDir>/acute-portal.json — {port, token, pid, startedAt} — next to the
+ * SQLite DB, so the CLI (scripts/acute.mjs → scripts/acute-discovery.mjs)
+ * can find the RUNNING app without env plumbing: port + token are exactly
+ * what ACUTE_BASE_URL/ACUTE_TOKEN would have carried. The file is
+ * user-local (the db dir already is — .dev/ in the dev stack, the Rust
+ * shell's state_dir()/acute-code packaged), removed on graceful shutdown
+ * (app.close → the onClose hook below; SIGTERM/SIGINT bypass Fastify's
+ * hooks, so a stale file can linger after a hard kill — the CLI's resolver
+ * treats a dead target as "not found" via the connection error, exactly
+ * like a wrong ACUTE_BASE_URL). The TOKEN is never LOGGED (the ready line
+ * prints the port only — pinned by server.test.ts); it rides the
+ * user-local file, which is the same trust boundary the shell's env
+ * injection already is. */
+export const PORTAL_DISCOVERY_FILENAME = "acute-portal.json";
+
+/** Write the discovery file (best-effort — a failure NEVER kills boot:
+ * the ready line still tells the shell the port). Returns the path (or the
+ * would-be path when the write failed) so onClose can attempt removal. */
+function writePortalDiscoveryFile(dbDir: string, port: number, token: string): string {
+  const file = join(dbDir, PORTAL_DISCOVERY_FILENAME);
+  try {
+    writeFileSync(
+      file,
+      `${JSON.stringify({ port, token, pid: process.pid, startedAt: new Date().toISOString() }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+  } catch {
+    // best-effort by design (read-only dir, disk full, …)
+  }
+  return file;
+}
+
+/** Remove the discovery file (best-effort — a concurrent boot may already
+ * have replaced it; rmSync's force tolerates absence). */
+function removePortalDiscoveryFile(file: string): void {
+  try {
+    rmSync(file, { force: true });
+  } catch {
+    // best-effort by design
+  }
 }
 
 /** Opens the database, binds 127.0.0.1 (loopback only), prints the ready line. */
@@ -1948,18 +1996,37 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   app.addHook("onClose", async () => {
     db.close();
   });
+  // R98-K: the discovery-file lifecycle. The WRITE needs the real port
+  // (after the bind) but the REMOVAL hook must be registered BEFORE listen
+  // (Fastify refuses addHook on a listening instance), so a mutable holder
+  // carries the path from the write to the removal. Until the write lands
+  // the hook is a no-op, which also covers the failed-bind throw path below
+  // (app.close() runs before any file exists — a STALE file from a previous
+  // boot on this dbDir survives that close, deliberately: this boot never
+  // owned it).
+  const discovery: { file?: string } = {};
+  app.addHook("onClose", async () => {
+    if (discovery.file !== undefined) removePortalDiscoveryFile(discovery.file);
+  });
   await app.listen({ port: options.port ?? 0, host: "127.0.0.1" });
   const address = app.server.address();
   if (address === null || typeof address === "string") {
     await app.close();
     throw new Error("sidecar failed to bind a TCP port");
   }
+  // R98-K: the discovery file — written AFTER the successful bind (the port
+  // is real, never a placeholder) and removed by the hook above on graceful
+  // close; a hard SIGTERM/SIGINT kill can leave a stale file, which the
+  // next boot overwrites (last boot wins — pinned in r98-cli-discovery).
+  discovery.file = writePortalDiscoveryFile(dirname(options.dbPath), address.port, options.token);
   // The shell parses this exact line (ARCHITECTURE §2). R37 note: structured
   // log lines (JSON) may precede it on stdout — the shell prefix-scans for
   // ACUTE_READY, so they're harmless; only malformed non-JSON output would
-  // risk confusing a stricter parser.
+  // risk confusing a stricter parser. R98-K: still exactly ONE line, still
+  // port-only — the token reaches the shell through env injection and the
+  // CLI through the discovery file, never through stdout.
   console.log(`ACUTE_READY ${JSON.stringify({ port: address.port })}`);
-  return { server: app, port: address.port };
+  return { server: app, port: address.port, discoveryFile: discovery.file };
 }
 
 

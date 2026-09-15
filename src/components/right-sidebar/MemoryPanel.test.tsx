@@ -1,16 +1,29 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { deleteProjectMemory, fetchMemorySettings, listProjectMemory } from "../../lib/api";
+import {
+  createProjectMemory,
+  deleteProjectMemory,
+  fetchMemorySettings,
+  listProjectMemory,
+  updateProjectMemory,
+} from "../../lib/api";
 import { MemoryPanel } from "./MemoryPanel";
 import type { RightSidebarTab } from "../../lib/right-sidebar-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 
 // The panel is a VIEW over the memory REST surface — the api module is
-// mocked exactly as the real sidecar shapes it (GET listing + DELETE).
+// mocked exactly as the real sidecar shapes it (GET listing + DELETE, and
+// since R98-F1 the write side: POST create + PUT update).
 vi.mock("../../lib/api", () => ({
   listProjectMemory: vi.fn(),
   deleteProjectMemory: vi.fn().mockResolvedValue(undefined),
+  // R98-F1: the write side — resolved by default; tests override to fail.
+  createProjectMemory: vi.fn().mockResolvedValue({
+    memory: { id: "mem_new", deduplicated: false },
+    deduplicated: false,
+  }),
+  updateProjectMemory: vi.fn().mockResolvedValue({ id: "mem_1" }),
   // ROUND-49: the memory master switch — default ON (no OFF notice).
   fetchMemorySettings: vi.fn().mockResolvedValue({ enabled: true }),
 }));
@@ -21,6 +34,15 @@ beforeEach(() => {
   resetTestState();
   vi.mocked(listProjectMemory).mockReset().mockResolvedValue([]);
   vi.mocked(deleteProjectMemory).mockReset().mockResolvedValue(undefined);
+  vi.mocked(createProjectMemory)
+    .mockReset()
+    .mockResolvedValue({
+      memory: { id: "mem_new", projectId: "prj_1", kind: "note", content: "", source: "owner", createdAt: now(), updatedAt: now() },
+      deduplicated: false,
+    });
+  vi.mocked(updateProjectMemory)
+    .mockReset()
+    .mockResolvedValue({ id: "mem_1", projectId: "prj_1", kind: "fact", content: "", source: "agent", createdAt: now(), updatedAt: now() });
   vi.mocked(fetchMemorySettings).mockReset().mockResolvedValue({ enabled: true });
 });
 
@@ -132,5 +154,106 @@ describe("MemoryPanel (ROUND-44 R44-a)", () => {
     expect(screen.getByText("sidecar down")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Try again/i }));
     await waitFor(() => expect(listProjectMemory).toHaveBeenCalledTimes(2));
+  });
+
+  // ── ROUND-98 (R98-F1): the WRITE side — the add-memory form + the
+  // per-row inline edit. Pins: the form's exact POST body (trimmed content
+  // + the picked kind), the invalidation refetch, the honest failure line,
+  // and the row edit's exact PUT patch. ────────────────────────────────────
+  it("R98-F1: the add-memory form POSTs {kind, content} (trimmed) and refreshes the listing", async () => {
+    renderWithProviders(<MemoryPanel projectId="prj_1" tab={tab} />);
+
+    // The empty state renders first; the header's + toggle opens the form.
+    expect(await screen.findByText("No memories yet")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("memory-add-toggle"));
+    expect(await screen.findByTestId("memory-add-form")).toBeTruthy();
+
+    // Pick the kind (default note → decision) + type content with padding
+    // (the trim is the form's job — the server never sees the whitespace).
+    fireEvent.change(screen.getByTestId("memory-add-kind"), { target: { value: "decision" } });
+    fireEvent.change(screen.getByTestId("memory-add-content"), {
+      target: { value: "  Use pnpm workspaces everywhere.  " },
+    });
+    fireEvent.click(screen.getByTestId("memory-add-save"));
+
+    await waitFor(() =>
+      expect(createProjectMemory).toHaveBeenCalledWith("prj_1", {
+        kind: "decision",
+        content: "Use pnpm workspaces everywhere.",
+      }),
+    );
+    // The listing is refetched after the save settles.
+    await waitFor(() => expect(listProjectMemory).toHaveBeenCalledTimes(2));
+  });
+
+  it("R98-F1: the add form refuses an empty draft (no POST) and surfaces a failed save's honest error", async () => {
+    renderWithProviders(<MemoryPanel projectId="prj_1" tab={tab} />);
+    fireEvent.click(await screen.findByTestId("memory-add-toggle"));
+
+    // Empty draft: the Save stays inert — ZERO POSTs.
+    const save = screen.getByTestId("memory-add-save");
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("memory-add-content"), { target: { value: "   " } });
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(save);
+    expect(createProjectMemory).not.toHaveBeenCalled();
+
+    // A failing save (the server's 400 envelope text, verbatim) keeps the
+    // form OPEN with the error — nothing silently swallowed.
+    vi.mocked(createProjectMemory).mockRejectedValue(
+      new Error("content must be at most 4000 characters"),
+    );
+    fireEvent.change(screen.getByTestId("memory-add-content"), {
+      target: { value: "a real draft" },
+    });
+    expect((save as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(save);
+    expect(await screen.findByTestId("memory-add-error")).toBeTruthy();
+    expect(screen.getByText("content must be at most 4000 characters")).toBeTruthy();
+    expect(screen.getByTestId("memory-add-form")).toBeTruthy();
+  });
+
+  it("R98-F1: the per-row Pencil opens the inline editor, Save PUTs the {content, kind} patch, and Cancel abandons", async () => {
+    vi.mocked(listProjectMemory).mockResolvedValue([
+      memFactory({ id: "mem_edit", kind: "fact", content: "The sidecar runs on port 5178." }),
+    ]);
+    renderWithProviders(<MemoryPanel projectId="prj_1" tab={tab} />);
+
+    // Open the editor — the textarea is prefilled with the row's content.
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Edit memory: The sidecar runs on port/i }),
+    );
+    const content = await screen.findByTestId("memory-edit-content");
+    expect((content as HTMLTextAreaElement).value).toBe("The sidecar runs on port 5178.");
+    // The Save starts disabled (nothing dirty yet).
+    const save = screen.getByTestId("memory-edit-save");
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+
+    // Edit content + move the kind, save → the EXACT partial patch.
+    fireEvent.change(content, { target: { value: "The sidecar runs on port 5179." } });
+    fireEvent.change(screen.getByTestId("memory-edit-kind"), { target: { value: "decision" } });
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(updateProjectMemory).toHaveBeenCalledWith("prj_1", "mem_edit", {
+        content: "The sidecar runs on port 5179.",
+        kind: "decision",
+      }),
+    );
+    await waitFor(() => expect(listProjectMemory).toHaveBeenCalledTimes(2));
+
+    // A second row: Cancel ABANDONS — no PUT at all.
+    cleanup();
+    vi.mocked(listProjectMemory).mockClear().mockResolvedValue([
+      memFactory({ id: "mem_keep", kind: "note", content: "keep me untouched" }),
+    ]);
+    renderWithProviders(<MemoryPanel projectId="prj_1" tab={tab} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Edit memory: keep me untouched/i }));
+    fireEvent.change(await screen.findByTestId("memory-edit-content"), {
+      target: { value: "changed but cancelled" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Cancel/i }));
+    expect(updateProjectMemory).toHaveBeenCalledTimes(1); // only the first row's PUT
+    // The row renders its ORIGINAL content again (the draft was abandoned).
+    expect(await screen.findByText("keep me untouched")).toBeTruthy();
   });
 });

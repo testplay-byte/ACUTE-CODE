@@ -318,6 +318,86 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     expect(await screen.findByTestId("rail-settings-prompts")).toBeTruthy();
   });
 
+  // R98-I1 (owner: "separate the different side options into different
+  // categories"): the settings nav is GROUPED — the five owner-named
+  // category headers (11px uppercase tracked, textTertiary) label the
+  // clusters, once per cluster (not per row), while the minimized rail
+  // stays FLAT (icons only — no headers, the R66 B4 mirror contract). The
+  // entry ids stay the SettingsPage TABS ids (the R44 lesson; deep-links
+  // keep working).
+  it("R98-I1: the settings nav renders the five GROUP headers (one per cluster) and the entries still deep-link; the minimized rail stays FLAT", async () => {
+    function SearchProbe() {
+      const { search } = useLocation();
+      return <div data-testid="search-probe">{search}</div>;
+    }
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/settings" element={<SearchProbe />} />
+        </Routes>
+      </>,
+      { route: "/settings?tab=appearance" },
+    );
+
+    // All five group headers, exactly ONE each (a header per CLUSTER, never
+    // per row — the count pins that). Pinned via the settings-group-*
+    // testids because "Data & Statistics" is BOTH a group name and the data
+    // entry's own label (a getAllByText count would conflate the two).
+    expect(document.querySelectorAll('[data-testid^="settings-group-"]')).toHaveLength(5);
+    for (const group of [
+      "Workspace",
+      "Agents & Skills",
+      "Integrations",
+      "Data & Statistics",
+      "System",
+    ]) {
+      expect(document.querySelectorAll(`[data-testid="settings-group-${group}"]`)).toHaveLength(1);
+      // The header is the 11px uppercase tracked label in textTertiary (the
+      // SectionTitle idiom the dispatch asked for).
+      const header = document.querySelector(`[data-testid="settings-group-${group}"]`);
+      expect(header?.className).toContain("uppercase");
+      expect(header?.className).toContain("text-[11px]");
+      expect(header?.className).toContain("tracking-widest");
+    }
+
+    // The clustering itself: appearance (Workspace) sits ABOVE agents
+    // (Agents & Skills), which sits ABOVE the prompts entry (same cluster),
+    // which sits ABOVE api (Integrations) — the grouped order.
+    const appearance = screen.getByRole("button", { name: /^appearance$/i, hidden: true });
+    const agents = screen.getByRole("button", { name: /^agents$/i, hidden: true });
+    const prompts = screen.getByRole("button", { name: /^prompts$/i, hidden: true });
+    const api = screen.getByRole("button", { name: /^models & providers$/i, hidden: true });
+    const data = screen.getByRole("button", { name: /data & statistics/i, hidden: true });
+    expect(
+      (appearance.compareDocumentPosition(agents) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+    expect(
+      (agents.compareDocumentPosition(prompts) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+    expect(
+      (prompts.compareDocumentPosition(api) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+    expect(
+      (api.compareDocumentPosition(data) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+
+    // The renamed Functionality entry (id "advanced" — the load-bearing
+    // deep-link contract) navigates as before.
+    const functionality = screen.getByRole("button", { name: /^functionality$/i, hidden: true });
+    fireEvent.click(functionality);
+    expect((await screen.findByTestId("search-probe")).textContent).toContain("tab=advanced");
+
+    // The minimized rail: every section icon present, ZERO group headers
+    // (the full nav unmounts on minimize, so the group labels vanish with
+    // it — the rail is icons only).
+    act(() => useProjectChatStore.setState({ appSidebarMinimized: true }));
+    expect(await screen.findByTestId("rail-settings-advanced")).toBeTruthy();
+    for (const group of ["Workspace", "Agents & Skills", "Integrations", "Data & Statistics", "System"]) {
+      expect(screen.queryByText(group)).toBeNull();
+    }
+  });
+
   it("R60-C: normal mode has no header row — the nav starts at the panel's top", () => {
     renderWithProviders(
       <>
