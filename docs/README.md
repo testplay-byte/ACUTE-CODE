@@ -72,7 +72,7 @@ file the discrepancy and fix the doc in the same round.
 - [`architecture/PROJECT-MAP.md`](architecture/PROJECT-MAP.md) — the product map & naming rules
 - [`architecture/PILLARS.md`](architecture/PILLARS.md) — the three-pillar blueprint (coding / agentic system / automation) and how they interconnect additively
 - [`architecture/MODULARITY-ASSESSMENT.md`](architecture/MODULARITY-ASSESSMENT.md) — **the structure audit (R80.5 → re-assessed R85)**: the verdict (part-level modularity exemplary, product core monolithic), the dependency map + cycles (the 25-file SCC DEAD since R84; one benign 2-cycle remains), god-file responsibility inventories (re-measured at c38bc8b), the extension-surface grades, the PILLARS §7 seam audit, the R84-claim verification, scores, the risk register, and the 4-wave improvement roadmap (the owner's R86 scoping input)
-- [`decisions/`](decisions/) — ADRs 0001–0029 + `TEMPLATE.md`; sequential, never renumbered; next = 0030 (ADR-0029 the unified operating modes, R81; ADR-0028 the background-delegation + task-addressing tier, R79)
+- [`decisions/`](decisions/) — ADRs 0001–0030 + `TEMPLATE.md`; sequential, never renumbered; next = 0031 (ADR-0030 the mermaid v11 diagram rendering + the two ADR-classified license pins, R98; ADR-0029 the unified operating modes, R81)
 
 ## Design
 - [`design/ui-direction.md`](design/ui-direction.md) — the owner's design language, derived from his demos

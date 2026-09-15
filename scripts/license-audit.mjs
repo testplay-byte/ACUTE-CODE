@@ -32,6 +32,22 @@ const ALLOWED = new Set([
 ]);
 const FIRST_PARTY = new Set(["UNLICENSED", "LicenseRef-Proprietary"]);
 
+// R98-D (ADR-0030): SPELLING-GAP overrides — an exact `package@version` whose
+// true license is allowed/permissive but whose pnpm-reported SPDX string is
+// missing or non-SPDX. Overrides are for spelling gaps ONLY, NEVER copyleft:
+// the GPL/AGPL/LGPL exclusion in verdictFor runs on the ADR-classified value
+// BEFORE the override can apply, so no entry here can ever whitelist a
+// copyleft license. The ALLOWED set is not touched; every entry cites its ADR
+// and the generated report prints the classified license plus the raw pnpm
+// value so the override stays visible in docs/compliance/.
+const PACKAGE_LICENSE_OVERRIDES = new Map([
+  // package.json ships no license field; MIT in fact (fabiospampinato/khroma).
+  ["khroma@2.1.0", { license: "MIT", adr: "ADR-0030" }],
+  // Public-domain-equivalent — more permissive than MIT; the audit already
+  // admits the class via 0BSD/CC0-1.0.
+  ["robust-predicates@3.0.3", { license: "Unlicense", adr: "ADR-0030" }],
+]);
+
 const WORKSPACE_PACKAGES = [".", "agent-core", "shared"];
 
 function run() {
@@ -85,8 +101,16 @@ function collectRows(grouped) {
   return rows;
 }
 
-function verdictFor(license) {
+/** The override row for an exact package@version, when one is pinned. */
+function overrideFor(row) {
+  return PACKAGE_LICENSE_OVERRIDES.get(`${row.name}@${row.version}`);
+}
+
+function verdictFor(license, override) {
+  // Copyleft is the ABSOLUTE exclusion — it is checked on the ADR-classified
+  // value too, so a PACKAGE_LICENSE_OVERRIDES entry can never whitelist it.
   if (/GPL/i.test(license)) return "FORBIDDEN (copyleft)";
+  if (override !== undefined) return `OK (${override.adr})`;
   if (FIRST_PARTY.has(license)) return "FIRST-PARTY (proprietary)";
   if (ALLOWED.has(license)) return "OK";
   // SPDX choice expressions ("A OR B", e.g. json-schema's "AFL-2.1 OR
@@ -118,7 +142,14 @@ function writeReport(rows, failed) {
     "|---|---|---|---|",
   ];
   for (const row of rows) {
-    lines.push(`| ${row.name} | ${row.version} | ${row.license} | ${verdictFor(row.license)} |`);
+    const override = overrideFor(row);
+    // Overridden rows show the ADR-classified license PLUS the raw pnpm
+    // value (R98-D: the override stays visible in the generated report).
+    const licenseCell =
+      override !== undefined ? `${override.license} (raw: ${row.license}; ${override.adr})` : row.license;
+    lines.push(
+      `| ${row.name} | ${row.version} | ${licenseCell} | ${verdictFor(row.license, override)} |`,
+    );
   }
   if (rows.length === 0) {
     lines.push("| _no production dependencies_ | | | |");
@@ -132,7 +163,9 @@ if (code !== 0) {
   process.exit(code);
 }
 
-const failures = rows.filter((row) => verdictFor(row.license).startsWith("FORBIDDEN"));
+const failures = rows.filter((row) =>
+  verdictFor(row.license, overrideFor(row)).startsWith("FORBIDDEN"),
+);
 writeReport(rows, failures.length > 0);
 
 if (failures.length > 0) {

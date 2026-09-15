@@ -92,6 +92,28 @@ export async function fetchProviders(): Promise<ProviderView[]> {
 }
 
 /**
+ * R98-H (owner: "Adding other providers: I am unable to select
+ * OpenAI-compatible providers there… currently there are only options to
+ * select Anthropic, Google, NVIDIA, OpenAI, and OpenRouter"): create a custom
+ * OpenAI-compatible provider row from the wizard via POST /api/v1/providers.
+ *
+ * The body is EXACTLY {name, baseUrl, apiFormat} — no id (the sidecar derives
+ * it via slugifyProviderId → prv_…), no kind (stamped "openai-compatible"),
+ * no enabled (stamped true), and NO KEY EVER (the key lands via the Tauri
+ * keyring command, never a REST body). Returns the created row (201) as a
+ * ProviderView; a 409 name-conflict rejects with the server's message.
+ */
+export interface CreateCustomProviderInput {
+  name: string;
+  baseUrl: string;
+  apiFormat?: string;
+}
+
+export async function createCustomProvider(input: CreateCustomProviderInput): Promise<ProviderView> {
+  return request<ProviderView>("/providers", { method: "POST", json: input });
+}
+
+/**
  * Client-side OpenRouter default (owner directive): the wizard must render
  * fully EVEN IF GET /providers returns [] or fails — so OpenRouter is always
  * available as the DEFAULT SELECTED provider, chosen entirely client-side.

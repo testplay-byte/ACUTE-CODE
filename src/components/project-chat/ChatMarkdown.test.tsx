@@ -11,9 +11,13 @@
  * code), fenced code through the CodeBlock component, and the mid-stream
  * partial-markdown guarantee (an unterminated fence renders as a code block,
  * a dangling `**` renders as plain text).
+ *
+ * ROUND-98 (R98-D, ADR-0030): the mermaid leg — the scanner's `terminated`
+ * flag, the lazy diagram mount for COMPLETE mermaid fences, the honest
+ * source fallback on render failure, and the theme re-initialization.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
   ChatMarkdown,
   CodeBlock,
@@ -24,7 +28,30 @@ import {
   parseMarkdownBlocks,
 } from "./ChatMarkdown";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
+import { useThemeStore } from "../../lib/theme-store";
 import { renderWithProviders } from "../../test-utils";
+
+// R98-D: the mermaid mock. The factory-run counter is the LAZINESS observable
+// — a factory evaluation means the dynamic import("mermaid") inside
+// MermaidDiagram actually fired (nothing in this file imports mermaid at
+// module scope). initialize/render are plain vi.fn()s; behaviors are armed
+// per-test because the afterEach restoreAllMocks wipes them, and call counts
+// are cleared in the mermaid describe's beforeEach.
+const mockMermaid = vi.hoisted(() => ({
+  factoryRuns: 0,
+  initialize: vi.fn(),
+  render: vi.fn(),
+}));
+
+vi.mock("mermaid", () => {
+  mockMermaid.factoryRuns += 1;
+  return {
+    default: {
+      initialize: mockMermaid.initialize,
+      render: mockMermaid.render,
+    },
+  };
+});
 
 afterEach(() => {
   cleanup();
@@ -90,7 +117,8 @@ describe("parseMarkdownBlocks (the pure line scanner)", () => {
     expect(blocks).toEqual([
       { kind: "para", lines: ["before"] },
       // ROUND-95 (R95-F): the info string now rides the block as `lang`.
-      { kind: "code", code: "const a = 1;", lang: "ts" },
+      // R98-D: `terminated` — false: the closing fence never arrived.
+      { kind: "code", code: "const a = 1;", lang: "ts", terminated: false },
     ]);
   });
 
@@ -127,18 +155,22 @@ describe("ROUND-95 (R95-F) parse fixes", () => {
   });
 
   it("fence info strings ride the code block as `lang` (backtick + tilde fences)", () => {
+    // R98-D: `terminated` rides every CLOSED fence as true.
     expect(parseMarkdownBlocks("```python\nx=1\n```")).toEqual([
-      { kind: "code", code: "x=1", lang: "python" },
+      { kind: "code", code: "x=1", lang: "python", terminated: true },
     ]);
     expect(parseMarkdownBlocks("~~~js\ny=2\n~~~")).toEqual([
-      { kind: "code", code: "y=2", lang: "js" },
+      { kind: "code", code: "y=2", lang: "js", terminated: true },
     ]);
-    expect(parseMarkdownBlocks("```\nz=3\n```")).toEqual([{ kind: "code", code: "z=3", lang: "" }]);
+    expect(parseMarkdownBlocks("```\nz=3\n```")).toEqual([
+      { kind: "code", code: "z=3", lang: "", terminated: true },
+    ]);
   });
 
   it("each fence closes on its OWN marker (a ``` block does not close on ~~~)", () => {
+    // R98-D: closed by its own ``` marker → terminated true.
     expect(parseMarkdownBlocks("```\nhas ~~~ inside\n```")).toEqual([
-      { kind: "code", code: "has ~~~ inside", lang: "" },
+      { kind: "code", code: "has ~~~ inside", lang: "", terminated: true },
     ]);
   });
 
@@ -616,5 +648,130 @@ describe("ROUND-95 (R95-F) helper contracts (matchUrl · isSafeUrl · decodeEnti
     expect(decodeEntities("&amp;lt;")).toBe("&lt;"); // one pass, no double-decode
     expect(decodeEntities("&nbsp;")).toBe("\u00a0");
     expect(decodeEntities("&unknown; &#xZZ; &#9999999999;")).toBe("&unknown; &#xZZ; &#9999999999;");
+  });
+});
+
+describe("ROUND-98 (R98-D) mermaid diagrams (ADR-0030)", () => {
+  // Call counts are cleared per-test (implementations are armed per-test;
+  // the file-level afterEach restoreAllMocks wipes the armed behaviors).
+  beforeEach(() => {
+    mockMermaid.initialize.mockClear();
+    mockMermaid.render.mockClear();
+  });
+
+  it("the scanner's `terminated` flag — true only when the CLOSING fence line arrived", () => {
+    // R98-D: the flag that gates the mermaid branch. Closed backtick AND
+    // tilde fences → true; the mid-stream dangling tail → false; a fence
+    // whose closer is the OTHER marker never terminated.
+    expect(parseMarkdownBlocks("```mermaid\nA\n```")).toEqual([
+      { kind: "code", code: "A", lang: "mermaid", terminated: true },
+    ]);
+    expect(parseMarkdownBlocks("~~~mermaid\nB\n~~~")).toEqual([
+      { kind: "code", code: "B", lang: "mermaid", terminated: true },
+    ]);
+    expect(parseMarkdownBlocks("```mermaid\nA")).toEqual([
+      { kind: "code", code: "A", lang: "mermaid", terminated: false },
+    ]);
+    // A ~~~ fence closed by a ``` line: the ``` is CONTENT, never a closer.
+    expect(parseMarkdownBlocks("~~~js\nconst a = 1;\n```")).toEqual([
+      { kind: "code", code: "const a = 1;\n```", lang: "js", terminated: false },
+    ]);
+  });
+
+  it("(a) a COMPLETE mermaid fence mounts the diagram card — verbatim code, strict config, injected SVG, lang badge", async () => {
+    mockMermaid.render.mockResolvedValue({ svg: '<svg data-acute-mermaid="probe"><g /></svg>' });
+    const runsBefore = mockMermaid.factoryRuns;
+    renderMd("```mermaid\ngraph TD;\nA-->B\n```");
+    // The fence-family card mounts immediately with the CodeBlock badge
+    // spelling (data-code-lang="mermaid") and the loading announcement.
+    expect(document.querySelector('[data-code-lang="mermaid"]')?.textContent).toBe("mermaid");
+    expect(screen.getByRole("status", { name: "Rendering diagram" })).toBeTruthy();
+    // The lazy import fired exactly once (the factory-run counter).
+    await waitFor(() => expect(mockMermaid.render).toHaveBeenCalledTimes(1));
+    expect(mockMermaid.factoryRuns).toBe(runsBefore + 1);
+    // STRICT security, startOnLoad false, the theme follows the app store
+    // (the store defaults to dark mode in this file).
+    expect(mockMermaid.initialize).toHaveBeenCalledWith({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: "dark",
+    });
+    // The code passed VERBATIM + the unique acute-mermaid render id.
+    const [renderId, renderCode] = mockMermaid.render.mock.calls[0];
+    expect(renderId).toMatch(/^acute-mermaid-\d+$/);
+    expect(renderCode).toBe("graph TD;\nA-->B");
+    // The SVG is injected into the card body; no Copy button (not a CodeBlock).
+    await waitFor(() =>
+      expect(document.querySelector('[data-acute-mermaid="probe"]')).toBeTruthy(),
+    );
+    expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull();
+  });
+
+  it("(b) a render failure degrades to the amber note + the ordinary CodeBlock (never a crash)", async () => {
+    mockMermaid.render.mockRejectedValue(new Error("unknown diagram type"));
+    renderMd("```mermaid\nthis is not a diagram\n```");
+    await waitFor(() =>
+      expect(screen.getByText("Diagram could not be rendered — showing source")).toBeTruthy(),
+    );
+    // The note is the amber semantic warning, announced as a status.
+    const note = screen.getByText("Diagram could not be rendered — showing source");
+    expect(note.getAttribute("role")).toBe("status");
+    expect(["#f59e0b", "rgb(245, 158, 11)"]).toContain((note as HTMLElement).style.color);
+    // The source survives as an ordinary CodeBlock: Copy button + text.
+    expect(screen.getByRole("button", { name: "Copy code" })).toBeTruthy();
+    expect(screen.getByText("this is not a diagram")).toBeTruthy();
+    // No diagram card: no loading status, no injected mermaid SVG (the only
+    // svg on screen is the Copy button's lucide icon).
+    expect(document.querySelector('[aria-label="Rendering diagram"]')).toBeNull();
+    expect(document.querySelector("[data-acute-mermaid]")).toBeNull();
+  });
+
+  it("(c) a NON-mermaid fence stays an ordinary CodeBlock — no mermaid import delta", () => {
+    const runsBefore = mockMermaid.factoryRuns;
+    renderMd("```ts\nconst x = 1;\n```");
+    expect(screen.getByRole("button", { name: "Copy code" })).toBeTruthy();
+    expect(document.querySelector("[data-code-lang]")?.textContent).toBe("ts");
+    // No import delta: the lazy mermaid chunk never loads for ordinary fences.
+    expect(mockMermaid.factoryRuns).toBe(runsBefore);
+    expect(mockMermaid.render).not.toHaveBeenCalled();
+  });
+
+  it("(d) an UNCLOSED mermaid fence stays a CodeBlock (mid-stream) — no import, render never called", () => {
+    const runsBefore = mockMermaid.factoryRuns;
+    renderMd("```mermaid\ngraph TD;\nA-->B");
+    // The ordinary CodeBlock: Copy button, its own lang badge, source visible.
+    expect(screen.getByRole("button", { name: "Copy code" })).toBeTruthy();
+    expect(document.querySelector("[data-code-lang]")?.textContent).toBe("mermaid");
+    expect(screen.getByText("A-->B")).toBeTruthy();
+    // No diagram card mounts while the fence is still streaming in.
+    expect(document.querySelector('[aria-label="Rendering diagram"]')).toBeNull();
+    expect(mockMermaid.factoryRuns).toBe(runsBefore);
+    expect(mockMermaid.render).not.toHaveBeenCalled();
+  });
+
+  it("a theme flip re-initializes mermaid with the light 'default' theme", async () => {
+    mockMermaid.render.mockResolvedValue({ svg: '<svg data-acute-mermaid="theme-probe"></svg>' });
+    renderMd("```mermaid\ngraph TD;\nA-->B\n```");
+    await waitFor(() => expect(mockMermaid.initialize).toHaveBeenCalledTimes(1));
+    expect(mockMermaid.initialize).toHaveBeenLastCalledWith({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: "dark",
+    });
+    // Flip the app theme mode — the diagram re-initializes for light.
+    act(() => {
+      useThemeStore.setState({ mode: "light" });
+    });
+    await waitFor(() =>
+      expect(mockMermaid.initialize).toHaveBeenLastCalledWith({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: "default",
+      }),
+    );
+    // Restore the file's dark-mode default for any later assertions.
+    act(() => {
+      useThemeStore.setState({ mode: "dark" });
+    });
   });
 });

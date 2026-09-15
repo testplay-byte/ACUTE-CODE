@@ -8,6 +8,10 @@ import { withAlpha } from "../dashboard/helpers";
 // R97-F: the Prism-backed highlighter (the app's own token palette lives in
 // index.css — see src/lib/highlight.ts).
 import { highlightLines } from "../../lib/highlight";
+// R98-D (ADR-0030): the mermaid diagram renderer — imported statically (the
+// component itself is tiny) but its mermaid dependency loads LAZILY inside
+// the component, only when a COMPLETE mermaid fence mounts.
+import { MermaidDiagram } from "./MermaidDiagram";
 
 /**
  * ROUND-64 (R64-c, owner: "there was apparently no formatting of the response
@@ -585,9 +589,12 @@ function renderInline(text: string, projectId: string, keyPrefix: string, styles
 /** One parsed markdown block. ROUND-95 (R95-F): `code` carries the fence's
  * info string (`lang` — "" when absent) and bullets carry an ARBITRARY
  * `level` (indentation / 2 spaces — the old binary 0|1 flattened depth-2+
- * nests onto depth 1). */
+ * nests onto depth 1). ROUND-98 (R98-D): `code` also carries `terminated` —
+ * true only when the CLOSING fence line actually arrived; a mid-stream
+ * unclosed fence stays false so the mermaid branch below never mounts a
+ * diagram renderer for a fence that is still streaming in. */
 export type MdBlock =
-  | { kind: "code"; code: string; lang: string }
+  | { kind: "code"; code: string; lang: string; terminated: boolean }
   | { kind: "heading"; level: number; text: string }
   | { kind: "hr" }
   | { kind: "quote"; lines: string[] }
@@ -680,19 +687,22 @@ export function parseMarkdownBlocks(content: string): MdBlock[] {
 
     // Fenced code — consumes to the closing fence (same marker) OR the end
     // of input (a mid-stream dangling fence still renders its partial
-    // content as a code block).
+    // content as a code block). R98-D: `terminated` records WHICH of the two
+    // happened — true only when the closing fence line arrived.
     const marker = fenceMarker(line);
     if (marker !== null) {
       const info = FENCE_INFO_RE.exec(line);
       const lang = info !== null ? info[2] : "";
       const buf: string[] = [];
       i += 1;
+      let terminated = false;
       while (i < lines.length && fenceMarker(lines[i]) !== marker) {
         buf.push(lines[i]);
         i += 1;
       }
+      if (i < lines.length) terminated = true;
       i += 1; // skip the closing fence (or past EOF)
-      out.push({ kind: "code", code: buf.join("\n"), lang });
+      out.push({ kind: "code", code: buf.join("\n"), lang, terminated });
       continue;
     }
 
@@ -807,7 +817,20 @@ function renderBlocks(content: string, projectId: string, styles: ThemeStyles): 
   return blocks.map((b, i) => {
     switch (b.kind) {
       case "code":
-        return <CodeBlock key={`md-code-${i}`} code={b.code} lang={b.lang} />;
+        // R98-D (ADR-0030): a COMPLETE mermaid fence renders as a diagram;
+        // everything else keeps the ordinary CodeBlock — every other
+        // language, and an UNCLOSED mid-stream mermaid fence (terminated is
+        // false while the diagram source is still streaming; the diagram
+        // mounts only once the closing fence lands). THINKING blocks stay
+        // CodeBlocks by design: WorkingSection's fence-split renders them
+        // directly as archival mono (R97-F), deliberately outside this
+        // branch — a diagram grammar has no business inside a reasoning
+        // trace, and the mono rendering is the thinking area's identity.
+        return b.lang.toLowerCase() === "mermaid" && b.terminated ? (
+          <MermaidDiagram key={`md-diagram-${i}`} code={b.code} />
+        ) : (
+          <CodeBlock key={`md-code-${i}`} code={b.code} lang={b.lang} />
+        );
 
       case "heading": {
         const size = HEADING_SIZES[b.level];
