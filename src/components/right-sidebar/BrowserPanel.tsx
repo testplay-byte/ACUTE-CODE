@@ -193,6 +193,18 @@ const RECOVERY_WINDOW_MS = 60_000;
 const NATIVE_BOUNDS_INTERVAL_MS = 500;
 
 /**
+ * ROUND-98 (R98-G1): the screenshot_meta visibility floor (LOGICAL px). A
+ * visible browser panel is hundreds of logical px on every axis; a hidden
+ * (display:none keep-alive) tab or a collapsed sidebar reports a 0×0 (or
+ * single-digit) rect. Below this floor the screenshot_meta handler refuses
+ * honestly instead of answering a degenerate region the agent-core capture
+ * would faithfully turn into a one-pixel "screenshot". The agent-core side
+ * keeps its own physical-px floor (REGION_MIN_PX in the browser plugin) —
+ * two honest nets, no clamp anywhere.
+ */
+const PANEL_MIN_LOGICAL_PX = 10;
+
+/**
  * R91-B3: the VISIBILITY WATCHDOG's period. Every 2s the panel re-asserts
  * the ACTIVE, unguarded tab's webview visibility + bounds, and recreates
  * the webview outright when it discovers it never came to exist. This is
@@ -1132,18 +1144,67 @@ export function BrowserPanel({
       if (action === "screenshot_meta") {
         const el = placeholderRef.current;
         if (el === null) return { ok: false, error: "screenshot_meta: the panel area is not measurable right now" };
+        // ── ROUND-98 (R98-G1): HONEST visibility gates — never a 1×1 lie ──
+        // The pre-fix handler clamped a not-visible panel's rect with
+        // Math.max(1,…) and answered a "region" anyway: a display:none
+        // keep-alive tab (0×0 rect), a hidden sidebar, the Home view, or an
+        // overlay covering the panel all produced a capture that PASSED the
+        // tool's w>0&&h>0 check and photographed one pixel — or worse, the
+        // app DOM behind a HIDDEN webview (the owner: "it was currently
+        // unable to take screenshots of the web browser" — every capture
+        // was garbage). Now each cause answers an explicit ERROR naming it;
+        // the agent-core tool surfaces the message verbatim and never
+        // captures. Values are read LIVE (getState/refs) — the handler is
+        // registered once per (nativeMode, tabId), the visibility truth
+        // changes constantly.
+        const notVisible = (why: string): BrowserCommandReply => ({
+          ok: false,
+          error:
+            `screenshot_meta: the browser tab is not visible — ${why}. ` +
+            "Switch the right sidebar to the Browser panel first (and off the Home view), then retry the screenshot.",
+        });
+        if (hiddenRef.current) {
+          return notVisible("this tab is mounted in the background (keep-alive hidden)");
+        }
         const rect = el.getBoundingClientRect();
+        // A visible panel is hundreds of logical px on every axis; anything
+        // below this floor is a hidden/collapsed layout reporting a stub rect.
+        if (rect.width < PANEL_MIN_LOGICAL_PX || rect.height < PANEL_MIN_LOGICAL_PX) {
+          return notVisible(
+            `its panel rect measures ${Math.round(rect.width)}×${Math.round(rect.height)}px (the sidebar is collapsed or the tab is hidden)`,
+          );
+        }
+        if (useBrowserTabStore.getState().tabs[tabId]?.homeView) {
+          // R97-J (M1): on the Home view the native webview is hidden — a
+          // capture would photograph the app's DOM behind it, not the page.
+          return notVisible("the browser is on its Home view (the page webview is hidden)");
+        }
+        if (useWebviewGuardStore.getState().popoverTabId === tabId) {
+          return notVisible("a sidebar popover is covering the panel (the page webview is hidden)");
+        }
+        // R92-A discipline (the watchdog's pattern): a FRESH overlay sweep
+        // before the geometric check, so a stale covering rect can never
+        // pass a capture through, and a just-closed overlay never blocks it.
+        refreshOverlayRectsNow();
+        if (overlayCoversRect(rect)) {
+          return notVisible("an app overlay (menu/dialog) is covering the panel");
+        }
         const metrics = await nativeWindowMetrics();
         if (metrics === null) {
           // No window API — still answer supported with no region; the
-          // tool falls back to a full-display capture.
+          // tool's honest no-region refusal fires (R87: never a full-display
+          // capture — that was the owner's screen leaking into the chat).
           return { ok: true, data: { supported: true, region: null, mode: "native" } };
         }
         const region = {
           x: Math.round(metrics.x + rect.left * metrics.scaleFactor),
           y: Math.round(metrics.y + rect.top * metrics.scaleFactor),
-          w: Math.max(1, Math.round(rect.width * metrics.scaleFactor)),
-          h: Math.max(1, Math.round(rect.height * metrics.scaleFactor)),
+          // R98-G1: NO Math.max(1,…) clamp — the visibility gates above own
+          // the degenerate cases; the tool's own REGION_MIN_PX floor is the
+          // second honest net (a fractional scale can shrink a small-but-
+          // visible panel below any frontend floor).
+          w: Math.round(rect.width * metrics.scaleFactor),
+          h: Math.round(rect.height * metrics.scaleFactor),
         };
         return { ok: true, data: { supported: true, region, scaleFactor: metrics.scaleFactor, mode: "native" } };
       }

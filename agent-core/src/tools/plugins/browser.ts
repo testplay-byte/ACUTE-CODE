@@ -12,8 +12,10 @@
  *                  via the SSE→UI→Rust browser-command bridge) — click links,
  *                  fill forms, read the DOM the user is watching;
  *   · screenshot — capture the browser panel's on-screen region through the
- *                  computer-use backends + describe it with the (separate or
- *                  main) vision model; needs Computer Use enabled;
+ *                  platform screen-capture backends + describe it with the
+ *                  (separate or main) vision model; R98-G1: DECOUPLED from
+ *                  the Computer Use master switch (its own standalone
+ *                  capture backend path — getCaptureBackend);
  *   · get_state  — now with the session list (every open tab) + active tab.
  * The pre-R62 actions (navigate/back/forward/reload/set_viewport) are
  * byte-identical in behavior.
@@ -85,13 +87,21 @@ import { detectVerificationWall, openBrowserCheckpoint } from "../../browser-che
 import type { VerificationWallHit } from "../../browser-checkpoint.js";
 import { requestWebFetchApproval } from "../../approvals.js";
 import { buildApprovalDeps } from "../approval-deps.js";
-import { getActiveComputerRelay } from "./computer-relay.js";
+// ROUND-98 (R98-G1): the DECOUPLED capture engine — the browser screenshot
+// no longer borrows the computer-use relay (that registry is armed only
+// when Settings → Computer Use is enabled, an unrelated OFF-by-default
+// master switch). getCaptureBackend returns the ACTIVE platform backend +
+// its runner directly; the relay stays for computer-use's own path.
+import { getCaptureBackend } from "../../computer/backends/index.js";
 import { relayVision } from "./computer-use.js";
-// R94-E (PART 3): the vision gate — the same no-image-understanding check the
-// computer-use screenshot tools run BEFORE any capture work (the helper +
-// the canonical message live in computer-use.ts; browser.ts already imports
-// relayVision from there, so this adds NO new module edge).
-import { NO_VISION_SCREENSHOT_MESSAGE, NO_VISION_SCREENSHOT_RECOVERY, sessionHasVisionPath } from "./computer-use.js";
+// R94-E (PART 3) → R98-G1: the vision-gate helpers. The gate SPLIT in
+// round 98: sessionHasVisionPath now gates only the DESCRIBE leg
+// (relayVision — the Image-Analysis description) AFTER the capture; the
+// capture itself (captureRegion + registerRaster + the chat thumbnail
+// frame) is NOT vision-gated (a blind session still gets the raster — the
+// owner sees it in the chat thumbnail; only the description is refused
+// honestly with the canonical message).
+import { NO_VISION_SCREENSHOT_MESSAGE, sessionHasVisionPath } from "./computer-use.js";
 // ROUND-67 (R67-D): the screenshot action copies its capture into the
 // route-served raster registry + announces the chat THUMBNAIL frame.
 import { registerRaster } from "../../computer/raster-cache.js";
@@ -119,6 +129,16 @@ import type { PluginDefinition, ToolDefinition } from "../registry.js";
 
 /** A relative path that names a local page-ish file (`demo.html`). */
 const RELATIVE_LOCAL_FILE_RE = /^[^?#]*\.(?:html?|xhtml|svg|md|txt|json|css|js|mjs)(?:[?#]|$)/i;
+
+/**
+ * ROUND-98 (R98-G1, bug b): the degenerate-region floor for the screenshot
+ * action. A VISIBLE browser panel is hundreds of pixels on every axis; a
+ * hidden (display:none) tab, a collapsed sidebar, or stale geometry reports
+ * a 0×0 (or single-digit) rect that the pre-fix code CLAMPED to 1×1 and then
+ * "successfully" captured one pixel. Anything below this floor is refused
+ * honestly with the cause named — never captured.
+ */
+const REGION_MIN_PX = 50;
 
 /**
  * R95-C: normalize a file:// URL or a bare LOCAL PATH (Windows drive, POSIX
@@ -428,7 +448,7 @@ export const browserPlugin: PluginDefinition = {
       {
         name: "browser_control",
         description:
-          "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live, driven with VISIBLE HUMAN-LIKE INPUT: a custom agent cursor is ALWAYS on the page (parked at a resting spot between actions), moves to every target along a natural human path (slight overshoot-and-return, hesitation, curved — never a straight-line teleport), fires a real pointermove/mousemove trail with hover events as it travels (hover menus open), clicks land as real pointer events with a visible press pulse, and typing is word-by-word at a human pace (~150 WPM) after a natural ~1s beat from the click that focused the field; submit (Enter) also lands ~1s after the typing finishes. HOW TO WORK: (0) PLAN — for a multi-step browsing task, write the plan with the todo tool first (the owner watches the list progress live). (1) SEARCH FIRST — if the task is to find/search/look something up, navigate to a search engine (https://duckduckgo.com or https://www.bing.com), TYPE the query into its search box, then submit — do NOT guess direct URLs unless the task explicitly gives one. (2) read_dom FIRST on every new page — it returns each interactive element's exact selector + x/y/w/h position, which feed the mouse ops. (3) Interact like a person: type into fields (word-by-word), click (the cursor visibly moves), press_key Enter to submit forms, mouse scroll to browse results. Actions: navigate (absolute http(s) URL, or a LOCAL FILE — a file:// URL or an absolute local path like C:\\Users\\me\\page.html — local HTML files open natively in the browser panel; documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts; presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps w/h), read (the CURRENT page's text content, fetched fresh server-side — local file:// pages read from disk; works in every mode), read_dom (a STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element with a short CSS selector + its text/label/value + its x/y/w/h position, forms with field names, and pageState — the SPA SECTION tracker: the URL hash + query params + which tab/nav item is aria-selected or aria-current; AFTER clicking a section or tab, call read_dom again and CHECK pageState to confirm the section stuck — if it reverted (e.g. back to 'all'), click the section again; include 'all' adds the text paragraphs — THE way to know the page content without screenshots — call it FIRST), source (the live page's raw material: html (outerHTML of the page or one selector), css (stylesheets, plus the computed style of a selector), or scripts (src list + inline bodies); native desktop mode only), click (click an element — by CSS selector, or a case-insensitive substring of a clickable's visible text/aria-label/name/value/title; the cursor VISIBLY moves to it, hovers first (menus arm), then a full real pointer-event sequence — over/enter, move, down, up, click — fires at that exact spot, and the result reports where focus moved afterwards, a cheap effect check; native desktop mode only), type (the cursor moves to the field and TAPS it, a natural ~1s beat passes, then the text is typed WORD BY WORD at ~150 WPM with real per-character events so React/Vue pages register it; newlines in the text become REAL newlines (Shift+Enter formatting — the form is NEVER submitted implicitly); pass submit:true to submit after typing (the Enter key lands ~1s after the typing finishes — a person reviewing what they typed); capped at 600 chars per call — split longer texts), press_key (dispatch a key to an element or the focused element — Enter inside a form triggers REAL native form submission), mouse (FULL pointer control at exact page coordinates from read_dom: op move (hover), click (left), double, right (context menu), drag (x,y → toX,toY), scroll (dx/dy pixels, optional x/y hover point) — the custom cursor visibly travels every path), eval (run JavaScript INSIDE the live page and get the value back — click links with `return document.querySelector('a').click()`, fill inputs, read the DOM; the page's own state (logins, JS) is live; native desktop mode only), wait (let the page settle — probes the live page until its conditions hold, up to ms (default 900, max 15000): document.readyState 'complete' (default on; readyState:false skips it), a CSS selector appearing (selector), and/or the tab URL containing a substring (urlContains); returns honestly what matched or what did not — a pure ms pause with readyState:false needs no bridge. ALWAYS call wait (or use sequence, which waits automatically) after navigate before clicking/typing — pages need a moment to become interactive), sequence (MULTI-STAGE STEPS in ONE tool call — the way to do atomic multi-step interactions: steps is an array of 1-8 step objects {action, ...params}, each action being any of navigate/back/forward/reload/read/read_dom/source/click/type/press_key/mouse/eval/wait/wait_for_verification/set_viewport/screenshot/get_state (never sequence itself — no nesting); the steps run IN ORDER on one tab, each through the exact same code as the standalone action, stopping at the FIRST failure with its step index; between steps the tool settles automatically (250ms, or after navigate/back/forward/reload it waits up to 5s for readyState complete — the built-in proper waiting); use it for type→wait→click, navigate→read_dom, form fill→submit chains), screenshot (capture EXACTLY what the browser panel shows + a vision-model description — panel region only, NEVER the full screen; requires Computer Use enabled in Settings and the browser tab to be open in the app; prefer read/read_dom — screenshot only when pixels are genuinely the question), get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab), wait_for_verification (the page is blocked by a bot wall — captcha/Cloudflare/age gate: opens a countdown card in the OWNER's chat and waits — default 15s, up to 60s — while the owner solves it, then re-checks the page and reports honestly). To submit a search box / form: type with submit:true, or press_key key Enter (it triggers native form submission), or click the submit button. When a tool result warns '⚠ A verification wall', call wait_for_verification — the owner gets a live countdown card in chat to solve it. sessionId optional — omit it to drive THIS chat session's own tab (auto-opened for you; never another chat session's tab). click/type/press_key/mouse/read_dom/source/eval run through the desktop app's native bridge — in web dev mode they fail fast with an honest error (read works in every mode). The actions are HUMAN-PACED by design (the user watches a person work): a type call takes ~1s per 12 words plus the beats — do not fire them in parallel; do them in order like a person would. Viewport/page changes appear LIVE in the user's panel; announce them in one line. The page the panel shows may differ from a fresh fetch (logins, JS) — read for text, eval for the live DOM, screenshot for what the user actually sees.",
+          "Control the user's EMBEDDED BROWSER PANEL — a real in-app web browser the user watches live, driven with VISIBLE HUMAN-LIKE INPUT: a custom agent cursor is ALWAYS on the page (parked at a resting spot between actions), moves to every target along a natural human path (slight overshoot-and-return, hesitation, curved — never a straight-line teleport), fires a real pointermove/mousemove trail with hover events as it travels (hover menus open), clicks land as real pointer events with a visible press pulse, and typing is word-by-word at a human pace (~150 WPM) after a natural ~1s beat from the click that focused the field; submit (Enter) also lands ~1s after the typing finishes. HOW TO WORK: (0) PLAN — for a multi-step browsing task, write the plan with the todo tool first (the owner watches the list progress live). (1) SEARCH FIRST — if the task is to find/search/look something up, navigate to a search engine (https://duckduckgo.com or https://www.bing.com), TYPE the query into its search box, then submit — do NOT guess direct URLs unless the task explicitly gives one. (2) read_dom FIRST on every new page — it returns each interactive element's exact selector + x/y/w/h position, which feed the mouse ops. (3) Interact like a person: type into fields (word-by-word), click (the cursor visibly moves), press_key Enter to submit forms, mouse scroll to browse results. Actions: navigate (absolute http(s) URL, or a LOCAL FILE — a file:// URL or an absolute local path like C:\\Users\\me\\page.html — local HTML files open natively in the browser panel; documentation/source hosts like github.com navigate freely, other hosts ask the owner for permission first), back | forward | reload (walk that tab's history), set_viewport (change the display size the user sees — test responsive layouts; presets mobile-sm 375×667, mobile-md 390×844, tablet 768×1024, laptop 1280×800, desktop 1440×900, full-hd 1920×1080, or custom width 200-3840 × height 200-4320, zoom 0.25-3, rotate swaps w/h), read (the CURRENT page's text content, fetched fresh server-side — local file:// pages read from disk; works in every mode), read_dom (a STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element with a short CSS selector + its text/label/value + its x/y/w/h position, forms with field names, and pageState — the SPA SECTION tracker: the URL hash + query params + which tab/nav item is aria-selected or aria-current; AFTER clicking a section or tab, call read_dom again and CHECK pageState to confirm the section stuck — if it reverted (e.g. back to 'all'), click the section again; include 'all' adds the text paragraphs — THE way to know the page content without screenshots — call it FIRST), source (the live page's raw material: html (outerHTML of the page or one selector), css (stylesheets, plus the computed style of a selector), or scripts (src list + inline bodies); native desktop mode only), click (click an element — by CSS selector, or a case-insensitive substring of a clickable's visible text/aria-label/name/value/title; the cursor VISIBLY moves to it, hovers first (menus arm), then a full real pointer-event sequence — over/enter, move, down, up, click — fires at that exact spot, and the result reports where focus moved afterwards, a cheap effect check; native desktop mode only), type (the cursor moves to the field and TAPS it, a natural ~1s beat passes, then the text is typed WORD BY WORD at ~150 WPM with real per-character events so React/Vue pages register it; newlines in the text become REAL newlines (Shift+Enter formatting — the form is NEVER submitted implicitly); pass submit:true to submit after typing (the Enter key lands ~1s after the typing finishes — a person reviewing what they typed); capped at 600 chars per call — split longer texts), press_key (dispatch a key to an element or the focused element — Enter inside a form triggers REAL native form submission), mouse (FULL pointer control at exact page coordinates from read_dom: op move (hover), click (left), double, right (context menu), drag (x,y → toX,toY), scroll (dx/dy pixels, optional x/y hover point) — the custom cursor visibly travels every path), eval (run JavaScript INSIDE the live page and get the value back — click links with `return document.querySelector('a').click()`, fill inputs, read the DOM; the page's own state (logins, JS) is live; native desktop mode only), wait (let the page settle — probes the live page until its conditions hold, up to ms (default 900, max 15000): document.readyState 'complete' (default on; readyState:false skips it), a CSS selector appearing (selector), and/or the tab URL containing a substring (urlContains); returns honestly what matched or what did not — a pure ms pause with readyState:false needs no bridge. ALWAYS call wait (or use sequence, which waits automatically) after navigate before clicking/typing — pages need a moment to become interactive), sequence (MULTI-STAGE STEPS in ONE tool call — the way to do atomic multi-step interactions: steps is an array of 1-8 step objects {action, ...params}, each action being any of navigate/back/forward/reload/read/read_dom/source/click/type/press_key/mouse/eval/wait/wait_for_verification/set_viewport/screenshot/get_state (never sequence itself — no nesting); the steps run IN ORDER on one tab, each through the exact same code as the standalone action, stopping at the FIRST failure with its step index; between steps the tool settles automatically (250ms, or after navigate/back/forward/reload it waits up to 5s for readyState complete — the built-in proper waiting); use it for type→wait→click, navigate→read_dom, form fill→submit chains), screenshot (capture EXACTLY what the browser panel shows + a vision-model description — panel region only, NEVER the full screen; needs the browser tab OPEN and VISIBLE in the app's right sidebar — a hidden tab, the Home view, or web dev mode is refused with an honest error naming the cause, so switch the right sidebar to the Browser panel and retry; the capture works without a vision model — the owner sees it in the chat thumbnail — but the DESCRIPTION needs one (a no-vision session gets the capture with an honest no-description note); prefer read/read_dom — screenshot only when pixels are genuinely the question), get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab), wait_for_verification (the page is blocked by a bot wall — captcha/Cloudflare/age gate: opens a countdown card in the OWNER's chat and waits — default 15s, up to 60s — while the owner solves it, then re-checks the page and reports honestly). To submit a search box / form: type with submit:true, or press_key key Enter (it triggers native form submission), or click the submit button. When a tool result warns '⚠ A verification wall', call wait_for_verification — the owner gets a live countdown card in chat to solve it. sessionId optional — omit it to drive THIS chat session's own tab (auto-opened for you; never another chat session's tab). click/type/press_key/mouse/read_dom/source/eval/screenshot run through the desktop app's native bridge — in web dev mode they fail fast with an honest error (read works in every mode). The actions are HUMAN-PACED by design (the user watches a person work): a type call takes ~1s per 12 words plus the beats — do not fire them in parallel; do them in order like a person would. Viewport/page changes appear LIVE in the user's panel; announce them in one line. The page the panel shows may differ from a fresh fetch (logins, JS) — read for text, eval for the live DOM, screenshot for what the user actually sees.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
@@ -1424,36 +1444,51 @@ export const browserPlugin: PluginDefinition = {
                   output: `browser_control: screenshot — no page is open in tab '${sessionId}' yet; navigate first`,
                 };
               }
-              const relay = getActiveComputerRelay();
-              if (relay === null) {
-                return {
-                  ok: false,
-                  output:
-                    "browser_control: screenshot needs Computer Use enabled (Settings → Computer Use — the screen-capture engine). It is currently OFF. Meanwhile action 'read' gets the page text and 'eval' the live DOM.",
-                };
-              }
               if (toolDeps === undefined || toolDeps.db === null || toolDeps.db === undefined) {
                 return { ok: false, output: "browser_control: screenshot unavailable — no database in this context" };
               }
-              // ── R94-E (PART 3): the VISION GATE (the single surgical block) ──
-              // The owner's v0.91.0 report: the session's model had NO image
-              // understanding, yet the agent kept screenshotting — dead captures
-              // downstream. Resolve the vision path BEFORE any capture work
-              // (the region ask included — that is a 5s-potential UI bridge
-              // round-trip); no path → the honest, instructive refusal steering
-              // to the text actions that DO work everywhere (read / read_dom).
-              if (!sessionHasVisionPath(toolDeps.db, toolDeps.mainModel)) {
-                return {
-                  ok: false,
-                  output: `browser_control: screenshot — ${NO_VISION_SCREENSHOT_MESSAGE} ${NO_VISION_SCREENSHOT_RECOVERY}`,
-                };
-              }
+              // ── ROUND-98 (R98-G1): the three gate fixes ────────────────────
+              // The owner: "it was currently unable to take screenshots of the
+              // web browser." The chain had three dishonest gates:
+              //  (1) the Computer Use master switch — this action used to
+              //      borrow the computer-use RELAY, which is armed inside the
+              //      computer-use plugin's createTools ONLY when Settings →
+              //      Computer Use is enabled (DEFAULT OFF). Browser
+              //      screenshots therefore silently required an unrelated
+              //      off-by-default feature. The capture now goes through
+              //      getCaptureBackend() — the SAME platform backend + runner
+              //      the relay would carry, minus the computer-use
+              //      session/relay/settings (computer-use's own path is
+              //      untouched — zero regression there).
+              //  (2) the R94-E vision gate fired BEFORE any capture work, so
+              //      a no-vision session got NOTHING even though the capture
+              //      itself has value (the owner's chat thumbnail). The gate
+              //      moved below the capture and now gates the DESCRIBE leg
+              //      (relayVision) ONLY — the capture, registerRaster, and the
+              //      SSE `screenshot` frame are not vision-gated.
+              //  (3) a degenerate region PASSED: the frontend clamped a
+              //      display:none tab's 0×0 rect with Math.max(1,…) and the
+              //      validation below only tested w>0 && h>0 — a 1×1
+              //      physical-px capture "succeeded" and photographed ONE
+              //      PIXEL of whatever sat behind the app (and when the
+              //      webview was hidden — Home view, a covering overlay — the
+              //      GDI capture photographed the app DOM, not the page).
+              //      Both ends refuse honestly now: the BrowserPanel's
+              //      screenshot_meta handler answers an explicit not-visible
+              //      ERROR naming the cause, and THIS side enforces a floor —
+              //      a sub-50px region never reaches the backend.
+              //
               // Ask the live UI for the panel's on-screen region (physical px).
               // R87 (the owner: screenshots must be the PANEL ONLY — never the
               // whole display): no answer / web mode → an HONEST ERROR steering
               // to read/read_dom, never a full-display capture (the old fallback
               // leaked the owner's entire screen into the agent's context).
+              // R98-G1: the panel's own NOT-VISIBLE refusals (a display:none
+              // keep-alive tab, the Home view, a covering overlay, a hidden
+              // sidebar) now arrive as command ERRORS — surfaced verbatim
+              // instead of being swallowed into the generic no-region message.
               let region: { x: number; y: number; w: number; h: number } | null = null;
+              let panelRefusal: string | null = null;
               if (typeof toolDeps.emit === "function") {
                 try {
                   const meta = (await sendBrowserCommand(toolDeps.emit, sessionId, "screenshot_meta", {}, 5000)) as {
@@ -1478,19 +1513,50 @@ export const browserPlugin: PluginDefinition = {
                       h: Math.round(meta.region.h),
                     };
                   }
-                } catch {
-                  // The UI didn't answer (no panel mounted / web dev mode) —
-                  // region stays null and the honest error below fires.
+                } catch (error) {
+                  // The panel answered with an explicit honest refusal (the
+                  // tab is not visible — its message names the cause), or the
+                  // bridge reported no mounted handler ("the tab is closed,
+                  // inactive, or running outside the desktop app"), or the
+                  // command timed out (web dev mode / a wedged UI). Keep the
+                  // message — the refusal below surfaces it instead of
+                  // guessing a cause.
+                  panelRefusal = error instanceof Error ? error.message : String(error);
                 }
               }
               if (region === null) {
                 return {
                   ok: false,
                   output:
-                    "browser_control: screenshot — the browser panel is not mounted in the app right now (web dev mode, or the browser tab is closed), so there is no panel region to capture. The panel-only capture NEVER falls back to a full-screen shot. Use action 'read' for the page text or 'read_dom' for the structured content (they work everywhere), or re-open the browser tab and retry.",
+                    `browser_control: screenshot — ${
+                      panelRefusal !== null
+                        ? panelRefusal
+                        : "the browser panel is not mounted in the app right now (web dev mode, or the browser tab is closed)"
+                    }, so there is no panel region to capture. ` +
+                    "The panel-only capture NEVER falls back to a full-screen shot. " +
+                    "Use action 'read' for the page text or 'read_dom' for the structured content (they work everywhere), or make the browser tab visible in the app's right sidebar and retry.",
                 };
               }
-              const raster = await relay.backend.captureRegion(relay.run, region);
+              // R98-G1 (bug b): the degenerate-region floor. A region smaller
+              // than this cannot be a visible browser panel (a display:none
+              // rect, a collapsed sidebar, stale geometry) — capturing it
+              // would produce a useless sliver and report "success". Refuse
+              // honestly, never capture.
+              if (region.w < REGION_MIN_PX || region.h < REGION_MIN_PX) {
+                return {
+                  ok: false,
+                  output:
+                    `browser_control: screenshot — the browser tab is not visible: its panel region came back as ${region.w}×${region.h}px (a hidden or collapsed panel reports a degenerate rect). ` +
+                    "Switch the right sidebar to the Browser panel (and off any view that hides the page) and retry. The panel-only capture NEVER falls back to a full-screen shot. " +
+                    "Meanwhile action 'read' gets the page text and 'read_dom' the structured content.",
+                };
+              }
+              // R98-G1 (1): the STANDALONE capture engine — no Computer Use
+              // session, no relay, no settings gate. Same platform backend
+              // singleton the computer-use dispatcher uses, so capture
+              // behavior is identical when both features are on.
+              const capture = getCaptureBackend();
+              const raster = await capture.backend.captureRegion(capture.run, region);
               if ("error" in raster) {
                 return {
                   ok: false,
@@ -1522,10 +1588,22 @@ export const browserPlugin: PluginDefinition = {
                   // The thumbnail strip is an enhancement — never break the tool.
                 }
               }
-              // R66 (A1): NO relay.session.record here anymore — browser
+              // R66 (A1): NO computer-use session record here — browser
               // screenshots must NOT appear in the computer-use monitor ring
               // (the owner: browser work wrongly showed "agent is using your
               // computer"). The capture + vision description stand alone.
+              // ── R98-G1 (2): the DESCRIBE leg — the ONLY vision-gated part ──
+              // The capture above succeeded and is already shown to the owner
+              // (the thumbnail frame just emitted); the DESCRIPTION needs a
+              // seer. NO vision path → the honest refusal rides the SUCCESS
+              // output (R94-E's canonical message): the capture is real, the
+              // describe is not — steer to the text actions that work.
+              if (!sessionHasVisionPath(toolDeps.db, toolDeps.mainModel)) {
+                return {
+                  ok: true,
+                  output: `Browser panel screenshot captured (panel region ${region.w}×${region.h}, ${raster.width}×${raster.height}px, page ${state.currentUrl}) — shown to the owner in the chat thumbnail, but NOT described: ${NO_VISION_SCREENSHOT_MESSAGE} Use read / read_dom for the page text; call screenshot only when the owner needs to SEE the panel.`,
+                };
+              }
               const instruction =
                 typeof input.instruction === "string" && input.instruction.trim() !== ""
                   ? input.instruction.trim().slice(0, 500)

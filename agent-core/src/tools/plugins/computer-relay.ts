@@ -1,16 +1,23 @@
 /**
  * ROUND-62 (D8): the LIVE COMPUTER-USE RELAY registry.
  *
- * The browser plugin's `screenshot` action needs the computer-use engine
- * (the ONLY pixel-capture path in the app — the OS screen capture backends)
- * plus its vision relay. The computer-use plugin is SETTINGS-GATED and
- * builds its dispatcher per turn inside createTools; this module is the
- * handshake point: the computer-use plugin registers the LIVE engine when
- * a turn arms it, and the browser plugin borrows it for screen-region
- * captures of the embedded browser panel.
+ * History: the browser plugin's `screenshot` action used to borrow the
+ * computer-use engine through this registry (the ONLY pixel-capture path in
+ * the app — the OS screen capture backends) plus its vision relay, which
+ * silently made browser screenshots require Settings → Computer Use
+ * (DEFAULT OFF) — an unrelated master switch.
  *
- * Honest failure modes (all fail-closed in the browser tool):
- *  - nothing registered → Computer Use is OFF (Settings → Computer Use);
+ * ROUND-98 (R98-G1): the browser plugin now captures through the STANDALONE
+ * getCaptureBackend() (computer/backends/index.ts — same platform backend +
+ * runner, no computer-use session/relay/settings gate). This registry is
+ * deliberately KEPT (narrowest honest change, per the round's contract):
+ * the computer-use plugin still arms it every enabled turn — the registry
+ * remains the "a computer-use turn is live" handshake for computer-use-side
+ * consumers and for the plugin tests that pin the armed-turn wiring.
+ *
+ * Honest failure modes (all fail-closed):
+ *  - nothing registered → no armed computer-use turn (Computer Use is OFF,
+ *    or no tool-bearing turn ran yet);
  *  - registered but capture fails → the OS backend's error surfaces.
  */
 import type { CuaBackend, RunCommand } from "../../computer/backends/interface.js";

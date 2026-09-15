@@ -6,7 +6,7 @@
  */
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
-import type { CuaBackend } from "./interface.js";
+import type { CuaBackend, RunCommand } from "./interface.js";
 import { linuxBackend } from "./linux.js";
 import { windowsBackend } from "./windows.js";
 import { macosBackend } from "./macos.js";
@@ -37,6 +37,30 @@ export function backendForPlatform(id: PlatformId = detectPlatform()): CuaBacken
     default:
       return linuxBackend;
   }
+}
+
+/**
+ * ROUND-98 (R98-G1): the STANDALONE capture engine for pixels that do not
+ * belong to Computer Use. `backendForPlatform()` + `realRunner()` are pure
+ * host facts — the SAME singletons the computer-use plugin wires into its
+ * dispatcher/relay — but until now the ONLY way a tool could reach them was
+ * the computer-use relay registry, which the plugin arms inside createTools
+ * ONLY when Settings → Computer Use is enabled (DEFAULT OFF). The browser
+ * plugin's screenshot action therefore silently inherited an unrelated
+ * OFF-by-default master switch (the owner: "it was currently unable to take
+ * screenshots of the web browser").
+ *
+ * This is the decoupled door: the active platform backend + its command
+ * runner, with NO computer-use session, NO relay registry, NO settings gate.
+ * Fail-closed stays honest per-call: a backend whose capture tools are
+ * missing (e.g. Linux without scrot/import) returns its own error from
+ * captureRegion, and the caller surfaces it. Computer Use keeps its own
+ * dispatcher + relay path untouched (zero regression there) — when the
+ * plugin is enabled both paths resolve to the exact same backend object,
+ * so nothing about capture behavior changes for it.
+ */
+export function getCaptureBackend(): { backend: CuaBackend; run: RunCommand } {
+  return { backend: backendForPlatform(), run: realRunner() };
 }
 
 /**

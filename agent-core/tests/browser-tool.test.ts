@@ -34,10 +34,52 @@ import {
   resetBrowserCheckpointsForTest,
   resolveBrowserCheckpoint,
 } from "../src/browser-checkpoint.js";
-import {
-  resetActiveComputerRelayForTest,
-  setActiveComputerRelay,
-} from "../src/tools/plugins/computer-relay.js";
+import { resetActiveComputerRelayForTest } from "../src/tools/plugins/computer-relay.js";
+// ── ROUND-98 (R98-G1): the browser screenshot's DECOUPLED capture engine ──
+// The tool no longer borrows the computer-use relay; it calls
+// getCaptureBackend() directly. These tests fake the FACTORY (the same
+// fail-closed shapes the relay fakes used to carry: a healthy region
+// capture echoing the region, a recording captureDisplay that must stay
+// unreachable, and a switchable backend error). vi.hoisted state — the mock
+// factory closes over it.
+const captureState = vi.hoisted(() => ({
+  regions: [] as Array<{ x: number; y: number; w: number; h: number }>,
+  displayCaptures: [] as number[],
+  failWith: null as string | null,
+  runCalls: 0,
+}));
+vi.mock("../src/computer/backends/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/computer/backends/index.js")>();
+  return {
+    ...actual,
+    getCaptureBackend: () => ({
+      backend: {
+        captureRegion: async (
+          _run: unknown,
+          region: { x: number; y: number; w: number; h: number },
+        ) => {
+          captureState.regions.push(region);
+          if (captureState.failWith !== null) return { error: captureState.failWith };
+          return {
+            pngBase64: "aW1n",
+            width: region.w,
+            height: region.h,
+            scale: 1,
+            origin: { x: region.x, y: region.y },
+          };
+        },
+        captureDisplay: async (_run: unknown, displayIndex: number) => {
+          captureState.displayCaptures.push(displayIndex);
+          return { pngBase64: "aW1n", width: 1920, height: 1080, scale: 1, origin: { x: 0, y: 0 } };
+        },
+      },
+      run: async () => {
+        captureState.runCalls += 1;
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    }),
+  };
+});
 import { buildServer } from "../src/server";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { setVisionSettings } from "../src/storage/vision.js";
@@ -101,6 +143,11 @@ beforeEach(async () => {
   resetActiveComputerRelayForTest();
   resetBrowserCheckpointsForTest();
   webFetchMock.mockReset();
+  // R98-G1: fresh capture-engine fake per test (regions/display/errors).
+  captureState.regions.length = 0;
+  captureState.displayCaptures.length = 0;
+  captureState.failWith = null;
+  captureState.runCalls = 0;
 });
 
 afterEach(() => {
@@ -580,36 +627,31 @@ describe("browser_control — eval (R62: JavaScript in the live page, via the SS
   });
 });
 
-describe("browser_control — screenshot (R62: computer-use capture + vision relay)", () => {
-  it("fails closed with the enable-Computer-Use pointer when the relay is not armed", async () => {
+describe("browser_control — screenshot (R62 → R98-G1: decoupled capture + vision relay)", () => {
+  it("R98-G1: Computer Use OFF no longer blocks the screenshot — no relay, no emit → the honest not-mounted refusal (no capture attempted)", async () => {
+    // Re-pin of the pre-R98 test ("fails closed with the enable-Computer-Use
+    // pointer"): the relay/master-switch gate is GONE (the owner: "it was
+    // currently unable to take screenshots of the web browser"). With no live
+    // emit channel there is no panel to ask for a region → the honest
+    // not-mounted error, and the message must NOT point at Computer Use
+    // anymore (that pointer WAS the bug — an unrelated OFF-by-default
+    // feature). No capture may be attempted.
     const tools = await buildTools(tempDir);
     const bc = tool(tools, "browser_control");
     await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot", sessionId: "tool-tab-shot" });
     const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-shot" });
     expect(result.ok).toBe(false);
-    expect(result.output).toContain("Computer Use");
+    expect(result.output).toContain("no panel region to capture");
     expect(result.output).toContain("read");
+    // The old dishonest pointer is gone — Computer Use is NOT the gate.
+    expect(result.output).not.toContain("Computer Use");
+    expect(captureState.regions).toEqual([]);
+    expect(captureState.displayCaptures).toEqual([]);
   });
 
   it("captures the panel REGION the UI reports and relays vision (honest off-mode note when vision is off)", async () => {
-    const captured: Array<{ x: number; y: number; w: number; h: number }> = [];
-    const relay = {
-      backend: {
-        captureRegion: async (_run: unknown, region: { x: number; y: number; w: number; h: number }) => {
-          captured.push(region);
-          return {
-            pngBase64: "aW1n",
-            width: region.w,
-            height: region.h,
-            scale: 1,
-            origin: { x: region.x, y: region.y },
-          };
-        },
-      },
-      run: vi.fn(),
-      session: { record: vi.fn() },
-    };
-    setActiveComputerRelay(relay as never);
+    // R98-G1: no relay is armed — the tool reaches the STANDALONE capture
+    // backend (getCaptureBackend) directly; Computer Use stays OFF.
     const emit = (event: unknown) => {
       const frame = event as { commandId: string };
       queueMicrotask(() =>
@@ -620,44 +662,30 @@ describe("browser_control — screenshot (R62: computer-use capture + vision rel
       );
     };
     const tools = await buildTools(tempDir, { emit });
-    // R94-E: the vision gate requires a live vision path BEFORE any capture
-    // — seed one (a separate vision model with no keyring entry: the path
-    // exists, the relay below still fails honestly → the off-mode note).
+    // R94-E → R98-G1: the vision gate now sits AFTER the capture; seeding a
+    // path (a separate vision model with no keyring entry) lets the relay
+    // below still fail honestly → the off-mode note.
     setVisionSettings(db, { mode: "separate", provider: "prov-shot", modelId: "vision-x" });
     const bc = tool(tools, "browser_control");
     await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot2", sessionId: "tool-tab-shot2" });
 
     const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-shot2" });
-    // Vision defaults OFF (fresh keyring) → the tool is still ok:true with the
-    // honest unavailable note; the CAPTURE happened with the UI's region.
+    // Vision fails honestly at describe time (no keyring) → the tool is still
+    // ok:true with the honest unavailable note; the CAPTURE happened with
+    // the UI's region through the decoupled engine.
     expect(result.ok).toBe(true);
     expect(result.output).toContain("panel region 800×600");
     expect(result.output).toContain("vision description is unavailable");
-    expect(captured).toEqual([{ x: 100, y: 200, w: 800, h: 600 }]);
-    // R66 (A1): browser screenshots NO LONGER record into the computer-use
+    expect(captureState.regions).toEqual([{ x: 100, y: 200, w: 800, h: 600 }]);
+    // R66 (A1): browser screenshots NEVER record into the computer-use
     // monitor ring — the owner must never see "agent is using your computer"
-    // during browser turns. The capture + vision note stand alone.
-    expect(relay.session.record).not.toHaveBeenCalled();
+    // during browser turns. (With the relay gone there IS no session object
+    // to record into; captureState is the proof the capture still happened.)
+    expect(captureState.displayCaptures).toEqual([]);
   });
 
   it("R87: no region answer → the HONEST ERROR (never a full-display capture — the owner's screen must not leak)", async () => {
-    const displayCaptures: number[] = [];
-    const relay = {
-      backend: {
-        captureDisplay: async (_run: unknown, displayIndex: number) => {
-          displayCaptures.push(displayIndex);
-          return { pngBase64: "aW1n", width: 1920, height: 1080, scale: 1, origin: { x: 0, y: 0 } };
-        },
-        captureRegion: async () => ({ error: "unreachable" }),
-      },
-      run: vi.fn(),
-      session: { record: vi.fn() },
-    };
-    setActiveComputerRelay(relay as never);
     const tools = await buildTools(tempDir); // no emit → no screenshot_meta ask at all
-    // R94-E: the vision gate requires a live vision path BEFORE the region
-    // ask — seed one so this test still exercises the REGION story below.
-    setVisionSettings(db, { mode: "separate", provider: "prov-shot3", modelId: "vision-x" });
     const bc = tool(tools, "browser_control");
     await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot3", sessionId: "tool-tab-shot3" });
     const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-shot3" });
@@ -665,10 +693,12 @@ describe("browser_control — screenshot (R62: computer-use capture + vision rel
     expect(result.output).toContain("no panel region to capture");
     expect(result.output).toContain("NEVER falls back to a full-screen shot");
     // R87: the full-display capture is GONE — the fallback was the leak.
-    expect(displayCaptures).toEqual([]);
+    expect(captureState.displayCaptures).toEqual([]);
+    expect(captureState.regions).toEqual([]);
   });
 
   it("a failed REGION capture surfaces the backend's error", async () => {
+    captureState.failWith = "no scrot, no import";
     const emit = (event: unknown) => {
       const frame = event as { commandId: string };
       queueMicrotask(() =>
@@ -678,16 +708,7 @@ describe("browser_control — screenshot (R62: computer-use capture + vision rel
         }),
       );
     };
-    const relay = {
-      backend: {
-        captureRegion: async () => ({ error: "no scrot, no import" }),
-      },
-      run: vi.fn(),
-      session: { record: vi.fn() },
-    };
-    setActiveComputerRelay(relay as never);
     const tools = await buildTools(tempDir, { emit });
-    // R94-E: the vision gate requires a live vision path BEFORE the capture.
     setVisionSettings(db, { mode: "separate", provider: "prov-shot4", modelId: "vision-x" });
     const bc = tool(tools, "browser_control");
     await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/shot4", sessionId: "tool-tab-shot4" });

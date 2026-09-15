@@ -1364,16 +1364,146 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     }
   });
 
-  it("R62: screenshot_meta without window metrics still answers supported (region null → full-display fallback)", async () => {
+  it("R62: screenshot_meta without window metrics still answers supported (region null → the tool's honest no-region refusal)", async () => {
+    // R98-G1 re-pin: the handler now runs its VISIBILITY gates first (the
+    // happy-dom default rect is 0×0 — exactly the degenerate case the gates
+    // refuse), so this test mocks a VISIBLE panel (mockAreaRect) and then
+    // removes the window API: the handler answers supported with region
+    // null, and the AGENT-CORE tool turns that into its honest "no panel
+    // region to capture" refusal (R87: never a full-display capture — the
+    // old comment's "full-display fallback" was stale even before this
+    // round; the fallback died in R87).
+    const rectSpy = mockAreaRect();
     nativeState.windowMetrics = null;
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
+      const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_meta", {});
+      expect(reply.ok).toBe(true);
+      expect((reply.data as { supported: boolean; region: unknown }).supported).toBe(true);
+      expect((reply.data as { region: unknown }).region).toBeNull();
+    } finally {
+      rectSpy.mockRestore();
+      nativeState.windowMetrics = null;
+    }
+  });
+
+  // ── ROUND-98 (R98-G1): the honest not-visible refusals — never a 1×1 ────
+  // The pre-fix handler clamped a not-visible panel's 0×0 rect with
+  // Math.max(1,…) and answered a "region" anyway, so the agent-core capture
+  // faithfully photographed ONE PIXEL (or the app DOM behind a hidden
+  // webview). Each visibility cause now answers an explicit ERROR naming it;
+  // the agent-core side surfaces the message verbatim and never captures
+  // (pinned agent-core-side in tests/r98-browser-screenshot.test.ts (d)).
+  it("R98-G1: a KEEP-ALIVE-HIDDEN tab (display:none) → the explicit not-visible error, never a clamped region", async () => {
+    // A healthy rect is mocked to prove the refusal comes from the HIDDEN
+    // flag (hiddenRef), not from a stub rect: even a "visible-sized" rect
+    // must not answer a region while the tab is backgrounded.
+    const rectSpy = mockAreaRect();
+    nativeState.windowMetrics = { x: 100, y: 50, scaleFactor: 2 };
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} hidden />);
+      await waitFor(() => expect(hasBrowserCommandHandler("tab-test-1")).toBe(true));
+
+      const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_meta", {});
+      expect(reply.ok).toBe(false);
+      expect(reply.error).toContain("the browser tab is not visible");
+      expect(reply.error).toContain("keep-alive hidden");
+      expect(reply.error).toContain("Switch the right sidebar to the Browser panel");
+      // No region was answered — there is nothing honest to capture.
+      expect((reply as { data?: unknown }).data).toBeUndefined();
+    } finally {
+      rectSpy.mockRestore();
+      nativeState.windowMetrics = null;
+    }
+  });
+
+  it("R98-G1: a 0×0 rect (hidden sidebar / unmeasurable layout) → the explicit not-visible error naming the measured rect", async () => {
+    // No mockAreaRect: happy-dom's default rect IS 0×0 — the display:none
+    // shape. The old handler clamped this to a 1×1 region; the new one
+    // refuses with the measurement in the message.
+    nativeState.windowMetrics = { x: 0, y: 0, scaleFactor: 1 };
     const tab = makeTab({ browserUrl: "https://example.com" });
     seedRightSidebar(tab);
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
-    await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
+    await waitFor(() => expect(hasBrowserCommandHandler("tab-test-1")).toBe(true));
+
     const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_meta", {});
-    expect(reply.ok).toBe(true);
-    expect((reply.data as { supported: boolean; region: unknown }).supported).toBe(true);
-    expect((reply.data as { region: unknown }).region).toBeNull();
+    expect(reply.ok).toBe(false);
+    expect(reply.error).toContain("the browser tab is not visible");
+    expect(reply.error).toContain("0×0");
+    expect(reply.error).toContain("Switch the right sidebar to the Browser panel");
+  });
+
+  it("R98-G1: the HOME view (the webview is hidden) → the explicit not-visible error, never the app DOM behind it", async () => {
+    const rectSpy = mockAreaRect();
+    nativeState.windowMetrics = { x: 0, y: 0, scaleFactor: 1 };
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
+
+      // The owner pressed HOME (R97-J M1): the store flips homeView and the
+      // native webview hides — a region capture would photograph the app's
+      // DOM behind it, not the page.
+      act(() => {
+        useBrowserTabStore.getState().goHome("tab-test-1");
+      });
+
+      const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_meta", {});
+      expect(reply.ok).toBe(false);
+      expect(reply.error).toContain("the browser tab is not visible");
+      expect(reply.error).toContain("Home view");
+      expect(reply.error).toContain("Switch the right sidebar to the Browser panel");
+    } finally {
+      // The suite's beforeEach calls useBrowserTabStore.getState().resetAll()
+      // (homeView included) — nothing to restore by hand; just unmock.
+      rectSpy.mockRestore();
+      nativeState.windowMetrics = null;
+    }
+  });
+
+  it("R98-G1: an app overlay covering the panel → the explicit not-visible error (the webview is hidden)", async () => {
+    const rectSpy = mockAreaRect(); // every element measures (80,120)-(480,1020)
+    nativeState.windowMetrics = { x: 0, y: 0, scaleFactor: 1 };
+    // A REAL overlay in the DOM (role="dialog" matches the guard's
+    // OVERLAY_SELECTOR): the handler re-sweeps the overlay rects LIVE before
+    // answering (the R92-A watchdog discipline — the refusal keys off what
+    // is measured THIS instant, and under mockAreaRect the dialog measures
+    // exactly the panel area, so it geometrically covers it).
+    const overlay = document.createElement("div");
+    overlay.setAttribute("role", "dialog");
+    document.body.appendChild(overlay);
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await waitFor(() => expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")));
+
+      const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_meta", {});
+      expect(reply.ok).toBe(false);
+      expect(reply.error).toContain("the browser tab is not visible");
+      expect(reply.error).toContain("overlay");
+      expect(reply.error).toContain("Switch the right sidebar to the Browser panel");
+
+      // The overlay closes → the next sweep finds nothing → the region
+      // answer RESUMES (the refusal is a live visibility fact, not a
+      // latched state).
+      overlay.remove();
+      const healthy = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_meta", {});
+      expect(healthy.ok).toBe(true);
+      expect((healthy.data as { region: { x: number; y: number; w: number; h: number } }).region).toEqual({ x: 80, y: 120, w: 400, h: 900 });
+    } finally {
+      overlay.remove();
+      useWebviewGuardStore.getState().setOverlayRects([]);
+      rectSpy.mockRestore();
+      nativeState.windowMetrics = null;
+    }
   });
 
   it("R62: web/proxy mode registers NO handler (eval is native-only; the bridge answers honestly instead)", async () => {

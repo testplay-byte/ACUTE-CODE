@@ -205,8 +205,10 @@ export const computerUsePlugin: PluginDefinition = {
       db: toolDeps.db,
       sessionId: toolDeps.sessionId,
     });
-    // R62 (D8): publish the live engine for the browser plugin's screenshot
-    // action (fail-closed there when this never runs — Computer Use OFF).
+    // R62 (D8): publish the live engine for the relay registry (R98-G1: the
+    // browser plugin no longer consumes it — it captures standalone via
+    // getCaptureBackend(); the registry stays the armed-turn handshake for
+    // computer-use-side consumers and the plugin tests).
     setActiveComputerRelay({ backend, run, session });
     const emit = (event: Record<string, unknown>) => {
       try {
