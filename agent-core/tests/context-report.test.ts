@@ -559,13 +559,17 @@ describe("prompt efficiency rework (ROUND-51 R51-d, consolidated ROUND-70 R70-c)
     maxOuterLoops: 5,
   };
 
-  it("the merged AGENTIC LOOP carries the five phases; the three overlap sections are GONE", () => {
+  it("the merged AGENTIC LOOP carries the six phases; the three overlap sections are GONE", () => {
     const full = buildProjectSystemPrompt(ctx);
-    // The five-phase loop (R70-c D2): PLAN / EXPLORE / ACT / VERIFY / FINISH.
+    // ROUND-99 (R99-G): the six-phase loop — INTAKE opens it (the owner's
+    // analyze-the-request-FIRST meta-directive), the R70-c five phases
+    // keep their numbers untouched.
     expect(full).toContain("## AGENTIC LOOP — MULTI-TURN COMPLETION");
+    expect(full).toContain("0. INTAKE");
     for (const phase of ["1. PLAN", "2. EXPLORE", "3. ACT", "4. VERIFY", "5. FINISH"]) {
       expect(full).toContain(phase);
     }
+    expect(full.indexOf("0. INTAKE")).toBeLessThan(full.indexOf("1. PLAN"));
     // The retired sections never compose (any ctx — this one is maximal for
     // the old gates: todo_write + delegate present).
     expect(full).not.toContain("## EFFICIENCY");
@@ -576,7 +580,7 @@ describe("prompt efficiency rework (ROUND-51 R51-d, consolidated ROUND-70 R70-c)
     expect(full).toContain("Do not re-explore between steps or re-read files already in context");
     expect(full).toContain("the FEWEST steps that genuinely complete the work");
     // The PLAN phase absorbed the todo guidance (todo_write-gated below).
-    expect(full).toContain("Tasks with 3+ steps get a todo_write list UP FRONT");
+    expect(full).toContain("tasks with 3+ steps get a todo_write list UP FRONT");
     expect(full).toContain("update after EACH sub-task (never batch completions)");
     expect(full).toContain("a snapshot, not a delta");
     // VERIFY absorbed the 3+ file edits adversarial-review affordance.
@@ -590,10 +594,10 @@ describe("prompt efficiency rework (ROUND-51 R51-d, consolidated ROUND-70 R70-c)
 
   it("the PLAN todo lines are todo_write-gated (the old todo-tracking gate, kept)", () => {
     const noTodo = buildProjectSystemPrompt({ ...ctx, toolNames: ctx.toolNames.filter((t) => t !== "todo_write") });
-    expect(noTodo).not.toContain("Tasks with 3+ steps get a todo_write list UP FRONT");
+    expect(noTodo).not.toContain("tasks with 3+ steps get a todo_write list UP FRONT");
     expect(noTodo).toContain("1. PLAN");
     const withTodo = buildProjectSystemPrompt(ctx);
-    expect(withTodo).toContain("Tasks with 3+ steps get a todo_write list UP FRONT");
+    expect(withTodo).toContain("tasks with 3+ steps get a todo_write list UP FRONT");
   });
 
   it("the mandatory read-back verify is GONE — smart verification replaces it in BOTH the loop and FILE EDITING", () => {
@@ -617,12 +621,18 @@ describe("prompt efficiency rework (ROUND-51 R51-d, consolidated ROUND-70 R70-c)
     expect(full).not.toContain("budget of up to");
     // The maxTurns injection survives (Round-28 WS-F contract: the model is
     // told its real cap)…
-    expect(full).toContain("up to 30 tool round-trips per iteration");
+    // R99-G re-pin: the line opens with a capital U after the dash and — the
+    // numbers-audit point — now carries "a limit to keep working within,
+    // never a target to fill" (the owner's "hard numbers become targets").
+    expect(full).toContain("Up to 30 tool round-trips per iteration");
+    expect(full).toContain("never a target to fill");
     // …framed as fewest-steps, with the anti-lazy-stop clause intact…
     expect(full).toContain("FEWEST steps that genuinely complete and verify the work, not step count for its own sake");
     expect(full).toContain("so is stopping early on a multi-step task");
-    // …and the outer-iteration cap is named honestly (R70-c D2).
-    expect(full).toContain("5 outer iterations exist — keep working within them");
+    // …and the outer-iteration cap is named honestly (R70-c D2), as a
+    // LIMIT — never a target (R99-G's hard-numbers fix; conscious re-pin
+    // of the old "keep working within them" phrasing).
+    expect(full).toContain("5 outer iterations exist — a limit to keep working within, never a target to fill");
   });
 
   it("batching is taught everywhere it must be (TOOL USE rule, EXPLORE phase)", () => {

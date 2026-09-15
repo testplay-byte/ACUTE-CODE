@@ -27,7 +27,7 @@ import {
   PROMPT_REGISTRY,
   PROMPT_SECTION_IDS,
 } from "../src/agents/prompt-registry";
-import { buildProjectSystemPrompt, buildTaggedPromptLines } from "../src/agents/prompts";
+import { buildProjectSystemPrompt, buildSectionText, buildTaggedPromptLines } from "../src/agents/prompts";
 import { TOOL_NAMES } from "../src/storage/agents";
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -211,6 +211,18 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     expect(PROMPT_SECTION_IDS).toContain("tool-use");
     expect(PROMPT_SECTION_IDS).toContain("agentic-loop");
     expect(PROMPT_SECTION_IDS).toContain("project-memory");
+    // ROUND-99 (R99-G): the PRECEDENCE header slots in DIRECTLY AFTER
+    // identity — before any other guidance can conflict with anything, the
+    // model already knows how conflicts resolve (the ladder, rules vs.
+    // judgment, limits-are-not-targets).
+    expect(PROMPT_SECTION_IDS.indexOf("precedence")).toBe(PROMPT_SECTION_IDS.indexOf("identity") + 1);
+    expect(PROMPT_SECTION_IDS.indexOf("tool-use")).toBe(PROMPT_SECTION_IDS.indexOf("precedence") + 1);
+    // ROUND-99 (R99-G): the AUTONOMY LADDER slots in DIRECTLY AFTER the
+    // permission-mode narration it qualifies (mode = ceiling, ladder = the
+    // graduated rule under it). Unconditional — it composes even when the
+    // mode section does not (ask-mode sessions still need the ladder).
+    expect(PROMPT_SECTION_IDS.indexOf("autonomy")).toBe(PROMPT_SECTION_IDS.indexOf("permission-mode") + 1);
+    expect(PROMPT_SECTION_IDS.indexOf("sub-agents")).toBe(PROMPT_SECTION_IDS.indexOf("autonomy") + 1);
     // R71-e1: the discipline section slots in right behind the agentic
     // loop's failure doctrine — R94-G moved that doctrine into its own
     // RECOVERY PROTOCOL section, and ROUND-96 (R96-D) slotted the BATCH +
@@ -248,9 +260,16 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     expect(PROMPT_SECTION_IDS).not.toContain("todo-tracking");
   });
 
-  it("ROUND-96 (R96-D): PRECISION DISCIPLINE slots in behind code navigation, before git", () => {
-    expect(PROMPT_SECTION_IDS.indexOf("precision-discipline")).toBe(PROMPT_SECTION_IDS.indexOf("code-navigation") + 1);
-    expect(PROMPT_SECTION_IDS.indexOf("precision-discipline")).toBeLessThan(PROMPT_SECTION_IDS.indexOf("git"));
+  it("ROUND-99 (R99-G): precision-discipline is RETIRED — merged into completion-discipline; a stale override file is diagnosed, never honored", () => {
+    // The R66-2-c/R70-c removal-cascade precedent: registry entry +
+    // composition block + golden + pins all moved together. The merged
+    // section's content pins live in the ROUND-99 describe below; the
+    // r96 suite re-pins its PRECISION content pins against the merged
+    // section.
+    expect(PROMPT_SECTION_IDS).not.toContain("precision-discipline");
+    // code-navigation now directly precedes git (the precision section that
+    // sat between them is gone).
+    expect(PROMPT_SECTION_IDS.indexOf("git")).toBe(PROMPT_SECTION_IDS.indexOf("code-navigation") + 1);
   });
 
   it("COMPLETENESS: the ids stamped by buildTaggedPromptLines are exactly the registry ids, in registry order", () => {
@@ -374,6 +393,38 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // a byte-identity test). .gitattributes additionally pins the fixture
     // to LF, but the code-side normalization keeps the test honest even in
     // working copies with local git overrides.
+    //
+    // Regenerated AGAIN in R99-G (deliberately — the system-prompt overhaul
+    // round for the owner's flaw list: "Length dilutes attention", "Heavy
+    // duplication, no precedence rules", "Hard numbers become targets",
+    // "no risk threshold for autonomy", "no guidance on where to use memory
+    // save and memory recall", "some tools… only appear in the name list,
+    // never described", "no output contract for subagents", "no confidence
+    // tags", and the analyze-the-request-FIRST meta-directive). The verified
+    // diff (git diff of the fixture, read before regenerating — never blind):
+    // (1) the new ## PRECEDENCE section after the identity lines; (2) the new
+    // ## AUTONOMY LADDER after ## OPERATING MODE; (3) the loop's new
+    // "0. INTAKE" phase ahead of "1. PLAN" (which lost its clarify clause to
+    // INTAKE); (4) TOOL USE gains the core-vocabulary descriptions block
+    // after the rules (presence-filtered — the golden's frozen vocab lists
+    // 20 lines, no search_symbols/ask_user); (5) SUB-AGENTS gains the REPORT
+    // CONTRACT line (trims: the PARALLELISM example, AFTER DELEGATION, the
+    // SUPERVISION/GOOD-BAD tightening); (6) BATCH DISCIPLINE's first two
+    // bullets merged; (7) COMPLETION DISCIPLINE absorbs the PRECISION lines
+    // (the standalone ## PRECISION DISCIPLINE section is GONE — its
+    // AFTER-EDITING-VERIFY line was the fourth copy of the verify doctrine);
+    // (8) COMMUNICATION's confidence-tag line gains the because/raising-it
+    // contract; (9) Project memory's single save-discipline line became the
+    // SAVE/RECALL/NEVER WHEN block; (10) the dedup trims across
+    // file-editing/code-navigation/web-access/terminal/engineering and the
+    // numbers-audit softenings ("1–3 sentence summary" → "a few sentences at
+    // most"; "2-3 lines of context" → "the least context that makes the
+    // match unique"). Golden delta: 29,582 → 30,847 bytes (29,276 →
+    // 30,519 composed chars) — the additions (~+3.6K) outweigh the dedup
+    // (~-2.4K) in the MAXIMAL kitchen-sink ctx because it composes the
+    // descriptions block at full width + the memory WHEN block; the DEFAULT
+    // full-tools budget (r71 D6) tells the honest net story: 22,962 →
+    // 23,975 chars.
     const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r61.txt"), "utf8").replace(/\r\n/g, "\n");
     const composed = buildProjectSystemPrompt(FULL_CTX).replace(/\r\n/g, "\n");
     expect(composed).toBe(golden);
@@ -541,6 +592,189 @@ describe("ROUND-69 (4-c-2): the auto-observation chain discipline", () => {
     // (the CHAIN DISCIPLINE line above lists it) — the semantics pin stays.
     expect(rest).toContain("the receipt's observation is the first verification read");
     expect(rest).toContain("an external oracle (file exists, exit code) is the strong one");
+  });
+});
+
+// ── ROUND-99 (R99-G): the system-prompt overhaul pins ───────────────────────
+// The owner's flaw list, one describe per fix: precedence rules, the intake
+// phase, the autonomy ladder, memory-tool guidance, tool descriptions, the
+// subagent output contract, confidence tags, and the precision→completion
+// merge that paid for it all.
+
+describe("ROUND-99 (R99-G): PRECEDENCE + AUTONOMY — the two new identity sections", () => {
+  it("precedence: the conflict ladder, rules-vs-judgment, limits-are-not-targets, scoped length", () => {
+    const section = buildSectionText(FULL_CTX, "precedence") ?? "";
+    expect(section).toContain("## PRECEDENCE");
+    expect(section).toContain("SAFETY > TRUTH > THE USER'S CURRENT REQUEST > EFFICIENCY");
+    expect(section).toContain("Never optimize speed or token cost by lying or guessing");
+    expect(section).toContain("Lines marked as rules (NEVER/ALWAYS/maximums) are hard; everything else is judgment");
+    expect(section).toContain("When a hard number appears as a LIMIT it is a maximum, never a target to fill");
+    expect(section).toContain("the more specific one governs");
+    expect(section).toContain("only the enabled surfaces' sections ride your context");
+    // Static + unconditional: even a bare ctx resolves conflicts by the ladder.
+    const bare = buildProjectSystemPrompt({ projectName: "Bare", rootPath: "/tmp/none", toolNames: ["read_file"] });
+    expect(bare).toContain("## PRECEDENCE");
+    // It sits BEFORE every other ## heading (identity carries none).
+    const composed = buildProjectSystemPrompt(FULL_CTX);
+    expect(composed.indexOf("## PRECEDENCE")).toBeLessThan(composed.indexOf("## TOOL USE"));
+  });
+
+  it("autonomy: the three tiers under the permission mode's ceiling — static + unconditional", () => {
+    const section = buildSectionText(FULL_CTX, "autonomy") ?? "";
+    expect(section).toContain("## AUTONOMY LADDER");
+    expect(section).toContain("the permission MODE sets the ceiling; this ladder fills the space it leaves");
+    expect(section).toContain("ACT WITHOUT ASKING (reversible, in-scope)");
+    expect(section).toContain("reading files, searching, running read-only commands, creating/editing files inside the task's scope (git tracks them), writing todos");
+    expect(section).toContain("ASK FIRST (consequential or ambiguous)");
+    expect(section).toContain("git push/force-push/branch deletion, dependency installs, schema migrations, changes outside the stated scope");
+    expect(section).toContain("NEVER (refuse + explain)");
+    expect(section).toContain("exfiltrating secrets or credentials, disabling safety gates, destructive commands with no undo (rm -rf on user paths), actions that hide their own history");
+    // Composes with NO permission mode too (ask-mode sessions keep the ladder).
+    const noMode = buildProjectSystemPrompt({ projectName: "Bare", rootPath: "/tmp/none", toolNames: ["read_file"] });
+    expect(noMode).toContain("## AUTONOMY LADDER");
+    // And directly AFTER the OPERATING MODE narration when one composes.
+    const composed = buildProjectSystemPrompt(FULL_CTX); // permissionMode: "plan"
+    expect(composed.indexOf("## AUTONOMY LADDER")).toBeGreaterThan(composed.indexOf("## OPERATING MODE"));
+    expect(composed.indexOf("## SUB-AGENTS (delegate_task)")).toBeGreaterThan(composed.indexOf("## AUTONOMY LADDER"));
+  });
+});
+
+describe("ROUND-99 (R99-G): the loop's PHASE 0 — REQUEST INTAKE", () => {
+  it("INTAKE opens the loop: restate, knowns vs. unknowns, skills check, out-of-scope, then plan", () => {
+    const loop = buildSectionText(FULL_CTX, "agentic-loop") ?? "";
+    expect(loop).toContain("0. INTAKE");
+    expect(loop.indexOf("0. INTAKE")).toBeLessThan(loop.indexOf("1. PLAN"));
+    expect(loop).toContain("(a) restate the goal in one line");
+    expect(loop).toContain("(b) list what you already know vs. what you must find out");
+    expect(loop).toContain("never a silent guess");
+    expect(loop).toContain("check the SKILLS index (when one exists) — a matching skill is read BEFORE planning");
+    expect(loop).toContain("(d) name what is OUT of scope — what you will NOT touch");
+    expect(loop).toContain("(e) only then write the plan");
+    // The five phase numbers survive untouched (the existing pins' anchor).
+    for (const phase of ["1. PLAN", "2. EXPLORE", "3. ACT", "4. VERIFY", "5. FINISH"]) {
+      expect(loop).toContain(phase);
+    }
+  });
+
+  it("the ask_user variant moves the clarify clause INTO INTAKE (both vocabularies pinned)", () => {
+    // FULL_CTX's frozen vocab has no ask_user → the prose fallback.
+    const bare = buildSectionText(FULL_CTX, "agentic-loop") ?? "";
+    expect(bare).toContain("missing context gets a clarifying question OR an explicit assumption");
+    // MODES_CTX tracks the LIVE TOOL_NAMES (ask_user present) → the tool form.
+    const withAsk = buildSectionText(MODES_CTX, "agentic-loop") ?? "";
+    expect(withAsk).toContain("gets ask_user EARLY (batched questions, options where enumerable) or an explicit stated assumption");
+    // PLAN itself no longer carries the clarify clause in EITHER variant —
+    // INTAKE owns it (one home for the clarify-early doctrine).
+    expect(bare).not.toContain("ask ONE clarifying question");
+    expect(withAsk).toContain("1. PLAN — tasks with 3+ steps get a todo_write list UP FRONT");
+  });
+});
+
+describe("ROUND-99 (R99-G): the TOOL USE core-vocabulary descriptions block", () => {
+  it("describes the core tools honestly — subordinated to the live list + schemas", () => {
+    const section = buildSectionText(MODES_CTX, "tool-use") ?? "";
+    expect(section).toContain("What the core tools DO");
+    expect(section).toContain("stay authoritative for which exist");
+    // The mandated core vocabulary (MODES_CTX carries the live TOOL_NAMES).
+    for (const line of [
+      "- read_file:",
+      "- write_file:",
+      "- edit_file:",
+      "- search_files:",
+      "- search_code:",
+      "- search_symbols:",
+      "- list_dir:",
+      "- run_command:",
+      "- git_status / git_diff / git_log:",
+      "- todo_write:",
+      "- web_fetch:",
+      "- web_search:",
+      "- delegate_task:",
+      "- memory_save:",
+      "- memory_recall:",
+      "- read_skill:",
+      "- ask_user:",
+      "- browser_control:",
+      "- job_status / job_stop:",
+      "- analyze_image:",
+    ]) {
+      expect(section).toContain(line);
+    }
+    // The block stays a BLOCK, not a paragraph — scannable one-liners.
+    expect((section.match(/^- [a-z_]/gm) ?? []).length).toBeGreaterThanOrEqual(20);
+  });
+
+  it("presence-filtered: a stripped vocabulary never describes absent tools", () => {
+    const stripped = buildSectionText(
+      { ...FULL_CTX, toolNames: ["read_file", "search_code", "run_command"] },
+      "tool-use",
+    ) ?? "";
+    expect(stripped).toContain("- read_file:");
+    expect(stripped).toContain("- search_code:");
+    expect(stripped).toContain("- run_command:");
+    expect(stripped).not.toContain("- write_file:");
+    expect(stripped).not.toContain("- browser_control:");
+    expect(stripped).not.toContain("- delegate_task:");
+  });
+});
+
+describe("ROUND-99 (R99-G): the subagent REPORT CONTRACT + confidence tags + memory WHEN", () => {
+  it("every delegated task ends with the five-field report — \"none\", never silence", () => {
+    const sub = buildSectionText(FULL_CTX, "sub-agents") ?? "";
+    expect(sub).toContain("REPORT CONTRACT");
+    expect(sub).toContain("RESULT (done/blocked/failed, one line)");
+    expect(sub).toContain("FILES TOUCHED (paths + what changed)");
+    expect(sub).toContain("FINDINGS (facts the parent needs)");
+    expect(sub).toContain("OPEN QUESTIONS (for the parent/user)");
+    expect(sub).toContain("CONFIDENCE (high/medium/low + what raises it)");
+    expect(sub).toContain('A sub-agent that cannot fill a field writes "none" — never silence');
+  });
+
+  it("COMMUNICATION: the confidence tag earns its keep — because + raising-it + no-tag-when-verified", () => {
+    const comm = buildSectionText(FULL_CTX, "communication") ?? "";
+    expect(comm).toContain("When an answer rests on unverified assumptions, partial reads, or untested code");
+    expect(comm).toContain("Confidence: high|medium|low — because <the specific reason>; raising it needs <the concrete next step>");
+    expect(comm).toContain("verified-working answers need no tag");
+    // The R71 tag vocabulary + devil's advocate survive inside the same line.
+    expect(comm).toContain("🟢 = all claims verified by receipts");
+    expect(comm).toContain("one line of devil's advocate — the strongest counter-argument to what you just did");
+  });
+
+  it("project-memory: the SAVE/RECALL/NEVER WHEN block (memory-tools-gated)", () => {
+    const withMemory = buildSectionText(FULL_CTX, "project-memory") ?? "";
+    expect(withMemory).toContain("WHEN to use the memory tools");
+    expect(withMemory).toContain("- SAVE when you discover something DURABLE the next session needs");
+    expect(withMemory).toContain("project conventions, the owner's confirmed preferences, environment gotchas, decisions with their reasons");
+    expect(withMemory).toContain("Save at the moment of discovery: batch saves at turn-end get lost");
+    expect(withMemory).toContain("- RECALL at the start of a task whose topic matches a memory — search before re-deriving");
+    expect(withMemory).toContain("- NEVER save: secrets or keys, per-session state, raw transcripts, anything the file ledger or git already records");
+    // The gate: no memory TOOLS in vocab → the digest narration only.
+    const noTools = buildSectionText({ ...FULL_CTX, toolNames: ["read_file"] }, "project-memory") ?? "";
+    expect(noTools).toContain("## Project memory (persisted across sessions)");
+    expect(noTools).not.toContain("WHEN to use the memory tools");
+  });
+
+  it("the merged COMPLETION DISCIPLINE carries the precision lines (the retired section's survivors)", () => {
+    const merged = buildSectionText(FULL_CTX, "completion-discipline") ?? "";
+    // The R96-D ending contract survives…
+    expect(merged).toContain("END WITH THE LINE: Task complete.");
+    expect(merged).toContain("NEVER pad finished work");
+    expect(merged).toContain("NEVER restart finished work");
+    // …and the R96-D precision lines fold in under their label, with the
+    // LANDING/RIGHT aphorism folded into the DONE line.
+    expect(merged).toContain("Precision (target before you read):");
+    expect(merged).toContain("TARGET THE FILE FIRST");
+    expect(merged).toContain("READ ONLY WHAT THE TASK NEEDS");
+    expect(merged).toContain("EDITS USE EXACT ANCHORS from the CURRENT content");
+    expect(merged).toContain("one character off is a miss");
+    expect(merged).toContain('"CHANGE X TO Y IN FILE F"');
+    expect(merged).toContain("never analyze the whole project (or a whole HTML file) when one file and one string are named");
+    expect(merged).toContain("a change LANDING is not a change being RIGHT");
+    // The fourth-copy verify line is GONE (its doctrine lives in the loop's
+    // VERIFY phase + DONE-means-VERIFIED + file-editing smart verification).
+    expect(merged).not.toContain("AFTER EDITING, VERIFY: re-read the changed range");
+    // And the standalone section no longer composes anywhere.
+    expect(buildProjectSystemPrompt(FULL_CTX)).not.toContain("## PRECISION DISCIPLINE");
   });
 });
 

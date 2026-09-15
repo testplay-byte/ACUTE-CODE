@@ -234,11 +234,13 @@ describe("D1: the red-flags anti-rationalization table", () => {
 
   it("the agentic-loop's fix-retry rule still stands (R94-G folded it into the pointer form; the escalation gates it, does not replace it)", () => {
     const loop = buildSectionText(ctxFor(), "agentic-loop") ?? "";
-    // ROUND-94 (R94-G): the rule now POINTS at the RECOVERY PROTOCOL that
-    // immediately follows the loop — the read-error/fix-root-cause/retry
-    // core and the do-not-abort tail survive verbatim within the line.
-    expect(loop).toContain("If a tool call fails: read the error, fix the root cause, retry");
-    expect(loop).toContain("the RECOVERY PROTOCOL below governs. Do not abort.");
+    // ROUND-94 (R94-G): the rule POINTS at the RECOVERY PROTOCOL that
+    // immediately follows the loop; the do-not-abort tail survives verbatim.
+    // ROUND-99 (R99-G, conscious re-pin): the read-error/fix-root-cause head
+    // retired — the TOOL USE rules ("READ tool errors fully before reacting")
+    // and the RECOVERY PROTOCOL own that doctrine; the loop keeps the pointer
+    // + the do-not-abort core.
+    expect(loop).toContain("- If a tool call fails: the RECOVERY PROTOCOL below governs. Do not abort.");
   });
 });
 
@@ -397,32 +399,32 @@ describe("PLAN mode: every discipline surface composes (read-only vocabulary)", 
 
 // ── D6: the size budget ──────────────────────────────────────────────────────
 
-describe("D6: the size budget (the 22K hard bound + the section window)", () => {
-  it("the DEFAULT full-tools composition stays ≤ 23,000 chars", () => {
-    // The 22K bound guards the BUILT-IN system prompt — the composition a
+describe("D6: the size budget (the hard bound + the section window)", () => {
+  it("the DEFAULT full-tools composition stays ≤ 24,000 chars", () => {
+    // The bound guards the BUILT-IN system prompt — the composition a
     // real session composes before any project-injected dynamic content
     // (custom rules have their own 32K cap; the memory digest, index
     // summary, and skills list are budgeted separately). R70 baseline:
-    // 14,757 chars; R71-e1 (this round's ~3.5K of discipline content):
-    // 18,220 — R94-G (the recovery protocol, the browser wait/sequence
-    // discipline): ~20.0K. The MAXIMAL kitchen-sink composition (every
-    // gate open + project content: 23,447 chars pre-R94-G) is byte-pinned
-    // by the golden fixture in prompt-registry.test.ts — the discipline
-    // content's mandated floor (~2.9K net additions: four mantras +
-    // self-tests + three tags + the verbatim 3-strike rule + five red
-    // flags + receipts/tags/anti-question + sub-agent lines) exceeds the
-    // ~1.8K headroom the maximal leaves under 22K, so the bound is pinned
-    // where it can honestly hold.
+    // 14,757 chars; R71-e1: 18,220; R94-G: ~20.0K; R96-D: ~21.1K.
     // ROUND-96 (R96-D): 22,000 → 23,000 — the owner-directed discipline
-    // trio (BATCH + COMPLETION behind the loop, PRECISION behind code
-    // navigation — research memo §9 notes (d)/(f)) adds ~1.9K of mandated
-    // content; the sections were TRIMMED to their load-bearing lines
-    // (every phrase the round's content pins assert survived), and the
-    // bound moves to hold the owner's explicit asks rather than degrading
-    // them under an arbitrary pre-R96 number. The cap still guards against
-    // unbounded growth (the budget discipline itself is R71's point).
+    // trio added ~1.9K of mandated content; the sections were TRIMMED to
+    // their load-bearing lines and the bound moved to hold the owner's
+    // explicit asks rather than degrading them under an arbitrary number.
+    // ROUND-99 (R99-G): 23,000 → 24,000 — the SAME precedent, one more
+    // turn. The system-prompt overhaul adds ~3.8K of owner-mandated
+    // content (precedence header, autonomy ladder, INTAKE phase, the
+    // tool-descriptions block, the subagent report contract, the
+    // confidence because/raising-it line) and pays for it with the
+    // deepest dedup yet (~2.3K retired: precision-discipline merged into
+    // completion-discipline, the third copies of the read-error and
+    // verify doctrines retired, batch/tool-use/terminal/file-editing/
+    // code-navigation/web-access trims — every phrase the rounds' pins
+    // assert survived). Pre-trim the additions would have landed ~26.9K;
+    // the measured result is 23,975 — the cap still guards against
+    // unbounded growth (the budget discipline itself is R71's point) and
+    // the floor below keeps the additions honest content, not a gutting.
     const composed = buildProjectSystemPrompt(ctxFor());
-    expect(composed.length).toBeLessThanOrEqual(23_000);
+    expect(composed.length).toBeLessThanOrEqual(24_000);
     expect(composed.length).toBeGreaterThan(15_000); // the R71 delta is real content, not a gutting
   });
 

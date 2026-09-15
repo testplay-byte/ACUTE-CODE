@@ -58,9 +58,23 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     dynamic: true, // projectName + rootPath
     bucket: "identity",
   },
+  // ROUND-99 (R99-G, the system-prompt overhaul — the owner's flaw list:
+  // "no precedence rules" + "length dilutes attention"): the PRECEDENCE
+  // header, immediately after the identity lines. Short, imperative, read
+  // FIRST: the conflict ladder (SAFETY > TRUTH > the user's current request
+  // > efficiency), the rule-class distinction (hard rules vs. judgment; a
+  // LIMIT is a maximum, never a target), and the scoped-length pointer (only
+  // the enabled surfaces' sections ride the context). Static + unconditional
+  // — every session needs the resolution rules before any other guidance.
+  {
+    id: "precedence",
+    description: "## PRECEDENCE — the conflict ladder (SAFETY > TRUTH > USER > EFFICIENCY), rules vs. judgment, limits are maximums never targets (R99-G)",
+    dynamic: false,
+    bucket: "identity",
+  },
   {
     id: "tool-use",
-    description: "## TOOL USE — the live tool-name list + call discipline",
+    description: "## TOOL USE — the live tool-name list, call discipline, and the core-vocabulary DESCRIPTIONS block (R99-G)",
     dynamic: true, // toolNames
     bucket: "tools",
   },
@@ -70,9 +84,22 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     dynamic: true, // permissionMode
     bucket: "identity",
   },
+  // ROUND-99 (R99-G, the owner's flaw list: "There is no risk threshold for
+  // autonomy"): the AUTONOMY LADDER — the three tiers (act without asking /
+  // ask first / never) that turn "how bold should I be" from a vibe into a
+  // decision rule. Sits directly under the permission-mode narration it
+  // qualifies: "The permission MODE you run in sets the ceiling; this ladder
+  // fills the space it leaves." Static + unconditional (the ladder applies
+  // in every mode — ask-mode sessions just have a lower ceiling).
+  {
+    id: "autonomy",
+    description: "## AUTONOMY LADDER — the risk threshold: act-without-asking (reversible, in-scope) / ask-first (consequential or ambiguous) / never (refuse + explain), under the permission mode's ceiling (R99-G)",
+    dynamic: false,
+    bucket: "identity",
+  },
   {
     id: "sub-agents",
-    description: "## SUB-AGENTS (delegate_task) — delegation patterns (only when the tool is allowed)",
+    description: "## SUB-AGENTS (delegate_task) — delegation patterns + the REPORT CONTRACT (RESULT/FILES TOUCHED/FINDINGS/OPEN QUESTIONS/CONFIDENCE — a field that cannot be filled says \"none\", never silence; R99-G)",
     dynamic: true, // tool-gated
     bucket: "identity",
   },
@@ -84,8 +111,8 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   },
   {
     id: "agentic-loop",
-    description: "## AGENTIC LOOP — MULTI-TURN COMPLETION — the five-phase loop (PLAN/EXPLORE/ACT/VERIFY/FINISH; maxTurns + maxOuterLoops injected, R70-c merged the old efficiency/task-planning/todo-tracking sections)",
-    dynamic: true, // maxTurns + maxOuterLoops + todo/delegate-gated lines
+    description: "## AGENTIC LOOP — MULTI-TURN COMPLETION — the six-phase loop (INTAKE/PLAN/EXPLORE/ACT/VERIFY/FINISH; R99-G opened it with the INTAKE phase — restate the goal, knowns vs. unknowns, skills check, out-of-scope — before PLAN; maxTurns + maxOuterLoops injected)",
+    dynamic: true, // maxTurns + maxOuterLoops + todo/ask_user/skills-gated lines
     bucket: "identity",
   },
   // ROUND-96 (R96-D): the execution-doctrine pair behind the loop —
@@ -102,7 +129,7 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   },
   {
     id: "completion-discipline",
-    description: "## COMPLETION DISCIPLINE — the concise verified summary + the explicit \"Task complete.\" line; never pad, never restart finished work (R96-D)",
+    description: "## COMPLETION DISCIPLINE — the ending contract (verified done, explicit \"Task complete.\", never pad, never restart) + the PRECISION lines folded in by R99-G (target before you read, exact anchors, the change-X-to-Y-in-file-F recipe)",
     dynamic: false,
     bucket: "identity",
   },
@@ -136,22 +163,22 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   },
   {
     id: "code-navigation",
-    description: "## CODE NAVIGATION — search_files / search_code / list_dir",
+    description: "## CODE NAVIGATION — search_symbols-first definition hunting, list_dir, search-before-assume (the search_files/search_code role lines moved to the TOOL USE descriptions block by R99-G)",
     dynamic: false,
     bucket: "identity",
   },
-  // ROUND-96 (R96-D): the precision doctrine behind navigation — the
-  // owner's HTML example ("change a specific text from this to this… it
-  // will not try to analyze the whole HTML") generalized: target before
-  // you read, exact anchors from CURRENT content, verify after editing,
-  // never analyze the whole project when one file is named (research memo
-  // note (f)). Static + unconditional.
-  {
-    id: "precision-discipline",
-    description: "## PRECISION DISCIPLINE (target before you read) — search-first targeting, exact anchors, the change-X-to-Y-in-file-F recipe (R96-D)",
-    dynamic: false,
-    bucket: "identity",
-  },
+  // ROUND-99 (R99-G): "precision-discipline" is REMOVED — merged into
+  // completion-discipline (the owner's flaw list: "Heavy duplication, no
+  // precedence rules"). Its non-duplicated lines (TARGET THE FILE FIRST,
+  // READ ONLY WHAT THE TASK NEEDS, EXACT ANCHORS, the CHANGE-X-TO-Y recipe)
+  // fold into the merged section; its AFTER-EDITING-VERIFY line was the
+  // fourth copy of the verify doctrine (loop VERIFY + completion DONE-means-
+  // VERIFIED + file-editing smart verification) and is gone. The removal-
+  // cascade precedent: R66-2-c/R70-c ("efficiency", "task-planning",
+  // "todo-tracking") — registry entry + composition block + golden + pins
+  // all moved together; the registry-completeness pin guarantees the stale
+  // entry can't linger and a stale .acute/prompts/precision-discipline.md
+  // file is an unknown-file diagnostic, never an override.
   {
     id: "git",
     description: "## GIT (only when git_status is allowed)",
@@ -270,7 +297,7 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   // The registry-completeness pin guarantees a stale entry can't linger.
   {
     id: "communication",
-    description: "## COMMUNICATION — reply style",
+    description: "## COMMUNICATION — reply style, verification receipts, and the confidence tags with their because/raising-it contract (R99-G)",
     dynamic: false,
     bucket: "identity",
   },
@@ -282,7 +309,7 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   },
   {
     id: "project-memory",
-    description: "## Project memory — the digest (only when the project has memories)",
+    description: "## Project memory — the digest + the WHEN block: save durable discoveries at the moment of discovery, recall before re-deriving, never secrets/session-state (R99-G)",
     dynamic: true, // memoryDigest
     bucket: "memory",
   },

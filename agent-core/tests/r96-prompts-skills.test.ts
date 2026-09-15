@@ -140,14 +140,17 @@ describe("R96-D P1: the new prompt sections compose in order", () => {
   const composedWithGit = (): string =>
     buildProjectSystemPrompt({ ...promptCtx([]), toolNames: [...promptCtx([]).toolNames, "git_status", "git_diff", "git_log"] });
 
-  it("the registry carries the three new ids in the designed slots", () => {
+  it("the registry carries the three R96-D ids in their slots (ROUND-99: precision-discipline retired into completion-discipline)", () => {
     expect(PROMPT_SECTION_IDS).toContain("batch-discipline");
     expect(PROMPT_SECTION_IDS).toContain("completion-discipline");
-    expect(PROMPT_SECTION_IDS).toContain("precision-discipline");
     expect(PROMPT_SECTION_IDS.indexOf("batch-discipline")).toBe(PROMPT_SECTION_IDS.indexOf("agentic-loop") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("completion-discipline")).toBe(PROMPT_SECTION_IDS.indexOf("batch-discipline") + 1);
     expect(PROMPT_SECTION_IDS.indexOf("recovery")).toBe(PROMPT_SECTION_IDS.indexOf("completion-discipline") + 1);
-    expect(PROMPT_SECTION_IDS.indexOf("precision-discipline")).toBe(PROMPT_SECTION_IDS.indexOf("code-navigation") + 1);
+    // ROUND-99 (R99-G): the precision-discipline id is RETIRED — its
+    // load-bearing lines folded into completion-discipline (the removal
+    // pin + merged-content pins live in prompt-registry.test.ts).
+    expect(PROMPT_SECTION_IDS).not.toContain("precision-discipline");
+    expect(PROMPT_SECTION_IDS.indexOf("git")).toBe(PROMPT_SECTION_IDS.indexOf("code-navigation") + 1);
   });
 
   it("BATCH DISCIPLINE sits between the AGENTIC LOOP and the RECOVERY PROTOCOL (headings in order)", () => {
@@ -164,21 +167,25 @@ describe("R96-D P1: the new prompt sections compose in order", () => {
     expect(engineering).toBeGreaterThan(recovery);
   });
 
-  it("PRECISION DISCIPLINE sits between CODE NAVIGATION and GIT (headings in order)", () => {
+  it("the precision lines ride the MERGED COMPLETION DISCIPLINE section (R99-G) — between CODE NAVIGATION and GIT there is no standalone section", () => {
     const text = composedWithGit();
     const nav = text.indexOf("## CODE NAVIGATION");
-    const precision = text.indexOf("## PRECISION DISCIPLINE (target before you read)");
     const git = text.indexOf("## GIT");
     expect(nav).toBeGreaterThan(-1);
-    expect(precision).toBeGreaterThan(nav);
-    expect(git).toBeGreaterThan(precision);
+    expect(git).toBeGreaterThan(nav);
+    // The retired section never composes; its survivors live inside
+    // completion-discipline (pinned below).
+    expect(text).not.toContain("## PRECISION DISCIPLINE");
   });
 
   it("BATCH DISCIPLINE teaches the owner's batching directive (content pins)", () => {
     const text = composed();
     // The owner: "It will run multiple commands in a single go… batch commands."
     expect(text).toContain("issue them ALL in ONE response");
-    expect(text).toContain("DEPENDENT CALLS WAIT");
+    // ROUND-99 (R99-G, conscious re-pin): DEPENDENT CALLS WAIT merged into
+    // the BATCH INDEPENDENT CALLS bullet — the sequencing rule survives as
+    // the bullet's tail clause (the standalone bullet form is gone).
+    expect(text).toContain("a call that needs a previous result WAITS for it");
     expect(text).toContain("CHAIN SHELL COMMANDS");
     expect(text).toContain("`a && b`");
     expect(text).toContain("ONE-CALL-ONE-WAIT IS THE ANTI-PATTERN");
@@ -192,16 +199,18 @@ describe("R96-D P1: the new prompt sections compose in order", () => {
     expect(text).toContain("NEVER restart finished work");
   });
 
-  it("PRECISION DISCIPLINE teaches the owner's HTML example (content pins)", () => {
-    const text = composed();
+  it("the owner's HTML example teaches inside the MERGED section (R99-G re-pin)", () => {
     // The owner: "…in an HTML file tells it to change a specific text from
     // this to this, then it will not try to analyze the whole HTML."
-    expect(text).toContain("TARGET THE FILE FIRST");
-    expect(text).toContain("READ ONLY WHAT THE TASK NEEDS");
-    expect(text).toContain("EDITS USE EXACT ANCHORS from the CURRENT content");
-    expect(text).toContain("one character off is a miss");
-    expect(text).toContain('"CHANGE X TO Y IN FILE F"');
-    expect(text).toContain("NEVER analyze the whole project (or a whole HTML file) when one file and one string are named");
+    // ROUND-99 (R99-G): the lines compose inside completion-discipline now
+    // — the section was merged there; every load-bearing phrase survives.
+    const merged = buildSectionText(promptCtx([]), "completion-discipline") ?? "";
+    expect(merged).toContain("TARGET THE FILE FIRST");
+    expect(merged).toContain("READ ONLY WHAT THE TASK NEEDS");
+    expect(merged).toContain("EDITS USE EXACT ANCHORS from the CURRENT content");
+    expect(merged).toContain("one character off is a miss");
+    expect(merged).toContain('"CHANGE X TO Y IN FILE F"');
+    expect(merged).toContain("never analyze the whole project (or a whole HTML file) when one file and one string are named");
   });
 
   it("the loop's VERIFY phase gained on-disk verification; FINISH names the completion line", () => {

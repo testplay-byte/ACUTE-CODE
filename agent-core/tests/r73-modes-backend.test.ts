@@ -136,8 +136,11 @@ describe("R73-b D1: the registry + the two composed sections", () => {
     // (behind agentic-loop) + PRECISION DISCIPLINE (behind code-navigation).
     // ROUND-98 (R98-E2): 30 → 31 — the ALWAYS-ON SKILLS section (the pinned
     // bodies) joined DIRECTLY after skills, pushing the R73 pair one back.
-    expect(PROMPT_SECTION_IDS.length).toBe(31);
-    expect(PROMPT_REGISTRY.length).toBe(31);
+    // R99-G: 31 → 32 — +precedence +autonomy, −precision-discipline (folded
+    // into completion-discipline; the registry-completeness pin elsewhere
+    // guarantees the stale id can't linger).
+    expect(PROMPT_SECTION_IDS.length).toBe(32);
+    expect(PROMPT_REGISTRY.length).toBe(32);
     // R98-E2: always-on-skills sits DIRECTLY after skills (the "deep module
     // follows its index" position — the R73 pair's own precedent).
     expect(PROMPT_SECTION_IDS.indexOf("always-on-skills")).toBe(PROMPT_SECTION_IDS.indexOf("skills") + 1);

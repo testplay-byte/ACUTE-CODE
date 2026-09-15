@@ -241,7 +241,9 @@ describe("D1: prepareTurn grounds the live turn (git probe never blocks)", () =>
 
   it("the AGENTIC LOOP's outer-iteration line reflects the agent default", async () => {
     const system = await captureSystem(tempRoot(), 4);
-    expect(system).toContain("outer iterations exist — keep working within them");
+    // ROUND-99 (R99-G, conscious re-pin): the cap line now names itself a
+    // LIMIT — never a target (the hard-numbers audit).
+    expect(system).toContain("outer iterations exist — a limit to keep working within, never a target to fill");
   });
 });
 
@@ -258,7 +260,7 @@ describe("D2: the four-way overlap is ONE section", () => {
 
   it("the default maxOuterLoops is 5 when the ctx omits it", () => {
     const composed = buildProjectSystemPrompt(ctxFor({ maxOuterLoops: undefined }));
-    expect(composed).toContain("5 outer iterations exist — keep working within them");
+    expect(composed).toContain("5 outer iterations exist — a limit to keep working within, never a target to fill");
   });
 });
 

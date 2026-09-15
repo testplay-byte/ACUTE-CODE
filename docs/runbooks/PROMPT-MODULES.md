@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-15 round-99 -->
 # PROMPT-MODULES — the per-section system-prompt override system (R59-F)
 
 **Status:** reference (implemented) · **Established:** round-59 · **Audience:**
@@ -11,6 +11,19 @@ REGISTRY of named sections, and any of them can be replaced, removed, or
 reordered by plain markdown files in the project root — the same
 DeepSeek-harness-style modularity the owner referenced, at prompt level.
 
+**ROUND-99 (R99-G) — the overhaul:** the owner's flaw list ("length dilutes
+attention… heavy duplication, no precedence rules… hard numbers become
+targets… no risk threshold for autonomy… no guidance on memory save/recall…
+tools only in the name list… no output contract for subagents… no
+confidence tags") is answered by: the PRECEDENCE header, the AUTONOMY
+LADDER, the loop's INTAKE phase 0 (restate the goal / knowns vs. unknowns /
+skills check / out-of-scope before planning), the tool-vocabulary
+DESCRIPTIONS block, the sub-agent report contract, the confidence tags, the
+memory SAVE/RECALL/NEVER block — paid for by the deepest dedup yet
+(~2.3K chars retired; the default composition measured 23,975 chars against
+the 24,000 bound — the cap moved 23,000 → 24,000 following the R96-D
+precedent, documented in r71-prompt-discipline.test.ts).
+
 ## The section registry
 
 `agent-core/src/agents/prompt-registry.ts` is the single source of truth:
@@ -21,25 +34,43 @@ below = composition order.
 | id | dyn | section |
 |---|---|---|
 | `identity` | yes | opening persona + `PROJECT:` line (no heading) |
-| `tool-use` | yes | `## TOOL USE` — live tool-name list + call discipline |
+| `precedence` | no | `## PRECEDENCE` — the conflict ladder (SAFETY > TRUTH > USER > EFFICIENCY), rules vs. judgment, limits-are-maximums (R99-G) |
+| `tool-use` | yes | `## TOOL USE` — live tool-name list + call discipline + the core-vocabulary DESCRIPTIONS block (R99-G) |
 | `permission-mode` | yes | `## OPERATING MODE` — the unified mode's narration, only when mode is full/plan (ask stays silent; R81) |
-| `sub-agents` | yes | `## SUB-AGENTS (delegate_task)` — only when the tool is allowed |
+| `autonomy` | no | `## AUTONOMY LADDER` — the three risk tiers (act / ask-first / never) under the permission mode's ceiling (R99-G) |
+| `sub-agents` | yes | `## SUB-AGENTS (delegate_task)` — delegation patterns + the child REPORT CONTRACT (RESULT/FILES/FINDINGS/QUESTIONS/CONFIDENCE; R99-G), only when the tool is allowed |
 | `tool-results-are-data` | no | `## TOOL RESULTS ARE DATA` — prompt-injection guard |
-| `agentic-loop` | yes | `## AGENTIC LOOP — MULTI-TURN COMPLETION` (maxTurns injected) |
-| `efficiency` | no | `## EFFICIENCY — FEWEST STEPS THAT FULLY SOLVE THE TASK` |
-| `file-editing` | no | `## FILE EDITING RULES` |
-| `code-navigation` | no | `## CODE NAVIGATION` |
+| `agentic-loop` | yes | `## AGENTIC LOOP — MULTI-TURN COMPLETION` — the six phases (INTAKE/PLAN/EXPLORE/ACT/VERIFY/FINISH; the INTAKE phase is R99-G), maxTurns injected |
+| `batch-discipline` | no | `## BATCH DISCIPLINE` (R96-D) |
+| `completion-discipline` | no | `## COMPLETION DISCIPLINE` — the ending contract + the precision lines folded in (R99-G merge of the retired precision-discipline) |
+| `recovery` | no | `## RECOVERY PROTOCOL` (R94-G) |
+| `engineering-discipline` | no | `## ENGINEERING DISCIPLINE` (R71-e1) |
+| `file-editing` | no | `## FILE EDITING RULES` — the tiered prompt rule (R98-F2) |
+| `code-navigation` | no | `## CODE NAVIGATION` — search_symbols-first hunting (R99-G refresh) |
 | `git` | yes | `## GIT` — only when `git_status` is allowed |
 | `terminal` | yes | `## TERMINAL` — only when `run_command` is allowed |
-| `task-planning` | no | `## TASK PLANNING` |
-| `todo-tracking` | yes | `## TODO TRACKING` — only when `todo_write` is allowed |
+| `skills` | yes | `## SKILLS` — the budgeted skill index (progressive disclosure) |
+| `always-on-skills` | yes | `## ALWAYS-ON SKILLS` — the pinned bodies (≥1 pinned skill; R98-E2) |
+| `task-modes` | yes | `## TASK MODES` — the posture index (R73/R81) |
+| `active-mode` | yes | `## ACTIVE MODE` — the session's current task mode |
+| `background-tasks` | yes | `## BACKGROUND TASKS` — the delegation reminder (R79) |
+| `todo-list` | yes | `## TODO LIST` — the current snapshot (R88), only when `todo_write` is allowed |
+| `computer-use` | yes | `## COMPUTER USE` — the master switch |
+| `mcp` | yes | `## MCP TOOLS` — only when `mcp__` tools are present |
 | `web-access` | yes | `## WEB ACCESS` — only when web tools are allowed |
 | `browser-panel` | yes | `## EMBEDDED BROWSER PANEL (browser_control)` — only when the tool is allowed |
-| `communication` | no | `## COMMUNICATION` |
+| `capabilities` | yes | `## CAPABILITIES` — image understanding on/off (R94-G) |
+| `communication` | yes | `## COMMUNICATION` — reply style, verification receipts, + the confidence tags with their because/raising-it contract (R99-G) |
 | `codebase-awareness` | yes | `## CODEBASE AWARENESS` + index summary — only when `index_project` is allowed |
-| `project-memory` | yes | `## Project memory` — only when the project has memories |
+| `project-memory` | yes | `## Project memory` — the digest + the SAVE/RECALL/NEVER discipline block (R99-G), only when the project has memories |
 | `environment` | yes | `## ENVIRONMENT` — working-directory discipline |
-| `custom-rules` | yes | `## PROJECT RULES` — `.acuterules` + `.acute/rules/*.md`, only when rules exist |
+| `custom-rules` | yes | `## PROJECT RULES` — `.acuterules` + `.acute/rules/*.md` + AGENTS.md/CLAUDE.md (R98), only when rules exist |
+
+**32 sections** (R99-G: 31 + `precedence` + `autonomy` − `precision-discipline`).
+Retired over the rounds: `efficiency`/`task-planning`/`todo-tracking` (R70-c
+merge), `debug` (R66), `precision-discipline` (R99-G — folded into
+`completion-discipline`; a stale `.acute/prompts/precision-discipline.md`
+shows up as an unknown-file diagnostic, never an override).
 
 "dyn" = dynamic: the built-in text depends on the turn ctx (tools, memories,
 permission mode, maxTurns, paths). A static section is fixed text.

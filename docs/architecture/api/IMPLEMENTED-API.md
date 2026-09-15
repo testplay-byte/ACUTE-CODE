@@ -844,8 +844,9 @@ ROUND-61 — see below.)
 
 ### Prompt-section registry (modular system prompts)
 
-- `.acute/prompts/<section-id>.md` per-section overrides (20 registry ids —
-  see `docs/runbooks/PROMPT-MODULES.md`); empty file removes the section;
+- `.acute/prompts/<section-id>.md` per-section overrides (32 registry ids —
+  R99-G: +precedence +autonomy, −precision-discipline; see
+  `docs/runbooks/PROMPT-MODULES.md`); empty file removes the section;
   `_order.txt` reorders when ≥1 override exists. No overrides → composition
   byte-identical to pre-R59-F (golden-fixture pinned).
 - CLI: `prompt:sections [--project]` + `prompt:show <id> [--project]`.
