@@ -350,6 +350,24 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // byte-identical to the pre-R98 shape — pinned in
     // tests/r98-always-load.test.ts, not here (this fixture now exercises
     // the pinned case deliberately).
+    // Regenerated AGAIN in R98-F2/F3 (deliberately — the edit-efficiency +
+    // symbol-search round for the owner's "It should not be the one to read
+    // the whole file again… context-optimized and token-optimized" +
+    // "Implement grep functionality. Handle it properly. Look into
+    // indexing…"). The verified diff (diff -u against the pre-R98-F23 copy,
+    // never blind) was EXACTLY three hunks: (1) FILE EDITING RULES rule 1
+    // REWRITTEN — the "ALWAYS use read_file before edit_file or write_file"
+    // absolutism became the honest tiered rule ("Read before the FIRST
+    // edit… the response IS the confirmation: edit the SAME file again
+    // directly… Re-read only when a tool result warns the file changed on
+    // disk or an edit fails") — the session file-freshness ledger backs the
+    // silence; (2) CODE NAVIGATION gained ONE line (search_symbols before
+    // search_code when hunting a definition); (3) CODEBASE AWARENESS — the
+    // "Call index_project on the FIRST turn" imperative became the
+    // auto-index truth line, and the FABRICATED "search_code… queries both
+    // the live tree AND the index" claim (search_code never touched the
+    // index) became the honest split: search_code = live-tree contents,
+    // search_symbols = the index query leg. NOTHING else moved.
     // R59 CI fix: normalize \r\n → \n on BOTH sides before comparing — the
     // fixture is committed with LF, but a Windows checkout with autocrlf
     // rewrites it to CRLF (the R57 CI lesson: never let line endings decide

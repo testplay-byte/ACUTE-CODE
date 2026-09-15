@@ -156,16 +156,20 @@ describe("ROUND-52 (R52-f): the plugin registry", () => {
   it("buildProjectTools assembles through the registry with the exact allowlist semantics", async () => {
     const all = await buildProjectTools(tempDir);
     const names = Object.keys(all);
-    // The 22 base tools + delegate_task needs deps (absent here) = 22.
-    expect(names.length).toBe(22);
+    // ROUND-98 (R98-F3): the 22 base tools + search_symbols (the symbol-index
+    // query leg — the search plugin's fourth tool, always registered like
+    // index_project; deps gate at EXECUTE time) = 23. delegate_task still
+    // needs deps (absent here).
+    expect(names.length).toBe(23);
     expect(names).toContain("run_command");
     expect(names).toContain("job_status");
+    expect(names).toContain("search_symbols");
 
     const two = await buildProjectTools(tempDir, ["read_file", "job_stop"]);
     expect(Object.keys(two).sort()).toEqual(["job_stop", "read_file"]);
 
     const empty = await buildProjectTools(tempDir, []);
-    expect(Object.keys(empty).length).toBe(22);
+    expect(Object.keys(empty).length).toBe(23);
 
     const none = await buildProjectTools(tempDir, ["__none__"]);
     expect(Object.keys(none)).toHaveLength(0);

@@ -56,6 +56,11 @@ export const TOOL_CATALOG = [
   "delete_file",
   "search_files",
   "search_code",
+  // ROUND-98 (R98-F3): the symbol-index query leg (search_symbols — the
+  // codebase index lookup: name prefix + kind filter + file:line +
+  // signature). Kept in lockstep with agent-core storage/agents.ts
+  // TOOL_NAMES (the drift guard enforces it).
+  "search_symbols",
   "git_status",
   "git_diff",
   "git_log",

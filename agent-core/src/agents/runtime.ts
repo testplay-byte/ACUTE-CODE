@@ -87,6 +87,9 @@ import { findMode, resolveEffectiveModes, type TaskMode } from "./modes.js";
 import { resolveEffectiveSkills } from "../storage/skills-files.js";
 import { getComputerUseSettings } from "../storage/computer-use.js";
 import { getIndexSummary } from "../storage/index.js";
+// ROUND-98 (R98-F3): the auto-index hook — prepareTurn's one guarded,
+// fire-and-forget background refresh for the codebase symbol index.
+import { maybeAutoIndexProject } from "../storage/auto-index.js";
 // ROUND-44 (R44-a): the project memory digest for prompt injection.
 import { memoryDigest } from "../storage/memory.js";
 // ROUND-49: the memory master switch (Settings → Advanced).
@@ -1375,6 +1378,22 @@ async function prepareTurn(
         message: `session ${sessionId} references missing project ${session.projectId}`,
       },
     };
+  }
+  // ROUND-98 (R98-F3): AUTO-INDEX — the cheapest honest hook for the index's
+  // background freshness keeper (the owner: "Look into indexing… essential
+  // for larger projects with a lot of files, folders, subfolders"). ONE SQL
+  // staleness probe per turn; when the project's index rows are missing or
+  // >10 minutes stale, a guarded fire-and-forget reindexProject is scheduled
+  // (setImmediate — the walk lands in the event loop's idle stretch, never
+  // in the turn's critical path). In-flight + attempt-cooldown guards keep
+  // it to at most one background walk per project at a time, retried at
+  // most once per 10 minutes; failures are swallowed (search_symbols
+  // reports the honest state; index_project is the manual refresher).
+  // prepareTurn runs for EVERY turn (sync + streamed + sub-agent children)
+  // — the staleness gate is what makes this "first turn + every 10 minutes"
+  // rather than "every turn".
+  if (project !== undefined) {
+    maybeAutoIndexProject(db, project.id, project.rootPath);
   }
   // Tools: the project set, intersected with the agent's allowlist when one
   // is set (ADR-0019). Empty/omitted allowlist = ALL tools (the default

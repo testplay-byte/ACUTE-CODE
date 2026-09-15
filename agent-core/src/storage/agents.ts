@@ -23,6 +23,15 @@ export const TOOL_NAMES = [
   "delete_file",
   "search_files",
   "search_code",
+  // ROUND-98 (R98-F3): the SYMBOL-INDEX query leg (search_symbols — name
+  // prefix + optional kind filter over the codebase index; the owner's
+  // "Implement grep functionality. Handle it properly. Look into indexing…
+  // essential for larger projects"). Sits in the search family next to
+  // search_code (live-tree contents); migration 0038 appends it to
+  // template/default allowlists that already list search_code (a
+  // code-searching agent is a symbol-searching agent — user curation is
+  // never widened).
+  "search_symbols",
   "git_status",
   "git_diff",
   "git_log",

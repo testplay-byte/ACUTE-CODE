@@ -212,6 +212,9 @@ describe("openDatabase", () => {
       // ROUND-98 (R98-E2): the always-load tier — skills.always_load
       // (default 0: nothing rides the prompt until the owner pins).
       { version: 37, name: "0037_skills_always_load.sql" },
+      // ROUND-98 (R98-F3): search_symbols joins the allowlist vocabulary
+      // (the search_code companion rule — the symbol-index query leg).
+      { version: 38, name: "0038_search_symbols_tool.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
@@ -243,6 +246,10 @@ describe("template seeding", () => {
           "delete_file",
           "search_files",
           "search_code",
+          // ROUND-98 (R98-F3): the symbol-index query tool — in TOOL_NAMES
+          // right after search_code (fresh seeds); existing DBs get it
+          // appended at the END by migration 0038.
+          "search_symbols",
           "git_status",
           "git_diff",
           "git_log",

@@ -228,7 +228,7 @@ describe("round-14 tools: create_dir / delete_file / search_files", () => {
 });
 
 describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () => {
-  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task; R44-a: +memory tools; R52-a: +job tools; R61: +read_skill; R66: +analyze_image; R73: +switch_mode; R87: +ask_user; R96: +search_skills)", async () => {
+  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task; R44-a: +memory tools; R52-a: +job tools; R61: +read_skill; R66: +analyze_image; R73: +switch_mode; R87: +ask_user; R96: +search_skills; R98-F3: +search_symbols)", async () => {
     const { TOOL_NAMES } = await import("../src/storage/agents");
     expect([...TOOL_NAMES].sort()).toEqual([
       "analyze_image",
@@ -259,6 +259,9 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
       // ROUND-96 (R96-D): the skills-discovery tool (migration 0036
       // appends it to read_skill-capable template/default rows).
       "search_skills",
+      // ROUND-98 (R98-F3): the symbol-index query tool (migration 0038
+      // appends it to search_code-capable template/default rows).
+      "search_symbols",
       // ROUND-73 (R73-b): the task-mode posture switch — allowlist
       // vocabulary like read_skill (migration 0027 appends it to
       // read_skill-capable template/default rows).
@@ -270,13 +273,14 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
     ]);
   });
 
-  it("buildProjectTools filters by allowlist; empty allowlist = all tools (22 base incl. browser_control + memory + job tools; read_skill is deps-gated per R61 — bare calls don't get it)", async () => {
+  it("buildProjectTools filters by allowlist; empty allowlist = all tools (23 base incl. browser_control + memory + job tools + search_symbols; read_skill is deps-gated per R61 — bare calls don't get it)", async () => {
     const { buildProjectTools } = await import("../src/tools/index");
     // ROUND-36: delegate_task requires deps.keyring + deps.chat — without
     // them the base tools return (back-compat), with them more (R43-10
     // added browser_control; R44-a added the three memory tools; R52-a the
     // two job tools to the base set — they fail gracefully without deps,
-    // like todo_write).
+    // like todo_write). ROUND-98 (R98-F3): search_symbols joins the base
+    // set (always registered like index_project; deps gate at EXECUTE).
     const all = (await buildProjectTools(tempDir)) as unknown as Record<string, unknown>;
     expect(Object.keys(all).sort()).toEqual([
       "browser_control",
@@ -297,6 +301,7 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
       "run_command",
       "search_code",
       "search_files",
+      "search_symbols",
       "todo_write",
       "web_fetch",
       "web_search",
@@ -305,7 +310,7 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
     const two = (await buildProjectTools(tempDir, ["read_file", "search_files"])) as unknown as Record<string, unknown>;
     expect(Object.keys(two).sort()).toEqual(["read_file", "search_files"]);
     const empty = (await buildProjectTools(tempDir, [])) as unknown as Record<string, unknown>;
-    expect(Object.keys(empty)).toHaveLength(22);
+    expect(Object.keys(empty)).toHaveLength(23);
   });
 
   it("server rejects SPEC-era tool names in allowedTools (drift guard)", async () => {

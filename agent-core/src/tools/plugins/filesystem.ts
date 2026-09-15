@@ -3,8 +3,13 @@
  * / edit_file / create_dir / delete_file, moved VERBATIM from
  * tools/index.ts buildProjectTools (same descriptions, schemas, execute
  * bodies, snapshot recording — the refactor is architectural only).
+ * ROUND-98 (R98-F2/F3): the plugin now also carries the SESSION FILE-FRESHNESS
+ * LEDGER wiring (tools/file-ledger.ts — read/edit/write record what the model
+ * last saw; edit_file warns when the disk moved under it) and the INCREMENTAL
+ * symbol-index refresh (storage/index.ts reindexFile after every successful
+ * write/edit/delete — the index catches up as the agent works).
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { jsonSchema } from "ai";
 import {
   createDir,
@@ -23,10 +28,76 @@ import { editFailureSuffix, isEditAnchorFailure, recordEditFailure, resetEditStr
 // reminder appended to successful read_file results (kilocode pattern;
 // root-level files stay readCustomRules' job — no double-billing).
 import { conventionReminder, findDeepestConvention, shouldInject } from "../dir-conventions.js";
+// ROUND-98 (R98-F2): the session file-freshness ledger — the owner's
+// "it should not be the one to read the whole file again" ask. The same
+// import family as edit-streak/dir-conventions: in-process module state,
+// never persisted, never a gate.
+import {
+  ledgerCheckFresh,
+  ledgerHasEntry,
+  ledgerLastSeenAgeMs,
+  ledgerRecordRead,
+  ledgerRecordWrite,
+  shouldRemindRedundantRead,
+} from "../file-ledger.js";
+// ROUND-98 (R98-F2): the redundant-read reminder rides the R73-d renderer
+// (ONE mechanism for fenced system notes — the "note" kind).
+import { renderReminder } from "../../agents/system-reminders.js";
+// ROUND-98 (R98-F3): the incremental symbol-index refresh after writes.
+import { reindexFile } from "../../storage/index.js";
 import { recordSnapshot } from "../../storage/snapshots.js";
 // ROUND-96 (R96-C): the atomic batch shape + the uniform result type.
 import type { EditOp } from "../fs-ops.js";
-import type { PluginDefinition, ToolDefinition, ToolResult } from "../registry.js";
+import type { PluginDefinition, ToolBuildContext, ToolDefinition, ToolResult } from "../registry.js";
+// ROUND-98 (R98-F2): the whole-file budget — the redundant-read reminder's
+// expensive-file threshold (re-reads of files OVER this budget cost real
+// context; ≤48KB re-reads are cheap and stay unreminded).
+import { READ_WHOLE_BUDGET_BYTES } from "../fs-ops.js";
+
+/** ROUND-98 (R98-F2): the redundant-read reminder — ONE bounded note when
+ * the model re-reads a file it already read/wrote THIS session, ONLY for
+ * files over the 48KB whole-file budget (the re-read is expensive there;
+ * ≤48KB re-reads are cheap and reminding on them would be noise). Once per
+ * file per session (file-ledger's shouldRemindRedundantRead check-and-mark,
+ * the R72-d session-once pattern). The text is deliberately one sentence —
+ * the task-hints discipline: a reminder is a hint, not a second prompt. */
+function redundantReadReminder(relPath: string): string {
+  return renderReminder({
+    kind: "note",
+    label: `[you already read ${relPath} this session]`,
+    text: `you already read ${relPath} this session — prefer direct edits with anchors from your last read/write.`,
+  });
+}
+
+/** ROUND-98 (R98-F2/F3): post-write bookkeeping shared by write_file and
+ * edit_file — (a) the LEDGER entry: the model just AUTHORED the content, so
+ * the post-write stat is the truth the next freshness check compares against
+ * (this is the owner's exact case — "edit the file you just wrote directly,
+ * do not read the whole file again"); (b) the INCREMENTAL symbol-index refresh
+ * (reindexFile for the one path — cheap, catches search_symbols up as the
+ * agent works). Both wrapped in try/catch: bookkeeping must never break the
+ * write it rides on, and its failures are never the tool's failures. */
+function afterWriteBookkeeping(
+  toolDeps: ToolBuildContext["toolDeps"] | undefined,
+  root: string,
+  relPath: string,
+): void {
+  const sessionId = toolDeps?.sessionId;
+  if (sessionId === undefined && !(toolDeps?.db && toolDeps.projectId)) return;
+  try {
+    const resolved = resolveInsideRoot(root, relPath);
+    if ("error" in resolved) return;
+    if (sessionId !== undefined) {
+      const stats = statSync(resolved.abs);
+      ledgerRecordWrite(sessionId, resolved.abs, { mtimeMs: stats.mtimeMs, size: stats.size });
+    }
+    if (toolDeps?.db && toolDeps.projectId) {
+      reindexFile(toolDeps.db, toolDeps.projectId, root, relPath);
+    }
+  } catch {
+    /* bookkeeping, never a gate */
+  }
+}
 
 export const filesystemPlugin: PluginDefinition = {
   id: "core-filesystem",
@@ -82,6 +153,40 @@ export const filesystemPlugin: PluginDefinition = {
             offset: typeof input.offset === "number" ? input.offset : undefined,
             limit: typeof input.limit === "number" ? input.limit : undefined,
           });
+          // ROUND-98 (R98-F2): every successful read records the LEDGER entry
+          // (the model now knows the file as of this stat — the next edit_file
+          // freshness check compares against it). Bare builds (no toolDeps)
+          // record nothing. The stat itself is bookkeeping: an unreadable
+          // stat never breaks the read it rides on.
+          let ledgerSuffix = "";
+          const sessionId = toolDeps?.sessionId;
+          if (result.ok && sessionId !== undefined) {
+            try {
+              const resolved = resolveInsideRoot(root, relPath);
+              if (!("error" in resolved)) {
+                const stats = statSync(resolved.abs);
+                const alreadySaw = ledgerHasEntry(sessionId, resolved.abs);
+                ledgerRecordRead(sessionId, resolved.abs, {
+                  mtimeMs: stats.mtimeMs,
+                  size: stats.size,
+                });
+                // The bounded redundant-read reminder: ONLY a re-read of a
+                // file the session already saw AND only when the file is
+                // OVER the ~48KB whole-file budget — the expensive re-reads.
+                // (≤48KB re-reads are cheap; reminding on them would be
+                // noise. Once per file per session, via the check-and-mark.)
+                if (
+                  alreadySaw &&
+                  stats.size > READ_WHOLE_BUDGET_BYTES &&
+                  shouldRemindRedundantRead(sessionId, resolved.abs)
+                ) {
+                  ledgerSuffix = redundantReadReminder(relPath);
+                }
+              }
+            } catch {
+              /* the ledger is bookkeeping, never a gate */
+            }
+          }
           // ROUND-72 (R72-d): per-directory conventions (the kilocode
           // AGENTS.md pattern). ONLY a successful read carries a reminder —
           // failures stay byte-exact errors. The reminder quotes the deepest
@@ -94,7 +199,10 @@ export const filesystemPlugin: PluginDefinition = {
           if (result.ok) {
             const convention = findDeepestConvention(root, relPath);
             if (convention !== null && shouldInject(toolDeps?.sessionId, convention.dir)) {
-              return { ok: true, output: `${result.output}${conventionReminder(convention)}` };
+              return { ok: true, output: `${result.output}${conventionReminder(convention)}${ledgerSuffix}` };
+            }
+            if (ledgerSuffix !== "") {
+              return { ok: true, output: `${result.output}${ledgerSuffix}` };
             }
           }
           return result;
@@ -134,6 +242,11 @@ export const filesystemPlugin: PluginDefinition = {
               toolName: "write_file",
             });
           }
+          // ROUND-98 (R98-F2/F3): the ledger entry (the model authored the
+          // content — its view is current) + the incremental index refresh.
+          if (result.ok) {
+            afterWriteBookkeeping(toolDeps, root, relPath);
+          }
           return result;
         },
       },
@@ -147,7 +260,7 @@ export const filesystemPlugin: PluginDefinition = {
         // confirmation with no diff body (the UI renders diffs from the
         // recorded snapshots).
         description:
-          "Edit an existing file by exact string replacement. Read the file first and copy oldString EXACTLY from the current content — one whitespace character of difference misses. Include enough surrounding lines to make oldString match EXACTLY ONCE, or set replaceAll: true to replace every occurrence (the result reports the count). Exactly ONE fallback rung exists: when the exact anchor is absent, whitespace-normalized matching is tried once (runs of whitespace compared as a single space) and the result says so — anything else fails honestly; on failure re-read the file and re-anchor on CURRENT content. For several changes to one file pass edits: [{oldString, newString}, …] (max 32, optionally with replaceAll per item): every anchor is validated IN ORDER against the evolving content and applied in ONE atomic write — any failure names the failing index and leaves the file UNTOUCHED. Prefer edit_file over write_file for changing existing files.",
+          "Edit an existing file by exact string replacement. Read the file first (needed before the FIRST edit of a file this session; after a successful edit or write of the SAME file your anchors are current — edit again directly without re-reading) and copy oldString EXACTLY from the current content — one whitespace character of difference misses. Include enough surrounding lines to make oldString match EXACTLY ONCE, or set replaceAll: true to replace every occurrence (the result reports the count). Exactly ONE fallback rung exists: when the exact anchor is absent, whitespace-normalized matching is tried once (runs of whitespace compared as a single space) and the result says so — anything else fails honestly; on failure re-read the file and re-anchor on CURRENT content. For several changes to one file pass edits: [{oldString, newString}, …] (max 32, optionally with replaceAll per item): every anchor is validated IN ORDER against the evolving content and applied in ONE atomic write — any failure names the failing index and leaves the file UNTOUCHED. Prefer edit_file over write_file for changing existing files.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
@@ -181,6 +294,35 @@ export const filesystemPlugin: PluginDefinition = {
             const resolved = resolveInsideRoot(root, relPath);
             if (!("error" in resolved)) beforeContent = readFileSync(resolved.abs, "utf8");
           } catch { /* file doesn't exist — edit will fail anyway */ }
+          // ROUND-98 (R98-F2): the STALENESS CHECK — stat the file BEFORE
+          // applying and ask the session ledger whether the disk still
+          // matches what the model last read/wrote. "stale" (the user or
+          // another process changed it) PREPENDS an honest one-line warning
+          // to a SUCCESSFUL edit (the anchor engine is the real guard — the
+          // edit still attempts) and STRENGTHENS an anchor FAILURE with the
+          // ledger's evidence (the miss was probably not the model's fault).
+          // "unknown" (no entry — first edit this session) and "fresh" stay
+          // silent: silence is the owner's token-optimization ask.
+          let staleAgeMs: number | null = null;
+          const ledgerSession = toolDeps?.sessionId;
+          if (ledgerSession !== undefined) {
+            try {
+              const resolved = resolveInsideRoot(root, relPath);
+              if (!("error" in resolved)) {
+                const stats = statSync(resolved.abs);
+                if (
+                  ledgerCheckFresh(ledgerSession, resolved.abs, {
+                    mtimeMs: stats.mtimeMs,
+                    size: stats.size,
+                  }) === "stale"
+                ) {
+                  staleAgeMs = ledgerLastSeenAgeMs(ledgerSession, resolved.abs);
+                }
+              }
+            } catch {
+              /* unreadable stat = unknown freshness — the anchor engine is the real guard */
+            }
+          }
           // ROUND-96 (R96-C): dispatch between the single-edit shorthand and
           // the atomic edits[] batch (mutually exclusive — an ambiguous call
           // is an honest error, never a guess).
@@ -218,6 +360,38 @@ export const filesystemPlugin: PluginDefinition = {
               ok: false,
               output: `cannot edit '${relPath}': missing oldString/newString (single edit) or edits (batch)`,
             };
+          }
+          // ROUND-98 (R98-F2): the ledger's honest narration of a stale-file
+          // edit. SUCCESS → the warning rides FIRST (one line, prepended —
+          // the model should re-read if the result looks wrong); anchor
+          // FAILURE → the error names the likeliest cause with the ledger's
+          // evidence (the disk moved after the model's last look — "re-read"
+          // is then the FIRST remedy, not the R71 streak's escalation).
+          // Non-anchor failures (shape errors, missing file) stay untouched —
+          // staleness is not their story.
+          if (staleAgeMs !== null) {
+            const age = Math.max(staleAgeMs, 0);
+            if (result.ok) {
+              result = {
+                ok: true,
+                output:
+                  `[warning: the file changed on disk since you last read it (${age} ms ago) — ` +
+                  `the anchor may not match; re-read if the edit fails]\n${result.output}`,
+              };
+            } else if (isEditAnchorFailure(result)) {
+              result = {
+                ok: false,
+                output:
+                  `${result.output} — the file changed on disk since you last read it (${age} ms ago): ` +
+                  `re-read it with read_file and re-anchor on the CURRENT content`,
+              };
+            }
+          }
+          // ROUND-98 (R98-F2/F3): the post-write ledger entry (the model
+          // authored the new content — its view is current, edit again
+          // directly) + the incremental symbol-index refresh.
+          if (result.ok) {
+            afterWriteBookkeeping(toolDeps, root, relPath);
           }
           // ROUND-71 (R71-e2, D2): per-session consecutive edit-failure
           // escalation (cline's progressive-failure pattern). A SUCCESS
@@ -296,6 +470,17 @@ export const filesystemPlugin: PluginDefinition = {
               afterContent: null,
               toolName: "delete_file",
             });
+          }
+          // ROUND-98 (R98-F3): a deleted file's index rows are cleared —
+          // reindexFile's delete-then-read on a missing path is exactly the
+          // honest empty result (search_symbols must never return a dead
+          // path). Bookkeeping, never a gate.
+          if (result.ok && toolDeps?.db && toolDeps.projectId) {
+            try {
+              reindexFile(toolDeps.db, toolDeps.projectId, root, relPath);
+            } catch {
+              /* bookkeeping, never a gate */
+            }
           }
           return result;
         },

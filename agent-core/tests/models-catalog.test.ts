@@ -353,8 +353,10 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
     // rule — the list has read_skill by then) → 26; ROUND-87 (R87): 0033
     // appends ask_user (the todo_write companion rule — the list has
     // todo_write by then) → 27 — and ROUND-96's migration 0036 appends
-    // search_skills (the read_skill companion rule) → 28.
-    expect(row("agt_tpl_coder")).toHaveLength(28);
+    // search_skills (the read_skill companion rule) → 28 — and ROUND-98's
+    // (R98-F3) migration 0038 appends search_symbols (the search_code
+    // companion rule — the seed list has search_code) → 29.
+    expect(row("agt_tpl_coder")).toHaveLength(29);
     expect(row("agt_tpl_coder")).toContain("analyze_image");
     expect(row("agt_default_nova")).toContain("delegate_task");
     expect(row("agt_default_nova")).toContain("browser_control");
@@ -369,7 +371,9 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
     // ROUND-73 (R73-b): 0027 appends switch_mode (the mode-capable
     // companion rule — the row HAS read_skill). ROUND-96 (R96-D): 0036
     // appends search_skills (the skills-discovery companion rule — the
-    // row HAS read_skill).
+    // row HAS read_skill). ROUND-98 (R98-F3): 0038 leaves it UNTOUCHED —
+    // its list has no search_code, and the symbol-index tool is the
+    // search_code companion (the companion rule pins itself here).
     expect(row("agt_tpl_already")).toEqual([
       "list_dir",
       "delegate_task",
@@ -388,7 +392,7 @@ describe("migration 0014 (delegate_task + browser_control allowlist repair)", ()
       JSON.parse(
         (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
       ),
-    ).toHaveLength(28); // R96: +search_skills (migration 0036)
+    ).toHaveLength(29); // R96: +search_skills (0036); R98-F3: +search_symbols (0038)
     again.close();
   });
 });

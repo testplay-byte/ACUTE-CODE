@@ -198,13 +198,23 @@ export function getIndexSummary(db: SqliteDatabase, projectId: string): IndexSum
     .prepare("SELECT path, symbol, kind, line FROM codebase_index WHERE project_id = ? ORDER BY path, line LIMIT 50")
     .all(projectId) as Array<{ path: string; symbol: string; kind: string; line: number }>;
 
+  // ROUND-98 (R98-F3): indexedAt is the HONEST last-write timestamp of the
+  // project's index rows (MAX(ts)), not `new Date()` — a freshness claim
+  // must never be fabricated. The no-rows case returned null above, so the
+  // fallback is unreachable in practice; Date.now() keeps it honest if a
+  // future caller ever reaches it with a NULL MAX(ts) (never a made-up
+  // fixed string).
+  const maxTs = db
+    .prepare("SELECT MAX(ts) AS m FROM codebase_index WHERE project_id = ?")
+    .get(projectId) as { m: string | null } | undefined;
+  const indexedAtMs = maxTs?.m != null ? parseSqliteTs(maxTs.m) : null;
   return {
     projectId,
     totalFiles: totalRow.files,
     totalSymbols: totalRow.symbols,
     topFiles,
     topSymbols,
-    indexedAt: new Date().toISOString(),
+    indexedAt: indexedAtMs !== null ? new Date(indexedAtMs).toISOString() : new Date().toISOString(),
   };
 }
 
@@ -234,20 +244,96 @@ export function reindexFile(
 }
 
 /** Search the codebase index for symbols by name (prefix match). Used by the
- * search_code tool + the CommandPalette. Returns up to `limit` matches. */
+ * search_code tool + the CommandPalette. Returns up to `limit` matches.
+ * ROUND-98 (R98-F3): the search_symbols TOOL's backing query — now returns
+ * the row's signature + line_end too (honestly: signature is the defining
+ * source line; line_end is NULL until a future extractor computes spans),
+ * and accepts an optional kind filter (SQL-side, one of the seven kinds the
+ * schema's CHECK constrains). */
+export interface IndexSymbolMatch {
+  path: string;
+  symbol: string;
+  kind: string;
+  line: number;
+  line_end?: number;
+  signature?: string;
+}
+
 export function searchIndexSymbols(
   db: SqliteDatabase,
   projectId: string,
   query: string,
   limit = 50,
-): Array<{ path: string; symbol: string; kind: string; line: number }> {
+  kind?: string,
+): IndexSymbolMatch[] {
   const needle = query.trim();
   if (needle === "") return [];
-  return db
-    .prepare(
-      `SELECT path, symbol, kind, line FROM codebase_index
-       WHERE project_id = ? AND symbol LIKE ? COLLATE NOCASE
-       ORDER BY path, line LIMIT ?`,
-    )
-    .all(projectId, `${needle}%`, limit) as Array<{ path: string; symbol: string; kind: string; line: number }>;
+  // ROUND-98 (R98-F3): the kind filter rides the SQL (the index is the
+  // queryable surface the owner asked for — "look into indexing… essential
+  // for larger projects"); the caller validates the vocabulary.
+  const rows = kind
+    ? (db
+        .prepare(
+          `SELECT path, symbol, kind, line, line_end, signature FROM codebase_index
+           WHERE project_id = ? AND symbol LIKE ? COLLATE NOCASE AND kind = ?
+           ORDER BY path, line LIMIT ?`,
+        )
+        .all(projectId, `${needle}%`, kind, limit) as Array<{
+          path: string;
+          symbol: string;
+          kind: string;
+          line: number;
+          line_end: number | null;
+          signature: string | null;
+        }>)
+    : (db
+        .prepare(
+          `SELECT path, symbol, kind, line, line_end, signature FROM codebase_index
+           WHERE project_id = ? AND symbol LIKE ? COLLATE NOCASE
+           ORDER BY path, line LIMIT ?`,
+        )
+        .all(projectId, `${needle}%`, limit) as Array<{
+          path: string;
+          symbol: string;
+          kind: string;
+          line: number;
+          line_end: number | null;
+          signature: string | null;
+        }>);
+  // Shaped honestly: only the fields the row actually carries (an absent
+  // line_end/signature is OMITTED, never null-padded).
+  return rows.map((r) => ({
+    path: r.path,
+    symbol: r.symbol,
+    kind: r.kind,
+    line: r.line,
+    ...(r.line_end !== null ? { line_end: r.line_end } : {}),
+    ...(r.signature !== null && r.signature !== "" ? { signature: r.signature } : {}),
+  }));
+}
+
+/* ── ROUND-98 (R98-F3): the index's HONEST freshness facts ────────────────── */
+
+/** Parse SQLite's UTC "YYYY-MM-DD HH:MM:SS" timestamp (the codebase_index
+ * `ts` default, datetime('now')) into epoch ms. Null on any other shape —
+ * never a guess. The explicit "Z" is load-bearing: Date.parse of a
+ * space-separated or bare-T timestamp treats it as LOCAL time (the classic
+ * trap — a UTC column parsed as local shifts freshness by the timezone). */
+export function parseSqliteTs(ts: string): number | null {
+  const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})$/.exec(ts.trim());
+  if (m === null) return null;
+  const epoch = Date.parse(`${m[1]}T${m[2]}Z`);
+  return Number.isNaN(epoch) ? null : epoch;
+}
+
+/** The project index's HONEST last-write timestamp — MAX(ts) over its rows,
+ * raw SQLite form ("YYYY-MM-DD HH:MM:SS", UTC), or null when the project has
+ * no index rows (never indexed, or emptied). This is the staleness fact the
+ * search_symbols tool reports and the auto-index hook (storage/auto-index.ts)
+ * gates on — a freshness claim must come from the rows, never the clock. */
+export function getIndexedAt(db: SqliteDatabase, projectId: string): string | null {
+  const row = db
+    .prepare("SELECT MAX(ts) AS m FROM codebase_index WHERE project_id = ?")
+    .get(projectId) as { m: string | null } | undefined;
+  return row?.m ?? null;
 }

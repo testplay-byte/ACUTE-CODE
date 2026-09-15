@@ -619,7 +619,17 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // ── File editing discipline ─────────────────────────────────────────────
   beginSection("file-editing");
   ident("## FILE EDITING RULES");
-  ident("1. **Read before edit**: ALWAYS use read_file before edit_file or write_file on an existing file. Never guess content.");
+  // ROUND-98 (R98-F2, the owner's token-optimization ask — "It just created
+  // a file and then I tell it to change something in that file. It should
+  // not be the one to read the whole file again… It should be able to
+  // directly make those changes as needed"): the old absolutism ("ALWAYS use
+  // read_file before edit_file or write_file") taught a re-read before
+  // EVERY edit — pure context spend when the model's view is provably
+  // current. The honest TIERED rule replaces it: read before the FIRST edit
+  // of a file this session; after a successful edit/write the response IS
+  // the confirmation (the session ledger backs this — the tools warn when
+  // the disk moved under the model's view, so silence means current).
+  ident("1. **Read before the FIRST edit**: read_file before the FIRST edit of a file this session. After a successful edit_file/edit_file_multi/write_file the response IS the confirmation — edit the SAME file again directly (anchors current; no re-read). Re-read only when a tool warns the file changed on disk or an edit fails.");
   // ROUND-70 (R70-c, D4): read_file output became line-numbered in R70-a
   // (the cat -n prefix) — the model must strip it when building anchors.
   ident("2. **Line numbers are not content**: read_file output prefixes every line with its line number. The prefix is NOT file content — edit_file oldString/newString anchors must be the RAW text of the line.");
@@ -648,6 +658,10 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   ident("## CODE NAVIGATION");
   ident("- Use search_files to find files BY NAME (glob-style substring match).");
   ident("- Use search_code to find code BY CONTENT (finds 'where is X used', 'what imports Y', 'where is function Z defined').");
+  // ROUND-98 (R98-F3): the symbol-index query leg — the owner's "Implement
+  // grep functionality… Look into indexing" ask. Index lookup answers
+  // "where is X DEFINED" without walking the tree.
+  ident("- Use search_symbols to find WHERE a symbol is DEFINED (name prefix + kind filter; hits as path:line [kind] symbol) — try it BEFORE search_code when hunting a definition.");
   ident("- Use list_dir to explore folder structure before creating files in new directories.");
   ident("- ALWAYS search before assuming a file exists or doesn't exist.");
   ident("");
@@ -1143,9 +1157,16 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     beginSection("codebase-awareness");
     meta("## CODEBASE AWARENESS");
     meta("- You have an index_project tool that builds a symbol index of this project (functions, classes, constants, types, interfaces, imports per file).");
-    meta("- Call index_project on the FIRST turn for a new project, or after a large refactor. It takes no arguments.");
+    // ROUND-98 (R98-F3): the auto-index truth — the old "call it on the FIRST
+    // turn" imperative retired (the background keeper handles missing/stale
+    // indexes; the tool is the MANUAL full refresher).
+    meta("- The index refreshes AUTOMATICALLY (background on missing/stale >10 min; every write re-indexes that file). Call index_project only after large refactors or when search_symbols says stale.");
     meta("- After indexing, a summary of the codebase is injected here on every turn so you know the structure without list_dir/read_file.");
-    meta("- Use search_code (with case_sensitive/whole_word/file_glob options) to find symbols + content; it queries both the live tree AND the index.");
+    // ROUND-98 (R98-F3): the OLD line claimed search_code "queries both the
+    // live tree AND the index" — a fabrication (search_code never touched
+    // the index). The honest split: search_code = live-tree content search;
+    // search_symbols = the index query leg.
+    meta("- Use search_code to search file CONTENTS across the live tree; use search_symbols to query the symbol index (name-prefix + kind filter, file:line + signature) — the index first when hunting definitions.");
     meta("");
 
     if (ctx.indexSummary && ctx.indexSummary.totalSymbols > 0) {

@@ -8,11 +8,41 @@
  * searching capabilities need to be worked on properly… it should utilize
  * smarter techniques rather than checking each and every single one of the
  * files."
+ * ROUND-98 (R98-F3): search_symbols joins the family — the QUERYABLE index
+ * surface (the owner: "Implement grep functionality. Handle it properly.
+ * Look into indexing… essential for larger projects with a lot of files,
+ * folders, subfolders."). search_code is the LIVE-TREE grep; search_symbols
+ * is the INDEX lookup (prefix match over names, kind filter, signature per
+ * row); index_project is the manual FULL refresher. The three descriptions
+ * cross-reference each other so the model always knows which leg to use.
  */
 import { jsonSchema } from "ai";
+import { readdirSync } from "node:fs";
 import { searchCode, searchFiles } from "../fs-ops.js";
-import { reindexProject } from "../../storage/index.js";
+import { getIndexedAt, parseSqliteTs, reindexProject, searchIndexSymbols } from "../../storage/index.js";
+import { AUTO_INDEX_STALE_MS } from "../../storage/auto-index.js";
 import type { PluginDefinition, ToolDefinition } from "../registry.js";
+
+/** The kind vocabulary the schema's CHECK constrains (0007 migration) — the
+ * search_symbols kind filter validates against THIS list, honestly, and the
+ * error names the valid set (never a silent empty result for a typo'd kind). */
+const SYMBOL_KINDS: readonly string[] = [
+  "function",
+  "class",
+  "const",
+  "variable",
+  "import",
+  "type",
+  "interface",
+] as const;
+
+/** Render one index row as a model-facing line: the codebase's path:line
+ * citation idiom + the kind tag + the signature (the defining source line —
+ * often enough to answer "what is this?" without a read). */
+function symbolLine(row: { path: string; symbol: string; kind: string; line: number; signature?: string }): string {
+  const sig = row.signature !== undefined ? ` — ${row.signature}` : "";
+  return `${row.path}:${row.line} [${row.kind}] ${row.symbol}${sig}`;
+}
 
 export const searchPlugin: PluginDefinition = {
   id: "core-search",
@@ -89,8 +119,15 @@ export const searchPlugin: PluginDefinition = {
       },
       {
         name: "index_project",
+        // ROUND-98 (R98-F3): the description now tells the AUTO-INDEX truth
+        // (background refresh when stale + per-file refresh after every
+        // write/edit — the tool is the MANUAL full refresher, not the only
+        // path) and cross-references search_symbols (the queryable surface).
+        // The old "Also enables symbol search via search_code" claim was
+        // retired — search_code walks the LIVE TREE and never touched the
+        // index; search_symbols is the honest index-query leg.
         description:
-          "Index the project's codebase: walk the tree, extract symbols (functions, classes, constants, types, interfaces, imports) from .ts/.tsx/.js/.jsx/.py/.rs/.go/.md files, store them in the codebase_index table. Call this on the FIRST turn for a new project, or after large refactors. Subsequent turns get an index summary injected into context (codebase awareness). Also enables symbol search via search_code. Returns { indexedFiles, indexedSymbols, durationMs }.",
+          "Index the project's codebase: walk the tree, extract symbols (functions, classes, constants, types, interfaces, imports) from .ts/.tsx/.js/.jsx/.py/.rs/.go/.md files, store them in the symbol index that search_symbols queries. The index also refreshes AUTOMATICALLY: a background pass re-indexes when it is missing or >10 minutes stale, and every successful write_file/edit_file re-indexes that single file — so call THIS only to force a FULL refresh NOW (new project mid-session, after large refactors, or when search_symbols says the index is stale). Returns { indexedFiles, indexedSymbols, durationMs }.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {},
@@ -102,8 +139,94 @@ export const searchPlugin: PluginDefinition = {
           const result = reindexProject(toolDeps.db, toolDeps.projectId, root);
           return {
             ok: true,
-            output: `indexed ${result.indexedFiles} files, ${result.indexedSymbols} symbols in ${result.durationMs}ms. The index summary is now injected into your context for codebase awareness.`,
+            output: `indexed ${result.indexedFiles} files, ${result.indexedSymbols} symbols in ${result.durationMs}ms. The index summary is now injected into your context for codebase awareness; query it with search_symbols.`,
           };
+        },
+      },
+      {
+        name: "search_symbols",
+        // ROUND-98 (R98-F3): the owner's grep/indexing ask — the INDEX is the
+        // queryable surface for "where is X defined" in a large project: no
+        // tree walk, prefix match over names, kind filter, signature per row.
+        // Honest staleness language in the RESULT (not the description): the
+        // built-at timestamp + the index_project pointer when stale.
+        description:
+          "Search the project's SYMBOL INDEX for WHERE things are DEFINED (not file contents — that is search_code): query is a case-insensitive PREFIX of a symbol name; optional kind filter (function | class | const | variable | import | type | interface); each row shows path:line [kind] symbol — signature (the defining source line). Try this BEFORE search_code when hunting a definition or recall — the index answers without walking the tree. The result carries the index's built-at timestamp and an honest stale note; call index_project to force a full refresh (the index also refreshes automatically in the background and per-file after edits).",
+        inputSchema: jsonSchema({
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Symbol-name prefix to look up (case-insensitive)" },
+            kind: {
+              type: "string",
+              enum: [...SYMBOL_KINDS],
+              description: "Optional kind filter: function, class, const, variable, import, type, or interface",
+            },
+            limit: { type: "integer", description: "Max symbols to return (default 50, cap 200)" },
+          },
+          required: ["query"],
+        }),
+        execute: async (input) => {
+          if (!toolDeps?.db) return { ok: false, output: "symbol search unavailable (no db in this context)" };
+          if (!toolDeps.projectId) {
+            return { ok: false, output: "symbol search unavailable (no project bound to this session)" };
+          }
+          const query = typeof input.query === "string" ? input.query : "";
+          if (query.trim() === "") {
+            return { ok: false, output: "search_symbols 'query' must be a non-empty symbol-name prefix" };
+          }
+          const kind = typeof input.kind === "string" ? input.kind : undefined;
+          if (kind !== undefined && !SYMBOL_KINDS.includes(kind)) {
+            return {
+              ok: false,
+              output: `search_symbols 'kind' must be one of: ${SYMBOL_KINDS.join(", ")} (got '${kind}')`,
+            };
+          }
+          const limitRaw = typeof input.limit === "number" ? input.limit : 50;
+          const limit =
+            Number.isInteger(limitRaw) && limitRaw >= 1 ? Math.min(200, limitRaw) : 50;
+          const rows = searchIndexSymbols(toolDeps.db, toolDeps.projectId, query, limit, kind);
+          // The HONEST freshness header: the built-at timestamp from the rows
+          // themselves (MAX(ts)), plus the stale/empty note when the index is
+          // older than the auto-index horizon or has nothing for this project
+          // while the root has files (the honest "empty" case — a project with
+          // no indexable files would say "0 symbols", not "stale").
+          const indexedAt = getIndexedAt(toolDeps.db, toolDeps.projectId);
+          const indexedAtMs = indexedAt !== null ? parseSqliteTs(indexedAt) : null;
+          const stale =
+            indexedAt === null ||
+            indexedAtMs === null ||
+            Date.now() - indexedAtMs > AUTO_INDEX_STALE_MS;
+          const header =
+            `symbol index (built at ${indexedAtMs !== null ? new Date(indexedAtMs).toISOString() : "unknown"}) — ` +
+            `${rows.length} match${rows.length === 1 ? "" : "es"} for '${query.trim()}'${kind !== undefined ? ` (kind: ${kind})` : ""}`;
+          const lines = rows.map((r) => symbolLine(r));
+          if (rows.length >= limit) {
+            lines.push(`…[capped at ${limit} results — narrow the query or raise the limit (max 200)]…`);
+          }
+          let note = "";
+          if (indexedAt === null) {
+            // Empty index: only call it stale when the project actually has
+            // files (a shallow readdir — one call, cheap). An empty project's
+            // empty index is CORRECT, not stale.
+            let rootHasFiles = false;
+            try {
+              rootHasFiles = readdirSync(root).some((name) => !name.startsWith("."));
+            } catch {
+              /* unreadable root — report the note anyway (honest: nothing indexed) */
+              rootHasFiles = true;
+            }
+            if (rootHasFiles) {
+              note =
+                `note: the symbol index is empty for this project (nothing indexed yet) — ` +
+                `call index_project to build it now (it also refreshes automatically in the background)`;
+            }
+          } else if (stale) {
+            note =
+              `note: the index is stale (built at ${indexedAtMs !== null ? new Date(indexedAtMs).toISOString() : indexedAt}, ` +
+              `more than 10 minutes ago) — call index_project to refresh it; edits re-index touched files automatically`;
+          }
+          const body = lines.length > 0 ? lines.join("\n") : "(no matching symbols)";
+          return { ok: true, output: note !== "" ? `${header}\n${body}\n${note}` : `${header}\n${body}` };
         },
       },
     ];
