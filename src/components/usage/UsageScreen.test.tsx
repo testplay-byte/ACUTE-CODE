@@ -1,8 +1,15 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { Route, Routes } from "react-router";
-import { fetchDetailedUsage, fetchKeyPool, fetchProviders, type KeyPoolSlot, type ProviderView } from "../../lib/api";
+import {
+  fetchDetailedUsage,
+  fetchKeyPool,
+  fetchProviders,
+  fetchUsageStats,
+  type KeyPoolSlot,
+  type ProviderView,
+} from "../../lib/api";
 import { UsageScreen } from "./UsageScreen";
 import { useConfigStore } from "../../lib/config-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
@@ -20,6 +27,9 @@ vi.mock("../../lib/api", async (importOriginal) => {
     fetchDetailedUsage: vi.fn(),
     fetchProviders: vi.fn(),
     fetchKeyPool: vi.fn(),
+    // R98-I2: the DataStatsPanel's fetcher — mocked so the panel renders
+    // its empty-stats state deterministically (never a fetch error card).
+    fetchUsageStats: vi.fn(),
   };
 });
 
@@ -31,6 +41,23 @@ beforeEach(() => {
   // usage log) — flip the store so the mocked fetch actually executes.
   useConfigStore.setState({ demoData: false });
   vi.mocked(fetchDetailedUsage).mockReset().mockResolvedValue(emptyDetailedUsage());
+  // R98-I2: the stats aggregate defaults to an empty 12-month window.
+  vi.mocked(fetchUsageStats).mockReset().mockResolvedValue({
+    months: 12,
+    totals: {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      requests: 0,
+      providerCalls: 0,
+    },
+    peak: { date: null, tokens: 0 },
+    series: [],
+    models: [],
+    health: { turnErrors: [], toolFailures: [] },
+    generatedAt: "2026-09-15T00:00:00.000Z",
+  });
   // ROUND-64 (R64-e): no providers / no keys by default — the existing
   // fixtures exercise the sections without the keys join.
   vi.mocked(fetchProviders).mockReset().mockResolvedValue([]);
@@ -259,8 +286,16 @@ describe("UsageScreen (ROUND-52 R52-b)", () => {
     expect(await screen.findByText("Tokens")).toBeTruthy();
     expect(vi.mocked(fetchDetailedUsage)).toHaveBeenCalledWith(30);
 
-    fireEvent.click(screen.getByRole("button", { name: "Last 7 days" }));
-    expect(await screen.findByText("Tokens")).toBeTruthy();
+    // R98-I2: the screen now hosts TWO range pickers (the activity chart's
+    // + the DataStatsPanel's model-mix chart) — scope to the ACTIVITY chart's
+    // group so the query stays unambiguous. The stat label "Tokens" also
+    // renders twice now (the overview's + the panel's stat card) — the
+    // settled assertion rides findAllByText.
+    const activityRange = within(
+      screen.getByRole("group", { name: "Activity chart day range" }),
+    );
+    fireEvent.click(activityRange.getByRole("button", { name: "Last 7 days" }));
+    expect((await screen.findAllByText("Tokens")).length).toBeGreaterThan(0);
     expect(vi.mocked(fetchDetailedUsage)).toHaveBeenCalledWith(7);
   });
 

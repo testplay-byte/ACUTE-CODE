@@ -24,12 +24,14 @@ import type { RouteContext } from "./context.js";
 import {
   getBrowserSettings,
   getDebugSettings,
+  getDesktopNotificationsSettings,
   getMemorySettings,
   getOrchestrationSettings,
   getRetrySettings,
   getThinkingLoopSettings,
   setBrowserSettings,
   setDebugSettings,
+  setDesktopNotificationsSettings,
   setMemorySettings,
   setOrchestrationSettings,
   setRetrySettings,
@@ -362,6 +364,43 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         ...(Array.isArray(raw.quickLinks)
           ? { quickLinks: raw.quickLinks as Array<{ label: string; url: string }> }
           : {}),
+      });
+    } catch (error) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
+          field: "body",
+        }),
+      );
+    }
+  });
+
+  // ── ROUND-98 (R98-J, owner: task complete / failed / permission needed
+  // → the user's PC): the DESKTOP-NOTIFICATIONS switch. The r97 browser
+  // pattern exactly — GET returns the full DesktopNotificationsSettings,
+  // PUT accepts a partial {enabled} patch (a non-boolean 400s with the
+  // field named; the storage throw is the backstop). The frontend bridge
+  // reads this per flip via its in-memory cache — the route is the truth.
+
+  scope.get("/settings/desktop-notifications", async () => {
+    return getDesktopNotificationsSettings(db);
+  });
+
+  scope.put("/settings/desktop-notifications", async (request, reply) => {
+    const body: unknown = request.body;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+    }
+    const raw = body as Record<string, unknown>;
+    if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body.enabled must be a boolean", { field: "body.enabled" }));
+    }
+    try {
+      return setDesktopNotificationsSettings(db, {
+        ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
       });
     } catch (error) {
       return reply.code(400).send(

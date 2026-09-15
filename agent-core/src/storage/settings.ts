@@ -728,3 +728,41 @@ export function setBrowserSettings(
   }
   return getBrowserSettings(db);
 }
+
+// ── ROUND-98 (R98-J, owner: task complete / failed / permission needed →
+//    "it will send me a notification on my PC"): the DESKTOP-NOTIFICATIONS
+//    switch — gates the Tauri notification bridge's fan-out (the frontend
+//    src/lib/desktop-notifications.ts caches THIS value in memory so a
+//    flip takes effect on the very next record, no restart). The
+//    setDebugSettings pattern exactly: one boolean row, default ON (the
+//    pre-R98 behavior — the Toaster already fired web notifications, so
+//    the desktop leg ships enabled). ─────────────────────────────────────
+
+export interface DesktopNotificationsSettings {
+  enabled: boolean;
+}
+
+export const DESKTOP_NOTIFICATIONS_DEFAULTS: DesktopNotificationsSettings = {
+  enabled: true,
+};
+
+const DESKTOP_NOTIFICATIONS_ENABLED_KEY = "desktopNotifications.enabled";
+
+export function getDesktopNotificationsSettings(db: SqliteDatabase): DesktopNotificationsSettings {
+  return { enabled: readBoolean(db, DESKTOP_NOTIFICATIONS_ENABLED_KEY, DESKTOP_NOTIFICATIONS_DEFAULTS.enabled) };
+}
+
+export function setDesktopNotificationsSettings(
+  db: SqliteDatabase,
+  patch: Partial<DesktopNotificationsSettings>,
+): DesktopNotificationsSettings {
+  if (patch.enabled !== undefined) {
+    if (typeof patch.enabled !== "boolean") {
+      throw new Error("enabled must be a boolean");
+    }
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(DESKTOP_NOTIFICATIONS_ENABLED_KEY, String(patch.enabled));
+  }
+  return getDesktopNotificationsSettings(db);
+}

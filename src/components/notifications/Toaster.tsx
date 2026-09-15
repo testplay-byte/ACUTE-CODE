@@ -41,6 +41,12 @@ import {
 } from "lucide-react";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
+// R98-J: the Web-Notification path below is WEB-ONLY now —
+// tauri-plugin-notification (>= 2.3) injects a window.Notification
+// POLYFILL into every Tauri webview, so without this guard the in-page
+// path would silently become a second Tauri path and DOUBLE-FIRE with
+// the R98-J bridge (lib/desktop-notifications.ts owns the desktop leg).
+import { isTauri } from "../../lib/sidecar";
 import type { NotificationKind, NotificationRecord } from "../../lib/notifications-api";
 import { useNotificationStreamStore } from "../../hooks/use-notifications";
 
@@ -142,7 +148,12 @@ export function Toaster() {
   // so duplicate publishes (across SSE reconnects) don't stack duplicates.
   // Clicking the desktop notification focuses the app window + navigates to
   // the notification's session (same as clicking the in-app toast).
+  //
+  // R98-J: WEB-ONLY — in the Tauri shell this whole path is bypassed (the
+  // plugin's Notification polyfill would double-fire with the bridge; see
+  // the import note above).
   useEffect(() => {
+    if (isTauri()) return; // the R98-J bridge owns the desktop leg
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission === "default") {
       // Fire-and-forget; the browser surfaces the permission prompt. If the
@@ -154,6 +165,12 @@ export function Toaster() {
 
   useEffect(() => {
     if (!lastNotification) return;
+    // R98-J: WEB-ONLY — the Tauri shell's desktop notifications ride the
+    // R98-J bridge (NotificationStreamStarter's fan-out →
+    // lib/desktop-notifications.ts); this in-page path must never run
+    // there or the plugin's >=2.3 window.Notification polyfill would
+    // double-fire every record.
+    if (isTauri()) return;
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
     // ROUND-42: only fire the in-page desktop notification when the page is

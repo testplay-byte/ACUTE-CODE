@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
 import {
   fetchBrowserSettings,
   fetchDebugSettings,
+  fetchDesktopNotificationsSettings,
   fetchMemorySettings,
   fetchRetrySettings,
   fetchThinkingLoopSettings,
   updateBrowserSettings,
   updateDebugSettings,
+  updateDesktopNotificationsSettings,
   updateMemorySettings,
   updateRetrySettings,
   updateThinkingLoopSettings,
@@ -18,6 +20,15 @@ import {
   type ThinkingLoopSettings,
 } from "../lib/api";
 import { Bot, Brain, Globe, Info, Minus, Monitor, Moon, Palette, Plus, PlugZap, RefreshCw, RotateCcw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Timer, Trash2, Users } from "lucide-react";
+// R98-J: the desktop-notifications card's BellRing icon (the bridge card
+// lives in AdvancedTab beside DebugModeCard).
+import { BellRing } from "lucide-react";
+// R98-I2: the Data & Statistics tab renders the shared usage panel.
+import { BarChart3 } from "lucide-react";
+import { DataStatsPanel } from "../components/usage/DataStatsPanel";
+// R98-J: the LIVE in-memory push of the switch to the notification bridge
+// (the bridge caches the flag so a flip applies to the very next record).
+import { setDesktopNotificationsEnabled } from "../lib/desktop-notifications";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
@@ -64,6 +75,11 @@ const TABS = [
   // address-bar search engine, the homepage, the default zoom, and the
   // editable quick links. Same id discipline (deep-link ?tab=browser).
   { id: "browser", label: "Browser", icon: Globe },
+  // ROUND-98 (R98-I2, owner directive): the Data & Statistics section —
+  // total tokens, peak day, the heatmap, the model-mix charts, agent
+  // health, and clear-all-data (the same DataStatsPanel the /usage screen
+  // hosts). Same id discipline (deep-link ?tab=data).
+  { id: "data", label: "Data & Statistics", icon: BarChart3 },
   // ROUND-78 (R78-C, owner: "General Settings 重试配置"): the tab is
   // LABELED "General" now — the retry switches belong with the general
   // engine settings, not a scary "Advanced" bin. The id/deep-link STAYS
@@ -147,6 +163,7 @@ export function SettingsPage() {
         {tab === "computeruse" && <ComputerUseTab />}
         {tab === "vision" && <ImageAnalysisTab />}
         {tab === "browser" && <BrowserTab />}
+        {tab === "data" && <DataStatsPanel />}
         {tab === "advanced" && <AdvancedTab />}
         {tab === "about" && <AboutTab />}
       </div>
@@ -492,7 +509,8 @@ function AdvancedTab() {
           General
         </h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
-          Auto-retry, debug mode, and agent memory. Sub-agent keys, model, parallelism, and supervision live on the{" "}
+          Auto-retry, desktop notifications, debug mode, and agent memory. Sub-agent keys, model, parallelism, and
+          supervision live on the{" "}
           <Link to="/settings?tab=subagents" className="font-bold underline" style={{ color: styles.accent }}>
             Sub-agents
           </Link>{" "}
@@ -502,6 +520,7 @@ function AdvancedTab() {
       <RetryConfigCard />
       <ThinkingLoopCard />
       <DebugModeCard />
+      <DesktopNotificationsCard />
       <MemoryCard />
     </div>
   );
@@ -1276,6 +1295,142 @@ function DebugModeCard() {
           role="switch"
           aria-checked={current.enabled}
           aria-label="Toggle debug mode"
+          disabled={busy}
+          onClick={() => toggle.mutate(!current.enabled)}
+          className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
+          style={{
+            background: current.enabled ? styles.accent : withAlpha(styles.text, 0.18),
+            border: bdr("1.5px", current.enabled ? styles.accent : styles.border),
+          }}
+        >
+          <span
+            className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full shadow transition-all"
+            style={{
+              left: current.enabled ? "calc(100% - 21px)" : "3px",
+              height: 18,
+              width: 18,
+              // R93-A4: contrast-aware knob (Mono Stone dark → #111111).
+              background: current.enabled ? styles.accentText : styles.toggleActive,
+            }}
+          />
+        </button>
+      </div>
+    </section>
+  );
+}
+
+
+/* ── ROUND-98 (R98-J, owner: task complete / failed / permission needed →
+ * "it will send me a notification on my PC"): the DESKTOP-NOTIFICATIONS
+ * switch — gates the Tauri notification bridge's OS-notification fan-out.
+ * The DebugModeCard pattern exactly (one query, one mutation, honest
+ * error + loading states, R97-I error-first gates) PLUS the LIVE
+ * in-memory push: the bridge (src/lib/desktop-notifications.ts) caches
+ * the enabled flag in memory, and every confirmed flip (and every fresh
+ * GET) is pushed there immediately — a flip applies to the very next
+ * record, no restart, no refetch of the bridge. */
+
+function DesktopNotificationsCard() {
+  const styles = useThemeStyles();
+  const queryClient = useQueryClient();
+  const settingsQuery = useQuery({
+    queryKey: ["desktop-notifications-settings"],
+    queryFn: fetchDesktopNotificationsSettings,
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = useMutation({
+    mutationFn: (enabled: boolean) => updateDesktopNotificationsSettings({ enabled }),
+    onSuccess: (data) => {
+      setError(null);
+      // R98-J: the LIVE push — the bridge's in-memory gate flips NOW (the
+      // server row below is the durable truth; this is the live one).
+      setDesktopNotificationsEnabled(data.enabled);
+      void queryClient.invalidateQueries({ queryKey: ["desktop-notifications-settings"] });
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  const current = settingsQuery.data;
+
+  // R98-J: sync the bridge's in-memory gate with the server truth whenever
+  // a fresh GET lands (a restart + a previously-OFF row must not fire
+  // notifications until the card is opened — this closes that gap). Above
+  // the early returns: hooks stay unconditional (the Rules of Hooks).
+  useEffect(() => {
+    if (current === undefined) return;
+    setDesktopNotificationsEnabled(current.enabled);
+  }, [current]);
+
+  // R97-I part 3: the ERROR branch comes FIRST — with the pre-R97 gate a
+  // failed GET (data undefined) hung on "loading…" forever. Stale data on a
+  // background-refetch failure still renders the card normally below.
+  if (settingsQuery.isError && current === undefined) {
+    return (
+      <section
+        data-testid="desktop-notifications-card"
+        className="rounded-lg p-4"
+        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      >
+        <SettingsLoadErrorCard
+          what="desktop-notifications"
+          error={settingsQuery.error}
+          onRetry={() => void settingsQuery.refetch()}
+        />
+      </section>
+    );
+  }
+  if (settingsQuery.isLoading || current === undefined) {
+    return (
+      <section
+        data-testid="desktop-notifications-card"
+        className="rounded-lg p-4"
+        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      >
+        <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
+          loading desktop notification settings…
+        </span>
+      </section>
+    );
+  }
+
+  const busy = toggle.isPending;
+
+  return (
+    <section
+      data-testid="desktop-notifications-card"
+      className="rounded-lg p-4"
+      style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
+      aria-label="Desktop notifications"
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <BellRing size={13} style={{ color: styles.accent, opacity: 0.7 }} />
+        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
+          Desktop notifications
+        </span>
+      </div>
+      <div className="flex items-start gap-3">
+        <div className="min-w-[200px] flex-1">
+          <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+            OS notifications
+          </div>
+          <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+            While ON, task-complete, task-failed, and permission-needed alerts fire a
+            native OS notification when the app window is not visible (the same rule
+            the in-app toasts already follow). Sub-agent activity stays in-app only.
+            Applies to the very next notification.
+          </div>
+          {error ? (
+            <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+              {error}
+            </div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={current.enabled}
+          aria-label="Toggle desktop notifications"
           disabled={busy}
           onClick={() => toggle.mutate(!current.enabled)}
           className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"

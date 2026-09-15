@@ -1,5 +1,12 @@
 import { keepPreviousData, useQuery, useQueries } from "@tanstack/react-query";
-import { fetchDetailedUsage, fetchKeyPool, fetchProviders, type KeyPoolSlot, type ProviderView } from "../lib/api";
+import {
+  fetchDetailedUsage,
+  fetchKeyPool,
+  fetchProviders,
+  fetchUsageStats,
+  type KeyPoolSlot,
+  type ProviderView,
+} from "../lib/api";
 import { useConfigStore } from "../lib/config-store";
 
 /**
@@ -18,6 +25,26 @@ export function useDetailedUsage(days = 30) {
   return useQuery({
     queryKey: ["usage-detailed", source, days],
     queryFn: () => fetchDetailedUsage(days),
+    enabled: source === "live",
+    staleTime: 60_000,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * ROUND-98 (R98-I2, owner: "Data & statistics"): the windowed stats surface
+ * (GET /usage/stats) behind the shared DataStatsPanel — rendered in BOTH the
+ * settings "Data & Statistics" tab AND the /usage screen. Same patterns as
+ * useDetailedUsage: live sidecar only (idle in demo mode), one-minute
+ * staleTime, keepPreviousData so a months-picker switch (6/12/24) never
+ * flashes the skeleton between windows. The key carries ONLY the months
+ * value — the panel owns the picker state.
+ */
+export function useUsageStats(months = 12) {
+  const source = useConfigStore((s) => (s.demoData ? "demo" : "live"));
+  return useQuery({
+    queryKey: ["usage-stats", months],
+    queryFn: () => fetchUsageStats(months),
     enabled: source === "live",
     staleTime: 60_000,
     placeholderData: keepPreviousData,

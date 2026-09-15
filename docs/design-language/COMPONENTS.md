@@ -83,8 +83,9 @@ bug.
   line; icon quiet-tinted; never a rainbow.
 - **Charts**: theme accent for the primary series; per-model/per-category
   series get STABLE palette hues keyed by name (same name = same color,
-  everywhere in the app — see the usage segment palette precedent in
-  `src/lib/menu-overlay.ts`).
+  everywhere in the app — the model palette in
+  `src/components/usage/usage-helpers.ts`, the usage segment palette
+  precedent in `src/lib/menu-overlay.ts`).
 - **Heatmap**: intensity = accent alpha ladder (0 → 0.15 → 0.35 → 0.6 →
   0.85 → 1); empty days transparent; month labels `meta` type.
 - **Donut/ring**: 6px track, center hole carries the headline stat; segment

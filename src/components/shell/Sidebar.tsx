@@ -261,6 +261,10 @@ const SETTINGS_SECTIONS = [
   // ROUND-97 (R97-G, owner directive): the dedicated BROWSER section (same id
   // as SettingsPage TABS so the ?tab=browser deep link lines up).
   { id: "browser", label: "Browser", icon: Globe },
+  // ROUND-98 (R98-I2, owner directive): the Data & Statistics section (same
+  // id as SettingsPage TABS so the ?tab=data deep link lines up — the R44
+  // unreachable-tab lesson applied at birth).
+  { id: "data", label: "Data & Statistics", icon: BarChart3 },
   { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
   // ROUND-87 (R87, owner directive): the About section — version, update
   // check, and the application-wide reset. Same id as SettingsPage TABS

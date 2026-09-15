@@ -4,6 +4,11 @@ import { useSidecarHealth } from "../../hooks/use-sidecar-health";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { PushSetup } from "../../lib/push-setup";
 import { isTauri } from "../../lib/sidecar";
+// R98-J (owner: task complete / failed / permission needed → the user's
+// PC): the tauri-plugin-notification bridge's app-start init — a
+// best-effort permission pre-check (Tauri only; web mode is a no-op
+// inside the bridge itself).
+import { initDesktopNotifications } from "../../lib/desktop-notifications";
 import { AcuteLogo, Sidebar } from "./Sidebar";
 import { NotificationStreamStarter } from "../notifications/NotificationStreamStarter";
 import { Toaster } from "../notifications/Toaster";
@@ -47,6 +52,12 @@ export function AppShell() {
   // opened up then it would show under the browser").
   useEffect(() => {
     installOverlayWebviewWatcher();
+  }, []);
+  // R98-J: the desktop-notification bridge boots with the app (the
+  // best-effort permission pre-check — the real fires happen in the SSE
+  // fan-out; see lib/desktop-notifications.ts).
+  useEffect(() => {
+    initDesktopNotifications();
   }, []);
   // Round-28 WS-D2: boot-time health ping. If the sidecar is up + token is
   // set, flip demoData false so the streaming SSE path activates (the real

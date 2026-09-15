@@ -24,12 +24,17 @@ deriveThemeStyles()           ThemeStyles (~35 derived keys:
 
 1. NEVER hard-code a hex/rgb in a component. If the pipeline can't express
    it, extend the pipeline (themes.ts) — do not bypass it.
-2. Documented exceptions live in exactly three places:
+2. Documented exceptions live in exactly four places:
    `src/lib/semantics.ts` (`SEMANTIC_COLORS`: success `#22c55e`, danger
    `#ef4444`, warning `#f59e0b`), the syntax palette
-   (`src/components/project-chat/highlight.ts`), and the usage-segment
-   palette (`src/lib/menu-overlay.ts`). Anything else hard-coded is a bug
-   (round-98 C2 hunts them).
+   (`src/components/project-chat/highlight.ts`), the usage-segment
+   palette (`src/lib/menu-overlay.ts`), and the MODEL palette
+   (`src/components/usage/usage-helpers.ts` — exception #4, round-98 I2:
+   12 fixed light/dark hue pairs + the deterministic `modelColor(name,
+   isDark)` hash, so the same model name paints the same color on every
+   surface; hue identity is the data encoding, so it cannot flow from the
+   theme pipeline). Anything else hard-coded is a bug (round-98 C2 hunts
+   them).
 3. Alpha tints ALWAYS via `withAlpha(color, 0.08–0.13)` from
    `src/components/dashboard/helpers.ts` — never string-suffix hex hacks
    (`#ef44441a` is a violation; round-97 already executed these).

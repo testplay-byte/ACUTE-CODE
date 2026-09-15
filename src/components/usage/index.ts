@@ -10,3 +10,9 @@ export { ModelCards } from "./ModelCards";
 // ROUND-64 (R64-e): per-API-key stats cards (the "API keys" section).
 export { KeyCards } from "./KeyCards";
 export { ProjectsDrilldown } from "./ProjectsDrilldown";
+// ROUND-98 (R98-I2): the Data & Statistics surface — the shared panel
+// (settings tab + usage screen) + its three charts.
+export { DataStatsPanel } from "./DataStatsPanel";
+export { UsageHeatmap } from "./UsageHeatmap";
+export { ModelStackChart } from "./ModelStackChart";
+export { ModelDonut } from "./ModelDonut";

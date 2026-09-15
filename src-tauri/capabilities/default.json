@@ -1,13 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability: core permissions plus in-app window controls for the frameless main window (R58).",
+  "description": "Default capability: core permissions plus in-app window controls for the frameless main window (R58) and the OS-notification surface (R98-J — notification:default grants allow-notify / allow-is-permission-granted / allow-request-permission for the tauri-plugin-notification bridge in src/lib/desktop-notifications.ts).",
   "windows": ["main", "acute-browser", "acute-computer-mini", "acute-menu-overlay"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
-    "core:window:allow-close"
+    "core:window:allow-close",
+    "notification:default"
   ]
 }

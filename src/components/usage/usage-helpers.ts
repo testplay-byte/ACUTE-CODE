@@ -28,3 +28,57 @@ export function formatCompactTokens(n: number): string {
   if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
   return String(n);
 }
+
+/* ── ROUND-98 (R98-I2, owner: "time-range graphs color-coded by model
+ * name — the same name across providers IS one model"): the MODEL COLOR
+ * PALETTE — the one spelling of per-model color everywhere in the app
+ * (the heatmap is accent-only; the model-mix stack chart, the donut, and
+ * every model dot paint from HERE). Same model name = same color, on
+ * every surface, in every session — a deterministic name→index hash
+ * (the dashboard chipColor idiom) into 12 fixed hue pairs.
+ *
+ * TOKENS.md §1 hex-exception #4: these hex values are the documented
+ * second fixed-hue palette (the segment palette in src/lib/menu-overlay.ts
+ * is the precedent — a categorical palette cannot flow from the theme
+ * pipeline because hue IDENTITY is the data encoding, not a surface
+ * color). Light/dark variants keep 10px swatches distinguishable on both
+ * card surfaces. */
+
+const MODEL_COLOR_PALETTE: ReadonlyArray<{ light: string; dark: string }> = [
+  { light: "#2563eb", dark: "#60a5fa" }, // blue
+  { light: "#0d9488", dark: "#2dd4bf" }, // teal
+  { light: "#7c3aed", dark: "#a78bfa" }, // violet
+  { light: "#db2777", dark: "#f472b6" }, // pink
+  { light: "#ea580c", dark: "#fb923c" }, // orange
+  { light: "#16a34a", dark: "#4ade80" }, // green
+  { light: "#ca8a04", dark: "#facc15" }, // yellow
+  { light: "#0284c7", dark: "#38bdf8" }, // sky
+  { light: "#9333ea", dark: "#c084fc" }, // purple
+  { light: "#dc2626", dark: "#f87171" }, // red
+  { light: "#475569", dark: "#94a3b8" }, // slate
+  { light: "#be185d", dark: "#ec4899" }, // rose
+];
+
+/** Deterministic palette slot for a model name (the chipColor hash
+ * idiom — same name ⇒ same slot across renders, surfaces, sessions). */
+export function modelPaletteIndex(name: string): number {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash) % MODEL_COLOR_PALETTE.length;
+}
+
+/** The paintable color for a model name — ONE spelling everywhere. */
+export function modelColor(name: string, isDark: boolean): string {
+  const entry = MODEL_COLOR_PALETTE[modelPaletteIndex(name)];
+  return isDark ? entry.dark : entry.light;
+}
+
+/** "z-ai/glm-5.2:free" → "glm-5.2" — the short name for tight centers
+ * (chips, the donut's headline); falls back to the full name. */
+export function shortModelName(name: string): string {
+  const tail = name.split("/").pop() ?? name;
+  const beforeVariant = tail.split(":")[0];
+  return beforeVariant.trim() !== "" ? beforeVariant : name;
+}

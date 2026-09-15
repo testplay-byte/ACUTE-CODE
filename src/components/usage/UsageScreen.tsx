@@ -14,6 +14,9 @@ import { ModelCards } from "./ModelCards";
 import { ProjectsDrilldown } from "./ProjectsDrilldown";
 import { ToolsLeaderboard } from "./ToolsLeaderboard";
 import { UsageActivityChart } from "./UsageActivityChart";
+// R98-I2: the Data & Statistics panel joins the overview — the same shared
+// panel the settings ?tab=data surface hosts.
+import { DataStatsPanel } from "./DataStatsPanel";
 
 /**
  * ROUND-52 (R52-b): the in-app Usage screen (/usage) — the owner-approved
@@ -261,6 +264,11 @@ export function UsageScreen() {
             {/* Activity chart + tool leaderboard */}
             <div className="mb-4 md:mb-6 grid grid-cols-1 lg:grid-cols-3 gap-3 md:gap-4">
               <div className="lg:col-span-2 min-w-0">
+                {/* UsageActivityChart STAYS (the R52-b input/output view) —
+                    the DataStatsPanel's ModelStackChart below is the MODEL
+                    view of the same ledger; the two answer different
+                    questions (in/out split vs. which model burned it), so
+                    both render by design (R98-I2). */}
                 <UsageActivityChart
                   days={usage.data?.days ?? []}
                   dayCount={days}
@@ -271,6 +279,16 @@ export function UsageScreen() {
                 />
               </div>
               <ToolsLeaderboard tools={usage.data?.tools ?? []} styles={styles} />
+            </div>
+
+            {/* R98-I2 (owner: "Data & statistics … shown in BOTH the
+                settings tab AND the usage screen"): the shared panel slots
+                below the activity/leaderboard grid — the 12-month heatmap,
+                the model-mix stack chart + donut, agent health, and the
+                clear-all-data card. The panel owns its own query + months
+                picker, so it works identically here and in settings. */}
+            <div className="mb-4 md:mb-6">
+              <DataStatsPanel />
             </div>
 
             {/* Model mix */}

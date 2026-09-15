@@ -17,6 +17,22 @@ mod wincred;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        // ROUND-98 (R98-J, owner: task complete / failed / permission needed
+        // → the user's PC): the OS-notification plugin. NO npm package — the
+        // frontend bridge (src/lib/desktop-notifications.ts) invokes the
+        // raw IPC surface over the withGlobalTauri window.__TAURI__.core
+        // channel: plugin:notification|notify { options: { title, body } }
+        // (NotificationData is #[serde(rename_all = "camelCase")]; the
+        // `options` wrapper matches the Rust param name),
+        // plugin:notification|is_permission_granted → bool|null, and
+        // plugin:notification|request_permission → PermissionState. The
+        // capability lives in capabilities/default.json ("notification:
+        // default" grants allow-notify / allow-is-permission-granted /
+        // allow-request-permission). NOTE: plugin >= 2.3 ALSO injects a
+        // window.Notification polyfill into every webview — Toaster.tsx's
+        // legacy in-page path is guarded web-only so the two never
+        // double-fire.
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             sidecar::start(app.handle());
             Ok(())

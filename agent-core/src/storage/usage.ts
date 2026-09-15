@@ -719,3 +719,309 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
     generatedAt: new Date().toISOString(),
   };
 }
+
+/* ── ROUND-98 (R98-I2, owner: "Data & statistics … total tokens, peak
+ * tokens, the 12-month token-activity heatmap, time-range graphs
+ * color-coded by model name — the same name across providers IS one
+ * model — the model-usage donut, total cost, agent-health, and
+ * clear-all-data"): the windowed stats aggregation behind
+ * GET /usage/stats + DELETE /usage/data. Everything here scopes to a
+ * CALENDAR-MONTH window ending today (months=12 ⇒ the series runs from
+ * one calendar year ago to today, zero-filled); the model grouping keys
+ * the `model` column ONLY — "z-ai/glm-5.2" served by openrouter and by a
+ * custom gateway is ONE model (the owner's rule), the providers list per
+ * name comes from a second DISTINCT scan. ─────────────────────────────── */
+
+/**
+ * UTC date key `months` calendar months before today, CLAMPED to the
+ * target month's last day (Mar 31 − 1 month ⇒ Feb 28/29, never a
+ * nonexistent Feb 31). Calendar-month window like getUsageSummary's
+ * utcDayKey is a day window — DST-immune by staying on Date.UTC.
+ */
+function utcMonthsAgoKey(months: number): string {
+  const now = new Date();
+  const totalMonths = now.getUTCFullYear() * 12 + now.getUTCMonth() - months;
+  const year = Math.floor(totalMonths / 12);
+  const month = ((totalMonths % 12) + 12) % 12;
+  // Last day of the target month: day 0 of the NEXT month.
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const day = Math.min(now.getUTCDate(), lastDay);
+  return new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10);
+}
+
+export interface UsageStatsTotals {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  /** ROUND-83 semantics: SUM(cost_usd) over the window, roundUsd-trimmed. */
+  costUsd: number;
+  /** Turns — COUNT(*) of usage rows (one row per turn since R24). */
+  requests: number;
+  /** ROUND-83 semantics: the REAL SDK-call count (SUM(provider_calls)). */
+  providerCalls: number;
+}
+
+export interface UsageStatsPeak {
+  /** The highest input+output UTC day in the window, earliest on ties;
+   * null when the window has no traffic at all. */
+  date: string | null;
+  /** That day's input+output token total (0 when there is no peak). */
+  tokens: number;
+}
+
+export interface UsageStatsDayBucket {
+  /** UTC calendar date, "YYYY-MM-DD" — matches SQLite date(ts). */
+  date: string;
+  /** Tokens (input+output) per MODEL NAME this day — grouped by the model
+   * column ONLY (the owner's same-name-across-providers rule); empty for
+   * zero-filled days with no traffic. */
+  byModel: Record<string, number>;
+}
+
+export interface UsageStatsModel {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  tokens: number;
+  costUsd: number;
+  /** ROUND-83 semantics: the real SDK-call count (SUM(provider_calls)). */
+  calls: number;
+  /** Turns — COUNT(*) of usage rows. */
+  requests: number;
+  /** The provider ids that served this model name in the window (a second
+   * DISTINCT scan; sorted name-asc so the chip row is deterministic). */
+  providers: string[];
+}
+
+export interface UsageStatsHealthIssue {
+  /** The turn-error class (errorClass, with the payload's code as the
+   * honest fallback) or the failing tool's name — a REAL payload field,
+   * never a guessed label. */
+  name: string;
+  /** How many times it occurred in the window. */
+  count: number;
+}
+
+export interface UsageStatsHealth {
+  /** Top-10 turn.error classes by count (errorClass, falling back to the
+   * payload's code; rows with NEITHER are skipped, never guessed). */
+  turnErrors: UsageStatsHealthIssue[];
+  /** Top-10 failing tool names by count (tool.use rows with ok=0; a null
+   * toolName is skipped). */
+  toolFailures: UsageStatsHealthIssue[];
+}
+
+export interface UsageStats {
+  /** The window actually used (clamped 1–24; the route validates first). */
+  months: number;
+  totals: UsageStatsTotals;
+  peak: UsageStatsPeak;
+  /** Zero-filled ascending day series over the calendar-month window. */
+  series: UsageStatsDayBucket[];
+  /** Models sorted tokens-desc, ties name-asc. */
+  models: UsageStatsModel[];
+  health: UsageStatsHealth;
+  generatedAt: string;
+}
+
+interface StatsTotalsRow {
+  input_tokens: number | null;
+  output_tokens: number | null;
+  requests: number;
+  cost_usd: number | null;
+  provider_calls: number | null;
+}
+
+interface StatsDayModelRow {
+  date: string;
+  model: string;
+  tokens: number;
+}
+
+interface StatsPeakRow {
+  date: string;
+  tokens: number;
+}
+
+interface StatsModelRow {
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  requests: number;
+  cost_usd: number | null;
+  calls: number | null;
+}
+
+interface StatsHealthRow {
+  name: string | null;
+  count: number;
+}
+
+/**
+ * Windowed usage statistics for the Data & Statistics surface (GET
+ * /usage/stats). Calendar-month window ending today: `months` clamps to
+ * 1–24 (the route already 400s out-of-range values; the clamp is the
+ * storage backstop). Every aggregate below reads the SAME window: totals,
+ * peak day, the zero-filled per-day × per-model series, the model
+ * leaderboard (grouped by the model column only — same name across
+ * providers is ONE model), and the agent-health counts from
+ * session_events.
+ */
+export function getUsageStats(db: SqliteDatabase, options: { months?: number } = {}): UsageStats {
+  const months = Math.min(24, Math.max(1, Math.round(options.months ?? 12)));
+  const firstDay = utcMonthsAgoKey(months);
+  const lastDay = utcDayKey(0);
+  const windowClause = "WHERE date(ts) >= ? AND date(ts) <= ?";
+
+  const totalsRow = db
+    .prepare(
+      `SELECT SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+              COUNT(*) AS requests, SUM(cost_usd) AS cost_usd,
+              SUM(COALESCE(provider_calls, 1)) AS provider_calls
+       FROM usage_events ${windowClause}`,
+    )
+    .get(firstDay, lastDay) as StatsTotalsRow;
+  const totals: UsageStatsTotals = {
+    inputTokens: totalsRow.input_tokens ?? 0,
+    outputTokens: totalsRow.output_tokens ?? 0,
+    totalTokens: (totalsRow.input_tokens ?? 0) + (totalsRow.output_tokens ?? 0),
+    costUsd: roundUsd(totalsRow.cost_usd ?? 0),
+    requests: totalsRow.requests ?? 0,
+    providerCalls: totalsRow.provider_calls ?? 0,
+  };
+
+  /* Peak day — highest input+output total, earliest date on ties. */
+  const peakRow = db
+    .prepare(
+      `SELECT date(ts) AS date, SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) AS tokens
+       FROM usage_events ${windowClause}
+       GROUP BY date(ts) ORDER BY tokens DESC, date ASC LIMIT 1`,
+    )
+    .get(firstDay, lastDay) as StatsPeakRow | undefined;
+  const peak: UsageStatsPeak =
+    peakRow === undefined
+      ? { date: null, tokens: 0 } // no traffic in the window at all
+      : { date: peakRow.date, tokens: peakRow.tokens };
+
+  /* Zero-filled ascending series, grouped by date × model name. */
+  const dayModelRows = db
+    .prepare(
+      `SELECT date(ts) AS date, model,
+              SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) AS tokens
+       FROM usage_events ${windowClause}
+       GROUP BY date(ts), model`,
+    )
+    .all(firstDay, lastDay) as StatsDayModelRow[];
+  const byDate = new Map<string, Record<string, number>>();
+  for (const row of dayModelRows) {
+    const day = byDate.get(row.date) ?? {};
+    day[row.model] = row.tokens;
+    byDate.set(row.date, day);
+  }
+  const series: UsageStatsDayBucket[] = [];
+  const firstMs = Date.parse(`${firstDay}T00:00:00Z`);
+  const lastMs = Date.parse(`${lastDay}T00:00:00Z`);
+  const dayCount = Math.round((lastMs - firstMs) / MS_PER_DAY) + 1;
+  for (let i = 0; i < dayCount; i += 1) {
+    const date = new Date(firstMs + i * MS_PER_DAY).toISOString().slice(0, 10);
+    series.push({ date, byModel: byDate.get(date) ?? {} });
+  }
+
+  /* Model leaderboard — grouped by the model column ONLY (the owner's
+   * same-name rule); providers[] from a second DISTINCT scan. */
+  const modelRows = db
+    .prepare(
+      `SELECT model, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+              COUNT(*) AS requests, SUM(cost_usd) AS cost_usd,
+              SUM(COALESCE(provider_calls, 1)) AS calls
+       FROM usage_events ${windowClause}
+       GROUP BY model`,
+    )
+    .all(firstDay, lastDay) as StatsModelRow[];
+  const providersByModel = new Map<string, string[]>();
+  for (const row of db
+    .prepare(
+      `SELECT DISTINCT model, provider FROM usage_events ${windowClause}`,
+    )
+    .all(firstDay, lastDay) as { model: string; provider: string }[]) {
+    providersByModel.set(row.model, [...(providersByModel.get(row.model) ?? []), row.provider]);
+  }
+  const models: UsageStatsModel[] = modelRows
+    .map((row) => ({
+      model: row.model,
+      inputTokens: row.input_tokens ?? 0,
+      outputTokens: row.output_tokens ?? 0,
+      tokens: (row.input_tokens ?? 0) + (row.output_tokens ?? 0),
+      costUsd: roundUsd(row.cost_usd ?? 0),
+      calls: row.calls ?? 0,
+      requests: row.requests,
+      providers: (providersByModel.get(row.model) ?? []).sort((a, b) => a.localeCompare(b)),
+    }))
+    .sort((a, b) => b.tokens - a.tokens || a.model.localeCompare(b.model));
+
+  /* Agent health — session_events over the SAME window. turn.error rows
+   * group by errorClass with the payload's code as the honest fallback
+   * (COALESCE — both are REAL payload fields; rows carrying NEITHER are
+   * skipped via HAVING, never labeled with a guess). tool.use failures
+   * group by toolName (null names skipped). */
+  const turnErrors = db
+    .prepare(
+      `SELECT COALESCE(json_extract(payload, '$.errorClass'), json_extract(payload, '$.code')) AS name,
+              COUNT(*) AS count
+       FROM session_events
+       WHERE type = 'turn.error' AND date(ts) >= ? AND date(ts) <= ?
+       GROUP BY name
+       HAVING name IS NOT NULL AND name != ''
+       ORDER BY count DESC, name ASC LIMIT 10`,
+    )
+    .all(firstDay, lastDay) as StatsHealthRow[];
+  const toolFailures = db
+    .prepare(
+      `SELECT json_extract(payload, '$.toolName') AS name, COUNT(*) AS count
+       FROM session_events
+       WHERE type = 'tool.use' AND json_extract(payload, '$.ok') = 0
+         AND date(ts) >= ? AND date(ts) <= ?
+       GROUP BY name
+       HAVING name IS NOT NULL AND name != ''
+       ORDER BY count DESC, name ASC LIMIT 10`,
+    )
+    .all(firstDay, lastDay) as StatsHealthRow[];
+
+  return {
+    months,
+    totals,
+    peak,
+    series,
+    models,
+    health: {
+      turnErrors: turnErrors.map((row) => ({ name: row.name as string, count: row.count })),
+      toolFailures: toolFailures.map((row) => ({ name: row.name as string, count: row.count })),
+    },
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * ROUND-98 (R98-I2, owner: "clear-all-data"): DELETE /usage/data's storage
+ * half — wipes the append-only usage LEDGER and NOTHING else. Returns the
+ * SQLite `changes` count (the number of usage events deleted, surfaced as
+ * the panel's "Cleared N usage events" line).
+ *
+ * CLEARED — every row of usage_events, i.e. the ledger's whole memory:
+ * the token counts (input / output / cached), the costs, the per-model +
+ * per-provider + per-key-slot history, the ROUND-83 provider-call counts,
+ * the origin tags, and the per-session usage joins (every usage surface —
+ * the dashboard chart, the /usage screen, the stats panel, the context
+ * meter's session totals — reads this one table, so they all reset to
+ * zero together, honestly).
+ *
+ * NOT touched: sessions and session_events (the conversations and their
+ * event log), agents, providers and their API keys, projects,
+ * notifications, memory, and settings — the ledger is a side table the
+ * rest of the app never depends on for correctness.
+ */
+export function clearUsageData(db: SqliteDatabase): number {
+  const result = db.prepare("DELETE FROM usage_events").run();
+  return result.changes;
+}
+

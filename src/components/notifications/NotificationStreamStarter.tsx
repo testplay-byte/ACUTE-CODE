@@ -19,8 +19,14 @@
 import { useEffect, useRef } from "react";
 import { useConfigStore } from "../../lib/config-store";
 import { getQueryClient } from "../../lib/query-client";
+// R98-J (owner: task complete / failed / permission needed → the user's
+// PC): the desktop-notification fan-out rides the SAME stream records
+// that feed the store — the bridge owns the web/visibility/settings/
+// permission gates, this is just the wire.
+import { notifyDesktop, type DesktopNotificationKind } from "../../lib/desktop-notifications";
 import {
   streamNotifications,
+  type NotificationKind,
   type NotificationRecord,
 } from "../../lib/notifications-api";
 import {
@@ -31,6 +37,30 @@ import {
 /** Backoff schedule for the reconnect loop (in milliseconds). */
 const BACKOFF_INITIAL_MS = 1_000;
 const BACKOFF_MAX_MS = 15_000;
+
+/** R98-J: the three kinds that graduate to the owner's PC — the FIXED
+ * desktop titles (the record's own message rides as the body).
+ * subagent_* transitions are deliberately absent: they stay in-app only
+ * (sub-agent chatter is not a desktop event). */
+const DESKTOP_TITLES: Partial<Record<NotificationKind, string>> = {
+  task_complete: "Task complete",
+  task_failed: "Task failed",
+  permission_request: "Permission needed",
+};
+
+/** R98-J: the fan-out — one notifyDesktop per streamed record of the
+ * three desktop kinds. Fire-and-forget: the bridge never throws and the
+ * stream must never block on the OS. */
+function fanOutToDesktop(record: NotificationRecord): void {
+  const title = DESKTOP_TITLES[record.kind];
+  if (title === undefined) return;
+  const kind = record.kind as DesktopNotificationKind;
+  void notifyDesktop({
+    title,
+    body: record.body ?? record.title ?? "",
+    kind,
+  });
+}
 
 export function NotificationStreamStarter() {
   const demoData = useConfigStore((s) => s.demoData);
@@ -92,6 +122,9 @@ export function NotificationStreamStarter() {
           // unread + ticker (the Bell's badge + the Toaster read from
           // there).
           const record = event as NotificationRecord;
+          // R98-J: the desktop fan-out (task_complete/task_failed/
+          // permission_request only — see DESKTOP_TITLES).
+          fanOutToDesktop(record);
           if (qc) {
             qc.setQueryData<{
               notifications: NotificationRecord[];

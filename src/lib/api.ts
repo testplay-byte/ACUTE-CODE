@@ -891,6 +891,96 @@ export function fetchDetailedUsage(days = 30): Promise<DetailedUsage> {
   return request<DetailedUsage>(`/usage/detailed?days=${days}`);
 }
 
+// ---------------------------------------------------------------------------
+// ROUND-98 (R98-I2, owner: "Data & statistics … total tokens, peak tokens,
+// the 12-month token-activity heatmap, time-range graphs color-coded by
+// model name — same name across providers IS one model — the model-usage
+// donut, total cost, agent-health, and clear-all-data"): the windowed
+// stats surface (GET /usage/stats + DELETE /usage/data — agent-core
+// storage/usage.ts getUsageStats/clearUsageData). Shown in BOTH the
+// settings "Data & Statistics" tab AND the /usage screen (the shared
+// DataStatsPanel).
+// ---------------------------------------------------------------------------
+
+/** Window totals as served by GET /usage/stats. */
+export interface UsageStatsTotals {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  /** Turns — COUNT(*) of usage rows (one row per turn since R24). */
+  requests: number;
+  /** ROUND-83 semantics: the real SDK-call count. */
+  providerCalls: number;
+}
+
+/** The highest input+output UTC day in the window (date null = no traffic). */
+export interface UsageStatsPeak {
+  date: string | null;
+  tokens: number;
+}
+
+/** One day of the zero-filled series: tokens per MODEL NAME (the owner's
+ * same-name-across-providers rule — one key per distinct model column
+ * value, never split by provider). */
+export interface UsageStatsDayBucket {
+  date: string;
+  byModel: Record<string, number>;
+}
+
+/** One model's window rollup (models sorted tokens-desc server-side). */
+export interface UsageStatsModel {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  tokens: number;
+  costUsd: number;
+  /** ROUND-83 semantics: the real SDK-call count. */
+  calls: number;
+  /** Turns — COUNT(*) of usage rows. */
+  requests: number;
+  /** The provider ids that served this name in the window (name-asc). */
+  providers: string[];
+}
+
+/** A health count — the turn-error class (errorClass, code as the honest
+ * fallback) or the failing tool's name; never a guessed label. */
+export interface UsageStatsHealthIssue {
+  name: string;
+  count: number;
+}
+
+export interface UsageStatsHealth {
+  turnErrors: UsageStatsHealthIssue[];
+  toolFailures: UsageStatsHealthIssue[];
+}
+
+export interface UsageStats {
+  /** The window actually used (1–24; the route validates). */
+  months: number;
+  totals: UsageStatsTotals;
+  peak: UsageStatsPeak;
+  /** Zero-filled ascending day series over the calendar-month window. */
+  series: UsageStatsDayBucket[];
+  models: UsageStatsModel[];
+  health: UsageStatsHealth;
+  generatedAt: string;
+}
+
+/** Windowed Data & Statistics over the trailing `months` calendar months
+ * (integer 1–24, default 12). */
+export function fetchUsageStats(months = 12): Promise<UsageStats> {
+  return request<UsageStats>(`/usage/stats?months=${months}`);
+}
+
+/** R98-I2 (owner: "clear-all-data"): DELETE /usage/data — wipes the
+ * usage_events ledger ONLY (token counts, costs, model/key-slot/provider-
+ * call history); sessions, conversations, agents, providers, and settings
+ * are NOT touched. Returns the deleted-row count. */
+export function clearUsageData(): Promise<{ deleted: number }> {
+  return request<{ deleted: number }>("/usage/data", { method: "DELETE" });
+}
+
 /**
  * Round-28 WS-D3: a single file snapshot (before/after content) for the
  * DiffCard's real unified-diff rendering. Returns null if the snapshot
@@ -2749,6 +2839,29 @@ export async function updateBrowserSettings(
   patch: Partial<BrowserSettings>,
 ): Promise<BrowserSettings> {
   return request<BrowserSettings>("/settings/browser", {
+    method: "PUT",
+    json: patch,
+  });
+}
+
+/** ROUND-98 (R98-J, owner: task complete / failed / permission needed →
+ * "it will send me a notification on my PC"): the desktop-notification
+ * master switch. The Tauri notification bridge (src/lib/desktop-
+ * notifications.ts) caches this value in memory so a flip applies to the
+ * very next record — the GET/PUT pair here is the durable truth. Default
+ * ON (the pre-R98 behavior shipped notifications enabled). */
+export interface DesktopNotificationsSettings {
+  enabled: boolean;
+}
+
+export async function fetchDesktopNotificationsSettings(): Promise<DesktopNotificationsSettings> {
+  return request<DesktopNotificationsSettings>("/settings/desktop-notifications");
+}
+
+export async function updateDesktopNotificationsSettings(
+  patch: Partial<DesktopNotificationsSettings>,
+): Promise<DesktopNotificationsSettings> {
+  return request<DesktopNotificationsSettings>("/settings/desktop-notifications", {
     method: "PUT",
     json: patch,
   });

@@ -344,7 +344,8 @@ describe("Advanced tab (ROUND-65 R65)", () => {
 
     // R78: the header copy leads with the retry card (the tab is "General"
     // now — auto-retry + debug + memory), and the memory card survives.
-    expect(screen.getByText(/Auto-retry, debug mode, and agent memory/)).toBeTruthy();
+    // R98-J: desktop notifications joined the list — the pin follows the copy.
+    expect(screen.getByText(/Auto-retry, desktop notifications, debug mode, and agent memory/)).toBeTruthy();
     expect(screen.getByRole("switch", { name: "Toggle agent memory" })).toBeTruthy();
   });
 
@@ -640,6 +641,8 @@ describe("General tab + Auto-retry card (ROUND-78 R78-C)", () => {
     // Phase 1: the retry GET hits the bearer wall. The describe's stub does
     // not serve thinking-loop either — patch that too, so the retry card is
     // the ONE honest error on the tab and the role=alert query stays unique.
+    // R98-J: the desktop-notifications GET joins the patched set (its card
+    // arrived this round — the same uniqueness rule).
     let failRetryGet = true;
     const original = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -650,6 +653,13 @@ describe("General tab + Auto-retry card (ROUND-78 R78-C)", () => {
           status: 200,
           text: async () =>
             JSON.stringify({ enabled: false, stallSeconds: 120, reasoningBytesKB: 24 }),
+        } as unknown as Response;
+      }
+      if (url.includes("/api/v1/settings/desktop-notifications")) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ enabled: true }),
         } as unknown as Response;
       }
       if (url.includes("/api/v1/settings/retry") && (init?.method ?? "GET") === "GET" && failRetryGet) {
