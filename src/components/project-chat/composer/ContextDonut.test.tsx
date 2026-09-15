@@ -35,6 +35,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { Route, Routes, useLocation } from "react-router";
 import {
   CONTEXT_DONUT_DANGER,
   CONTEXT_DONUT_WARN,
@@ -65,6 +66,7 @@ const overlayState = vi.hoisted(() => ({
   hidden: 0,
   hoverHandler: null as ((hovering: boolean) => void) | null,
   closeHandler: null as (() => void) | null,
+  pickHandler: null as ((pick: { kind: string; target?: string }) => void) | null,
 }));
 
 vi.mock("../../../lib/native-browser", async (importOriginal) => {
@@ -100,6 +102,12 @@ vi.mock("../../../lib/menu-overlay", async (importOriginal) => {
         if (overlayState.closeHandler === cb) overlayState.closeHandler = null;
       };
     }),
+    onMenuOverlayPick: vi.fn((cb: (pick: { kind: string; target?: string }) => void) => {
+      overlayState.pickHandler = cb;
+      return () => {
+        if (overlayState.pickHandler === cb) overlayState.pickHandler = null;
+      };
+    }),
   };
 });
 
@@ -114,6 +122,7 @@ afterEach(() => {
   overlayState.hidden = 0;
   overlayState.hoverHandler = null;
   overlayState.closeHandler = null;
+  overlayState.pickHandler = null;
 });
 
 function baseReport(overrides: Partial<SessionContextReport> = {}): SessionContextReport {
@@ -211,8 +220,10 @@ describe("ROUND-95 (R95-F) measured-usage prominence", () => {
       expect(document.querySelector("[data-context-popover]")).not.toBeNull();
     });
     expect(document.querySelector("[data-context-measured]")?.textContent).toContain("not yet measured");
-    // The estimate row keeps its basis label (the R83 one-rule).
-    expect(document.body.textContent).toContain("tokens · estimated");
+    // R99-D: the big token line is the primary read ("40k of 200k"); the
+    // estimate's basis rides the ONE % line ("~20% projected") beside it —
+    // the R83 one-rule, one labeled spelling per number.
+    expect(document.body.textContent).toContain("40k of 200k");
     expect(document.body.textContent).toContain("~20% projected");
   });
 
@@ -225,8 +236,8 @@ describe("ROUND-95 (R95-F) measured-usage prominence", () => {
     const measured = document.querySelector("[data-context-measured]") as HTMLElement;
     expect(measured.textContent).toContain("45k");
     expect(measured.textContent).toContain("measured at last request");
-    // The estimate row keeps its basis label (the R83 one-rule).
-    expect(document.body.textContent).toContain("tokens · estimated");
+    // R99-D: the big token line + the ONE % line carry the estimate's basis.
+    expect(document.body.textContent).toContain("40k of 200k");
     expect(document.body.textContent).toContain("~20% projected");
   });
 
@@ -279,18 +290,42 @@ describe("ROUND-96 (R96-G) — the usage popover rides the overlay window (no br
     await waitFor(() => expect(overlayState.showCalls.length).toBeGreaterThan(0));
     const { anchor, payload } = overlayState.showCalls[0]!;
     // The overlay payload: the usage kind, the DOM popover's width, and the
-    // same numbers the DOM popover shows. R97-C: the window rows now live in
-    // the DONUT header's line column; the sections are Breakdown / Cache /
-    // Session totals (the table). R98-C3: the width is the 420px sectioned
-    // card (the owner's wider-aspect ask).
+    // SAME build the DOM popover renders from (R99-D: the payload IS the
+    // single source — the overview hero + the bar-with-legend + the Cache /
+    // Session sections; the note row is retired). R98-C3: the width is the
+    // 420px sectioned card (the owner's wider-aspect ask).
     expect(payload.kind).toBe("usage");
     expect(payload.width).toBe(420);
-    // R97-C: the visual payload — typed views over the JSON-safe record.
+    // R99-D: the OVERVIEW HERO — typed views over the JSON-safe record.
+    const overview = payload.overview as {
+      bigUsed: string;
+      bigLimit: string;
+      pctLine: string;
+      meta: Array<{ id?: string; label: string; value: string }>;
+      budgetLine?: string;
+      ringColor: string;
+    } | undefined;
+    expect(overview).toBeDefined();
+    expect(overview!.bigUsed).toBe(fmtTokens(40_000));
+    expect(overview!.bigLimit).toBe(fmtTokens(200_000));
+    expect(overview!.pctLine).toBe("~20% projected"); // the ONE % line, % first
+    expect(overview!.meta.map((m) => m.id)).toEqual(["measured", "model", "window"]);
+    expect(overview!.meta[0]!.value).toBe(fmtTokens(45_200)); // MEASURED — the provider's own count
+    expect(overview!.meta[2]!.value).toContain("catalog default"); // window provenance (ex-note)
+    expect(overview!.budgetLine).toContain("compaction line");
+    expect(overview!.ringColor).toBe("accent");
+    // R99-D: the context bar's segments ARE the legend rows.
     const contextBar = payload.contextBar as {
       windowTokens: number;
       usedTokens: number;
       reservedTokens: number;
-      segments: Array<{ label: string; color: string }>;
+      segments: Array<{
+        label: string;
+        color: string;
+        tokensLabel: string;
+        pctOfUsed: string;
+        manage?: { target: string };
+      }>;
     } | undefined;
     expect(contextBar).toBeDefined();
     expect(contextBar!.segments.map((s) => s.label)).toEqual([
@@ -301,27 +336,61 @@ describe("ROUND-96 (R96-G) — the usage popover rides the overlay window (no br
       "Memory & skills",
       "Meta & project",
     ]);
-    const headerLines = (payload.donut as { lines: Array<{ label: string; value: string; note?: string }> })
-      .lines;
-    expect(headerLines.map((l) => l.label)).toEqual([
-      "Projected",
-      "Estimated",
-      "Measured",
-      "Model",
-      "Session cost",
+    expect(contextBar!.segments[0]!.tokensLabel).toBe(fmtTokens(34_500));
+    expect(contextBar!.segments[0]!.pctOfUsed).toBe("86%"); // of USED (34.5k / 40k)
+    expect(contextBar!.segments.find((s) => s.label === "System prompt")!.manage?.target).toBe(
+      "/settings?tab=prompts",
+    );
+    expect(contextBar!.segments.find((s) => s.label === "MCP tools")!.manage?.target).toBe("/settings?tab=mcp");
+    expect(contextBar!.segments.find((s) => s.label === "Messages")!.manage).toBeUndefined(); // honest: no surface
+    // The sections are Cache (ONE row) + Session totals (the table).
+    expect((payload.sections as Array<{ title: string }>).map((s) => s.title)).toEqual([
+      "Cache",
+      "Session totals",
     ]);
-    expect(headerLines[0]!.value).toBe("~20%"); // projected
-    expect(headerLines[1]!.value).toBe(`${fmtTokens(40_000)} / ${fmtTokens(200_000)}`); // estimated
-    expect(headerLines[2]!.value).toBe(fmtTokens(45_200)); // MEASURED — the provider's own count
-    expect(headerLines[2]!.note).toBe("at last request");
-    expect(headerLines[3]!.value).toBe("z-ai/glm-5.2:free"); // the model line
-    expect(String(payload.note)).toContain("catalog default"); // window provenance
     // The anchor: the card's window — width = card + the page's 6px paddings,
     // positioned above the trigger, never off the top of the screen.
     expect(anchor.width).toBe(420 + 12);
     expect(anchor.top).toBeGreaterThanOrEqual(0);
     expect(anchor.height).toBeGreaterThanOrEqual(40);
     // THE point: no DOM popover portal exists to intersect the browser.
+    expect(document.querySelector("[data-context-popover]")).toBeNull();
+  });
+
+  it("R99-D: a usage-link pick from the overlay leg closes the popover + router-navigates (the legend's manage chips work on BOTH legs)", async () => {
+    overlayState.available = true;
+    function SearchProbe() {
+      const { search } = useLocation();
+      return <div data-testid="search-probe">{search}</div>;
+    }
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(baseReport());
+    renderWithProviders(
+      <>
+        <ContextDonut
+          sessionId="sess_r95f"
+          model="z-ai/glm-5.2:free"
+          providerId="openrouter"
+          transcriptLength={4}
+          liveTick={2}
+          streaming={false}
+          liveMode
+        />
+        <Routes>
+          <Route path="/settings" element={<SearchProbe />} />
+        </Routes>
+      </>,
+    );
+    fireEvent.click(await waitFor(() => screen.getByTitle(/measured at last request/)));
+    await waitFor(() => expect(overlayState.showCalls.length).toBeGreaterThan(0));
+    expect(overlayState.pickHandler).not.toBeNull();
+    act(() => {
+      overlayState.pickHandler!({ kind: "usage-link", target: "/settings?tab=prompts" });
+    });
+    // The popover closed (the overlay window hides with it) + the router
+    // navigated to the management surface.
+    await waitFor(() => expect(overlayState.hidden).toBeGreaterThan(0));
+    expect((await screen.findByTestId("search-probe")).textContent).toContain("tab=prompts");
     expect(document.querySelector("[data-context-popover]")).toBeNull();
   });
 
@@ -431,8 +500,8 @@ describe("ROUND-96 (R96-G) — the usage popover rides the overlay window (no br
   });
 });
 
-describe("ROUND-96 (R96-G) + ROUND-97 (R97-C) — buildUsageCardSections (the pure payload builder)", () => {
-  it("mirrors the popover's named rows: measured/estimated/model + the compaction note (now the DONUT header lines)", () => {
+describe("ROUND-96 (R96-G) → R99-D — buildUsageCardSections (the pure payload builder)", () => {
+  it("the OVERVIEW HERO: the big token line is the primary read + the honesty meta pairs + the compacted badge", () => {
     const built = buildUsageCardSections(
       baseReport({
         compaction: { throughSeq: 30, droppedMessages: 12, tokensSaved: 18_400 },
@@ -441,13 +510,24 @@ describe("ROUND-96 (R96-G) + ROUND-97 (R97-C) — buildUsageCardSections (the pu
       { isError: false, sessionId: "s1" },
     );
     expect(built).not.toBeNull();
-    // R97-C: the window rows moved INTO the donut header block's line column.
-    const headerLines = built!.donut!.lines;
-    expect(headerLines[1]!.value).toBe(`${fmtTokens(40_000)} / ${fmtTokens(200_000)}`); // estimated
-    expect(headerLines[2]!.value).toBe("not yet"); // honest pre-first-reply
-    expect(built!.note).toContain("compacted");
-    expect(built!.note).toContain("12 messages summarized");
-    expect(built!.note).toContain("catalog default");
+    // R99-D: what the old donut header carried as five label/value lines is
+    // now the hero — the big line, ONE % line (percentage first), ≤3 meta
+    // pairs, and the compaction note promoted to the header-row badge.
+    expect(built!.overview!.bigUsed).toBe(fmtTokens(40_000));
+    expect(built!.overview!.bigLimit).toBe(fmtTokens(200_000));
+    expect(built!.overview!.pctLine).toBe("~20% projected");
+    const measured = built!.overview!.meta.find((m) => m.id === "measured")!;
+    expect(measured.value).toBe("not yet measured"); // honest pre-first-reply
+    const windowPair = built!.overview!.meta.find((m) => m.id === "window")!;
+    expect(windowPair.value).toBe(`${fmtTokens(200_000)} · catalog default`);
+    expect(built!.overview!.budgetLine).toBe(
+      `compaction line ${fmtTokens(159_232)} · reserve ${fmtTokens(32_768)} output`,
+    );
+    expect(built!.overview!.compactedBadge!.label).toBe("Context compacted");
+    expect(built!.overview!.compactedBadge!.detail).toContain("12 messages summarized");
+    expect(built!.overview!.compactedBadge!.detail).toContain(fmtTokens(18_400));
+    // Never more than three honesty pairs (the R99-D contract).
+    expect(built!.overview!.meta.length).toBeLessThanOrEqual(3);
   });
 
   it("the empty/loading states stay honest (same copy as the DOM popover)", () => {
@@ -462,7 +542,7 @@ describe("ROUND-96 (R96-G) + ROUND-97 (R97-C) — buildUsageCardSections (the pu
     );
   });
 
-  it("a per-send model switch names BOTH models (the R83 rule, carried into the donut header)", () => {
+  it("a per-send model switch names BOTH models (the R83 rule, carried into the hero's model pair)", () => {
     const built = buildUsageCardSections(
       baseReport({
         actual: {
@@ -475,11 +555,11 @@ describe("ROUND-96 (R96-G) + ROUND-97 (R97-C) — buildUsageCardSections (the pu
       }),
       { isError: false, sessionId: "s1" },
     );
-    const model = built!.donut!.lines.find((l) => l.label === "Model")!;
-    expect(model.value).toBe("next z-ai/glm-5.2:free · measured openai/gpt-5.1");
+    const model = built!.overview!.meta.find((m) => m.id === "model")!;
+    expect(model.value).toBe("next send z-ai/glm-5.2:free · measured openai/gpt-5.1");
   });
 
-  it("R97-C: the session split is the compact TABLE (Turns/Calls/Sent/Received/Cost per group)", () => {
+  it("R97-C → R99-D: the session split is the compact TABLE (Turns/Calls/Sent/Received/Cost per group)", () => {
     const built = buildUsageCardSections(
       baseReport({
         usage: {
@@ -498,26 +578,31 @@ describe("ROUND-96 (R96-G) + ROUND-97 (R97-C) — buildUsageCardSections (the pu
     // A pre-R83 sidecar without providerCalls reads the honest em-dash.
     expect(session.table!.rows[1]!.cells[1]).toBe("—");
     expect(session.table!.rows[1]!.cells[4]).toBe("—"); // zero cost renders the em-dash
-    // The Combined row is the strong one.
+    // The Combined row is the strong one, and the R99-D retirement holds:
+    // the session-cost HEADLINE is gone — the table's Cost column carries
+    // the combined truth (one source of truth per number).
     expect(session.table!.rows[2]!.strong).toBe(true);
-    // The header's cost headline reads the COMBINED truth.
-    const costLine = built!.donut!.lines.find((l) => l.label === "Session cost")!;
-    expect(costLine.value).toBe("$0.0123");
-    expect(costLine.note).toBe("4 turns · 9 provider calls");
+    expect(session.table!.rows[2]!.cells).toEqual([
+      "4",
+      "9",
+      `${fmtTokens(46_200)} ↑`,
+      `${fmtTokens(1_100)} ↓`,
+      "$0.0123",
+    ]);
   });
 
-  it("R97-C: the context bar segments mirror the breakdown (one colored segment per category + the reserve)", () => {
+  it("R99-D: the context bar is the star — full-width segments with legend rows (tokens/%/manage links)", () => {
     const built = buildUsageCardSections(
       baseReport({ maxOutputTokens: 16_000 }),
       { isError: false, sessionId: "s1" },
     );
     expect(built!.contextBar).toBeDefined();
-    // R98-C3: the sectioned card — the panes carry their labels in the
-    // payload so both legs (DOM popover + overlay window) paint the same
-    // headers, and the session section is titled for the pane grammar.
+    // The pane's label — both legs (DOM popover + overlay window) paint it
+    // as the pane header; the R98-C3 "Breakdown" section is GONE (merged
+    // into the bar's legend) and the overview is the unboxed head.
     expect(built!.contextBar!.label).toBe("Window composition");
-    expect(built!.donut!.label).toBe("Overview");
-    expect(built!.sections.map((s) => s.title)).toEqual(["Breakdown", "Cache", "Session totals"]);
+    expect(built!.overview).toBeDefined();
+    expect(built!.sections.map((s) => s.title)).toEqual(["Cache", "Session totals"]);
     expect(built!.contextBar!.windowTokens).toBe(200_000);
     expect(built!.contextBar!.usedTokens).toBe(40_000);
     expect(built!.contextBar!.reservedTokens).toBe(16_000);
@@ -530,33 +615,58 @@ describe("ROUND-96 (R96-G) + ROUND-97 (R97-C) — buildUsageCardSections (the pu
       "Memory & skills",
       "Meta & project",
     ]);
-    // The palette keys pair with the breakdown rows' barColor (the mutual
-    // hover-highlight contract).
-    const breakdown = built!.sections.find((s) => s.title === "Breakdown")!;
-    expect(breakdown.lines.map((l) => l.barColor)).toEqual(built!.contextBar!.segments.map((s) => s.color));
-    // The breakdown rows carry mini-bar fractions relative to usedTokens
-    // (the fixture's Messages = 34_500 of 40_000 used).
-    expect(breakdown.lines[0]!.barFrac).toBeCloseTo(34_500 / 40_000, 5);
-    // The donut's ring color follows the graded thresholds (20% → accent).
-    expect(built!.donut!.ringColor).toBe("accent");
+    // The legend rows ARE the segments now — each carries its pre-formatted
+    // tokens + its share of the USED context (the fixture's Messages =
+    // 34_500 of 40_000 used → 86%).
+    expect(built!.contextBar!.segments[0]!.tokens).toBe(34_500);
+    expect(built!.contextBar!.segments[0]!.tokensLabel).toBe(fmtTokens(34_500));
+    expect(built!.contextBar!.segments[0]!.pctOfUsed).toBe("86%");
+    // The palette keys ride the segments (the mutual hover-highlight
+    // contract between a segment and its legend row).
+    expect(built!.contextBar!.segments.map((s) => s.color)).toEqual([
+      "accent",
+      "blue",
+      "teal",
+      "violet",
+      "amber",
+      "rose",
+    ]);
+    // The management links — ONLY where a real surface exists (the Claude
+    // Code /context pattern): prompts/mcp targets present, the others
+    // honestly absent (no dead links).
+    const byLabel = (label: string) => built!.contextBar!.segments.find((s) => s.label === label)!;
+    expect(byLabel("System prompt").manage?.target).toBe("/settings?tab=prompts");
+    expect(byLabel("Memory & skills").manage?.target).toBe("/settings?tab=prompts");
+    expect(byLabel("MCP tools").manage?.target).toBe("/settings?tab=mcp");
+    expect(byLabel("Messages").manage).toBeUndefined();
+    expect(byLabel("System tools").manage).toBeUndefined();
+    expect(byLabel("Meta & project").manage).toBeUndefined();
+    // The hero's ring color follows the graded thresholds (20% → accent).
+    expect(built!.overview!.ringColor).toBe("accent");
     expect(usageRingColorKey(130_000, 200_000)).toBe("warn");
     expect(usageRingColorKey(195_000, 200_000)).toBe("danger");
   });
 
-  it("the breakdown + cache sections mirror the popover's rows (cache honesty included)", () => {
+  it("the legend + the ONE-row cache section mirror the popover's rows (cache honesty included)", () => {
     const built = buildUsageCardSections(baseReport(), { isError: false, sessionId: "s1" });
-    const breakdown = built!.sections.find((s) => s.title === "Breakdown")!;
-    expect(breakdown.lines.map((l) => l.label)).toEqual([
-      "Messages",
-      "System prompt",
-      "System tools",
-      "MCP tools",
-      "Memory & skills",
-      "Meta & project",
-    ]);
+    // The legend's MCP row: the fixture's 1_500 reads its tokens; a ZERO
+    // override reads the honest "none configured" (both spellings pinned).
+    expect(built!.contextBar!.segments.find((s) => s.label === "MCP tools")!.tokensLabel).toBe(
+      fmtTokens(1_500),
+    );
+    const zeroMcp = buildUsageCardSections(
+      baseReport({ breakdown: { ...baseReport().breakdown, mcpTools: 0 } }),
+      { isError: false, sessionId: "s1" },
+    );
+    expect(zeroMcp!.contextBar!.segments.find((s) => s.label === "MCP tools")!.tokensLabel).toBe(
+      "none configured",
+    );
+    // The Cache section is ONE row now (the R83 §2.10 null-rate honesty
+    // rides the value itself — the old two-row split is gone).
     const cache = built!.sections.find((s) => s.title === "Cache")!;
-    expect(cache.lines[0]!.value).toBe("—"); // hitRate null
-    expect(cache.lines[0]!.note).toBe("not reported by this provider"); // the honest null note
-    expect(cache.lines[1]!.value).toBe(`${fmtTokens(0)} / ${fmtTokens(45_200)}`); // cached / input
+    expect(cache.lines).toHaveLength(1);
+    expect(cache.lines[0]!.label).toBe("Hit rate");
+    expect(cache.lines[0]!.value).toBe("— · not reported by this provider");
+    expect(cache.lines[0]!.barColor).toBe("teal");
   });
 });

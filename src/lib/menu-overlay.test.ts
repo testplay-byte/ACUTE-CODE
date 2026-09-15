@@ -19,11 +19,18 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  USAGE_BAR_LABEL_MIN_FRAC,
   USAGE_CARD_CHROME_PX,
   USAGE_CONTEXT_BAR_PX,
-  USAGE_DONUT_PX,
+  USAGE_HERO_BIG_PX,
+  USAGE_HERO_BUDGET_PX,
+  USAGE_HERO_GAP_PX,
+  USAGE_HERO_META_PX,
+  USAGE_HERO_PCT_PX,
+  USAGE_HERO_RING_PX,
+  USAGE_LEGEND_HINT_PX,
+  USAGE_LEGEND_ROW_PX,
   USAGE_LINE_PX,
-  USAGE_NOTE_PX,
   USAGE_PANE_PX,
   USAGE_SECTION_TITLE_PX,
   USAGE_TABLE_HEAD_PX,
@@ -66,20 +73,64 @@ function usagePayload(sections: UsageSectionPayload[], note?: string): UsageCard
   };
 }
 
-describe("ROUND-96 (R96-G) — the usage payload contract", () => {
+describe("ROUND-96 (R96-G) + ROUND-99 (R99-D) — the usage payload contract", () => {
   it("the payload is JSON-safe: the string round-trips into the same shape (it crosses the window boundary as one JSON string)", () => {
-    const payload = usagePayload(
-      [section("Window", 4), section("Breakdown", 6), section("Cache", 2), section("Session", 3)],
-      "compacted · 12 messages summarized · ~18.4k saved",
-    );
+    const payload = usagePayload([section("Cache", 1), section("Session totals", 0)]);
+    payload.contextBar = {
+      usedTokens: 40_000,
+      windowTokens: 200_000,
+      reservedTokens: 16_000,
+      usedPct: 20,
+      segments: [
+        { label: "Messages", tokens: 34_500, color: "accent", tokensLabel: "34.5k", pctOfUsed: "86%" },
+        {
+          label: "System prompt",
+          tokens: 2_000,
+          color: "blue",
+          tokensLabel: "2k",
+          pctOfUsed: "5%",
+          manage: { target: "/settings?tab=prompts", title: "Manage the prompt sections — Settings → Prompts" },
+        },
+        { label: "System tools", tokens: 1_000, color: "teal", tokensLabel: "1k", pctOfUsed: "3%" },
+        { label: "MCP tools", tokens: 1_500, color: "violet", tokensLabel: "1.5k", pctOfUsed: "4%", manage: { target: "/settings?tab=mcp", title: "Manage MCP servers — Settings → MCP Servers" } },
+        { label: "Memory & skills", tokens: 500, color: "amber", tokensLabel: "500", pctOfUsed: "1%", manage: { target: "/settings?tab=prompts", title: "Manage skills & prompt sections — Settings → Prompts" } },
+        { label: "Meta & project", tokens: 500, color: "rose", tokensLabel: "500", pctOfUsed: "1%" },
+      ],
+    };
+    payload.overview = {
+      used: 40_000,
+      limit: 200_000,
+      markerFrac: 0.8,
+      ringColor: "accent",
+      bigUsed: "40k",
+      bigLimit: "200k",
+      pctLine: "~20% projected",
+      meta: [
+        { id: "measured", label: "measured at last request", value: "45k", title: "45k tokens · 9/13/2026" },
+        { id: "model", label: "model", value: "z-ai/glm-5.2:free" },
+        { id: "window", label: "window", value: "200k · catalog default" },
+      ],
+      budgetLine: "compaction line 159k · reserve 33k output",
+      compactedBadge: { label: "Context compacted", detail: "12 messages summarized · ~18.4k saved" },
+    };
     const json = JSON.stringify(payload);
     expect(json.length).toBeGreaterThan(200); // a real card, not a stub
     const back = JSON.parse(json) as UsageCardPayload;
     expect(back.kind).toBe("usage");
-    expect(back.sections).toHaveLength(4);
-    expect(back.sections[0]?.lines[0]?.label).toBe("L0");
-    expect(back.note).toBe("compacted · 12 messages summarized · ~18.4k saved");
+    expect(back.sections).toHaveLength(2);
+    expect(back.overview?.pctLine).toBe("~20% projected");
+    expect(back.overview?.compactedBadge?.detail).toContain("12 messages summarized");
     // Every field the overlay page paints is a JSON-safe string.
+    for (const seg of back.contextBar?.segments ?? []) {
+      expect(typeof seg.label).toBe("string");
+      expect(typeof seg.tokensLabel).toBe("string");
+      expect(typeof seg.pctOfUsed).toBe("string");
+      expect(seg.manage === undefined || typeof seg.manage.target === "string").toBe(true);
+    }
+    for (const m of back.overview?.meta ?? []) {
+      expect(typeof m.label).toBe("string");
+      expect(typeof m.value).toBe("string");
+    }
     for (const s of back.sections) {
       expect(typeof s.title).toBe("string");
       for (const l of s.lines) {
@@ -90,35 +141,27 @@ describe("ROUND-96 (R96-G) — the usage payload contract", () => {
     }
   });
 
-  it("the estimator sums the contract: chrome + every pane (overhead + label) + every line (+ the note), floored at the Rust command's 40px minimum", () => {
-    const twoSections = usagePayload([section("Window", 4), section("Session", 3)]);
-    // R98-C3: every visual block is a PANE now — the per-pane overhead
-    // (USAGE_PANE_PX: border + padding + the gap below) + the pane's label
-    // row (USAGE_SECTION_TITLE_PX) + the content lines.
+  it("R99-D: the estimator sums the contract — chrome + the unboxed overview hero (big/%/meta rows vs the ring floor + the budget line + the block gap) + every pane (overhead + label) + the bar/hint/legend rows + the lines + the table, floored at the Rust command's 40px minimum", () => {
+    const twoSections = usagePayload([section("Cache", 1), section("Report", 2)]);
+    // No overview / no contextBar → no hero, no bar pane: chrome + the two
+    // section panes + their lines.
     expect(estimateUsageCardHeight(twoSections)).toBe(
-      USAGE_CARD_CHROME_PX + 2 * (USAGE_PANE_PX + USAGE_SECTION_TITLE_PX) + 7 * USAGE_LINE_PX,
-    );
-    // The note adds its row only when non-empty.
-    const withNote = usagePayload([section("Window", 4)], "200k window · catalog default");
-    expect(estimateUsageCardHeight(withNote)).toBe(
-      USAGE_CARD_CHROME_PX + (USAGE_PANE_PX + USAGE_SECTION_TITLE_PX) + 4 * USAGE_LINE_PX + USAGE_NOTE_PX,
-    );
-    const emptyNote = usagePayload([section("Window", 4)], "");
-    expect(estimateUsageCardHeight(emptyNote)).toBe(
-      USAGE_CARD_CHROME_PX + (USAGE_PANE_PX + USAGE_SECTION_TITLE_PX) + 4 * USAGE_LINE_PX,
+      USAGE_CARD_CHROME_PX + 2 * (USAGE_PANE_PX + USAGE_SECTION_TITLE_PX) + 3 * USAGE_LINE_PX,
     );
     // The floor: a degenerate card never asks for a sub-40px window (the
     // Rust clamp would refuse it anyway). R98-C3: the sectioned chrome
     // (55px) alone exceeds the Rust floor — an empty card IS the chrome.
     expect(estimateUsageCardHeight(usagePayload([]))).toBe(USAGE_CARD_CHROME_PX);
     expect(USAGE_CARD_CHROME_PX).toBeGreaterThanOrEqual(40);
-  });
 
-  it("R97-C: the estimator sums the context bar + the donut header + the session table", () => {
-    const visual = {
+    // The full R99-D card: hero (3 meta pairs + the budget line) + the
+    // bar pane (6 legend rows) + the Cache pane (one line) + the session
+    // table pane.
+    const hero = {
       ...usagePayload([
+        section("Cache", 1),
         {
-          ...section("Session", 0),
+          ...section("Session totals", 0),
           table: {
             columns: ["Group", "Turns", "Calls", "Sent ↑", "Received ↓", "Cost"],
             rows: [
@@ -129,51 +172,65 @@ describe("ROUND-96 (R96-G) — the usage payload contract", () => {
           },
         },
       ]),
+      overview: {
+        used: 40_000,
+        limit: 200_000,
+        markerFrac: 0.8,
+        ringColor: "accent" as const,
+        bigUsed: "40k",
+        bigLimit: "200k",
+        pctLine: "~20% projected",
+        meta: [
+          { id: "measured", label: "measured at last request", value: "45k" },
+          { id: "model", label: "model", value: "z-ai/glm-5.2:free" },
+          { id: "window", label: "window", value: "200k · catalog default" },
+        ],
+        budgetLine: "compaction line 159k · reserve 33k output",
+      },
       contextBar: {
         usedTokens: 40_000,
         windowTokens: 200_000,
         reservedTokens: 16_000,
         usedPct: 20,
-        segments: [],
-      },
-      donut: {
-        used: 40_000,
-        limit: 200_000,
-        markerFrac: 0.8,
-        ringColor: "accent" as const,
-        lines: [
-          { label: "Projected", value: "~20%", strong: true },
-          { label: "Estimated", value: "40K / 200K", note: "of window" },
-          { label: "Measured", value: "45.2K", note: "at last request", strong: true },
-          { label: "Model", value: "z-ai/glm-5.2:free" },
-          { label: "Session cost", value: "$0.0123", note: "4 turns · 9 provider calls" },
-        ],
+        segments: Array.from({ length: 6 }, (_, i) => ({
+          label: `S${i}`,
+          tokens: 1_000,
+          color: "accent" as const,
+          tokensLabel: "1k",
+          pctOfUsed: "5%",
+        })),
       },
     } satisfies UsageCardPayload;
-    expect(estimateUsageCardHeight(visual)).toBe(
+    expect(estimateUsageCardHeight(hero)).toBe(
       USAGE_CARD_CHROME_PX +
-        // R98-C3: three panes (donut + bar + the one section) each pay the
-        // pane overhead + the label row.
+        Math.max(
+          USAGE_HERO_RING_PX,
+          USAGE_HERO_BIG_PX + USAGE_HERO_PCT_PX + 3 * USAGE_HERO_META_PX,
+        ) +
+        USAGE_HERO_BUDGET_PX +
+        USAGE_HERO_GAP_PX +
+        // three panes: the bar pane + Cache + Session totals
         3 * (USAGE_PANE_PX + USAGE_SECTION_TITLE_PX) +
         USAGE_CONTEXT_BAR_PX +
-        // the donut content: 5 header lines (5*17=85) beat the 54px floor
-        5 * USAGE_LINE_PX + 10 +
+        USAGE_LEGEND_HINT_PX +
+        6 * USAGE_LEGEND_ROW_PX +
+        USAGE_LINE_PX +
         USAGE_TABLE_HEAD_PX +
         3 * USAGE_TABLE_ROW_PX,
     );
-    // A donut with FEW lines still reserves the 54px ring block.
-    const small = {
-      ...visual,
-      donut: { ...visual.donut, lines: visual.donut.lines.slice(0, 2) },
+    // A hero with FEW meta rows floors at the 46px ring block; no budget
+    // line → no budget row.
+    const sparse = {
+      ...hero,
+      overview: { ...hero.overview, meta: hero.overview.meta.slice(0, 1), budgetLine: undefined },
     } satisfies UsageCardPayload;
-    expect(estimateUsageCardHeight(small)).toBe(
-      USAGE_CARD_CHROME_PX +
-        3 * (USAGE_PANE_PX + USAGE_SECTION_TITLE_PX) +
-        USAGE_CONTEXT_BAR_PX +
-        USAGE_DONUT_PX +
-        USAGE_TABLE_HEAD_PX +
-        3 * USAGE_TABLE_ROW_PX,
+    expect(estimateUsageCardHeight(sparse)).toBe(
+      estimateUsageCardHeight(hero) - 2 * USAGE_HERO_META_PX - USAGE_HERO_BUDGET_PX,
     );
+  });
+
+  it("R99-D: USAGE_BAR_LABEL_MIN_FRAC is the one shared label gate (both legs label segments at/above it)", () => {
+    expect(USAGE_BAR_LABEL_MIN_FRAC).toBe(0.12);
   });
 
   it("R97-C: usageSegmentHex resolves the palette (accent passes through; the fixed hues are theme-aware)", () => {

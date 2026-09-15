@@ -13,7 +13,7 @@
  *   · an UNLINKED local toast still auto-dismisses after 1.5s (the
  *     owner's ROUND-64 verdict, byte-identical).
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { Route, Routes } from "react-router";
 import { Toaster, toastNeedsAttention } from "./Toaster";

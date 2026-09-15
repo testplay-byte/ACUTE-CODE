@@ -1928,17 +1928,17 @@ describe("Composer: context donut (owner spec G)", () => {
     // Big donut summary (ROUND-83): "~% projected" + used / window tokens
     // · estimated + the MEASURED line + the model.
     expect(popover.textContent).toContain("~42% projected");
-    // R91-H: the million tier — a 1,000,000-token window renders as 1m.
-    expect(popover.textContent).toContain("420k / 1m tokens · estimated");
-    // ROUND-95 (R95-F): the measured line was PROMOTED to a two-span row
-    // (bold number + label), so the DOM concatenates without the space this
-    // used to assert — number + basis still both pinned.
-    expect(popover.textContent).toContain("390kmeasured at last request");
+    // R99-D: the hero — the BIG TOKEN LINE is the primary read ("420k of
+    // 1m"; R91-H's million tier rides it) and the honesty pairs render
+    // label-then-value ("measured at last request390k").
+    expect(popover.textContent).toContain("420k of 1m");
+    expect(popover.textContent).toContain("measured at last request390k");
     expect(popover.textContent).toContain("openrouter/ox-alpha");
-    // The budget line (the compaction-line tick + the output reserve) and
-    // the window's provenance.
+    // The budget line (the compaction-line tick + the output reserve) —
+    // R99-D: the window's PROVENANCE moved from the budget line to the
+    // hero's window meta pair (data-context-window-source).
     expect(popover.querySelector("[data-context-budget]")?.textContent).toContain("compaction line 959k");
-    expect(popover.querySelector("[data-context-budget]")?.textContent).toContain("your override");
+    expect(popover.querySelector("[data-context-window-source]")?.textContent).toContain("your override");
 
     // Breakdown rows (mini-bars) — MCP tools honestly "none configured".
     for (const row of [
@@ -1956,8 +1956,9 @@ describe("Composer: context donut (owner spec G)", () => {
     );
     expect(popover.querySelector('[data-breakdown-row="Messages"]')?.textContent).toContain("400k");
 
-    // Cache line: hit rate + cached/total tokens.
-    expect(popover.textContent).toContain("Cache hit rate");
+    // Cache (R99-D: ONE row — the section header + the "Hit rate" label):
+    // hit rate + cached/total tokens ride the single line's value.
+    expect(popover.textContent).toContain("Hit rate");
     expect(popover.textContent).toContain("82%");
     expect(popover.textContent).toContain("82k / 100k cached");
 

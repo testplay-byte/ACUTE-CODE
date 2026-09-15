@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
+import { ArrowUpRight } from "lucide-react";
 import {
   fetchSessionContext,
   type SessionContextReport,
-  type SessionUsageTotals,
 } from "../../../lib/api";
 import { fmtTokens } from "../../../lib/format";
 import { SEMANTIC_COLORS } from "../../../lib/semantics";
+import { getContrastText } from "../../../lib/themes";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
 import { useTimeoutClear } from "../../../hooks/use-timeout-clear";
@@ -20,16 +22,20 @@ import { useDismiss } from "./composer-utils";
 // browser behind the "menu is open" caption.
 import { isNativeBrowserAvailable } from "../../../lib/native-browser";
 import {
+  USAGE_BAR_LABEL_MIN_FRAC,
   estimateUsageCardHeight,
   hideMenuOverlay,
   onMenuOverlayClose,
   onMenuOverlayHover,
+  onMenuOverlayPick,
   showMenuOverlay,
   usageSegmentHex,
+  type UsageBarSegmentPayload,
   type UsageCardPayload,
   type UsageContextBarPayload,
-  type UsageDonutPayload,
   type UsageLinePayload,
+  type UsageMetaPair,
+  type UsageOverviewPayload,
   type UsageSegmentColor,
   type UsageSectionPayload,
   type UsageTableRowPayload,
@@ -115,21 +121,52 @@ function line(
   return { label, value, ...opts };
 }
 
-/** R97-C: the six context categories, their display order, and their PALETTE
- * KEYS — the single mapping both views (the overlay card + the DOM popover)
- * paint the context-bar segments and the breakdown rows from. Messages rides
- * the theme accent (the dominant segment reads as the app's own color);
- * the rest are fixed distinguishable hues (see usageSegmentHex). */
+/** R97-C → R99-D: the six context categories, their display order, their
+ * PALETTE KEYS, and — new in R99-D — their MANAGEMENT SURFACES (the Claude
+ * Code /context pattern: every number paired with an action, but ONLY where
+ * a real surface exists — messages / system tools / meta honestly carry no
+ * link, never a dead one). The single mapping both views (the overlay card +
+ * the DOM popover) paint the bar segments and the legend rows from. Messages
+ * rides the theme accent (the dominant segment reads as the app's own
+ * color); the rest are fixed distinguishable hues (see usageSegmentHex). */
 const BREAKDOWN_CATEGORIES: ReadonlyArray<{
   label: string;
   key: "messages" | "systemPrompt" | "systemTools" | "mcpTools" | "memory" | "meta";
   color: UsageSegmentColor;
+  /** R99-D: the settings deep-link where this category can be managed
+   * (system prompt / Memory & skills → the Prompts tab — the R98-E prompt
+   * manager; MCP tools → the MCP servers tab). */
+  manage?: { target: string; title: string };
 }> = [
   { label: "Messages", key: "messages", color: "accent" },
-  { label: "System prompt", key: "systemPrompt", color: "blue" },
+  {
+    label: "System prompt",
+    key: "systemPrompt",
+    color: "blue",
+    manage: {
+      target: "/settings?tab=prompts",
+      title: "Manage the prompt sections — Settings → Prompts",
+    },
+  },
   { label: "System tools", key: "systemTools", color: "teal" },
-  { label: "MCP tools", key: "mcpTools", color: "violet" },
-  { label: "Memory & skills", key: "memory", color: "amber" },
+  {
+    label: "MCP tools",
+    key: "mcpTools",
+    color: "violet",
+    manage: {
+      target: "/settings?tab=mcp",
+      title: "Manage MCP servers — Settings → MCP Servers",
+    },
+  },
+  {
+    label: "Memory & skills",
+    key: "memory",
+    color: "amber",
+    manage: {
+      target: "/settings?tab=prompts",
+      title: "Manage skills & prompt sections — Settings → Prompts",
+    },
+  },
   { label: "Meta & project", key: "meta", color: "rose" },
 ];
 
@@ -144,29 +181,41 @@ export function usageRingColorKey(usedTokens: number, windowTokens: number): "ac
   return "accent";
 }
 
-/** The shape buildUsageCardSections returns (R97-C grew it from the plain
- * sections into the full visual card: the context bar + the donut block +
- * the sections + the note). */
+/** The shape buildUsageCardSections returns (R99-D: the overview hero +
+ * the bar-with-legend + the Cache/Session sections; the R97-C bottom note
+ * is retired — its content lives in the badge + the meta pairs now, killing
+ * the duplicate encodings). */
 export interface UsageCardBuild {
   title: string;
   contextBar?: UsageContextBarPayload;
-  donut?: UsageDonutPayload & { lines: UsageLinePayload[] };
+  overview?: UsageOverviewPayload;
   sections: UsageSectionPayload[];
-  note?: string;
 }
 
 /**
- * ROUND-96 (R96-G) → ROUND-97 (R97-C): the ContextDonut popover's content as
- * the structured usage-card payload the overlay window renders — now the FULL
- * visual card: the Kilo-style segmented context bar (one colored segment per
- * category + the reserved-for-output block + the free track), the big donut
- * with its header lines (projected / estimated / measured / model / the
- * session cost headline), the breakdown rows with palette dots + mini-bars,
- * the cache block, and the session TABLE (Turns / Calls / Sent / Received /
- * Cost per Main / Sub-agents / Combined) — the owner's "well-formatted,
- * well-understood, nothing hidden" directive. `null` never happens for a
- * live report; the empty/loading states carry their own honest lines. Pure;
- * exported for tests.
+ * ROUND-96 (R96-G) → R97-C → R99-D: the ContextDonut popover's content as
+ * the structured usage-card payload the overlay window renders — THE single
+ * build both legs paint from (the DOM popover renders its body from this
+ * build too, so the two legs cannot drift). R99-D restructures it after the
+ * Claude Code /context reference (the owner: "the context window
+ * composition does not look proper… the overview is not proper"):
+ *  · the OVERVIEW HERO — the big token line ("40k of 200k", the primary
+ *    read) + ONE % meta line ("~20% projected", percentage first) + the
+ *    honesty pairs (measured / model / window provenance — never more than
+ *    three rows) + the compaction/reserve line + the compacted badge riding
+ *    the header row;
+ *  · the CONTEXT BAR — full card width, one colored segment per category
+ *    with its inline % label when the segment is ≥12% of the window, the
+ *    reserved-for-output hatched block, free space as the track (the
+ *    flanking used/window counts retired — the hero's big line carries
+ *    them: one source of truth per number);
+ *  · the LEGEND under the bar (REPLACES the old Breakdown section — the
+ *    mini-bars retired with it): palette dot + label + tokens + % of used
+ *    per category, the management link-chips where surfaces exist;
+ *  · the CACHE one-row section + the session TABLE (Turns / Calls / Sent /
+ *    Received / Cost per Main / Sub-agents / Combined).
+ * `null` never happens for a live report; the empty/loading states carry
+ * their own honest lines. Pure; exported for tests.
  */
 export function buildUsageCardSections(
   data: SessionContextReport | null,
@@ -182,115 +231,143 @@ export function buildUsageCardSections(
   }
   const window_ = data.contextWindow;
   const pct = window_ > 0 ? Math.min(100, (data.usedTokens / window_) * 100) : 0;
-  // R97-C: the session split (main / sub-agents / combined) — the TABLE rows +
-  // the header's cost headline both read from these (a pre-R51 sidecar falls
-  // back to the flat sessionTotals with honest zero sub-agents).
+  // R97-C: the session split (main / sub-agents / combined) — the TABLE rows
+  // read from these (a pre-R51 sidecar falls back to the flat sessionTotals
+  // with honest zero sub-agents).
   const split = data.usage ?? null;
   const mainTotals = split?.main ?? data.sessionTotals;
   const subagentTotals = split?.subagents ?? { inputTokens: 0, outputTokens: 0, requests: 0, costUsd: 0 };
   const combinedTotals = split?.combined ?? mainTotals;
 
-  // ── R97-C: the DONUT header block — the ring + its line column (the DOM
-  // popover's header twin: projected / estimated / measured / model / the
-  // session cost headline — the owner's "show the proper price used in this
-  // session" ask, always visible at the top, not buried).
-  const headerLines: UsageLinePayload[] = [
-    line("Projected", `~${Math.round(pct)}%`, { strong: true }),
-    line("Estimated", `${fmtTokens(data.usedTokens)} / ${fmtTokens(window_)}`, { note: "of window" }),
+  // ── R99-D: the OVERVIEW HERO's honesty block — ≤3 label:value pairs. The
+  // measured pair keeps the R83 basis IN the label ("measured at last
+  // request" → the provider's own count; "not yet measured" before the
+  // first reply — never a fake 0); the model pair names BOTH models on a
+  // per-send switch (never silently mixing numbers); the window pair
+  // carries the provenance (override / catalog / the honest "assumed").
+  const meta: UsageMetaPair[] = [
+    data.actual != null
+      ? {
+          id: "measured",
+          label: "measured at last request",
+          value: fmtTokens(data.actual.inputTokens),
+          title: `${fmtTokens(data.actual.inputTokens)} tokens · ${new Date(data.actual.at).toLocaleString()}`,
+        }
+      : {
+          id: "measured",
+          label: "measured at last request",
+          value: "not yet measured",
+          title: "the first reply reports the provider's own count",
+        },
+    {
+      id: "model",
+      label: "model",
+      value:
+        data.actual != null && data.actual.model !== data.model
+          ? `next send ${data.model} · measured ${data.actual.model}`
+          : data.model,
+    },
   ];
-  if (data.actual != null) {
-    headerLines.push(line("Measured", fmtTokens(data.actual.inputTokens), { strong: true, note: "at last request" }));
-  } else {
-    headerLines.push(line("Measured", "not yet", { note: "the first reply reports it" }));
-  }
-  headerLines.push(
-    line(
-      "Model",
-      data.actual != null && data.actual.model !== data.model
-        ? `next ${data.model} · measured ${data.actual.model}`
-        : data.model,
-    ),
-  );
-  const sessionActivity =
-    combinedTotals.providerCalls !== undefined
-      ? `${combinedTotals.requests} turns · ${combinedTotals.providerCalls} provider calls`
-      : `${combinedTotals.requests} turns`;
-  headerLines.push(
-    line(
-      "Session cost",
-      combinedTotals.costUsd > 0 ? `$${combinedTotals.costUsd.toFixed(4)}` : "$0",
-      { note: sessionActivity },
-    ),
-  );
+  const windowSource =
+    data.contextWindowSource === "override"
+      ? `${fmtTokens(window_)} · your override`
+      : data.contextWindowSource === "catalog"
+        ? `${fmtTokens(window_)} · catalog default`
+        : data.contextWindowSource === "default"
+          ? `${fmtTokens(window_)} assumed — set it in Settings → Models`
+          : null;
+  if (windowSource !== null) meta.push({ id: "window", label: "window", value: windowSource });
+
   const available = data.available ?? null;
   const markerFrac =
     available !== null && window_ > 0 && available > 0 && available < window_ ? available / window_ : 0;
-  const donut: UsageDonutPayload & { lines: UsageLinePayload[] } = {
+  const overview: UsageOverviewPayload = {
     used: data.usedTokens,
     limit: window_,
     markerFrac,
     ringColor: usageRingColorKey(data.usedTokens, window_),
-    lines: headerLines,
-    // R98-C3: the pane's label — both legs paint it as the pane header.
-    label: "Overview",
+    bigUsed: fmtTokens(data.usedTokens),
+    bigLimit: fmtTokens(window_),
+    // The ONE % line — percentage first; the R83 tilde says PROJECTED.
+    pctLine: `~${Math.round(pct)}% projected`,
+    meta,
+    ...(available !== null
+      ? {
+          budgetLine: `compaction line ${fmtTokens(available)} · reserve ${fmtTokens(
+            data.maxOutputTokens ?? 0,
+          )} output`,
+        }
+      : {}),
+    ...(data.compaction !== undefined
+      ? {
+          compactedBadge: {
+            label: "Context compacted",
+            detail: `${data.compaction.droppedMessages} messages summarized · ~${fmtTokens(
+              data.compaction.tokensSaved,
+            )} saved`,
+          },
+        }
+      : {}),
   };
 
-  // ── R97-C: the CONTEXT BAR — the Kilo-style segmented usage bar (the
-  // owner's named element). One colored segment per category (the palette
-  // keys mirror the breakdown rows), the reserved-for-output dimmed block,
-  // and the free space as the track.
+  // ── the CONTEXT BAR + its LEGEND (the old Breakdown section merged under
+  // the bar): each segment carries its own legend row — the pre-formatted
+  // tokens + the % of used ride the payload so both legs paint ONE spelling.
+  // MCP tools honestly reads "none configured" at zero.
   const contextBar: UsageContextBarPayload = {
     usedTokens: data.usedTokens,
     windowTokens: window_,
     reservedTokens: data.maxOutputTokens ?? 0,
     usedPct: pct,
-    segments: BREAKDOWN_CATEGORIES.map((cat) => ({
-      label: cat.label,
-      tokens: data.breakdown[cat.key],
-      color: cat.color,
-    })),
+    segments: BREAKDOWN_CATEGORIES.map((cat) => {
+      const value = data.breakdown[cat.key];
+      return {
+        label: cat.label,
+        tokens: value,
+        color: cat.color,
+        tokensLabel: cat.key === "mcpTools" && value === 0 ? "none configured" : fmtTokens(value),
+        pctOfUsed: data.usedTokens > 0 ? `${Math.round((value / data.usedTokens) * 100)}%` : "—",
+        ...(cat.manage !== undefined ? { manage: cat.manage } : {}),
+      };
+    }),
     // R98-C3: the pane's label — both legs paint it as the pane header.
     label: "Window composition",
   };
 
-  // ── the sections: Breakdown (dots + mini-bars) / Cache / Session (table).
+  // ── the sections: Cache (ONE row — hit-rate bar + cached/total right-
+  // aligned; the R83 §2.10 null-rate honesty rides the value itself) /
+  // Session totals (the table).
+  const cacheValue =
+    data.cache.hitRate !== null
+      ? data.cache.inputTokens > 0
+        ? `${Math.round(data.cache.hitRate * 100)}% · ${fmtTokens(data.cache.cachedInputTokens)} / ${fmtTokens(
+            data.cache.inputTokens,
+          )} cached`
+        : `${Math.round(data.cache.hitRate * 100)}%`
+      : data.cache.inputTokens > 0
+        ? "— · not reported by this provider"
+        : "—";
   const sections: UsageSectionPayload[] = [
     {
-      title: "Breakdown",
-      lines: BREAKDOWN_CATEGORIES.map((cat) => {
-        const value = data.breakdown[cat.key];
-        return line(cat.label, fmtTokens(value), {
-          barFrac: data.usedTokens > 0 ? Math.min(1, value / data.usedTokens) : 0,
-          barColor: cat.color,
-        });
-      }),
+      title: "Cache",
+      lines: [
+        line("Hit rate", cacheValue, {
+          ...(data.cache.hitRate !== null ? { barFrac: Math.max(0.02, data.cache.hitRate) } : {}),
+          barColor: "teal",
+        }),
+      ],
     },
   ];
-  const hitRate = data.cache.hitRate !== null ? `${Math.round(data.cache.hitRate * 100)}%` : "—";
-  sections.push({
-    title: "Cache",
-    lines: [
-      line("Hit rate", hitRate, {
-        note: data.cache.hitRate === null && data.cache.inputTokens > 0 ? "not reported by this provider" : undefined,
-        barFrac: data.cache.hitRate !== null ? Math.max(0.02, data.cache.hitRate) : undefined,
-        barColor: "teal",
-      }),
-      ...(data.cache.inputTokens > 0
-        ? [line("Cached input", `${fmtTokens(data.cache.cachedInputTokens)} / ${fmtTokens(data.cache.inputTokens)}`)]
-        : []),
-    ],
-  });
-  // R97-C: the session split as a compact TABLE — the DOM popover's UsageGroup
-  // rows (Turns / Provider calls / Tokens sent ↑ / received ↓ / Cost per
-  // group), the owner's "the actual main sessions stats and the sub-agent
-  // sessions stats kept separate BUT also shown combined" contract, now with
-  // the COST column as a first-class cell. R98-C3: BOTH legs render this table
-  // (the DOM leg's stacked UsageGroup rows are dead — one spelling, twins by
-  // construction); rows carry stable ids for the DOM test pins.
+  // R97-C → R99-D: the session split as the compact TABLE (Turns / Calls /
+  // Sent ↑ / Received ↓ / Cost per Main / Sub-agents / Combined — the
+  // R97-C session-cost headline now lives HERE, in the table's Cost column,
+  // instead of the retired donut-header line). Both legs render this table
+  // (one spelling, twins by construction); rows carry stable ids for the
+  // DOM test pins.
   const tableRow = (
     id: string,
     label: string,
-    totals: SessionUsageTotals,
+    totals: SessionContextReport["sessionTotals"],
     strong: boolean,
   ): UsageTableRowPayload => ({
     id,
@@ -316,23 +393,7 @@ export function buildUsageCardSections(
       ],
     },
   });
-  const noteParts: string[] = [];
-  if (data.compaction !== undefined) {
-    noteParts.push(
-      `compacted · ${data.compaction.droppedMessages} messages summarized · ~${fmtTokens(data.compaction.tokensSaved)} saved`,
-    );
-  }
-  if (data.contextWindowSource === "override") noteParts.push(`${fmtTokens(window_)} window · your override`);
-  else if (data.contextWindowSource === "catalog") noteParts.push(`${fmtTokens(window_)} window · catalog default`);
-  else if (data.contextWindowSource === "default")
-    noteParts.push(`${fmtTokens(window_)} window assumed — set it in Settings → Models`);
-  return {
-    title: "Context window usage",
-    contextBar,
-    donut,
-    sections,
-    note: noteParts.length > 0 ? noteParts.join(" · ") : undefined,
-  };
+  return { title: "Context window usage", contextBar, overview, sections };
 }
 
 /** SVG donut ring — the toolbar icon and the popover's big donut share the math.
@@ -413,37 +474,37 @@ function DonutRing({
   );
 }
 
-/** One breakdown row: label · tokens · a mini-bar relative to usedTokens.
- * R97-C: the row carries its PALETTE DOT (the context bar's segment color —
- * the legend) + the mutual hover-highlight (hovering the row lights its bar
- * segment and vice versa; the Cursor interaction, mirrored on the DOM leg). */
-function BreakdownRow({
-  label,
-  value,
-  usedTokens,
-  note,
-  color,
+/** R99-D: one LEGEND row — the old Breakdown section merged UNDER the bar
+ * (palette dot + label + tokens right-aligned + the % of used; the mini-bars
+ * RETIRED — the stacked bar already encodes the proportion, the duplicate
+ * encoding was the "not proper" smell). The mutual hover-highlight stays
+ * (hovering the row lights its bar segment and vice versa). Where a
+ * management surface exists (the segment's `manage`), the label becomes a
+ * subtle link-chip (↗ affordance, underline + the icon brightening on hover
+ * — the CSS-var leg, no hand-rolled handlers) that closes the popover +
+ * router-navigates; rows without a surface stay plain text (honest: no
+ * dead links). */
+function LegendRow({
+  seg,
   lit,
   dimmed,
   onHover,
+  onNavigate,
 }: {
-  label: string;
-  value: number;
-  usedTokens: number;
-  note?: string;
-  color: UsageSegmentColor;
+  seg: UsageBarSegmentPayload;
   lit: boolean;
   dimmed: boolean;
   onHover: (label: string | null) => void;
+  onNavigate: (target: string) => void;
 }) {
   const styles = useThemeStyles();
-  const pct = usedTokens > 0 ? Math.max(2, (value / usedTokens) * 100) : 0;
-  const hex = usageSegmentHex(color, styles.isDark, styles.accent);
+  const manage = seg.manage;
+  const hex = usageSegmentHex(seg.color, styles.isDark, styles.accent);
   return (
     <div
       className="flex items-center gap-2 rounded-md px-1 -mx-1 transition-colors"
-      data-breakdown-row={label}
-      onMouseEnter={() => onHover(label)}
+      data-breakdown-row={seg.label}
+      onMouseEnter={() => onHover(seg.label)}
       onMouseLeave={() => onHover(null)}
       style={{ background: lit ? withAlpha(styles.text, 0.05) : "transparent" }}
     >
@@ -457,31 +518,60 @@ function BreakdownRow({
           opacity: dimmed ? 0.4 : 1,
         }}
       />
+      {manage !== undefined ? (
+        <button
+          type="button"
+          onClick={() => onNavigate(manage.target)}
+          className="group flex min-w-0 flex-1 origin-left items-center gap-0.5 text-left transition-transform active:scale-95"
+          title={manage.title}
+          aria-label={`${seg.label} — manage in Settings`}
+        >
+          <span
+            className="min-w-0 truncate text-[10.5px] group-hover:underline"
+            style={{ color: lit ? styles.text : styles.textSecondary, fontWeight: lit ? 700 : 400 }}
+          >
+            {seg.label}
+          </span>
+          <ArrowUpRight
+            aria-hidden
+            size={9}
+            className="shrink-0 opacity-50 transition-opacity group-hover:opacity-100"
+            style={{ color: styles.accent }}
+          />
+        </button>
+      ) : (
+        <span
+          className="min-w-0 flex-1 truncate text-[10.5px]"
+          style={{ color: lit ? styles.text : styles.textSecondary, fontWeight: lit ? 700 : 400 }}
+        >
+          {seg.label}
+        </span>
+      )}
       <span
-        className="text-[10.5px] min-w-0 flex-1 truncate"
-        style={{ color: lit ? styles.text : styles.textSecondary, fontWeight: lit ? 700 : 400 }}
+        className="font-mono text-[10px] tabular-nums shrink-0"
+        style={{ color: styles.textTertiary }}
       >
-        {label}
+        {seg.tokensLabel}
       </span>
-      <span className="font-mono text-[10px] shrink-0" style={{ color: styles.textTertiary }}>
-        {note ?? fmtTokens(value)}
+      <span
+        className="font-mono text-[10px] tabular-nums shrink-0 w-9 text-right"
+        style={{ color: lit ? styles.text : styles.textSecondary }}
+      >
+        {seg.pctOfUsed}
       </span>
-      {/* R98-C3: the mini-bar widened (w-16 → w-24) — the 420px pane gives
-          the share bars room to read. */}
-      <div className="w-24 h-[3px] rounded-full overflow-hidden shrink-0" style={{ background: styles.subtle }}>
-        <div
-          className="h-full rounded-full transition-opacity"
-          style={{ width: `${pct}%`, background: hex, opacity: dimmed ? 0.4 : 1 }}
-        />
-      </div>
     </div>
   );
 }
 
-/** R97-C: the DOM popover's CONTEXT BAR — the segmented usage bar, the exact
- * twin of the overlay card's (one colored segment per category + the reserved
- * block + the free track, used/window counts flanking, the mutual
- * hover-highlight against the breakdown rows below). */
+/** R97-C → R99-D: the DOM popover's CONTEXT BAR — the STAR of the card, the
+ * visual bridge between "how full" (the hero's big numbers directly above)
+ * and "what's inside" (the legend directly below). Full pane width (the
+ * pre-R99 flanking used/window counts are retired — the hero's big line
+ * carries them, one source of truth per number), 14px tall so every segment
+ * ≥12% of the window carries its % label INSIDE (narrower segments stay
+ * honest-quiet — the legend carries their numbers), the reserved hatched
+ * block after the used segments, free space as the track, and the mutual
+ * hover-highlight against the legend rows (kept). */
 function ContextBar({
   bar,
   hoverSeg,
@@ -493,74 +583,86 @@ function ContextBar({
 }) {
   const styles = useThemeStyles();
   const reservedHex = usageSegmentHex("reserved", styles.isDark, styles.accent);
+  // R99-D a11y: the inline labels are visual-only above the threshold — the
+  // bar's aria-label summarizes EVERY category's share, so the composition
+  // never depends on the hover affordance.
+  const aria =
+    `Context composition (share of window): ` +
+    bar.segments
+      .map((seg) => {
+        const frac = bar.windowTokens > 0 ? Math.min(1, seg.tokens / bar.windowTokens) : 0;
+        return `${seg.label} ${Math.round(frac * 100)}%`;
+      })
+      .join(", ");
   return (
-    <div className="flex items-center gap-2 px-0.5" data-context-bar>
-      <span
-        className="font-mono text-[10px] font-bold shrink-0 tabular-nums"
-        style={{ color: styles.text }}
-        title={`${fmtTokens(bar.usedTokens)} tokens used (estimated)`}
-      >
-        {fmtTokens(bar.usedTokens)}
-      </span>
-      <div
-        role="img"
-        aria-label={`context window usage ${Math.round(bar.usedPct)}%`}
-        className="flex-1 h-[6px] rounded-[3px] overflow-hidden flex"
-        style={{ background: withAlpha(styles.text, 0.1) }}
-      >
-        {bar.segments.map((seg) => {
-          const frac = bar.windowTokens > 0 ? Math.min(1, seg.tokens / bar.windowTokens) : 0;
-          const lit = hoverSeg === seg.label;
-          return (
-            <div
-              key={seg.label}
-              className="transition-opacity duration-100"
-              title={`${seg.label} · ${fmtTokens(seg.tokens)} tokens · ${Math.round(frac * 100)}% of window`}
-              onMouseEnter={() => onHover(seg.label)}
-              onMouseLeave={() => onHover(null)}
-              style={{
-                width: `${frac * 100}%`,
-                background: usageSegmentHex(seg.color, styles.isDark, styles.accent),
-                opacity: hoverSeg === null || lit ? 1 : 0.35,
-                ...(lit ? { boxShadow: `0 0 0 1px ${withAlpha(styles.accent, 0.35)}` } : {}),
-              }}
-            />
-          );
-        })}
-        {/* The reserved-for-output block — dimmed + hatched, so "free"
-            never reads as fully usable (Kilo's three-segment insight). */}
-        {bar.windowTokens > 0 && bar.reservedTokens > 0 ? (
+    <div
+      role="img"
+      aria-label={aria}
+      data-context-bar
+      className="flex w-full h-[14px] rounded-[7px] overflow-hidden"
+      style={{ background: withAlpha(styles.text, 0.1) }}
+    >
+      {bar.segments.map((seg) => {
+        const frac = bar.windowTokens > 0 ? Math.min(1, seg.tokens / bar.windowTokens) : 0;
+        const lit = hoverSeg === seg.label;
+        const hex = usageSegmentHex(seg.color, styles.isDark, styles.accent);
+        // R99-D: the inline % label — ONLY for segments wide enough to hold
+        // it honestly (≥12% of the window ≈ its share of the bar's width).
+        const showLabel = frac >= USAGE_BAR_LABEL_MIN_FRAC;
+        return (
           <div
-            title={`Reserved for output · ${fmtTokens(bar.reservedTokens)} tokens`}
+            key={seg.label}
+            data-context-seg={seg.label}
+            className="transition-opacity duration-100 flex items-center justify-center overflow-hidden"
+            title={`${seg.label} · ${fmtTokens(seg.tokens)} tokens · ${Math.round(frac * 100)}% of window`}
+            onMouseEnter={() => onHover(seg.label)}
+            onMouseLeave={() => onHover(null)}
             style={{
-              width: `${Math.min(100 - bar.usedPct, (bar.reservedTokens / bar.windowTokens) * 100)}%`,
-              background: `repeating-linear-gradient(45deg, ${withAlpha(reservedHex, 0.55)}, ${withAlpha(
-                reservedHex,
-                0.55,
-              )} 2px, ${withAlpha(reservedHex, 0.25)} 2px, ${withAlpha(reservedHex, 0.25)} 4px)`,
+              width: `${frac * 100}%`,
+              background: hex,
+              opacity: hoverSeg === null || lit ? 1 : 0.35,
+              ...(lit ? { boxShadow: `0 0 0 1px ${withAlpha(styles.accent, 0.35)}` } : {}),
             }}
-          />
-        ) : null}
-      </div>
-      <span
-        className="font-mono text-[10px] font-bold shrink-0 tabular-nums"
-        style={{ color: styles.textTertiary }}
-        title={`${fmtTokens(bar.windowTokens)} token window`}
-      >
-        {fmtTokens(bar.windowTokens)}
-      </span>
+          >
+            {showLabel ? (
+              <span
+                className="font-mono text-[9px] font-bold tabular-nums leading-none whitespace-nowrap"
+                style={{ color: getContrastText(hex) }}
+              >
+                {`${Math.round(frac * 100)}%`}
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
+      {/* The reserved-for-output block — dimmed + hatched, so "free"
+          never reads as fully usable (Kilo's three-segment insight). */}
+      {bar.windowTokens > 0 && bar.reservedTokens > 0 ? (
+        <div
+          title={`Reserved for output · ${fmtTokens(bar.reservedTokens)} tokens`}
+          style={{
+            width: `${Math.min(100 - bar.usedPct, (bar.reservedTokens / bar.windowTokens) * 100)}%`,
+            background: `repeating-linear-gradient(45deg, ${withAlpha(reservedHex, 0.55)}, ${withAlpha(
+              reservedHex,
+              0.55,
+            )} 2px, ${withAlpha(reservedHex, 0.25)} 2px, ${withAlpha(reservedHex, 0.25)} 4px)`,
+          }}
+        />
+      ) : null}
     </div>
   );
 }
 
 /** R98-C3 (owner: "proper separation between the elements… the whole
  * layout of it needs to be adjusted properly") — THE PANE: the sectioned
- * card the whole popover is built from on the DOM leg (the overlay card's
- * twin paints the same recipe from the payload's label fields). A rounded
- * inset group — the theme's subtle wash + a hairline border + the 9px
- * uppercase tracked label — so each region (Overview / Window composition /
- * Breakdown / Cache / Session totals) reads as its own visual block,
- * separated by real space instead of the pre-R98 hairline-stacked column. */
+ * card the popover's sections are built from on the DOM leg (the overlay
+ * card's twin paints the same recipe from the payload's label fields). A
+ * rounded inset group — the theme's subtle wash + a hairline border + the
+ * micro-header — so each region (Window composition / Cache / Session
+ * totals) reads as its own visual block, separated by real space. R99-D:
+ * the overview rides UNBOXED above these (it IS the top) and every header
+ * speaks the ONE grammar — 10px uppercase tracked label-caps, textTertiary,
+ * the 8px margin below. */
 function Pane({ label, children }: { label: string; children: ReactNode }) {
   const styles = useThemeStyles();
   return (
@@ -570,7 +672,7 @@ function Pane({ label, children }: { label: string; children: ReactNode }) {
       style={{ borderColor: styles.borderSubtle, background: styles.subtle }}
     >
       <div
-        className="text-[9px] font-bold uppercase tracking-[0.08em] mb-[6px]"
+        className="text-[10px] font-bold uppercase tracking-[0.1em] mb-2"
         style={{ color: styles.textTertiary }}
       >
         {label}
@@ -580,10 +682,12 @@ function Pane({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** R98-C3: the session TABLE on the DOM leg — the SAME spelling as the
- * overlay card's (one component now; the pre-R98 stacked UsageGroup rows are
+/** R98-C3 → R99-D: the session TABLE on the DOM leg — the SAME spelling as
+ * the overlay card's (one component; the pre-R98 stacked UsageGroup rows are
  * dead). The 6-column grid (Group / Turns / Calls / Sent ↑ / Received ↓ /
- * Cost) reads scannably at the 420px width. */
+ * Cost) reads scannably at the 420px width: the subtle uppercase header row,
+ * right-aligned mono cells, and tabular-nums on every numeric (the
+ * anti-jitter rule — digits hold their width while live values grow). */
 function UsageTable({ table }: { table: NonNullable<UsageSectionPayload["table"]> }) {
   const styles = useThemeStyles();
   return (
@@ -624,7 +728,7 @@ function UsageTable({ table }: { table: NonNullable<UsageSectionPayload["table"]
           {row.cells.map((cell, ci) => (
             <span
               key={ci}
-              className="font-mono text-[10px] truncate text-right"
+              className="font-mono text-[10px] truncate text-right tabular-nums"
               style={{
                 color: row.strong === true ? styles.text : styles.textSecondary,
                 fontWeight: row.strong === true ? 700 : 500,
@@ -638,8 +742,6 @@ function UsageTable({ table }: { table: NonNullable<UsageSectionPayload["table"]
     </div>
   );
 }
-
-const ZERO_TOTALS: SessionUsageTotals = { inputTokens: 0, outputTokens: 0, requests: 0, costUsd: 0 };
 
 /**
  * ROUND-50 (R50-c2): the context donut (owner: "It will show me the context
@@ -709,10 +811,14 @@ export function ContextDonut({
   liveMode: boolean;
 }) {
   const styles = useThemeStyles();
+  // R99-D: the legend's management link-chips navigate the router (the
+  // ModelSelector goManageModels precedent: close the popover FIRST, then
+  // navigate — the popover lives above the composer).
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
   // R97-C: the mutual hover-highlight's state — the currently hovered category
-  // label, shared by the context bar's segments and the breakdown rows (the
+  // label, shared by the context bar's segments and the legend rows (the
   // Cursor-style cross-highlight, on both the DOM leg and the overlay twin).
   const [hoverSeg, setHoverSeg] = useState<string | null>(null);
   // ROUND-51 (R51-c): the shared close timer + a pinned mirror the timeout
@@ -812,6 +918,34 @@ export function ContextDonut({
     setPinned(false);
     setOpen(false);
   }, []);
+
+  // R99-D: the legend link-chip navigation — close the popover (both legs:
+  // setOpen(false) makes the overlay effect below take the window down),
+  // then router-navigate to the management surface.
+  const goManage = useCallback(
+    (target: string): void => {
+      closePopover();
+      navigate(target);
+    },
+    [closePopover, navigate],
+  );
+
+  // R99-D: the OVERLAY leg's link-chips — the usage card rides the
+  // menu-overlay OS window, so its clicks land THERE; the legend's "manage in
+  // Settings" chips report back through the shared pick channel as the
+  // "usage-link" kind (every other subscriber filters by its own kind, so
+  // this stays private to the popover). Close + navigate, exactly like the
+  // DOM chip.
+  useEffect(
+    () =>
+      onMenuOverlayPick((pick) => {
+        if (!overlayUpRef.current) return;
+        if (pick.kind !== "usage-link") return;
+        closePopover();
+        navigate(pick.target);
+      }),
+    [closePopover, navigate],
+  );
 
   // The overlay page's hover bridge (pointer enter/leave over the CARD, which
   // lives in ITS window now): mapped onto the SAME close-grace timer the DOM
@@ -932,28 +1066,16 @@ export function ContextDonut({
   const window_ = data?.contextWindow ?? 0;
   const pct = data !== null && window_ > 0 ? Math.min(100, (used / window_) * 100) : null;
 
-  // ROUND-83 (R83): the budget line — available/window (the same line the
-  // compaction trigger and the context guard use; ONE truth). Rendered as
-  // the tick on the big ring + the "compaction line" note under it.
-  const available = data?.available ?? null;
-  const markerFrac =
-    available !== null && window_ > 0 && available > 0 && available < window_
-      ? available / window_
-      : undefined;
-
-  // ROUND-83 (R83): the honest window provenance (§2.7 — a silent 200K
-  // guess can never masquerade as a measured window).
-  const windowSourceNote =
-    data?.contextWindowSource === "override"
-      ? `${fmtTokens(window_)} window · your override`
-      : data?.contextWindowSource === "catalog"
-        ? `${fmtTokens(window_)} window · catalog default`
-        : data?.contextWindowSource === "default"
-          ? `${fmtTokens(window_)} window assumed — set it in Settings → Models`
-          : null;
-
   // ROUND-51 (R51-c): the graded ring color (accent → amber → danger).
   const ringColor = contextDonutColor(used, window_, styles.accent);
+
+  // ── R99-D: THE payload build — the single source BOTH legs paint from (the
+  // overlay window gets it through showMenuOverlay below; the DOM popover
+  // renders its body from the same build right in this component, so the
+  // two legs cannot drift). Pure + cheap; rebuilt on every report refresh.
+  const built = data !== null ? buildUsageCardSections(data, { isError: report.isError, sessionId }) : null;
+  const cacheLine = built?.sections.find((s) => s.title === "Cache")?.lines[0] ?? null;
+  const sessionTable = built?.sections.find((s) => s.title === "Session totals")?.table ?? null;
 
   // ROUND-83 (R83) §3.1: the honest summary — the estimate is LABELED as a
   // projection; the provider's own number (when one exists) rides along.
@@ -968,26 +1090,6 @@ export function ContextDonut({
       : report.isError
         ? "Context window usage unavailable"
         : "Context window usage";
-
-  const hitRate =
-    data !== null && data.cache.hitRate !== null
-      ? `${Math.round(data.cache.hitRate * 100)}%`
-      : "—";
-  // ROUND-83 (R83) §3.5: the null hit rate is HONEST — "not reported by
-  // this provider" when usage exists but no call reported a cache tier
-  // (distinct from zero usage, where "—" needs no note).
-  const hitRateNote =
-    data !== null && data.cache.hitRate === null && data.cache.inputTokens > 0
-      ? "not reported by this provider"
-      : undefined;
-
-  // ROUND-51 (R51-c): the main / sub-agents / combined usage split. A
-  // pre-R51 sidecar (or an error fallback) has no `usage` object — main
-  // falls back to the flat sessionTotals, sub-agents honestly read zero.
-  const split = data?.usage ?? null;
-  const mainTotals = split?.main ?? data?.sessionTotals ?? ZERO_TOTALS;
-  const subagentTotals = split?.subagents ?? ZERO_TOTALS;
-  const combinedTotals = split?.combined ?? mainTotals;
 
   // ── R96-G: the overlay ladder's SHOW/REFRESH effect ─────────────────────
   // Opens with the overlay attempt (the payload mirrors the DOM popover's
@@ -1010,12 +1112,12 @@ export function ContextDonut({
       kind: "usage",
       title: built.title,
       width: POPOVER_WIDTH_PX,
-      // R97-C: the full visual card — the context bar + the donut header
-      // cross the payload boundary with the sections now.
+      // R99-D: the full visual card — the context bar (+ its legend rows)
+      // and the overview hero cross the payload boundary with the sections
+      // now; the note is retired (badge + meta pairs carry its content).
       ...(built.contextBar !== undefined ? { contextBar: built.contextBar } : {}),
-      ...(built.donut !== undefined ? { donut: built.donut } : {}),
+      ...(built.overview !== undefined ? { overview: built.overview } : {}),
       sections: built.sections,
-      ...(built.note !== undefined ? { note: built.note } : {}),
       theme: {
         card: styles.card,
         border: styles.border,
@@ -1213,235 +1315,183 @@ export function ContextDonut({
                         ? "starts with the first message"
                         : "loading context report…"}
                   </div>
-                ) : (
+                ) : built !== null && built.overview !== undefined && built.contextBar !== undefined ? (
                   <>
-                    {/* ── R98-C3: the OVERVIEW pane — the ring + its line
-                        column (projected / estimated / measured / model) +
-                        the budget + compaction lines, one visual block. */}
-                    <Pane label="Overview">
-                      <div className="flex items-center gap-3 pb-2">
-                        <div className="relative grid place-items-center shrink-0">
-                          <DonutRing
-                            size={46}
-                            stroke={5}
-                            used={used}
-                            limit={window_}
-                            color={ringColor}
-                            track={styles.subtle}
-                            markerFrac={markerFrac}
-                          />
-                          <span className="absolute font-mono text-[10px] font-bold" style={{ color: styles.text }}>
-                            {pct !== null ? Math.round(pct) : 0}%
-                          </span>
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-[12px] font-bold" style={{ color: styles.text }}>
-                            {/* ROUND-83: the tilde says PROJECTED — the estimate
-                                fills the ring live; the measured line below is
-                                the provider's own number. */}
-                            {pct !== null ? `~${Math.round(pct)}% projected` : "0% projected"}
-                          </div>
-                          <div className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-                            {fmtTokens(used)} / {fmtTokens(window_)} tokens · estimated
-                          </div>
-                          {/* ROUND-83 (R83) §3.1 + ROUND-95 (R95-F): the MEASURED
-                              line — the provider's own prompt size for the
-                              last request, PROMOTED to a first-class row. `at`
-                              rides on the title; null before the first reply →
-                              the honest "not yet measured", never 0. */}
-                          {data.actual != null ? (
-                            <div
-                              className="flex min-w-0 items-baseline gap-1.5"
-                              data-context-measured
-                              title={`${fmtTokens(data.actual.inputTokens)} tokens · ${new Date(data.actual.at).toLocaleString()}`}
+                    {/* ── R99-D: THE OVERVIEW HERO — the card's head, NO section
+                        header (it IS the top). The BIG TOKEN LINE is the
+                        primary read ("40k of 200k", 19px semibold
+                        tabular-nums); ONE % meta line under it, percentage
+                        first ("~20% projected" — ONE source of truth per
+                        number: the ring lost its center %); the honesty
+                        lines collapse into ≤3 label:value pairs; the
+                        compaction/reserve stays ONE line; the compacted
+                        badge rides the header row's right side. The ring
+                        stays the left visual anchor (46px, the graded color,
+                        the budget tick). */}
+                    <section data-context-overview className="pb-2.5">
+                      <div className="flex items-start gap-3">
+                        <DonutRing
+                          size={46}
+                          stroke={5}
+                          used={built.overview.used}
+                          limit={built.overview.limit}
+                          color={ringColor}
+                          track={styles.subtle}
+                          markerFrac={built.overview.markerFrac}
+                        />
+                        <div className="min-w-0 flex-1">
+                          {/* The big number line + the compacted badge. */}
+                          <div className="flex min-w-0 items-baseline gap-1.5">
+                            <span
+                              data-context-bigused
+                              className="font-mono text-[19px] font-semibold leading-none tabular-nums"
+                              style={{ color: styles.text }}
                             >
-                              <span className="font-mono text-[11px] font-bold" style={{ color: styles.text }}>
-                                {fmtTokens(data.actual.inputTokens)}
-                              </span>
-                              <span className="shrink-0 text-[9.5px]" style={{ color: styles.textSecondary }}>
-                                measured at last request
-                              </span>
-                            </div>
-                          ) : (
-                            <div
-                              className="font-mono text-[9.5px]"
-                              data-context-measured
-                              style={{ color: styles.textSecondary }}
+                              {built.overview.bigUsed}
+                            </span>
+                            <span
+                              className="shrink-0 text-[11px] tabular-nums"
+                              style={{ color: styles.textTertiary }}
                             >
-                              not yet measured — the first reply reports the provider's own count
-                            </div>
-                          )}
-                          {/* The model line. ROUND-95 (R95-F): a per-send model
-                              switch can never silently mix numbers — when the
-                              measured number came from a DIFFERENT model than
-                              the meter's current one, BOTH are named. */}
-                          <div className="font-mono text-[9.5px] truncate" title={data.model} style={{ color: styles.textTertiary }}>
-                            {data.actual != null && data.actual.model !== data.model
-                              ? `next send ${data.model} · measured ${data.actual.model}`
-                              : data.model}
+                              {" "}
+                              of {built.overview.bigLimit}
+                            </span>
+                            {built.overview.compactedBadge !== undefined ? (
+                              <span
+                                data-context-compaction
+                                className="ml-auto flex min-w-0 items-baseline gap-1.5"
+                                title={`${built.overview.compactedBadge.label} · ${built.overview.compactedBadge.detail}`}
+                              >
+                                <span className="shrink-0 text-[10px] font-bold" style={{ color: styles.accent }}>
+                                  {built.overview.compactedBadge.label}
+                                </span>
+                                <span
+                                  className="truncate font-mono text-[9.5px] tabular-nums"
+                                  style={{ color: styles.textTertiary }}
+                                >
+                                  {built.overview.compactedBadge.detail}
+                                </span>
+                              </span>
+                            ) : null}
+                          </div>
+                          {/* The ONE % meta line — percentage FIRST (users
+                              think in %); the R83 tilde says PROJECTED. */}
+                          <div
+                            data-context-pctline
+                            className="mt-1 font-mono text-[12px] font-semibold tabular-nums"
+                            style={{ color: styles.text }}
+                          >
+                            {built.overview.pctLine}
+                          </div>
+                          {/* The honesty block — ≤3 label:value pairs at
+                              10px (measured at last request / model / the
+                              window's provenance). */}
+                          <div className="mt-1.5 flex flex-col gap-[3px]">
+                            {built.overview.meta.map((pair) => (
+                              <div
+                                key={pair.id ?? pair.label}
+                                {...(pair.id === "measured" ? { "data-context-measured": true } : {})}
+                                {...(pair.id === "window" ? { "data-context-window-source": true } : {})}
+                                className="flex min-w-0 items-baseline gap-1.5"
+                                title={pair.title}
+                              >
+                                <span className="shrink-0 text-[10px]" style={{ color: styles.textTertiary }}>
+                                  {pair.label}
+                                </span>
+                                <span
+                                  className="truncate font-mono text-[10px] tabular-nums"
+                                  style={{ color: styles.textSecondary }}
+                                >
+                                  {pair.value}
+                                </span>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       </div>
-                      {/* ROUND-83 (R83): the budget line + window provenance —
-                          the BEHAVIORAL line (the tick on the ring + this note
-                          agree). */}
-                      {(markerFrac !== undefined && available !== null) || windowSourceNote !== null ? (
+                      {/* The compaction/reserve line — ONE line (the tick on
+                          the ring + this line agree). */}
+                      {built.overview.budgetLine !== undefined ? (
                         <div
-                          className="flex flex-col gap-0.5"
                           data-context-budget
+                          className="mt-1.5 font-mono text-[9.5px] tabular-nums"
                           style={{ color: styles.textTertiary }}
                         >
-                          {markerFrac !== undefined && available !== null ? (
-                            <div className="font-mono text-[9.5px]">
-                              compaction line {fmtTokens(available)} · reserve {fmtTokens(data?.maxOutputTokens ?? 0)} output
-                            </div>
-                          ) : null}
-                          {windowSourceNote !== null ? (
-                            <div className="font-mono text-[9.5px] truncate" data-context-window-source>
-                              {windowSourceNote}
-                            </div>
-                          ) : null}
+                          {built.overview.budgetLine}
                         </div>
                       ) : null}
-                      {/* ROUND-83 (R83) §2.4: the compaction badge — the visible
-                          truth that older context was summarized. */}
-                      {data.compaction !== undefined ? (
-                        <div
-                          className="flex items-center gap-1.5 pt-1.5 mt-1 border-t"
-                          style={{ borderColor: styles.borderSubtle }}
-                          data-context-compaction
-                        >
-                          <span className="text-[10.5px] font-bold" style={{ color: styles.accent }}>
-                            Context compacted
-                          </span>
-                          <span className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
-                            {data.compaction.droppedMessages} messages summarized · ~{fmtTokens(data.compaction.tokensSaved)} saved
-                          </span>
-                        </div>
-                      ) : null}
-                    </Pane>
-                    {/* ── R98-C3: the WINDOW pane — the Kilo-style segmented
-                        usage bar (the owner's named element), its own block. */}
+                    </section>
+                    {/* ── the WINDOW COMPOSITION pane — the stacked bar moved UP
+                        to sit directly under the overview's big numbers (the
+                        visual bridge between "how full" and "what's inside"),
+                        full width with per-segment % labels, and the LEGEND
+                        under it REPLACES the old Breakdown section (the
+                        mini-bars retired — the bar already encodes the
+                        proportion). */}
                     <Pane label="Window composition">
-                      <ContextBar
-                        bar={{
-                          usedTokens: used,
-                          windowTokens: window_,
-                          reservedTokens: data.maxOutputTokens ?? 0,
-                          usedPct: pct ?? 0,
-                          segments: BREAKDOWN_CATEGORIES.map((cat) => ({
-                            label: cat.label,
-                            tokens: data.breakdown[cat.key],
-                            color: cat.color,
-                          })),
-                        }}
-                        hoverSeg={hoverSeg}
-                        onHover={setHoverSeg}
-                      />
-                    </Pane>
-                    {/* ── R98-C3: the BREAKDOWN pane — the palette dots + the
-                        wider mini-bars + the mutual hover-highlight. */}
-                    <Pane label="Breakdown">
-                      <div className="flex flex-col gap-1.5">
-                        {BREAKDOWN_CATEGORIES.map((cat) => (
-                          <BreakdownRow
-                            key={cat.label}
-                            label={cat.label}
-                            value={data.breakdown[cat.key]}
-                            usedTokens={used}
-                            note={
-                              cat.key === "mcpTools" && data.breakdown.mcpTools === 0
-                                ? "none configured"
-                                : undefined
-                            }
-                            color={cat.color}
-                            lit={hoverSeg === cat.label}
-                            dimmed={hoverSeg !== null && hoverSeg !== cat.label}
+                      <ContextBar bar={built.contextBar} hoverSeg={hoverSeg} onHover={setHoverSeg} />
+                      <div
+                        className="mt-1.5 flex justify-end font-mono text-[9px] uppercase tracking-[0.06em]"
+                        style={{ color: styles.textTertiary }}
+                      >
+                        tokens · % of used
+                      </div>
+                      <div className="mt-0.5 flex flex-col gap-[3px]">
+                        {built.contextBar.segments.map((seg) => (
+                          <LegendRow
+                            key={seg.label}
+                            seg={seg}
+                            lit={hoverSeg === seg.label}
+                            dimmed={hoverSeg !== null && hoverSeg !== seg.label}
                             onHover={setHoverSeg}
+                            onNavigate={goManage}
                           />
                         ))}
                       </div>
                     </Pane>
-                    {/* ── R98-C3: the CACHE pane. */}
-                    <Pane label="Cache">
-                      <div
-                        className="flex items-center justify-between gap-2"
-                        title={hitRateNote}
-                      >
-                        <span className="text-[10.5px]" style={{ color: styles.textSecondary }}>
-                          Cache hit rate
-                        </span>
-                        <span className="font-mono text-[10.5px] font-bold" style={{ color: styles.text }}>
-                          {hitRate}
-                          {data.cache.inputTokens > 0 ? (
-                            <span className="font-normal" style={{ color: styles.textTertiary }}>
-                              {" "}
-                              · {fmtTokens(data.cache.cachedInputTokens)} / {fmtTokens(data.cache.inputTokens)} cached
-                            </span>
+                    {/* ── the CACHE pane — ONE quiet row (hit-rate bar + the
+                        cached/total right-aligned, tabular-nums). */}
+                    {cacheLine !== null ? (
+                      <Pane label="Cache">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="shrink-0 text-[10.5px]" style={{ color: styles.textSecondary }}>
+                            {cacheLine.label}
+                          </span>
+                          {cacheLine.barFrac !== undefined && cacheLine.barColor !== undefined ? (
+                            <div
+                              className="h-[3px] w-12 shrink-0 overflow-hidden rounded-full"
+                              style={{ background: styles.subtle }}
+                            >
+                              <div
+                                className="h-full rounded-full"
+                                style={{
+                                  width: `${Math.max(2, Math.min(100, cacheLine.barFrac * 100))}%`,
+                                  background: usageSegmentHex(cacheLine.barColor, styles.isDark, styles.accent),
+                                }}
+                              />
+                            </div>
                           ) : null}
-                          {/* ROUND-83 (R83) §2.10: a null rate on a live session
-                              is the honest "not reported" — never a fabricated
-                              0%. */}
-                          {hitRateNote !== undefined ? (
-                            <span className="font-normal" style={{ color: styles.textTertiary }}>
-                              {" "}· {hitRateNote}
-                            </span>
-                          ) : null}
-                        </span>
-                      </div>
-                    </Pane>
-                    {/* ── R98-C3: the SESSION pane — the TABLE now on BOTH legs
-                        (one spelling; the pre-R98 stacked UsageGroup rows are
-                        dead). Owner R51: separate BUT also combined. */}
-                    <div data-session-totals>
-                      <Pane label="Session totals">
-                        <UsageTable
-                          table={{
-                            columns: ["Group", "Turns", "Calls", "Sent ↑", "Received ↓", "Cost"],
-                            rows: [
-                              {
-                                id: "main",
-                                label: "Main agent",
-                                strong: false,
-                                cells: [
-                                  String(mainTotals.requests),
-                                  mainTotals.providerCalls !== undefined ? String(mainTotals.providerCalls) : "—",
-                                  `${fmtTokens(mainTotals.inputTokens)} ↑`,
-                                  `${fmtTokens(mainTotals.outputTokens)} ↓`,
-                                  mainTotals.costUsd > 0 ? `$${mainTotals.costUsd.toFixed(4)}` : "—",
-                                ],
-                              },
-                              {
-                                id: "subagents",
-                                label: "Sub-agents",
-                                strong: false,
-                                cells: [
-                                  String(subagentTotals.requests),
-                                  subagentTotals.providerCalls !== undefined ? String(subagentTotals.providerCalls) : "—",
-                                  `${fmtTokens(subagentTotals.inputTokens)} ↑`,
-                                  `${fmtTokens(subagentTotals.outputTokens)} ↓`,
-                                  subagentTotals.costUsd > 0 ? `$${subagentTotals.costUsd.toFixed(4)}` : "—",
-                                ],
-                              },
-                              {
-                                id: "combined",
-                                label: "Combined",
-                                strong: true,
-                                cells: [
-                                  String(combinedTotals.requests),
-                                  combinedTotals.providerCalls !== undefined ? String(combinedTotals.providerCalls) : "—",
-                                  `${fmtTokens(combinedTotals.inputTokens)} ↑`,
-                                  `${fmtTokens(combinedTotals.outputTokens)} ↓`,
-                                  combinedTotals.costUsd > 0 ? `$${combinedTotals.costUsd.toFixed(4)}` : "—",
-                                ],
-                              },
-                            ],
-                          }}
-                        />
+                          <span
+                            className="ml-auto truncate font-mono text-[10.5px] tabular-nums"
+                            style={{ color: styles.text }}
+                          >
+                            {cacheLine.value}
+                          </span>
+                        </div>
                       </Pane>
-                    </div>
+                    ) : null}
+                    {/* ── the SESSION pane — the TABLE on BOTH legs (one
+                        spelling; the pre-R98 stacked UsageGroup rows are
+                        dead). Owner R51: separate BUT also combined. */}
+                    {sessionTable !== null ? (
+                      <div data-session-totals>
+                        <Pane label="Session totals">
+                          <UsageTable table={sessionTable} />
+                        </Pane>
+                      </div>
+                    ) : null}
                   </>
-                )}
+                ) : null}
               </div>
               {/* Top/bottom fades — only while the content overflows the
                   capped height (they blend into the card surface). */}

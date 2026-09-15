@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
+  ArrowUpRight,
   Bot,
   Brain,
   Check,
@@ -32,9 +33,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  USAGE_BAR_LABEL_MIN_FRAC,
   USAGE_CARD_CHROME_PX,
   USAGE_LINE_PX,
-  USAGE_NOTE_PX,
   USAGE_SECTION_TITLE_PX,
   USAGE_TABLE_ROW_PX,
   usageSegmentHex,
@@ -48,6 +49,9 @@ import { formatTokenCount } from "../lib/format";
 // R97-J (m3): the danger/warn ring hexes ride the documented semantic tokens
 // (same values — one source of truth, not literals).
 import { SEMANTIC_COLORS } from "../lib/semantics";
+// R99-D: the bar labels' ink — the theme pipeline's own contrast helper
+// (black/white by luminance, same spelling as every other surface).
+import { getContrastText } from "../lib/themes";
 
 /** The lucide icons the payload addresses by name (the quick menu's set +
  * R92-A: the composer option menus' rows). */
@@ -177,13 +181,26 @@ export function MenuOverlayApp(): React.ReactElement {
     void sh.event.emit("menu-overlay-hover", { hovering }).catch(() => {});
   }, []);
 
+  // R99-D: the USAGE card's LINK picks — the legend's "manage in Settings"
+  // chips report their deep-link target through the same pick channel the
+  // menus use (the "usage-link" kind; every menu subscriber filters by its
+  // own kind). The main window's ContextDonut closes the popover +
+  // router-navigates — the Claude Code /context "every number paired with
+  // an action" pattern, alive on the overlay leg too (the desktop's
+  // primary one).
+  const reportLink = useCallback((target: string) => {
+    const sh = shell();
+    if (sh === null) return;
+    void sh.event.emit("menu-overlay-pick", { kind: "usage-link", target }).catch(() => {});
+  }, []);
+
   if (payload === null) {
     // No payload yet (the window prewarms hidden at sidebar mount — a
     // transparent nothing is the correct idle render).
     return <></>;
   }
   if (payload.kind === "usage") {
-    return <UsageCard payload={payload} reportHover={reportHover} />;
+    return <UsageCard payload={payload} reportHover={reportHover} reportLink={reportLink} />;
   }
   const t = payload.theme;
   return (
@@ -424,17 +441,20 @@ function withAlpha(color: string, alpha: number): string {
 }
 
 /**
- * ROUND-96 (R96-G) → ROUND-97 (R97-C): the USAGE rich card — the ContextDonut's
+ * ROUND-96 (R96-G) → R97-C → R99-D: the USAGE rich card — the ContextDonut's
  * popover painted inside this OS window, so hovering the token usage reads
  * ABOVE the live embedded-browser webview instead of pausing it behind the
- * R89-E5 guard's caption. R97-C grew the card from the plain label/value
- * sections into the full visual twin of the DOM popover — the DONUT header
- * (ring + % + the window lines + the session-cost headline), the
- * KILO-STYLE SEGMENTED CONTEXT BAR (one colored segment per category + the
- * reserved-for-output block + the free track, used/window counts flanking),
- * the breakdown rows with palette dots + mini-bars, the session TABLE with
- * the Cost column, and the note footer. Hovering a bar segment highlights its
- * breakdown row and vice versa (the Cursor-style mutual highlight).
+ * R89-E5 guard's caption. R99-D repaints it as the DOM popover's twin from
+ * the SAME payload build (buildUsageCardSections): the OVERVIEW HERO (the
+ * big token line + ONE %-first meta line + ≤3 honesty pairs + the
+ * compaction/reserve line + the compacted badge on the header row — the ring
+ * stays the left anchor with NO center %: one source of truth per number),
+ * the full-width STACKED BAR with per-segment % labels (segments ≥12% of the
+ * window only) + the LEGEND rows under it (palette dot + label + tokens +
+ * % of used; the label is a link-chip where a management surface exists —
+ * the pick reports back through reportLink), the one-row CACHE, and the
+ * session TABLE. Hovering a bar segment highlights its legend row and vice
+ * versa (the Cursor-style mutual highlight).
  *
  * The card FILLS the window (the main window estimated its height from the
  * same px contract the lines below paint to — USAGE_* in lib/menu-overlay.ts)
@@ -443,29 +463,30 @@ function withAlpha(color: string, alpha: number): string {
 function UsageCard({
   payload,
   reportHover,
+  reportLink,
 }: {
   payload: UsageCardPayload;
   reportHover: (hovering: boolean) => void;
+  reportLink: (target: string) => void;
 }): React.ReactElement {
   const t = payload.theme;
   // R97-C: the mutual hover-highlight's shared state — the currently hovered
-  // category label (a bar segment OR its breakdown row owns it; both paint
-  // the highlight from the same string).
+  // category label (a bar segment OR its legend row owns it; both paint the
+  // highlight from the same string).
   const [hoverSeg, setHoverSeg] = useState<string | null>(null);
   const segHex = useCallback(
     (color: UsageSegmentColor): string => usageSegmentHex(color, t.isDark, t.accent),
     [t.isDark, t.accent],
   );
   const ringHex =
-    payload.donut?.ringColor === "danger"
+    payload.overview?.ringColor === "danger"
       ? SEMANTIC_COLORS.danger
-      : payload.donut?.ringColor === "warn"
+      : payload.overview?.ringColor === "warn"
         ? SEMANTIC_COLORS.warning
         : t.accent;
-  // R98-C3: THE PANE — the sectioned card's building block, the DOM popover's
-  // Pane twin (subtle wash + hairline border + the 9px uppercase tracked
-  // label + the 8px gap below; the owner's "proper separation between the
-  // elements" ask, painted on the overlay leg).
+  // R98-C3 → R99-D: THE PANE — the sectioned card's building block, the DOM
+  // popover's Pane twin (subtle wash + hairline border + the micro-header —
+  // the ONE grammar: 10px uppercase tracked label + the 8px margin below).
   const paneStyle: React.CSSProperties = {
     borderRadius: 10,
     border: `1px solid ${t.border}`,
@@ -474,17 +495,18 @@ function UsageCard({
     marginBottom: 8,
   };
   const paneLabelStyle: React.CSSProperties = {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: 700,
     textTransform: "uppercase" as const,
-    letterSpacing: "0.08em",
+    letterSpacing: "0.1em",
     color: t.textTertiary,
-    marginBottom: 5,
-    // The estimator's USAGE_SECTION_TITLE_PX (17) is this label's row
-    // height (12 label + 5 gap) — minHeight keeps the two sides honest.
+    marginBottom: 8,
+    // The estimator's USAGE_SECTION_TITLE_PX (21) is this label's row
+    // height (13 label + 8 margin) — minHeight keeps the two sides honest.
     minHeight: USAGE_SECTION_TITLE_PX,
   };
   const monoFamily = "var(--font-mono, ui-monospace, monospace)";
+  const tabular: React.CSSProperties = { fontVariantNumeric: "tabular-nums" as const };
   return (
     <div
       className="acute-menu-card"
@@ -531,141 +553,349 @@ function UsageCard({
           {payload.title}
         </div>
 
-        {/* ── R98-C3: the DONUT pane — the ring + the line column, inside its
-            own sectioned block (the DOM popover's Overview pane twin). */}
-        {payload.donut !== undefined ? (
-          <div style={paneStyle} data-usage-pane="overview">
-            <div style={paneLabelStyle}>{payload.donut.label ?? "Overview"}</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 2 }}>
+        {/* ── R99-D: the OVERVIEW HERO — the card's unboxed head (no section
+            header: it IS the top), the DOM popover's twin. The big token line
+            is the primary read; ONE % line under it (percentage first); the
+            honesty pairs; the compaction/reserve line; the badge on the
+            header row. */}
+        {payload.overview !== undefined ? (
+          <div data-usage-overview style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
               <UsageDonutRing
-                used={payload.donut.used}
-                limit={payload.donut.limit}
-                markerFrac={payload.donut.markerFrac}
+                used={payload.overview.used}
+                limit={payload.overview.limit}
+                markerFrac={payload.overview.markerFrac}
                 color={ringHex}
                 track={withAlpha(t.text, 0.12)}
               />
               <div style={{ minWidth: 0, flex: 1 }}>
-                {payload.donut.lines.map((line, li) => (
-                  <div
-                    key={`${li}-${line.label}`}
+                {/* The big number line + the compacted badge. */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                  <span
                     style={{
-                      display: "flex",
-                      alignItems: "baseline",
-                      justifyContent: "space-between",
-                      gap: 8,
-                      minHeight: USAGE_LINE_PX,
+                      fontFamily: monoFamily,
+                      fontSize: 19,
+                      fontWeight: 600,
+                      lineHeight: 1,
+                      color: t.text,
+                      ...tabular,
                     }}
                   >
-                    <span style={{ fontSize: 10, color: t.textTertiary, whiteSpace: "nowrap" }}>{line.label}</span>
+                    {payload.overview.bigUsed}
+                  </span>
+                  <span style={{ fontSize: 11, color: t.textTertiary, whiteSpace: "nowrap", ...tabular }}>
+                    {" "}
+                    of {payload.overview.bigLimit}
+                  </span>
+                  {payload.overview.compactedBadge !== undefined ? (
                     <span
-                      style={{
-                        fontFamily: monoFamily,
-                        fontSize: 10.5,
-                        fontWeight: line.strong === true ? 700 : 500,
-                        color: line.strong === true ? t.text : t.textSecondary,
-                        textAlign: "right",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
+                      title={`${payload.overview.compactedBadge.label} · ${payload.overview.compactedBadge.detail}`}
+                      style={{ marginLeft: "auto", display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}
                     >
-                      {line.value}
-                      {line.note !== undefined && line.note !== "" ? (
-                        <span style={{ fontWeight: 400, color: t.textTertiary }}> · {line.note}</span>
-                      ) : null}
+                      <span style={{ fontSize: 10, fontWeight: 700, color: t.accent, whiteSpace: "nowrap" }}>
+                        {payload.overview.compactedBadge.label}
+                      </span>
+                      <span
+                        style={{
+                          fontFamily: monoFamily,
+                          fontSize: 9.5,
+                          color: t.textTertiary,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          ...tabular,
+                        }}
+                      >
+                        {payload.overview.compactedBadge.detail}
+                      </span>
                     </span>
-                  </div>
-                ))}
+                  ) : null}
+                </div>
+                {/* The ONE % meta line — percentage first. */}
+                <div
+                  style={{
+                    marginTop: 4,
+                    fontFamily: monoFamily,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: t.text,
+                    ...tabular,
+                  }}
+                >
+                  {payload.overview.pctLine}
+                </div>
+                {/* The honesty block — ≤3 label:value pairs at 10px. */}
+                <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
+                  {payload.overview.meta.map((pair) => (
+                    <div
+                      key={pair.id ?? pair.label}
+                      title={pair.title}
+                      style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}
+                    >
+                      <span style={{ fontSize: 10, color: t.textTertiary, whiteSpace: "nowrap" }}>
+                        {pair.label}
+                      </span>
+                      <span
+                        style={{
+                          fontFamily: monoFamily,
+                          fontSize: 10,
+                          color: t.textSecondary,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          minWidth: 0,
+                          ...tabular,
+                        }}
+                      >
+                        {pair.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
+            {/* The compaction/reserve line — ONE line. */}
+            {payload.overview.budgetLine !== undefined ? (
+              <div
+                style={{
+                  marginTop: 6,
+                  fontFamily: monoFamily,
+                  fontSize: 9.5,
+                  color: t.textTertiary,
+                  ...tabular,
+                }}
+              >
+                {payload.overview.budgetLine}
+              </div>
+            ) : null}
           </div>
         ) : null}
 
-        {/* ── R97-C → R98-C3: the CONTEXT BAR pane — the Kilo-style segmented
-            usage bar in its own sectioned block ("Window composition"). */}
+        {/* ── R97-C → R99-D: the CONTEXT BAR pane — the stacked bar (the
+            star: full width, 14px tall, per-segment % labels at ≥12% of the
+            window, the reserved hatched block, the free track) + its LEGEND
+            (the old Breakdown merged under the bar; the mini-bars retired). */}
         {payload.contextBar !== undefined ? (
           <div style={paneStyle} data-usage-pane="window">
             <div style={paneLabelStyle}>{payload.contextBar.label ?? "Window composition"}</div>
-            <div data-usage-context-bar style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span
-                style={{
-                  fontFamily: monoFamily,
-                  fontSize: 9.5,
-                  fontWeight: 700,
-                  color: t.text,
-                  fontVariantNumeric: "tabular-nums",
-                  flexShrink: 0,
-                }}
-              >
-                {formatTokenCount(payload.contextBar.usedTokens)}
-              </span>
-              <div
-                role="img"
-                aria-label={`context window ${Math.round(payload.contextBar.usedPct)}% used`}
-                style={{
-                  flex: 1,
-                  height: 6,
-                  borderRadius: 3,
-                  background: withAlpha(t.text, 0.1),
-                  overflow: "hidden",
-                  display: "flex",
-                }}
-              >
-                {payload.contextBar.segments.map((seg) => {
-                  const frac =
-                    payload.contextBar !== undefined && payload.contextBar.windowTokens > 0
-                      ? Math.min(1, seg.tokens / payload.contextBar.windowTokens)
-                      : 0;
-                  const lit = hoverSeg === seg.label;
-                  return (
-                    <div
-                      key={seg.label}
-                      title={`${seg.label} · ${formatTokenCount(seg.tokens)} tokens · ${Math.round(frac * 100)}% of window`}
-                      onMouseEnter={() => setHoverSeg(seg.label)}
-                      onMouseLeave={() => setHoverSeg(null)}
+            <div
+              data-usage-context-bar
+              role="img"
+              aria-label={
+                "Context composition (share of window): " +
+                payload.contextBar.segments
+                  .map((seg) => {
+                    const frac =
+                      payload.contextBar !== undefined && payload.contextBar.windowTokens > 0
+                        ? Math.min(1, seg.tokens / payload.contextBar.windowTokens)
+                        : 0;
+                    return `${seg.label} ${Math.round(frac * 100)}%`;
+                  })
+                  .join(", ")
+              }
+              style={{
+                display: "flex",
+                width: "100%",
+                height: 14,
+                borderRadius: 7,
+                background: withAlpha(t.text, 0.1),
+                overflow: "hidden",
+              }}
+            >
+              {payload.contextBar.segments.map((seg) => {
+                const frac =
+                  payload.contextBar !== undefined && payload.contextBar.windowTokens > 0
+                    ? Math.min(1, seg.tokens / payload.contextBar.windowTokens)
+                    : 0;
+                const lit = hoverSeg === seg.label;
+                const hex = segHex(seg.color);
+                // R99-D: the inline % label — only for segments ≥12% of the
+                // window (narrower ones stay honest-quiet; the legend carries
+                // their numbers). The ink rides the theme pipeline's own
+                // contrast helper.
+                const showLabel = frac >= USAGE_BAR_LABEL_MIN_FRAC;
+                return (
+                  <div
+                    key={seg.label}
+                    title={`${seg.label} · ${formatTokenCount(seg.tokens)} tokens · ${Math.round(frac * 100)}% of window`}
+                    onMouseEnter={() => setHoverSeg(seg.label)}
+                    onMouseLeave={() => setHoverSeg(null)}
+                    style={{
+                      width: `${frac * 100}%`,
+                      height: "100%",
+                      background: hex,
+                      opacity: hoverSeg === null || lit ? 1 : 0.35,
+                      transition: "opacity 120ms ease",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      overflow: "hidden",
+                      ...(lit ? { boxShadow: `0 0 0 1px ${withAlpha(hex, 0.6)}` } : {}),
+                    }}
+                  >
+                    {showLabel ? (
+                      <span
+                        style={{
+                          fontFamily: monoFamily,
+                          fontSize: 9,
+                          fontWeight: 700,
+                          lineHeight: 1,
+                          color: getContrastText(hex),
+                          whiteSpace: "nowrap",
+                          ...tabular,
+                        }}
+                      >
+                        {`${Math.round(frac * 100)}%`}
+                      </span>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {/* The reserved-for-output block — dimmed + hatched, after the
+                  used segments, so "free" never reads as fully usable. */}
+              {payload.contextBar.windowTokens > 0 && payload.contextBar.reservedTokens > 0 ? (
+                <div
+                  title={`Reserved for output · ${formatTokenCount(payload.contextBar.reservedTokens)} tokens`}
+                  style={{
+                    width: `${Math.min(
+                      100 - payload.contextBar.usedPct,
+                      (payload.contextBar.reservedTokens / payload.contextBar.windowTokens) * 100,
+                    )}%`,
+                    height: "100%",
+                    background: `repeating-linear-gradient(45deg, ${withAlpha(segHex("reserved"), 0.55)}, ${withAlpha(
+                      segHex("reserved"),
+                      0.55,
+                    )} 2px, ${withAlpha(segHex("reserved"), 0.25)} 2px, ${withAlpha(segHex("reserved"), 0.25)} 4px)`,
+                  }}
+                />
+              ) : null}
+            </div>
+            {/* R99-D: the legend's column hint — the % base named once. */}
+            <div
+              style={{
+                marginTop: 6,
+                textAlign: "right",
+                fontFamily: monoFamily,
+                fontSize: 9,
+                textTransform: "uppercase" as const,
+                letterSpacing: "0.06em",
+                color: t.textTertiary,
+              }}
+            >
+              tokens · % of used
+            </div>
+            {/* R99-D: the LEGEND rows — one per category (dot + label + tokens
+                + % of used); a management surface turns the label into a
+                link-chip whose pick reports back through reportLink. */}
+            <div style={{ marginTop: 2, display: "flex", flexDirection: "column", gap: 3 }}>
+              {payload.contextBar.segments.map((seg) => {
+                const lit = hoverSeg === seg.label;
+                const manage = seg.manage;
+                return (
+                  <div
+                    key={seg.label}
+                    data-usage-legend={seg.label}
+                    onMouseEnter={() => setHoverSeg(seg.label)}
+                    onMouseLeave={() => setHoverSeg(null)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      paddingTop: 2,
+                      paddingBottom: 2,
+                      borderRadius: 5,
+                      ...(lit ? { background: withAlpha(t.text, 0.05) } : {}),
+                    }}
+                  >
+                    <span
+                      aria-hidden
                       style={{
-                        width: `${frac * 100}%`,
-                        height: "100%",
+                        width: 6,
+                        height: 6,
+                        borderRadius: 999,
                         background: segHex(seg.color),
-                        opacity: hoverSeg === null || lit ? 1 : 0.35,
+                        flexShrink: 0,
+                        opacity: hoverSeg === null || lit ? 1 : 0.4,
                         transition: "opacity 120ms ease",
-                        ...(lit ? { boxShadow: `0 0 0 1px ${withAlpha(segHex(seg.color), 0.6)}` } : {}),
                       }}
                     />
-                  );
-                })}
-                {/* The reserved-for-output block — dimmed, after the used
-                    segments, so "free" never reads as fully usable. */}
-                {payload.contextBar.windowTokens > 0 &&
-                payload.contextBar.reservedTokens > 0 ? (
-                  <div
-                    title={`Reserved for output · ${formatTokenCount(payload.contextBar.reservedTokens)} tokens`}
-                    style={{
-                      width: `${Math.min(
-                        100 - payload.contextBar.usedPct,
-                        (payload.contextBar.reservedTokens / payload.contextBar.windowTokens) * 100,
-                      )}%`,
-                      height: "100%",
-                      background: `repeating-linear-gradient(45deg, ${withAlpha(segHex("reserved"), 0.55)}, ${withAlpha(
-                        segHex("reserved"),
-                        0.55,
-                      )} 2px, ${withAlpha(segHex("reserved"), 0.25)} 2px, ${withAlpha(segHex("reserved"), 0.25)} 4px)`,
-                    }}
-                  />
-                ) : null}
-              </div>
-              <span
-                style={{
-                  fontFamily: monoFamily,
-                  fontSize: 9.5,
-                  fontWeight: 700,
-                  color: t.textTertiary,
-                  fontVariantNumeric: "tabular-nums",
-                  flexShrink: 0,
-                }}
-              >
-                {formatTokenCount(payload.contextBar.windowTokens)}
-              </span>
+                    {manage !== undefined ? (
+                      <button
+                        type="button"
+                        onClick={() => reportLink(manage.target)}
+                        title={manage.title}
+                        aria-label={`${seg.label} — manage in Settings`}
+                        style={{
+                          all: "unset",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 3,
+                          minWidth: 0,
+                          flex: 1,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: 10.5,
+                            color: lit ? t.text : t.textSecondary,
+                            ...(lit ? { fontWeight: 700 } : {}),
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {seg.label}
+                        </span>
+                        <ArrowUpRight
+                          aria-hidden
+                          size={9}
+                          style={{ color: t.accent, flexShrink: 0, opacity: 0.6 }}
+                        />
+                      </button>
+                    ) : (
+                      <span
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          fontSize: 10.5,
+                          color: lit ? t.text : t.textSecondary,
+                          ...(lit ? { fontWeight: 700 } : {}),
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {seg.label}
+                      </span>
+                    )}
+                    <span
+                      style={{
+                        fontFamily: monoFamily,
+                        fontSize: 10,
+                        color: t.textTertiary,
+                        flexShrink: 0,
+                        ...tabular,
+                      }}
+                    >
+                      {seg.tokensLabel}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: monoFamily,
+                        fontSize: 10,
+                        color: lit ? t.text : t.textSecondary,
+                        flexShrink: 0,
+                        width: 32,
+                        textAlign: "right",
+                        ...tabular,
+                      }}
+                    >
+                      {seg.pctOfUsed}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         ) : null}
@@ -673,122 +903,65 @@ function UsageCard({
         {payload.sections.map((section, si) => (
           <div key={`${si}-${section.title}`} style={paneStyle} data-usage-pane={section.title}>
             <div style={paneLabelStyle}>{section.title}</div>
-            {section.lines.map((line, li) => {
-              const lit = hoverSeg !== null && line.label === hoverSeg;
-              return (
-                <div
-                  key={`${li}-${line.label}`}
-                  onMouseEnter={line.barColor !== undefined ? () => setHoverSeg(line.label) : undefined}
-                  onMouseLeave={line.barColor !== undefined ? () => setHoverSeg(null) : undefined}
+            {section.lines.map((line, li) => (
+              <div
+                key={`${li}-${line.label}`}
+                style={{ display: "flex", alignItems: "center", gap: 8, minHeight: USAGE_LINE_PX }}
+              >
+                <span style={{ fontSize: 10.5, color: t.textSecondary, whiteSpace: "nowrap" }}>
+                  {line.label}
+                </span>
+                {/* R99-D: the line's own slim bar (the cache hit rate). */}
+                {line.barFrac !== undefined && line.barColor !== undefined ? (
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 48,
+                      height: 3,
+                      borderRadius: 2,
+                      background: withAlpha(t.text, 0.1),
+                      overflow: "hidden",
+                      flexShrink: 0,
+                      display: "block",
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: "block",
+                        width: `${Math.max(2, Math.min(100, line.barFrac * 100))}%`,
+                        height: "100%",
+                        borderRadius: 2,
+                        background: segHex(line.barColor),
+                      }}
+                    />
+                  </span>
+                ) : null}
+                <span
                   style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 10,
-                    minHeight: USAGE_LINE_PX,
-                    paddingTop: 2,
-                    paddingBottom: 2,
-                    borderRadius: 5,
-                    ...(lit ? { background: withAlpha(t.text, 0.05) } : {}),
+                    marginLeft: "auto",
+                    fontFamily: monoFamily,
+                    fontSize: 10.5,
+                    fontWeight: line.strong === true ? 700 : 500,
+                    color: line.strong === true ? t.text : t.textSecondary,
+                    textAlign: "right",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    minWidth: 0,
+                    flex: 1,
+                    ...tabular,
                   }}
                 >
-                  <span
-                    style={{
-                      fontSize: 10.5,
-                      color: lit ? t.text : t.textSecondary,
-                      whiteSpace: "nowrap",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 5,
-                      minWidth: 0,
-                    }}
-                  >
-                    {/* R97-C: the category DOT — the segment's palette color,
-                        the legend for the context bar above. */}
-                    {line.barColor !== undefined ? (
-                      <span
-                        aria-hidden
-                        style={{
-                          width: 6,
-                          height: 6,
-                          borderRadius: 999,
-                          background: segHex(line.barColor),
-                          flexShrink: 0,
-                          opacity: hoverSeg === null || lit ? 1 : 0.4,
-                          transition: "opacity 120ms ease",
-                        }}
-                      />
-                    ) : null}
-                    <span
-                      style={{
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        ...(lit ? { fontWeight: 700 } : {}),
-                      }}
-                    >
-                      {line.label}
-                    </span>
-                  </span>
-                  <span
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      minWidth: 0,
-                    }}
-                  >
-                    {/* R97-C → R98-C3: the MINI-BAR — the line's share as a 3px
-                        bar in its palette color, widened (34 → 56) for the
-                        420px card. */}
-                    {line.barFrac !== undefined && line.barColor !== undefined ? (
-                      <span
-                        aria-hidden
-                        style={{
-                          width: 56,
-                          height: 3,
-                          borderRadius: 2,
-                          background: withAlpha(t.text, 0.1),
-                          overflow: "hidden",
-                          flexShrink: 0,
-                          display: "block",
-                        }}
-                      >
-                        <span
-                          style={{
-                            display: "block",
-                            width: `${Math.max(2, Math.min(100, line.barFrac * 100))}%`,
-                            height: "100%",
-                            borderRadius: 2,
-                            background: segHex(line.barColor),
-                            opacity: hoverSeg === null || lit ? 1 : 0.4,
-                            transition: "opacity 120ms ease",
-                          }}
-                        />
-                      </span>
-                    ) : null}
-                    <span
-                      style={{
-                        fontFamily: monoFamily,
-                        fontSize: 10.5,
-                        fontWeight: line.strong === true ? 700 : 500,
-                        color: line.strong === true ? t.text : t.textSecondary,
-                        textAlign: "right",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {line.value}
-                      {line.note !== undefined && line.note !== "" ? (
-                        <span style={{ fontWeight: 400, color: t.textTertiary }}> · {line.note}</span>
-                      ) : null}
-                    </span>
-                  </span>
-                </div>
-              );
-            })}
-            {/* R97-C: the session TABLE — the compact split (Turns / Calls /
-                Sent / Received / Cost per group), the strong row emphasized. */}
+                  {line.value}
+                  {line.note !== undefined && line.note !== "" ? (
+                    <span style={{ fontWeight: 400, color: t.textTertiary }}> · {line.note}</span>
+                  ) : null}
+                </span>
+              </div>
+            ))}
+            {/* R97-C → R99-D: the session TABLE — the compact split (Turns /
+                Calls / Sent / Received / Cost per group), the strong row
+                emphasized, tabular-nums on every numeric. */}
             {section.table !== undefined ? (
               <div data-usage-table style={{ display: "flex", flexDirection: "column" }}>
                 <div
@@ -857,6 +1030,7 @@ function UsageCard({
                           whiteSpace: "nowrap",
                           overflow: "hidden",
                           textOverflow: "ellipsis",
+                          ...tabular,
                         }}
                       >
                         {cell}
@@ -868,29 +1042,16 @@ function UsageCard({
             ) : null}
           </div>
         ))}
-        {payload.note !== undefined && payload.note !== "" ? (
-          <div
-            style={{
-              marginTop: 2,
-              paddingTop: 6,
-              borderTop: `1px solid ${t.border}`,
-              fontSize: 9.5,
-              fontFamily: monoFamily,
-              color: t.textTertiary,
-              minHeight: USAGE_NOTE_PX,
-            }}
-          >
-            {payload.note}
-          </div>
-        ) : null}
       </div>
     </div>
   );
 }
 
-/** R97-C: the usage card's donut ring — the DOM popover's DonutRing as a
- * self-contained SVG (this page does not import the composer's component;
- * same math: the -90° origin, the graded color, the budget tick). */
+/** R97-C → R99-D: the usage card's donut ring — the DOM popover's DonutRing
+ * as a self-contained SVG (this page does not import the composer's
+ * component; same math: the -90° origin, the graded color, the budget
+ * tick). R99-D: NO center % anymore — the hero's % line is the one source
+ * of truth for that number (the ring is the visual anchor, not a readout). */
 function UsageDonutRing({
   used,
   limit,
@@ -940,18 +1101,6 @@ function UsageDonutRing({
         style={{ transition: "stroke-dasharray 300ms ease-out" }}
       />
       {marker}
-      <text
-        x="50%"
-        y="50%"
-        dominantBaseline="central"
-        textAnchor="middle"
-        fontSize={10}
-        fontWeight={700}
-        fill={color}
-        fontFamily="var(--font-mono, ui-monospace, monospace)"
-      >
-        {limit > 0 ? Math.round(Math.min(100, (used / limit) * 100)) : 0}%
-      </text>
     </svg>
   );
 }
@@ -959,11 +1108,11 @@ function UsageDonutRing({
 /*
  * The px contract's honesty guard: the estimator (lib/menu-overlay.ts) and
  * this card MUST agree on how tall a usage card is — the constants imported
- * above are the same ones the estimator sums (USAGE_LINE_PX is the lines'
- * minHeight, USAGE_SECTION_TITLE_PX the section title's, USAGE_NOTE_PX the
- * footnote's, USAGE_TABLE_ROW_PX the session table's rows; USAGE_CARD_CHROME_PX
- * covers the head strip + title row + the card paddings painted around them
- * here). A drift between the two sides shows up as clipped rows or dead card
- * space — pinned by menu-overlay.test.
+ * above are the same ones the estimator sums (USAGE_LINE_PX is the section
+ * lines' minHeight, USAGE_SECTION_TITLE_PX the pane label's, USAGE_TABLE_ROW_PX
+ * the session table's rows, USAGE_BAR_LABEL_MIN_FRAC the inline-label gate
+ * both legs share; USAGE_CARD_CHROME_PX covers the head strip + title row +
+ * the card paddings painted around them here). A drift between the two sides
+ * shows up as clipped rows or dead card space — pinned by menu-overlay.test.
  */
 void USAGE_CARD_CHROME_PX;
