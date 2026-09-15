@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # Round 69 — the computer-use enforcement layer: every action returns an observation receipt, clicks verify what they hit, and the re-capture loops die
 
 **Date:** 2026-09-06 · **Branch:** `main` · **Version:** 0.69.0 ·

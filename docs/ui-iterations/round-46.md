@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # Round 46 — Agent intelligence depth + capability completion: context compaction (summarize, don't drop) · relevance-ranked memory · provider-call timeout · checkpoint restore UI (the round-25 orphan closed) · browser cookie persistence · terminal-session e2e
 
 **Date:** 2026-08-28 · **Branch:** `main` · **Owner directive:** *"improving our

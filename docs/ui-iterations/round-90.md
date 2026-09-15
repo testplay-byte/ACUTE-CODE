@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # Round 90 — The owner's second walkthrough: the delete dead-click, the wizard's memory, and the browser's NATIVE feel
 
 Date: 2026-09-11 · Version: 0.87.0 → 0.88.0 · Scope: UX + capability + a

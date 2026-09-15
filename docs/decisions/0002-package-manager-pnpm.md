@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # ADR-0002: pnpm workspaces as the package manager / monorepo tool
 
 - **Status:** ACCEPTED (owner delegated the choice, 2026-08-21)

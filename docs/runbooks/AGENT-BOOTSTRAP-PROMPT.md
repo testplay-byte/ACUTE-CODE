@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # ACUTE-CODE — New-Agent Bootstrap Prompt
 
 > **For the owner:** fill in the three `<...>` placeholders below (GitHub PAT,

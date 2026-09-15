@@ -184,3 +184,72 @@ VERIFIED WORKSTREAM COMMIT.
 - Browser verification for every UI change (agent-browser screenshots; the
   VLM pass for the surfaces that changed).
 - The owner's TEST CHECKLIST (§9) mirrors §0 item for item.
+
+## §3 The delivery log (per workstream)
+
+| WS | Commit | State |
+|---|---|---|
+| G1 browser screenshots | 0d9cea2 | DELIVERED — decoupled from the Computer Use master switch (the OFF-by-default silent gate); the vision gate split to the describe leg; honest refusals (never the 1×1 capture). +8 pins. |
+| B design-language | 3c84dcf | DELIVERED — the 7-file language layer + the DESIGN-SYSTEM §1 link. |
+| C1 window controls | f31f559 | DELIVERED — the visible chips + hover identities + the true restore glyph; the semantic hues on the CSS-var leg. |
+| C3 context popup | 6451643 | DELIVERED — the 420px sectioned panes on both legs; the session table everywhere. |
+| D Mermaid | 9201f1d | DELIVERED — ADR-0030 + the narrow audit pins + the lazy strict theme-aware renderer. |
+| H wizard providers | 9201f1d | DELIVERED — the "+ Custom OpenAI-compatible…" inline create flow + the focus-timer fix. |
+| I2 Data & Statistics | e2ee4f2 | DELIVERED — the backend aggregate + the five components + the settings tab + the UsageScreen integration. |
+| J desktop notifications | e2ee4f2 | DELIVERED — the plugin + the bridge + the SSE fan-out + the settings toggle. |
+| E prompts + always-load | 77e81c9 + b1c348b | DELIVERED — the routes/storage + the PromptsTab + the always-load tier (migration 0037) + the SkillsTab pin switches. |
+| F2+F3 ledger + indexing | 1010b30 | DELIVERED — the file ledger + the tiered rule (golden re-pinned, the 23K budget held) + search_symbols + the auto-index keeper. |
+| I1 settings categories | e2a8396 | DELIVERED — the grouped nav + the Functionality relabel (ids stable). |
+| F1 memory | e2a8396 | DELIVERED — add/edit routes + the MemoryPanel flows + the discipline line. |
+| K terminal | e2a8396 | DELIVERED — the discovery file + the CLI auto-connect + usage:stats/prompts:sections + the runbook. |
+| C2 chat de-slop | 06cda62 | DELIVERED (the surgical pass under the owner's rush directive) — the color slop signals retired to the documented tokens. |
+| M review | this commit | The orchestrator's systematic self-review under the rush directive: the hex audit (only the registered exceptions + test fixtures), zero new keyframes, zero console.error additions, all 13 tab ids stable, both full suites green. A full subagent review is queued for R99 (honest — the rush directive traded it). |
+
+## §4 The recovery chapter (the round's defining event)
+
+A sandbox reset mid-round lost EIGHT unpushed commits (the repo re-cloned at
+the R97 baseline; the DASHBOARD repo deleted; the helpers reset). The G1
+agent's uncommitted work survived (it ran post-reset on the fresh baseline).
+Everything else was re-implemented from the orchestrator's retained
+knowledge + re-dispatched agents, and pushed per-workstream — the
+push-after-every-commit discipline is now binding (recorded in the worklog
+as R98-recovery-1/2/3). Three further server shutdowns were absorbed by the
+protocol: worktree state is the truth; killed agents leave no worklog but
+their diffs land; verify-then-complete-then-commit; connection death ≠
+agent death.
+
+## §5 Verification (the final numbers)
+
+- Frontend: 3,651 passed / 12 env-skipped / 0 failed (199 files).
+- agent-core: 2,370 / 2,370 (119 files) — the golden prompt re-pinned twice
+  (E2 + F2), byte-diffed via the sanctioned UPDATE_GOLDEN procedure.
+- Both typechecks, eslint on every touched file, docs:check 213/0/0, the
+  license audit clean (247 deps — ADR-0030's two narrow pins).
+- cargo check could not run in the sandbox (no Rust toolchain) — the Rust
+  side (the notification plugin wiring) verified by config-consistency;
+  CI's Rust build is the gate.
+
+## §6 The owner's TEST CHECKLIST (mirrors §0)
+
+1. Hover the three window buttons — each a visible chip; the colors shift +
+   motion on hover; maximize→ the true two-squares restore glyph.
+2. Click the context donut — the 420px sectioned panes (Overview / Window
+   composition / Breakdown / Cache / Session totals table); nothing hidden.
+3. Settings → Data & Statistics (and the usage screen): the heatmap, the
+   per-model stacked chart, the donut, the health cards, Clear data (with
+   the exact enumeration).
+4. Settings → Prompts: pick a project, override a section, the live
+   preview; save an empty override → the drop warning.
+5. Skills → pin "ui-design" (Always load) → the budget readout; the next
+   turn's prompt carries its full body.
+6. Ask the agent to edit a file it just wrote — no forced re-read; the
+   search_symbols tool answers "where is X defined".
+7. A mermaid fence in chat renders the diagram (fallback: the note + code).
+8. The wizard's "+ Custom OpenAI-compatible…" creates + selects a gateway.
+9. Task complete/failed/permission-needed while the window is unfocused →
+   the OS notification (toggle in Functionality).
+10. The browser screenshot works with Computer Use OFF; a hidden tab
+    refuses honestly.
+11. Settings → Functionality: the grouped nav + the internal categories.
+12. `node scripts/acute.mjs usage:stats` against the running app (the
+    discovery file connects automatically).

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # OpenCode — Patterns for ACUTE-CODE
 
 Each pattern: WHAT (verified in OpenCode), WHY it fits ACUTE-CODE, HOW it maps onto our stack (Tauri 2 shell + React 18/TS UI + Node/TS sidecar owning SQLite via localhost REST+WS + cloud LLM APIs + human-approval safety layer, max 5 concurrent agents). Study only — never copy code. OpenCode is MIT (verified from its LICENSE file), so even dependency-level reuse would be license-safe; our constraint stays patterns-first.

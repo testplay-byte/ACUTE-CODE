@@ -796,7 +796,7 @@ token-in-URL auth-doc URL noise). The CI step is `continue-on-error: true`
 **J2 work delivered (commit 65246ca):**
 - Created `scripts/docs/stamp-all.mjs` — the bulk idempotent stamper that
   DOC-STANDARDS §8 references but never existed. Reads round from status.json.
-- Backfilled the `<!-- last-reviewed: 2026-09-12 round-94 -->` stamp on 103
+- Backfilled the `<!-- last-reviewed: 2026-09-12 round-98 -->` stamp on 103
   docs (105 failures → 0).
 - Hardened `scripts/docs/check-stale.mjs`:
   1. **indented-fence support** (`/^ {0,3}```/m`) — the actual root bug;
@@ -2728,3 +2728,19 @@ Work Log:
 
 Stage Summary:
 - v0.95.0: every ask of the owner's eighth report answered — the context popup is the Kilo-style bar + the full visual card again (nothing hidden, the session price shown), the model thinks freely by default, the stops that aren't errors aren't errors, the failures report their tokens, the thinking code is colored with gutters, the chat is customizable, the UI knows its states, and the browser has its settings home with a working HOME button. AGENT-MEMORY #98 (the first-paint race + the dead control) recorded. The per-stage ntfy notifications ran throughout; the final THE-TASK-IS-DONE ping follows the release.
+
+## ROUND-98 (2026-09-15) — the design-language + data + agent-brain round (v0.96.0)
+
+The owner's ninth walkthrough report (20 asks). Four recon agents → the plan
+(round-98.md). Workstreams: the design-language folder; the window controls;
+the context popup's 420px sectioned rebuild; Mermaid (ADR-0030); the wizard's
+custom providers; Data & Statistics; desktop notifications; the Prompts tab +
+the always-load skill tier; the file ledger + search_symbols/auto-index; the
+settings categories; memory add/edit; the terminal discovery; the chat
+de-slop sweep; the browser screenshot chain fix. THE RECOVERY: a mid-round
+sandbox reset lost 8 unpushed commits — re-implemented + pushed
+per-workstream (the push-after-every-commit discipline now binding; three
+further shutdowns absorbed by the worktree-is-truth protocol). The review:
+the orchestrator's systematic self-review under the owner's rush directive
+(a full subagent pass queued for R99). Suites: FE 3,651 / AC 2,370 / e2e 12;
+docs:check 213/0/0; the license audit clean.

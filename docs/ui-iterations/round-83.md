@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # Round 83 — Honest Token & Context Metering (the "highly misleading" round)
 
 **Provenance:** the owner's verbatim complaint (the research session's

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # Round 72 — the adaptive capability round: the agent now picks skills on the basis of the task (deterministic, free), carries eighteen built-in crafts, reads skills to reference depth, and honors the conventions of the directory it edits
 
 **Date:** 2026-09-07 · **Branch:** `main` · **Version:** 0.72.0 ·

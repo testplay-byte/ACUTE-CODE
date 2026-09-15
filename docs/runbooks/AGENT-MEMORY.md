@@ -1107,3 +1107,14 @@ identical-text detector + the warn-only rewrite.)
    process needs that process named in its test.
 (2026-09-14, round-97; the state-awareness sweep's ten re-pins + the
 review's M1.)
+
+#99 (2026-09-15, R98): A sandbox reset lost EIGHT unpushed commits — the
+only durable store is the REMOTE. Push after every verified workstream
+commit; never batch pushes to "release time". Corollaries proven across
+three further shutdowns: (a) killed agents leave no worklog entry but their
+uncommitted diffs LAND — the worktree state is the truth, wait + inspect
+before re-dispatching; (b) have agents append their worklog record BEFORE
+their final long suites so a cut can't lose it; (c) connection death ≠
+agent death. Also: verify the ROOT tsconfig (it includes agent-core/tests —
+agent-core's own tsc passing does NOT mean the shared gate passes; an
+unused const in a test file fails the root gate).

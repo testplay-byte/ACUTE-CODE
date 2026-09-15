@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # LOCAL PC RUNNER — one double-click, everything handled
 
 **Owner round-11 redesign (2026-08-23):** the round-10 pure-`.bat` approach

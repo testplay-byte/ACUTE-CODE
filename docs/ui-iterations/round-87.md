@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # Round 87 — the UX + capability round (About/reset, configure-before-add, ask_user, the embedded browser)
 
 ## 1. Owner direction (verbatim intent)

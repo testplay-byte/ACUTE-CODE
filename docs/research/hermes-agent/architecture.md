@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # Hermes Agent — Architecture
 
 **Repo:** https://github.com/NousResearch/hermes-agent (v0.20.x, MIT)

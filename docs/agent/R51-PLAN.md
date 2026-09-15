@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # R51 PLAN — the owner's fourth Windows test round
 
 Source: the owner's R50 feedback message (fourth test round). Sandbox verified

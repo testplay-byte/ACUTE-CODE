@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # Development Environment Setup (ACUTE-CODE)
 
 Status: Phase 0 snapshot — updated each phase by the Scribe.

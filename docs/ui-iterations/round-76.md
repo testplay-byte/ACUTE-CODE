@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # Round 76 — The Documentation Round (Accuracy & Structure)
 
 **Owner's report (verbatim ask):**

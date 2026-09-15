@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # MetaGPT — Architecture
 
 > All claims verified against source on `main` (2026-08-21). Files consulted: `metagpt/schema.py`, `metagpt/roles/role.py`, `metagpt/roles/di/role_zero.py`, `metagpt/environment/base_env.py`, `metagpt/environment/README.md`, `metagpt/team.py`, `metagpt/memory/memory.py`, `metagpt/actions/action.py`, `metagpt/const.py`, `metagpt/utils/project_repo.py`, `metagpt/document.py`, `metagpt/software_company.py`, plus the five software-company role files.

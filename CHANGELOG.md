@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-14 round-97 -->
+<!-- last-reviewed: 2026-09-15 round-98 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -20,6 +20,81 @@ ratings-driven prompt tuning, and the standing items (edit-linting, installer
 code-signing, the Files-tab polish, the browser agent's CDP-level trusted-input
 tier, the computer-use COM IUIAutomation bridge for the ACTION/MSAA legacy
 layers).
+
+## [0.96.0] - 2026-09-15 — the ninth-walkthrough round: design language, data, and the agent's brain
+
+The owner's v0.95.0 walkthrough report, answered end to end — the design
+LANGUAGE as an enforceable folder, the Data & Statistics surface, the
+prompt-customization UI + the always-load skill tier, the token-optimization
+pair (the file ledger + search_symbols/auto-index), the desktop
+notifications, Mermaid diagrams in chat, the wizard's custom
+OpenAI-compatible providers, and the browser screenshot chain fixed.
+
+### Added
+- **The design language** (`docs/design-language/`): TOKENS (the color
+  pipeline + type/spacing ladders), MOTION (the animation grammar +
+  keyframe registry), COMPONENTS (the shared-primitive catalog), WIZARD-DNA
+  (the owner-approved aesthetic), WINDOW-CONTROLS, and USAGE (the per-edit
+  checklist + do-not list) — every UI edit refers to it first.
+- **Data & Statistics** (Settings tab + the usage screen): total/peak
+  tokens, the 12-month token-activity heatmap, the per-model color-coded
+  stacked chart (same model name = one color everywhere), the model-usage
+  donut, agent health (turn-error classes + tool failures), total cost, and
+  the clear-all-data option (usage events only — enumerated exactly).
+- **Desktop notifications**: task complete / failed / permission needed
+  reach the user's PC via tauri-plugin-notification (the visibility rule; a
+  settings toggle, default ON).
+- **The Prompts tab**: per-project system-prompt section overrides — the
+  registry list with badges, the editor (8K cap, the drop warning), the
+  live composed preview, the diagnostics.
+- **Always-load skills**: pin any skill (the switch on the Skills tab or
+  `always-load: true` frontmatter) and its FULL body rides every turn
+  (budgeted 24K with honest truncation) — the "must follow every single
+  time" tier.
+- **search_symbols + the auto-index**: the symbol index is queryable
+  (name-prefix + kind filter, path:line + signature), refreshes in the
+  background (missing/stale >10 min) and incrementally after every write.
+- **The session file ledger**: edits after edits without re-reads (the
+  response IS the confirmation), with staleness warnings when the disk moved.
+- **Mermaid diagrams in chat** (mermaid v11 — ADR-0030's honest license
+  path): lazy-loaded, strict security, theme-aware, graceful fallback.
+- **The wizard's custom providers**: "+ Custom OpenAI-compatible…" — name +
+  base URL + API format, created and selected in one flow.
+- **Memory add/edit** (the MemoryPanel) + the save-as-you-discover
+  discipline line; **the terminal discovery file** (the CLI auto-connects
+  to the running app) + `usage:stats` / `prompts:sections` commands.
+
+### Changed
+- **The context popup**: the 288px cramped column became a 420px stack of
+  sectioned panes (Overview / Window composition / Breakdown / Cache /
+  Session totals) — proper separation, wider aspect, both legs (DOM +
+  overlay) twins by shared payload; the session table on both legs.
+- **The window controls**: visible chips with hover identities (minimize
+  the accent nudge, maximize/restore the accent grow, close the danger) +
+  the true restore glyph (the Copy metaphor is dead).
+- **The settings nav is grouped** (Workspace / Agents & Skills /
+  Integrations / Data & Statistics / System); the General tab relabels to
+  Functionality with internal categories.
+- **The chat's color slop retired**: the duplicated amber and the per-file
+  running-blue constants became the documented single spellings; the
+  frosted pills ride the --ac-frosted var.
+- **The tiered edit rule**: read before the FIRST edit; a successful edit
+  IS the confirmation (the golden prompt re-pinned; the 23K budget held).
+
+### Fixed
+- **Browser screenshots work now**: decoupled from the Computer Use master
+  switch (OFF by default was silently blocking them); the vision gate
+  applies only to the describe leg; honest refusals replace the 1×1
+  degenerate captures on hidden tabs/webviews.
+- The wizard's stale focus timer (a closed dropdown re-opening over the new
+  form); the fabricated "search_code queries the index" prompt line (the
+  honest split now).
+
+### Notes
+- A sandbox reset mid-round lost eight unpushed commits; everything was
+  re-implemented and pushed per-workstream — the push-after-every-commit
+  discipline is now binding. Suites: frontend 3,651 / agent-core 2,370 /
+  e2e 12; license audit clean (247 deps; ADR-0030's two narrow pins).
 
 ## [0.95.0] - 2026-09-14 — the eighth-walkthrough round: context, freedom, states
 

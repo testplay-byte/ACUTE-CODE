@@ -3,7 +3,7 @@
  "product": {
   "name": "Acute",
   "tagline": "Local-first multi-agent engineering workbench",
-  "version": "0.94.0",
+  "version": "0.96.0",
   "availability": "Private build — not yet distributed",
   "chips": [
    "Windows desktop",
@@ -288,6 +288,10 @@
   {
    "date": "2026-09-14",
    "label": "Round 97 — the context/freedom/states round (v0.95.0): Kilo-style context bar, thinking free by default, honest UI states"
+  },
+  {
+   "date": "2026-09-15",
+   "label": "R98 — the design-language + data round (v0.96.0)"
   }
  ],
  "quality": {
@@ -295,11 +299,11 @@
   "suites": [
    {
     "name": "frontend",
-    "tests": 1223
+    "tests": 3651
    },
    {
     "name": "agent-core",
-    "tests": 2255
+    "tests": 2370
    },
    {
     "name": "sidecar e2e",
@@ -323,11 +327,15 @@
   }
  ],
  "plan": {
-  "current": "R97 — the eighth-walkthrough round (the context-popup rebuild + thinking freedom + state awareness), v0.94.0 → v0.95.0",
+  "current": "R98 — the ninth-walkthrough round (the design language + Data & Statistics + the agent's brain: prompts/skills/ledger/indexing), v0.95.0 → v0.96.0",
   "upcoming": [
    {
-    "title": "The owner's v0.95.0 walkthrough",
-    "detail": "The R97 test checklist lives in round-97.md §9 (the Kilo-style context bar, the thinking-loop default-OFF + the amber stop card, the failed-turn token chips, the text-size/timestamps pair, the syntax-colored thinking code with gutters, the state-aware skeleton/error surfaces, and the Browser settings home with the working HOME button). Standing follow-ups from the round's review: the chat.ts R97-E region's cosmetic re-indent, the quick-links default dedup (frontend/backend), and the ~120 pre-existing hardcoded semantic hexes outside the round's touched files (documented in DESIGN-SYSTEM §1's exception list)."
+    "title": "The owner's v0.96.0 walkthrough",
+    "detail": "The R98 test checklist lives in round-98.md §6 (the design-language surfaces, the Data & Statistics tab, the Prompts tab + always-load skills, the tiered edit rule + search_symbols, Mermaid, the wizard's custom providers, the desktop notifications, the browser screenshot, the grouped settings, the CLI discovery). The round also carries the recovery chapter (§4) — the push-after-every-commit discipline is binding."
+   },
+   {
+    "title": "R99 candidates (honest)",
+    "detail": "The full subagent review pass (traded for the orchestrator's self-review under the owner's rush directive this round), the self-improving feedback loop (I2's health aggregations feeding prompts/skills — the L roadmap), the CDP-level browser tier (trusted input + Page.captureScreenshot), and the modularity Wave 2-b continuation."
    }
   ],
   "principles": [
@@ -336,6 +344,6 @@
    "Quality over speed — every round verified before push"
   ]
  },
- "round": 97,
- "ci": "GREEN — CI 34879323837 and Release 34879322559 both SUCCESS on 52ffce2 (lint, both typechecks, agent-core 2,255/2,255 in 111 files, frontend 1,223/1,223, e2e 12/12, build, license audit, docs:check 204/0/0, version ×4 at 0.95.0). v0.95.0 PUBLISHED (release 388616224, latest — both assets verified with GitHub's server-side sha256 digests against freshly downloaded bytes: setup.exe e7aa1db1…, kit 83c0c0d9…; the launcher kit scanned — zero real-key values, only prefix teaching text). The R97 review pass (a dedicated audit of the round's full diff) landed SHIP-WITH-FIXES with every finding fixed + pinned before the release; the round's eight workstreams (C the Kilo-style context bar, D the thinking-loop default-off + the amber card, E the failure-usage truth, F the syntax colors with the gutter, G the browser settings home + the working HOME button, H the chat customizability, I the state-awareness sweep, J the review fixes) all live in the owner's TEST CHECKLIST at round-97.md §9."
+ "round": 98,
+ "ci": "PENDING — the v0.96.0 runs (CI + Release) fire on the tag; this row syncs GREEN when they land (the R96/R97 pattern)."
 }

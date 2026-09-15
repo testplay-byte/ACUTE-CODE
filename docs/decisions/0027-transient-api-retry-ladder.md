@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # ADR-0027: Transient-API retry ladder — three-layer composition
 
 - **Status:** ACCEPTED

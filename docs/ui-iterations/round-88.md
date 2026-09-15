@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-94 -->
+<!-- last-reviewed: 2026-09-12 round-98 -->
 # Round 88 — The floating to-do widget: the owner's spec, manual edits included
 
 Date: 2026-09-11 · Version: 0.85.0 → 0.86.0 · Scope: UX + capability (the
