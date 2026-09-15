@@ -322,6 +322,97 @@ describe("GET /system/updates (R89-A2)", () => {
   });
 });
 
+// ── R99-C: the release NOTES passthrough (GET /system/updates `body`) —
+// the About tab's one-click card renders the release body ("What's new").
+// The route caps it at 8,000 chars with an honest truncation marker (the
+// full notes live on the release page the same response links), and a
+// tag-only release ships "" (the card then renders no notes block).
+describe("R99-C: the release-notes body passthrough (GET /system/updates)", () => {
+  it("passes a normal-length body through VERBATIM", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, null);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            tag_name: "v0.99.0",
+            body: "## What's new\n\n- the one-click silent update\n- the startup auto-check",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok: boolean; body?: string };
+    expect(body.ok).toBe(true);
+    expect(body.body).toBe("## What's new\n\n- the one-click silent update\n- the startup auto-check");
+    vi.unstubAllGlobals();
+  });
+
+  it("a tag-only release (no body field) ships \"\" — never undefined", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, null);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ tag_name: "v0.99.0" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })),
+    );
+
+    const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
+    const body = res.json() as { ok: boolean; body?: string };
+    expect(body.ok).toBe(true);
+    expect(body.body).toBe("");
+    vi.unstubAllGlobals();
+  });
+
+  it("a changelog-sized body is capped at 8,000 chars + the honest truncation marker", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, null);
+    const longBody = "x".repeat(9_001);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ tag_name: "v0.99.0", body: longBody }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
+    const body = res.json() as { ok: boolean; body?: string };
+    expect(body.ok).toBe(true);
+    // The cap is EXACTLY the first 8,000 chars + the marker — the cut is
+    // visible, never silent.
+    expect(body.body?.startsWith("x".repeat(8_000))).toBe(true);
+    expect(body.body).toContain("[truncated — the full notes live on the release page]");
+    expect(body.body?.length).toBeGreaterThan(8_000);
+    expect(body.body?.length).toBeLessThan(8_100);
+    // And an exactly-8,000 body rides UNMARKED (the cap is inclusive).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ tag_name: "v0.99.0", body: "y".repeat(8_000) }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    const res2 = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
+    const body2 = res2.json() as { body?: string };
+    expect(body2.body).toBe("y".repeat(8_000));
+    vi.unstubAllGlobals();
+  });
+});
+
 // ── R91-E: the IN-APP UPDATE DOWNLOAD (POST /system/updates/download +
 // GET /system/updates/download/progress). R94-B: the repo is public, so the
 // download runs anonymously when no PAT exists (no 409 anymore) and the

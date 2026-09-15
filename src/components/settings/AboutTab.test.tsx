@@ -18,18 +18,29 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { fetchSystemUpdates, resetApplication } from "../../lib/api";
+import {
+  fetchSystemUpdates,
+  fetchUpdateDownloadProgress,
+  resetApplication,
+  startUpdateDownload,
+  type SystemUpdateDownload,
+} from "../../lib/api";
+import { APP_VERSION } from "../../lib/version";
 // R99-A: the link router’s preference cache + the stores it resolves the
 // active project from (in-app routing + the no-project fallback).
 import { setLinkOpeningMode } from "../../lib/open-link";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
+// R99-C: the badge-sync store (the manual check refreshes the sidebar dot).
+import { useUpdateCheckerStore } from "../../lib/update-checker";
 import { resetTestState, renderWithProviders } from "../../test-utils";
 import { AboutTab } from "./AboutTab";
 
 vi.mock("../../lib/api", () => ({
   fetchSystemUpdates: vi.fn(),
+  fetchUpdateDownloadProgress: vi.fn(),
   resetApplication: vi.fn(),
+  startUpdateDownload: vi.fn(),
   // R99-A: open-link.ts imports this from the same module — present in
   // the mock so the import never lands on undefined (hydration is never
   // kicked in these tests; the router’s default cache stands).
@@ -52,6 +63,8 @@ beforeEach(() => {
   useRightSidebarStore.setState({ activeProjectId: null, byProject: {} });
   vi.mocked(fetchSystemUpdates).mockReset();
   vi.mocked(resetApplication).mockReset();
+  vi.mocked(startUpdateDownload).mockReset();
+  vi.mocked(fetchUpdateDownloadProgress).mockReset();
 });
 
 describe("AboutTab (ROUND-89 R89-A)", () => {
@@ -198,5 +211,247 @@ describe("AboutTab (ROUND-89 R89-A)", () => {
     });
     // The in-app leg never fired — forceExternal is the deliberate device-browser gesture.
     expect(Object.values(useRightSidebarStore.getState().byProject)).toHaveLength(0);
+  });
+});
+
+// ── R99-C: THE ONE-CLICK SILENT UPDATE. The owner's directive: "I click
+// the update button in the application and everything else happens
+// automatically afterwards by itself without me having to make any
+// changes." The available-update card becomes a real card (version line +
+// collapsible "What's new" + the ONE button), the flow is honest at every
+// step (byte-true MB + %, the checksum verify, the silent launch), and a
+// REJECTED silent launch keeps the legacy interactive wizard one click
+// away — reusing the already-verified installer, never re-downloading.
+describe("AboutTab R99-C: the one-click silent update", () => {
+  /** The full happy-path progress sequence updateNow walks: the reuse
+   * check (idle) → download poll (partial bytes) → verify poll → ready.
+   * The sticky DEFAULT is "ready": the sidecar's single-flight state stays
+   * ready once an installer is verified, so the fallback's reuse check (a
+   * 5th call) still finds it — that reuse IS the no-re-download contract. */
+  function mockDownloadSequence(): void {
+    const state = (patch: Partial<SystemUpdateDownload>): SystemUpdateDownload => ({
+      status: "idle",
+      received: 0,
+      total: 0,
+      path: null,
+      version: null,
+      error: null,
+      ...patch,
+    });
+    const ready = state({
+      status: "ready",
+      path: "C:\\Temp\\ACUTE-CODE-0.87.0-x64-setup.exe",
+      version: "0.87.0",
+    });
+    vi.mocked(fetchUpdateDownloadProgress)
+      .mockResolvedValue(ready)
+      .mockResolvedValueOnce(state({})) // the reuse check (nothing ready yet)
+      .mockResolvedValueOnce(state({ status: "downloading", received: 13_000_000, total: 38_700_000 }))
+      .mockResolvedValueOnce(state({ status: "verifying" }))
+      .mockResolvedValueOnce(ready);
+    vi.mocked(startUpdateDownload).mockResolvedValue({ ok: true, status: "downloading" });
+  }
+
+  function mockAvailableRelease(): void {
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: APP_VERSION,
+      releasesUrl: "https://github.com/testplay-byte/ACUTE-CODE/releases",
+      ok: true,
+      latest: "0.87.0",
+      updateAvailable: true,
+      releaseUrl: "https://github.com/testplay-byte/ACUTE-CODE/releases/tag/v0.87.0",
+      body: "## What's new\n\n- the one-click silent update\n- the startup auto-check",
+      asset: {
+        url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/42",
+        size: 38_700_000,
+        digest: `sha256:${"ab".repeat(32)}`,
+      },
+    });
+  }
+
+  it("renders the one-click card — the version line, the What's-new block, the Update now button, the auto-check toggle — and SYNCs the badge", async () => {
+    mockAvailableRelease();
+    // The Update now button is desktop-only (a browser has no installer) —
+    // the __TAURI__ global is the whole shell mock.
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+      core: { invoke: vi.fn().mockResolvedValue(undefined) },
+    };
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("update-state").textContent).toContain("Update available — v0.87.0");
+    });
+    // The current → new version line (tabular-nums mono).
+    expect(screen.getByTestId("update-state").textContent).toContain(`v${APP_VERSION} → v0.87.0`);
+    // The release notes block (collapsible; the route's body passthrough).
+    expect(screen.getByTestId("update-notes-body").textContent).toContain("the one-click silent update");
+    // The ONE button + the persisted auto-check toggle.
+    expect(screen.getByTestId("update-now-button")).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Check for updates automatically" })).toBeTruthy();
+    // The manual check refreshes the sidebar's pending-update dot (the
+    // R99-C badge-sync contract: one sync, two callers).
+    expect(useUpdateCheckerStore.getState().pendingVersion).toBe("0.87.0");
+  });
+
+  it("the manual check CLEARS the badge when the answer is up-to-date", async () => {
+    useUpdateCheckerStore.setState({ pendingVersion: "0.87.0" });
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: APP_VERSION,
+      releasesUrl: "x",
+      ok: true,
+      latest: APP_VERSION,
+      updateAvailable: false,
+    });
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("update-state").textContent).toContain("Up to date");
+    });
+    expect(useUpdateCheckerStore.getState().pendingVersion).toBeNull();
+  });
+
+  it("the What's-new block collapses blank-line runs + expands via the chevron", async () => {
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: APP_VERSION,
+      releasesUrl: "x",
+      ok: true,
+      latest: "0.87.0",
+      updateAvailable: true,
+      body: "Line one\n\n\n\n\nLine two",
+    });
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("update-notes-body")).toBeTruthy();
+    });
+    // Runs of blank lines collapse to ONE blank line (the markdown source's
+    // 3+ newlines are vertical noise in the mono block).
+    expect(screen.getByTestId("update-notes-body").textContent).toBe("Line one\n\nLine two");
+    const toggle = screen.getByTestId("update-notes-toggle");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("Update now runs the automatic sequence — byte-true progress (MB + %), then the SILENT invoke, then the restarting line", async () => {
+    mockAvailableRelease();
+    mockDownloadSequence();
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = { core: { invoke } };
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-now-button")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("update-now-button"));
+
+    // Step 1 — DOWNLOADING with the byte-true readout: 13,000,000 B =
+    // 12.4 MB of the 38,700,000 B total = 36.9 MB · 33% (real chunk data
+    // only, tabular-nums — never a fabricated indeterminate percentage).
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-progress").textContent).toContain(
+          "Downloading — 12.4 MB of 36.9 MB · 33%",
+        );
+      },
+      { timeout: 6_000 },
+    );
+    // Step 2 — VERIFYING (the sha256 checksum leg).
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-verifying")).toBeTruthy();
+      },
+      { timeout: 6_000 },
+    );
+    // Step 3 — the SILENT INSTALL invoke: the exact IPC arg the Rust
+    // command's NSIS "/S /R" leg keys on.
+    await waitFor(
+      () => {
+        expect(invoke).toHaveBeenCalledWith("run_update_installer", {
+          path: "C:\\Temp\\ACUTE-CODE-0.87.0-x64-setup.exe",
+          silent: true,
+        });
+      },
+      { timeout: 6_000 },
+    );
+    // Step 4 — the terminal line for the 1.5s the window survives.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-launched").textContent).toContain("Restarting into v0.87.0");
+      },
+      { timeout: 6_000 },
+    );
+    expect(screen.getByTestId("update-launched").textContent).toContain("your data is kept");
+  });
+
+  it("a REJECTED silent invoke shows the honest error + the wizard escape hatch — which reuses the verified installer (no re-download)", async () => {
+    mockAvailableRelease();
+    mockDownloadSequence();
+    // The silent launch leg rejects with the Rust error string (the ShellExecuteW
+    // SE_ERR path); the wizard retry resolves.
+    const invoke = vi.fn()
+      .mockRejectedValueOnce("launching the silent installer failed: ShellExecuteW answered 5 — the OS refused the launch (access denied)")
+      .mockResolvedValue(undefined);
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = { core: { invoke } };
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-now-button")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("update-now-button"));
+
+    // The honest error (role=alert, the Rust string verbatim) + the button.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-flow-error").textContent).toContain("ShellExecuteW answered 5");
+      },
+      { timeout: 6_000 },
+    );
+    expect(screen.getByTestId("update-flow-error").getAttribute("role")).toBe("alert");
+    const fallback = screen.getByTestId("update-wizard-fallback");
+    expect(fallback.textContent).toBe("Run the setup wizard manually");
+
+    // The escape hatch re-runs with silent:false — and REUSES the verified
+    // installer (the single-flight state is still "ready"): exactly ONE
+    // download for the whole journey.
+    fireEvent.click(fallback);
+    await waitFor(
+      () => {
+        expect(invoke).toHaveBeenCalledWith("run_update_installer", {
+          path: "C:\\Temp\\ACUTE-CODE-0.87.0-x64-setup.exe",
+          silent: false,
+        });
+      },
+      { timeout: 6_000 },
+    );
+    expect(vi.mocked(startUpdateDownload)).toHaveBeenCalledTimes(1);
+    // The wizard leg's honest terminal copy (the pre-R99 line, re-pinned).
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-launched").textContent).toContain(
+          "the setup wizard will close this app and install v0.87.0",
+        );
+      },
+      { timeout: 6_000 },
+    );
+  });
+
+  it("the auto-check toggle flips the persisted update-checker store", async () => {
+    renderWithProviders(<AboutTab />);
+
+    expect(useUpdateCheckerStore.getState().autoCheck).toBe(true);
+    fireEvent.click(screen.getByRole("switch", { name: "Check for updates automatically" }));
+    expect(useUpdateCheckerStore.getState().autoCheck).toBe(false);
+    // And back — the toggle is live in both directions.
+    fireEvent.click(screen.getByRole("switch", { name: "Check for updates automatically" }));
+    expect(useUpdateCheckerStore.getState().autoCheck).toBe(true);
   });
 });

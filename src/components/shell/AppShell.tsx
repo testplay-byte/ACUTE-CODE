@@ -15,6 +15,12 @@ import { initDesktopNotifications } from "../../lib/desktop-notifications";
 // obeys the saved preference (best-effort; a failed GET keeps the default
 // in-app mode).
 import { hydrateLinkOpeningMode } from "../../lib/open-link";
+// R99-C (owner: "I click the update button … and everything else happens
+// automatically afterwards"): the startup auto-check — after a post-boot
+// delay it runs the same /system/updates check the About tab's button
+// uses, 24h-cadence-gated, and surfaces a pending update as the Sidebar's
+// Settings dot + ONE clickable toast. Failures are silent console.warns.
+import { initUpdateChecker } from "../../lib/update-checker";
 import { AcuteLogo, Sidebar } from "./Sidebar";
 import { NotificationStreamStarter } from "../notifications/NotificationStreamStarter";
 import { Toaster } from "../notifications/Toaster";
@@ -62,10 +68,13 @@ export function AppShell() {
   // R98-J: the desktop-notification bridge boots with the app (the
   // best-effort permission pre-check — the real fires happen in the SSE
   // fan-out; see lib/desktop-notifications.ts). R99-A: the link router's
-  // preference hydrates on the same beat.
+  // preference hydrates on the same beat. R99-C: the update auto-check
+  // schedules itself on the same beat (its own 8s delay keeps it off the
+  // first-paint path; see lib/update-checker.ts).
   useEffect(() => {
     initDesktopNotifications();
     void hydrateLinkOpeningMode();
+    initUpdateChecker();
   }, []);
   // Round-28 WS-D2: boot-time health ping. If the sidecar is up + token is
   // set, flip demoData false so the streaming SSE path activates (the real

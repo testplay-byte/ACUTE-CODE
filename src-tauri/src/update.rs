@@ -16,7 +16,7 @@
 //! ShellExecute, and tauri-plugin-shell's JS `open` would fight the
 //! app-content scope).
 //!
-//! `run_update_installer(path)`:
+//! `run_update_installer(path, silent?)`:
 //!  · validates `path` — it must EXIST, be a `.exe`, and be a plausible
 //!    installer (> 10 MB; the real bundle is ~35 MB, a stray error page
 //!    is a few KB). No path escapes: any other extension is refused.
@@ -30,9 +30,9 @@
 //!    files being WRITABLE — TerminateProcess closes handles
 //!    asynchronously. By the time the installer below is launched, nothing
 //!    the app spawned holds the install directory.
-//!  · hands it to the OS `open` verb (ShellExecute "open") via the shell
-//!    plugin — exactly the OS handoff `open_external_url` already uses,
-//!    but for a LOCAL file the plugin's Rust-side entry accepts it.
+//!  · hands it to the OS — R99-C adds the SILENT leg (below); the legacy
+//!    leg is the shell plugin's `open` verb (ShellExecute "open"), exactly
+//!    the OS handoff `open_external_url` already uses, for a LOCAL file.
 //!  · schedules the APP's own exit 1.5s later. The NSIS installer
 //!    replaces the running exe — Windows locks a running executable's
 //!    file, so the app must close for the install to land. 1.5s is enough
@@ -41,6 +41,39 @@
 //!    already dead by this point — the exit only has to close the app's
 //!    own exe; the RunEvent::Exit shutdown in lib.rs finds no child and
 //!    returns immediately.)
+//!
+//! ROUND-99 (R99-C): THE ONE-CLICK SILENT UPDATE. The owner's directive:
+//! "I click the update button in the application and everything else
+//! happens automatically afterwards by itself without me having to make
+//! any changes." The optional `silent` IPC arg (camelCase `silent` on the
+//! invoke, identical on both legs of the auto-conversion) switches the
+//! launch to ShellExecuteW with the parameter string `/S /R`:
+//!  · `/S` is NSIS's own silent flag — no wizard pages, no prompts, and a
+//!    currentUser install reuses the existing $INSTDIR by default (no
+//!    path re-derivation, no elevation prompt).
+//!  · `/R` is tauri's NSIS-template RESTART flag: on a successful silent
+//!    install the template's `.onInstSuccess` relaunches
+//!    `$INSTDIR\ACUTE-CODE.exe` via `nsis_tauri_utils::RunAsUser` (the
+//!    same leg tauri-plugin-updater rides) — the app comes back by
+//!    itself, which the MUI2 finish-page "run app" checkbox can never do
+//!    in silent mode (the finish page is skipped). A FAILED install does
+//!    not relaunch (`.onInstSuccess` never fires) — honest.
+//!  · `silent: None` / `Some(false)` keeps the legacy INTERACTIVE wizard
+//!    (the escape hatch the About tab offers when the silent launch
+//!    rejects — pathological machines keep a working path).
+//!
+//! WHY hand-rolled ShellExecuteW instead of `app.shell().open(path, …)`:
+//! the shell plugin's second parameter is an `open::Program` ENUM (the
+//! named opener/browser programs the `open` crate knows), NEVER a
+//! free-form parameter string — the plugin's `open` delegates to the
+//! `open` crate's `that_detached`, which calls ShellExecuteExW with
+//! lpParameters left null. ShellExecuteW takes the parameter string
+//! directly, and — like the ShellExecuteExW leg the interactive flow
+//! rides (proven on the owner's machine since R91) — the launched
+//! process is fully detached from this process's lifetime: it survives
+//! the 1.5s exit below, and it joins no Job-Object leash (only the
+//! explicitly-assigned sidecar children are in the R94-B job, never the
+//! installer).
 //!
 //! ASYNC on purpose (the R91-B1 lesson, same as open_browser_window): a
 //! sync command runs on the main thread, and nothing in THIS command
@@ -62,10 +95,17 @@ use tauri::AppHandle;
 /// by mistake — refuse to execute it.
 const MIN_INSTALLER_BYTES: u64 = 10 * 1024 * 1024;
 
-/// `run_update_installer(path)` — launch the downloaded update installer
-/// and schedule the app's exit. See the module header for the contract.
+/// `run_update_installer(path, silent?)` — launch the downloaded update
+/// installer and schedule the app's exit. See the module header for the
+/// contract. R99-C: `silent: Some(true)` runs the NSIS installer with
+/// `/S /R` (silent install + the template's post-success relaunch);
+/// `None`/`Some(false)` keeps the interactive setup wizard.
 #[tauri::command]
-pub async fn run_update_installer(app: AppHandle, path: String) -> Result<(), String> {
+pub async fn run_update_installer(
+    app: AppHandle,
+    path: String,
+    silent: Option<bool>,
+) -> Result<(), String> {
     let parsed = Path::new(&path);
     if parsed.is_absolute() {
         // Absolute is the expected form (the sidecar passes its own temp
@@ -113,14 +153,25 @@ pub async fn run_update_installer(app: AppHandle, path: String) -> Result<(), St
         kill_outcome.describe()
     ));
 
-    // The OS handoff — tauri-plugin-shell's Rust-side open (the same
-    // entry open_external_url uses; a LOCAL path needs no ACL walk, and
-    // the extension/existence gates above are the path-escape guard).
-    use tauri_plugin_shell::ShellExt;
-    #[allow(deprecated)]
-    app.shell()
-        .open(&path, None)
-        .map_err(|e| format!("launching the installer failed: {e}"))?;
+    // The OS handoff — R99-C's two legs. SILENT (the one-click default
+    // the frontend sends): ShellExecuteW with "/S /R" — the NSIS silent
+    // flag + tauri's template restart flag (see the module header: the
+    // relaunch rides the template's .onInstSuccess RunAsUser, and the
+    // launch is as detached as the interactive leg the shell plugin
+    // serves). INTERACTIVE (absent/false — the About tab's fallback
+    // button): the shell plugin's Rust-side open (the same entry
+    // open_external_url uses; a LOCAL path needs no ACL walk, and the
+    // extension/existence gates above are the path-escape guard).
+    if silent.unwrap_or(false) {
+        silent_launch::open_with_parameters(&path, silent_launch::ARGS)
+            .map_err(|e| format!("launching the silent installer failed: {e}"))?;
+    } else {
+        use tauri_plugin_shell::ShellExt;
+        #[allow(deprecated)]
+        app.shell()
+            .open(&path, None)
+            .map_err(|e| format!("launching the installer failed: {e}"))?;
+    }
 
     // Give the reply time to reach the webview, then close the app so the
     // NSIS installer can replace the executable (Windows locks a running
@@ -132,4 +183,109 @@ pub async fn run_update_installer(app: AppHandle, path: String) -> Result<(), St
         exit_handle.exit(0);
     });
     Ok(())
+}
+
+// ── R99-C: the SILENT-install launch leg (Windows) ──────────────────────────
+//
+// ShellExecuteW is the one Win32 entry that both (a) launches a local .exe
+// through the shell — the SAME detachment family the interactive leg rides
+// (the `open` crate the shell plugin delegates to calls ShellExecuteExW; the
+// launched process outlives this app's exit and joins no job object) — and
+// (b) accepts a free-form PARAMETER string, which the shell plugin's `open`
+// cannot express (its second argument is the named `open::Program` enum).
+// Hand-rolled FFI mirrors the R55 wincred.rs precedent (direct CredReadW/
+// CredWriteW): enabling windows-sys's Win32_UI_Shell feature for one call
+// is a wider blast radius than six declared word/pointer arguments. No
+// structs, no GetLastError plumbing — ShellExecuteW reports success as a
+// return value > 31 and its own SE_ERR_* codes below that.
+#[cfg(windows)]
+pub(crate) mod silent_launch {
+    /// The parameter string for the silent leg: NSIS's `/S` (silent
+    /// install — no wizard, no prompts) + tauri's NSIS-template `/R`
+    /// (relaunch `$INSTDIR\ACUTE-CODE.exe` via the template's
+    /// `.onInstSuccess` → nsis_tauri_utils::RunAsUser after a SUCCESSFUL
+    /// install — the finish-page "run app" checkbox never renders
+    /// silently, so the template's own restart flag is the relaunch leg).
+    pub const ARGS: &str = "/S /R";
+
+    // SAFETY-of-declaration: six word/pointer-sized scalar arguments and an
+    // integer return — no structs, so there is no layout to get wrong. The
+    // `#[link]` attribute pulls shell32.lib in for the MSVC linker.
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(
+            hwnd: isize,
+            lp_operation: *const u16,
+            lp_file: *const u16,
+            lp_parameters: *const u16,
+            lp_directory: *const u16,
+            n_show: i32,
+        ) -> isize;
+    }
+
+    /// SW_SHOWNORMAL (winuser.h). NSIS `/S` renders no UI either way; the
+    /// flag keeps the call honest for any future non-silent parameter leg.
+    const SW_SHOWNORMAL: i32 = 1;
+
+    /// Opens `path` with the default "open" verb and `parameters` as the
+    /// launched process's command line. Buffers are NUL-terminated UTF-16
+    /// and outlive the call (the shell copies what it needs before
+    /// returning). Errors carry ShellExecuteW's own SE_ERR code.
+    pub fn open_with_parameters(path: &str, parameters: &str) -> Result<(), String> {
+        let file: Vec<u16> = wide(path);
+        let params: Vec<u16> = wide(parameters);
+        // SAFETY: `file`/`params` are NUL-terminated UTF-16 buffers alive
+        // until the call returns; the null hwnd (no owner window), null
+        // verb (the default "open" verb), and null directory (the target's
+        // own directory) are each explicitly documented as legal nulls.
+        let result = unsafe {
+            ShellExecuteW(
+                0,
+                std::ptr::null(),
+                file.as_ptr(),
+                params.as_ptr(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        // Win32 contract: a value > 31 means success; 0..=31 is SE_ERR_*.
+        if result > 31 {
+            Ok(())
+        } else {
+            Err(describe_se_err(result))
+        }
+    }
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// The honest SE_ERR_* reading (shellapi.h) — the reachability of
+    /// 2/3 was already proven impossible by the existence gates above,
+    /// so each hint stays one line, never a guess.
+    fn describe_se_err(code: isize) -> String {
+        let hint = match code {
+            0 => "the OS is out of memory or resources".to_string(),
+            2 => "the installer file was not found".to_string(),
+            3 => "the installer's directory was not found".to_string(),
+            5 => "the OS refused the launch (access denied)".to_string(),
+            26 => "a sharing violation blocked the launch".to_string(),
+            27 => "the file association is incomplete".to_string(),
+            28 => "the command timed out".to_string(),
+            31 => "no program is associated with the installer".to_string(),
+            other => format!("ShellExecuteW error code {other}"),
+        };
+        format!("ShellExecuteW answered {code} — {hint}")
+    }
+}
+
+/// Non-Windows dev checkouts: the silent installer launch is a
+/// packaged-Windows-app concern (the wincred.rs imp-stub pattern — keep
+/// every call site honest instead of silently pretending).
+#[cfg(not(windows))]
+pub(crate) mod silent_launch {
+    pub const ARGS: &str = "";
+    pub fn open_with_parameters(_path: &str, _parameters: &str) -> Result<(), String> {
+        Err("the silent installer launch is only available in the packaged Windows app".to_string())
+    }
 }

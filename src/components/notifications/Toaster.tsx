@@ -12,10 +12,16 @@
  *     disappear after 1.5 seconds"): non-persistent toasts auto-dismiss
  *     after 1.5s. permission_request + task_failed stay PERSISTENT — they
  *     need a decision/attention, so those NEVER auto-dismiss.
+ *   - ROUND-99 (R99-C): an ACTIONABLE toast — one carrying a `link` (the
+ *     update-available ping → /settings?tab=about) — is persistent too: a
+ *     toast that needs a click must outlive the 1.5s auto-dismiss, the
+ *     same needs-attention class as permission_request. Click navigates
+ *     to the link (the openSession leg for session records is unchanged).
  *   - Click the body → mark the notification read + navigate to its session
  *     (via react-router's useNavigate). For permission_request, this drops
  *     the user into the chat where the ApprovalCard lives — the approval
- *     modal itself is in AgentChatPanel; navigation is enough.
+ *     modal itself is in AgentChatPanel; navigation is enough. For a LINKED
+ *     local toast, click navigates to its link.
  *   - Esc dismisses the most recent (top) toast.
  *   - z-[100] so it sits above the right sidebar + any popover.
  *
@@ -52,11 +58,21 @@ import { useNotificationStreamStore } from "../../hooks/use-notifications";
 
 /** Toast kinds that NEVER auto-dismiss — they need user attention
  * (permission_request needs a decision; task_failed needs eyes). ROUND-64
- * (R64-c): exported for tests + the kind policy below. */
+ * (R64-c): exported for tests + the kind policy below.
+ * ROUND-99 (R99-C): an ACTIONABLE toast (a record carrying a `link` —
+ * e.g. the update-available ping) joins this class for the SAME reason
+ * (it needs a click); the rule lives in toastNeedsAttention below so the
+ * kind set itself stays the server contract. */
 export const PERSISTENT_KINDS: ReadonlySet<NotificationKind> = new Set<NotificationKind>([
   "permission_request",
   "task_failed",
 ]);
+
+/** R99-C: the full persistence rule — a persistent KIND or an actionable
+ * LINK keeps the toast on screen until dismissed. Exported for tests. */
+export function toastNeedsAttention(n: NotificationRecord): boolean {
+  return PERSISTENT_KINDS.has(n.kind) || (typeof n.link === "string" && n.link !== "");
+}
 
 /** ROUND-64 (R64-c, owner: "On the right side it shows me the notifications.
  * The internal app ones should automatically disappear after 1.5
@@ -212,7 +228,10 @@ export function Toaster() {
     toastedRef.current.add(n.id);
     setToasts((cur) => [...cur, { id: n.id, notification: n }]);
 
-    if (!PERSISTENT_KINDS.has(n.kind)) {
+    // R99-C: toastNeedsAttention covers the persistent KINDS + the
+    // actionable LINK leg — both stay until dismissed; everything else
+    // is a read-only ping that honors the R64-c 1.5s auto-dismiss.
+    if (!toastNeedsAttention(n)) {
       const timer = setTimeout(() => {
         setToasts((cur) => cur.filter((t) => t.id !== n.id));
         timersRef.current.delete(n.id);
@@ -254,11 +273,14 @@ export function Toaster() {
     return () => window.removeEventListener("keydown", onKey);
   }, [toasts]);
 
-  // Click the toast body: mark the notification read + navigate to its
-  // session. For permission_request, navigation alone surfaces the chat's
-  // ApprovalCard (the approval modal lives in AgentChatPanel).
+  // Click the toast body: mark the notification read + navigate. A LINKED
+  // local toast (R99-C) navigates to its in-app route (e.g. the update ping
+  // → /settings?tab=about); a session record navigates to its chat (for
+  // permission_request, navigation alone surfaces the chat's ApprovalCard).
   const openSession = (n: NotificationRecord) => {
-    if (n.sessionId && n.projectId) {
+    if (n.link && n.link !== "") {
+      navigate(n.link);
+    } else if (n.sessionId && n.projectId) {
       navigate(
         `/project/${encodeURIComponent(n.projectId)}/chat?session=${encodeURIComponent(n.sessionId)}`,
       );
@@ -276,7 +298,9 @@ export function Toaster() {
       <AnimatePresence initial={false}>
         {toasts.map(({ id, notification: n }) => {
           const tone = toneForKind(n.kind);
-          const clickable = !!n.sessionId && !!n.projectId;
+          // R99-C: a linked local toast is clickable — its body is the View
+          // action (the update ping navigates to /settings?tab=about).
+          const clickable = !!n.link || (!!n.sessionId && !!n.projectId);
           return (
             <motion.div
               key={id}

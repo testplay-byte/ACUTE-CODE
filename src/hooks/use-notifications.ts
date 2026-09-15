@@ -100,11 +100,17 @@ export const useNotificationStreamStore = create<NotificationStreamState>(
  * bottom-right toast card (auto-dismiss 6s for the default `task_complete`
  * kind; persistent kinds like `task_failed` stay until dismissed) without
  * inflating the Bell's unread badge.
+ *
+ * ROUND-99 (R99-C): the optional `link` turns a local toast into an
+ * ACTIONABLE one — the Toaster navigates there on click and keeps the
+ * toast on screen until dismissed (a toast that needs a click must
+ * outlive 1.5s; the R64-c auto-dismiss covers read-only pings).
  */
 export function pushLocalToast(
   title: string,
   body?: string,
   kind: NotificationKind = "task_complete",
+  link?: string,
 ): void {
   useNotificationStreamStore.getState().pushLocal({
     id: `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -115,6 +121,7 @@ export function pushLocalToast(
     sessionId: null,
     projectId: null,
     read: 1,
+    ...(link !== undefined ? { link } : {}),
   });
 }
 

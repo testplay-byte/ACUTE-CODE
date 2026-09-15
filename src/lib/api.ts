@@ -4367,6 +4367,10 @@ export interface SystemUpdateCheck {
   latest?: string;
   updateAvailable?: boolean;
   releaseUrl?: string;
+  /** R99-C: the release's NOTES body (markdown, capped at 8,000 chars +
+   * an honest truncation marker by the route; "" for a tag-only release) —
+   * feeds the About tab's "What's new" block. */
+  body?: string;
   /** R91-E: the release's x64 setup.exe asset (present when the release has
    * one) — feeds the in-app "Update now" download. */
   asset?: { url: string; size: number; digest: string | null };

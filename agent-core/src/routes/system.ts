@@ -49,6 +49,24 @@ const GITHUB_REPO = "testplay-byte/ACUTE-CODE";
 const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 const GITHUB_RELEASES_PAGE = `https://github.com/${GITHUB_REPO}/releases`;
 
+// ── R99-C: the release NOTES passthrough cap ─────────────────────────────────
+// The About tab's "What's new" block renders the release body as plain text;
+// a full changelog entry can run far past that surface. 8,000 chars is the
+// same order as the prompt-override cap (PROMPT_OVERRIDE_CHAR_CAP) — plenty
+// for a real release's notes, small enough to never bloat the check response.
+// The honest truncation marker keeps the cut visible (the full notes live on
+// the release page the same response already links).
+const RELEASE_BODY_CAP = 8_000;
+const RELEASE_BODY_TRUNCATION_MARKER = "\n\n[truncated — the full notes live on the release page]";
+
+/** R99-C: the release body, capped + honestly marked. "" when the release
+ * carried no body (a tag-only release — the card then renders no notes). */
+function releaseBodyForCard(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  if (raw.length <= RELEASE_BODY_CAP) return raw;
+  return `${raw.slice(0, RELEASE_BODY_CAP)}${RELEASE_BODY_TRUNCATION_MARKER}`;
+}
+
 // ── R91-E: the IN-APP UPDATER's download state ─────────────────────────────
 // The owner: "there was no inbuilt update system… I can update the application
 // from within the app itself rather than going anywhere." The download
@@ -95,10 +113,14 @@ function claimUpdateDownload(): boolean {
   return true;
 }
 
-/** The GitHub release JSON shape the updater cares about (tag + assets). */
+/** The GitHub release JSON shape the updater cares about (tag + assets +
+ * the release-notes body). */
 interface GithubRelease {
   tag_name?: unknown;
   html_url?: unknown;
+  /** R99-C: the release BODY markdown (the release notes) — passed through
+   * to the About tab's "What's new" block, capped at RELEASE_BODY_CAP. */
+  body?: unknown;
   assets?: Array<{
     name?: unknown;
     /** R94-B: the API asset endpoint (api.github.com/…/assets/<id>) — serves
@@ -336,11 +358,17 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
         // (The digest is GitHub's own server-side sha256 of the uploaded
         // asset — the same value the launcher verifies against.)
         const asset = findInstallerAsset(release);
+        // R99-C: the release NOTES passthrough — the About tab's one-click
+        // card renders the body ("What's new"); the route's own cap + honest
+        // truncation marker keep a changelog-sized body from bloating the
+        // response ("" for a tag-only release).
+        const body = releaseBodyForCard(release.body);
         return {
           ...base,
           ok: true,
           latest,
           updateAvailable,
+          body,
           releaseUrl:
             typeof release.html_url === "string" ? release.html_url : GITHUB_RELEASES_PAGE,
           ...(asset !== null

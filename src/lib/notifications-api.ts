@@ -30,7 +30,10 @@ export type NotificationKind =
   | "subagent_complete"
   | "subagent_failed";
 
-/** Stored notification record (returned by every route). */
+/** Stored notification record (returned by every route).
+ * R99-C: `link` is a CLIENT-ONLY field — server records never carry it;
+ * local toasts (pushLocalToast) set it to make the toast ACTIONABLE (the
+ * Toaster navigates there on click and keeps the toast until dismissed). */
 export interface NotificationRecord {
   id: string;
   ts: string;
@@ -40,6 +43,10 @@ export interface NotificationRecord {
   sessionId: string | null;
   projectId: string | null;
   read: 0 | 1;
+  /** R99-C: an in-app route a LOCAL toast navigates to on click
+   * ("/settings?tab=about" for the update-available ping). Absent on
+   * every server-published record. */
+  link?: string | null;
 }
 
 /** GET /notifications response shape. */

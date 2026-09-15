@@ -8,6 +8,10 @@ import { resetFixtureSessions } from "./lib/session-fixtures";
 import { useConfigStore } from "./lib/config-store";
 import { useThemeStore } from "./lib/theme-store";
 import { useProjectChatStore } from "./lib/project-chat-store";
+// R99-C: the update-checker's persisted state (auto-check + cadence stamp +
+// the pending flag) — reset like every other persisted store so a test's
+// pending update never leaks a Settings dot into the next one.
+import { useUpdateCheckerStore } from "./lib/update-checker";
 
 /** Fresh QueryClient per render: no retry, no stale cache across tests. */
 function createTestQueryClient() {
@@ -36,6 +40,9 @@ export function resetTestState() {
   // rail to survive a restart) — reset it so tests never inherit a prior
   // test's rail state (appSidebarVisible needs no reset: transient).
   useProjectChatStore.setState({ appSidebarMinimized: false });
+  // R99-C: fresh update-checker state per test (auto-check ON, no pending
+  // update, no cadence stamp — the fresh-install defaults).
+  useUpdateCheckerStore.setState({ autoCheck: true, lastCheckTs: 0, pendingVersion: null });
   localStorage.clear();
   // Shell tests exercise the main app, not first-run onboarding — mark setup done.
   localStorage.setItem("acute.setupDone", "1");

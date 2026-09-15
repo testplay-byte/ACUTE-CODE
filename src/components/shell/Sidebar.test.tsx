@@ -8,6 +8,8 @@ import { createFixtureProjects, getFixtureProjects } from "../../lib/project-fix
 import { getFixtureSessions } from "../../lib/session-fixtures";
 import { useActiveStreams } from "../../lib/active-streams";
 import { useProjectChatStore } from "../../lib/project-chat-store";
+// R99-C: the update-pending signal — the Settings dot's store.
+import { useUpdateCheckerStore } from "../../lib/update-checker";
 import type { Project, ProjectsBackend, Session, SessionsBackend } from "../../lib/api";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 
@@ -139,6 +141,43 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     expect(screen.queryByRole("button", { name: /^sessions$/i, hidden: true })).toBeNull();
     expect(screen.queryByText("Sessions")).toBeNull();
     expect(screen.queryByText("Agents")).toBeNull();
+  });
+
+  it("R99-C: the Settings entry carries the update-pending dot while a newer release waits (full panel + the minimized rail)", async () => {
+    // No pending update → no dot, no sr-only announcement (the resting nav).
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+        </Routes>
+      </>,
+    );
+    expect(screen.queryByTestId("settings-update-dot")).toBeNull();
+    expect(screen.queryByText("update available")).toBeNull();
+
+    // A pending update (the update-checker store the auto-check + the
+    // About tab sync) → the accent dot + the sr-only reading on the full
+    // panel's SettingsButton — the zustand subscription re-renders the
+    // entry in place, no remount needed.
+    useUpdateCheckerStore.setState({ pendingVersion: "0.99.0" });
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-update-dot")).toBeTruthy();
+    });
+    expect(screen.getAllByText("update available").length).toBeGreaterThan(0);
+
+    // …and the minimized rail's gear (the same signal, minimized form).
+    useProjectChatStore.setState({ appSidebarMinimized: true });
+    await screen.findByTestId("sidebar-rail");
+    await waitFor(() => {
+      expect(screen.getByTestId("rail-settings").querySelector('[data-testid="settings-update-dot"]')).toBeTruthy();
+    });
+
+    // The update lands (the boot self-heal clears the flag) → the dot is gone.
+    useUpdateCheckerStore.setState({ pendingVersion: null });
+    await waitFor(() => {
+      expect(screen.queryByTestId("settings-update-dot")).toBeNull();
+    });
   });
 
   it("R62: the MINIMIZE button lives at the very top; clicking swaps the panel to its 64px icon rail; the rail's top button restores", async () => {

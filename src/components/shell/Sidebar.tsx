@@ -42,6 +42,10 @@ import { useCreateSession, useDeleteSession, useRenameSession, useSessions } fro
 import { useAgents } from "../../hooks/use-agents";
 import { useActiveStreams } from "../../lib/active-streams";
 import { useProjectChatStore } from "../../lib/project-chat-store";
+// R99-C: the app-wide "an update is pending" signal — drives the accent dot
+// on the sidebar's Settings entries (the store persists across restarts and
+// self-heals at boot via initUpdateChecker).
+import { useUpdateCheckerStore } from "../../lib/update-checker";
 import { withAlpha } from "../dashboard/helpers";
 import { SkeletonRows } from "../shared/Skeletons";
 import { NotificationBell } from "../notifications/NotificationBell";
@@ -620,6 +624,27 @@ export function Sidebar() {
  * minimized settings sidebar must NOT fall back to the projects rail). */
 export type RailVariant = "normal" | "settings";
 
+// R99-C: the update-pending dot shared by every "Settings" entry point —
+// the full sidebar's SettingsButton and the rail's settings gear. The DOT
+// mirrors the project tile's running-dot grammar (10px accent pill on a
+// sidebar-bg ring); aria-hidden + an sr-only "update available" carries the
+// meaning to screen readers without inventing a new chip species.
+function UpdatePendingDot({ styles }: { styles: ReturnType<typeof useThemeStyles> }) {
+  const updatePending = useUpdateCheckerStore((s) => s.pendingVersion !== null);
+  if (!updatePending) return null;
+  return (
+    <>
+      <span
+        aria-hidden
+        data-testid="settings-update-dot"
+        className="absolute -top-0.5 -right-0.5 w-[10px] h-[10px] rounded-full border-2"
+        style={{ background: styles.accent, borderColor: styles.sidebarBg }}
+      />
+      <span className="sr-only">update available</span>
+    </>
+  );
+}
+
 function MinimizedRail({
   onExpand,
   variant = "normal",
@@ -651,6 +676,7 @@ function MinimizedRail({
     active: boolean,
     onClick: () => void,
     testId?: string,
+    showUpdateDot = false,
   ) => (
     <button
       onClick={onClick}
@@ -658,7 +684,7 @@ function MinimizedRail({
       aria-current={active ? "page" : undefined}
       title={label}
       data-testid={testId}
-      className="w-10 h-10 shrink-0 grid place-items-center rounded-[12px] transition-all duration-200"
+      className="relative w-10 h-10 shrink-0 grid place-items-center rounded-[12px] transition-all duration-200"
       style={{
         background: active ? styles.accent : "transparent",
         color: active ? styles.accentText : styles.textSecondary,
@@ -672,6 +698,9 @@ function MinimizedRail({
       }}
     >
       {icon}
+      {/* R99-C: the update-pending dot on the rail's SETTINGS entry (the
+          full sidebar's SettingsButton carries the same dot). */}
+      {showUpdateDot && <UpdatePendingDot styles={styles} />}
     </button>
   );
 
@@ -799,7 +828,7 @@ function MinimizedRail({
           R66: inside the settings-variant conditional, so the settings rail
           ends after the section icons (no projects footer there). */}
       <NotificationBell collapsed />
-      {railBtn("Settings", <Settings size={17} strokeWidth={2} />, settingsActive, () => navigate("/settings"), "rail-settings")}
+      {railBtn("Settings", <Settings size={17} strokeWidth={2} />, settingsActive, () => navigate("/settings"), "rail-settings", true)}
         </>
       )}
     </div>
@@ -855,7 +884,9 @@ function UsageButton() {
 /** Prominent Settings button (owner round-33): a card-style row — icon tile
  * in an accent-tinted square + bold label — visually distinct from the plain
  * nav rows above the divider. R60-C: expanded card only (the collapsed gear
- * tile went with the rail). */
+ * tile went with the rail). R99-C: carries the update-pending DOT while a
+ * newer release is waiting (the rail's settings gear mirrors it).
+ */
 function SettingsButton() {
   const styles = useThemeStyles();
   const navigate = useNavigate();
@@ -865,7 +896,7 @@ function SettingsButton() {
     <button
       onClick={() => navigate("/settings")}
       aria-current={active ? "page" : undefined}
-      className="w-full h-11 flex items-center gap-2.5 px-2.5 rounded-[12px] border-[1.5px] transition-all hover:-translate-y-px"
+      className="relative w-full h-11 flex items-center gap-2.5 px-2.5 rounded-[12px] border-[1.5px] transition-all hover:-translate-y-px"
       style={{
         background: active ? withAlpha(styles.accent, 0.12) : styles.card,
         borderColor: active ? withAlpha(styles.accent, 0.4) : styles.border,
@@ -883,6 +914,8 @@ function SettingsButton() {
       <span className="text-[13px] font-bold" style={{ color: styles.text }}>
         Settings
       </span>
+      {/* R99-C: the update-pending dot (see UpdatePendingDot above). */}
+      <UpdatePendingDot styles={styles} />
     </button>
   );
 }
