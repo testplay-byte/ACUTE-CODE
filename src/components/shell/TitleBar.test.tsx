@@ -244,6 +244,58 @@ describe("TitleBar — Tauri chrome", () => {
     warn.mockRestore();
   });
 
+  // R98-C1 (owner round-98: "giving them a background, with each one of them
+  // getting a distinct background… when I hover the colors will shift a
+  // little bit and maybe some animations will play too") — the window
+  // controls are VISIBLE chips now (subtle wash + hairline border), each
+  // with its own hover identity, the press contract, and the true restore
+  // glyph (the two-overlapping-squares window shape — the pre-R98 lucide
+  // `Copy` duplicate-action metaphor is dead).
+  it("R98-C1: distinct resting surfaces + hover identities + press motion", () => {
+    stubTauri();
+    render(<TitleBar />);
+
+    const rest = {
+      min: screen.getByRole("button", { name: "Minimize window" }) as HTMLElement,
+      max: screen.getByRole("button", { name: "Maximize window" }) as HTMLElement,
+      close: screen.getByRole("button", { name: "Close window" }) as HTMLElement,
+    };
+
+    for (const btn of Object.values(rest)) {
+      // The resting chip: a subtle wash + hairline border (never a ghost).
+      expect(btn.className).toContain("bg-[color-mix(in_srgb,var(--ac-subtle)_70%,transparent)]");
+      expect(btn.className).toContain("border-[color:var(--ac-border-subtle)]");
+      // The universal press contract.
+      expect(btn.className).toContain("active:scale-[0.96]");
+      // The 150ms color-shift transition the owner asked for.
+      expect(btn.className).toContain("duration-150");
+    }
+
+    // Each hover is its OWN identity: minimize = the quiet accent nudge,
+    // maximize = the stronger accent grow, close = the destructive danger.
+    expect(rest.min.className).toContain("var(--ac-accent)_14%");
+    expect(rest.max.className).toContain("var(--ac-accent)_22%");
+    expect(rest.close.className).toContain("var(--ac-danger)_16%");
+    expect(rest.close.className).not.toContain("var(--ac-accent)");
+  });
+
+  it("R98-C1: the restore glyph is the two-squares window shape, not a copy icon", async () => {
+    stubTauri({ isMaximized: () => Promise.resolve(true) });
+    render(<TitleBar />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Restore window" })).toBeTruthy(),
+    );
+    const restore = screen.getByRole("button", { name: "Restore window" }) as HTMLElement;
+    // The custom SVG glyph (with its occlusion mask), never lucide `Copy`.
+    const svg = restore.querySelector("svg");
+    expect(svg).toBeTruthy();
+    expect(svg?.querySelector("mask")).toBeTruthy();
+    expect(restore.querySelector("svg.lucide-copy")).toBeNull();
+    // The icon motion rides the hover group.
+    expect(restore.textContent).toBe("");
+  });
+
   // R59-A (owner: "make that top navigation bar rounded and give it padding
   // on all four sides") — the bar is a rounded CARD now: rounded on all four
   // corners, bordered all around (no more flat border-b strip), and the

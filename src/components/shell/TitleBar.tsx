@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Copy, Minus, Square, X } from "lucide-react";
+import { Minus, Square, X } from "lucide-react";
 import { isTauri } from "../../lib/sidecar";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { APP_NAME } from "../../lib/version";
@@ -50,6 +50,92 @@ type TauriListenFn = (
   event: string,
   handler: (ev: { payload: unknown }) => void,
 ) => Promise<() => void>;
+
+/**
+ * R98-C1 (owner: "each one of them getting a distinct background… when I
+ * hover the colors will shift a little bit and maybe some animations will
+ * play too") — the RESTORE glyph. The pre-R98 icon was lucide `Copy`, a
+ * duplicate-action metaphor standing in for restore. This is the true
+ * two-overlapping-squares window glyph (the Windows chrome-restore shape):
+ * the back square is CUT where the front square sits, via an SVG mask, so
+ * the two read as stacked windows rather than a copy action. 14px, current
+ * color, no fill — it inherits the button's ink (resting secondary → hover
+ * accent).
+ */
+function RestoreGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="h-3.5 w-3.5"
+      fill="none"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <defs>
+        <mask id="ac-restore-cut">
+          <rect x="0" y="0" width="16" height="16" fill="white" />
+          <rect x="5" y="5" width="9.5" height="9.5" rx="2" fill="black" />
+        </mask>
+      </defs>
+      {/* Back square — visible only outside the front square's footprint. */}
+      <rect
+        x="1.5"
+        y="1.5"
+        width="9.5"
+        height="9.5"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        mask="url(#ac-restore-cut)"
+      />
+      {/* Front square — the window you would return to. */}
+      <rect
+        x="5"
+        y="5"
+        width="9.5"
+        height="9.5"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.6"
+      />
+    </svg>
+  );
+}
+
+/**
+ * R98-C1 — the shared anatomy of the three window-control buttons. All
+ * color work rides Tailwind utilities over the --ac-* CSS vars (the
+ * design-language TOKENS §1 rule: hoverable colors NEVER take the
+ * JS-inline leg, which cannot express pseudo-states). The per-button
+ * HOVER identity (the owner's "colors shift a little" ask) is appended
+ * by the call sites: minimize = accent@14% + icon nudge, maximize/restore
+ * = accent@22% + icon scale, close = danger@16% + icon scale.
+ */
+const WINDOW_CONTROL_BASE =
+  "group grid h-8 w-10 place-items-center rounded-[9px] border " +
+  "bg-[color-mix(in_srgb,var(--ac-subtle)_70%,transparent)] " +
+  "border-[color:var(--ac-border-subtle)] " +
+  "text-[color:var(--ac-text-secondary)] " +
+  "transition-[transform,background-color,border-color,color] duration-150 " +
+  "active:scale-[0.96]";
+
+/** Hover identity: the quiet one — accent at 14%, icon nudges down 1px. */
+const MINIMIZE_HOVER =
+  "hover:bg-[color-mix(in_srgb,var(--ac-accent)_14%,transparent)] " +
+  "hover:border-[color-mix(in_srgb,var(--ac-accent)_35%,transparent)] " +
+  "hover:text-[color:var(--ac-accent)]";
+
+/** Hover identity: the grow one — accent at 22%, icon scales up. */
+const MAXIMIZE_HOVER =
+  "hover:bg-[color-mix(in_srgb,var(--ac-accent)_22%,transparent)] " +
+  "hover:border-[color-mix(in_srgb,var(--ac-accent)_35%,transparent)] " +
+  "hover:text-[color:var(--ac-accent)]";
+
+/** Hover identity: the destructive one — danger at 16%, icon scales up. */
+const CLOSE_HOVER =
+  "hover:bg-[color-mix(in_srgb,var(--ac-danger)_16%,transparent)] " +
+  "hover:border-[color-mix(in_srgb,var(--ac-danger)_40%,transparent)] " +
+  "hover:text-[color:var(--ac-danger)]";
 
 interface TauriGlobalShape {
   window: { getCurrentWindow: () => TauriWindowHandle };
@@ -181,31 +267,44 @@ export function TitleBar() {
         </span>
       </button>
 
-      {/* Window controls — R59-A: inset rounded buttons with a little breathing
-          room (pr-1.5 + gap-0.5) so the hover fills stay INSIDE the card's
-          corner radii; the ghost-hover language matches the app's buttons,
-          close keeps the destructive red. */}
-      <div className="flex h-full items-center gap-0.5 pr-1.5">
+      {/* Window controls — R98-C1 (owner round-98: "giving them a background,
+          with each one of them getting a distinct background… when I hover
+          the colors will shift a little bit and maybe some animations will
+          play too"). Spec: docs/design-language/WINDOW-CONTROLS.md. The
+          resting state is a VISIBLE chip — a subtle wash + hairline border
+          (no more ghost glyphs); each button's HOVER is its identity
+          (see the *_HOVER constants above). All color work rides the
+          --ac-* CSS-var leg, so hovers/transitions are pure CSS — no JS
+          handlers. Press: the universal active:scale-[0.96] contract. */}
+      <div className="flex h-full items-center gap-1 pr-1.5">
         <button
           type="button"
           aria-label="Minimize window"
           title="Minimize"
           onClick={onMinimize}
-          className="grid h-8 w-10 place-items-center rounded-[9px] text-muted transition-colors hover:bg-hover hover:text-ink"
+          className={`${WINDOW_CONTROL_BASE} ${MINIMIZE_HOVER}`}
         >
-          <Minus className="h-4 w-4" aria-hidden />
+          <Minus
+            className="h-4 w-4 transition-transform duration-150 group-hover:translate-y-[1px]"
+            aria-hidden
+          />
         </button>
         <button
           type="button"
           aria-label={maximized ? "Restore window" : "Maximize window"}
           title={maximized ? "Restore" : "Maximize"}
           onClick={onToggleMaximize}
-          className="grid h-8 w-10 place-items-center rounded-[9px] text-muted transition-colors hover:bg-hover hover:text-ink"
+          className={`${WINDOW_CONTROL_BASE} ${MAXIMIZE_HOVER}`}
         >
           {maximized ? (
-            <Copy className="h-3.5 w-3.5" aria-hidden />
+            <span className="grid place-items-center transition-transform duration-150 group-hover:scale-[1.08]">
+              <RestoreGlyph />
+            </span>
           ) : (
-            <Square className="h-3.5 w-3.5" aria-hidden />
+            <Square
+              className="h-3.5 w-3.5 transition-transform duration-150 group-hover:scale-[1.08]"
+              aria-hidden
+            />
           )}
         </button>
         <button
@@ -213,9 +312,12 @@ export function TitleBar() {
           aria-label="Close window"
           title="Close"
           onClick={onClose}
-          className="grid h-8 w-10 place-items-center rounded-[9px] text-muted transition-colors hover:bg-red-500/10 hover:text-red-500"
+          className={`${WINDOW_CONTROL_BASE} ${CLOSE_HOVER}`}
         >
-          <X className="h-4 w-4" aria-hidden />
+          <X
+            className="h-4 w-4 transition-transform duration-150 group-hover:scale-[1.08]"
+            aria-hidden
+          />
         </button>
       </div>
     </header>

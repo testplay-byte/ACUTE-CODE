@@ -457,6 +457,13 @@ export function syncThemeCssVars(styles: ThemeStyles): void {
     "--ac-sidebar-bg": styles.sidebarBg,
     "--ac-sidebar-border": styles.sidebarBorder,
     "--ac-sidebar-hover": styles.sidebarHover,
+    // R98-C1 (design-language TOKENS §4): the fixed semantic hues ride the
+    // CSS-var leg too, so hover-capable utilities (window controls, status
+    // chips) can express danger/success/warning without JS handlers. Same
+    // values as SEMANTIC_COLORS — the single documented exception set.
+    "--ac-danger": "#ef4444",
+    "--ac-success": "#22c55e",
+    "--ac-warning": "#f59e0b",
   };
   for (const [name, value] of Object.entries(vars)) {
     root.setProperty(name, value);
