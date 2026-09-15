@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-15 round-98 -->
+<!-- last-reviewed: 2026-09-15 round-99 -->
 # Components — the primitive catalog and composition rules
 
 Serves DESIGN-SYSTEM §5 (anatomy inventory). The inventory there names the
@@ -11,7 +11,7 @@ C2's mandate: no idiom re-implemented per file).
 | Primitive | Source | Contract |
 |---|---|---|
 | `SkeletonBlock` / `SkeletonRows` | `src/components/shared/Skeletons.tsx` | ALL loading states. Decorative `aria-hidden` pulse in `subtle` surface; the call site owns the single `role="status"` announcement. |
-| `ChoiceCard` | `src/pages/SettingsPage.tsx` | radio-circle + label + one-line description; the pattern for every pick-one setting (text size, timestamps, tool activity, search engine). |
+| `ChoiceCard` | `src/pages/SettingsPage.tsx` | radio-circle + label + one-line description; the pattern for every pick-one setting (text size, timestamps, tool activity, search engine, link opening — R99-A, wrapped in a labeled `role="group"` when the pair is one radio decision). |
 | `SettingsLoadErrorCard` | `src/pages/SettingsPage.tsx` | the honest error card for a failed settings GET: `role="alert"`, danger tint, exact cause, one Retry. |
 | `CommitNumberInput` | `src/pages/SettingsPage.tsx` | numeric stepper that PUTs only on blur/Enter (never mid-typing). |
 | `ConfirmDialog` | `src/components/settings/ConfirmDialog.tsx` | every destructive action's guard — exact enumeration of what will be destroyed. |

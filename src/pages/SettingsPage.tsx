@@ -32,6 +32,11 @@ import { DataStatsPanel } from "../components/usage/DataStatsPanel";
 // R98-J: the LIVE in-memory push of the switch to the notification bridge
 // (the bridge caches the flag so a flip applies to the very next record).
 import { setDesktopNotificationsEnabled } from "../lib/desktop-notifications";
+// R99-A: the central link router's live-push leg — the Browser tab's "Link
+// opening" card pushes every fresh GET + confirmed flip into the router's
+// in-memory cache so the next link click obeys without a restart (the
+// setDesktopNotificationsEnabled pattern).
+import { setLinkOpeningMode } from "../lib/open-link";
 import { useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
@@ -1684,6 +1689,18 @@ function BrowserTab() {
     onError: (err: Error) => setError(err.message),
   });
 
+  // R99-A: the LIVE push — every fresh GET + every confirmed flip (the
+  // onSuccess invalidation above refetches, landing here) seeds the central
+  // link router's in-memory cache, so the very next link click anywhere in
+  // the app already obeys. Only the two sanctioned spellings land (a value
+  // off the enum is not a reason to guess a different mode).
+  useEffect(() => {
+    const mode = settingsQuery.data?.linkOpeningMode;
+    if (mode === "in-app" || mode === "system") {
+      setLinkOpeningMode(mode);
+    }
+  }, [settingsQuery.data]);
+
   const current = settingsQuery.data;
   // R97-I part 3: the ERROR branch comes FIRST — with the pre-R97 gate a
   // failed GET (data undefined) hung on "loading…" forever. Stale data on a
@@ -1739,7 +1756,7 @@ function BrowserTab() {
           Browser
         </h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
-          The embedded browser's address bar, home page, default zoom, and quick links.
+          The embedded browser's address bar, home page, default zoom, link opening, and quick links.
         </p>
       </div>
 
@@ -1857,6 +1874,38 @@ function BrowserTab() {
                 <Plus size={12} />
               </button>
             </div>
+          </div>
+        </div>
+
+        {/* R99-A: LINK OPENING — where the app's own links land (chat, file
+            previews, the About tab). The shared ChoiceCard pattern (the
+            pick-one idiom: radio circle + bold label + one-line description,
+            active accent ring) — a labeled GROUP because the two cards are
+            one radio decision (aria-pressed on the cards themselves, the
+            Text Size / Timestamps precedent). Applied live via the effect
+            above. */}
+        <div className="mt-4 pt-3" style={{ borderTop: bdr("1.5px", styles.border) }}>
+          <div className="mb-2">
+            <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+              Link opening
+            </div>
+            <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+              Where links inside the app open — chat, file previews, and the About tab.
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="group" aria-label="Link opening preference">
+            <ChoiceCard
+              active={current.linkOpeningMode === "in-app"}
+              label="In-app browser (recommended)"
+              desc="Links open in ACUTE-CODE's built-in browser panel, beside your work."
+              onSelect={() => update.mutate({ linkOpeningMode: "in-app" })}
+            />
+            <ChoiceCard
+              active={current.linkOpeningMode === "system"}
+              label="System browser"
+              desc="Links open in your device's default browser."
+              onSelect={() => update.mutate({ linkOpeningMode: "system" })}
+            />
           </div>
         </div>
 

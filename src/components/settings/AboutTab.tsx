@@ -8,19 +8,32 @@
  *  · VERSION — the app version (the same single source the release
  *    pipeline enforces), a check-for-updates button (GitHub's latest
  *    release API — api.github.com allows CORS, and the desktop CSP is
- *    open), and the releases deep link.
+ *    open), and the releases link.
  *  · ABOUT — what the app is + the delivery phase.
  *  · RESET (danger zone) — type RESET to arm the button, then the full
  *    journey back to first-run: purge Credential Manager (Tauri) →
  *    POST /system/reset (wipes every table + reseeds factory state +
  *    purges the ~/.acute machine files) → clear the webview's
  *    localStorage stores + react-query cache → reload to onboarding.
+ *
+ * ROUND-99 (R99-A): the Releases link routes through the central link
+ * router (lib/open-link) — the app's OWN embedded browser by default (the
+ * owner's native-browser directive), with an explicit "open externally"
+ * affordance beside it as the escape hatch to the device's browser. The
+ * pre-R99 inline `__TAURI__` invoke duplication is GONE (open-link owns
+ * both the Rust handoff and the web-mode window.open fallback); AboutTab
+ * is a GLOBAL surface, so with no project context openLink honestly falls
+ * back to the system browser (open-link's no-project leg).
  */
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Download, ExternalLink, Info, PackageOpen, ShieldAlert } from "lucide-react";
 import { APP_NAME, APP_VERSION, PHASE } from "../../lib/version";
 import { isTauri } from "../../lib/sidecar";
+// R99-A: the ONE sanctioned link router — the Releases link opens in the
+// app's OWN browser panel by default; the external affordance beside it is
+// the deliberate escape hatch to the device's browser.
+import { openLink } from "../../lib/open-link";
 import {
   fetchSystemUpdates,
   fetchUpdateDownloadProgress,
@@ -33,25 +46,17 @@ import { bdr, withAlpha } from "../dashboard/helpers";
 
 const RELEASES_URL = "https://github.com/testplay-byte/ACUTE-CODE/releases";
 
-/** R89-A3: the Releases link must reach the OS browser. Inside Tauri a
- * plain <a target="_blank"> is silently swallowed by WebView2 (wry) — the
- * R58-b Rust command `open_external_url` (tauri-plugin-shell's OS-level
- * open, http/https validated in Rust) is the sanctioned handoff; the web
- * dev server falls back to window.open. */
-async function openReleasesPage(url: string): Promise<void> {
-  if (isTauri()) {
-    try {
-      const tauri = (window as { __TAURI__?: { core: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } } })
-        .__TAURI__;
-      if (tauri !== undefined) {
-        await tauri.core.invoke("open_external_url", { url });
-        return;
-      }
-    } catch (err) {
-      console.error("[about] open_external_url failed:", err);
-    }
+/** R99-A: the Releases link through the CENTRAL link router — the app's
+ * own embedded browser by default (the owner's native-browser directive);
+ * `forceExternal` is the deliberate escape hatch to the device's browser.
+ * Replaces the R89-A3 inline `__TAURI__` invoke (open-link owns the Rust
+ * open_external_url handoff AND the web-mode window.open fallback now).
+ * The result is logged — never swallowed — when the system leg fails. */
+async function openReleasesPage(forceExternal: boolean): Promise<void> {
+  const result = await openLink(RELEASES_URL, { forceExternal });
+  if (result.outcome === "error") {
+    console.error("[about] opening the releases page failed:", result.message);
   }
-  window.open(url, "_blank", "noreferrer");
 }
 
 /** Every localStorage store the app persists (the reset flow clears them
@@ -251,13 +256,29 @@ function VersionCard() {
           </button>
           <button
             type="button"
-            onClick={() => void openReleasesPage(RELEASES_URL)}
+            onClick={() => void openReleasesPage(false)}
+            title="The releases page — opens in ACUTE-CODE's built-in browser (your device's browser when no project is open)"
             className="h-9 px-3.5 rounded-full text-[11.5px] font-bold border-[1.5px] flex items-center gap-1.5 transition-colors hover:opacity-80"
             style={{ borderColor: bdr("1.5px", styles.border), color: styles.textSecondary }}
-            aria-label="Open the releases page in your browser"
+            aria-label="Open the releases page"
+            data-testid="about-releases-button"
           >
             Releases
-            <ExternalLink size={11} />
+          </button>
+          {/* R99-A: the explicit escape hatch — the user can ALWAYS reach the
+              device's browser deliberately (forceExternal beats every
+              preference; the BrowserPanel's own Open-externally control is
+              the same gesture inside the browser). */}
+          <button
+            type="button"
+            onClick={() => void openReleasesPage(true)}
+            aria-label="Open the releases page in your device's browser"
+            title="Open the releases page in your device's browser (explicit action)"
+            data-testid="about-releases-external"
+            className="h-9 w-9 grid place-items-center rounded-full border-[1.5px] transition-colors hover:opacity-80"
+            style={{ borderColor: bdr("1.5px", styles.border), color: styles.textSecondary }}
+          >
+            <ExternalLink size={12} />
           </button>
         </div>
       </div>

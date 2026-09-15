@@ -1,11 +1,12 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-15 round-99 -->
 # EMBEDDED BROWSER — the agent's in-app browser panel (owner's guide)
 
 **Status:** normative · **Established:** round-43 (the panel + the tool);
 grown round-62 (read/eval/screenshot/tabs), round-66 (the page-action
-surface, the bot-wall checkpoint, the instant viewport apply) and round-67
+surface, the bot-wall checkpoint, the instant viewport apply), round-67
 (the working Windows bridge: the instant navigate frame, the WebView2 eval
-decoder, the chat-session tab binding, per-project cookies) ·
+decoder, the chat-session tab binding, per-project cookies) and round-99
+(the engine SHIPS with the installer + the central in-app link router) ·
 **Audience:** the owner watching the panel and solving walls, and any agent
 maintaining the surface
 
@@ -231,6 +232,112 @@ R67-D addition: the `screenshot` action now also publishes the capture as
 a live chat THUMBNAIL (`screenshot` SSE frame + the ephemeral raster route
 — see [ATTACHMENTS](ATTACHMENTS.md), the ephemeral-rasters section).
 
+## The engine SHIPS with the app (R99-A — fixedRuntime)
+
+The owner's round-99 directive: "add native browser support. I would like
+you to install the browser packages and ship them alongside the application
+so it does not have to rely on the device's browser itself." Before R99 the
+installer rode the DEVICE's WebView2 runtime (`webviewInstallMode` unset
+→ the NSIS bootstrapper downloads/repairs the evergreen runtime): a
+machine with no Edge-lineage runtime, an outdated one, or a locked-down one
+was the app's single point of failure. Since R99 the installer carries the
+WebView2 **Fixed Version Runtime** and the app always runs its own engine:
+
+- `src-tauri/tauri.conf.json` pins
+  `bundle.windows.webviewInstallMode = { mode: "fixedRuntime", path:
+  "webview2-runtime" }` AND maps `"webview2-runtime/": "webview2-runtime/"`
+  in `bundle.resources` — the bundler does NOT auto-add the runtime dir
+  as a resource; without the resources row the installed app points at an
+  empty path. The app runtime resolves the folder RELATIVE TO THE
+  EXECUTABLE (`WEBVIEW2_BROWSER_EXECUTABLE_FOLDER =
+  <exe_dir>\webview2-runtime`), so the resource map must land the files at
+  exactly that relative path.
+- With fixedRuntime the NSIS WebView2 install section does nothing (its
+  mode string is empty) — no bootstrapper, no evergreen dependency: the
+  app ALWAYS uses the bundled engine. Zero reliance on the device.
+- **The CI fetch**: `.github/workflows/release.yml`'s `desktop-installer`
+  job downloads the pinned cab (~308 MB) from Microsoft's official CDN,
+  verifies the size (> 250 MB), `expand.exe`-extracts it, and moves the
+  single versioned folder's CONTENTS so
+  `src-tauri/webview2-runtime/msedgewebview2.exe` sits DIRECTLY inside (the
+  fixedRuntime `path` needs exactly that layout) — all BEFORE
+  `pnpm tauri build` packs the installer. Pinned URL (x64, verified live):
+  https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/c3d95bc1-a0a7-4ca6-aaa1-fa0ac3dd1a37/Microsoft.WebView2.FixedVersionRuntime.153.0.4234.32.x64.cab
+- **How to bump**: grab the new x64 "Fixed Version" cab link from
+  https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section
+  (the per-arch direct links are embedded in that page's HTML JSON —
+  pin the exact URL, never float), update `WEBVIEW2_FIXED_RUNTIME_URL` in
+  the step, and re-run the workflow UNTAGGED (the dispatch path builds the
+  installer artifact without opening a release) before tagging. A Fixed
+  Version Runtime never auto-updates, so the pin is the engine every
+  installed copy runs until the next deliberate bump.
+- **The honest trade-off**: the cab is 308,367,262 bytes and the extracted
+  tree is larger still — the installer grows by roughly the
+  LZMA-compressed size of that tree. That is the price of "the browser
+  ships with the app" (the `desktop-installer` timeout is 45 min for the
+  heavier NSIS LZMA pass).
+- **Local-dev caveat**: `pnpm tauri dev` on Windows runs the shell exe from
+  `src-tauri/target/debug/`, where no runtime folder exists — stage
+  `src-tauri/target/debug/webview2-runtime/` yourself (mirror the CI step)
+  or temporarily drop the `webviewInstallMode` block to fall back to the
+  machine's evergreen runtime. Web dev mode (`pnpm dev` in a plain browser)
+  and the Linux sandbox never touch WebView2. **The release workflow is the
+  canonical bundling path** — `ci.yml` only runs `cargo check`, no
+  bundle, no runtime fetch.
+- The staged runtime is git-ignored (`/src-tauri/webview2-runtime/` + the
+  `-extract` scratch dir in `.gitignore`) — the same discipline as the
+  sidecar staging.
+
+## Where links open (R99-A — the central link router)
+
+Every clickable http(s) link inside the app routes through ONE module:
+`src/lib/open-link.ts`. Before R99 the chat markdown links, the file-preview
+markdown links and the About tab's Releases button were plain
+`<a target="_blank">` — silently SWALLOWED inside WebView2 (wry never
+hands a webview anchor to the OS browser), i.e. DEAD links (the documented
+AboutTab lesson).
+
+The router's contract — every leg returns a typed `OpenLinkResult`, so
+callers and tests can assert where the link went and why:
+
+1. **Scheme gate** — http/https ONLY (parsed through the WHATWG URL
+   constructor); `mailto:`, `file:`, `javascript:`, `ftp:` and unparseable
+   strings are refused honestly. Never guessed.
+2. **Preference** — the browser settings domain's `linkOpeningMode`
+   (`"in-app"` | `"system"`, default **in-app**; GET/PUT
+   `/settings/browser`, the `browser.linkOpeningMode` row — the same
+   domain as the search engine/homepage/zoom/quick links since R97-G). The
+   Settings → Browser tab's "Link opening" card (two ChoiceCards) is
+   the UI. The value lives in an in-memory cache hydrated once at app boot
+   (`hydrateLinkOpeningMode`, called from AppShell beside the notification
+   bridge's init) and pushed LIVE by the settings card on every confirmed
+   flip — the next click obeys without a restart.
+3. **In-app leg** — resolves the current project (the caller's
+   `projectId` override → the project-chat store's `activeProjectId`
+   → the right-sidebar store's) and lands the link as a browser tab in
+   that project's sidebar via `openBrowser(projectId, url)`. No project
+   context (a global surface on a fresh boot) → the honest
+   system-browser fallback, said so in the result. A store throw → the
+   same fallback (a link must never become a dead click).
+4. **System leg** — `open_external_url` (the Rust OS-level handoff,
+   http/https re-validated in Rust) inside the desktop shell; `window.open`
+   only in web dev mode. Failures are reported, never swallowed.
+
+Callers: **ChatMarkdown** (both link render sites — the `[text](url)`
+mark and the bare-URL autolink; middle-click/aux button 1 rides the same
+router, and the REAL `href` + `rel` stay on the anchor for hover preview,
+copy-link and keyboard Enter — Enter fires click, which routes),
+**FileViewerPanel** and the explorer's markdown preview (the exported
+`Markdown` renderer takes an optional `projectId`), and **AboutTab** (the
+Releases button routes in-app by default; a small explicit "open externally"
+affordance sits beside it).
+
+**Escape hatches (explicit user intent — deliberately NOT routed
+through the preference)**: the BrowserPanel's own "Open externally" button,
+the pop-out window's "Open in system browser", and AboutTab's external
+affordance (`forceExternal: true` — it beats every preference). The
+user can always reach the device's browser deliberately.
+
 ## Honest limitations
 
 - **The native-bridge actions are desktop-only** (`read_dom`, `source`,
@@ -260,6 +367,14 @@ a live chat THUMBNAIL (`screenshot` SSE frame + the ephemeral raster route
 - **The page the panel shows can differ from a fresh fetch** (logins, JS):
   `read` = clean server-side text, `read_dom`/`click`/`type`/`press_key`/
   `source`/`eval` = the LIVE page, `screenshot` = the pixels you see.
+- **The shipped engine never auto-updates** (the fixedRuntime contract): the
+  pinned 153.0.4234.32 x64 build is the engine every installed copy runs
+  until a deliberate pin bump (the workflow comment + the section above say
+  how) — and the installer carries its ~300 MB payload (the honest
+  price of zero device dependency).
+- **The router's in-app leg needs a project context** — a link clicked
+  on a global surface before any project is opened degrades honestly to the
+  system browser (the result says so).
 
 ## See also
 
@@ -280,6 +395,10 @@ a live chat THUMBNAIL (`screenshot` SSE frame + the ephemeral raster route
   bridge answer channel `POST /api/v1/browser-commands/:id/result`
   (`agent-core/src/browser-proxy.ts` + `src-tauri/src/browser.rs`), the
   eval double-parse `src/lib/native-browser.ts` (`parseWebViewEvalJson`),
+  the central link router `src/lib/open-link.ts` (the scheme gate + the
+  linkOpeningMode preference + the in-app/system legs), the fixedRuntime
+  staging (the release.yml fetch step + the `src-tauri/tauri.conf.json`
+  webviewInstallMode + resources rows),
   the panel `src/components/right-sidebar/BrowserPanel.tsx` (the
   agentNavSeq effect + the create-on-adopt poll backstop), the tab store +
   instant apply + the bind client `src/lib/browser-store.ts`, the sidebar

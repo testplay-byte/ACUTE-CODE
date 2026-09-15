@@ -579,17 +579,25 @@ export function setThinkingLoopSettings(
 //                            (0.25–3, default 1).
 //   browser.quickLinks     — the quick-links row on the home page (JSON
 //                            array of {label, url}; default = the R87 trio).
+//   browser.linkOpeningMode — where in-app links open (R99-A): "in-app"
+//                            (the embedded browser panel) | "system"
+//                            (the device's default browser). Default
+//                            in-app — the app ships its own browser engine
+//                            now, so links stay inside it.
 
 export interface BrowserQuickLink {
   label: string;
   url: string;
 }
 
+export type LinkOpeningMode = "in-app" | "system";
+
 export interface BrowserSettings {
   searchEngine: "duckduckgo" | "google" | "bing" | "brave";
   homepage: string;
   defaultZoom: number;
   quickLinks: BrowserQuickLink[];
+  linkOpeningMode: LinkOpeningMode;
 }
 
 export const BROWSER_SETTINGS_DEFAULTS: BrowserSettings = {
@@ -601,14 +609,17 @@ export const BROWSER_SETTINGS_DEFAULTS: BrowserSettings = {
     { label: "MDN", url: "https://developer.mozilla.org" },
     { label: "This app (dev)", url: "http://localhost:5173" },
   ],
+  linkOpeningMode: "in-app",
 };
 
 const BROWSER_SEARCH_ENGINE_KEY = "browser.searchEngine";
 const BROWSER_HOMEPAGE_KEY = "browser.homepage";
 const BROWSER_DEFAULT_ZOOM_KEY = "browser.defaultZoom";
 const BROWSER_QUICK_LINKS_KEY = "browser.quickLinks";
+const BROWSER_LINK_OPENING_MODE_KEY = "browser.linkOpeningMode";
 
 const SEARCH_ENGINES: ReadonlySet<string> = new Set(["duckduckgo", "google", "bing", "brave"]);
+const LINK_OPENING_MODES: ReadonlySet<string> = new Set(["in-app", "system"]);
 
 /** The engine → search-URL template (the frontend mirror lives in
  * api.ts — the panel's normalizeUrl builds from the same table). */
@@ -672,17 +683,25 @@ export function getBrowserSettings(db: SqliteDatabase): BrowserSettings {
     | { value: string }
     | undefined;
   const homepage = typeof homepageRow?.value === "string" ? homepageRow.value.slice(0, 500) : BROWSER_SETTINGS_DEFAULTS.homepage;
+  const linkModeRow = db.prepare("SELECT value FROM settings WHERE key = ?").get(BROWSER_LINK_OPENING_MODE_KEY) as
+    | { value: string }
+    | undefined;
+  const linkOpeningMode = LINK_OPENING_MODES.has(linkModeRow?.value ?? "")
+    ? (linkModeRow!.value as LinkOpeningMode)
+    : BROWSER_SETTINGS_DEFAULTS.linkOpeningMode;
   return {
     searchEngine,
     homepage: homepage === "" ? BROWSER_SETTINGS_DEFAULTS.homepage : homepage,
     defaultZoom: readDefaultZoom(db),
     quickLinks: readQuickLinks(db),
+    linkOpeningMode,
   };
 }
 
 /** Partial patch. Validation: the engine must be one of the four; the zoom an
  * integer-ish 0.25–3 (two decimals); the quickLinks a 1–12 array of non-blank
- * {label, url}. Throws map to the route's 400s. */
+ * {label, url}; the linkOpeningMode one of the two R99-A values. Throws map
+ * to the route's 400s. */
 export function setBrowserSettings(
   db: SqliteDatabase,
   patch: Partial<BrowserSettings>,
@@ -725,6 +744,12 @@ export function setBrowserSettings(
       }
     }
     upsert.run(BROWSER_QUICK_LINKS_KEY, JSON.stringify(patch.quickLinks));
+  }
+  if (patch.linkOpeningMode !== undefined) {
+    if (!LINK_OPENING_MODES.has(patch.linkOpeningMode)) {
+      throw new Error("linkOpeningMode must be either \"in-app\" or \"system\"");
+    }
+    upsert.run(BROWSER_LINK_OPENING_MODE_KEY, patch.linkOpeningMode);
   }
   return getBrowserSettings(db);
 }

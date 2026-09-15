@@ -31,9 +31,14 @@
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
     "resources": {
-      "staging/sidecar/": "sidecar/"
+      "staging/sidecar/": "sidecar/",
+      "webview2-runtime/": "webview2-runtime/"
     },
     "windows": {
+      "webviewInstallMode": {
+        "mode": "fixedRuntime",
+        "path": "webview2-runtime"
+      },
       "nsis": {
         "installMode": "currentUser",
         "installerHooks": "installer-hooks.nsh"

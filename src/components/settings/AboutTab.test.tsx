@@ -9,26 +9,47 @@
  *       the repo is private; the old anonymous api.github.com fetch from the
  *       webview answered HTTP 404). Up-to-date, update-available, and the
  *       honest-error surfaces all render from the sidecar's answer.
- *  A3 · the Releases button OPENS THE OS BROWSER via the Tauri
- *       open_external_url command (a plain <a target="_blank"> is swallowed
- *       by WebView2) — verified through the invoke spy on the fake global.
+ *  A3 · ROUND-99 (R99-A): the Releases button routes through the CENTRAL
+ *       link router — in-app browser by default (a browser tab lands in the
+ *       active project's sidebar), the honest no-project fallback to the
+ *       device browser, and the EXPLICIT external affordance beside it
+ *       (forceExternal) riding the Tauri open_external_url command. The
+ *       pre-R99 plain <a target="_blank"> was swallowed by WebView2.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { fetchSystemUpdates, resetApplication } from "../../lib/api";
+// R99-A: the link router’s preference cache + the stores it resolves the
+// active project from (in-app routing + the no-project fallback).
+import { setLinkOpeningMode } from "../../lib/open-link";
+import { useProjectChatStore } from "../../lib/project-chat-store";
+import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { resetTestState, renderWithProviders } from "../../test-utils";
 import { AboutTab } from "./AboutTab";
 
 vi.mock("../../lib/api", () => ({
   fetchSystemUpdates: vi.fn(),
   resetApplication: vi.fn(),
+  // R99-A: open-link.ts imports this from the same module — present in
+  // the mock so the import never lands on undefined (hydration is never
+  // kicked in these tests; the router’s default cache stands).
+  fetchBrowserSettings: vi.fn(),
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+});
 
 beforeEach(() => {
   resetTestState();
   window.localStorage.clear();
+  // R99-A: deterministic link routing — the in-app default, no project
+  // context (each routing test sets exactly the context it pins).
+  setLinkOpeningMode("in-app");
+  useProjectChatStore.setState({ activeProjectId: null });
+  useRightSidebarStore.setState({ activeProjectId: null, byProject: {} });
   vi.mocked(fetchSystemUpdates).mockReset();
   vi.mocked(resetApplication).mockReset();
 });
@@ -126,20 +147,56 @@ describe("AboutTab (ROUND-89 R89-A)", () => {
     Object.defineProperty(window, "location", { value: originalHref, writable: true });
   });
 
-  it("A3: the Releases button hands the URL to the Tauri open_external_url command", async () => {
+  it("A3/R99-A: the Releases button routes IN-APP — a browser tab lands in the active project's sidebar", async () => {
+    useProjectChatStore.setState({ activeProjectId: "prj_about" });
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByTestId("about-releases-button"));
+
+    await waitFor(() => {
+      const tabs = Object.values(useRightSidebarStore.getState().byProject).flatMap((slice) =>
+        slice.tabs.filter((t) => t.type === "browser"),
+      );
+      expect(tabs).toEqual([
+        expect.objectContaining({
+          type: "browser",
+          browserUrl: "https://github.com/testplay-byte/ACUTE-CODE/releases",
+        }),
+      ]);
+    });
+  });
+
+  it("A3/R99-A: with NO project context the Releases button falls back to the device browser (window.open in web mode)", async () => {
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByTestId("about-releases-button"));
+
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith(
+        "https://github.com/testplay-byte/ACUTE-CODE/releases",
+        "_blank",
+        "noreferrer",
+      );
+    });
+  });
+
+  it("A3/R99-A: the EXPLICIT external affordance hands the URL to the Tauri open_external_url command", async () => {
     // isTauri() probes `"__TAURI__" in window` — setting the global before
     // render is the whole mock (sidecar.ts line 38).
     const invoke = vi.fn().mockResolvedValue(undefined);
     (window as unknown as { __TAURI__?: unknown }).__TAURI__ = { core: { invoke } };
     renderWithProviders(<AboutTab />);
 
-    fireEvent.click(screen.getByRole("button", { name: /releases/i }));
+    fireEvent.click(screen.getByTestId("about-releases-external"));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("open_external_url", {
         url: "https://github.com/testplay-byte/ACUTE-CODE/releases",
       });
     });
-    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    // The in-app leg never fired — forceExternal is the deliberate device-browser gesture.
+    expect(Object.values(useRightSidebarStore.getState().byProject)).toHaveLength(0);
   });
 });

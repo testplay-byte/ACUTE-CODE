@@ -472,7 +472,10 @@ export function FilesExplorerPanel({
               />
             ) : isMarkdown(selectedPath) ? (
               <div className="px-2.5 py-2.5">
-                <Markdown content={content} />
+                {/* R99-A: pass the project through so markdown links in the
+                    preview route through the central link router (in-app
+                    browser by default), same as the file-viewer tab. */}
+                <Markdown content={content} projectId={projectId} />
               </div>
             ) : (
               <pre className="p-2 font-mono text-[11px] leading-[1.6]">

@@ -1,5 +1,9 @@
 import { useRef, type ReactNode } from "react";
 import { useProjectFile } from "../../hooks/use-projects";
+// R99-A: the ONE sanctioned link router — markdown links inside viewed files
+// open in the app's OWN browser panel (the owner's native-browser directive),
+// never a dead <a target="_blank"> swallowed by WebView2.
+import { openLink } from "../../lib/open-link";
 import type { RightSidebarTab } from "../../lib/right-sidebar-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
@@ -28,8 +32,12 @@ export function isMarkdown(path: string): boolean {
 
 /** Lightweight markdown renderer (headings, bold, inline code, lists, code
  * fences, links). Enough for project README/rules files without a dep.
- * ROUND-48 (R48-c): exported for reuse by FilesExplorerPanel. */
-export function Markdown({ content }: { content: string }): ReactNode {
+ * ROUND-48 (R48-c): exported for reuse by FilesExplorerPanel.
+ * ROUND-99 (R99-A): optional `projectId` — when a caller provides it, the
+ * rendered links route through the central link router (in-app browser by
+ * default); without it the anchor keeps its plain navigation (the legacy
+ * behavior — no caller is left without a project in practice). */
+export function Markdown({ content, projectId }: { content: string; projectId?: string }): ReactNode {
   const lines = content.split("\n");
   const out: ReactNode[] = [];
   let i = 0;
@@ -82,7 +90,7 @@ export function Markdown({ content }: { content: string }): ReactNode {
       const sizes: Record<number, string> = { 1: "20px", 2: "17px", 3: "15px", 4: "14px", 5: "13px", 6: "12px" };
       out.push(
         <div key={`h-${key++}`} className="font-black mt-3 mb-1.5" style={{ fontSize: sizes[level] ?? "13px" }}>
-          {inlineMd(h[2])}
+          {inlineMd(h[2], projectId)}
         </div>,
       );
       i++;
@@ -90,13 +98,13 @@ export function Markdown({ content }: { content: string }): ReactNode {
     }
     if (/^\s*[-*]\s+/.test(line)) {
       if (listKind !== "ul") { flushList(); listKind = "ul"; }
-      listItems.push(<li key={`li-${key++}`}>{inlineMd(line.replace(/^\s*[-*]\s+/, ""))}</li>);
+      listItems.push(<li key={`li-${key++}`}>{inlineMd(line.replace(/^\s*[-*]\s+/, ""), projectId)}</li>);
       i++;
       continue;
     }
     if (/^\s*\d+\.\s+/.test(line)) {
       if (listKind !== "ol") { flushList(); listKind = "ol"; }
-      listItems.push(<li key={`li-${key++}`}>{inlineMd(line.replace(/^\s*\d+\.\s+/, ""))}</li>);
+      listItems.push(<li key={`li-${key++}`}>{inlineMd(line.replace(/^\s*\d+\.\s+/, ""), projectId)}</li>);
       i++;
       continue;
     }
@@ -109,7 +117,7 @@ export function Markdown({ content }: { content: string }): ReactNode {
     flushList();
     out.push(
       <p key={`p-${key++}`} className="text-[12.5px] leading-[1.65] my-0.5">
-        {inlineMd(line)}
+        {inlineMd(line, projectId)}
       </p>,
     );
     i++;
@@ -118,10 +126,21 @@ export function Markdown({ content }: { content: string }): ReactNode {
   return <div className="px-1">{out}</div>;
 }
 
-/** Inline markdown: **bold**, `code`, [text](url). */
-function inlineMd(text: string): ReactNode[] {
+/** Inline markdown: **bold**, `code`, [text](url).
+ * ROUND-99 (R99-A): when projectId is known, link clicks route through the
+ * central openLink router (preventDefault — the app's own browser panel by
+ * default); the REAL href + rel stay on the anchor (hover preview, copy-
+ * link, keyboard Enter — which fires click and rides the same router).
+ * Middle-click (aux button 1) routes the same way; right-click keeps the
+ * native context menu. */
+function inlineMd(text: string, projectId?: string): ReactNode[] {
   const parts: ReactNode[] = [];
   const re = /(\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))/g;
+  const route = (e: React.MouseEvent<HTMLAnchorElement>, url: string): void => {
+    if (projectId === undefined) return; // no project context — legacy navigation
+    e.preventDefault();
+    void openLink(url, { projectId });
+  };
   let last = 0;
   let m: RegExpExecArray | null;
   let k = 0;
@@ -136,9 +155,25 @@ function inlineMd(text: string): ReactNode[] {
         </code>,
       );
     } else if (m[4] !== undefined) {
+      // Capture the match's fields BEFORE building the element — the loop
+      // variable `m` is reassigned by re.exec and is null by the time a click
+      // handler's closure runs (the R99-A routing initially closed over `m`
+      // directly and crashed on the first click).
+      const url = m[5] as string;
+      const label = m[4];
       parts.push(
-        <a key={`l-${k++}`} href={m[5]} target="_blank" rel="noreferrer" className="underline">
-          {m[4]}
+        <a
+          key={`l-${k++}`}
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className="underline"
+          onClick={(e) => route(e, url)}
+          onAuxClick={(e) => {
+            if (e.button === 1) route(e, url);
+          }}
+        >
+          {label}
         </a>,
       );
     }
@@ -202,7 +237,7 @@ export function FileViewerPanel({ projectId, tab }: { projectId: string; tab: Ri
           </div>
         ) : isMd ? (
           <div className="px-3 py-3">
-            <Markdown content={content} />
+            <Markdown content={content} projectId={projectId} />
           </div>
         ) : (
           <pre className="p-2 font-mono text-[11.5px] leading-[1.6]">

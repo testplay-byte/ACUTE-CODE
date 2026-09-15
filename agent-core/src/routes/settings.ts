@@ -339,8 +339,11 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
   // the browser… which I can use to edit some settings of the browsers,
   // manage the browser"): the BROWSER settings domain — the search engine
   // (the address bar's query fallback), the homepage, the default zoom, and
-  // the editable quick links. GET returns the full BrowserSettings; PUT
-  // accepts a partial patch (the storage throw is the 400 backstop).
+  // the editable quick links. ROUND-99 (R99-A) adds linkOpeningMode: where
+  // in-app links open (the embedded browser panel vs the device's default
+  // browser — the central link router in src/lib/open-link.ts reads this
+  // preference). GET returns the full BrowserSettings; PUT accepts a
+  // partial patch (the storage throw is the 400 backstop).
 
   scope.get("/settings/browser", async () => {
     return getBrowserSettings(db);
@@ -363,6 +366,9 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         ...(typeof raw.defaultZoom === "number" ? { defaultZoom: raw.defaultZoom } : {}),
         ...(Array.isArray(raw.quickLinks)
           ? { quickLinks: raw.quickLinks as Array<{ label: string; url: string }> }
+          : {}),
+        ...(typeof raw.linkOpeningMode === "string"
+          ? { linkOpeningMode: raw.linkOpeningMode as "in-app" | "system" }
           : {}),
       });
     } catch (error) {

@@ -9,6 +9,12 @@ import { isTauri } from "../../lib/sidecar";
 // best-effort permission pre-check (Tauri only; web mode is a no-op
 // inside the bridge itself).
 import { initDesktopNotifications } from "../../lib/desktop-notifications";
+// R99-A (owner: "ship the browser with the app"): the central link
+// router's preference hydration — seeds the in-memory linkOpeningMode cache
+// from GET /settings/browser once at boot so the FIRST link click already
+// obeys the saved preference (best-effort; a failed GET keeps the default
+// in-app mode).
+import { hydrateLinkOpeningMode } from "../../lib/open-link";
 import { AcuteLogo, Sidebar } from "./Sidebar";
 import { NotificationStreamStarter } from "../notifications/NotificationStreamStarter";
 import { Toaster } from "../notifications/Toaster";
@@ -55,9 +61,11 @@ export function AppShell() {
   }, []);
   // R98-J: the desktop-notification bridge boots with the app (the
   // best-effort permission pre-check — the real fires happen in the SSE
-  // fan-out; see lib/desktop-notifications.ts).
+  // fan-out; see lib/desktop-notifications.ts). R99-A: the link router's
+  // preference hydrates on the same beat.
   useEffect(() => {
     initDesktopNotifications();
+    void hydrateLinkOpeningMode();
   }, []);
   // Round-28 WS-D2: boot-time health ping. If the sidecar is up + token is
   // set, flip demoData false so the streaming SSE path activates (the real

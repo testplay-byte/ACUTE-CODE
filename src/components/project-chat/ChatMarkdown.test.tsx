@@ -28,6 +28,9 @@ import {
   parseMarkdownBlocks,
 } from "./ChatMarkdown";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
+// R99-A: the link router's preference cache — the routing tests flip it and
+// MUST restore "in-app" after (the module-level cache is file-wide).
+import { setLinkOpeningMode } from "../../lib/open-link";
 import { useThemeStore } from "../../lib/theme-store";
 import { renderWithProviders } from "../../test-utils";
 
@@ -773,5 +776,105 @@ describe("ROUND-98 (R98-D) mermaid diagrams (ADR-0030)", () => {
     act(() => {
       useThemeStore.setState({ mode: "dark" });
     });
+  });
+});
+
+describe("ROUND-99 (R99-A) link routing — chat links open in the app's OWN browser", () => {
+  // The router consults the right-sidebar store (openBrowser) and, for the
+  // system leg, window.open — both need clean state per test, and the
+  // preference cache must go back to the default so no later test in this
+  // file inherits a flip.
+  beforeEach(() => {
+    useRightSidebarStore.setState({ byProject: {} });
+    setLinkOpeningMode("in-app");
+  });
+  afterEach(() => {
+    setLinkOpeningMode("in-app");
+    vi.unstubAllGlobals();
+  });
+
+  /** The browser tabs currently sitting in the right-sidebar store. */
+  function browserTabsInStore(): Array<{ browserUrl?: string | null }> {
+    return Object.values(useRightSidebarStore.getState().byProject).flatMap((slice) =>
+      slice.tabs.filter((t) => t.type === "browser"),
+    );
+  }
+
+  it("a [text](url) click routes IN-APP — a browser tab lands in THIS project's sidebar; the href stays on the anchor", async () => {
+    renderMd("See [the docs](https://example.com/docs) for more.");
+    const link = screen.getByRole("link", { name: "the docs" }) as HTMLAnchorElement;
+    // The a11y/copy-link contract: the REAL href + rel survive — only the
+    // navigation is intercepted.
+    expect(link.getAttribute("href")).toBe("https://example.com/docs");
+    expect(link.getAttribute("rel")).toBe("noreferrer");
+
+    fireEvent.click(link);
+    await waitFor(() => {
+      expect(browserTabsInStore()).toEqual([
+        expect.objectContaining({ type: "browser", browserUrl: "https://example.com/docs" }),
+      ]);
+    });
+    // The tab landed in the render's project slice (the component passes its
+    // own projectId — no prop drilling through the chat tree).
+    const key = Object.keys(useRightSidebarStore.getState().byProject)[0];
+    expect(key).toContain(PROJECT_ID);
+  });
+
+  it("a bare-URL autolink click routes IN-APP the same way", async () => {
+    renderMd("Visit https://example.com/autolink today.");
+    const link = screen.getByRole("link", { name: "https://example.com/autolink" }) as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("https://example.com/autolink");
+
+    fireEvent.click(link);
+    await waitFor(() => {
+      expect(browserTabsInStore()).toEqual([
+        expect.objectContaining({ type: "browser", browserUrl: "https://example.com/autolink" }),
+      ]);
+    });
+  });
+
+  it("a MIDDLE-CLICK (aux button 1) routes in-app too — the new-tab gesture maps to a new in-app browser tab", async () => {
+    renderMd("See [the docs](https://example.com/middle) here.");
+    const link = screen.getByRole("link", { name: "the docs" });
+    // fireEvent has no auxClick alias in this testing-library version — the
+    // raw MouseEvent dispatch is the same gesture (bubbles so React sees it).
+    fireEvent(link, new MouseEvent("auxclick", { button: 1, bubbles: true }));
+    await waitFor(() => {
+      expect(browserTabsInStore()).toEqual([
+        expect.objectContaining({ type: "browser", browserUrl: "https://example.com/middle" }),
+      ]);
+    });
+    // An aux click with another button (e.g. right-click's button 2) never
+    // routes — the native context menu owns that gesture.
+    fireEvent(link, new MouseEvent("auxclick", { button: 2, bubbles: true }));
+    expect(browserTabsInStore()).toHaveLength(1);
+  });
+
+  it("a mailto: link click is REFUSED by the router — no browser tab, no window.open (honest refusal, never guessed)", async () => {
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+    renderMd("Write [support](mailto:someone@example.com) please.");
+
+    fireEvent.click(screen.getByRole("link", { name: "support" }));
+    // The anchor still renders with its real href (isSafeUrl's allowlist) —
+    // but the router refuses the non-http(s) scheme: nothing opens.
+    expect((screen.getByRole("link", { name: "support" }) as HTMLAnchorElement).getAttribute("href")).toBe(
+      "mailto:someone@example.com",
+    );
+    expect(browserTabsInStore()).toHaveLength(0);
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("the 'system' preference sends the click to the OS browser instead (window.open in web mode)", async () => {
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+    setLinkOpeningMode("system");
+    renderMd("See [the docs](https://example.com/system-mode) here.");
+
+    fireEvent.click(screen.getByRole("link", { name: "the docs" }));
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith("https://example.com/system-mode", "_blank", "noreferrer");
+    });
+    expect(browserTabsInStore()).toHaveLength(0);
   });
 });

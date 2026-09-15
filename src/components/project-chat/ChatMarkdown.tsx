@@ -2,6 +2,10 @@ import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { Check, Copy, File, FileCode } from "lucide-react";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
+// R99-A: the ONE sanctioned link router — chat links open in the app's OWN
+// browser panel by default (the owner's native-browser directive), never a
+// dead <a target="_blank"> swallowed by WebView2.
+import { openLink } from "../../lib/open-link";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import type { ThemeStyles } from "../../lib/themes";
 import { withAlpha } from "../dashboard/helpers";
@@ -35,7 +39,8 @@ import { MermaidDiagram } from "./MermaidDiagram";
  *           moved here verbatim — an UNTERMINATED fence still renders as a
  *           code block so mid-stream partial markdown stays readable).
  *   INLINE  `**bold**` · `*italic*`/`_italic_` · `__bold__` · `` `code` `` ·
- *           `~~strike~~` · `[text](url)` links (target=_blank) · and the
+ *           `~~strike~~` · `[text](url)` links (R99-A: clicks route through
+ *           lib/open-link — the app's own browser panel by default) · and the
  *           ROUND-40 path-pill behavior VERBATIM: file-path-like tokens,
  *           bare OR inside inline code, render as clickable PathPills that
  *           open the file in the right sidebar.
@@ -335,6 +340,22 @@ export function PathPill({ path, projectId }: { path: string; projectId: string 
   );
 }
 
+// ─── R99-A: the chat's link clicks route through openLink ─────────────────
+
+/** ROUND-99 (R99-A): both link render sites below (the bare-URL autolink
+ * and the `[text](url)` mark) intercept the click — preventDefault + the
+ * central router — so the link opens where the user's linkOpeningMode
+ * preference says (default: the app's own embedded browser panel, in THIS
+ * project's sidebar). The REAL href + rel stay on the anchor (hover
+ * preview, copy-link, keyboard Enter — which fires click and rides the
+ * same router); only the navigation is intercepted. Middle-click
+ * (aux button 1) routes the same way — the "new tab" gesture maps to a new
+ * in-app browser tab; right-click keeps the native context menu. */
+function routeChatLink(e: React.MouseEvent<HTMLAnchorElement>, url: string, projectId: string): void {
+  e.preventDefault();
+  void openLink(url, { projectId });
+}
+
 /** Tokenize a plain-text segment by whitespace, render path-like tokens as
  * clickable PathPills, BARE URLs as links (ROUND-95 R95-F: GFM autolink),
  * and the runs between them as single spans (merged —
@@ -390,6 +411,10 @@ function renderPathAwareSegment(
           rel="noreferrer"
           className="underline underline-offset-2 break-all"
           style={{ color: styles.accent }}
+          onClick={(e) => routeChatLink(e, url, projectId)}
+          onAuxClick={(e) => {
+            if (e.button === 1) routeChatLink(e, url, projectId);
+          }}
         >
           {url}
         </a>,
@@ -563,6 +588,10 @@ function renderInline(text: string, projectId: string, keyPrefix: string, styles
             rel="noreferrer"
             className="underline underline-offset-2 break-all"
             style={{ color: styles.accent }}
+            onClick={(e) => routeChatLink(e, url, projectId)}
+            onAuxClick={(e) => {
+              if (e.button === 1) routeChatLink(e, url, projectId);
+            }}
           >
             {renderInline(mark.inner, projectId, `${keyPrefix}-li${k}`, styles)}
           </a>,

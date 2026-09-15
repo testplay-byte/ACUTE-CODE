@@ -2865,17 +2865,26 @@ export async function updateThinkingLoopSettings(
  * browser"): the browser settings domain — the search engine (the address
  * bar's query fallback), the homepage ("acute://home" = the panel's
  * quick-links page), the default zoom for new browser sessions, and the
- * editable quick links. */
+ * editable quick links.
+ * ROUND-99 (R99-A, owner: "ship the browser with the app"): linkOpeningMode
+ * — where in-app links open. "in-app" routes them through the central link
+ * router into the embedded browser panel (the default: the app ships its
+ * own WebView2 Fixed Version engine, so links stay inside it); "system"
+ * hands them to the device's default browser. The ONE sanctioned consumer
+ * is src/lib/open-link.ts. */
 export interface BrowserQuickLink {
   label: string;
   url: string;
 }
+
+export type LinkOpeningMode = "in-app" | "system";
 
 export interface BrowserSettings {
   searchEngine: "duckduckgo" | "google" | "bing" | "brave";
   homepage: string;
   defaultZoom: number;
   quickLinks: BrowserQuickLink[];
+  linkOpeningMode: LinkOpeningMode;
 }
 
 /** R97-G: the engine → search-URL template (the agent-core mirror — the

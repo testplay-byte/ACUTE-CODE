@@ -745,3 +745,191 @@ describe("Prompts tab (ROUND-98 R98-E)", () => {
     expect(screen.queryByRole("status", { name: "Loading prompt sections" })).toBeNull();
   });
 });
+
+/* ── ROUND-99 (R99-A): the Browser tab's LINK OPENING preference — where
+ * the app's own links open (the central router lib/open-link's truth). The
+ * stateful fetch stub models GET/PUT /settings/browser; the pins: the two
+ * ChoiceCards with the exact owner-facing copy, the partial PUT, the LIVE
+ * push into the router's cache (the very next click obeys — asserted via
+ * getLinkOpeningMode), the labeled radio group, and the card's honest
+ * loading + 401 gates. */
+describe("Browser tab: Link opening preference (ROUND-99 R99-A)", () => {
+  const browserState: {
+    searchEngine: "duckduckgo" | "google" | "bing" | "brave";
+    homepage: string;
+    defaultZoom: number;
+    quickLinks: Array<{ label: string; url: string }>;
+    linkOpeningMode: "in-app" | "system";
+  } = {
+    searchEngine: "duckduckgo",
+    homepage: "acute://home",
+    defaultZoom: 1,
+    quickLinks: [{ label: "GitHub", url: "https://github.com" }],
+    linkOpeningMode: "in-app",
+  };
+  const browserPuts: Array<Record<string, unknown>> = [];
+
+  beforeEach(() => {
+    resetTestState();
+    browserState.linkOpeningMode = "in-app";
+    browserState.searchEngine = "duckduckgo";
+    browserState.homepage = "acute://home";
+    browserState.defaultZoom = 1;
+    browserPuts.length = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/v1/settings/browser")) {
+          if ((init?.method ?? "GET") === "PUT") {
+            const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+            browserPuts.push(body);
+            if (body.linkOpeningMode === "in-app" || body.linkOpeningMode === "system") {
+              browserState.linkOpeningMode = body.linkOpeningMode;
+            }
+          }
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ ...browserState, quickLinks: [...browserState.quickLinks] }),
+          } as unknown as Response;
+        }
+        return {
+          status: 401,
+          ok: false,
+          text: async () =>
+            JSON.stringify({ error: { code: "UNAUTHORIZED", message: "no token" } }),
+        } as unknown as Response;
+      }),
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("the two cards render with the exact owner-facing copy in a LABELED group; the server's mode is the active one", async () => {
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=browser" });
+
+    const inApp = await screen.findByRole("button", { name: /In-app browser \(recommended\)/ });
+    expect(inApp.getAttribute("aria-pressed")).toBe("true");
+    const system = screen.getByRole("button", { name: /System browser/ });
+    expect(system.getAttribute("aria-pressed")).toBe("false");
+    expect(inApp.textContent).toContain("Links open in ACUTE-CODE's built-in browser panel, beside your work.");
+    expect(system.textContent).toContain("Links open in your device's default browser.");
+    // The a11y contract: the pair is ONE labeled radio decision.
+    expect(screen.getByRole("group", { name: "Link opening preference" })).toBeTruthy();
+  });
+
+  it("picking 'System browser' PUTs the PARTIAL patch and the LIVE push makes the router obey immediately", async () => {
+    const { getLinkOpeningMode } = await import("../lib/open-link");
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=browser" });
+
+    await screen.findByRole("button", { name: /System browser/ });
+    expect(getLinkOpeningMode()).toBe("in-app"); // the fresh GET seeded the cache
+
+    fireEvent.click(screen.getByRole("button", { name: /System browser/ }));
+
+    await waitFor(() => {
+      expect(browserPuts).toEqual([{ linkOpeningMode: "system" }]);
+    });
+    // The invalidation refetch lands the confirmed value in the router's
+    // cache — the very next link click anywhere obeys, no restart.
+    await waitFor(() => {
+      expect(getLinkOpeningMode()).toBe("system");
+    });
+    const system = screen.getByRole("button", { name: /System browser/ });
+    expect(system.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: /In-app browser \(recommended\)/ }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("re-picking 'In-app browser' PUTs the partial patch back and the cache follows", async () => {
+    const { getLinkOpeningMode } = await import("../lib/open-link");
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=browser" });
+
+    await screen.findByRole("button", { name: /System browser/ });
+    fireEvent.click(screen.getByRole("button", { name: /System browser/ }));
+    await waitFor(() => {
+      expect(getLinkOpeningMode()).toBe("system");
+    });
+    fireEvent.click(screen.getByRole("button", { name: /In-app browser \(recommended\)/ }));
+
+    await waitFor(() => {
+      expect(browserPuts).toEqual([{ linkOpeningMode: "system" }, { linkOpeningMode: "in-app" }]);
+    });
+    await waitFor(() => {
+      expect(getLinkOpeningMode()).toBe("in-app");
+    });
+  });
+
+  it("a 401 on the GET renders the honest error card (role=alert + Retry), never an eternal loader; Retry recovers", async () => {
+    let failBrowserGet = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/v1/settings/browser") && !failBrowserGet) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ ...browserState }),
+          } as unknown as Response;
+        }
+        return {
+          status: 401,
+          ok: false,
+          text: async () =>
+            JSON.stringify({ error: { code: "UNAUTHORIZED", message: "no token" } }),
+        } as unknown as Response;
+      }),
+    );
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=browser" });
+
+    expect(await screen.findByTestId("browser-settings-card")).toBeTruthy();
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry loading browser settings" })).toBeTruthy();
+    expect(screen.queryByText("In-app browser (recommended)")).toBeNull();
+
+    // Retry re-drives the GET — the real card (with the preference) returns.
+    failBrowserGet = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading browser settings" }));
+    expect(await screen.findByRole("button", { name: /In-app browser \(recommended\)/ })).toBeTruthy();
+  });
+
+  it("the loading gate shows honestly while the GET is in flight (no card yet)", async () => {
+    let releaseBrowser: ((r: Response) => void) | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (input: RequestInfo | URL) =>
+          new Promise<Response>((resolve) => {
+            const url = typeof input === "string" ? input : input.toString();
+            if (url.includes("/api/v1/settings/browser")) {
+              releaseBrowser = resolve;
+            } else {
+              resolve({
+                status: 401,
+                ok: false,
+                text: async () => JSON.stringify({ error: { code: "UNAUTHORIZED", message: "no token" } }),
+              } as unknown as Response);
+            }
+          }),
+      ),
+    );
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=browser" });
+
+    expect(await screen.findByText("loading browser settings…")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /In-app browser \(recommended\)/ })).toBeNull();
+
+    // TS flow-narrows releaseBrowser to null here (the assignment lives in the
+    // Promise executor's closure) — the cast re-widens it to the real union.
+    const release = releaseBrowser as ((r: Response) => void) | null;
+    release?.({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ ...browserState }),
+    } as unknown as Response);
+    expect(await screen.findByRole("button", { name: /In-app browser \(recommended\)/ })).toBeTruthy();
+  });
+});
