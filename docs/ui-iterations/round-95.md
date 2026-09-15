@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-13 round-95 -->
+<!-- last-reviewed: 2026-09-15 round-99 -->
 # Round 95 — the sixth-walkthrough round (v0.92.0 → v0.93.0)
 
 <!-- round: 95 -->

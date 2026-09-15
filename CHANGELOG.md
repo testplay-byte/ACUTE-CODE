@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-15 round-98 -->
+<!-- last-reviewed: 2026-09-15 round-99 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -10,6 +10,52 @@ version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
 ## [Unreleased]
+## [0.97.0] - 2026-09-15 — the tenth-walkthrough round: the self-contained app, the research-driven UI redo, and the agent's contract
+
+### The browser now ships WITH the app (and every link opens inside it)
+- The Windows installer carries the **WebView2 Fixed Version Runtime** — the app always runs its own browser engine; a machine with no Edge-lineage runtime, an outdated one, or a locked-down one no longer matters. (The honest price: the installer grows from ~38 MB to ~200 MB.)
+- Every link inside the app — chat messages, file previews, the About tab — now opens in ACUTE-CODE's **built-in browser panel** by default. Previously chat links were silently dead inside the shell and everything else jumped to the device's default browser.
+- New preference: Settings → Browser → **Link opening** (In-app browser, recommended / System browser), applied live. Explicit escape hatches (the browser panel's "Open externally", About's external button) always reach the device browser when you want them to.
+
+### One-click silent updates
+- Click **Update now** once: the installer downloads with byte-true progress and a percentage, the checksum verifies, the install runs **silently**, and the app **relaunches itself** into the new version. No setup wizard, no manual steps.
+- Inline **release notes** ("What's new") on the update card.
+- A quiet **automatic check once per 24 hours** at startup; an available update dots the Settings entry and fires one clickable toast. Failed checks stay silent. The auto-check toggle lives in Settings → About. A "Run the setup wizard manually" fallback covers pathological machines.
+
+### The chat window, redesigned (research-driven)
+- Assistant turns open with a compact **identity header** (the model + a hover timestamp — no avatars, no persona clutter).
+- Completed work compresses to an honest summary: **✓ Completed N steps · N tools · mm:ss**; live work shows the pulsing indicator with the actions counter and elapsed clock right-aligned.
+- Tool rows lead with their **outcome glyph** (✓ success / ✗ failure / ◌ running, amber while an approval waits) followed by the verb, target, and one-line result summary.
+- The reply footer is one quiet mono line (time · in · out · tok/s). The live answer breathes with a soft 2px caret. The empty state's suggestions are pill-cards. Every number in the chat rides tabular numerals (no width jitter as values grow).
+
+### The context popup, rebuilt after the reference design
+- The **overview hero**: the big token line ("40k of 200k"), one percentage line, and at most three honesty pairs (measured at last request / model / window provenance).
+- The **composition bar is the star**: full-width stacked segments with inline percentage labels, the output reserve marked, and a legend with per-category tokens and share-of-used. Hovering a legend row highlights its segment and vice versa.
+- Categories with management surfaces carry **jump links** (System prompt → the Prompts tab; MCP tools → the MCP tab); the others honestly carry none.
+- Cache flattens to one row; the session table keeps its columns; both render surfaces (the popover and the overlay window) paint from one payload.
+
+### Data & Statistics, polished
+- New order: stats → charts → **one quiet Agent health section** (turn errors and tool failures side by side, severity on the numbers, honest empty lines) → **the danger zone always last**: the GitHub-style red-outlined "Clear usage data" row at the very bottom, description left, red button right.
+- The anti-jitter kit: tabular numerals everywhere, fixed-height chart containers, skeletons that mirror the final geometry, a quick fade on the months switch.
+
+### The project-wide System prompt manager (Settings → Prompts)
+- The tab is reframed: **"The project-wide default instructions — every agent turn in <project> starts from this prompt."**
+- A searchable, bucket-grouped section list (identity/tools/memory/meta) with status chips (DEFAULT / OVERRIDDEN / ABSENT) and per-section token estimates; the detail pane shows what each section **does** (from the registry itself) beside the editor.
+- **Revert all** in one confirm; the **composed prompt preview** ("what the agent actually receives") is promoted to its own card with token counts.
+
+### The agent's operating contract (the system prompt overhaul)
+- A **precedence ladder** opens the prompt: safety > truth > the user's request > efficiency — conflicts resolve by the ladder, never by order or volume; limits are maximums, never targets to fill.
+- A new **INTAKE phase** starts every request: restate the goal, list knowns vs. unknowns, check the skills index, name what is out of scope — then plan.
+- An explicit **autonomy ladder**: act without asking (reversible, in-scope) / ask first (consequential or ambiguous) / never (refuse and explain).
+- Every core tool now has a **one-line description** in the prompt; delegated work returns under a **report contract** (result / files touched / findings / open questions / confidence); uncertain answers end with a **confidence tag** and what would raise it; memory use follows explicit save/recall/never rules.
+- The duplication that paid for it: the retired precision-discipline merge and ~2.3K chars of duplicate doctrine removed (the composed default measures 23,975 of the 24,000-char budget).
+
+### Fixes
+- The updater's silent-launch success boundary corrected (a missing-DLL error can no longer masquerade as success).
+- The update badge's self-heal handles pre-release versions correctly.
+- The planning skill's stale cross-reference to the retired prompt section corrected.
+- Chat markdown links, previously dead inside the desktop shell, now route correctly (also fixed in file previews).
+
 
 Planned next: the modularity roadmap's continuation (Wave 2-b the turn-loop
 harness extraction — risk #1 per the R85 audit; the remaining server.ts domains —

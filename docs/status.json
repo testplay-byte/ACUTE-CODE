@@ -1,349 +1,353 @@
 {
- "schema": "acute-status/1",
- "product": {
-  "name": "Acute",
-  "tagline": "Local-first multi-agent engineering workbench",
-  "version": "0.96.0",
-  "availability": "Private build — not yet distributed",
-  "chips": [
-   "Windows desktop",
-   "Tauri 2",
-   "React 18",
-   "Node sidecar",
-   "SQLite",
-   "BYO provider key"
-  ]
- },
- "pillars": [
-  {
-   "id": "coding",
-   "title": "Coding",
-   "state": "usable",
-   "progress": 92,
-   "summary": "Projects, 28 base tools (search_skills joined in R96) + skills/MCP/plugins, streaming chat, whole-file-first reads, ripgrep-style search, atomic multi-edit, codebase indexing"
+  "schema": "acute-status/1",
+  "product": {
+    "name": "Acute",
+    "tagline": "Local-first multi-agent engineering workbench",
+    "version": "0.97.0",
+    "availability": "Private build — not yet distributed",
+    "chips": [
+      "Windows desktop",
+      "Tauri 2",
+      "React 18",
+      "Node sidecar",
+      "SQLite",
+      "BYO provider key"
+    ]
   },
-  {
-   "id": "agentic",
-   "title": "Agentic system",
-   "state": "building",
-   "progress": 82,
-   "summary": "Multi-turn agentic continuation with the R70 agent brain + the R71 discipline layer + the R73 task modes + the R79 delegation tier; R96: the warn-only loop guard with raw-args identity, completion = the model's own stop (the role=user fix), BATCH/COMPLETION/PRECISION prompt disciplines, 24 seeded skills + search_skills discovery, the R96 live-fire-verified wire (verbatim reasoning rungs, app attribution, the output cap)"
-  },
-  {
-   "id": "automation",
-   "title": "Automation",
-   "state": "planned",
-   "progress": 10,
-   "summary": "Scheduling & workflow pillar — researched, additive plan ready"
-  }
- ],
- "milestones": [
-  {
-   "date": "2026-08-21",
-   "label": "Phase 0 — SPEC approved"
-  },
-  {
-   "date": "2026-08-22",
-   "label": "Phase 1 — architecture skeleton + CI green"
-  },
-  {
-   "date": "2026-08-22",
-   "label": "Phase 2 — first live agent conversation"
-  },
-  {
-   "date": "2026-08-22",
-   "label": "Setup wizard — owner-approved screen by screen"
-  },
-  {
-   "date": "2026-08-22",
-   "label": "Shell redo — Settings hub, honest connection test"
-  },
-  {
-   "date": "2026-08-23",
-   "label": "Agentic MVP — projects, sandboxed tools, live-proven file writes"
-  },
-  {
-   "date": "2026-08-23",
-   "label": "Demo-parity chat UI + 7-tool agent"
-  },
-  {
-   "date": "2026-08-23",
-   "label": "One-double-click launcher for the owner's PC"
-  },
-  {
-   "date": "2026-08-23",
-   "label": "Full agentic coding system; zero-setup default agent"
-  },
-  {
-   "date": "2026-08-23",
-   "label": "Live streaming replies + per-reply telemetry + design system"
-  },
-  {
-   "date": "2026-08-23",
-   "label": "Governance round — blueprints, ADR backfill, workflow, this dashboard"
-  },
-  {
-   "date": "2026-08-24",
-   "label": "Round 27 — web tools (web_fetch + web_search) + critical deps-wiring fix (todos + checkpoints now live) + demo project built by the agent"
-  },
-  {
-   "date": "2026-08-24",
-   "label": "Round 28 — sandbox restore + master plan (1123L, 13 workstreams A-M, 5 milestones, 6 sub-agent reviews)"
-  },
-  {
-   "date": "2026-08-24",
-   "label": "Round 28 — UX + agentic-quality overhaul (5 milestones delivered)"
-  },
-  {
-   "label": "Round 30 — Windows bug fixes (CORS streaming + sessions) + sidebar/chat redesign"
-  },
-  {
-   "date": "2026-08-24",
-   "label": "Round 32 — owner-designed UI: floating panels + activity block"
-  },
-  {
-   "date": "2026-08-24",
-   "label": "Round 33 — hello-loop fix + sidebar/logo system + headerless chat"
-  },
-  {
-   "date": "2026-08-24",
-   "label": "Round 34 — multi-step tool feedback + settings redesign"
-  },
-  {
-   "date": "2026-08-25",
-   "label": "Round 35 — thinking + interleaved tool calls"
-  },
-  {
-   "date": "2026-08-25",
-   "label": "Round 36 — sub-agent orchestration (Phase 3 core)"
-  },
-  {
-   "date": "2026-08-31",
-   "label": "Round 55 — the engine-boot round (EISDIR + Credential-Manager namespace root causes)"
-  },
-  {
-   "date": "2026-08-31",
-   "label": "Round 56 — the launch-choice round (app-or-site question + engine-failure recourse + immediate self-update)"
-  },
-  {
-   "date": "2026-08-31",
-   "label": "Round 57 — the engine-bundling round (the 189-junction link farm behind ERR_MODULE_NOT_FOUND; hoisted staging + zero-links gate + the Windows pre-pack boot gate)"
-  },
-  {
-   "date": "2026-08-31",
-   "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; the frameless title bar, the stop/continue/live-write/engine-capping fixes, the settings restructure with visible keys, and the CLI chat harness)"
-  },
-  {
-   "date": "2026-08-31",
-   "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; frameless title bar, honest stops + Continue, live file-write preview, session-replay capping, settings restructure with visible keys, the CLI chat harness)"
-  },
-  {
-   "date": "2026-09-01",
-   "label": "R59 — owner-feedback round: rounded window + pill scrollbars, pop-out custom chrome, settings honesty, response ratings with full-context capture, diagnostics console, prompt-section registry (1302 tests)"
-  },
-  {
-   "date": "2026-09-02",
-   "label": "R60 — second owner-feedback polish round: pop-out rounded view + gutter scrollbar (eval_with_callback channel), settings deep-clean (consistent key field, empty-by-default models + picker Free/All toggle, padding + scroll-reflow fix), title-bar sidebar toggle, browser-panel fixes (popover z-index, real DPI zoom) (1348 tests)"
-  },
-  {
-   "date": "2026-09-02",
-   "label": "R61 — computer use: 30 desktop-control tools (a11y-first, gated by a master switch + approval postures, enforced kill switch, audit journal) + the separate vision model (own provider/model/key slot, or main-model vision when supported) + skills + MCP servers + the live monitor panel + the floating draggable mini window; prompts upgraded (tool discipline + honesty contract) (1491 tests)"
-  },
-  {
-   "date": "2026-09-06",
-   "label": "R69 — the computer-use enforcement layer (milestones for R62–R68 live in CHANGELOG.md): observation receipts on all 11 mutating tools, click verification + hitElementName, stale-frame auto-refresh (frame_changed), screenshot-spam guard (screen_unchanged), the pngjs aHash frame memory, element middle/right clicks, wait() observable, the scroll-math/HWHEEL fix, the stdin long-type paste, the NOACTIVATE monitor (2082 tests)"
-  },
-  {
-   "date": "2026-09-06",
-   "label": "R70 — the agent brain round (research-driven): env grounding (real OS/shell/date/git in the prompt), AGENTS.md/CLAUDE.md convention loading with @file imports, the four planning sections merged into one five-phase loop, the Codex dirty-worktree + verify-after-edit discipline, the ACI tool-feedback round (head+tail output caps, line-numbered read_file), file-based skills + 7 new builtins + sticky skill bodies + agent.skills wired; prompt 22,460→20,156 chars (2177 tests)"
-  },
-  {
-   "date": "2026-09-07",
-   "label": "R71 — the discipline & reliability round (research-driven, the owner's 4 reference repos): the engineering-discipline prompt section (karpathy principles + [KNOWN]/[ASSUMED]/[UNKNOWN] + 3-strike + red flags), verification receipts + 🟢🟡🔴 confidence tags, 12 trigger-rich skills (focused-fix/zero-hallucination/self-eval/ship-gate), edit-failure escalation, owner-denial ≠ failure semantics, 6-class provider-error classification, context-overflow recovery (2287 tests)"
-  },
-  {
-   "date": "2026-09-07",
-   "label": "R72 — the adaptive capability round (the owner's 'on the basis of the task' directive): deterministic task→skill hints (the advisory 'Task signal' line, golden byte-stable), 18 builtin skills (+6 crafts: tdd/api-design/frontend-craft/typescript-craft/security-review/refactoring), references/ depth for file skills (read_skill's reference param), per-directory AGENTS.md/CLAUDE.md conventions on read_file (2423 tests)"
-  },
-  {
-   "date": "2026-09-07",
-   "label": "R73 — the task modes round (the posture tier of the owner's directive): six builtin posture modes (plan/debug/build/review/explore/refactor) + custom modes (.acute/agents/*.md, shadowing, tool narrowing), the switch_mode tool + composer picker + /mode slash + the mode Task signal line, sessions.active_mode (migration 0027), the generalized system-reminder renderer, skills 18→20 (spec-planning, performance) (2558 tests)"
-  },
-  {
-   "date": "2026-09-07",
-   "label": "R74 — the updater-freeze round: the launcher now picks releases by MAX VERSION (root cause: GitHub lists never-published drafts ABOVE published releases, and five R63-R67 drafts froze the owner's installed app at 0.67.0 while 0.73.0 was live); 10 launcher regression tests wired into both CI gates; the five stale drafts published (2558 root tests + 10 launcher tests)"
-  },
-  {
-   "id": 35,
-   "title": "0.75.0 — reliability & enforcement",
-   "date": "2026-09-07",
-   "summary": "The owner's four verbatim asks shipped together: the transient-API retry ladder (immediate → 1.5m → 5m → 10m → 30m → stop+notify, visible status card), hard task-mode enforcement (plan/review/explore read-only at the toolset level, owner-pinned, debug command tier, delegation inheritance), hover-only mode descriptions + read-only badges, and the single-row composer toolbar with the actually-working 5-line textarea. The deepest find: SDK error PARTS were swallowed — real 429s could never classify nor ladder; the adapter now re-throws them (live-verified)."
-  },
-  {
-   "id": 36,
-   "title": "R76 — the documentation round",
-   "date": "2026-09-07",
-   "summary": "Docs caught up with the code: the session history backfilled R68-R75 (8 entries, +147 lines), five AGENT-MEMORY lessons recorded (72-76), the two R75 ADRs written (0026 task-mode policy, 0027 retry-ladder), ARCHITECTURE/IMPLEMENTED-API/EXTENSIBILITY/DESIGN-SYSTEM/ROADMAP/SECURITY/HANDOFF corrected to the shipped truth, the docs index completed (5 unindexed runbooks), and the stamp-cohort rule documented where the next agent will find it (DOC-STANDARDS §8 + MAINTENANCE recipe g). Docs-only: 0.75.0 unchanged, no release."
-  },
-  {
-   "id": 37,
-   "title": "R77 — the field-report round",
-   "date": "2026-09-07",
-   "summary": "The 0.75.0 field report addressed end-to-end: the composer split left/right with the send action locked to its cluster, the model pill's Cpu icon, the redesigned retry card, the vanish-on-failure fix (freezeFailedTurn keeps the error card + the user's message), envelope-intact API errors + full-text error cards, revert-as-edit-and-resend (inclusive truncation + composer refill), and a live real-provider E2E battery including a genuine rate-limit storm that exercised the retry ladder live."
-  },
-  {
-   "id": 38,
-   "title": "R78 — the honest-errors + queue round",
-   "date": "2026-09-08",
-   "summary": "The owner’s four verbatim asks shipped together: the error chain robustified (RetryError unwrapped so classification reads the real status; a 403 region block no longer lies ‘authentication failed’; userMessage is the API’s REAL text — only a real rate limit ladders, every other failure shows the provider’s actual words on the live retry card too), the composer’s action group restructured into a never-wrapping bottom-right anchor (Continue/Send/Stop/queue-send can never render in a wrong position), the Settings → General retry config (three per-class auto-retry switches — a disabled class fails fast with the real text), and the message queue (send while the agent works — the message queues as an amber chip, auto-delivers after the current tool call with full context, continues the same stream at turn end, survives stops/crashes via the pre-flip). Verified: 2708 tests (agent-core 1742), the battery-r78 live battery 12/12 (real 429 ladder + a mock-provider request-body oracle), browser-verified on the real dev stack."
-  },
-  {
-   "id": 39,
-   "title": "R79 — the orchestrator round",
-   "date": "2026-09-08",
-   "summary": "The standing R73 deferral shipped — addressable, background, resumable sub-agent tasks (the last unshipped piece of the R71 sub-agent discipline): delegate_task gained task_id (the parent model’s own address, grammar-checked, duplicate-refused, capped at 10 outstanding background tasks), background:true (fire-and-forget with an immediate receipt while the child runs detached — it outlives the parent’s turn, streams to the Sub-agents panel, and its status rides the next turn’s system prompt as the per-turn BACKGROUND TASKS section that disappears once collected), and resume (waits while the task runs, returns the final report idempotently, retries a failed child from where it stopped; the delegation.collected event on the parent’s log is the one delivery marker). The owner sees the address as a mono task-id chip in the panel + the chat card; migration 0028 (sessions.delegate_task_id). Verified: 2741 tests (agent-core 1769 incl. 27 new), the battery-r79 live battery 10/10 with the request-body oracle proving the model SEES the reminder section and its disappearance after collection."
-  },
-  {
-   "id": 40,
-   "title": "R80 — the reliability round",
-   "date": "2026-09-09",
-   "summary": "The owner's four-clause field report shipped as one round: the silent chat terminations fixed at three root causes (the SSE clean-close truncation guard — a provider dropping the stream mid-generation now throws the honest 'connection closed mid-response' error and the retry ladder engages; the context/request guard stops now persist real turn.errors with CONTEXT_LIMIT/REQUEST_LIMIT codes instead of ending ok:true; a route crash now persists and notifies instead of vanishing on reload), the raw error messages shown (every error-detail cap raised — 4000/600/2000 — with key scrubbing unchanged and the nvapi- prefix joined), the retry ladder made customizable (maxAttempts, per-rung waitMinutes, providerTimeoutSeconds — validated, resolved defensively per turn, edited from the Settings General card, the defaults byte-identical to the R75 behavior), and the NVIDIA NIM provider supported (seeded, key-wired through the env injection + dev key file, live-verified reachable + catalog + key auth). Verified 2772/2772 in 149 files + live on the real keys (a real OpenRouter streamed turn end-to-end, the retry PUT round-trips, the NVIDIA connection test)."
-  },
-  {
-   "id": 41,
-   "title": "R81 — the unified operating modes",
-   "date": "2026-09-09",
-   "summary": "ONE picker of THREE modes (Full Access / Ask / Plan) replaces the task-mode picker + access-level switcher (ADR-0029). Postures became agent self-selection via switch_mode; enforcement lives solely in the operating mode (PLAN grew to the 19-tool read-only set); 'editor' retired fail-closed (migration 0029 preserves every historical guarantee). TaskModePicker/`/mode` deleted from the UI; live battery + browser + VLM verified."
-  },
-  {
-   "id": 42,
-   "title": "R82 — models & providers hardening",
-   "date": "2026-09-09",
-   "summary": "The owner's field report round 2: custom-provider model ROUTING fixed end-to-end (providerId rides the send wire, the vision relay, the context meter, queued messages, sub-agent children — a model picked under a custom gateway or NVIDIA serves there, with restart-surviving keys via the Rust note-file), the per-model TEST button (a real completion probe with http/auth/model/content checks + scrubbed preview/reason), tri-state capability columns (migration 0030: null=unknown, never the 0004 false-lie), the capabilities edit-dialog card, provider-scoped subagentModel {providerId, modelId} (NIM rows pickable), GET /models/configured, and the NVIDIA picker polish (dialog-local free-scope, zero-free auto-switch). Live battery 8/8 on the real keys (custom gateway routing through a mock oracle with its own key, real OpenRouter + NIM probes, hostile key-echo scrubbed)."
-  },
-  {
-   "id": 43,
-   "title": "R83 — honest token & context metering",
-   "date": "2026-09-10",
-   "summary": "The owner's 'highly misleading' round: ONE budget (resolveTurnBudget — window WITH source label, the owner's max_output_tokens finally honored, available = window − output − margin) drives the meter, the compaction trigger, and the context guard; the donut shows the provider's OWN number for the last request (actual block from the stats carriers) beside the labeled ~projected estimate, applies the newest compaction (the ring drops instead of lying high), renders the budget tick + window provenance; schema-measured tool tokens replace the 350/tool guess; the meter's prompt sections match the real turn's (skills/task-modes/active-mode/background/environment); migration 0031's provider_calls + origin make 'N turns · M provider calls' honest and the hidden compaction/debug calls billed; cached-null hit rates ('— not reported'), (unpriced) cost markers, the real POST /sessions/:id/compact (the 800K guard's phantom /compact finally exists), the model-relative guard with honest numbers. Live battery 5/5 on real keys (actual=61 tokens measured end-to-end)."
-  },
-  {
-   "id": 44,
-   "title": "R84 — the modularity round (Wave 2: the SCC break + the server.ts route split)",
-   "date": "2026-09-10",
-   "summary": "Wave 2 of the R80.5 audit, behavior-identical and test-guarded: the 25-file agents↔tools SCC is DEAD (the delegation plugin's static orchestrator import — the root cause — replaced by the agents/sub-roles.ts leaf + the ToolDeps.orchestrator seam + a lazy fallback; a Tarjan check over the runtime import graph reports zero cycles), and server.ts shrank 5,719 → 2,439 lines (−57%) as 71 routes moved verbatim into 14 routes/<domain>.ts modules (sessions, agents, projects, models, providers, attachments, memory, skills, modes, ratings, usage, settings) on the proven registerBrowserRoutes pattern with buildServer as the assembler — each phase a separate green commit. The remaining domains (terminal, MCP, computer-use, diagnostics, approvals, the SSE route) are the documented next phases."
-  },
-  {
-   "id": 45,
-   "title": "R85 — the structure re-assessment",
-   "date": "2026-09-10",
-   "summary": "The owner-directed post-R84 audit, docs-only: three parallel analysis sweeps re-verified at c38bc8b — R84's wins CONFIRMED (the SCC dead, server.ts 5,719→2,439 exact) with three overstatements corrected (one benign 2-cycle remains: registry↔plugins/mcp TOOL_NAME_RE since R61; 52 routes remain in server.ts, not ~31 — the notifications/jobs/checkpoints/dialogs/plugins tail was never on the plan; the SSE route is 476 lines); the turn-loop duplication measured (378 byte-identical lines; runtime.ts grew to 3,369; prepareTurn 447 lines/10 positional args); the frontend god files all grew since R80.5 (api 3,959 / stream-store 1,936 / ModelsProvidersTab 3,304; 559 lines of dead sessions/ code; zero extension seams); SQL leaks counted at 22 (approvals.ts ×11); every P0 doc drift fixed (MODULE-BOUNDARIES rewritten to the post-R84 reality, MAINTENANCE §e, HANDOFF, round-84.md backfilled, the board/index/TESTING/IMPLEMENTED-API/ROADMAP/EXTENSIBILITY synced, WORKLOG R76-R81 backfill, lessons #84-#85). v0.83.0 unchanged."
-  },
-  {
-   "id": 46,
-   "title": "R86 — the verification + SSE-extraction round",
-   "date": "2026-09-10",
-   "summary": "The owner's task-list session: (1) the R85 claims re-verified with three parallel sweeps — backend exact (52-route inventory, 22 SQL leaks, the 2-cycle, the 378-line duplication, ToolDeps missing runId), four frontend numbers corrected (api.ts 85 importers not 72; ModelsProvidersTab 60 hooks/3 dialogs; 14 stores; StreamTurnEvent 37 members), the dead sessions/ dir caught receiving an R83 edit, three narrow frontend seams the 'zero' claim missed. (2) THE SSE ROUTE EXTRACTED — routes/sse.ts (the final-phase domain of the R84 split): the 476-line streamed turn route moved verbatim (byte-identical round-trip verifier), server.ts 2,439→1,913, eleven single-consumer imports pruned, registration order preserved; full pipeline green (2,825 tests byte-identical to baseline, e2e 12/12 on the built dist, live boot smoke). v0.84.0. (3) Ops: six stale branches deleted (only main remains — the r61 branch's superseded cua-helper line documented with recoverable tips), the stuck v0.83.0 DRAFT release PUBLISHED (both assets verified), the DASHBOARD's stale plan section truth-synced."
-  },
-  {
-   "id": 47,
-   "title": "R87 — the UX + capability round (About/reset, configure-before-add, ask_user, the embedded browser)",
-   "date": "2026-09-11",
-   "summary": "The owner's improvement list, delivered as v0.85.0: (1) Settings → About — the version card with the update check + the application-wide RESET (POST /system/reset: live-turn abort, keyring clear, terminal dispose, table wipe + factory reseed, VACUUM, ~/.acute purge; the Tauri purge_provider_keys command clears Credential Manager first). (2) credentials.txt REMOVED from the launcher (the GitHub token is asked once + saved at .acute/github.pat or ACUTE_GITHUB_PAT; provider keys are saved in-app only). (3) ask_user end-to-end — the mid-task question card (option pills + custom answer, batched questions, 10-min timeout) with agent-question.requested/resolved session events + the resolve route; migration 0033. (4) The todo list VISIBLE in chat (TodoCard in the working stream, live via todo-updated frames). (5) Models & Providers redesigned: bordered model cards + capability chips (migration 0032: PDF input + text/image/video/audio outputs + sizeLabel; reasoning + tool use REMOVED from the dialog — the app detects them), configure-before-add (the picker opens the config dialog instead of adding directly), the animated self-dismissing test button, the NVIDIA phantom-add fixed (hasKey-aware existingIds). (6) The embedded browser: default viewport 1440×900, KEEP-ALIVE browser panels (no reload/glitch on tab switch, survives the new-tab menu with a deliberate pause hint), read_dom now returns per-element x/y/w/h positions, screenshots are panel-only (the full-display fallback is GONE). (7) The chat/shell batch: viewport-adaptive scrollbars, the chat min width halved + wide padding, the composer's graduated shrink (model name first), the provider-selector trajectory gating + frosted-glass backdrop, the sidebar rail expanding on project click."
-  },
-  {
-   "date": "2026-09-11",
-   "label": "R88 — the floating to-do list round: the owner's spec + manual edits, shipped as v0.86.0. The floating widget (top-right of the chat window; collapsed = only the task at hand; expand = the ten-row scroll box with done/processing/pending glyphs) + the manual editor (rename/status-cycle/reorder/delete/add; Save posts the owner's snapshot through POST /sessions/:id/todo with source:\"user\") + the CURRENT TODO LIST prompt section (the agent sees the latest snapshot — and the owner's edits, emphasized — on every turn)."
-  },
-  {
-   "date": "2026-09-11",
-   "label": "R89 — the owner's-verdict round: the full v0.86.0 walkthrough answered, shipped as v0.87.0. (A) The update check runs SERVER-SIDE with the launcher's saved PAT (the private-repo HTTP 404 fixed), the Releases button opens the OS browser, and the reset now clears the first-run gate (the app boots the SETUP WIZARD after 'Reset everything'). (B) Provider identity: the NAME is the uniqueness key, keyless preset rows are ADOPTED in place (the 'NVIDIA already exists' fresh-reset bug), same-type adds derive fresh ids (as many OpenRouters as needed), presets carry their API format (never asked), the chat picker lists only ADDED providers, and the last-used model becomes the next chats' default. (C) Models UI: clean human model names (Llama 3.3 70b Instruct), themed SVG capability chips, 1M/131K token formatting, the dedicated details strip (Context/Input/Output/Cache read), and the test result expanding its own section below the card. (D) Layout honesty: the dynamic sidebar cap (the chat reaches its floor at ANY window width), the logo-only model pill at minimum, padding tiers, overflow guards. (E) THE AGENT HANDS: a visible branded cursor traveling human bezier paths, real left/right/double clicks + drags at exact page coordinates, word-by-word typing at ~150 WPM with Shift+Enter newline semantics, smooth scrolling, the 1440×900 default viewport actually applying, and the GEOMETRIC overlay guard (the browser stays live when menus open away from it). (F) The TodoFloat frosted-glass blur. Full pipeline green: frontend 2,885 + agent-core 1,892 tests, e2e 12/12, license audit clean."
-  },
-  {
-   "date": "2026-09-11",
-   "label": "R90 — the browser-native round: the owner's second walkthrough answered, shipped as v0.88.0. The MENU OVERLAY WINDOW (menus float on top of the LIVE browser — the headline verdict), the agent hands v2 (always-visible cursor, human path planner, real event trail, visible press pulse, tap→1s→type→~1s→Enter), the delete-provider honesty (inline 409 + the OS-key purge — the R82 TODO closed), the wizard's persistence (model row + last-used default + the seeded agent re-pointed), the model card (icon badges + the arrow + one merged section), the launcher PAT home-path fix (the update check works after acute.bat), and the floating-webview race fix. The full pipeline green: lint, both typechecks, 2,888 frontend + 1,894 agent-core tests, the 4-page build (menu-overlay.html rides as the 4th vite entry), 12/12 e2e, the license audit, 16/16 launcher python tests.",
-   "state": "done"
-  },
-  {
-   "date": "2026-09-11",
-   "label": "R91 — the third-walkthrough round, shipped as v0.89.0. The IN-APP UPDATER (Update now downloads the sha256-verified installer in-app, launches it, and closes — the owner's headline ask), the OpenRouter delete unblock (the default agent's reference was the silent 409 — force now resets the referencing agents to the model-picker state), the browser blank-render deep fix (async menu-overlay window creation killing tauri's documented sync-command deadlock class + show re-asserts bounds + a 2s visibility watchdog that recreates or re-asserts the webview + honest 6s affordance timeouts), the model card's right-side identity (capability icons inline on the name; the details section conditional on what is actually configured — none/compact-chips/full-band), the CapChip on/off states, the queue-send gating (only with text), the minimized Continue, the TodoFloat column-relative cap + two-line wrap, and the token million tier (300M). Full pipeline green: lint, both typechecks, the 2,899-test root suite, 12/12 e2e, license audit, windows-target cargo check.",
-   "state": "done"
-  },
-  {
-   "date": "2026-09-11",
-   "label": "R92 — the multi-key pool + juggling, the browser-embedding finish, the generation dead end closed (v0.90.0)"
-  },
-  {
-   "date": "2026-09-12",
-   "label": "R93 — the fifth-walkthrough round: the computer-use v2 (element map + learning + tree tools + placement + relocation + ghost verification), the browser agent's hands, the turn-loop reliability, and the settings-surface polish (v0.91.0)"
-  },
-  {
-   "date": "2026-09-13",
-   "label": "R95 — the sixth-walkthrough round: the Models & Providers overhaul, model-aware thinking + the loop guard, the native local-file browser, the chat robustness pass, the REAL-API live-fire. Shipped as v0.93.0."
-  },
-  {
-   "date": "2026-09-14",
-   "label": "Round 96 — the smarter-agent round (v0.94.0): live-fired over a 258-file project"
-  },
-  {
-   "date": "2026-09-14",
-   "label": "Round 97 — the context/freedom/states round (v0.95.0): Kilo-style context bar, thinking free by default, honest UI states"
-  },
-  {
-   "date": "2026-09-15",
-   "label": "R98 — the design-language + data round (v0.96.0)"
-  }
- ],
- "quality": {
-  "ci": "GREEN — CI 34879323837 and Release 34879322559 both SUCCESS on 52ffce2 (lint, both typechecks, agent-core 2,255/2,255 in 111 files, frontend 1,223/1,223, e2e 12/12, build, license audit, docs:check 204/0/0, version ×4 at 0.95.0). v0.95.0 PUBLISHED (release 388616224, latest — both assets verified with GitHub's server-side sha256 digests against freshly downloaded bytes: setup.exe e7aa1db1…, kit 83c0c0d9…; the launcher kit scanned — zero real-key values, only prefix teaching text). The R97 review pass (a dedicated audit of the round's full diff) landed SHIP-WITH-FIXES with every finding fixed + pinned before the release; the round's eight workstreams (C the Kilo-style context bar, D the thinking-loop default-off + the amber card, E the failure-usage truth, F the syntax colors with the gutter, G the browser settings home + the working HOME button, H the chat customizability, I the state-awareness sweep, J the review fixes) all live in the owner's TEST CHECKLIST at round-97.md §9.",
-  "suites": [
-   {
-    "name": "frontend",
-    "tests": 3651
-   },
-   {
-    "name": "agent-core",
-    "tests": 2370
-   },
-   {
-    "name": "sidecar e2e",
-    "tests": 12
-   },
-   {
-    "name": "launcher (python unittest)",
-    "tests": 16
-   }
+  "pillars": [
+    {
+      "id": "coding",
+      "title": "Coding",
+      "state": "usable",
+      "progress": 92,
+      "summary": "Projects, 28 base tools (search_skills joined in R96) + skills/MCP/plugins, streaming chat, whole-file-first reads, ripgrep-style search, atomic multi-edit, codebase indexing"
+    },
+    {
+      "id": "agentic",
+      "title": "Agentic system",
+      "state": "building",
+      "progress": 82,
+      "summary": "Multi-turn agentic continuation with the R70 agent brain + the R71 discipline layer + the R73 task modes + the R79 delegation tier; R96: the warn-only loop guard with raw-args identity, completion = the model's own stop (the role=user fix), BATCH/COMPLETION/PRECISION prompt disciplines, 24 seeded skills + search_skills discovery, the R96 live-fire-verified wire (verbatim reasoning rungs, app attribution, the output cap)"
+    },
+    {
+      "id": "automation",
+      "title": "Automation",
+      "state": "planned",
+      "progress": 10,
+      "summary": "Scheduling & workflow pillar — researched, additive plan ready"
+    }
   ],
-  "cargoCheck": "green",
-  "licenseAudit": {
-   "deps": 134,
-   "verdict": "CLEAN"
-  }
- },
- "publicLinks": [
-  {
-   "label": "Owner's site",
-   "url": "https://testplay-byte.github.io/DASHBOARD/"
-  }
- ],
- "plan": {
-  "current": "R98 — the ninth-walkthrough round (the design language + Data & Statistics + the agent's brain: prompts/skills/ledger/indexing), v0.95.0 → v0.96.0",
-  "upcoming": [
-   {
-    "title": "The owner's v0.96.0 walkthrough",
-    "detail": "The R98 test checklist lives in round-98.md §6 (the design-language surfaces, the Data & Statistics tab, the Prompts tab + always-load skills, the tiered edit rule + search_symbols, Mermaid, the wizard's custom providers, the desktop notifications, the browser screenshot, the grouped settings, the CLI discovery). The round also carries the recovery chapter (§4) — the push-after-every-commit discipline is binding."
-   },
-   {
-    "title": "R99 candidates (honest)",
-    "detail": "The full subagent review pass (traded for the orchestrator's self-review under the owner's rush directive this round), the self-improving feedback loop (I2's health aggregations feeding prompts/skills — the L roadmap), the CDP-level browser tier (trusted input + Page.captureScreenshot), and the modularity Wave 2-b continuation."
-   }
+  "milestones": [
+    {
+      "date": "2026-08-21",
+      "label": "Phase 0 — SPEC approved"
+    },
+    {
+      "date": "2026-08-22",
+      "label": "Phase 1 — architecture skeleton + CI green"
+    },
+    {
+      "date": "2026-08-22",
+      "label": "Phase 2 — first live agent conversation"
+    },
+    {
+      "date": "2026-08-22",
+      "label": "Setup wizard — owner-approved screen by screen"
+    },
+    {
+      "date": "2026-08-22",
+      "label": "Shell redo — Settings hub, honest connection test"
+    },
+    {
+      "date": "2026-08-23",
+      "label": "Agentic MVP — projects, sandboxed tools, live-proven file writes"
+    },
+    {
+      "date": "2026-08-23",
+      "label": "Demo-parity chat UI + 7-tool agent"
+    },
+    {
+      "date": "2026-08-23",
+      "label": "One-double-click launcher for the owner's PC"
+    },
+    {
+      "date": "2026-08-23",
+      "label": "Full agentic coding system; zero-setup default agent"
+    },
+    {
+      "date": "2026-08-23",
+      "label": "Live streaming replies + per-reply telemetry + design system"
+    },
+    {
+      "date": "2026-08-23",
+      "label": "Governance round — blueprints, ADR backfill, workflow, this dashboard"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 27 — web tools (web_fetch + web_search) + critical deps-wiring fix (todos + checkpoints now live) + demo project built by the agent"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 28 — sandbox restore + master plan (1123L, 13 workstreams A-M, 5 milestones, 6 sub-agent reviews)"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 28 — UX + agentic-quality overhaul (5 milestones delivered)"
+    },
+    {
+      "label": "Round 30 — Windows bug fixes (CORS streaming + sessions) + sidebar/chat redesign"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 32 — owner-designed UI: floating panels + activity block"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 33 — hello-loop fix + sidebar/logo system + headerless chat"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 34 — multi-step tool feedback + settings redesign"
+    },
+    {
+      "date": "2026-08-25",
+      "label": "Round 35 — thinking + interleaved tool calls"
+    },
+    {
+      "date": "2026-08-25",
+      "label": "Round 36 — sub-agent orchestration (Phase 3 core)"
+    },
+    {
+      "date": "2026-08-31",
+      "label": "Round 55 — the engine-boot round (EISDIR + Credential-Manager namespace root causes)"
+    },
+    {
+      "date": "2026-08-31",
+      "label": "Round 56 — the launch-choice round (app-or-site question + engine-failure recourse + immediate self-update)"
+    },
+    {
+      "date": "2026-08-31",
+      "label": "Round 57 — the engine-bundling round (the 189-junction link farm behind ERR_MODULE_NOT_FOUND; hoisted staging + zero-links gate + the Windows pre-pack boot gate)"
+    },
+    {
+      "date": "2026-08-31",
+      "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; the frameless title bar, the stop/continue/live-write/engine-capping fixes, the settings restructure with visible keys, and the CLI chat harness)"
+    },
+    {
+      "date": "2026-08-31",
+      "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; frameless title bar, honest stops + Continue, live file-write preview, session-replay capping, settings restructure with visible keys, the CLI chat harness)"
+    },
+    {
+      "date": "2026-09-01",
+      "label": "R59 — owner-feedback round: rounded window + pill scrollbars, pop-out custom chrome, settings honesty, response ratings with full-context capture, diagnostics console, prompt-section registry (1302 tests)"
+    },
+    {
+      "date": "2026-09-02",
+      "label": "R60 — second owner-feedback polish round: pop-out rounded view + gutter scrollbar (eval_with_callback channel), settings deep-clean (consistent key field, empty-by-default models + picker Free/All toggle, padding + scroll-reflow fix), title-bar sidebar toggle, browser-panel fixes (popover z-index, real DPI zoom) (1348 tests)"
+    },
+    {
+      "date": "2026-09-02",
+      "label": "R61 — computer use: 30 desktop-control tools (a11y-first, gated by a master switch + approval postures, enforced kill switch, audit journal) + the separate vision model (own provider/model/key slot, or main-model vision when supported) + skills + MCP servers + the live monitor panel + the floating draggable mini window; prompts upgraded (tool discipline + honesty contract) (1491 tests)"
+    },
+    {
+      "date": "2026-09-06",
+      "label": "R69 — the computer-use enforcement layer (milestones for R62–R68 live in CHANGELOG.md): observation receipts on all 11 mutating tools, click verification + hitElementName, stale-frame auto-refresh (frame_changed), screenshot-spam guard (screen_unchanged), the pngjs aHash frame memory, element middle/right clicks, wait() observable, the scroll-math/HWHEEL fix, the stdin long-type paste, the NOACTIVATE monitor (2082 tests)"
+    },
+    {
+      "date": "2026-09-06",
+      "label": "R70 — the agent brain round (research-driven): env grounding (real OS/shell/date/git in the prompt), AGENTS.md/CLAUDE.md convention loading with @file imports, the four planning sections merged into one five-phase loop, the Codex dirty-worktree + verify-after-edit discipline, the ACI tool-feedback round (head+tail output caps, line-numbered read_file), file-based skills + 7 new builtins + sticky skill bodies + agent.skills wired; prompt 22,460→20,156 chars (2177 tests)"
+    },
+    {
+      "date": "2026-09-07",
+      "label": "R71 — the discipline & reliability round (research-driven, the owner's 4 reference repos): the engineering-discipline prompt section (karpathy principles + [KNOWN]/[ASSUMED]/[UNKNOWN] + 3-strike + red flags), verification receipts + 🟢🟡🔴 confidence tags, 12 trigger-rich skills (focused-fix/zero-hallucination/self-eval/ship-gate), edit-failure escalation, owner-denial ≠ failure semantics, 6-class provider-error classification, context-overflow recovery (2287 tests)"
+    },
+    {
+      "date": "2026-09-07",
+      "label": "R72 — the adaptive capability round (the owner's 'on the basis of the task' directive): deterministic task→skill hints (the advisory 'Task signal' line, golden byte-stable), 18 builtin skills (+6 crafts: tdd/api-design/frontend-craft/typescript-craft/security-review/refactoring), references/ depth for file skills (read_skill's reference param), per-directory AGENTS.md/CLAUDE.md conventions on read_file (2423 tests)"
+    },
+    {
+      "date": "2026-09-07",
+      "label": "R73 — the task modes round (the posture tier of the owner's directive): six builtin posture modes (plan/debug/build/review/explore/refactor) + custom modes (.acute/agents/*.md, shadowing, tool narrowing), the switch_mode tool + composer picker + /mode slash + the mode Task signal line, sessions.active_mode (migration 0027), the generalized system-reminder renderer, skills 18→20 (spec-planning, performance) (2558 tests)"
+    },
+    {
+      "date": "2026-09-07",
+      "label": "R74 — the updater-freeze round: the launcher now picks releases by MAX VERSION (root cause: GitHub lists never-published drafts ABOVE published releases, and five R63-R67 drafts froze the owner's installed app at 0.67.0 while 0.73.0 was live); 10 launcher regression tests wired into both CI gates; the five stale drafts published (2558 root tests + 10 launcher tests)"
+    },
+    {
+      "id": 35,
+      "title": "0.75.0 — reliability & enforcement",
+      "date": "2026-09-07",
+      "summary": "The owner's four verbatim asks shipped together: the transient-API retry ladder (immediate → 1.5m → 5m → 10m → 30m → stop+notify, visible status card), hard task-mode enforcement (plan/review/explore read-only at the toolset level, owner-pinned, debug command tier, delegation inheritance), hover-only mode descriptions + read-only badges, and the single-row composer toolbar with the actually-working 5-line textarea. The deepest find: SDK error PARTS were swallowed — real 429s could never classify nor ladder; the adapter now re-throws them (live-verified)."
+    },
+    {
+      "id": 36,
+      "title": "R76 — the documentation round",
+      "date": "2026-09-07",
+      "summary": "Docs caught up with the code: the session history backfilled R68-R75 (8 entries, +147 lines), five AGENT-MEMORY lessons recorded (72-76), the two R75 ADRs written (0026 task-mode policy, 0027 retry-ladder), ARCHITECTURE/IMPLEMENTED-API/EXTENSIBILITY/DESIGN-SYSTEM/ROADMAP/SECURITY/HANDOFF corrected to the shipped truth, the docs index completed (5 unindexed runbooks), and the stamp-cohort rule documented where the next agent will find it (DOC-STANDARDS §8 + MAINTENANCE recipe g). Docs-only: 0.75.0 unchanged, no release."
+    },
+    {
+      "id": 37,
+      "title": "R77 — the field-report round",
+      "date": "2026-09-07",
+      "summary": "The 0.75.0 field report addressed end-to-end: the composer split left/right with the send action locked to its cluster, the model pill's Cpu icon, the redesigned retry card, the vanish-on-failure fix (freezeFailedTurn keeps the error card + the user's message), envelope-intact API errors + full-text error cards, revert-as-edit-and-resend (inclusive truncation + composer refill), and a live real-provider E2E battery including a genuine rate-limit storm that exercised the retry ladder live."
+    },
+    {
+      "id": 38,
+      "title": "R78 — the honest-errors + queue round",
+      "date": "2026-09-08",
+      "summary": "The owner’s four verbatim asks shipped together: the error chain robustified (RetryError unwrapped so classification reads the real status; a 403 region block no longer lies ‘authentication failed’; userMessage is the API’s REAL text — only a real rate limit ladders, every other failure shows the provider’s actual words on the live retry card too), the composer’s action group restructured into a never-wrapping bottom-right anchor (Continue/Send/Stop/queue-send can never render in a wrong position), the Settings → General retry config (three per-class auto-retry switches — a disabled class fails fast with the real text), and the message queue (send while the agent works — the message queues as an amber chip, auto-delivers after the current tool call with full context, continues the same stream at turn end, survives stops/crashes via the pre-flip). Verified: 2708 tests (agent-core 1742), the battery-r78 live battery 12/12 (real 429 ladder + a mock-provider request-body oracle), browser-verified on the real dev stack."
+    },
+    {
+      "id": 39,
+      "title": "R79 — the orchestrator round",
+      "date": "2026-09-08",
+      "summary": "The standing R73 deferral shipped — addressable, background, resumable sub-agent tasks (the last unshipped piece of the R71 sub-agent discipline): delegate_task gained task_id (the parent model’s own address, grammar-checked, duplicate-refused, capped at 10 outstanding background tasks), background:true (fire-and-forget with an immediate receipt while the child runs detached — it outlives the parent’s turn, streams to the Sub-agents panel, and its status rides the next turn’s system prompt as the per-turn BACKGROUND TASKS section that disappears once collected), and resume (waits while the task runs, returns the final report idempotently, retries a failed child from where it stopped; the delegation.collected event on the parent’s log is the one delivery marker). The owner sees the address as a mono task-id chip in the panel + the chat card; migration 0028 (sessions.delegate_task_id). Verified: 2741 tests (agent-core 1769 incl. 27 new), the battery-r79 live battery 10/10 with the request-body oracle proving the model SEES the reminder section and its disappearance after collection."
+    },
+    {
+      "id": 40,
+      "title": "R80 — the reliability round",
+      "date": "2026-09-09",
+      "summary": "The owner's four-clause field report shipped as one round: the silent chat terminations fixed at three root causes (the SSE clean-close truncation guard — a provider dropping the stream mid-generation now throws the honest 'connection closed mid-response' error and the retry ladder engages; the context/request guard stops now persist real turn.errors with CONTEXT_LIMIT/REQUEST_LIMIT codes instead of ending ok:true; a route crash now persists and notifies instead of vanishing on reload), the raw error messages shown (every error-detail cap raised — 4000/600/2000 — with key scrubbing unchanged and the nvapi- prefix joined), the retry ladder made customizable (maxAttempts, per-rung waitMinutes, providerTimeoutSeconds — validated, resolved defensively per turn, edited from the Settings General card, the defaults byte-identical to the R75 behavior), and the NVIDIA NIM provider supported (seeded, key-wired through the env injection + dev key file, live-verified reachable + catalog + key auth). Verified 2772/2772 in 149 files + live on the real keys (a real OpenRouter streamed turn end-to-end, the retry PUT round-trips, the NVIDIA connection test)."
+    },
+    {
+      "id": 41,
+      "title": "R81 — the unified operating modes",
+      "date": "2026-09-09",
+      "summary": "ONE picker of THREE modes (Full Access / Ask / Plan) replaces the task-mode picker + access-level switcher (ADR-0029). Postures became agent self-selection via switch_mode; enforcement lives solely in the operating mode (PLAN grew to the 19-tool read-only set); 'editor' retired fail-closed (migration 0029 preserves every historical guarantee). TaskModePicker/`/mode` deleted from the UI; live battery + browser + VLM verified."
+    },
+    {
+      "id": 42,
+      "title": "R82 — models & providers hardening",
+      "date": "2026-09-09",
+      "summary": "The owner's field report round 2: custom-provider model ROUTING fixed end-to-end (providerId rides the send wire, the vision relay, the context meter, queued messages, sub-agent children — a model picked under a custom gateway or NVIDIA serves there, with restart-surviving keys via the Rust note-file), the per-model TEST button (a real completion probe with http/auth/model/content checks + scrubbed preview/reason), tri-state capability columns (migration 0030: null=unknown, never the 0004 false-lie), the capabilities edit-dialog card, provider-scoped subagentModel {providerId, modelId} (NIM rows pickable), GET /models/configured, and the NVIDIA picker polish (dialog-local free-scope, zero-free auto-switch). Live battery 8/8 on the real keys (custom gateway routing through a mock oracle with its own key, real OpenRouter + NIM probes, hostile key-echo scrubbed)."
+    },
+    {
+      "id": 43,
+      "title": "R83 — honest token & context metering",
+      "date": "2026-09-10",
+      "summary": "The owner's 'highly misleading' round: ONE budget (resolveTurnBudget — window WITH source label, the owner's max_output_tokens finally honored, available = window − output − margin) drives the meter, the compaction trigger, and the context guard; the donut shows the provider's OWN number for the last request (actual block from the stats carriers) beside the labeled ~projected estimate, applies the newest compaction (the ring drops instead of lying high), renders the budget tick + window provenance; schema-measured tool tokens replace the 350/tool guess; the meter's prompt sections match the real turn's (skills/task-modes/active-mode/background/environment); migration 0031's provider_calls + origin make 'N turns · M provider calls' honest and the hidden compaction/debug calls billed; cached-null hit rates ('— not reported'), (unpriced) cost markers, the real POST /sessions/:id/compact (the 800K guard's phantom /compact finally exists), the model-relative guard with honest numbers. Live battery 5/5 on real keys (actual=61 tokens measured end-to-end)."
+    },
+    {
+      "id": 44,
+      "title": "R84 — the modularity round (Wave 2: the SCC break + the server.ts route split)",
+      "date": "2026-09-10",
+      "summary": "Wave 2 of the R80.5 audit, behavior-identical and test-guarded: the 25-file agents↔tools SCC is DEAD (the delegation plugin's static orchestrator import — the root cause — replaced by the agents/sub-roles.ts leaf + the ToolDeps.orchestrator seam + a lazy fallback; a Tarjan check over the runtime import graph reports zero cycles), and server.ts shrank 5,719 → 2,439 lines (−57%) as 71 routes moved verbatim into 14 routes/<domain>.ts modules (sessions, agents, projects, models, providers, attachments, memory, skills, modes, ratings, usage, settings) on the proven registerBrowserRoutes pattern with buildServer as the assembler — each phase a separate green commit. The remaining domains (terminal, MCP, computer-use, diagnostics, approvals, the SSE route) are the documented next phases."
+    },
+    {
+      "id": 45,
+      "title": "R85 — the structure re-assessment",
+      "date": "2026-09-10",
+      "summary": "The owner-directed post-R84 audit, docs-only: three parallel analysis sweeps re-verified at c38bc8b — R84's wins CONFIRMED (the SCC dead, server.ts 5,719→2,439 exact) with three overstatements corrected (one benign 2-cycle remains: registry↔plugins/mcp TOOL_NAME_RE since R61; 52 routes remain in server.ts, not ~31 — the notifications/jobs/checkpoints/dialogs/plugins tail was never on the plan; the SSE route is 476 lines); the turn-loop duplication measured (378 byte-identical lines; runtime.ts grew to 3,369; prepareTurn 447 lines/10 positional args); the frontend god files all grew since R80.5 (api 3,959 / stream-store 1,936 / ModelsProvidersTab 3,304; 559 lines of dead sessions/ code; zero extension seams); SQL leaks counted at 22 (approvals.ts ×11); every P0 doc drift fixed (MODULE-BOUNDARIES rewritten to the post-R84 reality, MAINTENANCE §e, HANDOFF, round-84.md backfilled, the board/index/TESTING/IMPLEMENTED-API/ROADMAP/EXTENSIBILITY synced, WORKLOG R76-R81 backfill, lessons #84-#85). v0.83.0 unchanged."
+    },
+    {
+      "id": 46,
+      "title": "R86 — the verification + SSE-extraction round",
+      "date": "2026-09-10",
+      "summary": "The owner's task-list session: (1) the R85 claims re-verified with three parallel sweeps — backend exact (52-route inventory, 22 SQL leaks, the 2-cycle, the 378-line duplication, ToolDeps missing runId), four frontend numbers corrected (api.ts 85 importers not 72; ModelsProvidersTab 60 hooks/3 dialogs; 14 stores; StreamTurnEvent 37 members), the dead sessions/ dir caught receiving an R83 edit, three narrow frontend seams the 'zero' claim missed. (2) THE SSE ROUTE EXTRACTED — routes/sse.ts (the final-phase domain of the R84 split): the 476-line streamed turn route moved verbatim (byte-identical round-trip verifier), server.ts 2,439→1,913, eleven single-consumer imports pruned, registration order preserved; full pipeline green (2,825 tests byte-identical to baseline, e2e 12/12 on the built dist, live boot smoke). v0.84.0. (3) Ops: six stale branches deleted (only main remains — the r61 branch's superseded cua-helper line documented with recoverable tips), the stuck v0.83.0 DRAFT release PUBLISHED (both assets verified), the DASHBOARD's stale plan section truth-synced."
+    },
+    {
+      "id": 47,
+      "title": "R87 — the UX + capability round (About/reset, configure-before-add, ask_user, the embedded browser)",
+      "date": "2026-09-11",
+      "summary": "The owner's improvement list, delivered as v0.85.0: (1) Settings → About — the version card with the update check + the application-wide RESET (POST /system/reset: live-turn abort, keyring clear, terminal dispose, table wipe + factory reseed, VACUUM, ~/.acute purge; the Tauri purge_provider_keys command clears Credential Manager first). (2) credentials.txt REMOVED from the launcher (the GitHub token is asked once + saved at .acute/github.pat or ACUTE_GITHUB_PAT; provider keys are saved in-app only). (3) ask_user end-to-end — the mid-task question card (option pills + custom answer, batched questions, 10-min timeout) with agent-question.requested/resolved session events + the resolve route; migration 0033. (4) The todo list VISIBLE in chat (TodoCard in the working stream, live via todo-updated frames). (5) Models & Providers redesigned: bordered model cards + capability chips (migration 0032: PDF input + text/image/video/audio outputs + sizeLabel; reasoning + tool use REMOVED from the dialog — the app detects them), configure-before-add (the picker opens the config dialog instead of adding directly), the animated self-dismissing test button, the NVIDIA phantom-add fixed (hasKey-aware existingIds). (6) The embedded browser: default viewport 1440×900, KEEP-ALIVE browser panels (no reload/glitch on tab switch, survives the new-tab menu with a deliberate pause hint), read_dom now returns per-element x/y/w/h positions, screenshots are panel-only (the full-display fallback is GONE). (7) The chat/shell batch: viewport-adaptive scrollbars, the chat min width halved + wide padding, the composer's graduated shrink (model name first), the provider-selector trajectory gating + frosted-glass backdrop, the sidebar rail expanding on project click."
+    },
+    {
+      "date": "2026-09-11",
+      "label": "R88 — the floating to-do list round: the owner's spec + manual edits, shipped as v0.86.0. The floating widget (top-right of the chat window; collapsed = only the task at hand; expand = the ten-row scroll box with done/processing/pending glyphs) + the manual editor (rename/status-cycle/reorder/delete/add; Save posts the owner's snapshot through POST /sessions/:id/todo with source:\"user\") + the CURRENT TODO LIST prompt section (the agent sees the latest snapshot — and the owner's edits, emphasized — on every turn)."
+    },
+    {
+      "date": "2026-09-11",
+      "label": "R89 — the owner's-verdict round: the full v0.86.0 walkthrough answered, shipped as v0.87.0. (A) The update check runs SERVER-SIDE with the launcher's saved PAT (the private-repo HTTP 404 fixed), the Releases button opens the OS browser, and the reset now clears the first-run gate (the app boots the SETUP WIZARD after 'Reset everything'). (B) Provider identity: the NAME is the uniqueness key, keyless preset rows are ADOPTED in place (the 'NVIDIA already exists' fresh-reset bug), same-type adds derive fresh ids (as many OpenRouters as needed), presets carry their API format (never asked), the chat picker lists only ADDED providers, and the last-used model becomes the next chats' default. (C) Models UI: clean human model names (Llama 3.3 70b Instruct), themed SVG capability chips, 1M/131K token formatting, the dedicated details strip (Context/Input/Output/Cache read), and the test result expanding its own section below the card. (D) Layout honesty: the dynamic sidebar cap (the chat reaches its floor at ANY window width), the logo-only model pill at minimum, padding tiers, overflow guards. (E) THE AGENT HANDS: a visible branded cursor traveling human bezier paths, real left/right/double clicks + drags at exact page coordinates, word-by-word typing at ~150 WPM with Shift+Enter newline semantics, smooth scrolling, the 1440×900 default viewport actually applying, and the GEOMETRIC overlay guard (the browser stays live when menus open away from it). (F) The TodoFloat frosted-glass blur. Full pipeline green: frontend 2,885 + agent-core 1,892 tests, e2e 12/12, license audit clean."
+    },
+    {
+      "date": "2026-09-11",
+      "label": "R90 — the browser-native round: the owner's second walkthrough answered, shipped as v0.88.0. The MENU OVERLAY WINDOW (menus float on top of the LIVE browser — the headline verdict), the agent hands v2 (always-visible cursor, human path planner, real event trail, visible press pulse, tap→1s→type→~1s→Enter), the delete-provider honesty (inline 409 + the OS-key purge — the R82 TODO closed), the wizard's persistence (model row + last-used default + the seeded agent re-pointed), the model card (icon badges + the arrow + one merged section), the launcher PAT home-path fix (the update check works after acute.bat), and the floating-webview race fix. The full pipeline green: lint, both typechecks, 2,888 frontend + 1,894 agent-core tests, the 4-page build (menu-overlay.html rides as the 4th vite entry), 12/12 e2e, the license audit, 16/16 launcher python tests.",
+      "state": "done"
+    },
+    {
+      "date": "2026-09-11",
+      "label": "R91 — the third-walkthrough round, shipped as v0.89.0. The IN-APP UPDATER (Update now downloads the sha256-verified installer in-app, launches it, and closes — the owner's headline ask), the OpenRouter delete unblock (the default agent's reference was the silent 409 — force now resets the referencing agents to the model-picker state), the browser blank-render deep fix (async menu-overlay window creation killing tauri's documented sync-command deadlock class + show re-asserts bounds + a 2s visibility watchdog that recreates or re-asserts the webview + honest 6s affordance timeouts), the model card's right-side identity (capability icons inline on the name; the details section conditional on what is actually configured — none/compact-chips/full-band), the CapChip on/off states, the queue-send gating (only with text), the minimized Continue, the TodoFloat column-relative cap + two-line wrap, and the token million tier (300M). Full pipeline green: lint, both typechecks, the 2,899-test root suite, 12/12 e2e, license audit, windows-target cargo check.",
+      "state": "done"
+    },
+    {
+      "date": "2026-09-11",
+      "label": "R92 — the multi-key pool + juggling, the browser-embedding finish, the generation dead end closed (v0.90.0)"
+    },
+    {
+      "date": "2026-09-12",
+      "label": "R93 — the fifth-walkthrough round: the computer-use v2 (element map + learning + tree tools + placement + relocation + ghost verification), the browser agent's hands, the turn-loop reliability, and the settings-surface polish (v0.91.0)"
+    },
+    {
+      "date": "2026-09-13",
+      "label": "R95 — the sixth-walkthrough round: the Models & Providers overhaul, model-aware thinking + the loop guard, the native local-file browser, the chat robustness pass, the REAL-API live-fire. Shipped as v0.93.0."
+    },
+    {
+      "date": "2026-09-14",
+      "label": "Round 96 — the smarter-agent round (v0.94.0): live-fired over a 258-file project"
+    },
+    {
+      "date": "2026-09-14",
+      "label": "Round 97 — the context/freedom/states round (v0.95.0): Kilo-style context bar, thinking free by default, honest UI states"
+    },
+    {
+      "date": "2026-09-15",
+      "label": "R98 — the design-language + data round (v0.96.0)"
+    },
+    {
+      "date": "2026-09-15",
+      "label": "R99 — the research-driven UI redo round (v0.97.0): the self-contained browser, one-click silent updates, the agent's contract"
+    }
   ],
-  "principles": [
-   "Local-first — all processing on-device",
-   "Additive architecture — no pillar ever forces a rewrite",
-   "Quality over speed — every round verified before push"
-  ]
- },
- "round": 98,
- "ci": "GREEN — CI 34993547873 and Release 34993551131 both SUCCESS on 50a4b24 (lint, both typechecks, agent-core 2,370/2,370 in 119 files, frontend 3,651/3,651, e2e 12/12, build, license audit, docs:check 213/0/0); v0.96.0 PUBLISHED (release 389300285, latest, both assets sha256-verified against fresh downloads — setup.exe d5b13f3c…, kit 14e05082…; the kit scanned clean)."
+  "quality": {
+    "ci": "PENDING — the v0.97.0 runs land on the release commit (the R99 baseline proven in between: CI 329126c fully GREEN including cargo check + the Release dispatch on 34fe1e5 SUCCESS — the fixedRuntime engine-bundled installer chain is proven end to end)",
+    "suites": [
+      {
+        "name": "frontend",
+        "tests": 3651
+      },
+      {
+        "name": "agent-core",
+        "tests": 2370
+      },
+      {
+        "name": "sidecar e2e",
+        "tests": 12
+      },
+      {
+        "name": "launcher (python unittest)",
+        "tests": 16
+      }
+    ],
+    "cargoCheck": "green",
+    "licenseAudit": {
+      "deps": 134,
+      "verdict": "CLEAN"
+    }
+  },
+  "publicLinks": [
+    {
+      "label": "Owner's site",
+      "url": "https://testplay-byte.github.io/DASHBOARD/"
+    }
+  ],
+  "plan": {
+    "current": "R99 — the research-driven UI redo + the self-contained app round (native browser + silent updates + the chat/context/stats/prompts redesigns + the agent's contract), v0.96.0 → v0.97.0",
+    "upcoming": [
+      {
+        "title": "The owner's v0.97.0 walkthrough",
+        "detail": "The R99 test checklist lives in round-99.md §5 — the in-app link routing, the one-click silent update + relaunch, the chat turn headers + compressed summaries, the context hero/bar/legend, the stats danger zone, the System prompt manager, and the agent's intake/autonomy/confidence behavior."
+      },
+      {
+        "title": "R100 candidates (honest)",
+        "detail": "The modularity roadmap's continuation (the turn-loop harness extraction — risk #1 per the R85 audit; the remaining server.ts domains), the lessons-ledger affordance, ratings-driven prompt tuning, the standing items (edit-linting, installer code-signing, the Files-tab polish, the CDP-level trusted-input tier, the COM IUIAutomation bridge), and the R99 review's NIT list (the open-link hydration race, the wizard-fallback re-download leg)."
+      }
+    ],
+    "principles": [
+      "Local-first — all processing on-device",
+      "Additive architecture — no pillar ever forces a rewrite",
+      "Quality over speed — every round verified before push"
+    ]
+  },
+  "round": 99,
+  "ci": "PENDING — the v0.97.0 runs land on the release commit (the R99 baseline proven in between: CI 329126c fully GREEN including cargo check + the Release dispatch on 34fe1e5 SUCCESS — the fixedRuntime engine-bundled installer chain is proven end to end)"
 }

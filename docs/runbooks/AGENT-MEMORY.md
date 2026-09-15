@@ -1118,3 +1118,20 @@ their final long suites so a cut can't lose it; (c) connection death ≠
 agent death. Also: verify the ROOT tsconfig (it includes agent-core/tests —
 agent-core's own tsc passing does NOT mean the shared gate passes; an
 unused const in a test file fails the root gate).
+
+#100 (2026-09-15, R99): Three Tauri/CI traps and one tooling trap. (a) The
+`webviewInstallMode` serde tag field is `type`, NOT `mode` — tauri-build
+fails at cargo check with `missing field 'type'` (read the enum's serde
+attribute before writing config). (b) tauri-build validates EVERY
+`bundle.resources` path at COMPILE time — a CI-staged, gitignored resource
+dir needs a committed placeholder (the staging/sidecar/README.md pattern:
+`dir/*` ignore + `!dir/README.md`) or plain cargo check fails on clean
+checkouts. (c) The audit/terminal output pipeline EATS literal `[m`
+sequences (ANSI-reset artifacts) — "[math]::Round corrupted" and
+"max-w-[min(75%,640px)] broken" were display illusions; hex-dump (od/python
+bytes) BEFORE believing a file is corrupted. (d) Disk exhaustion (18k
+test-temp dirs, 6.9 GB in /tmp) produces mass ENOSPC test failures that
+mimic code breakage — check `df -h` before diagnosing a sudden suite-wide
+failure. Also proven again at scale: killed subagents' diffs land in the
+worktree — verify + complete + re-pin from the tree (7 of 8 workstreams
+this round).

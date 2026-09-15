@@ -2744,3 +2744,22 @@ further shutdowns absorbed by the worktree-is-truth protocol). The review:
 the orchestrator's systematic self-review under the owner's rush directive
 (a full subagent pass queued for R99). Suites: FE 3,651 / AC 2,370 / e2e 12;
 docs:check 213/0/0; the license audit clean.
+
+---
+
+## R99 — the research-driven UI redo + the self-contained app (v0.96.0 → v0.97.0)
+
+Method change: a UX-research pass ran FIRST (the report drove every design
+decision), seven surgical workstreams landed (A the fixedRuntime browser +
+the link router; B the chat visual redo; C the one-click silent update; D
+the context hero/bar/legend; E the stats reorder + anti-jitter; F the
+System prompt manager; G the prompt overhaul — the owner's 8-flaw list
+answered), and the full independent review pass ran LAST (the R98 debt —
+ship-shape after 4 MINORs, all fixed + pinned). CI proven mid-round: run
+329126c GREEN including cargo check; the Release dispatch on 34fe1e5
+SUCCESS — the engine-bundled installer chain verified end to end. Suites:
+FE+AC root 3,754/3,754 (12 env-skips; +103 pins over R98); AC alone
+2,384/2,384; docs:check 213/0/0. Lessons → AGENT-MEMORY #100 (the serde
+`type` tag, the compile-time resources validation, the `[m` display
+artifact, the ENOSPC mass-failure mode, the worktree-is-truth pattern at
+scale).
