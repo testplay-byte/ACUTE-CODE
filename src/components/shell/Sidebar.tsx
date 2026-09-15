@@ -27,6 +27,9 @@ import {
   Users,
   X,
 } from "lucide-react";
+// R98-E1: the Prompts settings section's FileText icon (id-synced with
+// SettingsPage TABS — the R44 lesson).
+import { FileText } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ApiError, pickFolderViaBackend, type Project, type Session } from "../../lib/api";
 import { cn } from "../../lib/utils";
@@ -251,6 +254,11 @@ const SETTINGS_SECTIONS = [
   // + the separate vision model). Same ids as SettingsPage TABS so the
   // ?tab= deep links line up (the R44 lesson applied at birth).
   { id: "skills", label: "Skills", icon: Sparkles },
+  // ROUND-98 (R98-E1/E3, owner directive): the prompt-customization section
+  // (per-project system-prompt overrides + the live composed preview). Same
+  // id as SettingsPage TABS so the ?tab=prompts deep link lines up — the
+  // R44 unreachable-tab lesson applied at birth.
+  { id: "prompts", label: "Prompts", icon: FileText },
   { id: "mcp", label: "MCP Servers", icon: PlugZap },
   { id: "computeruse", label: "Computer Use", icon: Monitor },
   // ROUND-66 (R66, owner directive): the dedicated image-analysis section

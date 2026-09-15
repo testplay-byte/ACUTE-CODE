@@ -25,6 +25,9 @@ import { Bot, Brain, Globe, Info, Minus, Monitor, Moon, Palette, Plus, PlugZap, 
 import { BellRing } from "lucide-react";
 // R98-I2: the Data & Statistics tab renders the shared usage panel.
 import { BarChart3 } from "lucide-react";
+// R98-E1: the Prompts tab's FileText icon (the prompt-modules sibling of
+// SkillsTab's Sparkles).
+import { FileText } from "lucide-react";
 import { DataStatsPanel } from "../components/usage/DataStatsPanel";
 // R98-J: the LIVE in-memory push of the switch to the notification bridge
 // (the bridge caches the flag so a flip applies to the very next record).
@@ -44,6 +47,10 @@ import { SubAgentsTab } from "../components/settings/SubAgentsTab";
 // computer use (the desktop-control master switch + the SEPARATE vision
 // model). Deep-links: ?tab=skills / ?tab=mcp / ?tab=computeruse.
 import { SkillsTab } from "../components/settings/SkillsTab";
+// ROUND-98 (R98-E1/E3, owner directive): the PROMPT-CUSTOMIZATION tab — the
+// per-project system-prompt section overrides (the R59-F engine finally on
+// REST) + the live composed preview. Deep-link ?tab=prompts.
+import { PromptsTab } from "../components/settings/PromptsTab";
 // ROUND-87 (R87): the About tab — version, updates, and the reset.
 import { AboutTab } from "../components/settings/AboutTab";
 import { McpTab } from "../components/settings/McpTab";
@@ -65,6 +72,11 @@ const TABS = [
   // ROUND-61 (R61, owner directive): the extensibility surface — skills,
   // MCP servers, and computer use (with its separate vision model).
   { id: "skills", label: "Skills", icon: Sparkles },
+  // ROUND-98 (R98-E1/E3, owner directive): the prompt-customization section —
+  // per-project system-prompt overrides + revert + drop + the live composed
+  // preview. Sits beside Skills (the prompt-modules family). Deep-link
+  // ?tab=prompts.
+  { id: "prompts", label: "Prompts", icon: FileText },
   { id: "mcp", label: "MCP Servers", icon: PlugZap },
   { id: "computeruse", label: "Computer Use", icon: Monitor },
   // ROUND-66 (R66, owner directive): the dedicated image-analysis section —
@@ -159,6 +171,7 @@ export function SettingsPage() {
         )}
         {tab === "subagents" && <SubAgentsTab />}
         {tab === "skills" && <SkillsTab />}
+        {tab === "prompts" && <PromptsTab />}
         {tab === "mcp" && <McpTab />}
         {tab === "computeruse" && <ComputerUseTab />}
         {tab === "vision" && <ImageAnalysisTab />}

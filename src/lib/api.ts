@@ -4367,16 +4367,36 @@ export async function updateVisionSettings(
 
 /* ── Skills (the owner's "multiple skills") ───────────────────────────────── */
 
+/**
+ * One skill row as served by GET /skills — the MERGED listing (agent-core
+ * storage/skills-files.ts MergedSkillRecord): DB rows (builtin/user, the
+ * editable source of truth) + file skills (`project-file`/`global-file`,
+ * provenance-marked and read-only in the app — PATCH /skills/:id refuses
+ * their synthetic ids with a 409).
+ */
 export interface SkillRecord {
   id: string;
   name: string;
   description: string;
   body: string;
-  source: "builtin" | "user";
+  source: "builtin" | "user" | "project-file" | "global-file";
   enabled: boolean;
+  /**
+   * ROUND-98 (R98-E2): the ALWAYS-LOAD tier — `true` means the skill's FULL
+   * body rides every turn's system prompt (the ALWAYS-ON SKILLS section,
+   * 24K total budget) instead of loading on demand via read_skill. DB rows
+   * PATCH it (updateSkill {alwaysLoad}); file rows read it from the SKILL.md
+   * frontmatter and are read-only. Optional so pre-R98 fixtures/tests keep
+   * compiling — the live sidecar sends it on every row.
+   */
+  alwaysLoad?: boolean;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
+  /** File skills only — the SKILL.md path (the app refuses edits; edit it). */
+  filePath?: string;
+  /** Project-file skills only — disambiguates same names across projects. */
+  projectName?: string;
 }
 
 export async function listSkills(): Promise<SkillRecord[]> {
@@ -4389,19 +4409,152 @@ export async function createSkill(input: {
   description?: string;
   body?: string;
   enabled?: boolean;
+  /** R98-E2: create straight into the always-load tier (default false). */
+  alwaysLoad?: boolean;
 }): Promise<SkillRecord> {
   return request<SkillRecord>("/skills", { method: "POST", json: input });
 }
 
 export async function updateSkill(
   id: string,
-  patch: { name?: string; description?: string; body?: string; enabled?: boolean; sortOrder?: number },
+  patch: {
+    name?: string;
+    description?: string;
+    body?: string;
+    enabled?: boolean;
+    /** R98-E2: the Settings tab's Always load switch PATCHes this. */
+    alwaysLoad?: boolean;
+    sortOrder?: number;
+  },
 ): Promise<SkillRecord> {
   return request<SkillRecord>(`/skills/${id}`, { method: "PATCH", json: patch });
 }
 
 export async function deleteSkill(id: string): Promise<void> {
   await request(`/skills/${id}`, { method: "DELETE" });
+}
+
+/* ── Prompt section overrides (ROUND-98 R98-E1) ───────────────────────────── */
+
+/** Which context-meter bucket a prompt section belongs to (the §2 identity
+ * chip grammar carries it in the Settings list). */
+export type PromptSectionBucket = "identity" | "tools" | "memory" | "meta";
+
+/**
+ * One registry entry as served by GET /prompts/sections (routes/prompts.ts):
+ * describePromptSections' PromptSectionInfo PLUS the editor's two payloads —
+ * `overrideContent` (the raw `.acute/prompts/<id>.md` file text, null when
+ * none exists) and `defaultText` (the built-in composition for THIS ctx,
+ * null when the section is absent here — conditional sections report
+ * honestly). `present` is post-override: an empty override file makes a
+ * present section absent (the DROP semantics).
+ */
+export interface PromptSectionView {
+  id: string;
+  description: string;
+  dynamic: boolean;
+  bucket: PromptSectionBucket;
+  present: boolean;
+  overridden: boolean;
+  overrideContent: string | null;
+  defaultText: string | null;
+}
+
+/** GET /prompts/sections?projectRoot= — the registry picture for one project. */
+export interface PromptSectionsReport {
+  rootPath: string;
+  sections: PromptSectionView[];
+  /** Ids carrying override files. */
+  overridden: string[];
+  /** Section order of the EFFECTIVE composition (post-override + reorder). */
+  effectiveOrder: string[];
+  /** Human-readable override diagnostics (reorder files, empty drops…). */
+  diagnostics: string[];
+}
+
+/** GET /prompts/sections — the list + each section's override/default text. */
+export async function fetchPromptSections(projectRoot: string): Promise<PromptSectionsReport> {
+  return request<PromptSectionsReport>(
+    `/prompts/sections?projectRoot=${encodeURIComponent(projectRoot)}`,
+  );
+}
+
+/** PUT /prompts/sections/:id — what the server replies after a write. */
+export interface PromptOverrideWriteResult {
+  ok: boolean;
+  id: string;
+  /** The `.acute/prompts/<id>.md` file that was written. */
+  file: string;
+  /** True when the content trimmed to empty — the DROP semantics fired. */
+  dropped: boolean;
+  content: string;
+}
+
+/**
+ * PUT /prompts/sections/:id {projectRoot, content} — write (or drop) the
+ * override. Non-empty content replaces the section WHOLESALE (dynamic parts
+ * included); content that TRIMS to empty writes the empty file = DROP the
+ * section from the prompt entirely — the caller must warn before that.
+ */
+export async function savePromptOverride(
+  projectRoot: string,
+  id: string,
+  content: string,
+): Promise<PromptOverrideWriteResult> {
+  return request<PromptOverrideWriteResult>(`/prompts/sections/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    json: { projectRoot, content },
+  });
+}
+
+/** DELETE /prompts/sections/:id?projectRoot= — revert to the built-in text. */
+export interface PromptOverrideRevertResult {
+  ok: boolean;
+  id: string;
+  reverted: boolean;
+  /** False when no override file existed (an idempotent revert). */
+  existed: boolean;
+}
+
+/**
+ * DELETE /prompts/sections/:id?projectRoot= — remove the override file so
+ * the section returns to its built-in composition (byte-identical to a
+ * project that never overrode it). Idempotent server-side.
+ */
+export async function deletePromptOverride(
+  projectRoot: string,
+  id: string,
+): Promise<PromptOverrideRevertResult> {
+  return request<PromptOverrideRevertResult>(
+    `/prompts/sections/${encodeURIComponent(id)}?projectRoot=${encodeURIComponent(projectRoot)}`,
+    { method: "DELETE" },
+  );
+}
+
+/** One PRESENT section's effective text as the model receives it. */
+export interface PromptPreviewSection {
+  id: string;
+  overridden: boolean;
+  text: string;
+}
+
+/** GET /prompts/preview?projectRoot= — the composed effective composition. */
+export interface PromptPreviewReport {
+  rootPath: string;
+  /** The registry ids in DEFAULT order — the UI's list anchor. */
+  registryOrder: string[];
+  effectiveOrder: string[];
+  /** Sum of every section's text length — the honest size readout. */
+  totalChars: number;
+  sections: PromptPreviewSection[];
+  diagnostics: string[];
+}
+
+/** GET /prompts/preview — the composed effective section texts, in order. */
+export async function fetchPromptPreview(projectRoot: string): Promise<PromptPreviewReport> {
+  return request<PromptPreviewReport>(
+    `/prompts/preview?projectRoot=${encodeURIComponent(projectRoot)}`,
+  );
 }
 
 /* ── MCP servers (the owner's "MCP servers too") ─────────────────────────── */

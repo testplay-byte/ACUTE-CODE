@@ -2,7 +2,7 @@
 /**
  * ROUND-61 (R61-2-a) — the Skills settings tab:
  *
- *  1. loading → data flow (the mono loader swaps for the rows).
+ *  1. loading → data flow (the R97-I skeleton gate swaps for the rows).
  *  2. Rows render name + description + source chip; built-ins carry the
  *     "no delete" treatment (a fixed marker + the honest refusal note in
  *     the editor), user rows carry the Trash2 two-step confirm.
@@ -11,12 +11,23 @@
  *  5. The New skill form POSTs /skills with enabled:true by default; a 400
  *     (duplicate name / bad slug) surfaces the ApiError message inline.
  *  6. Delete flows (user) + the rejected-delete error surface.
- *  7. Empty state + the load-error hint (coreUnreachableHint).
+ *  7. Empty state + the load-error card (R97-I: role=alert + exact cause +
+ *     Retry — re-pinned R98-E3).
+ *
+ * ROUND-98 (R98-E3) — the always-load additions:
+ *
+ *  8. The Always load switch PATCHes {alwaysLoad} + refetch.
+ *  9. The pinned-budget readout (24,000 budget; amber past 80%).
+ * 10. File-skill rows render read-only (disabled switches + the
+ *     "edit the SKILL.md" note; no PATCH on click).
+ * 11. The ALWAYS-ON marker rides pinned rows.
+ * 12. The composed SKILLS-section preview (index + ALWAYS-ON bodies).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { createSkill, deleteSkill, listSkills, updateSkill } from "../../lib/api";
 import type { SkillRecord } from "../../lib/api";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 import SkillsTab from "./SkillsTab";
 
@@ -76,12 +87,12 @@ describe("SkillsTab (ROUND-61 R61-2-a)", () => {
     vi.mocked(listSkills).mockResolvedValue(SKILLS);
     renderWithProviders(<SkillsTab />);
 
-    // The mono loader shows before the data lands.
-    expect(screen.getByText("loading skills…")).toBeTruthy();
+    // The R97-I loading gate: the shared skeletons behind ONE role=status.
+    expect(screen.getByRole("status", { name: "Loading skills" })).toBeTruthy();
     // The rows appear once the query resolves.
     expect(await screen.findByText("computer-use")).toBeTruthy();
     expect(screen.getByText("api-testing")).toBeTruthy();
-    expect(screen.queryByText("loading skills…")).toBeNull();
+    expect(screen.queryByRole("status", { name: "Loading skills" })).toBeNull();
   });
 
   it("renders rows with source chips and the built-in's no-delete treatment", async () => {
@@ -235,12 +246,190 @@ describe("SkillsTab (ROUND-61 R61-2-a)", () => {
     expect(rowError.textContent).toContain("built-in skills can be disabled or edited, not deleted");
   });
 
-  it("shows the load-error hint when the sidecar fails", async () => {
-    vi.mocked(listSkills).mockRejectedValue(new Error("sidecar down"));
+  it("R97-I (re-pinned R98-E3): a failed GET renders the honest error card (role=alert + exact cause + Retry); a successful Retry recovers the rows", async () => {
+    let failSkills = true;
+    vi.mocked(listSkills).mockImplementation(async () => {
+      if (failSkills) throw new Error("sidecar down");
+      return SKILLS;
+    });
     renderWithProviders(<SkillsTab />);
 
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Agent core unreachable");
-    expect(alert.textContent).toContain("to manage skills.");
+    const card = await screen.findByTestId("skills-load-error");
+    expect(card.getAttribute("role")).toBe("alert");
+    expect(card.textContent).toContain("Could not load the skills");
+    expect(card.textContent).toContain("sidecar down");
+    const retry = screen.getByRole("button", { name: "Retry loading the skills" });
+    // No dead rows while the card has nothing real to show.
+    expect(screen.queryByText("computer-use")).toBeNull();
+
+    // Phase 2: the sidecar recovers — Retry re-drives the GET.
+    failSkills = false;
+    fireEvent.click(retry);
+    expect(await screen.findByText("computer-use")).toBeTruthy();
+    expect(screen.queryByTestId("skills-load-error")).toBeNull();
+  });
+
+  /* ── ROUND-98 (R98-E3): the ALWAYS-LOAD additions ──────────────────── */
+
+  it("R98-E3: the Always load switch PATCHes updateSkill(id, {alwaysLoad}) + refetch", async () => {
+    vi.mocked(listSkills).mockResolvedValue(SKILLS);
+    renderWithProviders(<SkillsTab />);
+
+    await screen.findByText("api-testing");
+    const sw = screen.getByTestId("always-load-switch-skl_user");
+    expect(sw.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(sw);
+    await waitFor(() => expect(updateSkill).toHaveBeenCalledWith("skl_user", { alwaysLoad: true }));
+    // Invalidation refetches the listing.
+    await waitFor(() => expect(listSkills).toHaveBeenCalledTimes(2));
+  });
+
+  it("R98-E3: the pinned-budget readout sums the pinned enabled bodies; amber past 80% of the 24,000 budget", async () => {
+    // 1,000 chars of pinned body → the neutral readout.
+    vi.mocked(listSkills).mockResolvedValue([
+      skillFactory({
+        id: "skl_pin",
+        name: "pinned-flow",
+        description: "Always follows the flow.",
+        body: "x".repeat(1_000),
+        source: "user",
+        enabled: true,
+        alwaysLoad: true,
+      }),
+      // A DISABLED pin rides nothing — excluded from the sum.
+      skillFactory({
+        id: "skl_pin_off",
+        name: "pinned-off",
+        description: "Pinned but disabled.",
+        body: "y".repeat(500),
+        source: "user",
+        enabled: false,
+        alwaysLoad: true,
+      }),
+    ]);
+    renderWithProviders(<SkillsTab />);
+
+    const readout = await screen.findByTestId("pinned-budget");
+    expect(readout.textContent).toContain("pinned bodies ≈ 1,000 chars of the 24,000 budget");
+    expect(readout.textContent).not.toContain("past 80%");
+    expect(readout.style.color).not.toBe(SEMANTIC_COLORS.warning);
+
+    // Over the 80% line (20,000 > 19,200) → the amber readout with the note.
+    cleanup(); // unmount the first render — one listing under test at a time
+    vi.mocked(listSkills).mockResolvedValue([
+      skillFactory({
+        id: "skl_pin",
+        name: "pinned-flow",
+        description: "Always follows the flow.",
+        body: "x".repeat(20_000),
+        source: "user",
+        enabled: true,
+        alwaysLoad: true,
+      }),
+    ]);
+    renderWithProviders(<SkillsTab />);
+    const amber = await screen.findByTestId("pinned-budget");
+    expect(amber.textContent).toContain("pinned bodies ≈ 20,000 chars of the 24,000 budget");
+    expect(amber.textContent).toContain("past 80%");
+    expect(amber.style.color).toBe(SEMANTIC_COLORS.warning);
+  });
+
+  it("R98-E3: file-skill rows render read-only — disabled switches, the \u201cedit the SKILL.md\u201d note, and no PATCH on click", async () => {
+    vi.mocked(listSkills).mockResolvedValue([
+      skillFactory({
+        id: "fskl_project_marketing_api-conventions",
+        name: "api-conventions",
+        description: "The house API rules.",
+        body: "# API conventions…",
+        source: "project-file",
+        enabled: true,
+        alwaysLoad: true,
+        filePath: "/home/dev/marketing-site/.acute/skills/api-conventions/SKILL.md",
+        projectName: "marketing-site",
+      }),
+    ]);
+    renderWithProviders(<SkillsTab />);
+
+    await screen.findByText("api-conventions");
+    // The provenance chip names the file source.
+    expect(screen.getByText("project file")).toBeTruthy();
+    // The ALWAYS-ON marker rides the pinned row.
+    expect(screen.getByTestId("always-on-marker-fskl_project_marketing_api-conventions")).toBeTruthy();
+    // Both switches are READ-ONLY (disabled), showing their frontmatter state.
+    const alwaysLoad = screen.getByTestId(
+      "always-load-switch-fskl_project_marketing_api-conventions",
+    );
+    expect(alwaysLoad.getAttribute("aria-checked")).toBe("true");
+    expect(alwaysLoad.hasAttribute("disabled")).toBe(true);
+    const enabled = screen.getByRole("switch", { name: "Toggle skill api-conventions" });
+    expect(enabled.hasAttribute("disabled")).toBe(true);
+    // Clicking the read-only pin does NOT PATCH (the server would 409).
+    fireEvent.click(alwaysLoad);
+    expect(updateSkill).not.toHaveBeenCalled();
+    // The honest note: edit the SKILL.md.
+    const note = screen.getByTestId("file-skill-note-fskl_project_marketing_api-conventions");
+    expect(note.textContent).toContain("edit the SKILL.md");
+    expect(note.textContent).toContain("always-load: true");
+  });
+
+  it("R98-E3: the ALWAYS-ON marker rides pinned DB rows (absent on unpinned ones)", async () => {
+    vi.mocked(listSkills).mockResolvedValue([
+      skillFactory({
+        id: "skl_pin",
+        name: "pinned-flow",
+        description: "Always follows the flow.",
+        body: "Follow the flow.",
+        source: "user",
+        enabled: true,
+        alwaysLoad: true,
+      }),
+      skillFactory({ id: "skl_user", name: "api-testing", description: "d", body: "b", source: "user" }),
+    ]);
+    renderWithProviders(<SkillsTab />);
+
+    await screen.findByText("pinned-flow");
+    expect(screen.getByTestId("always-on-marker-skl_pin").textContent).toBe("always-on");
+    expect(screen.queryByTestId("always-on-marker-skl_user")).toBeNull();
+  });
+
+  it("R98-E3: the composed SKILLS-section preview — the index lines (pinned marked) + the ALWAYS-ON bodies", async () => {
+    vi.mocked(listSkills).mockResolvedValue([
+      skillFactory({
+        id: "skl_pin",
+        name: "pinned-flow",
+        description: "Always follows the flow.",
+        body: "R98E3-PINNED-BODY — always pnpm, always tests.",
+        source: "user",
+        enabled: true,
+        alwaysLoad: true,
+      }),
+      // A disabled row never reaches the composed index.
+      skillFactory({
+        id: "skl_off",
+        name: "disabled-flow",
+        description: "Off.",
+        body: "OFF-BODY",
+        source: "user",
+        enabled: false,
+      }),
+    ]);
+    renderWithProviders(<SkillsTab />);
+
+    await screen.findByText("pinned-flow");
+    expect(screen.queryByTestId("skills-section-preview")).toBeNull(); // collapsed by default
+    fireEvent.click(screen.getByRole("button", { name: "Show the composed skills section preview" }));
+
+    const preview = await screen.findByTestId("skills-section-preview");
+    // The index header + the pinned entry's ALWAYS-ON marker line.
+    expect(preview.textContent).toContain("## SKILLS (load with read_skill, search with search_skills)");
+    expect(preview.textContent).toContain(
+      "- **pinned-flow** — Always follows the flow. (ALWAYS-ON — full body in the ALWAYS-ON SKILLS section below)",
+    );
+    // The disabled skill is absent from the composition.
+    expect(preview.textContent).not.toContain("disabled-flow");
+    // The pinned FULL body rides the ALWAYS-ON section verbatim.
+    expect(preview.textContent).toContain("## ALWAYS-ON SKILLS (pinned — full bodies ride every turn)");
+    expect(preview.textContent).toContain("### Skill: pinned-flow");
+    expect(preview.textContent).toContain("R98E3-PINNED-BODY — always pnpm, always tests.");
   });
 });

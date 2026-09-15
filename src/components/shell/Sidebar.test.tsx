@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { Route, Routes } from "react-router";
+import { Route, Routes, useLocation } from "react-router";
 import { deriveSessionRowState, Sidebar } from "./Sidebar";
 import { ProjectView } from "../projects/ProjectView";
 import { createFixtureProjects, getFixtureProjects } from "../../lib/project-fixtures";
@@ -286,6 +286,36 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     // Section click deep-links; back returns to the dashboard.
     fireEvent.click(screen.getByTestId("rail-back-dashboard"));
     expect(await screen.findByText("dashboard stub")).toBeTruthy();
+  });
+
+  // R98-E1: the Prompts settings section is listed in BOTH nav shapes and
+  // navigates with the SettingsPage-tab-synced id — the R44 lesson (an entry
+  // in TABS without its sidebar twin is an unreachable tab).
+  it("R98-E1: the Prompts entry sits in the settings nav + the minimized rail, and navigates to ?tab=prompts", async () => {
+    function SearchProbe() {
+      const { search } = useLocation();
+      return <div data-testid="search-probe">{search}</div>;
+    }
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/settings" element={<SearchProbe />} />
+        </Routes>
+      </>,
+      { route: "/settings?tab=appearance" },
+    );
+
+    // The full settings nav lists Prompts.
+    const entry = screen.getByRole("button", { name: /^prompts$/i, hidden: true });
+    expect(entry).toBeTruthy();
+    // Clicking it deep-links to the SettingsPage tab id.
+    fireEvent.click(entry);
+    expect((await screen.findByTestId("search-probe")).textContent).toContain("tab=prompts");
+
+    // The minimized settings rail carries the SAME id (rail-settings-prompts).
+    act(() => useProjectChatStore.setState({ appSidebarMinimized: true }));
+    expect(await screen.findByTestId("rail-settings-prompts")).toBeTruthy();
   });
 
   it("R60-C: normal mode has no header row — the nav starts at the panel's top", () => {

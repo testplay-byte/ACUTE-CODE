@@ -271,7 +271,6 @@ function ctxFor(skills: PromptContext["skills"]): PromptContext {
 
 describe("R98-E2: the ALWAYS-ON SKILLS section", () => {
   const BODY_A = "# Skill: house-style\n\nR98E2-BODY-A — always pnpm, always tests.";
-  const BODY_B = "# Skill: ui-design\n\nR98E2-BODY-B — hierarchy, spacing, typography.";
 
   it("composes the pinned FULL bodies directly after the SKILLS index; the index line carries the ALWAYS-ON marker", () => {
     const prompt = buildProjectSystemPrompt(
