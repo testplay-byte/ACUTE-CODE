@@ -743,8 +743,8 @@ describe("collapsed-row icon chips (ROUND-51 R51-d)", () => {
     renderCollapsedRow({ ...EDIT_TOOL, ok: null, outputSummary: undefined }, true);
 
     const chip = screen.getByTestId("tool-icon-chip");
-    expect(chip.style.background).toBe(withAlpha("#3B82F6", 0.12));
-    expect(chip.style.color).toBe("#3B82F6");
+    expect(chip.style.background).toBe(withAlpha("#3b82f6", 0.12));
+    expect(chip.style.color).toBe("#3b82f6");
     // Still collapsed + one-line: the chip is the live signal, not an expansion.
     expect(screen.getByRole("button", { name: /^Edited / })).toBeTruthy();
     expect(screen.queryByTestId("live-delegate-row")).toBeNull();

@@ -36,7 +36,9 @@ import type { SubAgentLiveEntry, SubAgentLiveStep, SubAgentWatchInfo } from "../
 // ROUND-52 (R52-c): LiveOutputTail gives in-flight run_command rows the
 // same live terminal tail as the main chat's WorkingSection.
 import { LiveOutputTail, ThoughtRow } from "../project-chat/WorkingSection";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
+// R98-C2: RUNNING_BLUE joins SEMANTIC_COLORS from the documented exception
+// home — one spelling across the chat + panel surfaces.
+import { RUNNING_BLUE, SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
 import { ease } from "../../lib/motion";
@@ -121,7 +123,6 @@ const ROLE_COLORS: Record<string, string> = {
   tester: "#f59e0b",
 };
 
-const RUNNING_BLUE = "#3B82F6";
 
 /** ROUND-52 (R52-c): the amber warning tone (the stalled-watch + pending
  * states share it — same value as WorkingSection's approval accent). */

@@ -101,6 +101,7 @@ every other route keeps the bento card + 1.5px line borders.
 | success | `#22c55e` | completed, healthy, verified |
 | warning | `#f59e0b` | wait/attention: retry waits, queued, thinking-loop stops |
 | danger | `#ef4444` | failure, destructive, error — `role="alert"` surfaces |
+| running | `#3b82f6` | in-flight tool rows (informative "happening now" — R98-C2's `RUNNING_BLUE` in semantics.ts, the fourth exception) |
 
 Warning and danger are NEVER interchangeable (round-97 D: a thinking-loop
 stop is amber `role="status"`, never red "Generation failed"). Danger tints

@@ -464,6 +464,11 @@ export function syncThemeCssVars(styles: ThemeStyles): void {
     "--ac-danger": "#ef4444",
     "--ac-success": "#22c55e",
     "--ac-warning": "#f59e0b",
+    // R98-C2: the informative running-blue (in-flight tool rows) + the
+    // frosted pill surface (the chat's jump-to-latest / sticky affordances)
+    // join the CSS-var leg — one spelling, hover-capable, theme-aware.
+    "--ac-running": "#3b82f6",
+    "--ac-frosted": styles.isDark ? "rgba(44,44,46,0.72)" : "rgba(255,255,255,0.72)",
   };
   for (const [name, value] of Object.entries(vars)) {
     root.setProperty(name, value);

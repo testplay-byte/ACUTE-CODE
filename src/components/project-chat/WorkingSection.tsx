@@ -51,7 +51,9 @@ import { ScreenshotRow } from "./ScreenshotRow";
 import { QuestionCard } from "./QuestionCard";
 import { TodoCard } from "./TodoCard";
 import { extractStringArg } from "./streaming-args";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
+// R98-C2: RUNNING_BLUE joins SEMANTIC_COLORS.warning from the documented
+// exception home — one spelling across the chat surfaces.
+import { RUNNING_BLUE, SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 // ROUND-38 (owner: "outright remove that option completely"): the
@@ -151,11 +153,6 @@ const TOOL_LABELS: Record<string, string> = {
   delegate_task: "Delegated",
 };
 
-/** ROUND-52 (R51-d): the in-flight blue for pending tool rows — the same
- * value as SubAgentPanel's RUNNING_BLUE (kept local: that panel owns the
- * canonical const; this file only borrows the hue for in-flight states). */
-const RUNNING_BLUE = "#3B82F6";
-
 /** ROUND-58 (R58-cf): stable empty default for the pending-write-inputs
  * derive (the store selector returns undefined for folded sections — a
  * fresh [] there would re-render on every store tick). */
@@ -171,7 +168,9 @@ function elapsedSeconds(start: string, end: string): number {
 
 /** ROUND-52 (R52-c): the amber warning tone for the stalled-watch line
  * (same value SubAgentPanel uses — a semantic, theme-stable warning color). */
-const AMBER = "#f59e0b";
+// R98-C2: the duplicated amber literal retired — SEMANTIC_COLORS.warning is
+// the ONE documented spelling (the design-language TOKENS §4 rule).
+const AMBER = SEMANTIC_COLORS.warning;
 
 /** Compact token count (same formatting as the SubAgentCard rows). */
 function fmtTokens(n: number): string {
@@ -711,7 +710,8 @@ export function ThoughtRow({
                   className="absolute bottom-1.5 right-1.5 z-10 flex items-center gap-1 rounded-full border-[1.5px] pl-2 pr-1.5 py-0.5 shadow-md transition-all hover:shadow-lg"
                   style={{
                     borderColor: withAlpha(styles.accent, 0.28),
-                    background: styles.isDark ? "rgba(44,44,46,0.72)" : "rgba(255,255,255,0.72)",
+                    // R98-C2: the frosted pill rides the CSS-var leg (--ac-frosted).
+                    background: "var(--ac-frosted)",
                     backdropFilter: "blur(12px) saturate(1.15)",
                     WebkitBackdropFilter: "blur(12px) saturate(1.15)",
                     color: styles.text,

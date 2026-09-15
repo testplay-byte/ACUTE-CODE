@@ -1161,7 +1161,7 @@ export function TurnErrorCard({
               className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10.5px] leading-[1.55] whitespace-pre-wrap break-words min-w-0"
               style={{
                 borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3),
-                background: styles.isDark ? "rgba(255,255,255,0.04)" : styles.subtle,
+                background: styles.subtle,
                 color: styles.textSecondary,
               }}
             >
@@ -1448,7 +1448,7 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
                       className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10.5px] leading-[1.55] whitespace-pre-wrap break-words min-w-0"
                       style={{
                         borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.3),
-                        background: styles.isDark ? "rgba(255,255,255,0.04)" : styles.subtle,
+                        background: styles.subtle,
                         color: styles.textSecondary,
                       }}
                     >
@@ -3431,7 +3431,9 @@ export function AgentChatPanel({
             className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-full border-[1.5px] pl-3 pr-2 py-1.5 shadow-md transition-all hover:shadow-lg"
             style={{
               borderColor: withAlpha(styles.accent, 0.28),
-              background: styles.isDark ? "rgba(44,44,46,0.72)" : "rgba(255,255,255,0.72)",
+              // R98-C2: the frosted pill rides the CSS-var leg (--ac-frosted, bridged
+        // in themes.ts — one spelling for both chat surfaces).
+        background: "var(--ac-frosted)",
               backdropFilter: "blur(12px) saturate(1.15)",
               WebkitBackdropFilter: "blur(12px) saturate(1.15)",
               color: styles.text,

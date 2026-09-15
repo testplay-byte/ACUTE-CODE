@@ -16,3 +16,12 @@ export const SEMANTIC_COLORS = {
   danger: "#ef4444",
   warning: "#f59e0b",
 } as const;
+
+/**
+ * R98-C2: the informative running-blue — in-flight tool rows ("this is
+ * happening now", distinct from warning/danger). The ONE documented
+ * spelling (WorkingSection + SubAgentPanel + the tests import it; the
+ * per-file local constants are dead). A TOKENS.md §4-registered exception
+ * beside the semantic trio.
+ */
+export const RUNNING_BLUE = "#3b82f6";
