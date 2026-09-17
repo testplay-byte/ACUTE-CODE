@@ -84,5 +84,15 @@ jobs:
             curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
             librsvg2-dev
 
+      # R100 hotfix 2: `tauri::generate_context!` panics when frontendDist
+      # ("../dist") doesn't exist — the Windows verify job always has the
+      # built frontend, but THIS job is deliberately frontend-less. The
+      # stub dist (one index.html) satisfies the path check without paying
+      # the pnpm build (the real dist is what the release job packs).
+      - name: Stub the frontend dist for generate_context!
+        run: |
+          mkdir -p dist
+          printf '<!doctype html><title>stub</title>' > dist/index.html
+
       - name: Type-check the Rust shell on Linux
         run: cargo check --manifest-path src-tauri/Cargo.toml
