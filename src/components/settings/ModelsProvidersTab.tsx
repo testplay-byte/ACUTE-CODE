@@ -29,6 +29,13 @@ import { AnimatePresence, motion } from "framer-motion";
 // destructive ask in this tab (pool-key removal, model deletion, provider
 // deletion) goes through it; window.confirm is banned app-wide.
 import { ConfirmDialog } from "./ConfirmDialog";
+// R100-E2: the round-100 primitives (USAGE.md §3) — the settings sweep's
+// card/kicker/row spelling. SEMANTIC_COLORS replaces the inline status hexes
+// (danger/success — TOKENS.md §7, the documented exception home).
+import { Kicker } from "../ui/Kicker";
+import { SectionCard } from "../ui/SectionCard";
+import { SettingsRow } from "../ui/SettingsRow";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 // ROUND-87 (R87): the shared ease curve for the dialog/entrance animations.
 import { ease } from "../../lib/motion";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
@@ -402,23 +409,13 @@ function capabilityChips(
   return chips;
 }
 
-/** The section micro-label the rest of the app uses (uppercase, tracked). */
-function SectionLabel({
-  children,
-  color,
-}: {
-  children: string;
-  color?: string;
-}) {
-  const styles = useThemeStyles();
-  return (
-    <span
-      className="text-[10px] font-bold uppercase tracking-widest"
-      style={{ color: color ?? styles.textTertiary }}
-    >
-      {children}
-    </span>
-  );
+/** R100-E2: the section micro-label now delegates to the ui/Kicker primitive
+ * (THE label tier: 11px/500 uppercase tracking-[0.08em], tertiary ink) — the
+ * pre-round-100 10px/font-bold/tracking-widest spelling was the audit's
+ * "AI-generated" tell. Kept as a thin local alias so the ten call sites
+ * stay untouched (visual-only sweep). */
+function SectionLabel({ children }: { children: string }) {
+  return <Kicker>{children}</Kicker>;
 }
 
 /* ── Component ────────────────────────────────────────────────────────────── */
@@ -500,9 +497,12 @@ export function ModelsProvidersTab() {
           same height the right detail pane fills) with a generous 280px floor,
           so it reads as a proper fixed panel; only the INNER list scrolls
           when providers outgrow it. ─────────────────────────────────────── */}
-      <div
-        className="w-[280px] shrink-0 h-full min-h-[280px] rounded-[16px] border-[1.5px] overflow-hidden flex flex-col"
-        style={{ background: styles.card, borderColor: styles.border }}
+      {/* R100-E2: the rail rides the SectionCard primitive (rounded-2xl /
+          1.5px border-line / bg-card) with p-0 — its sections manage their
+          own padding; the w-[280px]/h-full/min-h-[280px] contract (R95-A)
+          is unchanged. */}
+      <SectionCard
+        className="w-[280px] shrink-0 h-full min-h-[280px] overflow-hidden flex flex-col p-0"
       >
         <div
           className="shrink-0 flex items-center gap-2 px-3.5 py-3 border-b"
@@ -523,7 +523,7 @@ export function ModelsProvidersTab() {
           <div
             role="alert"
             className="px-3.5 py-2 border-b text-[11px]"
-            style={{ borderColor: styles.border, color: "#ef4444" }}
+            style={{ borderColor: styles.border, color: SEMANTIC_COLORS.danger }}
           >
             Couldn&apos;t load providers —{" "}
             {providersQuery.error instanceof Error ? providersQuery.error.message : String(providersQuery.error)}
@@ -563,15 +563,16 @@ export function ModelsProvidersTab() {
               // the user's context instead of a blank placeholder.
               setAdding(true);
             }}
-            className="w-full h-9 flex items-center justify-center gap-1.5 rounded-[10px] text-[12px] font-bold transition-colors"
-            style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.18))}
-            onMouseLeave={(e) => (e.currentTarget.style.background = withAlpha(styles.accent, 0.1))}
+            /* R100-E2: the JS hover pair retired — the accent wash rides the
+               CSS-var leg (bg-accent-soft ≈ 0.1 rest, bg-accent-faded ≈ 0.18
+               hover), TOKENS.md §6 (hover is a class, never a handler). */
+            className="w-full h-9 flex items-center justify-center gap-1.5 rounded-lg text-[12px] font-semibold transition-colors bg-accent-soft hover:bg-accent-faded"
+            style={{ color: styles.accent }}
           >
             <Plus size={13} strokeWidth={2.5} /> Add provider
           </button>
         </div>
-      </div>
+      </SectionCard>
 
       {/* ── RIGHT: the detail panel — its OWN scroll container (R50-d) ──── */}
       <div className="flex-1 min-w-0 min-h-0 flex flex-col">
@@ -594,16 +595,16 @@ export function ModelsProvidersTab() {
             />
           </DetailScrollArea>
         ) : (
-          <div className="flex-1 min-h-0 grid place-items-center rounded-[16px] border-[1.5px] border-dashed" style={{ borderColor: styles.border }}>
+          <div className="flex-1 min-h-0 grid place-items-center rounded-2xl border-[1.5px] border-dashed" style={{ borderColor: styles.border }}>
             <div className="text-center px-6">
               <div
-                className="w-12 h-12 mx-auto rounded-[14px] grid place-items-center"
+                className="w-12 h-12 mx-auto rounded-xl grid place-items-center"
                 style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
                 aria-hidden
               >
                 <Globe size={22} />
               </div>
-              <p className="mt-3 text-[14px] font-bold" style={{ color: styles.text }}>
+              <p className="mt-3 text-[13px] font-semibold" style={{ color: styles.text }}>
                 Select a provider
               </p>
               <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
@@ -673,14 +674,13 @@ function ProviderListRow({
     <button
       onClick={onClick}
       aria-current={active ? "true" : undefined}
-      className="relative w-full h-11 flex items-center gap-2.5 px-2.5 rounded-[10px] transition-colors text-left"
-      style={{ background: active ? withAlpha(styles.accent, 0.1) : "transparent" }}
-      onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.background = styles.subtleHover;
-      }}
-      onMouseLeave={(e) => {
-        if (!active) e.currentTarget.style.background = "transparent";
-      }}
+      /* R100-E2: the JS hover pair retired — the ACTIVE row's accent-soft
+         fill and the inactive rows' hover:bg-hover wash ride the CSS-var
+         leg (TOKENS.md §6); the 2.5px accent bar keeps the selection
+         grammar (COMPONENTS §5). */
+      className={`relative w-full h-11 flex items-center gap-2.5 px-2.5 rounded-lg transition-colors text-left ${
+        active ? "bg-accent-soft" : "hover:bg-hover"
+      }`}
     >
       {active && (
         <span
@@ -690,20 +690,20 @@ function ProviderListRow({
         />
       )}
       <span
-        className="w-7 h-7 shrink-0 rounded-[8px] grid place-items-center"
+        className="w-7 h-7 shrink-0 rounded-lg grid place-items-center"
         style={{ background: styles.inputBg, color: styles.textSecondary }}
       >
         <Globe size={13} />
       </span>
       <span className="min-w-0 flex-1 flex flex-col items-start">
         <span
-          className="w-full truncate text-[12.5px] font-semibold"
+          className="w-full truncate text-[13px] font-medium"
           style={{ color: active ? styles.text : styles.textSecondary }}
         >
           {provider.name}
         </span>
         <span
-          className="w-full truncate font-mono text-[9.5px]"
+          className="w-full truncate font-mono text-[10px]"
           style={{ color: styles.textTertiary }}
           // ROUND-44 (VLM pass): the row clips the endpoint + wire format to one
           // line — surface the full text on hover so it stays verifiable.
@@ -718,7 +718,7 @@ function ProviderListRow({
       {keyCount >= 1 && (
         <span
           data-testid={`provider-key-count-${provider.id}`}
-          className="shrink-0 px-1.5 py-0.5 rounded-full text-[9.5px] font-bold tabular-nums"
+          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium tabular-nums"
           style={{ background: styles.subtle, color: styles.textSecondary }}
           title={
             keyCount === 1
@@ -733,7 +733,7 @@ function ProviderListRow({
       <span
         className="w-2 h-2 shrink-0 rounded-full"
         style={{
-          background: provider.hasKey ? "#22c55e" : withAlpha(styles.text, 0.25),
+          background: provider.hasKey ? SEMANTIC_COLORS.success : withAlpha(styles.text, 0.25),
         }}
         title={provider.hasKey ? "Key stored" : "No key set"}
       />
@@ -930,13 +930,11 @@ function ProviderDetailPane({
 
   return (
     <div className="flex flex-col gap-5">
-      {/* ── Header: provider identity + status ─────────────────────────── */}
-      <div
-        className="rounded-[16px] border-[1.5px] p-4 flex items-center gap-3 flex-wrap"
-        style={{ background: styles.card, borderColor: styles.border }}
-      >
+      {/* ── Header: provider identity + status — R100-E2: the SectionCard
+          primitive (rounded-2xl / 1.5px border-line / bg-card). ──────── */}
+      <SectionCard className="p-4 flex items-center gap-3 flex-wrap">
         <span
-          className="w-10 h-10 shrink-0 rounded-[12px] grid place-items-center"
+          className="w-10 h-10 shrink-0 rounded-xl grid place-items-center"
           style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
           aria-hidden
         >
@@ -967,7 +965,7 @@ function ProviderDetailPane({
                 }
               }}
               aria-label="Provider name"
-              className="h-9 w-full max-w-[320px] rounded-[10px] border-[1.5px] px-3 text-[14px] font-bold outline-none"
+              className="h-9 w-full max-w-[320px] rounded-lg border-[1.5px] px-3 text-[13px] font-medium outline-none"
               style={inputStyle}
             />
           ) : (
@@ -976,7 +974,7 @@ function ProviderDetailPane({
               className="flex items-center gap-2 min-w-0"
               title="Click to rename"
             >
-              <span className="text-[16px] font-black truncate" style={{ color: styles.text }}>
+              <span className="text-[13px] font-semibold truncate" style={{ color: styles.text }}>
                 {provider.name}
               </span>
               <Pencil size={12} style={{ color: styles.textTertiary }} />
@@ -995,19 +993,19 @@ function ProviderDetailPane({
             underlined text link; ROUND-59 R59-C: flipping it acts
             OUTRIGHT). */}
         <span
-          className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+          className="px-2 py-0.5 rounded-full text-[10px] font-medium"
           style={{
-            background: provider.enabled ? withAlpha("#22c55e", 0.12) : styles.subtle,
-            color: provider.enabled ? "#22c55e" : styles.textTertiary,
+            background: provider.enabled ? withAlpha(SEMANTIC_COLORS.success, 0.12) : styles.subtle,
+            color: provider.enabled ? SEMANTIC_COLORS.success : styles.textTertiary,
           }}
         >
           {provider.enabled ? "● Enabled" : "○ Disabled"}
         </span>
         <span
-          className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+          className="px-2 py-0.5 rounded-full text-[10px] font-medium"
           style={{
-            background: provider.hasKey ? withAlpha("#22c55e", 0.12) : styles.subtle,
-            color: provider.hasKey ? "#22c55e" : styles.textTertiary,
+            background: provider.hasKey ? withAlpha(SEMANTIC_COLORS.success, 0.12) : styles.subtle,
+            color: provider.hasKey ? SEMANTIC_COLORS.success : styles.textTertiary,
           }}
         >
           {provider.hasKey ? "● Key stored" : "○ No key"}
@@ -1017,7 +1015,7 @@ function ProviderDetailPane({
             provider's models simply disappear from the pickers. The agent
             count survives ONLY as this quiet hover tooltip. */}
         <span className="flex items-center gap-1.5">
-          <span className="text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+          <span className="text-[11px] font-medium" style={{ color: styles.textSecondary }}>
             {provider.enabled ? "Enabled" : "Disabled"}
           </span>
           <button
@@ -1059,7 +1057,7 @@ function ProviderDetailPane({
           </button>
         </span>
         {saveMsg && (
-          <span className="text-[11px] font-bold" style={{ color: styles.accent }}>
+          <span className="text-[11px] font-medium" style={{ color: styles.accent }}>
             {saveMsg}
           </span>
         )}
@@ -1067,9 +1065,10 @@ function ProviderDetailPane({
             not be shown at the very bottom but it should be shown at the very
             top. At the very top there should be a trash can icon"): the delete
             affordance lives IN THE HEADER now — the bottom Danger zone card is
-            retired. Quiet at rest (a bordered ghost); the hover turns it red
-            like every other destructive affordance in the app. The click opens
-            the shared styled ConfirmDialog (never a browser confirm). */}
+            retired. R100-E2: the JS hover-red pair retired — the button now
+            RESTS in the danger color (the R100-D WorkingSection destructive
+            idiom) with the hover:bg-hover CSS wash; the click opens the
+            shared styled ConfirmDialog (never a browser confirm). */}
         <button
           type="button"
           onClick={() => {
@@ -1080,22 +1079,15 @@ function ProviderDetailPane({
           aria-label={`Delete provider ${provider.name}`}
           title="Delete provider"
           data-testid="provider-delete-top"
-          className="w-9 h-9 shrink-0 grid place-items-center rounded-[10px] border-[1.5px] transition-colors"
-          style={{ borderColor: styles.border, color: styles.textTertiary }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = withAlpha("#ef4444", 0.12);
-            e.currentTarget.style.borderColor = withAlpha("#ef4444", 0.5);
-            e.currentTarget.style.color = "#ef4444";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.borderColor = styles.border;
-            e.currentTarget.style.color = styles.textTertiary;
+          className="w-9 h-9 shrink-0 grid place-items-center rounded-lg border-[1.5px] transition-colors hover:bg-hover cursor-pointer"
+          style={{
+            borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
+            color: SEMANTIC_COLORS.danger,
           }}
         >
           <Trash2 size={14} />
         </button>
-      </div>
+      </SectionCard>
 
       {/* R90-A1 → R95-A: the delete failure lands INLINE directly under the
           header (the click site is the header trash now) — in the danger
@@ -1103,7 +1095,7 @@ function ProviderDetailPane({
       {deleteError !== null && (
         <p
           className="-mt-3 text-[11px] font-medium"
-          style={{ color: "#ef4444" }}
+          style={{ color: SEMANTIC_COLORS.danger }}
           role="alert"
           data-testid="delete-provider-error"
         >
@@ -1111,25 +1103,23 @@ function ProviderDetailPane({
         </p>
       )}
 
-      {/* ── Connection: base URL / API format / key + test ─────────────── */}
-      <div
-        className="rounded-[16px] border-[1.5px] p-4 md:p-5 flex flex-col gap-4"
-        style={{ background: styles.card, borderColor: styles.border }}
-      >
+      {/* ── Connection: base URL / API format / key + test — R100-E2: the
+          SectionCard primitive. ───────────────────────────────────── */}
+      <SectionCard className="p-4 md:p-5 flex flex-col gap-4">
         <SectionLabel>Connection</SectionLabel>
         {/* ROUND-58 (R58-d): PRESET providers (the seeded built-ins) hide the
             Base URL input + API-format grid — endpoint and format are fixed
             (the owner: "It should only be shown for custom providers"). The
             API-key input + Test connection below stay for EVERY provider. */}
         {isPreset ? (
-          <p className="text-[10.5px]" style={{ color: styles.textTertiary }} data-preset-note>
+          <p className="text-[11px]" style={{ color: styles.textTertiary }} data-preset-note>
             Preset provider — endpoint and format are fixed.
           </p>
         ) : (
           <>
             {/* Base URL (editable — custom providers; owner R37) */}
             <div>
-              <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+              <label className="mb-1.5 block text-[11px] font-medium" style={{ color: styles.textSecondary }}>
                 Base URL
               </label>
               <div className="flex gap-2">
@@ -1137,13 +1127,13 @@ function ProviderDetailPane({
                   value={baseUrlDraft}
                   onChange={(e) => setBaseUrlDraft(e.target.value)}
                   aria-label="Base URL"
-                  className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                  className="h-10 flex-1 min-w-0 rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
                   style={inputStyle}
                 />
                 {baseUrlDraft.trim() !== (provider.baseUrl ?? "") && (
                   <button
                     onClick={() => saveDetails.mutate({ baseUrl: baseUrlDraft.trim() })}
-                    className="h-10 px-4 rounded-[10px] text-[12px] font-bold"
+                    className="h-10 px-4 rounded-lg text-[12px] font-semibold"
                     style={{ background: styles.accent, color: styles.accentText }}
                   >
                     Save
@@ -1153,7 +1143,7 @@ function ProviderDetailPane({
             </div>
             {/* API format — ROUND-37: the REAL selector (3 formats) */}
             <div>
-              <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+              <label className="mb-1.5 block text-[11px] font-medium" style={{ color: styles.textSecondary }}>
                 API format
               </label>
               <div className="grid grid-cols-3 gap-2">
@@ -1165,7 +1155,7 @@ function ProviderDetailPane({
                       onClick={() => !active && saveDetails.mutate({ apiFormat: f.id })}
                       aria-pressed={active}
                       title={f.hint}
-                      className="h-10 rounded-[10px] border-[1.5px] text-[12px] font-bold transition-colors"
+                      className="h-10 rounded-lg border-[1.5px] text-[12px] font-semibold transition-colors"
                       style={{
                         borderColor: active ? withAlpha(styles.accent, 0.55) : styles.border,
                         background: active ? withAlpha(styles.accent, 0.09) : styles.bg,
@@ -1177,7 +1167,7 @@ function ProviderDetailPane({
                   );
                 })}
               </div>
-              <p className="mt-1.5 text-[10.5px]" style={{ color: styles.textTertiary }}>
+              <p className="mt-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
                 {API_FORMATS.find((f) => f.id === (provider.apiFormat ?? "chat-completions"))?.hint}
               </p>
             </div>
@@ -1198,7 +1188,7 @@ function ProviderDetailPane({
             onChange={(e) =>
               setTestKeyChoice(e.target.value === "primary" ? "primary" : Number(e.target.value))
             }
-            className="h-9 rounded-[10px] border-[1.5px] px-2 text-[11.5px] font-bold outline-none cursor-pointer"
+            className="h-9 rounded-lg border-[1.5px] px-2 text-[11px] outline-none cursor-pointer"
             style={{ background: styles.bg, borderColor: styles.border, color: styles.textSecondary }}
           >
             <option value="primary">Key 1 (primary)</option>
@@ -1214,7 +1204,7 @@ function ProviderDetailPane({
             value={testModel}
             onChange={(e) => setTestModel(e.target.value)}
             disabled={catalogQuery.isFetching && catalogEntries.length === 0}
-            className="h-9 max-w-[260px] rounded-[10px] border-[1.5px] px-2 text-[11.5px] font-bold outline-none cursor-pointer disabled:opacity-50"
+            className="h-9 max-w-[260px] rounded-lg border-[1.5px] px-2 text-[11px] outline-none cursor-pointer disabled:opacity-50"
             style={{ background: styles.bg, borderColor: styles.border, color: styles.textSecondary }}
           >
             <option value="">(reachability only)</option>
@@ -1227,20 +1217,20 @@ function ProviderDetailPane({
           <button
             onClick={() => void runTest()}
             disabled={testState.kind === "testing" || (testKeyChoice === "primary" && !provider.hasKey)}
-            className="h-9 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold flex items-center gap-1.5 disabled:opacity-50"
+            className="h-9 px-3.5 rounded-lg border-[1.5px] text-[12px] font-semibold flex items-center gap-1.5 disabled:opacity-50"
             style={{ background: styles.bg, borderColor: styles.border, color: styles.textSecondary }}
           >
             {testState.kind === "testing" ? <RefreshCw size={12} className="animate-spin" /> : <Zap size={12} />}
             Test connection
           </button>
           {testState.kind === "ok" && (
-            <span className="text-[11px] font-bold" style={{ color: "#22c55e" }}>
+            <span className="text-[11px] font-medium" style={{ color: SEMANTIC_COLORS.success }}>
               <Check size={11} className="inline" /> Connected · {testState.ms}ms
               {testState.model ? ` · ${testState.model}` : ""}
             </span>
           )}
           {testState.kind === "fail" && (
-            <span className="text-[11px] font-bold break-all" style={{ color: "#ef4444" }}>
+            <span className="text-[11px] font-medium break-all" style={{ color: SEMANTIC_COLORS.danger }}>
               {testState.message}
             </span>
           )}
@@ -1251,17 +1241,17 @@ function ProviderDetailPane({
           )}
           {/* the backend's own reachability-only message — surfaced, not hardcoded */}
           {testState.kind === "ok" && testState.note && (
-            <span className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+            <span className="text-[11px]" style={{ color: styles.textTertiary }}>
               {testState.note}
             </span>
           )}
           {provider.apiFormat === "anthropic-messages" && (
-            <span className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+            <span className="text-[11px]" style={{ color: styles.textTertiary }}>
               Connection test probes the OpenAI-compatible surface — full adapter testing is pending.
             </span>
           )}
         </div>
-      </div>
+      </SectionCard>
 
       {/* ── API keys (R92-D3: ONE unified card — Key 1 = the primary editor,
           Key 2..N = the pool rows, then the always-on add row. The old
@@ -1315,7 +1305,7 @@ function ProviderDetailPane({
           {agentsUsingProvider.length > 0 ? (
             <p
               className="text-[11px] font-medium"
-              style={{ color: "#ef4444" }}
+              style={{ color: SEMANTIC_COLORS.danger }}
               data-testid="delete-used-by-warning"
             >
               In use by {agentsUsingProvider.length} agent{agentsUsingProvider.length === 1 ? "" : "s"}:{" "}
@@ -1438,22 +1428,24 @@ function AddProviderDialog({
       }}
     >
       <div
-        className="w-full max-w-[520px] max-h-[86vh] overflow-y-auto auto-scroll rounded-[20px] border-[1.5px] p-5 flex flex-col gap-4"
-        style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+        className="w-full max-w-[520px] max-h-[86vh] overflow-y-auto auto-scroll rounded-xl border-[1.5px] p-5 flex flex-col gap-4"
+        /* R100-E2: floating dialog = softShadow (TOKENS.md §5 — bentoShadow
+           is wizard + primary-CTA only). */
+        style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.softShadow }}
       >
         {preset === null ? (
           <>
             {/* STEP 1: what kind of provider? (owner: "is he going to add a
                 custom provider or is he going to add others from the list") */}
             <div className="flex items-center gap-2">
-              <span className="text-[16px] font-black" style={{ color: styles.text }}>
+              <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
                 Add provider
               </span>
               <span className="flex-1" />
               <button
                 onClick={onClose}
                 aria-label="Close"
-                className="w-7 h-7 grid place-items-center rounded-[8px]"
+                className="w-7 h-7 grid place-items-center rounded-lg"
                 style={{ color: styles.textTertiary }}
               >
                 <X size={14} />
@@ -1469,36 +1461,36 @@ function AddProviderDialog({
                   <button
                     key={p.id}
                     onClick={() => choosePreset(p.id)}
-                    className="h-12 px-4 rounded-[12px] border-[1.5px] flex items-center gap-3 text-left transition-colors"
-                    style={{ borderColor: styles.border, background: styles.bg, color: styles.text }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5);
-                    }}
-                    onMouseLeave={(e) => (e.currentTarget.style.borderColor = styles.border)}
+                    /* R100-E2: the JS hover pair retired — the standard
+                       hover:bg-hover wash (TOKENS.md §6); the resting bg
+                       moves off the inline leg so the class can express
+                       the wash. */
+                    className="h-12 px-4 rounded-xl border-[1.5px] flex items-center gap-3 text-left transition-colors bg-bg hover:bg-hover"
+                    style={{ borderColor: styles.border, color: styles.text }}
                   >
                     <span
-                      className="w-8 h-8 shrink-0 rounded-[10px] grid place-items-center"
+                      className="w-8 h-8 shrink-0 rounded-lg grid place-items-center"
                       style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
                       aria-hidden
                     >
                       <Globe size={14} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] font-bold truncate">{p.name}</span>
+                      <span className="block text-[13px] font-medium truncate">{p.name}</span>
                       <span className="block text-[11px] truncate" style={{ color: styles.textTertiary }}>
                         {p.blurb}
                       </span>
                     </span>
                     {configured ? (
                       <span
-                        className="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full"
-                        style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
+                        className="shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full"
+                        style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
                         title="Already configured — you can still add another one under a different name"
                       >
                         configured
                       </span>
                     ) : null}
-                    <span className="shrink-0 text-[11px] font-bold" style={{ color: styles.accent }}>
+                    <span className="shrink-0 text-[11px] font-medium" style={{ color: styles.accent }}>
                       Add →
                     </span>
                   </button>
@@ -1516,19 +1508,19 @@ function AddProviderDialog({
                   setError(null);
                 }}
                 aria-label="Back to presets"
-                className="w-7 h-7 grid place-items-center rounded-[8px]"
+                className="w-7 h-7 grid place-items-center rounded-lg"
                 style={{ color: styles.textTertiary }}
               >
                 <ArrowLeft size={14} />
               </button>
-              <span className="text-[16px] font-black" style={{ color: styles.text }}>
+              <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
                 {preset.id === "custom" ? "Custom provider" : preset.name}
               </span>
               <span className="flex-1" />
               <button
                 onClick={onClose}
                 aria-label="Close"
-                className="w-7 h-7 grid place-items-center rounded-[8px]"
+                className="w-7 h-7 grid place-items-center rounded-lg"
                 style={{ color: styles.textTertiary }}
               >
                 <X size={14} />
@@ -1536,7 +1528,7 @@ function AddProviderDialog({
             </div>
 
             <div>
-              <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+              <label className="mb-1.5 block text-[11px] font-medium" style={{ color: styles.textSecondary }}>
                 Provider name
               </label>
               <input
@@ -1549,24 +1541,24 @@ function AddProviderDialog({
                 placeholder={presetId !== null && presetId !== "custom" ? `${preset?.name} 2` : "My Gateway"}
                 aria-label="Provider name"
                 aria-invalid={nameTaken}
-                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 text-[13px] outline-none"
+                className="h-10 w-full rounded-lg border-[1.5px] px-3 text-[13px] outline-none"
                 style={{
                   ...inputStyle,
-                  ...(nameTaken ? { borderColor: "#ef4444" } : {}),
+                  ...(nameTaken ? { borderColor: SEMANTIC_COLORS.danger } : {}),
                 }}
               />
               {nameTaken ? (
-                <p className="mt-1.5 text-[10.5px]" style={{ color: "#ef4444" }} role="alert">
+                <p className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
                   That name is already in use — every provider needs a distinct display name.
                 </p>
               ) : (
-                <p className="mt-1.5 text-[10.5px]" style={{ color: styles.textTertiary }}>
+                <p className="mt-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
                   The display name is the only thing that must be unique.
                 </p>
               )}
             </div>
             <div>
-              <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+              <label className="mb-1.5 block text-[11px] font-medium" style={{ color: styles.textSecondary }}>
                 Base URL
               </label>
               <input
@@ -1574,7 +1566,7 @@ function AddProviderDialog({
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="https://api.example.com/v1"
                 aria-label="Base URL"
-                className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
                 style={inputStyle}
               />
             </div>
@@ -1586,7 +1578,7 @@ function AddProviderDialog({
                * never a choice. */
               <div className="flex items-center gap-2">
                 <span
-                  className="text-[10.5px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full"
+                  className="text-[11px] font-medium uppercase tracking-wider px-2.5 py-1 rounded-full"
                   style={{
                     background: withAlpha(styles.accent, 0.08),
                     color: styles.textSecondary,
@@ -1594,13 +1586,13 @@ function AddProviderDialog({
                 >
                   {formatLabel(apiFormat)}
                 </span>
-                <span className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+                <span className="text-[11px]" style={{ color: styles.textTertiary }}>
                   preset for {preset?.name} — nothing to pick
                 </span>
               </div>
             ) : (
               <div>
-                <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                <label className="mb-1.5 block text-[11px] font-medium" style={{ color: styles.textSecondary }}>
                   API format
                 </label>
                 <div className="grid grid-cols-3 gap-2">
@@ -1612,7 +1604,7 @@ function AddProviderDialog({
                         onClick={() => setApiFormat(f.id)}
                         aria-pressed={active}
                         title={f.hint}
-                        className="h-9 rounded-[10px] border-[1.5px] text-[11.5px] font-bold transition-colors"
+                        className="h-9 rounded-lg border-[1.5px] text-[11px] font-semibold transition-colors"
                         style={{
                           borderColor: active ? withAlpha(styles.accent, 0.55) : styles.border,
                           background: active ? withAlpha(styles.accent, 0.09) : styles.bg,
@@ -1624,13 +1616,13 @@ function AddProviderDialog({
                     );
                   })}
                 </div>
-                <p className="mt-1.5 text-[10.5px]" style={{ color: styles.textTertiary }}>
+                <p className="mt-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
                   {API_FORMATS.find((f) => f.id === apiFormat)?.hint}
                 </p>
               </div>
             )}
             <div>
-              <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+              <label className="mb-1.5 block text-[11px] font-medium" style={{ color: styles.textSecondary }}>
                 API key <span style={{ color: styles.textTertiary }}>(optional — can be added later)</span>
               </label>
               <div className="relative">
@@ -1640,13 +1632,13 @@ function AddProviderDialog({
                   onChange={(e) => setKey(e.target.value)}
                   placeholder="sk-…"
                   aria-label="API key"
-                  className="h-10 w-full rounded-[10px] border-[1.5px] px-3 pr-10 font-mono text-[12px] outline-none"
+                  className="h-10 w-full rounded-lg border-[1.5px] px-3 pr-10 font-mono text-[12px] outline-none"
                   style={inputStyle}
                 />
                 <button
                   onClick={() => setShowKey((v) => !v)}
                   aria-label={showKey ? "Hide key" : "Show key"}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 grid place-items-center rounded-md"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 grid place-items-center rounded-lg"
                   style={{ color: styles.textTertiary }}
                 >
                   {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
@@ -1655,7 +1647,7 @@ function AddProviderDialog({
             </div>
 
             {error && (
-              <p role="alert" className="text-[12px]" style={{ color: "#ef4444" }}>
+              <p role="alert" className="text-[12px]" style={{ color: SEMANTIC_COLORS.danger }}>
                 {error}
               </p>
             )}
@@ -1663,7 +1655,7 @@ function AddProviderDialog({
             <button
               onClick={() => create.mutate()}
               disabled={!valid || create.isPending}
-              className="h-11 rounded-full text-[13px] font-bold disabled:opacity-50 transition-transform hover:scale-[1.01] active:scale-[0.99]"
+              className="h-11 rounded-full text-[13px] font-semibold disabled:opacity-50 transition-transform active:scale-[0.99]"
               style={{ background: styles.accent, color: styles.accentText }}
             >
               {create.isPending ? "Adding…" : "Add provider"}
@@ -1850,7 +1842,7 @@ function TestIconButton({
   const testing = state.kind === "testing";
   // R94-C: the settled outcome keeps its icon color (green/red) — the hover
   // only swaps the color of an UNTINTED, UNANSWERED button to the accent.
-  const baseColor = outcome === "pass" ? "#16a34a" : outcome === "fail" ? "#ef4444" : styles.textSecondary;
+  const baseColor = outcome === "pass" ? SEMANTIC_COLORS.success : outcome === "fail" ? SEMANTIC_COLORS.danger : styles.textSecondary;
   return (
     <button
       onClick={run}
@@ -1860,34 +1852,27 @@ function TestIconButton({
       data-testid="model-test-button"
       data-model-row={model.id}
       className={[
-        "h-8 shrink-0 text-[11px] font-bold transition-all duration-300 flex items-center justify-center gap-1.5",
+        "h-8 shrink-0 text-[11px] font-medium transition-all duration-300 flex items-center justify-center gap-1.5",
         // R94-C: the pressed scale + the focus-visible ring (drawn INSIDE
         // the button edge, so the row cluster's overflow-hidden rounding
         // never clips it).
         "active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]",
-        variant === "segment" ? "w-8 px-0" : "rounded-[10px] px-2.5",
+        variant === "segment" ? "w-8 px-0" : "rounded-lg px-2.5",
+        /* R100-E2: the JS hover pair retired — an UNTINTED button gets the
+           accent-soft CSS wash (TOKENS.md §6); a TINTED one keeps its
+           settled green/red fill (the inline leg wins over the class, so
+           the R87 tint contract is untouched). */
+        "hover:bg-accent-soft",
       ].join(" ")}
       style={{
         width: label === undefined ? 32 : undefined,
         color: baseColor,
         background: tinted
           ? outcome === "pass"
-            ? withAlpha("#22c55e", 0.14)
-            : withAlpha("#ef4444", 0.12)
-          : "transparent",
+            ? withAlpha(SEMANTIC_COLORS.success, 0.14)
+            : withAlpha(SEMANTIC_COLORS.danger, 0.12)
+          : undefined,
         borderColor: "transparent",
-      }}
-      onMouseEnter={(e) => {
-        if (!tinted) {
-          e.currentTarget.style.background = withAlpha(styles.accent, 0.12);
-          if (outcome === null) e.currentTarget.style.color = styles.accent;
-        }
-      }}
-      onMouseLeave={(e) => {
-        if (!tinted) {
-          e.currentTarget.style.background = "transparent";
-          if (outcome === null) e.currentTarget.style.color = baseColor;
-        }
       }}
     >
       {testing ? (
@@ -1901,7 +1886,7 @@ function TestIconButton({
       ) : (
         <Zap size={12} />
       )}
-      {label !== undefined && <span className="text-[11px] font-bold">{label}</span>}
+      {label !== undefined && <span className="text-[11px] font-medium">{label}</span>}
     </button>
   );
 }
@@ -1938,8 +1923,8 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
           >
             {state.kind === "pass" ? (
               <div className="flex flex-col gap-0.5 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap text-[10.5px]">
-                  <span className="font-bold" style={{ color: "#22c55e" }}>
+                <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                  <span className="font-medium" style={{ color: SEMANTIC_COLORS.success }}>
                     ✓ responded in {state.latencyMs}ms
                   </span>
                   {state.usage !== undefined && (
@@ -1950,7 +1935,7 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
                   {state.preview !== undefined && (
                     <button
                       onClick={() => setShowReply(!showReply)}
-                      className="font-bold underline underline-offset-2"
+                      className="font-medium underline underline-offset-2"
                       style={{ color: styles.textTertiary }}
                       data-testid="model-test-show-reply"
                     >
@@ -1960,7 +1945,7 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
                 </div>
                 {showReply && state.preview !== undefined && (
                   <div
-                    className="font-mono text-[10.5px] break-all rounded-[6px] px-2 py-1 max-h-24 overflow-y-auto"
+                    className="font-mono text-[11px] break-all rounded-sm px-2 py-1 max-h-24 overflow-y-auto"
                     style={{ background: styles.subtle, color: styles.textSecondary }}
                   >
                     {state.preview}
@@ -1970,8 +1955,8 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
             ) : (
               <div className="flex flex-col gap-0.5 min-w-0">
                 <div
-                  className="text-[10.5px] break-all"
-                  style={{ color: "#ef4444" }}
+                  className="text-[11px] break-all"
+                  style={{ color: SEMANTIC_COLORS.danger }}
                   data-testid="model-test-reason"
                 >
                   {showFull ? state.reason : `${state.reason.slice(0, 240)}${state.reason.length > 240 ? "…" : ""}`}
@@ -1979,7 +1964,7 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
                 {state.reason.length > 240 && (
                   <button
                     onClick={() => setShowFull(!showFull)}
-                    className="text-[10.5px] font-bold underline underline-offset-2 self-start"
+                    className="text-[11px] font-medium underline underline-offset-2 self-start"
                     style={{ color: styles.textTertiary }}
                     data-testid="model-test-show-full"
                   >
@@ -2137,7 +2122,7 @@ function ModelCard({
           section (below) stays a SIBLING of this merged section — it is a
           transient result, not model identity. */}
       <div
-        className="rounded-[14px] border-[1.5px] overflow-hidden"
+        className="rounded-xl border-[1.5px] overflow-hidden"
         style={{
           // R95-A (the owner: "add some proper separation between the models
           // so that they are properly separated… the user can easily
@@ -2147,7 +2132,7 @@ function ModelCard({
           // the section's styles.card background — the same neutral-overlay
           // idiom this file already uses, just one step stronger.
           borderColor: m.configured ? styles.border : withAlpha(styles.accent, 0.3),
-          background: styles.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)",
+          background: withAlpha(styles.text, styles.isDark ? 0.03 : 0.02),
         }}
       >
       {/* ── the identity row (the "top half" — stays exactly as it is when
@@ -2163,7 +2148,7 @@ function ModelCard({
         <div className="min-w-0 flex-1 flex flex-col gap-1.5">
           <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
             <span
-              className="truncate text-[13.5px] font-bold"
+              className="truncate text-[13px] font-medium"
               style={{ color: m.configured ? styles.text : styles.textSecondary }}
               title={m.modelId}
             >
@@ -2171,15 +2156,15 @@ function ModelCard({
             </span>
             {isFreeModelEntry(m) && (
               <span
-                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
+                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
+                style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
               >
                 FREE
               </span>
             )}
             {m.hidden && (
               <span
-                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
                 style={{ background: styles.subtle, color: styles.textTertiary }}
                 title="Hidden from the chat model picker (still visible here)"
               >
@@ -2188,7 +2173,7 @@ function ModelCard({
             )}
             {m.configured && m.sizeLabel !== null && m.sizeLabel !== "" && (
               <span
-                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold font-mono"
+                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium font-mono"
                 style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
               >
                 {m.sizeLabel}
@@ -2204,7 +2189,7 @@ function ModelCard({
                 {inChips.map((chip) => (
                   <span
                     key={`in:${chip.label}`}
-                    className="shrink-0 inline-grid place-items-center h-[19px] w-[19px] rounded-[7px]"
+                    className="shrink-0 inline-grid place-items-center h-5 w-5 rounded-lg"
                     style={{ background: withAlpha(chip.color, 0.13), color: chip.color }}
                     title={chip.title}
                     role="img"
@@ -2227,7 +2212,7 @@ function ModelCard({
                 {outChips.map((chip) => (
                   <span
                     key={`out:${chip.label}`}
-                    className="shrink-0 inline-grid place-items-center h-[19px] w-[19px] rounded-[7px]"
+                    className="shrink-0 inline-grid place-items-center h-5 w-5 rounded-lg"
                     style={{
                       background: withAlpha(chip.color, 0.09),
                       color: withAlpha(chip.color, 0.95),
@@ -2255,7 +2240,7 @@ function ModelCard({
                 {statFacts.map((fact) => (
                   <span
                     key={fact.label}
-                    className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[9.5px] font-bold"
+                    className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px] font-medium"
                     style={{ background: styles.subtle, color: styles.textSecondary }}
                     title={`${fact.label}: ${fact.value}`}
                   >
@@ -2271,14 +2256,17 @@ function ModelCard({
             actual button kind of interface". The R87 icon trio + the R93-A7
             hide/show toggle are now ONE segmented ACTION GROUP: a shared
             rounded container with a hairline border + a subtle fill, a
-            divider between the buttons, an accent hover (red for the
-            destructive delete), a pressed scale, and a focus-visible ring.
+            divider between the buttons, a pressed scale, and a focus-visible
+            ring. R100-E2: the three JS hover pairs retired — each segment
+            gets the standard hover:bg-hover CSS wash (TOKENS.md §6) and the
+            destructive delete RESTS in the danger color (the R100-D
+            WorkingSection idiom) instead of turning red on hover.
             The Test segment keeps the R87 spin/pass/fail tint contract; the
             Eye keeps its accent-when-hidden state; every aria-label,
             title and data-testid is unchanged. */}
         {m.configured && row !== null && (
           <div
-            className="inline-flex items-stretch rounded-[10px] shrink-0 overflow-hidden"
+            className="inline-flex items-stretch rounded-lg shrink-0 overflow-hidden"
             style={{ border: `1px solid ${withAlpha(styles.border, 0.9)}`, background: styles.subtle }}
           >
             <TestIconButton model={row} state={state} run={runManual} variant="segment" />
@@ -2287,16 +2275,8 @@ function ModelCard({
               onClick={onEdit}
               aria-label={`Configure model ${m.displayName || m.modelId}`}
               title="Configure — display name, capabilities, pricing, limits"
-              className="h-8 w-8 grid place-items-center shrink-0 transition-all duration-200 active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
+              className="h-8 w-8 grid place-items-center shrink-0 transition-all duration-200 hover:bg-hover active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
               style={{ color: styles.textSecondary }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = withAlpha(styles.accent, 0.12);
-                e.currentTarget.style.color = styles.accent;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
-                e.currentTarget.style.color = styles.textSecondary;
-              }}
             >
               <Pencil size={13} />
             </button>
@@ -2308,16 +2288,8 @@ function ModelCard({
                   aria-label={row.hidden ? `Show model ${m.displayName || m.modelId} in the chat picker` : `Hide model ${m.displayName || m.modelId} from the chat picker`}
                   title={row.hidden ? "Hidden from the chat picker — click to show" : "Shown in the chat picker — click to hide"}
                   data-testid="model-toggle-hidden"
-                  className="h-8 w-8 grid place-items-center shrink-0 transition-all duration-200 active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
+                  className="h-8 w-8 grid place-items-center shrink-0 transition-all duration-200 hover:bg-hover active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
                   style={{ color: row.hidden ? styles.accent : styles.textSecondary }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = withAlpha(styles.accent, 0.12);
-                    e.currentTarget.style.color = styles.accent;
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                    e.currentTarget.style.color = row.hidden ? styles.accent : styles.textSecondary;
-                  }}
                 >
                   {row.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
                 </button>
@@ -2328,16 +2300,8 @@ function ModelCard({
               onClick={onDelete}
               aria-label={`Delete model ${m.displayName || m.modelId}`}
               title="Delete this model"
-              className="h-8 w-8 grid place-items-center shrink-0 transition-all duration-200 active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
-              style={{ color: styles.textTertiary }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = withAlpha("#ef4444", 0.12);
-                e.currentTarget.style.color = "#ef4444";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
-                e.currentTarget.style.color = styles.textTertiary;
-              }}
+              className="h-8 w-8 grid place-items-center shrink-0 transition-all duration-200 hover:bg-hover active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
+              style={{ color: SEMANTIC_COLORS.danger }}
             >
               <Trash2 size={13} />
             </button>
@@ -2365,14 +2329,14 @@ function ModelCard({
               key={fact.label}
               className="px-3 py-1.5 flex flex-col gap-0"
               style={{
-                background: styles.isDark ? "rgba(255,255,255,0.012)" : "rgba(0,0,0,0.006)",
+                background: withAlpha(styles.text, styles.isDark ? 0.012 : 0.006),
                 ...(i > 0 ? { borderLeft: `1px solid ${withAlpha(styles.border, 0.5)}` } : {}),
               }}
             >
-              <span className="text-[8.5px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
+              <span className="text-[10px] font-medium uppercase tracking-widest tabular-nums" style={{ color: styles.textTertiary }}>
                 {fact.label}
               </span>
-              <span className="font-mono text-[11px] font-bold" style={{ color: styles.text }}>
+              <span className="font-mono text-[11px] font-medium tabular-nums" style={{ color: styles.text }}>
                 {fact.value}
               </span>
             </div>
@@ -2398,18 +2362,18 @@ function ModelCard({
           >
             {state.kind === "pass" ? (
               <div
-                className="mt-1.5 rounded-[12px] border-[1.5px] px-3.5 py-2.5 flex flex-col gap-1.5"
-                style={{ borderColor: withAlpha("#22c55e", 0.45), background: withAlpha("#22c55e", 0.05) }}
+                className="mt-1.5 rounded-xl border-[1.5px] px-3.5 py-2.5 flex flex-col gap-1.5"
+                style={{ borderColor: withAlpha(SEMANTIC_COLORS.success, 0.45), background: withAlpha(SEMANTIC_COLORS.success, 0.05) }}
               >
                 <div className="flex items-center gap-2.5 flex-wrap text-[11px]">
                   <span
-                    className="inline-flex items-center gap-1.5 font-bold"
-                    style={{ color: "#22c55e" }}
+                    className="inline-flex items-center gap-1.5 font-medium"
+                    style={{ color: SEMANTIC_COLORS.success }}
                   >
                     <Check size={12} strokeWidth={2.5} /> responded in {state.latencyMs}ms
                   </span>
                   {state.usage !== undefined && (
-                    <span className="font-mono text-[10.5px]" style={{ color: styles.textTertiary }}>
+                    <span className="font-mono text-[11px]" style={{ color: styles.textTertiary }}>
                       {state.usage.inputTokens} tokens in / {state.usage.outputTokens} out
                     </span>
                   )}
@@ -2420,7 +2384,7 @@ function ModelCard({
                         keepOpen();
                         setShowReply(!showReply);
                       }}
-                      className="text-[10.5px] font-bold underline underline-offset-2"
+                      className="text-[11px] font-medium underline underline-offset-2"
                       style={{ color: styles.textSecondary }}
                       data-testid="model-test-show-reply"
                     >
@@ -2430,8 +2394,8 @@ function ModelCard({
                 </div>
                 {showReply && state.preview !== undefined && (
                   <div
-                    className="font-mono text-[10.5px] break-all rounded-[8px] px-2.5 py-1.5 max-h-28 overflow-y-auto auto-scroll"
-                    style={{ background: styles.isDark ? "rgba(0,0,0,0.25)" : "rgba(0,0,0,0.04)", color: styles.textSecondary }}
+                    className="font-mono text-[11px] break-all rounded-lg px-2.5 py-1.5 max-h-28 overflow-y-auto auto-scroll"
+                    style={{ background: withAlpha(styles.text, styles.isDark ? 0.25 : 0.04), color: styles.textSecondary }}
                     data-testid="model-test-reply-body"
                   >
                     {state.preview}
@@ -2440,13 +2404,13 @@ function ModelCard({
               </div>
             ) : (
               <div
-                className="mt-1.5 rounded-[12px] border-[1.5px] px-3.5 py-2.5 flex flex-col gap-1.5"
-                style={{ borderColor: withAlpha("#ef4444", 0.45), background: withAlpha("#ef4444", 0.05) }}
+                className="mt-1.5 rounded-xl border-[1.5px] px-3.5 py-2.5 flex flex-col gap-1.5"
+                style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), background: withAlpha(SEMANTIC_COLORS.danger, 0.05) }}
               >
-                <div className="flex items-center gap-1.5 text-[11px] font-bold" style={{ color: "#ef4444" }}>
+                <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: SEMANTIC_COLORS.danger }}>
                   <AlertTriangle size={12} /> the test request failed
                 </div>
-                <div className="text-[10.5px] break-all" style={{ color: styles.textSecondary }} data-testid="model-test-reason">
+                <div className="text-[11px] break-all" style={{ color: styles.textSecondary }} data-testid="model-test-reason">
                   {showFull ? state.reason : `${state.reason.slice(0, 300)}${state.reason.length > 300 ? "…" : ""}`}
                 </div>
                 {state.reason.length > 300 && (
@@ -2455,7 +2419,7 @@ function ModelCard({
                       keepOpen();
                       setShowFull(!showFull);
                     }}
-                    className="text-[10.5px] font-bold underline underline-offset-2 self-start"
+                    className="text-[11px] font-medium underline underline-offset-2 self-start"
                     style={{ color: styles.textTertiary }}
                     data-testid="model-test-show-full"
                   >
@@ -2543,21 +2507,15 @@ function ScopeOptionButton({
       disabled={disabled}
       title={title ?? hint}
       onClick={onClick}
-      className="flex-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 rounded-[10px] transition-colors disabled:cursor-default disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
+      className="flex-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg transition-colors enabled:hover:bg-hover disabled:cursor-default disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
       style={{ color: disabled ? styles.textTertiary : styles.text }}
-      onMouseEnter={(e) => {
-        if (!disabled) e.currentTarget.style.background = styles.subtleHover;
-      }}
-      onMouseLeave={(e) => {
-        if (!disabled) e.currentTarget.style.background = "transparent";
-      }}
     >
       <Icon
         size={13}
         className="shrink-0"
         style={{ color: disabled ? styles.textTertiary : styles.accent }}
       />
-      <span className="text-[11.5px] font-bold leading-tight whitespace-nowrap">{label}</span>
+      <span className="text-[11px] font-medium leading-tight whitespace-nowrap">{label}</span>
     </button>
   );
 }
@@ -2752,7 +2710,9 @@ function ModelListSection({
   });
 
   return (
-    <div className="rounded-[16px] border-[1.5px] overflow-hidden" style={{ background: styles.card, borderColor: styles.border }}>
+    /* R100-E2: the SectionCard primitive with p-0 — the section header and
+       the model rows own their own padding. */
+    <SectionCard className="overflow-hidden p-0">
       <div className="flex items-center gap-2 px-4 py-3 border-b flex-wrap" style={{ borderColor: styles.border }}>
         <SectionLabel>Models</SectionLabel>
         {/* ROUND-60 (R60-B): the count is the CONFIGURED row count only —
@@ -2789,14 +2749,14 @@ function ModelListSection({
               aria-haspopup="menu"
               aria-expanded={scopeMenu !== null}
               data-testid="test-all-models"
-              className="h-7 px-2.5 rounded-full text-[11px] font-bold flex items-center gap-1.5 disabled:cursor-default transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
+              className="h-7 px-2.5 rounded-full text-[11px] font-semibold flex items-center gap-1.5 disabled:cursor-default transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
               style={{
                 background: withAlpha(styles.accent, 0.1),
                 color:
                   testAll !== null && !testRunActive
                     ? testAll.failed > 0
-                      ? "#ef4444"
-                      : "#22c55e"
+                      ? SEMANTIC_COLORS.danger
+                      : SEMANTIC_COLORS.success
                     : styles.accent,
               }}
               title="Test — all models, only the failed ones, or only the working ones"
@@ -2824,13 +2784,14 @@ function ModelListSection({
               <div
                 role="menu"
                 aria-label="Test scope"
-                className="fixed z-50 w-[470px] rounded-[14px] border-[1.5px] p-1.5 flex items-stretch"
+                className="fixed z-50 w-[470px] rounded-xl border-[1.5px] p-1.5 flex items-stretch"
                 style={{
                   top: scopeMenu.top,
                   left: scopeMenu.left,
                   background: styles.card,
                   borderColor: styles.border,
-                  boxShadow: styles.bentoShadow,
+                  /* R100-E2: floating popover = softShadow (TOKENS.md §5). */
+                  boxShadow: styles.softShadow,
                 }}
                 onKeyDown={(e) => {
                   // R94-C → R95-A: the keyboard ladder — now HORIZONTAL
@@ -2924,7 +2885,7 @@ function ModelListSection({
             add-by-id fallback) — replacing the type-an-id inline form. */}
         <button
           onClick={() => setPickerOpen(true)}
-          className="h-7 px-2.5 rounded-full text-[11px] font-bold flex items-center gap-1"
+          className="h-7 px-2.5 rounded-full text-[11px] font-semibold flex items-center gap-1"
           style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
         >
           <Plus size={11} strokeWidth={2.5} /> Add models
@@ -2932,7 +2893,7 @@ function ModelListSection({
       </div>
 
       {error && (
-        <div className="px-4 py-2 border-b text-[11px]" style={{ borderColor: styles.border, color: "#ef4444" }}>
+        <div className="px-4 py-2 border-b text-[11px]" style={{ borderColor: styles.border, color: SEMANTIC_COLORS.danger }}>
           {error}
         </div>
       )}
@@ -2942,8 +2903,8 @@ function ModelListSection({
       {modelsLoadError !== null && (
         <div
           role="alert"
-          className="px-4 py-3 text-[11.5px]"
-          style={{ color: "#ef4444" }}
+          className="px-4 py-3 text-[11px]"
+          style={{ color: SEMANTIC_COLORS.danger }}
         >
           Couldn&apos;t load this provider&apos;s models — {modelsLoadError}
         </div>
@@ -3095,7 +3056,7 @@ function ModelListSection({
           }}
         />
       )}
-    </div>
+    </SectionCard>
   );
 }
 
@@ -3323,25 +3284,26 @@ function AddModelsDialog({
       }}
     >
       <div
-        className="w-full max-w-[560px] max-h-[82vh] rounded-[20px] border-[1.5px] flex flex-col overflow-hidden"
-        style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+        className="w-full max-w-[560px] max-h-[82vh] rounded-xl border-[1.5px] flex flex-col overflow-hidden"
+        /* R100-E2: floating dialog = softShadow (TOKENS.md §5). */
+        style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.softShadow }}
       >
         {/* header */}
         <div className="flex items-center gap-2 px-5 pt-4 pb-3 shrink-0">
-          <span className="text-[15px] font-black" style={{ color: styles.text }}>
+          <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
             Add models
           </span>
           <span className="flex-1" />
           <button
             onClick={onClose}
             aria-label="Close"
-            className="w-7 h-7 grid place-items-center rounded-[8px]"
+            className="w-7 h-7 grid place-items-center rounded-lg"
             style={{ color: styles.textTertiary }}
           >
             <X size={14} />
           </button>
         </div>
-        <p className="px-5 pb-3 text-[11.5px] shrink-0" style={{ color: styles.textSecondary }}>
+        <p className="px-5 pb-3 text-[11px] shrink-0" style={{ color: styles.textSecondary }}>
           Click <b>Add</b> on the right to add a model and open its configuration, or drag across
           rows on the left to select several at once. Already-added models are hidden.
         </p>
@@ -3361,7 +3323,7 @@ function AddModelsDialog({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search by model id or name…"
               aria-label="Search catalog models"
-              className="h-10 w-full rounded-[14px] border-[1.5px] pl-9 pr-3 text-[12.5px] outline-none"
+              className="h-10 w-full rounded-xl border-[1.5px] pl-9 pr-3 text-[13px] outline-none"
               style={inputStyle}
             />
           </div>
@@ -3372,7 +3334,7 @@ function AddModelsDialog({
           <div
             role="group"
             aria-label="Catalog filter"
-            className="flex items-center rounded-[14px] border-[1.5px] overflow-hidden shrink-0"
+            className="flex items-center rounded-xl border-[1.5px] overflow-hidden shrink-0"
             style={{ borderColor: styles.border }}
           >
             {([
@@ -3384,7 +3346,7 @@ function AddModelsDialog({
                 onClick={seg.pick}
                 aria-pressed={seg.active}
                 data-testid={seg.id === "free" ? "picker-free-only-toggle" : "picker-all-models-toggle"}
-                className="h-10 px-2.5 text-[11px] font-bold transition-colors whitespace-nowrap"
+                className="h-10 px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap"
                 style={{
                   background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
                   color: seg.active ? styles.accent : styles.textTertiary,
@@ -3401,12 +3363,12 @@ function AddModelsDialog({
             are NOT rendered at all (filtered out of `rows` above). */}
         <div className="flex-1 min-h-0 overflow-y-auto auto-scroll px-3 pb-3 flex flex-col gap-1">
           {catalog.isFetching && catalog.entries.length === 0 && (
-            <div className="px-2 py-4 text-[11.5px] flex items-center gap-2" style={{ color: styles.textTertiary }}>
+            <div className="px-2 py-4 text-[11px] flex items-center gap-2" style={{ color: styles.textTertiary }}>
               <RefreshCw size={12} className="animate-spin" /> Fetching the provider catalog…
             </div>
           )}
           {!catalog.isFetching && catalog.entries.length === 0 && (
-            <div className="px-2 py-4 text-[11.5px]" style={{ color: styles.textTertiary }}>
+            <div className="px-2 py-4 text-[11px]" style={{ color: styles.textTertiary }}>
               {catalog.isError
                 ? "The live catalog is unreachable for this provider — add a model by id below."
                 : "This provider serves no catalog — add a model by id below."}
@@ -3428,7 +3390,7 @@ function AddModelsDialog({
                 data-testid="picker-model-row"
                 data-model-id={entry.id}
                 data-selected={isSelected ? "true" : undefined}
-                className="flex items-stretch gap-2 rounded-[12px] border-[1.5px] transition-all"
+                className="flex items-stretch gap-2 rounded-xl border-[1.5px] transition-all"
                 style={{
                   borderColor: isSelected
                     ? withAlpha(styles.accent, 0.55)
@@ -3436,8 +3398,8 @@ function AddModelsDialog({
                   background: isSelected
                     ? withAlpha(styles.accent, 0.08)
                     : styles.isDark
-                      ? "rgba(255,255,255,0.015)"
-                      : "rgba(0,0,0,0.008)",
+                      ? withAlpha(styles.text, 0.015)
+                      : withAlpha(styles.text, 0.008),
                 }}
               >
                 {/* ── LEFT zone: the select checkbox + the text. PointerDOWN
@@ -3455,7 +3417,7 @@ function AddModelsDialog({
                     beginPaint(entry.id);
                   }}
                   onPointerEnter={() => paintOver(entry.id)}
-                  className="flex-1 min-w-0 flex items-center gap-3 px-3 py-2.5 text-left rounded-l-[10px] enabled:cursor-pointer disabled:cursor-default touch-none"
+                  className="flex-1 min-w-0 flex items-center gap-3 px-3 py-2.5 text-left rounded-l-lg enabled:cursor-pointer disabled:cursor-default touch-none"
                   title={
                     isSelected
                       ? "Selected — drag across rows to select more"
@@ -3465,7 +3427,7 @@ function AddModelsDialog({
                   <span
                     aria-hidden
                     data-testid="picker-model-checkbox"
-                    className="shrink-0 w-[18px] h-[18px] rounded-[6px] grid place-items-center border-[1.5px] transition-colors"
+                    className="shrink-0 w-4.5 h-4.5 rounded-sm grid place-items-center border-[1.5px] transition-colors"
                     style={{
                       borderColor: isSelected ? styles.accent : styles.border,
                       background: isSelected ? styles.accent : "transparent",
@@ -3476,21 +3438,21 @@ function AddModelsDialog({
                   <span className="min-w-0 flex-1 flex flex-col gap-0.5">
                     <span className="flex items-center gap-1.5 min-w-0 flex-wrap">
                       <span
-                        className="truncate text-[12.5px] font-bold"
+                        className="truncate text-[13px] font-medium"
                         style={{ color: styles.text }}
                       >
                         {cleanName}
                       </span>
                       {free ? (
                         <span
-                          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                          style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
+                          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
+                          style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
                         >
                           FREE
                         </span>
                       ) : meta ? (
                         <span
-                          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
                           style={{ background: styles.subtle, color: styles.textTertiary }}
                         >
                           PAID
@@ -3522,14 +3484,11 @@ function AddModelsDialog({
                   disabled={singleBusy || batchBusy}
                   aria-label={`Add ${entry.id}`}
                   data-testid="picker-model-direct-add"
-                  className="shrink-0 self-center flex items-center gap-1 h-8 px-3 mr-2 rounded-full text-[11px] font-bold transition-all active:scale-[0.97] disabled:opacity-50"
-                  style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = withAlpha(styles.accent, 0.22);
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = withAlpha(styles.accent, 0.14);
-                  }}
+                  /* R100-E2: the JS hover pair retired — the accent wash
+                     rides the CSS-var leg (soft ≈ the old 0.14 rest,
+                     faded ≈ the old 0.22 hover). */
+                  className="shrink-0 self-center flex items-center gap-1 h-8 px-3 mr-2 rounded-full text-[11px] font-semibold transition-all bg-accent-soft hover:bg-accent-faded active:scale-[0.97] disabled:opacity-50"
+                  style={{ color: styles.accent }}
                   title="Add this model, then open its configuration"
                 >
                   {singleBusy ? <RefreshCw size={12} className="animate-spin" /> : <Plus size={12} />} Add
@@ -3538,7 +3497,7 @@ function AddModelsDialog({
             );
           })}
           {rows.length === 0 && catalog.entries.length > 0 && (
-            <div className="px-2 py-4 text-[11.5px]" style={{ color: styles.textTertiary }}>
+            <div className="px-2 py-4 text-[11px]" style={{ color: styles.textTertiary }}>
               {/* ROUND-60 → R95-A: honest about ALL THREE filters — the search
                   text, the free-only scope, or "every match is already added"
                   may each have emptied the list (already-added rows are not
@@ -3563,7 +3522,7 @@ function AddModelsDialog({
             className="shrink-0 border-t px-5 py-3 flex items-center gap-3"
             style={{ borderColor: styles.border, background: withAlpha(styles.accent, 0.05) }}
           >
-            <span className="text-[12px] font-bold" style={{ color: styles.text }}>
+            <span className="text-[12px] font-medium" style={{ color: styles.text }}>
               {selectedCount} model{selectedCount === 1 ? "" : "s"} selected
             </span>
             <span className="flex-1" />
@@ -3571,7 +3530,7 @@ function AddModelsDialog({
               type="button"
               onClick={clearSelection}
               disabled={batchBusy}
-              className="h-9 px-3.5 rounded-full text-[11.5px] font-bold disabled:opacity-50"
+              className="h-9 px-3.5 rounded-full text-[11px] font-semibold disabled:opacity-50"
               style={{ color: styles.textSecondary }}
             >
               Clear
@@ -3581,7 +3540,7 @@ function AddModelsDialog({
               onClick={() => void addSelected()}
               disabled={batchBusy}
               data-testid="picker-batch-add"
-              className="h-9 px-4 rounded-full text-[12px] font-bold disabled:opacity-50 flex items-center gap-1.5"
+              className="h-9 px-4 rounded-full text-[12px] font-semibold disabled:opacity-50 flex items-center gap-1.5"
               style={{ background: styles.accent, color: styles.accentText }}
             >
               {batchBusy ? <RefreshCw size={12} className="animate-spin" /> : <Plus size={12} />}
@@ -3596,8 +3555,8 @@ function AddModelsDialog({
         {batchError !== null ? (
           <div
             data-testid="picker-batch-error"
-            className="shrink-0 border-t px-5 py-3 flex items-center gap-2 text-[11.5px] font-semibold"
-            style={{ borderColor: styles.border, color: "#ef4444" }}
+            className="shrink-0 border-t px-5 py-3 flex items-center gap-2 text-[11px] font-medium"
+            style={{ borderColor: styles.border, color: SEMANTIC_COLORS.danger }}
           >
             <AlertTriangle size={13} className="shrink-0" />
             <span className="min-w-0 flex-1">{batchError}</span>
@@ -3605,7 +3564,7 @@ function AddModelsDialog({
               type="button"
               onClick={() => setBatchError(null)}
               aria-label="Dismiss error"
-              className="shrink-0 w-6 h-6 grid place-items-center rounded-[8px]"
+              className="shrink-0 w-6 h-6 grid place-items-center rounded-lg"
               style={{ color: styles.textTertiary }}
             >
               <X size={12} />
@@ -3633,20 +3592,20 @@ function AddModelsDialog({
               }}
               placeholder="…or enter a model id not in the list"
               aria-label="Model id"
-              className="h-10 flex-1 min-w-0 rounded-[14px] border-[1.5px] px-3.5 font-mono text-[12px] outline-none"
+              className="h-10 flex-1 min-w-0 rounded-xl border-[1.5px] px-3.5 font-mono text-[12px] outline-none"
               style={inputStyle}
             />
             <button
               onClick={() => addOne(manualId.trim())}
               disabled={!manualId.trim() || singleBusy || batchBusy}
-              className="h-10 px-4 rounded-full text-[12px] font-bold disabled:opacity-50 shrink-0"
+              className="h-10 px-4 rounded-full text-[12px] font-semibold disabled:opacity-50 shrink-0"
               style={{ background: styles.accent, color: styles.accentText }}
             >
               {singleBusy ? "Adding…" : "Add"}
             </button>
           </div>
           {manualId.trim() !== "" && configuredIds.has(manualId.trim()) && (
-            <p className="text-[10.5px]" style={{ color: styles.textTertiary }} data-testid="picker-manual-already-added">
+            <p className="text-[11px]" style={{ color: styles.textTertiary }} data-testid="picker-manual-already-added">
               Already added — Add opens the existing row for editing.
             </p>
           )}
@@ -3758,10 +3717,13 @@ function draftFromPrefill(prefill: ModelAddPrefill): ModelConfigDraft {
  * ON is a FILLED, saturated pill in the modality's color with a check
  * badge; OFF is a NEUTRAL interactive pill (the old off-state kept a faded
  * tint of the modality color, which read as a DISABLED ghost —
- * indistinguishable from un-clickable). Hover + cursor make every chip's
- * clickability explicit. Module level, NOT inside the dialog — a component
- * defined in render remounts its subtree on every keystroke (the classic
- * anti-pattern). */
+ * indistinguishable from un-clickable). R100-E2: the hover-color promise
+ * (the modality's tint arriving as the promise of the click) now rides the
+ * CSS leg — the modality color is passed as the --cap custom property and
+ * the hover classes mix it in; the useState hover pair is retired
+ * (TOKENS.md §6: hover is a class, never a handler). Module level, NOT
+ * inside the dialog — a component defined in render remounts its subtree
+ * on every keystroke (the classic anti-pattern). */
 function CapChip({
   meta,
   on,
@@ -3779,7 +3741,6 @@ function CapChip({
 }) {
   const { color, Icon, label } = meta;
   const styles = useThemeStyles();
-  const [hover, setHover] = useState(false);
   return (
     <button
       type="button"
@@ -3788,29 +3749,30 @@ function CapChip({
       disabled={locked}
       title={title}
       data-testid={testId}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      className="h-8 px-3 rounded-full text-[11.5px] font-bold border-[1.5px] transition-all shrink-0 disabled:cursor-default flex items-center gap-1.5 cursor-pointer"
+      className="h-8 px-3 rounded-full text-[11px] font-medium border-[1.5px] transition-all shrink-0 disabled:cursor-default flex items-center gap-1.5 cursor-pointer border-line text-muted hover:border-[var(--cap)] hover:bg-[color-mix(in_srgb,var(--cap)_10%,transparent)]"
       style={
-        on
-          ? {
-              // ON — the modality's color, fully expressed: saturated fill,
-              // solid color border, white icon+label.
-              borderColor: color,
-              background: color,
-              color: "#ffffff",
-              boxShadow: `0 2px 8px ${withAlpha(color, 0.35)}`,
-              opacity: locked ? 0.85 : 1,
-            }
-          : {
-              // OFF — NEUTRAL (the interactive idle): theme border + text so
-              // it never reads as a disabled ghost, the modality's color
-              // arriving on HOVER as the promise of the click.
-              borderColor: hover ? withAlpha(color, 0.55) : styles.border,
-              background: hover ? withAlpha(color, 0.1) : "transparent",
-              color: styles.textSecondary,
-              opacity: locked ? 0.85 : 1,
-            }
+        {
+          // the modality's color, exposed to the hover classes above.
+          "--cap": color,
+          ...(on
+            ? {
+                // ON — the modality's color, fully expressed: saturated fill,
+                // solid color border, white icon+label (the inline leg wins
+                // over the hover classes, so the settled state never shifts).
+                borderColor: color,
+                background: color,
+                color: "#ffffff",
+                opacity: locked ? 0.85 : 1,
+              }
+            : {
+                // OFF — NEUTRAL (the interactive idle): theme border + text so
+                // it never reads as a disabled ghost; the resting look rides
+                // the border-line/text-muted classes above so the :hover
+                // classes can express the color promise.
+                color: styles.textSecondary,
+                opacity: locked ? 0.85 : 1,
+              }),
+        } as unknown as CSSProperties
       }
     >
       <Icon size={12} strokeWidth={2.25} aria-hidden style={on ? undefined : { color: withAlpha(color, 0.8) }} />
@@ -3839,7 +3801,7 @@ function TokenHint({ raw }: { raw: string }): JSX.Element | null {
   const parsed = numOrNull(raw);
   if (parsed === null || parsed < 1000) return null;
   return (
-    <span className="block mt-0.5 font-mono text-[9.5px]" style={{ color: styles.textTertiary }} aria-hidden>
+    <span className="block mt-0.5 font-mono text-[10px]" style={{ color: styles.textTertiary }} aria-hidden>
       ≈ {formatTokenCount(parsed)}
     </span>
   );
@@ -3960,17 +3922,18 @@ function ModelConfigDialog({
       }}
     >
       <div
-        className="w-full max-w-[680px] max-h-[86vh] overflow-y-auto auto-scroll rounded-[20px] border-[1.5px] p-5 flex flex-col gap-4"
-        style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+        className="w-full max-w-[680px] max-h-[86vh] overflow-y-auto auto-scroll rounded-xl border-[1.5px] p-5 flex flex-col gap-4"
+        /* R100-E2: floating dialog = softShadow (TOKENS.md §5). */
+        style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.softShadow }}
       >
         {/* header — ROUND-87 (R87): ADD vs CONFIGURE + the provider chip
             (the send wire's actual routing target). */}
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[15px] font-black" style={{ color: styles.text }}>
+          <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
             {addMode ? "Add model" : "Configure model"}
           </span>
           <span
-            className="px-1.5 py-0.5 rounded-full font-mono text-[10px] font-bold"
+            className="px-1.5 py-0.5 rounded-full font-mono text-[10px] font-medium"
             style={{ background: styles.subtle, color: styles.textTertiary }}
             title="The provider that serves this model (the send wire routes here since R82)"
           >
@@ -3980,7 +3943,7 @@ function ModelConfigDialog({
           <button
             onClick={onClose}
             aria-label="Close"
-            className="w-7 h-7 grid place-items-center rounded-[8px]"
+            className="w-7 h-7 grid place-items-center rounded-lg"
             style={{ color: styles.textTertiary }}
           >
             <X size={14} />
@@ -3996,7 +3959,7 @@ function ModelConfigDialog({
             <div className="flex flex-col gap-2">
               <SectionLabel>Identity</SectionLabel>
               <div>
-                <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                <label className="mb-1.5 block text-[11px] font-medium" style={{ color: styles.textSecondary }}>
                   Display name
                 </label>
                 <input
@@ -4004,12 +3967,12 @@ function ModelConfigDialog({
                   onChange={(e) => set("displayName", e.target.value)}
                   placeholder={draft.modelId || "the friendly name shown in pickers"}
                   aria-label="Display name"
-                  className="h-10 w-full rounded-[10px] border-[1.5px] px-3 text-[13px] outline-none"
+                  className="h-10 w-full rounded-lg border-[1.5px] px-3 text-[13px] outline-none"
                   style={inputStyle}
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                <label className="mb-1.5 block text-[11px] font-medium" style={{ color: styles.textSecondary }}>
                   Model id
                 </label>
                 {addMode ? (
@@ -4018,13 +3981,13 @@ function ModelConfigDialog({
                     onChange={(e) => set("modelId", e.target.value)}
                     placeholder="provider/model-name"
                     aria-label="Model id"
-                    className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[11.5px] outline-none"
+                    className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[11px] outline-none"
                     style={inputStyle}
                     data-testid="model-config-id-input"
                   />
                 ) : (
                   <p
-                    className="h-10 flex items-center w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[11px] break-all overflow-hidden"
+                    className="h-10 flex items-center w-full rounded-lg border-[1.5px] px-3 font-mono text-[11px] break-all overflow-hidden"
                     style={{ borderColor: styles.border, background: styles.subtle, color: styles.textTertiary }}
                     aria-label="Model id (read-only)"
                   >
@@ -4035,7 +3998,7 @@ function ModelConfigDialog({
               {/* ROUND-87 (R87): the SIZE label — a human-facing parameter
                   size ("70B", "405B MoE") for the detail row. */}
               <div>
-                <label className="mb-1.5 block text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+                <label className="mb-1.5 block text-[11px] font-medium" style={{ color: styles.textSecondary }}>
                   Size <span className="font-normal" style={{ color: styles.textTertiary }}>(e.g. 70B — display only)</span>
                 </label>
                 <input
@@ -4043,26 +4006,19 @@ function ModelConfigDialog({
                   onChange={(e) => set("sizeLabel", e.target.value)}
                   placeholder="unknown"
                   aria-label="Size label"
-                  className="h-10 w-full rounded-[10px] border-[1.5px] px-3 text-[13px] outline-none"
+                  className="h-10 w-full rounded-lg border-[1.5px] px-3 text-[13px] outline-none"
                   style={inputStyle}
                   data-testid="model-config-size-input"
                 />
               </div>
-              <div className="flex items-center gap-3">
-                <div className="min-w-0 flex-1">
-                  <span className="block text-[11.5px] font-bold" style={{ color: styles.textSecondary }}>
-                    Hide from chat picker
-                  </span>
-                  {/* R89-C2 (the owner: "the description could be made
-                      smaller"): one compact line instead of the sentence. */}
-                  <span className="block text-[9.5px]" style={{ color: styles.textTertiary }}>
-                    Stays in Settings — hidden from chat.
-                  </span>
-                </div>
+              {/* R100-E2: the label+control pair rides the SettingsRow
+                  primitive (36px control row, 13px/400 label + 11px
+                  tertiary description — TOKENS.md §3 row-height table). */}
+              <SettingsRow label="Hide from chat picker" description="Stays in Settings — hidden from chat.">
                 <div
                   role="group"
                   aria-label="Hide from chat picker"
-                  className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden shrink-0"
+                  className="flex items-center rounded-lg border-[1.5px] overflow-hidden shrink-0"
                   style={{ borderColor: styles.border }}
                 >
                   {([
@@ -4073,7 +4029,7 @@ function ModelConfigDialog({
                       key={seg.id}
                       onClick={seg.pick}
                       aria-pressed={seg.active}
-                      className="h-7 px-3 text-[11px] font-bold transition-colors"
+                      className="h-7 px-3 text-[11px] font-medium transition-colors"
                       style={{
                         background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
                         color: seg.active ? styles.accent : styles.textTertiary,
@@ -4083,7 +4039,7 @@ function ModelConfigDialog({
                     </button>
                   ))}
                 </div>
-              </div>
+              </SettingsRow>
             </div>
 
             {/* ROUND-87 (R87, owner: "configure which kinds of inputs this
@@ -4157,7 +4113,7 @@ function ModelConfigDialog({
                   testId="model-cap-audio-out"
                 />
               </div>
-              <p className="text-[9.5px]" style={{ color: styles.textTertiary }}>
+              <p className="text-[10px]" style={{ color: styles.textTertiary }}>
                 Reasoning and tool use are detected automatically — never configured here.
               </p>
             </div>
@@ -4173,7 +4129,7 @@ function ModelConfigDialog({
               <SectionLabel>Sizing</SectionLabel>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                  <label className="mb-1 block text-[11px] font-medium" style={{ color: styles.textTertiary }}>
                     Context window (tokens)
                   </label>
                   <input
@@ -4181,13 +4137,13 @@ function ModelConfigDialog({
                     onChange={(e) => set("contextWindow", e.target.value)}
                     placeholder="unknown"
                     aria-label="Context window (tokens)"
-                    className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                    className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
                     style={inputStyle}
                   />
                   <TokenHint raw={draft.contextWindow} />
                 </div>
                 <div>
-                  <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                  <label className="mb-1 block text-[11px] font-medium" style={{ color: styles.textTertiary }}>
                     Max output tokens
                   </label>
                   <input
@@ -4195,7 +4151,7 @@ function ModelConfigDialog({
                     onChange={(e) => set("maxOutputTokens", e.target.value)}
                     placeholder="unknown"
                     aria-label="Max output tokens"
-                    className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                    className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
                     style={inputStyle}
                   />
                   <TokenHint raw={draft.maxOutputTokens} />
@@ -4208,7 +4164,7 @@ function ModelConfigDialog({
               <SectionLabel>Pricing — USD per 1M tokens</SectionLabel>
               <div className="grid grid-cols-1 gap-2">
                 <div>
-                  <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                  <label className="mb-1 block text-[11px] font-medium" style={{ color: styles.textTertiary }}>
                     Input price
                   </label>
                   <input
@@ -4217,12 +4173,12 @@ function ModelConfigDialog({
                     inputMode="decimal"
                     placeholder="unknown"
                     aria-label="Input price ($ per 1M tokens)"
-                    className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                    className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
                     style={inputStyle}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                  <label className="mb-1 block text-[11px] font-medium" style={{ color: styles.textTertiary }}>
                     Output price
                   </label>
                   <input
@@ -4231,12 +4187,12 @@ function ModelConfigDialog({
                     inputMode="decimal"
                     placeholder="unknown"
                     aria-label="Output price ($ per 1M tokens)"
-                    className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                    className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
                     style={inputStyle}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-[10.5px] font-bold" style={{ color: styles.textTertiary }}>
+                  <label className="mb-1 block text-[11px] font-medium" style={{ color: styles.textTertiary }}>
                     Cache read price
                   </label>
                   <input
@@ -4245,12 +4201,12 @@ function ModelConfigDialog({
                     inputMode="decimal"
                     placeholder="unknown"
                     aria-label="Cache read price ($ per 1M tokens)"
-                    className="h-10 w-full rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+                    className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
                     style={inputStyle}
                   />
                 </div>
               </div>
-              <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+              <p className="text-[11px]" style={{ color: styles.textTertiary }}>
                 Each field is US dollars per 1 million tokens — leave empty for unknown (an empty price is never treated as $0).
               </p>
             </div>
@@ -4258,7 +4214,7 @@ function ModelConfigDialog({
             {/* live preview — R89-C4: the formatted summary (context +
                 max output in compact form + the pricing trio, unset → —). */}
             <div
-              className="rounded-[10px] px-3 py-2 font-mono text-[10.5px] flex flex-wrap gap-x-3 gap-y-0.5"
+              className="rounded-lg px-3 py-2 font-mono text-[11px] flex flex-wrap gap-x-3 gap-y-0.5"
               style={{ background: styles.subtle, color: styles.textTertiary }}
               data-testid="model-config-preview"
             >
@@ -4272,7 +4228,7 @@ function ModelConfigDialog({
         </div>
 
         {error && (
-          <p role="alert" className="text-[11.5px]" style={{ color: "#ef4444" }}>
+          <p role="alert" className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }}>
             {error}
           </p>
         )}
@@ -4280,7 +4236,7 @@ function ModelConfigDialog({
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={onClose}
-            className="h-10 px-4 rounded-[10px] border-[1.5px] text-[12px] font-bold"
+            className="h-10 px-4 rounded-lg border-[1.5px] text-[12px] font-semibold"
             style={{ borderColor: styles.border, color: styles.textSecondary }}
           >
             Cancel
@@ -4290,7 +4246,7 @@ function ModelConfigDialog({
           <button
             onClick={submit}
             disabled={save.isPending}
-            className="h-10 px-5 rounded-full text-[12.5px] font-bold disabled:opacity-50"
+            className="h-10 px-5 rounded-full text-[13px] font-semibold disabled:opacity-50"
             style={{ background: styles.accent, color: styles.accentText }}
             data-testid="model-config-save"
           >
@@ -4601,10 +4557,12 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
   const revealedValue = revealState.kind === "shown" ? revealState.value : null;
 
   return (
-    <section
-      className="rounded-[16px] border-[1.5px] p-4 md:p-5 flex flex-col gap-3"
-      style={{ background: styles.card, borderColor: styles.border }}
-      aria-label="API keys"
+    /* R100-E2: the SectionCard primitive (rounded-2xl / 1.5px border-line /
+       bg-card) — the aria-label passthrough keeps the card's accessible
+       name (its tests pin the "API keys" label). */
+    <SectionCard
+      className="p-4 md:p-5 flex flex-col gap-3"
+      ariaLabel="API keys"
     >
       <div>
         <SectionLabel>{`API keys — ${keyCount}`}</SectionLabel>
@@ -4614,7 +4572,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
           sub-agents use the same pool.
         </p>
       </div>
-      <div className="rounded-[10px] border-[1.5px] overflow-hidden" style={{ borderColor: styles.border }}>
+      <div className="rounded-lg border-[1.5px] overflow-hidden" style={{ borderColor: styles.border }}>
         {/* ── Key 1 — the primary (R60-B editor, verbatim semantics) ─────── */}
         <div
           data-pool-slot={0}
@@ -4627,11 +4585,11 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
               same x — the rows read as ONE aligned list (the owner's key-row
               parity ask). */}
           <span className="flex items-center gap-1.5 shrink-0 min-w-[108px]">
-            <span className="text-[11px] font-mono font-bold" style={{ color: styles.textSecondary }}>
+            <span className="text-[11px] font-mono font-medium" style={{ color: styles.textSecondary }}>
               KEY 1
             </span>
             <span
-              className="text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5"
+              className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5"
               style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent }}
               title="The provider's first key — stored at slot 0 and tried first"
             >
@@ -4688,7 +4646,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
               // ROUND-60: any typed/pasted change while at rest IS the
               // paste-to-replace gesture — the draft takes over (edit mode).
               onChange={(e) => setKeyDraft(e.target.value)}
-              className="h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 font-mono text-[12px] outline-none"
+              className="h-10 flex-1 min-w-0 rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
               style={{
                 background: styles.bg,
                 color: styles.text,
@@ -4721,7 +4679,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                     ? "Mask the stored key again"
                     : "Show the stored key"
               }
-              className="h-10 w-10 grid place-items-center rounded-[10px] border-[1.5px] shrink-0 disabled:opacity-40"
+              className="h-10 w-10 grid place-items-center rounded-lg border-[1.5px] shrink-0 disabled:opacity-40"
               style={{
                 background: styles.bg,
                 borderColor: styles.border,
@@ -4749,7 +4707,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                   disabled={keyDraft === null || keyDraft.trim() === "" || saveKey.isPending}
                   aria-label="Save key"
                   data-testid="save-key-button"
-                  className="h-10 px-4 rounded-[10px] text-[12px] font-bold disabled:opacity-50 shrink-0"
+                  className="h-10 px-4 rounded-lg text-[12px] font-semibold disabled:opacity-50 shrink-0"
                   style={{ background: styles.accent, color: styles.accentText }}
                 >
                   {saveKey.isPending ? "Saving…" : "Save key"}
@@ -4761,7 +4719,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                     aria-label="Cancel key edit"
                     data-testid="cancel-key-edit-button"
                     title="Restore the stored key display"
-                    className="h-10 w-10 grid place-items-center rounded-[10px] border-[1.5px] shrink-0"
+                    className="h-10 w-10 grid place-items-center rounded-lg border-[1.5px] shrink-0"
                     style={{ borderColor: styles.border, color: styles.textTertiary }}
                   >
                     <X size={13} />
@@ -4785,7 +4743,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                       aria-label="Copy stored key"
                       data-testid="copy-stored-key-button"
                       title="Copy the stored key"
-                      className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+                      className="h-10 px-3.5 rounded-lg border-[1.5px] text-[12px] font-semibold flex items-center gap-1.5 shrink-0 whitespace-nowrap"
                       style={{ borderColor: styles.border, color: styles.textSecondary }}
                     >
                       <Copy size={12} /> Copy
@@ -4822,7 +4780,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
               style={{ borderColor: styles.borderSubtle }}
             >
               <span className="flex items-center gap-1.5 shrink-0 min-w-[108px]">
-                <span className="text-[11px] font-mono font-bold" style={{ color: styles.textSecondary }}>
+                <span className="text-[11px] font-mono font-medium" style={{ color: styles.textSecondary }}>
                   KEY {ordinal}
                 </span>
               </span>
@@ -4838,7 +4796,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                       ? "The stored key — revealed"
                       : "The stored key (masked) — use the eye to reveal"
                   }
-                  className="min-h-10 flex-1 min-w-0 rounded-[10px] border-[1.5px] px-3 flex items-center font-mono text-[12px] overflow-hidden"
+                  className="min-h-10 flex-1 min-w-0 rounded-lg border-[1.5px] px-3 flex items-center font-mono text-[12px] overflow-hidden"
                   style={{
                     background: styles.bg,
                     color: revealed !== undefined ? styles.text : styles.textSecondary,
@@ -4863,7 +4821,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                   disabled={revealLoadingSlot !== null}
                   aria-label={revealed !== undefined ? `Hide key ${ordinal}` : `Reveal key ${ordinal}`}
                   title={revealed !== undefined ? "Mask again" : "Show the full key"}
-                  className="h-10 w-10 grid place-items-center rounded-[10px] border-[1.5px] shrink-0 disabled:opacity-40"
+                  className="h-10 w-10 grid place-items-center rounded-lg border-[1.5px] shrink-0 disabled:opacity-40"
                   style={{
                     background: styles.bg,
                     borderColor: styles.border,
@@ -4897,7 +4855,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                         aria-label={`Copy key ${ordinal}`}
                         data-testid="copy-pool-key-button"
                         title="Copy the full key"
-                        className="h-10 px-3.5 rounded-[10px] border-[1.5px] text-[12px] font-bold flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+                        className="h-10 px-3.5 rounded-lg border-[1.5px] text-[12px] font-semibold flex items-center gap-1.5 shrink-0 whitespace-nowrap"
                         style={{ borderColor: styles.border, color: styles.textSecondary }}
                       >
                         <Copy size={12} /> Copy
@@ -4905,25 +4863,20 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                     </motion.div>
                   )}
                 </AnimatePresence>
-                {/* The trash — the same bordered button family; hover turns
-                    red like every destructive affordance. Opens the styled
+                {/* The trash — the same bordered button family. R100-E2: the
+                    JS hover-red pair retired — it RESTS in the danger color
+                    (the R100-D WorkingSection destructive idiom) with the
+                    hover:bg-hover CSS wash. Opens the styled
                     ConfirmDialog (R95-A), never window.confirm. */}
                 <button
                   type="button"
                   onClick={() => setPendingRemoveSlot(k)}
                   aria-label={`Remove key ${ordinal}`}
                   title="Remove key"
-                  className="h-10 w-10 grid place-items-center rounded-[10px] border-[1.5px] shrink-0 transition-colors"
-                  style={{ borderColor: styles.border, color: styles.textTertiary }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = withAlpha("#ef4444", 0.12);
-                    e.currentTarget.style.borderColor = withAlpha("#ef4444", 0.5);
-                    e.currentTarget.style.color = "#ef4444";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                    e.currentTarget.style.borderColor = styles.border;
-                    e.currentTarget.style.color = styles.textTertiary;
+                  className="h-10 w-10 grid place-items-center rounded-lg border-[1.5px] shrink-0 transition-colors hover:bg-hover cursor-pointer"
+                  style={{
+                    borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
+                    color: SEMANTIC_COLORS.danger,
                   }}
                 >
                   <Trash2 size={13} />
@@ -4963,7 +4916,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
             className="flex items-center gap-2 px-3 py-2 border-t"
             style={{ borderColor: styles.borderSubtle, background: withAlpha(styles.accent, 0.03) }}
           >
-            <span className="text-[11px] font-mono font-bold shrink-0" style={{ color: styles.textTertiary }}>
+            <span className="text-[11px] font-mono font-medium shrink-0" style={{ color: styles.textTertiary }}>
               KEY {keyCount + 1}
             </span>
             <div className="relative flex-1 min-w-0">
@@ -4974,13 +4927,13 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                 placeholder="another key for this provider (sk-…)"
                 aria-label="New API key"
                 data-testid="add-key-input"
-                className="h-8 w-full rounded-[8px] border-[1.5px] px-2.5 pr-8 font-mono text-[11px] outline-none"
+                className="h-8 w-full rounded-lg border-[1.5px] px-2.5 pr-8 font-mono text-[11px] outline-none"
                 style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
               />
               <button
                 onClick={() => setShowNew((v) => !v)}
                 aria-label={showNew ? "Hide key" : "Show key"}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 grid place-items-center rounded-md"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 grid place-items-center rounded-lg"
                 style={{ color: styles.textTertiary }}
               >
                 {showNew ? <EyeOff size={11} /> : <Eye size={11} />}
@@ -4990,7 +4943,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
               onClick={() => newKey.trim() && addKey.mutate(newKey.trim())}
               disabled={!newKey.trim() || addKey.isPending}
               aria-label="Add key"
-              className="h-8 px-3 rounded-[8px] text-[11px] font-bold flex items-center gap-1 disabled:opacity-50"
+              className="h-8 px-3 rounded-lg text-[11px] font-semibold flex items-center gap-1 disabled:opacity-50"
               style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
             >
               <Plus size={11} strokeWidth={2.5} /> {addKey.isPending ? "Adding…" : "Add key"}
@@ -5000,14 +4953,14 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
       </div>
       {/* Primary-editor status (save/copy confirmations + reveal failures). */}
       {revealState.kind === "error" && (
-        <p className="text-[11px] break-all" style={{ color: "#ef4444" }} role="alert">
+        <p className="text-[11px] break-all" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
           {revealState.message}
         </p>
       )}
       {keyStatus && (
         <p
           className="text-[11px]"
-          style={{ color: saveKey.isError || keyStatusIsError ? "#ef4444" : "#22c55e" }}
+          style={{ color: saveKey.isError || keyStatusIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
         >
           {keyStatus}
         </p>
@@ -5016,35 +4969,35 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
       {poolMsg && (
         <p
           className="text-[11px]"
-          style={{ color: addKey.isError || removeKey.isError ? "#ef4444" : "#22c55e" }}
+          style={{ color: addKey.isError || removeKey.isError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
         >
           {poolMsg}
         </p>
       )}
       {revealError && (
-        <p className="text-[11px] break-all" style={{ color: "#ef4444" }} role="alert">
+        <p className="text-[11px] break-all" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
           {revealError}
         </p>
       )}
       {/* A failed pool listing is honest — the primary editor still works,
           but Key 2..N cannot render from a lie. */}
       {poolQuery.isError && (
-        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
+        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
           Key pool listing unavailable —{" "}
           {poolQuery.error instanceof Error ? poolQuery.error.message : String(poolQuery.error)}
         </p>
       )}
-      <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+      <p className="text-[11px]" style={{ color: styles.textTertiary }}>
         Stored in the OS secure store — never in the database or logs; Show fetches the full
         value only on your explicit click.
       </p>
       {/* ROUND-47 (R47-c1): browser-dev honesty — the sidecar keyring is
           in-memory, so browser-stored keys do not survive a restart. */}
       {!isTauri() && (
-        <p className="text-[10.5px]" style={{ color: styles.textTertiary, opacity: 0.75 }}>
+        <p className="text-[11px]" style={{ color: styles.textTertiary, opacity: 0.75 }}>
           {EPHEMERAL_KEY_NOTE}
         </p>
       )}
-    </section>
+    </SectionCard>
   );
 }

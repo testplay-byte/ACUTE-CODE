@@ -5,6 +5,11 @@ import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { isTauri } from "../../lib/sidecar";
 import { withAlpha } from "../dashboard/helpers";
+// R100-E2: the round-100 primitives + the semantic status home (USAGE.md §3,
+// TOKENS.md §7 — the tab's local AMBER const and inline status hexes retired).
+import { Kicker } from "../ui/Kicker";
+import { SectionCard } from "../ui/SectionCard";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { ToggleSwitch } from "../ui/toggle-switch"; // R93-A4: the shared contrast-aware switch
 import {
   fetchComputerUseConfig,
@@ -38,8 +43,6 @@ import {
 const coreUnreachableHint = isTauri()
   ? "agent-core is not responding — if the connection banner is showing, use its Restart engine button, then reopen this tab."
   : "Agent core unreachable — start the app (or pnpm dev:full).";
-
-const AMBER = "#f59e0b";
 
 /** A radio row (title + description) in the SubAgentsTab picker style. */
 function RadioRow({
@@ -77,21 +80,21 @@ function RadioRow({
       <span className="min-w-0 flex-1 flex flex-col gap-0.5">
         <span className="flex items-center gap-1.5 flex-wrap">
           <span
-            className="text-[12px] font-bold"
+            className="text-[12px] font-medium"
             style={{ color: disabled ? styles.textTertiary : styles.text }}
           >
             {title}
           </span>
           {badge && (
             <span
-              className="text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5"
+              className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5"
               style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent }}
             >
               {badge}
             </span>
           )}
         </span>
-        <span className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+        <span className="text-[11px]" style={{ color: styles.textTertiary }}>
           {description}
         </span>
       </span>
@@ -190,29 +193,21 @@ function ComputerUseMasterCard() {
 
   if (configQuery.isError) {
     return (
-      <section
-        className="rounded-[16px] border-[1.5px] p-4"
-        style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Computer use"
-      >
-        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
+      <SectionCard className="p-4" ariaLabel="Computer use">
+        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
           {coreUnreachableHint} to configure computer use.
         </p>
-      </section>
+      </SectionCard>
     );
   }
   const config = configQuery.data;
   if (configQuery.isLoading || config === undefined) {
     return (
-      <section
-        className="rounded-[16px] border-[1.5px] p-4"
-        style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Computer use"
-      >
+      <SectionCard className="p-4" ariaLabel="Computer use">
         <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
           loading computer use settings…
         </span>
-      </section>
+      </SectionCard>
     );
   }
 
@@ -220,27 +215,24 @@ function ComputerUseMasterCard() {
   const issues = Array.isArray(testReport?.issues) ? (testReport?.issues as string[]) : [];
 
   return (
-    <section
-      className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-2.5"
-      style={{ background: styles.card, borderColor: styles.border }}
-      aria-label="Computer use"
-    >
+    /* R100-E2: the SectionCard primitive (aria-label passthrough). */
+    <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Computer use">
       <div className="flex items-center gap-2 flex-wrap">
         <Monitor size={13} style={{ color: styles.accent, opacity: 0.8 }} />
-        <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+        <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Computer use
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-bold"
-            style={{ color: msgIsError ? "#ef4444" : "#22c55e" }}
+            className="text-[11px] font-medium"
+            style={{ color: msgIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
           >
             {msg}
           </span>
         )}
         <span className="flex items-center gap-2">
-          <span className="text-[11px] font-bold" style={{ color: styles.textSecondary }}>
+          <span className="text-[11px] font-medium" style={{ color: styles.textSecondary }}>
             {settings.enabled ? "Enabled" : "Disabled"}
           </span>
           <ToggleSwitch
@@ -267,7 +259,7 @@ function ComputerUseMasterCard() {
         <div
           role="radiogroup"
           aria-label="Computer use posture"
-          className="rounded-[10px] border-[1.5px] overflow-hidden"
+          className="rounded-lg border-[1.5px] overflow-hidden"
           style={{ borderColor: styles.border }}
         >
           {POSTURES.map((p) => (
@@ -283,7 +275,7 @@ function ComputerUseMasterCard() {
           ))}
         </div>
       ) : (
-        <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+        <p className="text-[11px]" style={{ color: styles.textTertiary }}>
           Posture is set while computer use is on — flip the switch to choose observe / act /
           autopilot.
         </p>
@@ -291,17 +283,17 @@ function ComputerUseMasterCard() {
 
       {/* Platform + capabilities (the backend's own report). */}
       <div className="flex items-center gap-1.5 flex-wrap">
-        <span className="font-mono text-[10.5px] shrink-0" style={{ color: styles.textTertiary }}>
+        <span className="font-mono text-[11px] shrink-0" style={{ color: styles.textTertiary }}>
           backend: {config.platform}
         </span>
         {Object.entries(config.capabilities ?? {}).map(([key, ok]) => (
           <span
             key={key}
-            className="text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5"
+            className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5"
             title={ok ? "available on this backend" : "not available on this backend"}
             style={{
-              background: ok ? withAlpha("#22c55e", 0.12) : styles.subtle,
-              color: ok ? "#22c55e" : styles.textTertiary,
+              background: ok ? withAlpha(SEMANTIC_COLORS.success, 0.12) : styles.subtle,
+              color: ok ? SEMANTIC_COLORS.success : styles.textTertiary,
             }}
           >
             {key}
@@ -315,30 +307,30 @@ function ComputerUseMasterCard() {
           onClick={() => testReadiness.mutate()}
           disabled={testReadiness.isPending}
           aria-label="Test computer use readiness"
-          className="h-8 px-3 rounded-[8px] text-[11px] font-bold shrink-0 disabled:opacity-50"
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 disabled:opacity-50"
           style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
         >
           {testReadiness.isPending ? "Testing…" : "Test readiness"}
         </button>
-        <span className="text-[10.5px] flex-1 min-w-[180px]" style={{ color: styles.textTertiary }}>
+        <span className="text-[11px] flex-1 min-w-[180px]" style={{ color: styles.textTertiary }}>
           Runs the engine's readiness probe (permissions + capabilities; never pops dialogs).
         </span>
       </div>
       {testReport && (
         <div
-          className="rounded-[10px] border-[1.5px] px-3 py-2.5 flex flex-col gap-1.5"
+          className="rounded-lg border-[1.5px] px-3 py-2.5 flex flex-col gap-1.5"
           style={{
-            borderColor: testReport.ok ? withAlpha("#22c55e", 0.4) : withAlpha(AMBER, 0.4),
-            background: testReport.ok ? withAlpha("#22c55e", 0.04) : withAlpha(AMBER, 0.04),
+            borderColor: testReport.ok ? withAlpha(SEMANTIC_COLORS.success, 0.4) : withAlpha(SEMANTIC_COLORS.warning, 0.4),
+            background: testReport.ok ? withAlpha(SEMANTIC_COLORS.success, 0.04) : withAlpha(SEMANTIC_COLORS.warning, 0.04),
           }}
           data-testid="readiness-result"
         >
           <div className="flex items-center gap-2">
             <span
-              className="text-[11px] font-black uppercase tracking-wider rounded-full px-2 py-0.5"
+              className="text-[11px] font-medium uppercase tracking-wider rounded-full px-2 py-0.5"
               style={{
-                background: testReport.ok ? withAlpha("#22c55e", 0.14) : withAlpha(AMBER, 0.14),
-                color: testReport.ok ? "#22c55e" : AMBER,
+                background: testReport.ok ? withAlpha(SEMANTIC_COLORS.success, 0.14) : withAlpha(SEMANTIC_COLORS.warning, 0.14),
+                color: testReport.ok ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.warning,
               }}
             >
               {testReport.ok ? "Ready" : "Issues"}
@@ -356,7 +348,7 @@ function ComputerUseMasterCard() {
               {issues.map((line, i) => (
                 <li
                   key={i}
-                  className="text-[10.5px] leading-relaxed list-disc"
+                  className="text-[11px] leading-relaxed list-disc"
                   style={{ color: styles.textSecondary }}
                 >
                   {line}
@@ -366,7 +358,7 @@ function ComputerUseMasterCard() {
           )}
         </div>
       )}
-    </section>
+    </SectionCard>
   );
 }
 
@@ -381,13 +373,13 @@ function ImageAnalysisPointerCard() {
   const styles = useThemeStyles();
   return (
     <section
-      className="rounded-[16px] border-[1.5px] p-4 flex items-start gap-2.5"
+      className="rounded-2xl border-[1.5px] p-4 flex items-start gap-2.5"
       style={{ background: withAlpha(styles.text, 0.02), borderColor: styles.borderSubtle }}
       aria-label="Image analysis moved"
       data-testid="image-analysis-pointer"
     >
       <ScanEye size={13} className="shrink-0 mt-0.5" style={{ color: styles.textTertiary }} />
-      <p className="text-[10.5px] leading-relaxed" style={{ color: styles.textTertiary }}>
+      <p className="text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
         Image analysis (the vision model) now lives in its own section — open Settings → Image
         Analysis to pick the provider and model, paste its API key, and mark which models support
         vision. It applies app-wide: computer-use screenshots, browser screenshots, and the general
@@ -403,12 +395,12 @@ function SafetyCard() {
   const styles = useThemeStyles();
   return (
     <section
-      className="rounded-[16px] border-[1.5px] p-4 flex items-start gap-2.5"
+      className="rounded-2xl border-[1.5px] p-4 flex items-start gap-2.5"
       style={{ background: withAlpha(styles.text, 0.02), borderColor: styles.borderSubtle }}
       aria-label="Computer use safety"
     >
       <ShieldAlert size={13} className="shrink-0 mt-0.5" style={{ color: styles.textTertiary }} />
-      <p className="text-[10.5px] leading-relaxed" style={{ color: styles.textTertiary }}>
+      <p className="text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
         Computer use is OFF by default. When on, the agent observes via the accessibility tree
         first and falls back to screenshots; destructive actions need your approval in Act mode. A
         STOP kill switch lives in the Computer monitor panel (right sidebar).
@@ -424,10 +416,11 @@ export function ComputerUseTab() {
   const styles = useThemeStyles();
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
+      {/* R100-E2: the tab-intro header snapped to the E1 grammar — Kicker
+          (the nav group) + 13px/600 title + 12px secondary description. */}
       <div className="pb-1">
-        <h2 className="text-[16px] font-black" style={{ color: styles.text }}>
-          Computer use
-        </h2>
+        <Kicker className="mb-1">Integrations</Kicker>
+        <h2 className="text-[13px] font-semibold text-ink">Computer use</h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
           The master switch for host control and the safety posture — everything computer-use lives
           on this one page.

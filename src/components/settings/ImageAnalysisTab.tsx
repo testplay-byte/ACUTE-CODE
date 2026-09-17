@@ -5,6 +5,11 @@ import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { isTauri } from "../../lib/sidecar";
 import { withAlpha } from "../dashboard/helpers";
+// R100-E2: the round-100 primitives + the semantic status home (the local
+// AMBER const and the inline status hexes retired — TOKENS.md §7).
+import { Kicker } from "../ui/Kicker";
+import { SectionCard } from "../ui/SectionCard";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { ClampedText } from "../shared/ClampedText";
 import {
   clearVisionKey,
@@ -74,8 +79,6 @@ const coreUnreachableHint = isTauri()
   ? "agent-core is not responding — if the connection banner is showing, use its Restart engine button, then reopen this tab."
   : "Agent core unreachable — start the app (or pnpm dev:full).";
 
-const AMBER = "#f59e0b";
-
 /** A radio row (title + description) in the SubAgentsTab picker style. */
 function RadioRow({
   selected,
@@ -112,21 +115,21 @@ function RadioRow({
       <span className="min-w-0 flex-1 flex flex-col gap-0.5">
         <span className="flex items-center gap-1.5 flex-wrap">
           <span
-            className="text-[12px] font-bold"
+            className="text-[12px] font-medium"
             style={{ color: disabled ? styles.textTertiary : styles.text }}
           >
             {title}
           </span>
           {badge && (
             <span
-              className="text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5"
+              className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5"
               style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent }}
             >
               {badge}
             </span>
           )}
         </span>
-        <span className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+        <span className="text-[11px]" style={{ color: styles.textTertiary }}>
           {description}
         </span>
       </span>
@@ -185,48 +188,37 @@ function VisionModeCard() {
 
   if (settingsQuery.isError) {
     return (
-      <section
-        className="rounded-[16px] border-[1.5px] p-4"
-        style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Image analysis mode"
-      >
-        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
+      <SectionCard className="p-4" ariaLabel="Image analysis mode">
+        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
           {coreUnreachableHint} to configure image analysis.
         </p>
-      </section>
+      </SectionCard>
     );
   }
   const settings = settingsQuery.data;
   if (settingsQuery.isLoading || settings === undefined) {
     return (
-      <section
-        className="rounded-[16px] border-[1.5px] p-4"
-        style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Image analysis mode"
-      >
+      <SectionCard className="p-4" ariaLabel="Image analysis mode">
         <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
           loading image analysis settings…
         </span>
-      </section>
+      </SectionCard>
     );
   }
 
   return (
-    <section
-      className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-2.5"
-      style={{ background: styles.card, borderColor: styles.border }}
-      aria-label="Image analysis mode"
-    >
+    /* R100-E2: the SectionCard primitive (aria-label passthrough). */
+    <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Image analysis mode">
       <div className="flex items-center gap-2 flex-wrap">
         <ScanEye size={13} style={{ color: styles.accent, opacity: 0.8 }} />
-        <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+        <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Image analysis
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-bold"
-            style={{ color: msgIsError ? "#ef4444" : "#22c55e" }}
+            className="text-[11px] font-medium"
+            style={{ color: msgIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
           >
             {msg}
           </span>
@@ -240,7 +232,7 @@ function VisionModeCard() {
       <div
         role="radiogroup"
         aria-label="Image analysis mode"
-        className="rounded-[10px] border-[1.5px] overflow-hidden"
+        className="rounded-lg border-[1.5px] overflow-hidden"
         style={{ borderColor: styles.border }}
       >
         {VISION_MODES.map((m) => (
@@ -256,7 +248,7 @@ function VisionModeCard() {
         ))}
       </div>
       {settings.mode === "off" && (
-        <p className="text-[10.5px] leading-relaxed" style={{ color: styles.textTertiary }}>
+        <p className="text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
           Off means no model ever sees an image. Turning it on gives: screenshot descriptions in
           computer use, screenshot descriptions in the embedded browser, and the general
           analyze_image tool (any local file or http(s) image URL) — no computer use needed.
@@ -270,7 +262,7 @@ function VisionModeCard() {
         />
       )}
       {settings.mode === "main" && <MainModelCard onNote={note} />}
-    </section>
+    </SectionCard>
   );
 }
 
@@ -373,7 +365,7 @@ function SeparateModelCard({
   return (
     <div className="flex flex-col gap-2.5" data-testid="separate-vision-card">
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[11px] font-bold shrink-0" style={{ color: styles.textSecondary }}>
+        <span className="text-[11px] font-medium shrink-0" style={{ color: styles.textSecondary }}>
           Provider
         </span>
         <select
@@ -383,7 +375,7 @@ function SeparateModelCard({
             setReplacing(false);
           }}
           aria-label="Vision provider"
-          className="h-8 rounded-[8px] border-[1.5px] px-2 text-[11.5px] outline-none"
+          className="h-8 rounded-lg border-[1.5px] px-2 text-[11px] outline-none"
           style={inputStyle}
         >
           <option value="">— pick a provider —</option>
@@ -394,7 +386,7 @@ function SeparateModelCard({
             </option>
           ))}
         </select>
-        <span className="text-[11px] font-bold shrink-0" style={{ color: styles.textSecondary }}>
+        <span className="text-[11px] font-medium shrink-0" style={{ color: styles.textSecondary }}>
           Model
         </span>
         <input
@@ -403,7 +395,7 @@ function SeparateModelCard({
           onChange={(e) => setModelId(e.target.value)}
           placeholder="provider/model or free-text id"
           aria-label="Vision model id"
-          className="h-8 flex-1 min-w-[200px] rounded-[8px] border-[1.5px] px-2.5 font-mono text-[11.5px] outline-none"
+          className="h-8 flex-1 min-w-[200px] rounded-lg border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
           style={inputStyle}
         />
         <datalist id="vision-model-options">
@@ -417,13 +409,13 @@ function SeparateModelCard({
           onClick={() => saveModel.mutate()}
           disabled={!dirty || saveModel.isPending}
           aria-label="Save vision model"
-          className="h-8 px-3 rounded-[8px] text-[11px] font-bold shrink-0 disabled:opacity-50"
+          className="h-8 px-3 rounded-lg text-[11px] font-medium shrink-0 disabled:opacity-50"
           style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
         >
           {saveModel.isPending ? "Saving…" : "Save model"}
         </button>
       </div>
-      <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+      <p className="text-[11px]" style={{ color: styles.textTertiary }}>
         {visionModels.length > 0
           ? `${visionModels.length} catalog models support images (the datalist); any id can be typed.`
           : "The model is a free-text id — the catalog is unavailable right now."}
@@ -440,11 +432,11 @@ function SeparateModelCard({
         </span>
       ) : (
         <div
-          className="flex items-center gap-2 flex-wrap rounded-[10px] border-[1.5px] px-3 py-2"
+          className="flex items-center gap-2 flex-wrap rounded-lg border-[1.5px] px-3 py-2"
           style={{ borderColor: styles.border, background: withAlpha(styles.accent, 0.03) }}
           data-testid="vision-key-row"
         >
-          <span className="text-[11px] font-bold shrink-0" style={{ color: styles.textTertiary }}>
+          <span className="text-[11px] font-medium shrink-0" style={{ color: styles.textTertiary }}>
             VISION KEY
           </span>
           {keyInfo?.hasKey ? (
@@ -457,8 +449,8 @@ function SeparateModelCard({
                 {keyInfo.masked ?? "••••••"}
               </span>
               <span
-                className="text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
-                style={{ background: withAlpha("#22c55e", 0.12), color: "#22c55e" }}
+                className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
+                style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
               >
                 Key saved
               </span>
@@ -470,14 +462,14 @@ function SeparateModelCard({
                   onChange={(e) => setKeyDraft(e.target.value)}
                   placeholder={`paste the replacement key for ${savedProvider}`}
                   aria-label={`Replacement vision key for ${savedProvider}`}
-                  className="h-8 flex-1 min-w-[180px] rounded-[8px] border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
+                  className="h-8 flex-1 min-w-[180px] rounded-lg border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
                   style={inputStyle}
                 />
               ) : null}
               <button
                 onClick={() => setReplacing((v) => !v)}
                 aria-label={`Replace vision key for ${savedProvider}`}
-                className="h-8 px-2.5 rounded-[8px] text-[11px] font-bold shrink-0"
+                className="h-8 px-2.5 rounded-lg text-[11px] font-medium shrink-0"
                 style={{ background: styles.subtle, color: styles.textSecondary }}
               >
                 {replacing ? "Hide" : "Replace"}
@@ -487,7 +479,7 @@ function SeparateModelCard({
                   onClick={() => keyDraft.trim() && saveKey.mutate()}
                   disabled={!keyDraft.trim() || saveKey.isPending}
                   aria-label={`Save vision key for ${savedProvider}`}
-                  className="h-8 px-2.5 rounded-[8px] text-[11px] font-bold shrink-0 disabled:opacity-50"
+                  className="h-8 px-2.5 rounded-lg text-[11px] font-medium shrink-0 disabled:opacity-50"
                   style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
                 >
                   {saveKey.isPending ? "Saving…" : "Save"}
@@ -497,8 +489,8 @@ function SeparateModelCard({
                 onClick={() => clearKey.mutate()}
                 disabled={clearKey.isPending}
                 aria-label={`Clear vision key for ${savedProvider}`}
-                className="h-8 px-2.5 rounded-[8px] text-[11px] font-bold shrink-0 disabled:opacity-50"
-                style={{ background: withAlpha("#ef4444", 0.1), color: "#ef4444" }}
+                className="h-8 px-2.5 rounded-lg text-[11px] font-medium shrink-0 disabled:opacity-50"
+                style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.1), color: SEMANTIC_COLORS.danger }}
               >
                 Clear
               </button>
@@ -512,14 +504,14 @@ function SeparateModelCard({
                 onChange={(e) => setKeyDraft(e.target.value)}
                 placeholder={`paste ${savedProvider}'s dedicated vision key`}
                 aria-label={`Vision key for ${savedProvider}`}
-                className="h-8 flex-1 min-w-[180px] rounded-[8px] border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
+                className="h-8 flex-1 min-w-[180px] rounded-lg border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
                 style={inputStyle}
               />
               <button
                 onClick={() => keyDraft.trim() && saveKey.mutate()}
                 disabled={!keyDraft.trim() || saveKey.isPending}
                 aria-label={`Save vision key for ${savedProvider}`}
-                className="h-8 px-2.5 rounded-[8px] text-[11px] font-bold shrink-0 disabled:opacity-50"
+                className="h-8 px-2.5 rounded-lg text-[11px] font-medium shrink-0 disabled:opacity-50"
                 style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
               >
                 {saveKey.isPending ? "Saving…" : "Save"}
@@ -572,8 +564,8 @@ function VisionModelRow({
         }
         className="w-7 h-7 grid place-items-center rounded-md shrink-0 disabled:opacity-50"
         style={{
-          color: model.supportsVision ? "#22c55e" : styles.textTertiary,
-          background: model.supportsVision ? withAlpha("#22c55e", 0.1) : "transparent",
+          color: model.supportsVision ? SEMANTIC_COLORS.success : styles.textTertiary,
+          background: model.supportsVision ? withAlpha(SEMANTIC_COLORS.success, 0.1) : "transparent",
         }}
       >
         {model.supportsVision ? <Eye size={13} /> : <EyeOff size={13} />}
@@ -582,7 +574,7 @@ function VisionModelRow({
         <ClampedText
           text={model.displayName || model.modelId}
           lines={1}
-          className="text-[12px] font-bold"
+          className="text-[12px] font-medium"
           style={{ color: styles.text }}
         />
         <span
@@ -594,10 +586,10 @@ function VisionModelRow({
         </span>
       </span>
       <span
-        className="text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
+        className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
         style={{
-          background: model.supportsVision ? withAlpha("#22c55e", 0.12) : styles.subtle,
-          color: model.supportsVision ? "#22c55e" : styles.textTertiary,
+          background: model.supportsVision ? withAlpha(SEMANTIC_COLORS.success, 0.12) : styles.subtle,
+          color: model.supportsVision ? SEMANTIC_COLORS.success : styles.textTertiary,
         }}
       >
         {model.supportsVision ? "supports vision" : "no images"}
@@ -630,8 +622,8 @@ function MainModelCard({ onNote }: { onNote: (text: string, isError?: boolean) =
   return (
     <div className="flex flex-col gap-2.5" data-testid="main-vision-card">
       <div
-        className="rounded-[10px] border-[1.5px] px-3 py-2.5"
-        style={{ borderColor: withAlpha(AMBER, 0.4), background: withAlpha(AMBER, 0.04) }}
+        className="rounded-lg border-[1.5px] px-3 py-2.5"
+        style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4), background: withAlpha(SEMANTIC_COLORS.warning, 0.04) }}
       >
         <p className="text-[11px] leading-relaxed" style={{ color: styles.textSecondary }}>
           The agent's current model must be marked supports vision. Set that flag on a model row in
@@ -643,7 +635,7 @@ function MainModelCard({ onNote }: { onNote: (text: string, isError?: boolean) =
           listing configured models…
         </span>
       ) : rowsQuery.isError ? (
-        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
+        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
           {rowsQuery.error instanceof Error
             ? rowsQuery.error.message
             : String(rowsQuery.error)}
@@ -654,7 +646,7 @@ function MainModelCard({ onNote }: { onNote: (text: string, isError?: boolean) =
         </p>
       ) : (
         <div
-          className="rounded-[10px] border-[1.5px] overflow-hidden max-h-64 overflow-y-auto"
+          className="rounded-lg border-[1.5px] overflow-hidden max-h-64 overflow-y-auto"
           style={{ borderColor: styles.border }}
         >
           {(rowsQuery.data ?? []).map(({ provider, model }) => (
@@ -709,24 +701,24 @@ function ReadinessCard() {
 
   return (
     <section
-      className="rounded-[16px] border-[1.5px] p-4 flex items-start gap-2.5"
+      className="rounded-2xl border-[1.5px] p-4 flex items-start gap-2.5"
       style={{
-        background: withAlpha(ready ? "#22c55e" : styles.text, 0.02),
+        background: withAlpha(ready ? SEMANTIC_COLORS.success : styles.text, 0.02),
         borderColor: styles.borderSubtle,
       }}
       aria-label="Image analysis readiness"
       data-testid="vision-readiness"
     >
       <span
-        className="text-[9px] font-black uppercase tracking-wider rounded-full px-2 py-0.5 shrink-0 mt-0.5"
+        className="text-[10px] font-medium uppercase tracking-wider rounded-full px-2 py-0.5 shrink-0 mt-0.5"
         style={{
-          background: ready ? withAlpha("#22c55e", 0.12) : styles.subtle,
-          color: ready ? "#22c55e" : styles.textTertiary,
+          background: ready ? withAlpha(SEMANTIC_COLORS.success, 0.12) : styles.subtle,
+          color: ready ? SEMANTIC_COLORS.success : styles.textTertiary,
         }}
       >
         Readiness
       </span>
-      <p className="text-[10.5px] leading-relaxed" style={{ color: styles.textTertiary }}>
+      <p className="text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
         {line}
       </p>
     </section>
@@ -741,9 +733,10 @@ export function ImageAnalysisTab() {
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
       <div className="pb-1">
-        <h2 className="text-[16px] font-black" style={{ color: styles.text }}>
-          Image analysis
-        </h2>
+        {/* R100-E2: the tab-intro header snapped to the E1 grammar — Kicker
+            (the nav group) + 13px/600 title + 12px secondary description. */}
+        <Kicker className="mb-1">Integrations</Kicker>
+        <h2 className="text-[13px] font-semibold text-ink">Image analysis</h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
           The vision model, in its own section: the provider and model that describes every image
           the agent sees — computer-use screenshots, browser screenshots, and the general

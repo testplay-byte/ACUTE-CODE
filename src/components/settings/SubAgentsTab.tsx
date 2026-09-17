@@ -4,6 +4,11 @@ import { Link } from "react-router";
 import { Activity, Check, Cpu, KeyRound, Workflow } from "lucide-react";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
+// R100-E2: the inline status hexes retired — SEMANTIC_COLORS is the one
+// sanctioned fixed-hue source (TOKENS §1 rule 2).
+import { SEMANTIC_COLORS } from "../../lib/semantics";
+// R100-E2: the label-tier heading primitive (TOKENS §2 — THE one kicker).
+import { Kicker } from "../ui/Kicker";
 import { withAlpha } from "../dashboard/helpers";
 import { isTauri } from "../../lib/sidecar";
 import { isFreeModelEntry } from "../../lib/settings-store";
@@ -92,13 +97,13 @@ function SubAgentKeysNote() {
   const styles = useThemeStyles();
   return (
     <section
-      className="rounded-[16px] border-[1.5px] p-4 flex items-center gap-3 flex-wrap"
+      className="rounded-2xl border-[1.5px] p-4 flex items-center gap-3 flex-wrap"
       style={{ background: styles.card, borderColor: styles.border }}
       aria-label="Sub-agent API keys"
       data-testid="subagent-keys-note"
     >
       <span
-        className="w-9 h-9 shrink-0 rounded-[10px] grid place-items-center"
+        className="w-9 h-9 shrink-0 rounded-lg grid place-items-center"
         style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
         aria-hidden
       >
@@ -111,7 +116,7 @@ function SubAgentKeysNote() {
       <Link
         to="/settings?tab=api"
         aria-label="Open Models and Providers to manage API keys"
-        className="h-8 px-3 rounded-[8px] text-[11px] font-bold flex items-center gap-1.5 shrink-0"
+        className="h-8 px-3 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 shrink-0"
         style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
       >
         <KeyRound size={11} /> Manage keys
@@ -181,11 +186,11 @@ function SubAgentModelCard() {
   if (settingsQuery.isError) {
     return (
       <section
-        className="rounded-[16px] border-[1.5px] p-4"
+        className="rounded-2xl border-[1.5px] p-4"
         style={{ background: styles.card, borderColor: styles.border }}
         aria-label="Sub-agent model"
       >
-        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
+        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
           {coreUnreachableHint} to pick a sub-agent model.
         </p>
       </section>
@@ -198,24 +203,24 @@ function SubAgentModelCard() {
   if (configuredQuery.isError) {
     return (
       <section
-        className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-2.5"
+        className="rounded-2xl border-[1.5px] p-4 flex flex-col gap-2.5"
         style={{ background: styles.card, borderColor: styles.border }}
         aria-label="Sub-agent model"
       >
         <div className="flex items-center gap-2">
           <Cpu size={13} style={{ color: styles.accent, opacity: 0.8 }} />
-          <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+          <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
             Sub-agent model
           </span>
         </div>
-        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
+        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
           Configured models unavailable — {configuredQuery.error instanceof Error ? configuredQuery.error.message : String(configuredQuery.error)}
         </p>
         <div>
           <button
             onClick={() => void configuredQuery.refetch()}
             aria-label="Retry loading the configured models"
-            className="h-8 px-3 rounded-[8px] text-[11px] font-bold"
+            className="h-8 px-3 rounded-lg text-[11px] font-semibold"
             style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
           >
             Retry
@@ -230,7 +235,7 @@ function SubAgentModelCard() {
   if (settingsPending || settings === undefined || configured === undefined) {
     return (
       <section
-        className="rounded-[16px] border-[1.5px] p-4"
+        className="rounded-2xl border-[1.5px] p-4"
         style={{ background: styles.card, borderColor: styles.border }}
         aria-label="Sub-agent model"
       >
@@ -261,20 +266,20 @@ function SubAgentModelCard() {
 
   return (
     <section
-      className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-2.5"
+      className="rounded-2xl border-[1.5px] p-4 flex flex-col gap-2.5"
       style={{ background: styles.card, borderColor: styles.border }}
       aria-label="Sub-agent model"
     >
       <div className="flex items-center gap-2 flex-wrap">
         <Cpu size={13} style={{ color: styles.accent, opacity: 0.8 }} />
-        <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+        <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Sub-agent model
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-bold"
-            style={{ color: saveModel.isError ? "#ef4444" : "#22c55e" }}
+            className="text-[11px] font-medium"
+            style={{ color: saveModel.isError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
           >
             {msg}
           </span>
@@ -283,18 +288,18 @@ function SubAgentModelCard() {
 
       {/* Current override state */}
       <div
-        className="flex items-center gap-2 rounded-[10px] border-[1.5px] px-3 py-2"
+        className="flex items-center gap-2 rounded-lg border-[1.5px] px-3 py-2"
         style={{ borderColor: selected ? withAlpha(styles.accent, 0.45) : styles.border, background: withAlpha(styles.accent, 0.04) }}
       >
-        <span className="text-[11px] font-bold shrink-0" style={{ color: styles.textTertiary }}>
+        <span className="text-[11px] font-medium shrink-0" style={{ color: styles.textTertiary }}>
           RUNNING ON
         </span>
         {selected === null ? (
-          <span className="text-[12px] font-bold" style={{ color: styles.textSecondary }}>
+          <span className="text-[12px] font-medium" style={{ color: styles.textSecondary }}>
             Inherits main model
           </span>
         ) : (
-          <span className="text-[12px] font-bold min-w-0 truncate" style={{ color: styles.text }}>
+          <span className="text-[12px] font-medium min-w-0 truncate" style={{ color: styles.text }}>
             {/* R93-A9: the display name comes from the configured rows now
                 (the catalog lookup is gone); a deleted/unknown row degrades
                 honestly to the raw id. */}
@@ -309,7 +314,7 @@ function SubAgentModelCard() {
         )}
       </div>
 
-      <div className="rounded-[10px] border-[1.5px] overflow-hidden" style={{ borderColor: styles.border }}>
+      <div className="rounded-lg border-[1.5px] overflow-hidden" style={{ borderColor: styles.border }}>
         {/* Inherit row */}
         <button
           onClick={() => saveModel.mutate(null)}
@@ -320,7 +325,7 @@ function SubAgentModelCard() {
             background: selected === null ? withAlpha(styles.accent, 0.07) : "transparent",
           }}
         >
-          <span className="text-[12px] font-bold" style={{ color: styles.text }}>
+          <span className="text-[12px] font-medium" style={{ color: styles.text }}>
             Inherits main model <span style={{ color: styles.textTertiary, fontWeight: 400 }}>(default)</span>
           </span>
           <span className="flex-1" />
@@ -331,13 +336,13 @@ function SubAgentModelCard() {
           /* R93-A9: zero configured rows — the honest pointer to the ONE
              place models are added (never a fallback catalog list). */
           <div className="flex items-center gap-2 px-3 py-2.5 flex-wrap" data-testid="subagent-no-models-hint">
-            <span className="text-[11.5px] flex-1 min-w-[200px]" style={{ color: styles.textSecondary }}>
+            <span className="text-[11px] flex-1 min-w-[200px]" style={{ color: styles.textSecondary }}>
               No models configured — add them in Settings → Models &amp; Providers.
             </span>
             <Link
               to="/settings?tab=api"
               aria-label="Open Models and Providers to add models"
-              className="h-8 px-3 rounded-[8px] text-[11px] font-bold flex items-center gap-1.5 shrink-0"
+              className="h-8 px-3 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 shrink-0"
               style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
             >
               Add models
@@ -378,13 +383,13 @@ function SubAgentModelCard() {
                 >
                   <span className="min-w-0 flex-1 flex items-center gap-1.5 flex-wrap">
                     <span
-                      className="text-[12px] font-bold truncate"
+                      className="text-[12px] font-medium truncate"
                       style={{ color: disabled ? styles.textTertiary : styles.text }}
                     >
                       {m.displayName || m.modelId}
                     </span>
                     <span
-                      className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[9.5px] font-bold"
+                      className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px] font-medium"
                       style={{ background: styles.subtle, color: styles.textTertiary }}
                       title="The provider the child turns route to"
                     >
@@ -392,8 +397,8 @@ function SubAgentModelCard() {
                     </span>
                     {isFreeModelEntry(m) && (
                       <span
-                        className="text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5"
-                        style={{ background: withAlpha("#22c55e", 0.14), color: "#22c55e" }}
+                        className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5"
+                        style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.14), color: SEMANTIC_COLORS.success }}
                       >
                         free
                       </span>
@@ -408,7 +413,7 @@ function SubAgentModelCard() {
                     </span>
                   )}
                   {disabled ? (
-                    <span className="text-[9.5px] font-bold shrink-0" style={{ color: "#D64545" }}>
+                    <span className="text-[10px] font-medium shrink-0" style={{ color: SEMANTIC_COLORS.danger }}>
                       no tool calling
                     </span>
                   ) : isSelected ? (
@@ -421,7 +426,7 @@ function SubAgentModelCard() {
         )}
       </div>
 
-      <p className="text-[10.5px]" style={{ color: styles.textTertiary }}>
+      <p className="text-[11px]" style={{ color: styles.textTertiary }}>
         Exactly the models configured in Models &amp; Providers (hidden rows excluded) — sub-agent turns
         route to the row&apos;s provider. Applies to every delegated sub-agent turn (delegate_task + retries);
         parallelism and supervision live in the cards below.
@@ -464,11 +469,11 @@ function SubAgentParallelismCard() {
   if (settingsQuery.isError) {
     return (
       <section
-        className="rounded-[16px] border-[1.5px] p-4"
+        className="rounded-2xl border-[1.5px] p-4"
         style={{ background: styles.card, borderColor: styles.border }}
         aria-label="Sub-agent parallelism"
       >
-        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
+        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
           {coreUnreachableHint} to tune sub-agent parallelism.
         </p>
       </section>
@@ -478,7 +483,7 @@ function SubAgentParallelismCard() {
   if (settingsQuery.isLoading || current === undefined) {
     return (
       <section
-        className="rounded-[16px] border-[1.5px] p-4"
+        className="rounded-2xl border-[1.5px] p-4"
         style={{ background: styles.card, borderColor: styles.border }}
         aria-label="Sub-agent parallelism"
       >
@@ -492,7 +497,7 @@ function SubAgentParallelismCard() {
   const stepper = (label: string, hint: string, field: "maxParallel" | "perKeyLimit", min: number, max: number, inputLabel: string, testId: string) => (
     <div className="flex items-center gap-3 flex-wrap" data-testid={testId}>
       <div className="min-w-[220px] flex-1">
-        <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>{label}</div>
+        <div className="text-[13px] font-semibold" style={{ color: styles.text }}>{label}</div>
         <div className="text-[11px]" style={{ color: styles.textTertiary }}>{hint}</div>
       </div>
       <span className="flex-1" />
@@ -505,14 +510,14 @@ function SubAgentParallelismCard() {
               setDraft((d) => ({ ...d, [field]: Math.min(max, Math.max(min, base + delta)) }));
             }}
             aria-label={`${delta > 0 ? "Increase" : "Decrease"} ${label}`}
-            className="w-8 h-8 rounded-[10px] grid place-items-center border-[1.5px] text-[14px] font-black shrink-0"
+            className="w-8 h-8 rounded-lg grid place-items-center border-[1.5px] text-[13px] font-semibold shrink-0"
             style={{ borderColor: styles.border, color: styles.textSecondary, background: styles.bg }}
           >
             {delta > 0 ? "+" : "−"}
           </button>
         ))}
         <span
-          className="w-14 text-center text-[15px] font-black tabular-nums rounded-[10px] py-1"
+          className="w-14 text-center text-[13px] font-semibold tabular-nums rounded-lg py-1"
           style={{ background: withAlpha(styles.accent, 0.09), color: styles.accent }}
           aria-label={inputLabel}
         >
@@ -526,20 +531,20 @@ function SubAgentParallelismCard() {
 
   return (
     <section
-      className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-4"
+      className="rounded-2xl border-[1.5px] p-4 flex flex-col gap-4"
       style={{ background: styles.card, borderColor: styles.border }}
       aria-label="Sub-agent parallelism"
     >
       <div className="flex items-center gap-2 flex-wrap">
         <Workflow size={13} style={{ color: styles.accent, opacity: 0.8 }} />
-        <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+        <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Sub-agent parallelism
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-bold"
-            style={{ color: update.isError ? "#ef4444" : "#22c55e" }}
+            className="text-[11px] font-medium"
+            style={{ color: update.isError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
           >
             {msg}
           </span>
@@ -570,14 +575,14 @@ function SubAgentParallelismCard() {
         )}
       </div>
       <div className="flex items-center gap-3">
-        <p className="text-[10.5px] flex-1" style={{ color: styles.textTertiary }}>
+        <p className="text-[11px] flex-1" style={{ color: styles.textTertiary }}>
           Each key carries at most this many children at once; extra pool keys raise the ceiling.
         </p>
         <button
           onClick={() => update.mutate(draft)}
           disabled={!dirty || update.isPending}
           aria-label="Save sub-agent parallelism settings"
-          className="h-8 px-3 rounded-[8px] text-[11px] font-bold shrink-0 disabled:opacity-50"
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 disabled:opacity-50"
           style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
         >
           {update.isPending ? "Saving…" : "Save"}
@@ -645,11 +650,11 @@ function SubAgentSupervisionCard() {
   if (settingsQuery.isError) {
     return (
       <section
-        className="rounded-[16px] border-[1.5px] p-4"
+        className="rounded-2xl border-[1.5px] p-4"
         style={{ background: styles.card, borderColor: styles.border }}
         aria-label="Sub-agent supervision"
       >
-        <p className="text-[11px]" style={{ color: "#ef4444" }} role="alert">
+        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
           {coreUnreachableHint} to tune sub-agent supervision.
         </p>
       </section>
@@ -659,7 +664,7 @@ function SubAgentSupervisionCard() {
   if (settingsQuery.isLoading || current === undefined) {
     return (
       <section
-        className="rounded-[16px] border-[1.5px] p-4"
+        className="rounded-2xl border-[1.5px] p-4"
         style={{ background: styles.card, borderColor: styles.border }}
         aria-label="Sub-agent supervision"
       >
@@ -712,7 +717,7 @@ function SubAgentSupervisionCard() {
   ) => (
     <div className="flex items-center gap-3 flex-wrap" data-testid={testId}>
       <div className="min-w-[220px] flex-1">
-        <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+        <div className="text-[13px] font-semibold" style={{ color: styles.text }}>
           {label}
         </div>
         <div className="text-[11px]" style={{ color: styles.textTertiary }}>
@@ -720,8 +725,8 @@ function SubAgentSupervisionCard() {
         </div>
         {!valid ? (
           <div
-            className="text-[10.5px] font-bold"
-            style={{ color: "#ef4444" }}
+            className="text-[11px] font-medium"
+            style={{ color: SEMANTIC_COLORS.danger }}
             role="alert"
             data-testid={`${testId}-error`}
           >
@@ -739,10 +744,10 @@ function SubAgentSupervisionCard() {
           value={value}
           onChange={(e) => onChange(e.target.value)}
           aria-label={inputLabel}
-          className="w-20 h-8 rounded-[8px] border-[1.5px] px-2.5 font-mono text-[11px] outline-none text-right"
+          className="w-20 h-8 rounded-lg border-[1.5px] px-2.5 font-mono text-[11px] outline-none text-right"
           style={{
             background: styles.bg,
-            borderColor: !valid ? "#ef4444" : styles.border,
+            borderColor: !valid ? SEMANTIC_COLORS.danger : styles.border,
             color: styles.text,
           }}
         />
@@ -755,20 +760,20 @@ function SubAgentSupervisionCard() {
 
   return (
     <section
-      className="rounded-[16px] border-[1.5px] p-4 flex flex-col gap-2.5"
+      className="rounded-2xl border-[1.5px] p-4 flex flex-col gap-2.5"
       style={{ background: styles.card, borderColor: styles.border }}
       aria-label="Sub-agent supervision"
     >
       <div className="flex items-center gap-2 flex-wrap">
         <Activity size={13} style={{ color: styles.accent, opacity: 0.8 }} />
-        <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+        <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Sub-agent supervision
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-bold"
-            style={{ color: msgIsError ? "#ef4444" : "#22c55e" }}
+            className="text-[11px] font-medium"
+            style={{ color: msgIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
           >
             {msg}
           </span>
@@ -808,14 +813,14 @@ function SubAgentSupervisionCard() {
         )}
       </div>
       <div className="flex items-center gap-3">
-        <p className="text-[10.5px] flex-1" style={{ color: styles.textTertiary }}>
+        <p className="text-[11px] flex-1" style={{ color: styles.textTertiary }}>
           Defaults: 15s heartbeat · 5min stall. Stalled children are stopped, never left hanging.
         </p>
         <button
           onClick={onSave}
           disabled={!dirty || !heartbeatValid || !stallValid || save.isPending}
           aria-label="Save sub-agent supervision settings"
-          className="h-8 px-3 rounded-[8px] text-[11px] font-bold shrink-0 disabled:opacity-50"
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 disabled:opacity-50"
           style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
         >
           {save.isPending ? "Saving…" : "Save"}
@@ -859,9 +864,8 @@ export function SubAgentsTab() {
       {/* Clean page header — the cards below are the whole sub-agent story:
           keys (via the providers&apos; pools), model, parallelism, supervision. */}
       <div className="pb-1">
-        <h2 className="text-[16px] font-black" style={{ color: styles.text }}>
-          Sub-agents
-        </h2>
+        <Kicker className="mb-1">Agents &amp; Skills</Kicker>
+        <h2 className="text-[13px] font-semibold text-ink">Sub-agents</h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
           Model, parallelism, and supervision for the agents your main agent delegates to — they
           share each provider&apos;s API key pool.

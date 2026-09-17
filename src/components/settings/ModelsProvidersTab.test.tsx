@@ -2176,7 +2176,12 @@ describe("Settings mutations refresh the SESSION page's model caches (R62-2b)", 
     expect(inlineError.textContent).toContain("1 agent still use 'OpenRouter'");
     // The provider row is STILL THERE (the delete was refused) — the pane's
     // header still shows the provider name.
-    await waitFor(() => expect(screen.getByText("OpenRouter", { selector: "span.text-\\[16px\\]" })).toBeTruthy());
+    // R100-E2: visual re-pin — the name snapped 16px/font-black → 13px/600
+    // (the ladder's section tier, TOKENS.md §2); the .font-semibold guard
+    // keeps it distinct from the 13px/500 list-row label.
+    await waitFor(() =>
+      expect(screen.getByText("OpenRouter", { selector: "span.text-\\[13px\\].font-semibold" })).toBeTruthy(),
+    );
   });
 });
 
