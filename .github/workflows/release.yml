@@ -474,14 +474,21 @@ jobs:
           for f in $debs $appimages; do
             echo "built: $f ($(du -h "$f" | cut -f1))"
           done
+          # R100 hotfix 4: upload-artifact@v4 derives paths from the LEAST
+          # COMMON ANCESTOR of every matched file — two globs spanning deb/
+          # and appimage/ store them as deb/… + appimage/… subdirs, and the
+          # github-release job then can't find the flat names its verify
+          # step + files glob expect. Copy into ONE flat dir first: a single
+          # glob uploads bare filenames, the download lands them flat in
+          # linux-bundles/, and every downstream check matches.
+          mkdir -p bundle-flat
+          cp $debs $appimages bundle-flat/
 
       - name: Upload Linux bundles artifact
         uses: actions/upload-artifact@v4
         with:
           name: acute-bundles-linux
-          path: |
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/appimage/*.AppImage
+          path: bundle-flat/*
           if-no-files-found: error
 
   # Draft release ONLY on tag pushes — the owner reviews + publishes manually.
