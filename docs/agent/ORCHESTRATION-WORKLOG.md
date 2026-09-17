@@ -2763,3 +2763,38 @@ FE+AC root 3,754/3,754 (12 env-skips; +103 pins over R98); AC alone
 `type` tag, the compile-time resources validation, the `[m` display
 artifact, the ENOSPC mass-failure mode, the worktree-is-truth pattern at
 scale).
+
+---
+
+## Session R100 — 2026-09-17 — the honest browser + the UI overhaul + the Linux release (v0.97.0 → v0.98.0)
+
+**Opening state:** sandbox RESET again (no /home/z/repos); restored per
+the standard protocol (clone, pnpm, typecheck). The remote was the truth:
+main @ 6a0bfb4 with R99 fully closed (v0.97.0 published, CI+Release
+green, status synced).
+
+**The round:** research first (two parallel passes — the browser/Linux
+trilemma doc + the UI design-language audit, both committed at 1a7ba1c),
+then: R100-A the honest browser (evergreen + de-branded UA + the engine
+line, e9a67fa), R100-C the design foundation (TOKENS + the audit gate +
+primitives, 7eb73d0), R100-D the chat overhaul (§C4, 2134194), R100-E1/E2
+the settings rebuild (412466e, 9f68fbc, 56db304), R100-F+G the shell
+density + de-costume (ea1217f), R100-B the Linux release (ADR-0031 + CI
+jobs + deb/AppImage, 11806a1), R100-H the live-fire agent battery (7
+legs, the Invalid-JSON retry fix, 602d0dd), R100-I this close-out.
+
+**The agent-death ledger:** 6 of 8 implementation subagents died at their
+final-report LLM call (context deadline) — D, D-resume, E1, E2-part1, F,
+G — every one after landing its diff; the orchestrator completed the
+tails (2 missing imports, 6 test re-pins, 3 baseline re-pins, all
+worklog entries). E2-part2, B, and C survived whole (the smaller
+contracts).
+
+**The verification:** root 3,785/3,785 (12 env-skips) at every commit
+gate; docs:check 218/0/0; the design audit ratcheted down across the
+round (sub-10px 101→0, weights 474→19, hovers 243→33, hex 254→103); the
+live-fire battery on real OpenRouter turns (z-ai/glm-5.2:free) with disk
+truth as ground truth; cargo check CI-gated (the new rust-linux job).
+
+**Closing:** round-100.md written, CHANGELOG 0.98.0, version ×4, tag
+v0.98.0 dispatched (the first release carrying the Linux bundles).

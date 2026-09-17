@@ -1135,3 +1135,21 @@ mimic code breakage — check `df -h` before diagnosing a sudden suite-wide
 failure. Also proven again at scale: killed subagents' diffs land in the
 worktree — verify + complete + re-pin from the tree (7 of 8 workstreams
 this round).
+
+#101 (2026-09-17, R100): Three lessons. (a) The research-first method
+paID off twice: both reports (the browser trilemma, the UI design
+language) drove the workstreams AND became the durable record — when the
+owner asks "why not engine X", the answer is a measured document, not a
+hunch. (b) The subagent FINAL-REPORT death pattern: 6 of 8 implementation
+agents died at their last LLM call (context deadline) — every one AFTER
+landing its full diff. The work always lands; the completion protocol
+(orchestrator verifies the tail, re-pins, appends worklog, commits) is
+routine. SIZE THE CONTRACT: agents scoped to one screen/subsystem
+survived whole; "a wave" died at the report. (c) The audit-gate ratchet
+is the round's structural gift: a cleanup that CANNOT regress (counts
+may only go down, enforced in verify + CI). Corollary: a live-fire
+battery on REAL provider turns is the only test that catches
+classification gaps — "Invalid JSON response" sailed through 2,384 green
+unit tests because no fixture ever emitted that exact string; the
+battery's one transient glitch exposed a fail-fast dead end that
+unit-land could not see.

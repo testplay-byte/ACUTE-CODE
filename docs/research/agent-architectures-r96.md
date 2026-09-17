@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-13 round-96 -->
+<!-- last-reviewed: 2026-09-17 round-100 -->
 # Agent architectures — the R96 research memo (Claude Code / Kilo Code / OpenCode / Cline / Aider / Goose)
 
 **Why this exists (owner directive, R96 §0 item 16):** "Analyze any online

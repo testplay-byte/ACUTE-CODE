@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-15 round-99 -->
+<!-- last-reviewed: 2026-09-17 round-100 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -10,6 +10,30 @@ version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
 ## [Unreleased]
+
+## [0.98.0] - 2026-09-17 — the eleventh-walkthrough round: the honest browser, the UI that stops looking generated, the Linux release, and the live-fire agent
+
+### The browser, made honest (and small again)
+- The Windows installer is **~37–40 MB again** (from ~258 MB): the bundled engine experiment is retired in favor of the standard evergreen contract — on machines without any WebView2 runtime (rare) the tiny bootstrapper provisions it at install; everywhere else the install is instant. Your app never launches your device's browser either way.
+- The embedded browser panel is **de-branded**: pages identify it as **ACUTE Browser** (`AcuteBrowser/1.0` in the user agent) — the Microsoft Edge brand token is gone from every page the agent drives or you visit in-app.
+- A plain-language **Engine line** in Settings → Browser and the About tab states what actually renders the panel: WebView2 (Chromium-based, ACUTE-branded) on Windows · WebKitGTK on Linux.
+- **Why not a different engine on Windows?** The measured trilemma is on record (`docs/research/browser-engine-and-linux-round-100.md`): a genuinely non-Chromium engine today (Servo, 66% web-platform compatibility) would break the real sites the agent browses; the alternatives that keep compatibility (CEF) are bigger than the 258 MB you rejected. Linux below is the genuinely-not-Edge answer that ships now.
+
+### The complete UI overhaul (research-driven, every working screen)
+- **The design language, enforced**: a measured type ladder (a 10px floor — zero sub-10px text app-wide), a weight law (regular-weight chrome; 600 for headers; the heavy "AI-generated" bolding eliminated: 474 → 19 occurrences), a 5-step radius scale, CSS hovers (243 hand-rolled JS hover handlers → 33, the survivors being genuine menu/chart interactions), and a new **design-audit gate** in CI that makes regression impossible — the counts may only go down.
+- **The chat window, overhauled end to end**: your messages in the tighter input-row style; tool rows led by proper status icons (not text glyphs); markdown headings snapped; the composer squared to 12px radius with one focus idiom; Send is a clean 28px circle with no glow and no hover-scale; a global keyboard-focus ring lands app-wide.
+- **Settings, rebuilt after VS Code**: a left navigation column with a **search box** that filters tabs and setting labels; all nine tabs swept to one card idiom, one row idiom, semantic status colors, and 28px rows (the Models & Providers tab was the worst offender — 77 heavy weights, 12 JS hovers, hardcoded reds — all gone).
+- **The shell**: sidebar rows slim to 32px with regular-weight labels; the sidebar narrows to 240px; the dashboard and usage screens lose their costume (the rotated display heroes, gradients, and hard shadows) for confident quiet titles; the browser panel's toolbar gets one grammar with a flexible mono address bar.
+- The startup page and setup wizard keep their praised personality — the wizard's DNA is now documented as a boundary (decoration earns its place in moments, not working surfaces).
+
+### The Linux release
+- **`.deb` + `.AppImage`** builds ship from every release (amd64): the same app, the same agent and tools, with the browser panel on **WebKitGTK** — genuinely not Edge on this platform. Provider keys live in the freedesktop **Secret Service** keyring (gnome-keyring/KWallet); headless boxes fall back to `ACUTE_PROVIDER_*` env vars honestly.
+- A new Linux CI check keeps the Rust shell compiling on Linux forever; the README carries install requirements and the NVIDIA/WebKitGTK troubleshooting ladder (blank-window fixes documented).
+
+### The agent, tested live (and hardened)
+- A real **live-fire battery** ran against live OpenRouter turns: tool use verified against disk truth, memory save/recall across sessions, the web-fetch approval chain end to end, honest refusals, confidence tags landing, and the usage ledger accurate.
+- **Fix caught by that battery**: a transient provider glitch ("Invalid JSON response") used to kill a turn instantly with no retry; it now classifies as transient and rides the retry ladder — mid-task hiccups heal instead of dead-ending.
+
 ## [0.97.0] - 2026-09-15 — the tenth-walkthrough round: the self-contained app, the research-driven UI redo, and the agent's contract
 
 ### The browser now ships WITH the app (and every link opens inside it)

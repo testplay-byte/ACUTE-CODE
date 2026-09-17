@@ -3,10 +3,10 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.97.0",
+    "version": "0.98.0",
     "availability": "Private build — not yet distributed",
     "chips": [
-      "Windows desktop",
+      "Windows + Linux desktop",
       "Tauri 2",
       "React 18",
       "Node sidecar",
@@ -296,18 +296,24 @@
     {
       "date": "2026-09-15",
       "label": "R99 — the research-driven UI redo round (v0.97.0): the self-contained browser, one-click silent updates, the agent's contract"
+    },
+    {
+      "date": "2026-09-17",
+      "label": "R100 — the honest-browser + UI-overhaul + Linux-release round (v0.98.0): evergreen installer + de-branded UA, the enforced design language, deb+AppImage, the live-fire agent battery"
     }
   ],
   "quality": {
-    "ci": "GREEN — CI 35035134792 and Release 35035136469 both SUCCESS on b6dc571 (lint, both typechecks, the root suite 3,754/3,766 (12 env-skips) — agent-core 2,384/2,384, e2e 12/12, build, license audit, docs:check 214/0/0, version ×4 at 0.97.0). v0.97.0 PUBLISHED (release 389541687, latest — THE ENGINE-BUNDLED INSTALLER: setup.exe 270,884,416 B sha256 f502aaee… + kit 121,230 B sha256 dcfe82cd…, both digests verified against GitHub’s server-side values on freshly downloaded bytes via the authenticated asset API; the kit scanned clean — zero real-key values). The installer grew 38.7 MB → 258 MB: it now ships the WebView2 Fixed Version Runtime — the honest price of the self-contained browser (the owner’s directive). The R99 review pass: a full independent subagent review (ship-shape after 4 MINORs — all fixed + pinned in de5ed1a before the tag).",
+    "ci": "PENDING — the v0.98.0 tag run (the first with the linux-bundles job: deb+AppImage) is dispatched; this line flips GREEN when CI + Release both land SUCCESS (the R99 close-out precedent).",
     "suites": [
       {
         "name": "frontend",
-        "tests": 3651
+        "tests": 3651,
+        "detail": "3,785 passed / 12 env-skipped (root vitest, R100 close: 205 files) — includes the +31 R100 pins (chat §C4 re-pins, settings nav/search, the audit-gate primitives, the Invalid-JSON classification)"
       },
       {
         "name": "agent-core",
-        "tests": 2370
+        "tests": 2370,
+        "detail": "2,385+ passed (the R100 Invalid-JSON pin lands in the r78 classification file)"
       },
       {
         "name": "sidecar e2e",
@@ -331,11 +337,11 @@
     }
   ],
   "plan": {
-    "current": "R99 — the research-driven UI redo + the self-contained app round (native browser + silent updates + the chat/context/stats/prompts redesigns + the agent's contract), v0.96.0 → v0.97.0",
+    "current": "R100 — the honest browser + the complete UI overhaul + the Linux release + the live-fire agent round, v0.97.0 → v0.98.0",
     "upcoming": [
       {
-        "title": "The owner's v0.97.0 walkthrough",
-        "detail": "The R99 test checklist lives in round-99.md §5 — the in-app link routing, the one-click silent update + relaunch, the chat turn headers + compressed summaries, the context hero/bar/legend, the stats danger zone, the System prompt manager, and the agent's intake/autonomy/confidence behavior."
+        "title": "The owner's v0.98.0 walkthrough",
+        "detail": "The R100 test checklist lives in round-100.md §5 — the ~37-40 MB installer, the ACUTE Browser identity (ask a page what it is), the engine line in Settings, the chat/settings/sidebar visual overhaul, the Linux deb+AppImage install, and the retry-hardened agent."
       },
       {
         "title": "R100 candidates (honest)",
@@ -348,6 +354,6 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 99,
-  "ci": "GREEN — CI 35035134792 and Release 35035136469 both SUCCESS on b6dc571 (lint, both typechecks, the root suite 3,754/3,766 (12 env-skips) — agent-core 2,384/2,384, e2e 12/12, build, license audit, docs:check 214/0/0, version ×4 at 0.97.0). v0.97.0 PUBLISHED (release 389541687, latest — THE ENGINE-BUNDLED INSTALLER: setup.exe 270,884,416 B sha256 f502aaee… + kit 121,230 B sha256 dcfe82cd…, both digests verified against GitHub’s server-side values on freshly downloaded bytes via the authenticated asset API; the kit scanned clean — zero real-key values). The installer grew 38.7 MB → 258 MB: it now ships the WebView2 Fixed Version Runtime — the honest price of the self-contained browser (the owner’s directive). The R99 review pass: a full independent subagent review (ship-shape after 4 MINORs — all fixed + pinned in de5ed1a before the tag)."
+  "round": 100,
+  "ci": "PENDING — the v0.98.0 tag run (the first with the linux-bundles job: deb+AppImage) is dispatched; this line flips GREEN when CI + Release both land SUCCESS (the R99 close-out precedent)."
 }

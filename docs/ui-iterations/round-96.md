@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-13 round-96 -->
+<!-- last-reviewed: 2026-09-17 round-100 -->
 # Round 96 — the seventh-walkthrough round (v0.93.0 → v0.94.0)
 
 <!-- round: 96 -->
