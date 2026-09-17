@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-100 -->
+<!-- last-reviewed: 2026-09-17 round-101 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -10,6 +10,26 @@ version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
 ## [Unreleased]
+
+## [0.99.0] - 2026-09-17 — the twelfth-walkthrough round: the calm update hand-off, the chat timeline, honest Mermaid, and Linux ARM64
+
+### The update, made calm (the round's headline)
+- **No more "the environment crashed" flash.** Installing an update used to kill the local engine (deliberately — the installer needs the files free) and then let the app's own health watchdog report the death as a crash, replacing your screen with the "Can't reach agent-core" error for the last seconds before the restart. The shutdown is now announced: a calm full-screen **"Restarting into v0.99.0… — your data is kept, the app comes back by itself"** splash owns the hand-off, every connection check stays quiet for a backend the app itself stopped, and the auto-restart after the silent install lands you straight back in the app.
+- **A failed install self-heals.** If a machine rejects the silent installer launch, the engine now restarts itself automatically instead of leaving a dead app and a manual "Restart engine" chore; the honest error and the setup-wizard escape hatch remain.
+
+### The chat window
+- **A timeline runs down the left of every conversation**: a continuous rail with a node at each of your messages, each agent turn, and each error (solid markers for you, hollow for the agent, red for failures) — hover a node for its timestamp. The chronology of a long session reads at a glance.
+- **Typing no longer "selects" the composer.** Clicking into the message box now answers with a subtle border-color shift only — the old behavior (a ring that highlighted the entry area *and the area around it*, plus a border-thickness jump) is gone. Keyboard focus still shows the standard ring on the text field itself.
+
+### Mermaid diagrams, honest at last
+- Diagrams now render **inside thinking/work sections too** — previously a flowchart the model emitted mid-reasoning showed as raw source forever (the likeliest cause of "not rendering properly").
+- Failures are no longer silent: if a diagram can't render, the fallback note shows **the actual error**, and both the diagram library load and the render itself get a bounded retry (a transient hiccup no longer degrades every diagram in the session). A build-time gate now proves the diagram library ships in every installer.
+
+### Linux on ARM64
+- Every release now carries **`_arm64` .deb + .AppImage** builds (built natively, not emulated) alongside the amd64 ones — for Raspberry Pi 5-class machines, aarch64 laptops, and Snapdragon X dev boxes. Same app, same agent and tools, WebKitGTK panel, Secret Service keyring. The amd64 builds remain the default for typical desktops.
+
+### The shell
+- The minimized sidebar rail: **styled label chips** on hover/focus (project tiles reveal the full project name), the active-page **accent bar**, and a **"+N" tile** when more than ten projects exist. The settings page's left navigation is a proper bordered pane with the search box docked at its top.
 
 ## [0.98.0] - 2026-09-17 — the eleventh-walkthrough round: the honest browser, the UI that stops looking generated, the Linux release, and the live-fire agent
 

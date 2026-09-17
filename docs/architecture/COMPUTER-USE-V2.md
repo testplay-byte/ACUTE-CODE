@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-97 -->
+<!-- last-reviewed: 2026-09-17 round-101 -->
 # COMPUTER-USE v2 — the Element Map & Learning Layer (R93)
 
 **Status:** design truth for the R93 computer-use rework (the owner's

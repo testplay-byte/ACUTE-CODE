@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-97 -->
+<!-- last-reviewed: 2026-09-17 round-101 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -1153,3 +1153,25 @@ classification gaps — "Invalid JSON response" sailed through 2,384 green
 unit tests because no fixture ever emitted that exact string; the
 battery's one transient glitch exposed a fail-fast dead end that
 unit-land could not see.
+
+#102 (2026-09-17, R101): Three lessons. (a) A deliberate kill must be
+ANNOUNCED: the R96-I pre-install kill was correct engineering, but every
+watcher of the killed process (the 20s watchdog, the connect loop, every
+in-flight query) reached the honest conclusion "it crashed" because nobody
+told them the death was planned. The `update-installing` event + the
+`updateInFlight` suppression flag is the general pattern — coordinated
+shutdowns need a BROADCAST, not just an ordering. Verify lifecycle
+hand-offs by what the USER SEES at every second, not just the end state
+(the NSIS `/R` relaunch worked all along; the 7 seconds around it told the
+owner a crash story). (b) A silent `catch {}` is a defect AMPLIFIER:
+mermaid never "failed" — it degraded silently through four different
+defects, three producing zero diagnostics. Surfaced errors would have made
+the owner's report one line instead of a guess. When wrapping third-party
+renderers: log the error, surface its message, retry once (import AND
+render, with a fresh id), and gate the build on the chunk actually
+shipping. (c) The rail overflow gotcha: CSS-only hover chips on a 48px
+icon rail require the container to let them paint PAST the column —
+`overflow-x-visible` pairs only with `overflow-y-clip` (the CSS axis
+constraint; `overflow-hidden` on the aside would swallow every chip). When
+a label chip "doesn't appear", audit the overflow geometry of every
+ancestor first.

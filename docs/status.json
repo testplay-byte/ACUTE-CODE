@@ -3,10 +3,11 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.98.0",
+    "version": "0.99.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
+      "Linux x64 + ARM64",
       "Tauri 2",
       "React 18",
       "Node sidecar",
@@ -300,20 +301,24 @@
     {
       "date": "2026-09-17",
       "label": "R100 — the honest-browser + UI-overhaul + Linux-release round (v0.98.0): evergreen installer + de-branded UA, the enforced design language, deb+AppImage, the live-fire agent battery"
+    },
+    {
+      "date": "2026-09-17",
+      "label": "R101 — the twelfth-walkthrough round (v0.99.0): the calm update hand-off (no more 'environment crashed' flash + self-healing failed installs), the chat timeline rail, the composer focus fix, honest + resilient Mermaid, the minimized-rail label chips, and Linux ARM64 bundles"
     }
   ],
   "quality": {
-    "ci": "GREEN — CI 35202716106 and Release 35202722327 both SUCCESS on 939c997+hotfixes (the final tag 9ec0c3b→bundle-flat leg; lint, both typechecks, the root suite, design:audit at baseline, docs:check 219/0/0, version ×4 at 0.98.0, cargo check green on BOTH platforms via verify + the new rust-linux job). v0.98.0 PUBLISHED (release 390567270, latest — THE EVERGREEN INSTALLER: setup.exe 38,724,392 B = 36.9 MB, back from v0.97.0's 258 MB — the owner's 4x complaint answered with the number; + THE FIRST LINUX BUNDLES: ACUTE-CODE_0.98.0_amd64.deb 67,231,760 B + ACUTE-CODE_0.98.0_amd64.AppImage 134,937,080 B + the launcher kit 122,907 B). Four CI-caught hotfixes on the way (the unbalanced cfg paren, the RGBA icon ladder, the rust-linux dist stub, the flat artifact staging) — the sandbox cannot compile Rust; CI is that gate and it earned its keep.",
+    "ci": "PENDING — R101 waves pushed green (wave-1 CI 35212450394 SUCCESS on c35da04, incl. the NEW rust-linux-arm64 job — the ARM64 runner is live for this account; wave-2 aa2c1ee mermaid landed with the build gate proven live); v0.99.0 tagging in progress — flips GREEN with the run IDs + asset sizes when CI + Release both land.",
     "suites": [
       {
         "name": "frontend",
-        "tests": 3651,
-        "detail": "3,785 passed / 12 env-skipped (root vitest, R100 close: 205 files) — includes the +31 R100 pins (chat §C4 re-pins, settings nav/search, the audit-gate primitives, the Invalid-JSON classification)"
+        "tests": 3818,
+        "detail": "3,818 passed / 12 env-skipped (root vitest, R101 close: 207 files) — +20 R101 pins (the update hand-off, the timeline rail, the rail label chips, the mermaid retries)"
       },
       {
         "name": "agent-core",
         "tests": 2370,
-        "detail": "2,385+ passed (the R100 Invalid-JSON pin lands in the r78 classification file)"
+        "detail": "2,385+ passed (unchanged this round — R101 touched no agent-core behavior)"
       },
       {
         "name": "sidecar e2e",
@@ -337,15 +342,19 @@
     }
   ],
   "plan": {
-    "current": "R100 — the honest browser + the complete UI overhaul + the Linux release + the live-fire agent round, v0.97.0 → v0.98.0",
+    "current": "R101 — the calm update hand-off + the chat timeline + honest Mermaid + Linux ARM64, v0.98.0 → v0.99.0",
     "upcoming": [
       {
-        "title": "The owner's v0.98.0 walkthrough",
-        "detail": "The R100 test checklist lives in round-100.md §5 — the ~37-40 MB installer, the ACUTE Browser identity (ask a page what it is), the engine line in Settings, the chat/settings/sidebar visual overhaul, the Linux deb+AppImage install, and the retry-hardened agent."
+        "title": "The owner's v0.99.0 walkthrough",
+        "detail": "The R101 test checklist lives in round-101.md §5 — the update arc (the calm Restarting splash, the self-healing failed install), the composer focus fix, the chat timeline rail, the sidebar rail label chips, the settings nav pane, Mermaid in answers AND thinking sections, and the Linux arm64 bundles."
       },
       {
-        "title": "R100 candidates (honest)",
-        "detail": "The modularity roadmap's continuation (the turn-loop harness extraction — risk #1 per the R85 audit; the remaining server.ts domains), the lessons-ledger affordance, ratings-driven prompt tuning, the standing items (edit-linting, installer code-signing, the Files-tab polish, the CDP-level trusted-input tier, the COM IUIAutomation bridge), and the R99 review's NIT list (the open-link hydration race, the wizard-fallback re-download leg)."
+        "title": "The owner's UI references (promised)",
+        "detail": "The owner said the next round will bring proper references/guides for the UI — the visual language work continues against them when they arrive."
+      },
+      {
+        "title": "Standing candidates (honest)",
+        "detail": "The modularity roadmap's continuation (the turn-loop harness extraction — risk #1 per the R85 audit; the remaining server.ts domains), the lessons-ledger affordance, ratings-driven prompt tuning, the standing items (edit-linting, installer code-signing, the Files-tab polish, the CDP-level trusted-input tier, the COM IUIAutomation bridge), the R99 review's NIT list, and the updater Linux wiring (AppImage = the candidate, per ADR-0031's follow-up note)."
       }
     ],
     "principles": [
@@ -354,6 +363,6 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 100,
-  "ci": "GREEN — CI 35202716106 and Release 35202722327 both SUCCESS on 939c997+hotfixes (the final tag 9ec0c3b→bundle-flat leg; lint, both typechecks, the root suite, design:audit at baseline, docs:check 219/0/0, version ×4 at 0.98.0, cargo check green on BOTH platforms via verify + the new rust-linux job). v0.98.0 PUBLISHED (release 390567270, latest — THE EVERGREEN INSTALLER: setup.exe 38,724,392 B = 36.9 MB, back from v0.97.0's 258 MB — the owner's 4x complaint answered with the number; + THE FIRST LINUX BUNDLES: ACUTE-CODE_0.98.0_amd64.deb 67,231,760 B + ACUTE-CODE_0.98.0_amd64.AppImage 134,937,080 B + the launcher kit 122,907 B). Four CI-caught hotfixes on the way (the unbalanced cfg paren, the RGBA icon ladder, the rust-linux dist stub, the flat artifact staging) — the sandbox cannot compile Rust; CI is that gate and it earned its keep."
+  "round": 101,
+  "ci": "PENDING — the R101 waves pushed green (wave-1 CI 35212450394 SUCCESS on c35da04, incl. the NEW rust-linux-arm64 job — the ARM64 runner is live; wave-2 aa2c1ee mermaid + close-out dispatched); v0.99.0 tagging in progress — this field flips GREEN with the run IDs + asset sizes when CI + Release both land."
 }

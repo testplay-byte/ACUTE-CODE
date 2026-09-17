@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-14 round-97 -->
+<!-- last-reviewed: 2026-09-17 round-101 -->
 # ACUTE-CODE Design System
 
 **Why this document exists (owner direction, round-16/2026-08-23):** "the UI

@@ -2798,3 +2798,18 @@ truth as ground truth; cargo check CI-gated (the new rust-linux job).
 
 **Closing:** round-100.md written, CHANGELOG 0.98.0, version ×4, tag
 v0.98.0 dispatched (the first release carrying the Linux bundles).
+
+---
+Task ID: R101 (full round)
+Agent: main-orchestrator (Z.ai Code)
+Task: Round-101 — the calm update hand-off, the chat timeline, honest Mermaid, Linux ARM64 (v0.98.0 → v0.99.0)
+
+Work Log:
+- Sandbox verified first (the owner's standing directive): /home/z/repos/acute-code intact at e2f2009 (the R100 close-out), clean + current; shared/ deps rebuilt; baseline suite 3,798/3,798 re-verified green BEFORE any work.
+- Research wave: one Explore subagent produced the five-area blueprint (updater root cause, sidebar inventory, chat/composer anatomy, mermaid defect list, ARM64 pipeline facts incl. the node-pty no-Linux-prebuilds truth).
+- Wave 1 (parallel): B the update hand-off (orchestrator: update-installing event + updateInFlight suppression + the Restarting splash + self-healing rejected launches; 34/34 area tests) + C the sidebar rail (RailLabel chips, accent bars, +N tile, settings nav pane; 97/97) + D the chat timeline rail + composer fix (424/424 project-chat) + E the Linux ARM64 pipeline (linux-bundles-arm64 + rust-linux-arm64 + docs). Pushed c35da04 → CI SUCCESS incl. the new rust-linux-arm64 job on its FIRST run.
+- Wave 2: F mermaid honest + resilient (errors surfaced with cause-chain, import/render retries with fresh ids, thinking-section fences render, the check-mermaid-chunk build gate proven live) — pushed aa2c1ee.
+- Close-out: round-101.md (§0 the report itemized → §5 the TEST CHECKLIST), CHANGELOG 0.99.0, version ×4, status.json (round 101, PENDING, chips +ARM64), HANDOFF header, AGENT-MEMORY #102, 7 stale doc stamps refreshed, docs:check 220/0/0.
+
+Stage Summary:
+- v0.99.0 tagged and released; the round's contract was the owner's v0.98.0 report answered item by item — every item either fixed at the root or honestly documented.
