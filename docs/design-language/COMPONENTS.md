@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-15 round-99 -->
+<!-- last-reviewed: 2026-09-17 round-100 -->
 # Components — the primitive catalog and composition rules
 
 Serves DESIGN-SYSTEM §5 (anatomy inventory). The inventory there names the
@@ -8,11 +8,21 @@ C2's mandate: no idiom re-implemented per file).
 
 ## 1. The primitives (one spelling each)
 
+ROUND-100 (R100-C): the token-level rules in TOKENS.md (the 5-step radius
+scale, the weight law, the 10px floor, hairline-vs-1.5px borders) supersede
+any legacy numbers still quoted below; waves D–G apply them per screen, and
+each row touched updates here in the same round. The first three extracted
+`src/components/ui/` primitives (Kicker / SectionCard / SettingsRow) are the
+rows the waves import instead of re-implementing.
+
 | Primitive | Source | Contract |
 |---|---|---|
 | `SkeletonBlock` / `SkeletonRows` | `src/components/shared/Skeletons.tsx` | ALL loading states. Decorative `aria-hidden` pulse in `subtle` surface; the call site owns the single `role="status"` announcement. |
 | `ChoiceCard` | `src/pages/SettingsPage.tsx` | radio-circle + label + one-line description; the pattern for every pick-one setting (text size, timestamps, tool activity, search engine, link opening — R99-A, wrapped in a labeled `role="group"` when the pair is one radio decision). |
 | `SettingsLoadErrorCard` | `src/pages/SettingsPage.tsx` | the honest error card for a failed settings GET: `role="alert"`, danger tint, exact cause, one Retry. |
+| `Kicker` | `src/components/ui/Kicker.tsx` | ROUND-100 (R100-C, research §C1.1): THE label-tier heading — 11px/500 uppercase `tracking-[0.08em]` tertiary ink, optional 12px lucide glyph, `as` h2/h3/div. The ONE kicker spelling; every 10.5px-black / 11px-bold variant is drift the waves retire. |
+| `SectionCard` | `src/components/ui/SectionCard.tsx` | ROUND-100 (R100-C, research §C1.4): the settings/panel bento card — `rounded-2xl` (the 16px radius step) + 1.5px `border-line` + `bg-card`, p-5/p-6, optional `softShadow`, optional Kicker + 13px/600 title header. The card species of §3, extracted. |
+| `SettingsRow` | `src/components/ui/SettingsRow.tsx` | ROUND-100 (R100-C, research §C1.2): the label+control row — 36px min-height, 13px/400 label + optional 11px tertiary description (`flex-1 min-w-[200px]`), right-aligned shrink-0 control slot, optional top hairline. NO JS hover (the parent owns the CSS wash). |
 | `CommitNumberInput` | `src/pages/SettingsPage.tsx` | numeric stepper that PUTs only on blur/Enter (never mid-typing). |
 | `ConfirmDialog` | `src/components/settings/ConfirmDialog.tsx` | every destructive action's guard — exact enumeration of what will be destroyed. |
 | `withAlpha()` / `bdr()` | `src/components/dashboard/helpers.ts` | the only sanctioned alpha-tint + border helpers. |
@@ -28,8 +38,9 @@ need it, make it a primitive and add the row here in the same round.
 
 Chips are the app's densest idiom. One grammar:
 
-- **Stat chip**: `stat` type (9.5px mono), `subtle` bg, hairline border,
-  tertiary text — usage: `s · ↑in · ↓out · tok/s · model`.
+- **Stat chip**: `meta-mono` tier (10px mono tabular — ROUND-100 R100-C: the
+  9.5px `stat` step is RETIRED, TOKENS §2's hard floor), `subtle` bg,
+  hairline border, tertiary text — usage: `s · ↑in · ↓out · tok/s · model`.
 - **Status chip**: semantic-tinted (`withAlpha(semantic, 0.1)` bg +
   semantic text): success/done, warning/waiting (queued, retry wait,
   thinking stop), danger/failure. `role="status"` unless it IS an alert.
@@ -62,7 +73,7 @@ within the card.
 | Primary | 135° accent→accent2 gradient, `bentoShadow`, white ink (WIZARD-DNA §4) | hover scale 1.03 + bloom; press 0.98 |
 | Secondary | `card` pill + 1.5px border | press 0.95 |
 | Ghost | text/icon only, `subtle-hover` wash | press 0.95 |
-| Icon | 28–32px square hit target, radius 9–10px | same as ghost |
+| Icon | 28–32px square hit target, radius 8px (`rounded-lg` — ROUND-100 R100-C: the 9–10px figure is retired; 8px is step 2 of the 5-step scale, TOKENS §4) | same as ghost |
 
 Press feedback (`active:scale-95`) is universal — a button without it is a
 bug.
@@ -91,10 +102,11 @@ bug.
 ## 6. The data-display grammar (round-98 I2 adds; round-99 E adds the
 anti-jitter + danger-zone rules)
 
-- **Stat cards**: big number (22px black) + label + one supporting line;
-  icon quiet-tinted; never a rainbow. R99-E: pinned `h-[92px]` (the exact
-  height every StatCard-shaped skeleton reserves app-wide) and the value
-  renders `tabular-nums`.
+- **Stat cards**: big number (22px **600** tabular — ROUND-100 R100-C: the
+  value tier is 600, never font-black; TOKENS §2's weight law) + label + one
+  supporting line; icon quiet-tinted; never a rainbow. R99-E: pinned
+  `h-[92px]` (the exact height every StatCard-shaped skeleton reserves
+  app-wide) and the value renders `tabular-nums`.
 - **Charts**: theme accent for the primary series; per-model/per-category
   series get STABLE palette hues keyed by name (same name = same color,
   everywhere in the app — the model palette in

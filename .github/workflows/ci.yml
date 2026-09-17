@@ -44,7 +44,11 @@ jobs:
         run: pnpm docs:check
         continue-on-error: true  # warn-only for now (existing docs need stamp backfill)
 
-      - name: Verify (lint, typecheck, test, build, license audit)
+      # R100-C: the design-language audit gate rides the verify chain right
+      # after the test step (same place license:audit runs — end of verify),
+      # so CI fails on design-token regressions without a second pass over
+      # the tree. Baseline ratchet: scripts/design-audit-baseline.json.
+      - name: Verify (lint, typecheck, test, design audit, build, license audit)
         run: pnpm verify
 
       - name: Type-check the Rust shell

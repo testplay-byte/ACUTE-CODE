@@ -1,7 +1,13 @@
-<!-- last-reviewed: 2026-09-15 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-100 -->
 # Tokens — the color, type, and spacing language
 
 Serves DESIGN-SYSTEM §1 (source of truth), §2 (spacing), §3 (typography).
+ROUND-100 (R100-C): revised per research §C1
+(`docs/research/ui-design-language-round-100.md`) — the token system was
+sound-but-unapplied with two token-level defects (a crowded type ladder
+with no weight law, and no radius/border enforcement). Every revision
+below is marked **ROUND-100 (R100-C)** and is enforced by
+`scripts/design-audit.mjs` (`pnpm design:audit` — see USAGE §2).
 
 ## 1. The color pipeline (how a color reaches a pixel)
 
@@ -34,7 +40,7 @@ deriveThemeStyles()           ThemeStyles (~35 derived keys:
    isDark)` hash, so the same model name paints the same color on every
    surface; hue identity is the data encoding, so it cannot flow from the
    theme pipeline). Anything else hard-coded is a bug (round-98 C2 hunts
-   them).
+   them; R100-C's audit rule R1 counts them).
 3. Alpha tints ALWAYS via `withAlpha(color, 0.08–0.13)` from
    `src/components/dashboard/helpers.ts` — never string-suffix hex hacks
    (`#ef44441a` is a violation; round-97 already executed these).
@@ -42,59 +48,169 @@ deriveThemeStyles()           ThemeStyles (~35 derived keys:
    must respond to `:hover`, `group-hover`, or transitions belongs on a
    `--ac-*` var / Tailwind utility class — the JS-inline leg cannot express
    pseudo-states (the root cause of the ~90 hand-rolled hover handlers; new
-   UI must not add to that count, and touched UI should retire them).
+   UI must not add to that count, and touched UI should retire them —
+   enforced by audit rule R5).
+
+### 1a. The neutral ramp — ROUND-100 (R100-C, research §C1.3)
+
+"Pick a neutral" is a LOOKUP into the existing per-mode steps, never a hex
+hunt. bg/card/text come from the active theme's table; the rest are the
+mode-level overlays `deriveThemeStyles()` paints over them (identical in
+every theme — only the mode flips them):
+
+| Step | Light mode | Dark mode | Use |
+|---|---|---|---|
+| `bg` | `theme.bgLight` (per-theme) | `theme.bgDark` | app background |
+| `frame` | `color-mix(bg 93%, text)` | same recipe | the ambient strip behind cards (`--ac-frame-bg`) |
+| `card` | `theme.cardLight` (per-theme) | `theme.cardDark` | cards, panels, chrome surfaces |
+| `subtle` | `rgba(0,0,0,0.04)` | `rgba(255,255,255,0.04)` | quiet fills, chips, identity-chip bg |
+| `border` | `rgba(0,0,0,0.10)` | `rgba(255,255,255,0.10)` | 1px hairlines (dividers, inside-panel) |
+| `border-strong` | `rgba(0,0,0,0.18)` | `rgba(255,255,255,0.18)` | hover border swap, top-level card lines |
+| `text-tertiary` | `rgba(0,0,0,0.40)` | `rgba(255,255,255,0.40)` | meta, kickers, timestamps |
+| `text-secondary` | `rgba(0,0,0,0.60)` | `rgba(255,255,255,0.60)` | descriptions, secondary labels |
+| `text` | `theme.textLight` (per-theme) | `theme.textDark` | primary ink |
+
+Accent discipline (ROUND-100, research §C1.3): the accent marks
+**selection + the one primary action**; nothing else in working UI is
+accent-colored at rest.
 
 ### The `--ac-*` var families (summary)
 
 | Family | Vars | Used for |
 |---|---|---|
 | Surfaces | `--ac-bg`, `--ac-card`, `--ac-sidebar-bg` | app background, cards, chrome |
-| Text | `--ac-text`, `--ac-text-secondary`, `--ac-text-tertiary` | ink hierarchy |
+| Text | `--ac-text`, `--ac-text-secondary`, `--ac-text-tertiary` | ink hierarchy (the ramp above) |
 | Accent | `--ac-accent`, `--ac-accent-text`, `--ac-accent-faded`, `--ac-accent-soft` | brand moments, user bubbles, primary buttons |
 | Lines | `--ac-border`, `--ac-border-strong`, `--ac-border-subtle` | bento borders, hairlines |
 | Subtle | `--ac-subtle`, `--ac-subtle-hover` | quiet fills, hover washes |
 | Inputs | `--ac-input-bg`, `--ac-input-border`, `--ac-input-focus-border` | fields, steppers |
 | Shadows | `--ac-soft-shadow`, `--ac-bento-shadow` | depth (see MOTION.md for entry motion) |
 
-## 2. The type scale (the canonical ladder)
+## 2. The type scale (the canonical ladder) — ROUND-100 (R100-C, research §C1.1)
 
-The app is compact and dense by design (owner round-16 direction). The
-scale below is the language; anything else is drift to be retired when
-touched:
+**ROUND-100 (R100-C) revision**: the old 8-step ladder sanctioned 8
+sub-14px sizes with no weight law — the measured "AI-generated" tell (34
+distinct `text-[Npx]` sizes in the tree, 101 sub-10px occurrences outside
+onboarding). The ladder is now cliff-shaped and weight-governed:
 
-| Step | Size | Tracking/Case | Role |
-|---|---|---|---|
-| display | 56–104px | font-black | wizard + greeting moments only (WIZARD-DNA) |
-| title | 24px | semibold | page titles (Settings) |
-| section | 13px | semibold | card/section headers |
-| body | 13px | — | chat prose, default reading size |
-| list-mono | 12–12.5px | mono | file lists, models, machine strings |
-| label | 11px | uppercase, `tracking-[0.1em]` | section labels, kickers |
-| meta | 10px | mono | chips, timestamps, stat suffixes |
-| stat | 9.5px | mono | dense stat chips (footers) |
-
-**Rules**: one reading size per surface; hierarchy comes from weight/color
-(`text-ink` → `text-secondary` → `text-tertiary`), not from inventing a
-9.75px. The chat's text-size ladder (S/M/L, ±12%, `--ac-chat-scale`)
-scales the three reading surfaces (.chat-prose/.chat-thinking/
-.chat-narration) — never the chrome.
-
-## 3. The spacing scale
-
-| Token | Value | Route |
+| Token | Size / weight / line-height | Use |
 |---|---|---|
-| pad-2 / gap-3 | 2px / 3px | the borderless chat route (panels as surfaces) |
-| pad-3, pad-4 | 12px, 16px | normal app routes |
-| gap-4 | 16px | dashboard card grids |
-| radius-panel | 16px (`rounded-2xl`) | panels/cards; 12px (`rounded-xl`) inner controls |
-| handle | 5px | drag strips between chat panels |
+| `display` | 56–104px / **600** / 0.95–1.05 | wizard + empty-state greetings only |
+| `title` | 24px / **600** / 1.2 | page titles (Settings, Usage, Dashboard) |
+| `section` | 13px / 600 / 1.4 | card + section headers |
+| `body` | 13px / **400** / 1.55–1.65 | chat prose, settings descriptions |
+| `body-strong` | 13px / 500 | active nav label, emphasized row |
+| `ui` | 12px / 400 / 1.4 | secondary chrome, tab labels, toolbar labels |
+| `label` | 11px / **500** uppercase / `tracking-[0.08em]` | THE ONE kicker idiom (`ui/Kicker`) |
+| `meta-mono` | 10px / 400 mono / tabular | timestamps, chips, stat lines, model ids |
+| `value` | 22px / 600 / 1.0 tabular | StatCard values |
 
-**Rules**: paddings step 12→16→24→32→48; never 13/18/22. The transcript's
-graduated padding (24→48→64px) is the sanctioned exception for reading
-comfort. The chat route stays borderless (surfaces + gaps, no outlines);
-every other route keeps the bento card + 1.5px line borders.
+**Enforced rules (ROUND-100 R100-C — audit rules R2/R3/R4 guard these):**
 
-## 4. Semantic colors (the only fixed hues)
+- **Hard floor 10px.** Kill 8 / 8.5 / 9 / 9.5px type (the 101 occurrences
+  outside onboarding snap to 10 or 11).
+- **No half-pixel steps.** 10.5→11, 11.5→12, 12.5→12 or 13, 13.5→13.
+- **≤7 sizes visible on any one screen** — the ladder is a cliff
+  (13→24→56), not a staircase; a screen quoting more than 7 steps is drift.
+- **Markdown headings snap to 13px/600 (h3) and 12px/600 (h4–h6)** — kill
+  the 15/13.5/12.5px heading sizes (`ChatMarkdown.tsx:839-841`).
+- **THE WEIGHT LAW: 400 is the default everywhere in chrome; 500 =
+  active/selected; 600 = section headers, titles, buttons; 700/900 =
+  wizard display + StatCard value ONLY.** `font-bold`/`font-black`/
+  `font-extrabold` outside `src/components/onboarding/` + the StatCard
+  value is a bug (audit rule R4 counts them; ~26+ files today).
+
+Fonts: keep Space Grotesk app-wide (the owner-approved identity — the
+wizard proves it), mono stack unchanged. One reading size per surface;
+hierarchy comes from weight/color (`text` → `text-secondary` →
+`text-tertiary`), never from inventing a 9.75px. The chat's text-size
+ladder (S/M/L, ±12%, `--ac-chat-scale`) scales the three reading surfaces
+(.chat-prose/.chat-thinking/.chat-narration) — never the chrome.
+
+## 3. Spacing + density — ROUND-100 (R100-C, research §C1.2)
+
+**ROUND-100 (R100-C) revision**: 4px base grid, 8px rhythm — the scale is
+**4 / 8 / 12 / 16 / 24 / 32 / 48 / 64**. The old "pad-2/pad-3 (2px/3px)"
+chat-route exception is reduced to: seam gaps 4px (`SEAM_GAP` 3→4). Paddings
+step on the rhythm; never 13/18/22. The transcript's graduated padding
+(24→48→64px) stays the sanctioned exception for reading comfort.
+
+### The row-height table (ROUND-100 R100-C — IDE density)
+
+| Surface | Height |
+|---|---|
+| Sidebar nav row (top-level) | **32px** (was 40/44) |
+| Sidebar project row | 30px |
+| Sidebar session row | 26px |
+| Settings nav row | 30px |
+| Settings control row (label + control) | **36px** (`ui/SettingsRow`) |
+| Chat tool row | 28px |
+| WorkingSection header | 28px |
+| Composer toolbar | 36px |
+| Right-sidebar toolbar | 36px |
+| Chat turn gap (between turns) | 24px |
+| In-turn segment gap | 8px |
+
+Chrome widths (ROUND-100 R100-C): sidebar **240px** (was 270 — VS Code's
+300 is for trees; ours is nav), rail **48px** (the activity-bar standard,
+was 64). Icon sizes: **16px** nav/chrome, **14px** toolbar, **12px**
+rows/chips, **11px** only inside 20px chips. Every icon button keeps a
+**≥28×28px** hit target. The chat route stays borderless (surfaces + gaps);
+every other route keeps the bento card + 1.5px line borders. Drag handles
+stay 5px.
+
+## 4. The radius scale — ROUND-100 (R100-C, research §C1.4)
+
+**ROUND-100 (R100-C) revision**: 5 steps, expressed through Tailwind's
+default scale (same pixels, no arbitrary values — audit rule R2 counts
+`rounded-[Npx]` spellings):
+
+| Step | Radius | Tailwind | Use |
+|---|---|---|---|
+| 1 | **4px** | `rounded-sm` | inline code, checkboxes |
+| 2 | **8px** | `rounded-lg` | buttons, chips, inputs, toolbar pills |
+| 3 | **12px** | `rounded-xl` | code blocks, popovers, dialogs, composer, user message |
+| 4 | **16px** | `rounded-2xl` | cards, panels, the chat window card (was 24) |
+| 5 | **999px** | `rounded-full` | pills |
+
+The wizard keeps its **18–24px signature radii as the documented
+exception** (WIZARD-DNA §4). Kill every other arbitrary radius
+(`rounded-[7px]`, `[9px]`, `[10px]`, `[14px]`, `[18px]`, `[20px]` — the
+40× in ModelsProvidersTab etc. all snap to the scale).
+
+## 5. Borders + elevation — ROUND-100 (R100-C, research §C1.4)
+
+- **1px hairlines** for dividers, inside-panel lines, table rows.
+- **1.5px** only on top-level bento cards (the owner-approved
+  border-forward look).
+- **2–2.5px** borders are wizard-only.
+- Elevation: `softShadow` for floating surfaces (popovers, menus, the chat
+  window card); `bentoShadow` (hard offset) + gradient fills are
+  **wizard + primary CTA only** (WIZARD-DNA §7) — remove from
+  UsageScreen/DashboardScreen heroes (`UsageScreen.tsx:126-138`,
+  `DashboardScreen.tsx:85-90`).
+
+## 6. Interaction states — ROUND-100 (R100-C, research §C1.5)
+
+- **Hover (ROUND-100 R100-C):** every interactive row = the `hover:bg-hover`
+  bg wash (the CSS-var leg), **80–120ms, no translate/scale**. Hover is a
+  CSS class — NEVER a JS `onMouseEnter`/`onMouseLeave` handler (TitleBar
+  shows the pattern; audit rule R5 counts the violations). Retire all
+  `onMouseEnter` handlers outside onboarding.
+- **Focus (ROUND-100 R100-C):** ONE global rule — an accent ring, 2px,
+  2px offset:
+  `:where(button, a, input, textarea, select, [tabindex]):focus-visible { outline: 2px solid var(--ac-accent); outline-offset: 2px; }`
+  — then the `outline-none` uses each get audited to confirm a visible
+  replacement. Normative for every wave; lands in `src/index.css` with the
+  first applying wave (D — chat) so all later screens inherit it.
+- **Press:** keep the universal `active:scale-[0.98]` contract; DELETE
+  `hover:scale-105` from working chrome (composer Send/Stop/Queue) —
+  resting UI never fidgets.
+- **Selection:** accent text + `bg-accent-soft` + a 2px accent bar on the
+  leading edge (the provider-list grammar, COMPONENTS §5 — apply it to
+  Sidebar nav + settings nav).
+
+## 7. Semantic colors (the only fixed hues)
 
 | Name | Hex | Means |
 |---|---|---|
