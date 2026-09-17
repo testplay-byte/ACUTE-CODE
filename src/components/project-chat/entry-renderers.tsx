@@ -202,7 +202,8 @@ export function UnknownWorkingEntryRow({ kind }: { kind: string }) {
   return (
     <div
       data-unknown-entry-kind={kind}
-      className="px-1 py-0.5 font-mono text-[10.5px]"
+      // R100-D: 10.5→10px mono (the ladder's no-half-pixel rule — meta-mono).
+      className="px-1 py-0.5 font-mono text-[10px]"
       style={{ color: styles.textTertiary }}
     >
       {known ? `${kind} — renderer not registered yet` : `unrecognized entry kind: ${kind}`}

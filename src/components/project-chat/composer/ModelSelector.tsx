@@ -469,13 +469,13 @@ export function ModelSelector({
         style={{ borderColor: styles.borderSubtle }}
       >
         <span
-          className="text-[10px] font-bold uppercase tracking-wide truncate"
+          className="text-[10px] font-medium uppercase tracking-[0.08em] truncate"
           style={{ color: styles.textTertiary }}
         >
           {hoveredName}
         </span>
         {!modelsConfigQuery.isLoading && models.length > 0 ? (
-          <span className="ml-auto font-mono text-[9px] shrink-0" style={{ color: styles.textTertiary }}>
+          <span className="ml-auto font-mono text-[10px] tabular-nums shrink-0" style={{ color: styles.textTertiary }}>
             {models.length} model{models.length === 1 ? "" : "s"}
           </span>
         ) : null}
@@ -483,7 +483,7 @@ export function ModelSelector({
           <button
             type="button"
             onClick={() => setHoveredProvider(null)}
-            className="text-[10px] font-semibold shrink-0"
+            className="text-[10px] font-medium shrink-0"
             style={{ color: styles.accent }}
           >
             Back
@@ -524,16 +524,12 @@ export function ModelSelector({
               aria-selected={isSelected}
               onClick={() => pickModel(m.modelId, hoveredProvider)}
               title={m.modelId}
-              className="w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg font-mono text-[10.5px] truncate transition-colors"
+              className={`w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg font-mono text-[10px] truncate transition-colors ${
+                isSelected ? "" : "hover:bg-hover"
+              }`}
               style={{
                 color: styles.textSecondary,
                 background: isSelected ? withAlpha(styles.accent, 0.09) : "transparent",
-              }}
-              onMouseEnter={(e) => {
-                if (!isSelected) e.currentTarget.style.background = styles.subtleHover;
-              }}
-              onMouseLeave={(e) => {
-                if (!isSelected) e.currentTarget.style.background = "transparent";
               }}
             >
               {isSelected ? (
@@ -554,16 +550,10 @@ export function ModelSelector({
         <button
           type="button"
           onClick={() => setModelsFreeOnly(false)}
-          className="w-full text-left px-2 pt-1.5 pb-1 mt-1 border-t rounded-none text-[10px] font-semibold transition-colors"
+          // R100-D: the hover (bg + color) is now the CSS wash (hover:bg-hover
+          // + hover:text-muted — the CSS-var leg; no JS painting).
+          className="w-full text-left px-2 pt-1.5 pb-1 mt-1 border-t rounded-none text-[10px] font-medium transition-colors hover:bg-hover hover:text-muted"
           style={{ color: styles.textTertiary, borderColor: styles.borderSubtle }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = styles.subtleHover;
-            e.currentTarget.style.color = styles.textSecondary;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = styles.textTertiary;
-          }}
         >
           {hiddenCount} paid model{hiddenCount === 1 ? "" : "s"} hidden — show all
         </button>
@@ -628,14 +618,8 @@ export function ModelSelector({
         aria-expanded={open}
         aria-label="Choose model"
         title={buttonTitle}
-        className="flex items-center gap-1 h-7 px-2 rounded-[10px] text-[11px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed max-w-[240px]"
+        className="flex items-center gap-1 h-7 px-2 rounded-lg text-[11px] font-medium transition-colors hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent max-w-[240px]"
         style={{ color: styles.textSecondary }}
-        onMouseEnter={(e) => {
-          if (!disabled) e.currentTarget.style.background = styles.subtleHover;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "transparent";
-        }}
       >
         {/* R77 (owner: "For the model selection, there was no proper icon,
             so you might need to add a proper icon"): the Cpu badge — every
@@ -716,11 +700,11 @@ export function ModelSelector({
             className="flex items-center justify-between gap-2 px-1 pb-1.5 mb-1 border-b"
             style={{ borderColor: styles.borderSubtle }}
           >
-            <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: styles.textTertiary }}>
+            <span className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: styles.textTertiary }}>
               Providers
             </span>
             <div
-              className="flex items-center rounded-[10px] border-[1.5px] overflow-hidden"
+              className="flex items-center rounded-lg border-[1.5px] overflow-hidden"
               style={{ borderColor: styles.border }}
             >
               {([
@@ -732,7 +716,7 @@ export function ModelSelector({
                   type="button"
                   onClick={seg.pick}
                   aria-pressed={seg.active}
-                  className="h-5 px-2 text-[9.5px] font-bold transition-colors"
+                  className="h-5 px-2 text-[10px] font-medium transition-colors"
                   style={{
                     background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
                     color: seg.active ? styles.accent : styles.textTertiary,
@@ -789,9 +773,9 @@ export function ModelSelector({
                       className="flex-1 min-w-0 flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg"
                       style={{ color: styles.textSecondary }}
                     >
-                      <span className="text-[11.5px] font-semibold truncate">{p.name}</span>
+                      <span className="text-[12px] font-medium truncate">{p.name}</span>
                       {effectiveProviderId === p.id ? (
-                        <span className="font-mono text-[9px] shrink-0" style={{ color: styles.accent }}>
+                        <span className="font-mono text-[10px] shrink-0" style={{ color: styles.accent }}>
                           current
                         </span>
                       ) : null}
@@ -802,14 +786,8 @@ export function ModelSelector({
                       aria-label={`Configure ${p.name}`}
                       title={`Model settings for ${p.name}`}
                       onClick={goManageModels}
-                      className="w-7 h-7 mr-0.5 grid place-items-center rounded-md shrink-0 transition-colors"
+                      className="w-7 h-7 mr-0.5 grid place-items-center rounded-lg shrink-0 transition-colors hover:bg-hover"
                       style={{ color: styles.textTertiary }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = styles.subtleHover;
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = "transparent";
-                      }}
                     >
                       <Settings size={11} />
                     </button>
@@ -824,14 +802,8 @@ export function ModelSelector({
             type="button"
             role="menuitem"
             onClick={goManageModels}
-            className="w-full flex items-center justify-center gap-1.5 mt-1 pt-1.5 border-t text-[11px] font-bold transition-colors"
+            className="w-full flex items-center justify-center gap-1.5 mt-1 pt-1.5 border-t text-[11px] font-medium transition-colors hover:bg-hover"
             style={{ borderColor: styles.borderSubtle, color: styles.accent }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = styles.subtleHover;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-            }}
           >
             <Settings size={11} />
             Manage Models

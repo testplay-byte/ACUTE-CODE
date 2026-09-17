@@ -108,7 +108,7 @@ export function CommandPalette({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -8, scale: 0.98 }}
             transition={{ duration: 0.15 }}
-            className="w-full max-w-[640px] mx-4 rounded-[16px] border-[1.5px] overflow-hidden shadow-2xl"
+            className="w-full max-w-[640px] mx-4 rounded-2xl border-[1.5px] overflow-hidden shadow-2xl"
             style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadowSm }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -120,7 +120,7 @@ export function CommandPalette({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={mode === "symbols" ? "Search symbols (useThemeStyles, greet, Agent)…" : mode === "files" ? "Search files (*.ts, Sidebar, AgentChatPanel)…" : "Search content (grep — where is X used?)…"}
-                className="flex-1 min-w-0 bg-transparent outline-none text-[14px]"
+                className="flex-1 min-w-0 bg-transparent outline-none text-[13px]"
                 style={{ color: styles.text }}
               />
               <button onClick={onClose} aria-label="Close palette" className="w-6 h-6 rounded-md grid place-items-center" style={{ color: styles.textTertiary }}>
@@ -137,9 +137,13 @@ export function CommandPalette({
                     key={m}
                     onClick={() => setMode(m)}
                     aria-pressed={active}
-                    className="flex items-center gap-1.5 h-7 px-2.5 rounded-[8px] text-[11px] font-bold capitalize transition-colors"
+                    // R100-D: rounded-[8px] → rounded-lg; the segmented pills
+                    // are 500 (the toolbar idiom — bold is off-law in chrome).
+                    className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-[11px] font-medium capitalize transition-colors hover:bg-hover"
                     style={{
-                      background: active ? withAlpha(styles.accent, 0.12) : "transparent",
+                      // R100-D: the inactive pills leave background to the
+                      // hover class (inline "transparent" would beat it).
+                      background: active ? withAlpha(styles.accent, 0.12) : undefined,
                       color: active ? styles.accent : styles.textTertiary,
                     }}
                   >
@@ -163,9 +167,9 @@ export function CommandPalette({
                   <button
                     key={`${r.path}-${i}`}
                     onClick={() => onPickFile(r.path, r.line)}
-                    className="w-full flex items-center gap-2 px-3.5 py-2 text-left transition-colors"
-                    onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                    // R100-D (TOKENS §6): the hover wash is the CSS class
+                    // (hover:bg-hover — the CSS-var leg; no JS painting).
+                    className="w-full flex items-center gap-2 px-3.5 py-2 text-left transition-colors hover:bg-hover"
                   >
                     {r.line !== undefined ? (
                       <Hash size={11} style={{ color: styles.accent }} className="shrink-0" />

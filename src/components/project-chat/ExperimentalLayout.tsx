@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { GripHorizontal, Maximize2, Minus } from "lucide-react";
-import { withAlpha } from "../dashboard/helpers";
 import {
   useProjectChatStore,
   type FreeformPanel,
@@ -177,14 +176,11 @@ function FreeformWindow({
           </span>
         </div>
         <button
-          className="w-6 h-6 rounded-lg grid place-items-center transition-colors"
+          // R100-D (TOKENS §6): the hover wash is the CSS class (hover:bg-hover
+          // — the CSS-var leg; the JS onMouseEnter/onMouseLeave accent
+          // painting is gone).
+          className="w-6 h-6 rounded-lg grid place-items-center transition-colors hover:bg-hover"
           style={{ color: styles.textSecondary }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = withAlpha(styles.accent, 0.08);
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-          }}
           onClick={(e) => {
             e.stopPropagation();
             updateFreeformPanel(panel.id, { minimized: !panel.minimized });

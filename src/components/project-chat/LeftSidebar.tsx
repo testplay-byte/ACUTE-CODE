@@ -6,6 +6,7 @@ import { ease } from "../../lib/motion";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
+import { withAlpha } from "../dashboard/helpers";
 import { ExplorerPanel } from "./panels/ExplorerPanel";
 import { TodoPanel } from "./panels/TodoPanel";
 
@@ -53,16 +54,14 @@ export function LeftSidebar({ project }: { project: Project }) {
             aria-pressed={codeVisible}
             aria-label="Toggle code panel"
             title={codeVisible ? "Hide code panel" : "Show code panel"}
-            className="w-7 h-7 rounded-lg grid place-items-center transition-colors"
+            // R100-D (TOKENS §6): the hover wash is the CSS class
+            // (hover:bg-hover), gated to the UNpressed state exactly as the
+            // old JS handler was; the hardcoded demo-era accent rgba rides
+            // withAlpha(styles.accent, 0.08) — the token spelling.
+            className="w-7 h-7 rounded-lg grid place-items-center transition-colors hover:bg-hover"
             style={{
               color: codeVisible ? styles.accent : styles.textSecondary,
-              background: codeVisible ? `rgba(255,107,44,0.08)` : "transparent",
-            }}
-            onMouseEnter={(e) => {
-              if (!codeVisible) e.currentTarget.style.background = styles.subtleHover;
-            }}
-            onMouseLeave={(e) => {
-              if (!codeVisible) e.currentTarget.style.background = "transparent";
+              background: codeVisible ? withAlpha(styles.accent, 0.08) : undefined,
             }}
           >
             <Code2 size={13} />
@@ -71,14 +70,8 @@ export function LeftSidebar({ project }: { project: Project }) {
             onClick={() => setSidebarOpen(false)}
             aria-label="Collapse explorer"
             title="Hide explorer"
-            className="w-7 h-7 rounded-lg grid place-items-center transition-colors"
+            className="w-7 h-7 rounded-lg grid place-items-center transition-colors hover:bg-hover"
             style={{ color: styles.textSecondary }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = styles.subtleHover;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-            }}
           >
             <ChevronLeft size={13} />
           </button>

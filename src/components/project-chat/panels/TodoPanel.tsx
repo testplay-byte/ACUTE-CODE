@@ -42,14 +42,18 @@ export function TodoPanel({ projectId, mission }: { projectId: string; mission: 
             />
           </svg>
           <div className="absolute inset-0 grid place-items-center">
-            <span className="text-[12px] font-bold font-mono" style={{ color: styles.text }}>
+            {/* R100-D (weight law + numbers): the ring's percent is 600
+                (value tier), tabular-nums — not font-bold. */}
+            <span className="text-[12px] font-semibold font-mono tabular-nums" style={{ color: styles.text }}>
               {percent}%
             </span>
           </div>
         </div>
         <div className="min-w-0">
+          {/* R100-D: the kicker snaps to the landed panel idiom — 10px/500
+              uppercase tracking-[0.08em] (THE one tracking spelling). */}
           <p
-            className="text-[10px] uppercase tracking-widest font-semibold"
+            className="text-[10px] uppercase tracking-[0.08em] font-medium"
             style={{ color: styles.textSecondary }}
           >
             Mission
@@ -63,13 +67,14 @@ export function TodoPanel({ projectId, mission }: { projectId: string; mission: 
       {/* Counter */}
       <div className="flex items-center justify-between mb-2 px-0.5">
         <span
-          className="text-[10px] uppercase tracking-widest font-semibold"
+          className="text-[10px] uppercase tracking-[0.08em] font-medium"
           style={{ color: styles.textSecondary }}
         >
           To-Do
         </span>
+        {/* R100-D: numbers discipline — the counter chip goes tabular. */}
         <span
-          className="text-[10px] font-mono px-2 py-0.5 rounded-full border"
+          className="text-[10px] font-mono tabular-nums px-2 py-0.5 rounded-full border"
           style={{ background: styles.inputBg, borderColor: styles.border, color: styles.textSecondary }}
         >
           {done}/{total}
@@ -112,7 +117,9 @@ export function TodoPanel({ projectId, mission }: { projectId: string; mission: 
               </span>
               {isProgress && (
                 <span
-                  className="ml-auto shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold font-mono"
+                  // R100-D: 9→10px (the type floor) + font-medium (the
+                  // weight law).
+                  className="ml-auto shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium font-mono"
                   style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
                 >
                   active

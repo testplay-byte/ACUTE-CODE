@@ -122,14 +122,8 @@ export function AddContextButton({
         aria-expanded={menu.isOpen || domOpen}
         aria-label="Add context"
         title={disabled ? "Attachments need the app backend" : "Attach files or project files"}
-        className="flex items-center justify-center h-7 w-7 rounded-[10px] text-[11px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="flex items-center justify-center h-7 w-7 rounded-lg text-[11px] font-medium transition-colors hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
         style={{ color: styles.textSecondary }}
-        onMouseEnter={(e) => {
-          if (!disabled) e.currentTarget.style.background = styles.subtleHover;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "transparent";
-        }}
       >
         {/* ROUND-51 (R51-c, owner: "there should be just the logo. There
             should not be the context or text or anything like that") — the
@@ -166,19 +160,13 @@ export function AddContextButton({
                 role="menuitem"
                 onClick={() => void attachFromOsPicker()}
                 disabled={busy}
-                className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg text-[11.5px] font-medium transition-colors disabled:opacity-50"
+                className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg text-[12px] transition-colors hover:bg-hover disabled:opacity-50"
                 style={{ color: styles.textSecondary }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = styles.subtleHover;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "transparent";
-                }}
               >
                 <HardDriveUpload size={12} className="shrink-0" style={{ color: styles.accent }} />
                 Attach files…
                 {busy ? (
-                  <span className="ml-auto font-mono text-[9.5px]" style={{ color: styles.textTertiary }}>
+                  <span className="ml-auto font-mono text-[10px]" style={{ color: styles.textTertiary }}>
                     picking…
                   </span>
                 ) : null}
@@ -187,20 +175,14 @@ export function AddContextButton({
                 type="button"
                 role="menuitem"
                 onClick={() => setPickerOpen(true)}
-                className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg text-[11.5px] font-medium transition-colors"
+                className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg text-[12px] transition-colors hover:bg-hover"
                 style={{ color: styles.textSecondary }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = styles.subtleHover;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "transparent";
-                }}
               >
                 <FolderOpen size={12} className="shrink-0" style={{ color: styles.accent }} />
                 Add project files…
               </button>
               <div
-                className="mt-1 pt-1.5 border-t px-2 py-1 font-mono text-[9.5px]"
+                className="mt-1 pt-1.5 border-t px-2 py-1 font-mono text-[10px]"
                 style={{ borderColor: styles.borderSubtle, color: styles.textTertiary }}
               >
                 type @ to mention a project file

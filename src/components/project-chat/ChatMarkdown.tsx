@@ -9,6 +9,9 @@ import { openLink } from "../../lib/open-link";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import type { ThemeStyles } from "../../lib/themes";
 import { withAlpha } from "../dashboard/helpers";
+// R100-D: the copied-check success color rides the ONE documented spelling
+// (semantics.ts) — no more inline hex literals here.
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 // R97-F: the Prism-backed highlighter (the app's own token palette lives in
 // index.css — see src/lib/highlight.ts).
 import { highlightLines } from "../../lib/highlight";
@@ -99,7 +102,9 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   // is back on highlighted blocks, and both paths wrap identically.
   const highlightedLines = useMemo(() => highlightLines(code, lang), [code, lang]);
   return (
-    <div className="my-1.5 rounded-[12px] overflow-hidden border" style={{ borderColor: styles.border }}>
+    // R100-D (research §C4.4): the code-block card keeps its 12px radius, now
+    // via the SCALE spelling (rounded-xl — no arbitrary value).
+    <div className="my-1.5 rounded-xl overflow-hidden border" style={{ borderColor: styles.border }}>
       <div
         className="flex items-center justify-between px-3 py-1.5 border-b"
         style={{ background: styles.subtle, borderColor: styles.border }}
@@ -108,7 +113,9 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
           {lang !== undefined && lang !== "" ? (
             <span
               data-code-lang={lang}
-              className="shrink-0 rounded-[5px] px-1.5 py-px font-mono text-[9.5px] font-bold uppercase tracking-wide"
+              // R100-D: the language badge snaps to the 4px radius step + the
+              // 10px type floor at 500 (the tiny-badge weight).
+              className="shrink-0 rounded-sm px-1.5 py-px font-mono text-[10px] font-medium uppercase tracking-wide"
               style={{
                 background: withAlpha(styles.accent, styles.isDark ? 0.16 : 0.1),
                 color: styles.accent,
@@ -117,7 +124,7 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
               {lang}
             </span>
           ) : null}
-          <span className="min-w-0 truncate font-mono text-[10px] font-bold" style={{ color: styles.textTertiary }}>
+          <span className="min-w-0 truncate font-mono text-[10px] tabular-nums" style={{ color: styles.textTertiary }}>
             {lines.length} {lines.length === 1 ? "line" : "lines"}
           </span>
         </span>
@@ -131,12 +138,14 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
           style={{ color: styles.textTertiary }}
           aria-label="Copy code"
         >
-          {copied ? <Check size={10} style={{ color: "#22c55e" }} /> : <Copy size={10} />}
+          {copied ? <Check size={10} style={{ color: SEMANTIC_COLORS.success }} /> : <Copy size={10} />}
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
       <pre
-        className="acute-code-hl overflow-x-auto p-3 font-mono text-[11.5px] leading-[1.6]"
+        // R100-D (research §C4.4): 11.5→12px mono body (the ladder's no
+        // half-pixel rule); the 10px tertiary gutter stays frozen.
+        className="acute-code-hl overflow-x-auto p-3 font-mono text-[12px] leading-[1.6]"
         style={{ color: styles.text }}
       >
         {highlightedLines !== null
@@ -311,7 +320,6 @@ export function matchUrl(token: string): string | null {
 
 /** Inline clickable pill for a file path — opens it in the right sidebar. */
 export function PathPill({ path, projectId }: { path: string; projectId: string }) {
-  const styles = useThemeStyles();
   const isCodeLike = /\.(t|j)sx?$|\.py$|\.rs$|\.go$|\.sh$|\.json$|\.toml$|\.ya?ml$|\.xml$|\.html?$|\.css$|\.scss$|\.md$|\.txt$|\.vue$|\.svelte$/i.test(path);
   const Icon = isCodeLike ? FileCode : File;
   return (
@@ -320,19 +328,13 @@ export function PathPill({ path, projectId }: { path: string; projectId: string 
       onClick={() => useRightSidebarStore.getState().openFile(projectId, path)}
       title={`Open ${path} in sidebar`}
       aria-label={`Open ${path} in sidebar`}
-      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[11.5px] transition-colors align-middle cursor-pointer max-w-full overflow-hidden"
-      style={{
-        background: withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08),
-        color: styles.text,
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = withAlpha(styles.accent, styles.isDark ? 0.22 : 0.16);
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08);
-      }}
+      // R100-D: the pill's accent tint + hover moved wholly to the CSS-var
+      // leg (bg-accent-soft rest, bg-accent-faded hover — the sanctioned
+      // accent-family utilities; the JS onMouseEnter style painting is
+      // gone, per TOKENS §1 rule 4 + §6). 11.5→12px mono per the ladder.
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-accent-soft hover:bg-accent-faded text-ink font-mono text-[12px] transition-colors align-middle cursor-pointer max-w-full overflow-hidden"
     >
-      <Icon size={10} className="shrink-0" style={{ color: styles.accent }} />
+      <Icon size={10} className="shrink-0 text-accent" />
       {/* ROUND-43: a very long path can never widen the chat — the label
           ellipsizes inside the pill instead (the full path is on the title). */}
       <span className="min-w-0 flex-1 truncate">{path}</span>
@@ -543,7 +545,9 @@ function renderInline(text: string, projectId: string, keyPrefix: string, styles
         out.push(
           <code
             key={`${keyPrefix}-c${k}`}
-            className="px-1.5 py-0.5 rounded-md text-[11.5px] font-mono break-all"
+            // R100-D (research §C4.4): inline code = 4px radius, px-1, mono
+            // 12px — the spec's exact inline-code idiom.
+            className="px-1 rounded-sm text-[12px] font-mono break-all"
             style={{
               background: withAlpha(styles.accent, styles.isDark ? 0.13 : 0.08),
               color: styles.text,
@@ -555,13 +559,15 @@ function renderInline(text: string, projectId: string, keyPrefix: string, styles
       }
     } else if (mark.kind === "bolditalic") {
       out.push(
-        <strong key={`${keyPrefix}-bi${k}`} style={{ fontWeight: 700 }}>
+        // R100-D (weight law): prose bold = 600 (700/900 are wizard display
+        // + StatCard value only — TOKENS §2).
+        <strong key={`${keyPrefix}-bi${k}`} style={{ fontWeight: 600 }}>
           <em>{renderInline(mark.inner, projectId, `${keyPrefix}-bii${k}`, styles)}</em>
         </strong>,
       );
     } else if (mark.kind === "bold") {
       out.push(
-        <strong key={`${keyPrefix}-b${k}`} style={{ fontWeight: 700 }}>
+        <strong key={`${keyPrefix}-b${k}`} style={{ fontWeight: 600 }}>
           {renderInline(mark.inner, projectId, `${keyPrefix}-bi${k}`, styles)}
         </strong>,
       );
@@ -835,10 +841,12 @@ export function parseMarkdownBlocks(content: string): MdBlock[] {
 
 // ─── The renderer ────────────────────────────────────────────────────────────
 
-/** Heading sizes per the R64-c spec: h1/h2/h3 as styled blocks (~15/13.5/
- * 12.5px, bold); h4–h6 as bold body-size paragraphs. */
-const HEADING_SIZES: Record<number, string> = { 1: "15px", 2: "13.5px", 3: "12.5px" };
-const HEADING_MARGINS: Record<number, string> = { 1: "mt-3 mb-1", 2: "mt-2.5 mb-1", 3: "mt-2 mb-0.5" };
+/** Heading sizes per the R100-D spec (research §C4.4 + TOKENS §2): h1–h3
+ * snap to 13px/600 (the `section` tier — the cliff: body 13 → title 24, no
+ * in-between staircase); h4–h6 are 12px/600. The old 15/13.5/12.5px ladder
+ * was the measured "AI-generated" tell (8 evenly-spaced sub-14px steps). */
+const HEADING_SIZES: Record<number, string> = { 1: "13px", 2: "13px", 3: "13px", 4: "12px", 5: "12px", 6: "12px" };
+const HEADING_MARGINS: Record<number, string> = { 1: "mt-3 mb-1", 2: "mt-2.5 mb-1", 3: "mt-2 mb-0.5", 4: "mt-1.5 mb-0.5", 5: "mt-1.5 mb-0.5", 6: "mt-1.5 mb-0.5" };
 
 /** Render the parsed blocks (module-level: pure given styles + projectId). */
 function renderBlocks(content: string, projectId: string, styles: ThemeStyles): ReactNode[] {
@@ -867,16 +875,17 @@ function renderBlocks(content: string, projectId: string, styles: ThemeStyles): 
           return (
             <div
               key={`md-h-${i}`}
-              className={`${HEADING_MARGINS[b.level]} font-bold break-words`}
+              className={`${HEADING_MARGINS[b.level]} font-semibold break-words`}
               style={{ fontSize: size, color: styles.text }}
             >
               {renderInline(b.text, projectId, `h${i}`, styles)}
             </div>
           );
         }
-        // h4–h6: bold paragraphs at body size.
+        // h4–h6 (unreachable today — the map above covers 1–6): bold
+        // paragraphs at body size.
         return (
-          <div key={`md-h-${i}`} className="mt-1.5 mb-0.5 font-bold break-words" style={{ color: styles.text }}>
+          <div key={`md-h-${i}`} className="mt-1.5 mb-0.5 font-semibold break-words" style={{ color: styles.text }}>
             {renderInline(b.text, projectId, `h${i}`, styles)}
           </div>
         );
@@ -902,7 +911,8 @@ function renderBlocks(content: string, projectId: string, styles: ThemeStyles): 
 
       case "bullets":
         return (
-          <div key={`md-ul-${i}`} className="my-1 flex flex-col gap-0.5 min-w-0">
+          // R100-D (research §C4.4): list items gap at 4px (gap-1).
+          <div key={`md-ul-${i}`} className="my-1 flex flex-col gap-1 min-w-0">
             {b.items.map((it, j) => (
               <div
                 key={j}
@@ -920,7 +930,7 @@ function renderBlocks(content: string, projectId: string, styles: ThemeStyles): 
 
       case "numbers":
         return (
-          <div key={`md-ol-${i}`} className="my-1 flex flex-col gap-0.5 min-w-0">
+          <div key={`md-ol-${i}`} className="my-1 flex flex-col gap-1 min-w-0">
             {b.items.map((it, j) => (
               <div key={j} className="flex gap-1.5 min-w-0">
                 <span className="shrink-0 select-none font-mono text-[11px] leading-[1.65]" style={{ color: styles.textTertiary }}>
@@ -941,7 +951,7 @@ function renderBlocks(content: string, projectId: string, styles: ThemeStyles): 
         return (
           <div
             key={`md-tbl-${i}`}
-            className="my-1.5 min-w-0 overflow-x-auto rounded-[10px] border"
+            className="my-1.5 min-w-0 overflow-x-auto rounded-xl border"
             style={{ borderColor: styles.border }}
           >
             <table className="w-full border-collapse text-[11px]" style={{ color: styles.text }}>

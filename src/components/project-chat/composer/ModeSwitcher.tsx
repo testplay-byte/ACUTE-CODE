@@ -78,14 +78,8 @@ export function ModeSwitcher({
             ? current.description
             : `${current.label} — ${current.description}`
         }
-        className="flex items-center gap-1.5 h-7 px-2 rounded-[10px] text-[11px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="flex items-center gap-1.5 h-7 px-2 rounded-lg text-[11px] font-medium transition-colors hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
         style={{ color: styles.textSecondary }}
-        onMouseEnter={(e) => {
-          if (!disabled) e.currentTarget.style.background = styles.subtleHover;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "transparent";
-        }}
       >
         <Icon size={12} className="shrink-0" style={{ color: styles.accent }} />
         {/* R87-A1 (owner: "when I make it smaller, at a point every single
@@ -131,27 +125,23 @@ export function ModeSwitcher({
                   menu.closeAll();
                   if (!isSelected) onChange(option.id);
                 }}
-                className="w-full flex items-start gap-2 text-left px-2 py-1.5 rounded-lg transition-colors"
+                className={`w-full flex items-start gap-2 text-left px-2 py-1.5 rounded-lg transition-colors ${
+                  isSelected ? "" : "hover:bg-hover"
+                }`}
                 style={{
                   background: isSelected ? withAlpha(styles.accent, 0.09) : "transparent",
-                }}
-                onMouseEnter={(e) => {
-                  if (!isSelected) e.currentTarget.style.background = styles.subtleHover;
-                }}
-                onMouseLeave={(e) => {
-                  if (!isSelected) e.currentTarget.style.background = "transparent";
                 }}
               >
                 <OptionIcon size={12} className="shrink-0 mt-0.5" style={{ color: styles.accent }} />
                 <span className="min-w-0 flex-1 flex items-center gap-1">
                   <span
-                    className="text-[11.5px] font-bold"
+                    className="text-[12px] font-medium"
                     style={{ color: isSelected ? styles.accent : styles.text }}
                   >
                     {option.label}
                   </span>
                   {option.id === "ask" ? (
-                    <span className="font-mono text-[9px] font-normal" style={{ color: styles.textTertiary }}>
+                    <span className="font-mono text-[10px] font-normal" style={{ color: styles.textTertiary }}>
                       default
                     </span>
                   ) : null}

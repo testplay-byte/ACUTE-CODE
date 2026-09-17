@@ -62,31 +62,37 @@ describe("ChatFocusLayout geometry math (Round 43 + R87-A1 240px floor)", () => 
     // Large container: the cap is generous; the sidebar keeps its stored
     // width and the CHAT absorbs the extra space. R87-A1: the chat floor
     // halved 480 → 240, so every cap grew by 240.
-    expect(sidebarWidthCap(2254)).toBe(2003);
-    expect(sidebarWidthCap(1134)).toBe(883);
+    // R100-D re-pin (§C1.2): SEAM_GAP 3→4 (the 4px base grid) grew the
+    // chrome 11→13px — every cap shrank by 2.
+    expect(sidebarWidthCap(2254)).toBe(2001);
+    expect(sidebarWidthCap(1134)).toBe(881);
     // Tight container (a 900px window with the app sidebar open ≈ 594px):
     // the cap keeps dropping — the R42 280px floor (→ 771px row, overflow)
     // is gone.
-    expect(sidebarWidthCap(594)).toBe(343);
-    // The cap only hits 0 when even the 240px floor + 11px chrome can't
+    expect(sidebarWidthCap(594)).toBe(341);
+    // The cap only hits 0 when even the 240px floor + 13px chrome can't
     // fit (R87-A1: was 491 at the 480px floor).
     expect(sidebarWidthCap(250)).toBe(0);
-    expect(sidebarWidthCap(300)).toBe(49);
+    expect(sidebarWidthCap(300)).toBe(47);
   });
 
   it("the row can never overflow: chat floor + chrome + sidebar ≤ container (every width)", () => {
     // The full row invariant across the entire width range: whatever the
     // stored sidebar width, the RENDERED row (softened chat floor + chrome +
     // max(sidebar sliver, cap)) always fits the container.
-    for (let w = 207; w <= 2560; w += 7) {
-      const row = chatMinWidthFor(w) + 11 + Math.max(36, sidebarWidthCap(w));
+    // R100-D re-pin (§C1.2): the chrome row-math rides 13px (SEAM_GAP 3→4);
+    // the loop now starts at the new hard bound 209 = chat(160) + 13 + 36
+    // (below it the row deliberately overflows rather than shrinking the
+    // chat under its 160px floor — unchanged behavior, shifted 2px).
+    for (let w = 209; w <= 2560; w += 7) {
+      const row = chatMinWidthFor(w) + 13 + Math.max(36, sidebarWidthCap(w));
       expect(row).toBeLessThanOrEqual(w);
     }
     // And while the container can fit the chat floor at all, the cap alone
     // already guarantees it (sidebar yields first — R42 behaviour). R87-A1:
-    // floor(240) + chrome(11) fits from 251px up (was 527 at the 480 floor).
-    for (let w = 251; w <= 2560; w += 7) {
-      expect(sidebarWidthCap(w) + 240 + 11).toBeLessThanOrEqual(w);
+    // floor(240) + chrome(13) fits from 253px up (was 527 at the 480 floor).
+    for (let w = 253; w <= 2560; w += 7) {
+      expect(sidebarWidthCap(w) + 240 + 13).toBeLessThanOrEqual(w);
     }
   });
 
@@ -97,13 +103,16 @@ describe("ChatFocusLayout geometry math (Round 43 + R87-A1 240px floor)", () => 
     expect(chatMinWidthFor(594)).toBe(240); // sidebar yields, NOT the chat
     expect(chatMinWidthFor(500)).toBe(240); // and the halved floor fits
     expect(chatMinWidthFor(320)).toBe(240); // even tighter still
-    // Below chat(240)+chrome(11)+sidebar-sliver(36)=287 the floor softens so
+    // Below chat(240)+chrome(13)+sidebar-sliver(36)=289 the floor softens so
     // the row still fits rather than overflowing (R87-A1: was 527 at 480).
-    expect(chatMinWidthFor(280)).toBe(233);
+    // R100-D re-pin (§C1.2): the soften point moved with the 13px chrome.
+    expect(chatMinWidthFor(280)).toBe(231);
     expect(chatMinWidthFor(200)).toBe(160); // the hard lower bound
     expect(chatMinWidthFor(100)).toBe(160);
     for (let w = 200; w <= 1200; w += 5) {
-      expect(chatMinWidthFor(w) + 11 + 36).toBeLessThanOrEqual(Math.max(w, 207));
+      // R100-D re-pin (§C1.2): the hard lower bound moved 207 → 209 with the
+      // 13px chrome (chat floor 160 + 13 + 36).
+      expect(chatMinWidthFor(w) + 13 + 36).toBeLessThanOrEqual(Math.max(w, 209));
     }
   });
 });
@@ -140,7 +149,9 @@ describe("ChatFocusLayout rendered geometry (Round 43)", () => {
 
   const chatCard = () =>
     (Array.from(document.querySelectorAll("div")).find((el) =>
-      el.className.includes("rounded-[24px]"),
+      // R100-D re-pin (§C4.1): the window card's 24px arbitrary radius became
+      // rounded-2xl (the 16px scale step — same lookup, new spelling).
+      el.className.includes("rounded-2xl"),
     ) as HTMLElement | undefined) ?? null;
 
   it("chat keeps its 240px floor at every measured width that can fit it", async () => {
@@ -161,10 +172,10 @@ describe("ChatFocusLayout rendered geometry (Round 43)", () => {
   it("softens the chat floor only when the container cannot fit floor+chrome+sliver", async () => {
     const projects = await getFixtureProjects().list();
     renderWithProviders(<ChatFocusLayout project={projects[0]} />);
-    // R87-A1: with the 240px floor, softening only starts below a 287px
-    // container (240 + 11 chrome + 36 sliver).
+    // R87-A1: with the 240px floor, softening only starts below a 289px
+    // container (240 + 13 chrome + 36 sliver — R100-D: 13px chrome).
     act(() => MockResizeObserver.fire(280));
-    expect(chatCard()?.style.minWidth).toBe("233px");
+    expect(chatCard()?.style.minWidth).toBe("231px");
   });
 
   it("chat panel FILLS its column — no shrink-to-fit dead space at any width (owner R43)", async () => {
@@ -174,8 +185,10 @@ describe("ChatFocusLayout rendered geometry (Round 43)", () => {
 
     // The panel root must carry w-full (the measured bug: a 455px panel
     // inside a 1781px card because the flex child shrink-to-fit its content).
+    // R100-D re-pin (§C4.1): the root's 16px radius is now rounded-2xl — the
+    // window card shares the spelling, so the lookup pins the w-full combo.
     const panel = Array.from(document.querySelectorAll("div")).find((el) =>
-      el.className.includes("rounded-[16px]"),
+      el.className.includes("rounded-2xl") && el.className.includes("w-full"),
     );
     expect(panel?.className).toContain("w-full");
 

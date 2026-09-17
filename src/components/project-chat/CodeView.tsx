@@ -132,7 +132,9 @@ export function CodeView({ projectId, busy = false }: { projectId: string; busy?
               ))}
             </div>
             <pre
-              className="flex-1 py-4 pl-4 pr-6 font-mono text-[12.5px] leading-[22px] whitespace-pre-wrap break-words"
+              // R100-D: 12.5→12px mono (the no-half-pixel rule — matches the
+              // CodeBlock body tier).
+              className="flex-1 py-4 pl-4 pr-6 font-mono text-[12px] leading-[22px] whitespace-pre-wrap break-words"
               style={{ color: styles.text }}
             >
               {lines.map((line, i) => (

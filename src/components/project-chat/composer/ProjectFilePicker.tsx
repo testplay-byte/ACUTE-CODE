@@ -40,14 +40,14 @@ export function ProjectFilePicker({
   return (
     <div className="flex flex-col min-w-0" data-project-file-picker>
       <div className="flex items-center justify-between gap-2 px-2 pb-1.5 mb-1 border-b" style={{ borderColor: styles.borderSubtle }}>
-        <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: styles.textTertiary }}>
+        <span className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: styles.textTertiary }}>
           Project files
         </span>
         <button
           type="button"
           onClick={onCancel}
           aria-label="Back to Add Context menu"
-          className="text-[10px] font-semibold"
+          className="text-[10px] font-medium"
           style={{ color: styles.accent }}
         >
           Back
@@ -61,7 +61,7 @@ export function ProjectFilePicker({
           autoFocus
           aria-label="Search project files"
           placeholder="Filter files…"
-          className="flex-1 min-w-0 bg-transparent outline-none text-[11.5px]"
+          className="flex-1 min-w-0 bg-transparent outline-none text-[12px]"
           style={{ color: styles.text }}
         />
       </div>
@@ -85,16 +85,12 @@ export function ProjectFilePicker({
                 aria-selected={isSelected}
                 onClick={() => toggle(path)}
                 title={path}
-                className="w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg font-mono text-[10.5px] truncate transition-colors"
+                className={`w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg font-mono text-[10px] truncate transition-colors ${
+                  isSelected ? "" : "hover:bg-hover"
+                }`}
                 style={{
                   color: styles.textSecondary,
                   background: isSelected ? withAlpha(styles.accent, 0.1) : "transparent",
-                }}
-                onMouseEnter={(e) => {
-                  if (!isSelected) e.currentTarget.style.background = styles.subtleHover;
-                }}
-                onMouseLeave={(e) => {
-                  if (!isSelected) e.currentTarget.style.background = "transparent";
                 }}
               >
                 {isSelected ? (
@@ -113,7 +109,7 @@ export function ProjectFilePicker({
         onClick={() => onConfirm([...selected])}
         disabled={selected.size === 0}
         aria-label={`Attach ${selected.size} project file${selected.size === 1 ? "" : "s"}`}
-        className="mt-1.5 mx-1 h-7 rounded-[10px] text-[11px] font-bold border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="mt-1.5 mx-1 h-7 rounded-lg text-[11px] font-semibold border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         style={{
           borderColor: withAlpha(styles.accent, 0.45),
           color: styles.accent,

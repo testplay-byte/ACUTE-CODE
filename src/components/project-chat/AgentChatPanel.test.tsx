@@ -144,8 +144,11 @@ async function renderPanel() {
 describe("AgentChatPanel layout contract (Round 43)", () => {
   it("panel root FILLS its column (w-full) — the shrink-to-fit dead-space bug", async () => {
     await renderPanel();
+    // R100-D re-pin: the panel root's 16px radius now uses the SCALE utility
+    // (rounded-2xl — §C4.1's window-card spec; same pixels, no arbitrary
+    // value), so the root lookup follows the new spelling.
     const root = Array.from(document.querySelectorAll("div")).find((el) =>
-      el.className.includes("rounded-[16px]"),
+      el.className.includes("rounded-2xl"),
     );
     expect(root).toBeTruthy();
     expect(root?.className).toContain("w-full");
@@ -1389,15 +1392,18 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
     expect(footer!.textContent).not.toContain("test/model-9");
   });
 
-  it("the user bubble caps at min(75%, 640px) of the reading column (a bubble, never a full-width document)", async () => {
+  it("the user bubble caps at min(65%, 640px) of the reading column (a bubble, never a full-width document)", async () => {
     await renderHeaderConversation();
+    // R100-D re-pin (§C4.3 — the input-row idiom): the messenger tail is
+    // DELETED (uniform rounded-xl 12px — the lookup below matches the
+    // bubble's unique class combo) and the row's cap tightens 75% → 65%.
     const bubble = Array.from(document.querySelectorAll("div")).find((el) =>
-      el.className.includes("rounded-br-[5px]"),
+      el.className.includes("rounded-xl px-3.5 py-2.5 text-[13px]"),
     );
     expect(bubble).toBeTruthy();
     const row = bubble!.parentElement;
     expect(row).not.toBeNull();
-    expect(row!.className).toContain("max-w-[min(75%,640px)]");
+    expect(row!.className).toContain("max-w-[min(65%,640px)]");
     // The squish tier keeps its wider relative room (R89-D2).
     expect(row!.className).toContain("@max-[420px]:max-w-[92%]");
   });

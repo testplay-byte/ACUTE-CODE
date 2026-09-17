@@ -113,7 +113,7 @@ export function ThinkingLevelButton({
           disabled
           aria-label="Thinking level: No thinking"
           title="This model does not support reasoning"
-          className="flex items-center gap-1.5 h-7 px-2 rounded-[10px] text-[11px] font-semibold"
+          className="flex items-center gap-1.5 h-7 px-2 rounded-lg text-[11px] font-medium"
           style={{ color: styles.textTertiary }}
         >
           <Brain size={12} className="shrink-0" style={{ color: styles.textTertiary }} />
@@ -137,14 +137,8 @@ export function ThinkingLevelButton({
         aria-expanded={menu.isOpen}
         aria-label={`Thinking level: ${current.label}`}
         title={`Thinking level — ${current.description}`}
-        className="flex items-center gap-1.5 h-7 px-2 rounded-[10px] text-[11px] font-semibold transition-colors"
+        className="flex items-center gap-1.5 h-7 px-2 rounded-lg text-[11px] font-medium transition-colors hover:bg-hover"
         style={{ color: styles.textSecondary }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = styles.subtleHover;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "transparent";
-        }}
       >
         <Brain size={12} className="shrink-0" style={{ color: styles.accent }} />
         {/* R87-A1 staggered composer shrink — tier 2: the thinking label
@@ -182,19 +176,15 @@ export function ThinkingLevelButton({
                   menu.closeAll();
                   if (!isSelected) onChange(option.id);
                 }}
-                className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg transition-colors"
+                className={`w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg transition-colors ${
+                  isSelected ? "" : "hover:bg-hover"
+                }`}
                 style={{
                   background: isSelected ? withAlpha(styles.accent, 0.09) : "transparent",
                 }}
-                onMouseEnter={(e) => {
-                  if (!isSelected) e.currentTarget.style.background = styles.subtleHover;
-                }}
-                onMouseLeave={(e) => {
-                  if (!isSelected) e.currentTarget.style.background = "transparent";
-                }}
               >
                 <span
-                  className="text-[11.5px] font-bold min-w-0 flex-1"
+                  className="text-[12px] font-medium min-w-0 flex-1"
                   style={{ color: isSelected ? styles.accent : styles.text }}
                 >
                   {option.label}
@@ -203,14 +193,14 @@ export function ThinkingLevelButton({
                   {option.id === spec.defaultRow && option.id !== "default" ? (
                     <span
                       data-thinking-default-rung
-                      className="ml-1.5 text-[9px] font-semibold uppercase tracking-wide"
+                      className="ml-1.5 text-[10px] font-medium uppercase tracking-wide"
                       style={{ color: styles.textTertiary }}
                     >
                       default
                     </span>
                   ) : null}
                 </span>
-                <span className="text-[9.5px] min-w-0 truncate" style={{ color: styles.textTertiary }}>
+                <span className="text-[10px] min-w-0 truncate" style={{ color: styles.textTertiary }}>
                   {option.description}
                 </span>
                 {isSelected ? <Check size={11} className="shrink-0" style={{ color: styles.accent }} /> : null}
@@ -224,7 +214,7 @@ export function ThinkingLevelButton({
           {spec.note !== null ? (
             <div
               data-thinking-menu-note
-              className="px-2 pt-1 pb-0.5 text-[9.5px] leading-tight"
+              className="px-2 pt-1 pb-0.5 text-[10px] leading-tight"
               style={{ color: styles.textTertiary }}
             >
               {spec.note}

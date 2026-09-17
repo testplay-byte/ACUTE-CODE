@@ -37,23 +37,20 @@ function FileTreeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
   return (
     <div>
       <button
-        className="w-full flex items-center gap-2 h-[34px] px-2 text-left transition-colors rounded-lg"
+        // R100-D (TOKENS §6): the hover wash is the CSS class (hover:bg-hover
+        // — the CSS-var leg), painted only on the UNselected rows exactly as
+        // the old JS handler was (a selected row's inline accent wash wins
+        // over the class by specificity — no double state).
+        className="w-full flex items-center gap-2 h-[34px] px-2 text-left transition-colors rounded-lg hover:bg-hover"
         style={{
           paddingLeft: `${depth * 14 + 8}px`,
           background: isSelected
             ? withAlpha(styles.accent, styles.isDark ? 0.09 : 0.08)
-            : "transparent",
+            : undefined,
         }}
         onClick={() => {
           if (isFolder) toggleFolder(node.path);
           else selectFile(node.path);
-        }}
-        onMouseEnter={(e) => {
-          if (!isSelected)
-            e.currentTarget.style.background = styles.isDark ? styles.inputBg : styles.subtleHover;
-        }}
-        onMouseLeave={(e) => {
-          if (!isSelected) e.currentTarget.style.background = "transparent";
         }}
       >
         {isFolder ? (
@@ -77,7 +74,9 @@ function FileTreeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
           <FileIcon name={node.name} />
         )}
         <span
-          className="text-[12.5px] font-mono truncate"
+          // R100-D: 12.5→12px mono (the ladder's no-half-pixel rule — the ui
+          // tier for chrome tree labels).
+          className="text-[12px] font-mono truncate"
           style={{
             color: isSelected ? styles.text : styles.textSecondary,
             fontWeight: isSelected ? 500 : 400,
@@ -128,7 +127,9 @@ export function ExplorerPanel({ project }: { project: Project }) {
       {/* Project name */}
       <div className="px-3 pb-2 flex items-center gap-2">
         <div
-          className="w-5 h-5 rounded-md grid place-items-center shrink-0"
+          // R100-D: rounded-md (6px) is off the 5-step radius scale — the
+          // chip snaps to rounded-lg (the 8px chips step).
+          className="w-5 h-5 rounded-lg grid place-items-center shrink-0"
           style={{ backgroundColor: project.color }}
         >
           {/* white icon reads on the project's own color chip, not a theme surface */}

@@ -38,8 +38,11 @@ import { withAlpha } from "../dashboard/helpers";
  */
 
 /** The amber verification tone — the documented cross-theme token (a wall is
- * a warning-to-act, not the red of a failed turn). */
-const AMBER = "#d97706";
+ * a warning-to-act, not the red of a failed turn).
+ * R100-D: the local #d97706 hex is retired — the ONE documented spelling
+ * is SEMANTIC_COLORS.warning (semantics.ts), same as every other amber
+ * surface after the R100-D sweep. */
+const AMBER = SEMANTIC_COLORS.warning;
 
 /** The kind → human title (the owner's exact naming ask). */
 function kindTitle(kind: LiveBrowserCheckpoint["kind"]): string {
@@ -159,7 +162,8 @@ export function BrowserCheckpointCard({ checkpoint, onResolve = resolveBrowserCh
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.2, ease }}
       data-testid="browser-checkpoint-card"
-      className="rounded-[14px] border overflow-hidden"
+      // R100-D: 14px arbitrary radius → rounded-xl (the 12px card step).
+      className="rounded-xl border overflow-hidden"
       style={{
         borderColor: waiting ? withAlpha(AMBER, 0.45) : styles.borderSubtle,
         background: styles.subtle,
@@ -170,7 +174,8 @@ export function BrowserCheckpointCard({ checkpoint, onResolve = resolveBrowserCh
       {/* ── the header row: the wall mark + title + the page URL ────────── */}
       <div className="px-3.5 pt-3 pb-2.5 flex items-start gap-2.5 min-w-0">
         <span
-          className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-[9px]"
+          // R100-D: rounded-[9px] → rounded-lg (the 8px chips step).
+          className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg"
           style={{ background: withAlpha(waiting ? AMBER : styles.accent, 0.14) }}
         >
           {waiting ? (
@@ -182,11 +187,14 @@ export function BrowserCheckpointCard({ checkpoint, onResolve = resolveBrowserCh
           )}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[12.5px] font-bold leading-tight" style={{ color: waiting ? AMBER : styles.text }}>
+          {/* R100-D: 12.5→13px + font-semibold (the section-header tier —
+              bold is wizard display only). */}
+          <p className="text-[13px] font-semibold leading-tight" style={{ color: waiting ? AMBER : styles.text }}>
             {title}
           </p>
           <p
-            className="mt-0.5 truncate font-mono text-[10.5px]"
+            // R100-D: 10.5→10px mono (the meta-mono tier).
+            className="mt-0.5 truncate font-mono text-[10px]"
             style={{ color: styles.textTertiary }}
             title={checkpoint.url}
           >
@@ -195,7 +203,9 @@ export function BrowserCheckpointCard({ checkpoint, onResolve = resolveBrowserCh
         </div>
         {waiting ? (
           <span
-            className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+            // R100-D: the chip kicker snaps — font-medium + tracking-[0.08em]
+            // (THE one tracking spelling).
+            className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]"
             style={{ background: withAlpha(AMBER, 0.12), color: AMBER }}
             title="The agent paused this browser action for you"
           >
@@ -213,7 +223,10 @@ export function BrowserCheckpointCard({ checkpoint, onResolve = resolveBrowserCh
             <div className="flex items-end gap-2.5">
               <span
                 data-testid="browser-checkpoint-countdown"
-                className="font-mono text-[30px] font-bold leading-none tabular-nums"
+                // R100-D (ladder): the countdown snaps 30px/700 → 22px/600 —
+                // the ladder's `value` tier (display sizes are wizard-only;
+                // tabular stays).
+                className="font-mono text-[22px] font-semibold leading-none tabular-nums"
                 style={{ color: AMBER }}
                 aria-live="polite"
               >
@@ -251,7 +264,8 @@ export function BrowserCheckpointCard({ checkpoint, onResolve = resolveBrowserCh
               disabled={busy !== null}
               data-testid="browser-checkpoint-done"
               title="I solved it in the browser panel — the agent re-checks the page and continues"
-              className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[11px] font-bold transition-colors disabled:opacity-60"
+              // R100-D (weight law): buttons are 600 — font-bold is gone.
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[11px] font-semibold transition-colors disabled:opacity-60"
               style={{
                 color: SEMANTIC_COLORS.success,
                 background: withAlpha(SEMANTIC_COLORS.success, 0.12),
@@ -267,7 +281,8 @@ export function BrowserCheckpointCard({ checkpoint, onResolve = resolveBrowserCh
               disabled={busy !== null}
               data-testid="browser-checkpoint-stop"
               title="Stop waiting — the agent will report back and ask how to proceed"
-              className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[11px] font-bold transition-colors disabled:opacity-60"
+              // R100-D (weight law): buttons are 600 — font-bold is gone.
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[11px] font-semibold transition-colors disabled:opacity-60"
               style={{
                 color: styles.textSecondary,
                 background: "transparent",
@@ -278,7 +293,8 @@ export function BrowserCheckpointCard({ checkpoint, onResolve = resolveBrowserCh
               {busy === "stop" ? "Stopping…" : "Stop waiting"}
             </button>
             {error !== null ? (
-              <span className="min-w-0 flex-1 truncate text-[10.5px]" style={{ color: AMBER }} title={error}>
+              // R100-D: 10.5→10px.
+              <span className="min-w-0 flex-1 truncate text-[10px]" style={{ color: AMBER }} title={error}>
                 {error}
               </span>
             ) : null}
@@ -289,7 +305,8 @@ export function BrowserCheckpointCard({ checkpoint, onResolve = resolveBrowserCh
               already unblocked/returning) ────────────────────────────────── */
         <div className="px-3.5 pb-3 pt-0.5 flex items-center gap-2 min-w-0">
           <Clock size={12} className="shrink-0" style={{ color: styles.textTertiary }} aria-hidden />
-          <p data-testid="browser-checkpoint-resolution" className="min-w-0 text-[11.5px] leading-snug" style={{ color: styles.textSecondary }}>
+          {/* R100-D: 11.5→12px (the no-half-pixel snap). */}
+          <p data-testid="browser-checkpoint-resolution" className="min-w-0 text-[12px] leading-snug" style={{ color: styles.textSecondary }}>
             {state === "done"
               ? "You marked it solved — the agent is re-checking the page and will continue."
               : state === "stop"

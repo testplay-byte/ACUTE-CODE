@@ -1,6 +1,5 @@
 import { FileText } from "lucide-react";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
-import { withAlpha } from "../../dashboard/helpers";
 
 /**
  * ROUND-50 (R50-c2): the @ quick-picker — typing "@" in the composer's
@@ -34,7 +33,7 @@ export function AtMentionPicker({
       className="absolute bottom-full left-2 mb-1.5 w-72 max-w-[calc(100%-1rem)] rounded-2xl border p-1.5 z-50"
       style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
     >
-      <div className="px-2 pb-1.5 mb-1 border-b font-mono text-[9.5px]" style={{ borderColor: styles.borderSubtle, color: styles.textTertiary }}>
+      <div className="px-2 pb-1.5 mb-1 border-b font-mono text-[10px]" style={{ borderColor: styles.borderSubtle, color: styles.textTertiary }}>
         @ {query}
       </div>
       <div className="max-h-52 overflow-y-auto auto-scroll">
@@ -47,18 +46,17 @@ export function AtMentionPicker({
             onClick={() => onPick(path)}
             onMouseEnter={() => onHighlight(i)}
             title={path}
-            className="w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg font-mono text-[10.5px] truncate transition-colors"
-            style={{
-              color: styles.textSecondary,
-              background: i === highlighted ? withAlpha(styles.accent, 0.1) : "transparent",
-            }}
+            className={`w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg font-mono text-[10px] truncate transition-colors ${
+              i === highlighted ? "bg-accent-soft" : "hover:bg-hover"
+            }`}
+            style={{ color: styles.textSecondary }}
           >
             <FileText size={11} className="shrink-0" style={{ color: i === highlighted ? styles.accent : styles.textTertiary }} />
             <span className="min-w-0 flex-1 truncate">{path}</span>
           </button>
         ))}
       </div>
-      <div className="px-2 pt-1 font-mono text-[9px]" style={{ color: styles.textTertiary }}>
+      <div className="px-2 pt-1 font-mono text-[10px]" style={{ color: styles.textTertiary }}>
         ↵ attach · esc close
       </div>
     </div>

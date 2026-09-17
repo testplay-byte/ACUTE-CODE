@@ -58,10 +58,12 @@ import type { Project } from "../../lib/api";
 const CHAT_MIN_WIDTH = 240;
 /** The resize handle's footprint. */
 const HANDLE_WIDTH = 5;
-/** The gap between the chat card and the sidebar card. */
-const SEAM_GAP = 3;
+/** The gap between the chat card and the sidebar card. R100-D (research
+ * §C1.2 — the 4px base grid): the old 2px/3px seam exception is retired;
+ * seams step on the grid at 4px. */
+const SEAM_GAP = 4;
 /** Fixed chrome around the chat column: the handle + the two seam gaps. */
-const CHROME_WIDTH = HANDLE_WIDTH + SEAM_GAP * 2; // 11px
+const CHROME_WIDTH = HANDLE_WIDTH + SEAM_GAP * 2; // 13px
 /** The narrowest the right sidebar may render: its header's collapse-button
  * column (36px, same as the collapsed rail). Below this nothing useful is
  * visible anyway — better to keep the collapse affordance on-screen than to
@@ -189,7 +191,10 @@ export function ChatFocusLayout({ project }: { project: Project }) {
           softens only when the container cannot even fit floor+chrome+sliver
           (see chatMinWidthFor) — the row can never force horizontal overflow. */}
       <div
-        className="flex-1 min-h-0 flex rounded-[24px] border-[1.5px] overflow-hidden"
+        // R100-D (research §C4.1): the window card snaps 24→16px (rounded-2xl —
+        // the scale utility spelling, no arbitrary value); border + softShadow
+        // stay exactly as built.
+        className="flex-1 min-h-0 flex rounded-2xl border-[1.5px] overflow-hidden"
         style={{
           minWidth: chatMinWidthFor(containerWidth),
           backgroundColor: styles.card,
@@ -214,14 +219,17 @@ export function ChatFocusLayout({ project }: { project: Project }) {
       </div>
 
       {/* Resize handle between chat and the right sidebar. ROUND-42: also
-          keyboard-resizable (Arrow keys ±16px) for accessibility. */}
+          keyboard-resizable (Arrow keys ±16px) for accessibility.
+          R100-D: the hover/focus reveal moved to the CSS leg (bg-line wash —
+          the JS onMouseEnter/onFocus style painting is gone, per TOKENS §6);
+          while a drag is in flight the pointer stays on the handle, so the
+          CSS wash covers the dragging state too. */}
       <div
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize right sidebar"
         tabIndex={0}
-        className="w-[5px] shrink-0 cursor-ew-resize relative group flex items-center justify-center outline-none rounded-full hover:opacity-100 opacity-0 transition-opacity"
-        style={{ background: "transparent" }}
+        className="w-[5px] shrink-0 cursor-ew-resize relative group flex items-center justify-center outline-none rounded-full bg-transparent hover:bg-line focus-visible:bg-line hover:opacity-100 opacity-0 transition-opacity transition-colors"
         onMouseDown={(e) => {
           e.preventDefault();
           isResizing.current = true;
@@ -237,18 +245,6 @@ export function ChatFocusLayout({ project }: { project: Project }) {
             e.preventDefault();
             onResize(-16);
           }
-        }}
-        onFocus={(e) => {
-          e.currentTarget.style.background = styles.border;
-        }}
-        onBlur={(e) => {
-          e.currentTarget.style.background = "transparent";
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = styles.border;
-        }}
-        onMouseLeave={(e) => {
-          if (!isResizing.current) e.currentTarget.style.background = "transparent";
         }}
       >
         <div

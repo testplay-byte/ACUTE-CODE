@@ -14,6 +14,7 @@
 import { useMemo, useState } from "react";
 import { Check, Clock, X } from "lucide-react";
 import type { WorkingEntry } from "../../lib/api";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 
@@ -45,22 +46,22 @@ export function QuestionCard({
     if (entry.status === "answered") {
       return (
         <div
-          className="rounded-[12px] border-[1.5px] px-3 py-2.5 my-1"
+          className="rounded-xl border-[1.5px] px-3 py-2.5 my-1"
           style={{
-            borderColor: withAlpha(SEMANTIC_OK, 0.45),
-            background: withAlpha(SEMANTIC_OK, styles.isDark ? 0.07 : 0.04),
+            borderColor: withAlpha(SEMANTIC_COLORS.success, 0.45),
+            background: withAlpha(SEMANTIC_COLORS.success, styles.isDark ? 0.07 : 0.04),
           }}
           data-testid="question-card-answered"
         >
           <div className="flex items-center gap-2 mb-1.5">
             <span
               className="flex items-center justify-center w-4 h-4 rounded-full shrink-0"
-              style={{ background: withAlpha(SEMANTIC_OK, 0.15), color: SEMANTIC_OK }}
+              style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.15), color: SEMANTIC_COLORS.success }}
               aria-hidden
             >
               <Check size={11} strokeWidth={3} />
             </span>
-            <span className="text-[11.5px] font-bold" style={{ color: styles.text }}>
+            <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
               Answered
             </span>
             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full" style={{ background: styles.subtle, color: styles.textTertiary }}>
@@ -105,7 +106,7 @@ export function QuestionCard({
     // read-only rather than dead buttons.
     return (
       <div
-        className="rounded-[12px] border-[1.5px] px-3 py-2.5 my-1"
+        className="rounded-xl border-[1.5px] px-3 py-2.5 my-1"
         style={{ borderColor: withAlpha(styles.accent, 0.5), background: withAlpha(styles.accent, 0.06) }}
       >
         {questions.map((q, i) => (
@@ -119,7 +120,7 @@ export function QuestionCard({
 
   return (
     <div
-      className="rounded-[12px] border-[1.5px] px-3 py-2.5 my-1"
+      className="rounded-xl border-[1.5px] px-3 py-2.5 my-1"
       style={{
         borderColor: withAlpha(styles.accent, 0.55),
         background: withAlpha(styles.accent, styles.isDark ? 0.08 : 0.05),
@@ -128,7 +129,7 @@ export function QuestionCard({
     >
       <div className="flex items-center gap-2 mb-2">
         <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: styles.accent }} aria-hidden />
-        <span className="text-[11.5px] font-bold" style={{ color: styles.text }}>
+        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
           The agent needs your answer{questions.length > 1 ? `s (${questions.length})` : ""}
         </span>
       </div>
@@ -145,7 +146,9 @@ export function QuestionCard({
                   key={option}
                   type="button"
                   onClick={() => setDrafts((d) => ({ ...d, [i]: { value: option, source: "option" } }))}
-                  className="h-7 px-3 rounded-full text-[11px] font-bold border-[1.5px] transition-all hover:scale-[1.02] active:scale-95"
+                  // R100-D (TOKENS §6): the hover:scale is gone (resting UI
+                  // never fidgets); the press stays.
+                  className="h-7 px-3 rounded-full text-[11px] font-semibold border-[1.5px] transition-colors active:scale-95"
                   style={{
                     borderColor: picked ? styles.accent : withAlpha(styles.accent, 0.35),
                     background: picked ? styles.accent : "transparent",
@@ -182,7 +185,7 @@ export function QuestionCard({
                 <button
                   type="button"
                   onClick={() => setCustomOpen((c) => ({ ...c, [i]: true }))}
-                  className="h-7 px-3 rounded-full text-[11px] font-bold border-[1.5px] border-dashed transition-colors"
+                  className="h-7 px-3 rounded-full text-[11px] font-semibold border-[1.5px] border-dashed transition-colors"
                   style={{ borderColor: withAlpha(styles.accent, 0.4), color: styles.textTertiary }}
                 >
                   {drafts[i]?.source === "custom" && drafts[i]?.value.trim() !== ""
@@ -207,7 +210,7 @@ export function QuestionCard({
           });
           onAnswer(entry.questionId, answers, sources);
         }}
-        className="h-8 px-4 rounded-full text-[11.5px] font-bold transition-transform hover:scale-[1.02] active:scale-95 disabled:hover:scale-100 disabled:opacity-50"
+        className="h-8 px-4 rounded-full text-[12px] font-semibold transition-transform active:scale-95 disabled:opacity-50"
         style={{ background: styles.accent, color: styles.accentText }}
       >
         Send answer{questions.length > 1 ? "s" : ""}
@@ -215,5 +218,3 @@ export function QuestionCard({
     </div>
   );
 }
-
-const SEMANTIC_OK = "#22c55e";

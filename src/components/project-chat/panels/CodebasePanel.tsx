@@ -70,10 +70,13 @@ export function CodebasePanel({ projectId }: { projectId: string }) {
     >
       {/* Header */}
       <div className="shrink-0 h-9 flex items-center justify-between px-3 border-b" style={{ borderColor: styles.border }}>
-        <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>
+        {/* R100-D: the header kicker snaps — font-medium + tracking-[0.08em]
+            (THE one tracking spelling; bold is off-law for chrome). */}
+        <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: styles.textTertiary }}>
           <Database size={12} /> Codebase
         </span>
-        <span className="text-[10px] font-mono" style={{ color: styles.textTertiary }}>
+        {/* R100-D: numbers discipline — the counts chip goes tabular. */}
+        <span className="text-[10px] font-mono tabular-nums" style={{ color: styles.textTertiary }}>
           {index.totalFiles}f · {index.totalSymbols}s
         </span>
       </div>
@@ -83,10 +86,12 @@ export function CodebasePanel({ projectId }: { projectId: string }) {
           <div key={path} className="mb-1">
             <button
               onClick={() => { selectFile(path); setCodeVisible(true); }}
-              className="w-full text-left px-2 py-1 rounded-[6px] text-[11px] font-mono truncate hover:bg-opacity-50 transition-colors"
+              // R100-D: rounded-[6px] → rounded-lg (the 8px scale step) + the
+              // hover wash on the CSS-var leg (hover:bg-hover — the JS
+              // onMouseEnter/onMouseLeave painting is gone, per TOKENS §6;
+              // the no-op hover:bg-opacity-50 went with it).
+              className="w-full text-left px-2 py-1 rounded-lg text-[11px] font-mono truncate hover:bg-hover transition-colors"
               style={{ color: styles.textSecondary }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               title={path}
             >
               {path}
@@ -96,15 +101,16 @@ export function CodebasePanel({ projectId }: { projectId: string }) {
                 <button
                   key={`${s.symbol}-${i}`}
                   onClick={() => { selectFile(s.path); setCodeVisible(true); }}
-                  className="w-full text-left px-1.5 py-0.5 rounded-[4px] text-[11px] flex items-center gap-1.5 hover:bg-opacity-50 transition-colors"
+                  // R100-D: rounded-[4px] → rounded-sm (the scale spelling of
+                  // the same 4px) + the hover wash on the CSS-var leg.
+                  className="w-full text-left px-1.5 py-0.5 rounded-sm text-[11px] flex items-center gap-1.5 hover:bg-hover transition-colors"
                   style={{ color: styles.text }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                   title={`${s.kind} ${s.symbol} — line ${s.line}`}
                 >
                   <Hash size={9} style={{ color: styles.accent }} className="shrink-0" />
                   <span className="truncate">{s.symbol}</span>
-                  <span className="ml-auto shrink-0 text-[9px] font-mono px-1 rounded" style={{ background: styles.subtle, color: styles.textTertiary }}>
+                  {/* R100-D: 9→10px (the type floor) for the kind chip. */}
+                  <span className="ml-auto shrink-0 text-[10px] font-mono px-1 rounded" style={{ background: styles.subtle, color: styles.textTertiary }}>
                     {s.kind.slice(0, 4)}
                   </span>
                 </button>

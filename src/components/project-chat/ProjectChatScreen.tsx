@@ -3,7 +3,6 @@ import {
   useEffect,
   useRef,
   type KeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
 } from "react";
 import { motion } from "framer-motion";
 import { ChevronRight, Files } from "lucide-react";
@@ -109,9 +108,6 @@ function GapHandle({ onResize }: { onResize: (delta: number) => void }) {
 /** Demo CollapsedSidebar rail (w-12 card strip with expand + explorer buttons). */
 function CollapsedSidebar({ onExpand }: { onExpand: () => void }) {
   const styles = useThemeStyles();
-  const hoverBg = (e: ReactMouseEvent<HTMLButtonElement>, on: boolean) => {
-    e.currentTarget.style.background = on ? styles.subtleHover : styles.inputBg;
-  };
   return (
     <motion.div
       initial={{ width: 0, opacity: 0 }}
@@ -124,10 +120,11 @@ function CollapsedSidebar({ onExpand }: { onExpand: () => void }) {
         onClick={onExpand}
         aria-label="Expand explorer"
         title="Expand sidebar"
-        className="w-9 h-9 rounded-xl grid place-items-center transition-colors"
-        style={{ color: styles.textSecondary, background: styles.inputBg }}
-        onMouseEnter={(e) => hoverBg(e, true)}
-        onMouseLeave={(e) => hoverBg(e, false)}
+        // R100-D (TOKENS §6): the hover wash is the CSS class (hover:bg-hover
+        // — the CSS-var leg; the rest background rides the bg-input utility
+        // so the hover class can win — the JS hoverBg painting is gone).
+        className="w-9 h-9 rounded-xl grid place-items-center transition-colors bg-input hover:bg-hover"
+        style={{ color: styles.textSecondary }}
       >
         <ChevronRight size={16} />
       </button>
@@ -135,10 +132,8 @@ function CollapsedSidebar({ onExpand }: { onExpand: () => void }) {
         onClick={onExpand}
         aria-label="Open explorer"
         title="Explorer"
-        className="w-9 h-9 rounded-xl grid place-items-center transition-colors"
-        style={{ color: styles.textSecondary, background: styles.inputBg }}
-        onMouseEnter={(e) => hoverBg(e, true)}
-        onMouseLeave={(e) => hoverBg(e, false)}
+        className="w-9 h-9 rounded-xl grid place-items-center transition-colors bg-input hover:bg-hover"
+        style={{ color: styles.textSecondary }}
       >
         <Files size={16} />
       </button>

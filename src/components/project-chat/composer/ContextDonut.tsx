@@ -527,8 +527,8 @@ function LegendRow({
           aria-label={`${seg.label} — manage in Settings`}
         >
           <span
-            className="min-w-0 truncate text-[10.5px] group-hover:underline"
-            style={{ color: lit ? styles.text : styles.textSecondary, fontWeight: lit ? 700 : 400 }}
+            className="min-w-0 truncate text-[11px] group-hover:underline"
+            style={{ color: lit ? styles.text : styles.textSecondary, fontWeight: lit ? 500 : 400 }}
           >
             {seg.label}
           </span>
@@ -541,8 +541,8 @@ function LegendRow({
         </button>
       ) : (
         <span
-          className="min-w-0 flex-1 truncate text-[10.5px]"
-          style={{ color: lit ? styles.text : styles.textSecondary, fontWeight: lit ? 700 : 400 }}
+          className="min-w-0 flex-1 truncate text-[11px]"
+          style={{ color: lit ? styles.text : styles.textSecondary, fontWeight: lit ? 500 : 400 }}
         >
           {seg.label}
         </span>
@@ -599,7 +599,7 @@ function ContextBar({
       role="img"
       aria-label={aria}
       data-context-bar
-      className="flex w-full h-[14px] rounded-[7px] overflow-hidden"
+      className="flex w-full h-[14px] rounded-full overflow-hidden"
       style={{ background: withAlpha(styles.text, 0.1) }}
     >
       {bar.segments.map((seg) => {
@@ -626,7 +626,7 @@ function ContextBar({
           >
             {showLabel ? (
               <span
-                className="font-mono text-[9px] font-bold tabular-nums leading-none whitespace-nowrap"
+                className="font-mono text-[10px] font-medium tabular-nums leading-none whitespace-nowrap"
                 style={{ color: getContrastText(hex) }}
               >
                 {`${Math.round(frac * 100)}%`}
@@ -668,11 +668,11 @@ function Pane({ label, children }: { label: string; children: ReactNode }) {
   return (
     <section
       data-pane={label}
-      className="rounded-[10px] border p-[9px] mb-2"
+      className="rounded-lg border p-2 mb-2"
       style={{ borderColor: styles.borderSubtle, background: styles.subtle }}
     >
       <div
-        className="text-[10px] font-bold uppercase tracking-[0.1em] mb-2"
+        className="text-[10px] font-medium uppercase tracking-[0.08em] mb-2"
         style={{ color: styles.textTertiary }}
       >
         {label}
@@ -702,7 +702,7 @@ function UsageTable({ table }: { table: NonNullable<UsageSectionPayload["table"]
         {table.columns.map((col, ci) => (
           <span
             key={ci}
-            className="text-[8.5px] font-bold uppercase tracking-[0.06em] truncate"
+            className="text-[10px] font-medium uppercase tracking-[0.08em] truncate"
             style={{ color: styles.textTertiary, textAlign: ci === 0 ? "left" : "right" }}
           >
             {col}
@@ -1217,23 +1217,24 @@ export function ContextDonut({
         aria-expanded={open}
         title={summaryText}
         data-context-donut
-        className="flex items-center gap-1 h-7 px-1.5 rounded-[10px] transition-colors"
+        className="flex items-center gap-1 h-7 px-1.5 rounded-lg transition-colors hover:bg-hover"
         style={{ color: styles.textSecondary }}
-        onMouseEnter={(e) => {
+        onMouseEnter={() => {
           clearCloseTimer();
           // ROUND-58 (R58-cf): hover INTENT — the popover opens only after
           // the pointer RESTS here for the intent window (a pass-through on
           // the way to Send no longer startles the owner).
           openAfter(() => setOpen(true), POPOVER_OPEN_INTENT_MS);
-          e.currentTarget.style.background = styles.subtleHover;
         }}
-        onMouseLeave={(e) => {
+        onMouseLeave={() => {
           // ROUND-58 (R58-cf): leaving before the intent fires cancels it;
           // ROUND-51 (R51-c): the 220ms grace timer lets the pointer cross
           // the gap into an OPEN popover without snapping it shut.
+          // R100-D: the hover WASH is the CSS class above; these handlers
+          // carry ONLY the open/close intent (the behavior-freeze exception
+          // — they drive component state, not styles).
           cancelOpenIntent();
           scheduleClose();
-          e.currentTarget.style.background = "transparent";
         }}
       >
         {/* ROUND-51 (R51-c): icon-only in the toolbar (owner: "no need to
@@ -1344,7 +1345,9 @@ export function ContextDonut({
                           <div className="flex min-w-0 items-baseline gap-1.5">
                             <span
                               data-context-bigused
-                              className="font-mono text-[19px] font-semibold leading-none tabular-nums"
+                              // R100-D: 19px → the ladder's `value` tier (22px/600
+                              // tabular — display sizes are wizard-only).
+                              className="font-mono text-[22px] font-semibold leading-none tabular-nums"
                               style={{ color: styles.text }}
                             >
                               {built.overview.bigUsed}
@@ -1362,11 +1365,11 @@ export function ContextDonut({
                                 className="ml-auto flex min-w-0 items-baseline gap-1.5"
                                 title={`${built.overview.compactedBadge.label} · ${built.overview.compactedBadge.detail}`}
                               >
-                                <span className="shrink-0 text-[10px] font-bold" style={{ color: styles.accent }}>
+                                <span className="shrink-0 text-[10px] font-medium" style={{ color: styles.accent }}>
                                   {built.overview.compactedBadge.label}
                                 </span>
                                 <span
-                                  className="truncate font-mono text-[9.5px] tabular-nums"
+                                  className="truncate font-mono text-[10px] tabular-nums"
                                   style={{ color: styles.textTertiary }}
                                 >
                                   {built.overview.compactedBadge.detail}
@@ -1414,7 +1417,7 @@ export function ContextDonut({
                       {built.overview.budgetLine !== undefined ? (
                         <div
                           data-context-budget
-                          className="mt-1.5 font-mono text-[9.5px] tabular-nums"
+                          className="mt-1.5 font-mono text-[10px] tabular-nums"
                           style={{ color: styles.textTertiary }}
                         >
                           {built.overview.budgetLine}
@@ -1431,7 +1434,7 @@ export function ContextDonut({
                     <Pane label="Window composition">
                       <ContextBar bar={built.contextBar} hoverSeg={hoverSeg} onHover={setHoverSeg} />
                       <div
-                        className="mt-1.5 flex justify-end font-mono text-[9px] uppercase tracking-[0.06em]"
+                        className="mt-1.5 flex justify-end font-mono text-[10px] uppercase tracking-[0.08em]"
                         style={{ color: styles.textTertiary }}
                       >
                         tokens · % of used
@@ -1454,7 +1457,7 @@ export function ContextDonut({
                     {cacheLine !== null ? (
                       <Pane label="Cache">
                         <div className="flex min-w-0 items-center gap-2">
-                          <span className="shrink-0 text-[10.5px]" style={{ color: styles.textSecondary }}>
+                          <span className="shrink-0 text-[11px]" style={{ color: styles.textSecondary }}>
                             {cacheLine.label}
                           </span>
                           {cacheLine.barFrac !== undefined && cacheLine.barColor !== undefined ? (
@@ -1472,7 +1475,7 @@ export function ContextDonut({
                             </div>
                           ) : null}
                           <span
-                            className="ml-auto truncate font-mono text-[10.5px] tabular-nums"
+                            className="ml-auto truncate font-mono text-[10px] tabular-nums"
                             style={{ color: styles.text }}
                           >
                             {cacheLine.value}

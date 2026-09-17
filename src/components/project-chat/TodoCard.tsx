@@ -12,6 +12,7 @@
  * todo list.
  */
 import type { WorkingEntry } from "../../lib/api";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 import { Check, Minus } from "lucide-react";
@@ -27,10 +28,10 @@ export function TodoCard({ entry }: { entry: TodoEntry }) {
 
   return (
     <div
-      className="rounded-[12px] border-[1.5px] px-3 py-2.5 my-1"
+      className="rounded-xl border-[1.5px] px-3 py-2.5 my-1"
       style={{
         borderColor: complete
-          ? withAlpha("#22c55e", 0.45)
+          ? withAlpha(SEMANTIC_COLORS.success, 0.45)
           : withAlpha(styles.accent, 0.35),
         background: styles.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.015)",
       }}
@@ -38,10 +39,10 @@ export function TodoCard({ entry }: { entry: TodoEntry }) {
     >
       <div className="flex items-center gap-2 mb-2">
         <span
-          className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full tracking-[0.08em] shrink-0"
+          className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full tracking-[0.08em] shrink-0"
           style={{
-            background: complete ? withAlpha("#22c55e", 0.12) : withAlpha(styles.accent, 0.12),
-            color: complete ? "#22c55e" : styles.accent,
+            background: complete ? withAlpha(SEMANTIC_COLORS.success, 0.12) : withAlpha(styles.accent, 0.12),
+            color: complete ? SEMANTIC_COLORS.success : styles.accent,
           }}
         >
           TASK LIST
@@ -56,13 +57,13 @@ export function TodoCard({ entry }: { entry: TodoEntry }) {
             className="h-full rounded-full transition-all duration-500"
             style={{
               width: total === 0 ? "0%" : `${(done / total) * 100}%`,
-              background: complete ? "#22c55e" : styles.accent,
+              background: complete ? SEMANTIC_COLORS.success : styles.accent,
             }}
           />
         </div>
         <span
-          className="text-[10px] font-mono font-bold shrink-0"
-          style={{ color: complete ? "#22c55e" : styles.textTertiary }}
+          className="text-[10px] font-mono tabular-nums shrink-0"
+          style={{ color: complete ? SEMANTIC_COLORS.success : styles.textTertiary }}
         >
           {done}/{total}
         </span>
@@ -74,10 +75,10 @@ export function TodoCard({ entry }: { entry: TodoEntry }) {
           return (
             <li key={i} className="flex items-start gap-2 min-w-0">
               <span
-                className="flex items-center justify-center w-[15px] h-[15px] rounded-[4px] border-[1.5px] shrink-0 mt-[1px] transition-colors"
+                className="flex items-center justify-center w-[15px] h-[15px] rounded-sm border-[1.5px] shrink-0 mt-[1px] transition-colors"
                 style={{
-                  borderColor: isDone ? "#22c55e" : isActive ? styles.accent : withAlpha(styles.text, 0.25),
-                  background: isDone ? "#22c55e" : "transparent",
+                  borderColor: isDone ? SEMANTIC_COLORS.success : isActive ? styles.accent : withAlpha(styles.text, 0.25),
+                  background: isDone ? SEMANTIC_COLORS.success : "transparent",
                 }}
                 aria-hidden
               >
@@ -93,7 +94,7 @@ export function TodoCard({ entry }: { entry: TodoEntry }) {
                 )}
               </span>
               <span
-                className={`text-[11.5px] leading-[1.45] break-words ${isDone ? "line-through" : ""}`}
+                className={`text-[12px] leading-[1.45] break-words ${isDone ? "line-through" : ""}`}
                 style={{
                   color: isDone
                     ? styles.textTertiary

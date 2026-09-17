@@ -463,7 +463,10 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     await renderEmptyPanel();
     const box = composerBox();
     expect(box).toBeTruthy();
-    expect(box.className).toContain("rounded-[18px]");
+    // R100-D re-pin (§C4.6): the composer container snapped 18→12px radius —
+    // rounded-xl, the scale utility (same pixels as the old arbitrary value
+    // only at the sanctioned step; no rounded-[18px] spelling anymore).
+    expect(box.className).toContain("rounded-xl");
     expect(box.contains(textarea())).toBe(true);
 
     const toolbar = box.querySelector("[data-composer-toolbar]") as HTMLElement;

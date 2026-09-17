@@ -721,10 +721,13 @@ describe("collapsed-row icon chips (ROUND-51 R51-d)", () => {
     // Accent wash at low alpha + the accent itself for the glyph (nova dark).
     expect(chip.style.background).toBe(withAlpha(theme.accent, 0.12));
     expect(chip.style.color).toBe(theme.accent);
-    // The row itself keeps its shape: one-line button, "Delegated" label, ✓.
+    // The row itself keeps its shape: one-line button, "Delegated" label,
+    // and the completed status — R100-D re-pin (§C4.5): the old ✓ TEXT
+    // glyph is now the 12px lucide CircleCheck icon (no text content); the
+    // state rides data-tool-status-kind, the status word the aria-label.
     const row = screen.getByRole("button", { name: /^Delegated / });
     expect(row.textContent).toContain("Delegated");
-    expect(row.textContent).toContain("✓");
+    expect(row.querySelector('[data-tool-status-kind="ok"]')).not.toBeNull();
   });
 
   it("a completed write_file/edit_file row renders the calm subtle chip", () => {
@@ -1668,14 +1671,20 @@ describe("R99-B working-section summaries + tool-row anatomy", () => {
     expect(header.getAttribute("aria-label")).toMatch(/^Stopped\b/);
   });
 
-  it("ToolLine: the LEADING outcome glyph (✓/✗/◌) + the status word in the row's aria-label; the result summary chip stays", () => {
+  it("ToolLine: the LEADING outcome status icon (lucide, R100-D) + the status word in the row's aria-label; the result summary chip stays", () => {
     renderWithProviders(
       <WorkingSection entries={FOLDED_ENTRIES} sessionId={SESSION_ID} projectId="proj_probe" defaultOpen />,
     );
 
-    // read_file with "of 42 total" → the leading ✓ + the "42 lines" summary.
+    // read_file with "of 42 total" → the leading completed icon + the
+    // "42 lines" summary. R100-D re-pin (§C4.5): the ✓/✗/◌ TEXT glyphs
+    // became 12px lucide icons (CircleCheck / CircleX / Loader) — the
+    // semantic colors ride the inner SVG's style; the state rides
+    // data-tool-status-kind; the status WORD still rides the aria-label
+    // (the a11y contract is unchanged — a button's aria-label replaces
+    // interior content, so screen readers still hear "completed").
     const readRow = screen.getByRole("button", { name: /^Read path: src\/app\.ts — completed$/ });
-    expect(readRow.textContent).toContain("✓");
+    expect(readRow.querySelector('[data-tool-status-kind="ok"]')).not.toBeNull();
     // The glyph LEADS the row (before the family icon + verb label).
     const readGlyph = readRow.querySelector('[data-testid="tool-status-glyph"]');
     expect(readGlyph).not.toBeNull();
@@ -1687,7 +1696,7 @@ describe("R99-B working-section summaries + tool-row anatomy", () => {
     // The one-line result summary the tool's own output carries (R96-H).
     expect(readRow.querySelector('[data-tool-status="42 lines"]')).not.toBeNull();
 
-    // run_command "exit 0" → its summary chip + ✓.
+    // run_command "exit 0" → its summary chip + the completed icon.
     const runRow = screen.getByRole("button", { name: /^Ran cmd: pnpm test — completed$/ });
     expect(runRow.querySelector('[data-tool-status="exit 0"]')).not.toBeNull();
 
@@ -1707,10 +1716,13 @@ describe("R99-B working-section summaries + tool-row anatomy", () => {
     );
     const failRow = screen.getByRole("button", { name: /^Ran cmd: boom — failed$/ });
     const failGlyph = failRow.querySelector('[data-testid="tool-status-glyph"]') as HTMLElement | null;
-    expect(failGlyph!.textContent).toBe("✗");
-    expect(failGlyph!.style.color).toBe(SEMANTIC_COLORS.danger);
+    // The danger color rides the inner SVG (the glyph span is a wrapper).
+    expect(failGlyph!.querySelector("svg")!.style.color).toBe(SEMANTIC_COLORS.danger);
+    expect(failGlyph!.getAttribute("data-tool-status-kind")).toBe("failed");
 
-    // An IN-FLIGHT call (ok === null): ◌ in the subtle tertiary tone.
+    // An IN-FLIGHT call (ok === null): the loader icon in the subtle
+    // tertiary tone. Whitespace-normalized — happy-dom re-serializes
+    // rgba() with spaces (the same treatment the R51-d chip tests use).
     renderWithProviders(
       <WorkingSection
         entries={[
@@ -1724,12 +1736,11 @@ describe("R99-B working-section summaries + tool-row anatomy", () => {
     );
     const runGlyph = screen
       .getAllByTestId("tool-status-glyph")
-      .find((g) => g.textContent === "◌");
+      .find((g) => g.getAttribute("data-tool-status-kind") === "running");
     expect(runGlyph).toBeTruthy();
-    // Whitespace-normalized — happy-dom re-serializes rgba() with spaces
-    // (the same treatment the R51-d chip tests use).
     const tight = (v: string): string => v.replace(/\s+/g, "");
-    expect(tight(runGlyph!.style.color)).toBe(tight(theme.textTertiary));
+    // SVGElement carries .style — typed via unknown (happy-dom's lucide svg).
+    expect(tight((runGlyph!.querySelector("svg") as unknown as HTMLElement).style.color)).toBe(tight(theme.textTertiary));
   });
 
   it("R99-B numbers discipline: the numeric chips the tool rows render carry tabular-nums", () => {

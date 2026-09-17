@@ -516,7 +516,14 @@ export function Composer({
   return (
     <div
       data-composer
-      className="@container relative flex flex-col rounded-[18px] border transition-all"
+      // R100-D (research §C4.6): the composer container snaps 18→12px radius
+      // (rounded-xl — the scale utility). THE one focus idiom: focused =
+      // 1.5px border at accent@0.4 + the 2px accent ring (outline, 2px offset —
+      // the same rule index.css lands globally); the old 4px box-shadow halo
+      // is gone (no glows on working chrome).
+      className={`@container relative flex flex-col rounded-xl border transition-all ${
+        composerFocused ? "border-[1.5px] outline outline-2 outline-offset-2 outline-accent" : ""
+      }`}
       style={{
         background: dragActive
           ? withAlpha(styles.accent, styles.isDark ? 0.1 : 0.07)
@@ -525,7 +532,6 @@ export function Composer({
             : styles.bg,
         borderColor:
           dragActive || composerFocused ? withAlpha(styles.accent, 0.4) : styles.border,
-        boxShadow: composerFocused ? `0 0 0 4px ${withAlpha(styles.accent, 0.13)}` : "none",
       }}
       data-dragging={dragActive ? "true" : undefined}
       onDragOver={(e) => {
@@ -582,9 +588,10 @@ export function Composer({
         aria-label="Message composer"
         placeholder={`Message ${agent?.name ?? "Acute"}…`}
         // R89-D2: the input's horizontal padding shrinks with the box (the
-        // 240px chat floor gets 12px instead of 14 — every pixel of typing
-        // room counts down there).
-        className="w-full min-w-0 bg-transparent outline-none resize-none text-[13px] leading-[1.5] px-3.5 pt-2.5 pb-1 @max-[420px]:px-2.5"
+        // 240px chat floor gets 12px instead of 16 — every pixel of typing
+        // room counts down there). R100-D (§C4.6): px-4 pt-3 pb-1 per the
+        // composer spec (13px/1.5 body).
+        className="w-full min-w-0 bg-transparent outline-none resize-none text-[13px] leading-[1.5] px-4 pt-3 pb-1 @max-[420px]:px-2.5"
         style={{ color: styles.text }}
       />
 
@@ -627,7 +634,9 @@ export function Composer({
         role="toolbar"
         aria-label="Composer tools"
         data-composer-toolbar
-        className="flex items-end justify-between gap-1 px-2 pb-2 pt-1"
+        // R100-D (research §C4.6): the toolbar row is 36px (28px pills + the
+        // 8px bottom padding — pt-1 retired) at px-2 pb-2.
+        className="flex items-end justify-between gap-1 px-2 pb-2"
       >
         {/* R78: the WRAPPING area — selectors only; the actions are a
             sibling pinned right by the toolbar's justify-between. */}
@@ -691,10 +700,8 @@ export function Composer({
               // full meaning; below that even the horizontal padding
               // shrinks a notch so the actions row never crowds the
               // selectors.
-              className="h-8 px-3 @max-[460px]:px-2 rounded-xl flex items-center gap-1.5 shrink-0 border text-[11.5px] font-semibold transition-colors"
-              style={{ borderColor: styles.border, background: styles.subtle, color: styles.textSecondary }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-              onMouseLeave={(e) => (e.currentTarget.style.background = styles.subtle)}
+              className="h-7 px-3 @max-[460px]:px-2 rounded-lg flex items-center gap-1.5 shrink-0 border text-[12px] font-medium transition-colors bg-subtle hover:bg-hover"
+              style={{ borderColor: styles.border, color: styles.textSecondary }}
             >
               <Play size={11} className="shrink-0" />
               <span className="max-w-[120px] @max-[460px]:max-w-0 @max-[460px]:opacity-0 @max-[460px]:-ml-0.5 overflow-hidden whitespace-nowrap transition-all duration-200">
@@ -708,10 +715,12 @@ export function Composer({
                 type="button"
                 // Stop routes through the stream store (works regardless of
                 // which panel is mounted — ROUND-39 semantics preserved).
+                // R100-D (§C4.6): Stop = the 28px CIRCLE (rounded-full),
+                // danger fill kept; NO hover-scale (the press stays).
                 onClick={onStop}
                 aria-label="Stop generation"
                 title="Stop generation"
-                className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-transform hover:scale-105 active:scale-95"
+                className="w-7 h-7 rounded-full grid place-items-center shrink-0 transition-transform active:scale-95"
                 style={{ backgroundColor: SEMANTIC_COLORS.danger, color: "#fff" }}
               >
                 <span className="w-3 h-3 rounded-sm bg-white/90" />
@@ -738,14 +747,17 @@ export function Composer({
                   aria-label="Queue message"
                   title="Queues right after the agent finishes the current step"
                   data-queue-send-button
-                  className="h-8 px-3 rounded-xl flex items-center gap-1 shrink-0 border text-[11.5px] font-bold transition-all hover:scale-105 active:scale-95 disabled:hover:scale-100 disabled:cursor-not-allowed"
+                  // R100-D (§C4.6): the queue-send pill snaps to 28px/8px
+                  // radius, 500 weight; the hover-scale AND the box-shadow
+                  // GLOW are gone (resting UI never fidgets, working chrome
+                  // never glows).
+                  className="h-7 px-2.5 rounded-lg flex items-center gap-1 shrink-0 border text-[12px] font-medium transition-all active:scale-95 disabled:cursor-not-allowed"
                   style={
                     input.trim() !== ""
                       ? {
                           backgroundColor: styles.accent,
                           color: styles.accentText,
                           borderColor: withAlpha(styles.accent, 0.5),
-                          boxShadow: `0 2px 10px ${withAlpha(styles.accent, 0.35)}`,
                         }
                       : {
                           backgroundColor: styles.inputBg,
@@ -766,13 +778,16 @@ export function Composer({
               disabled={input.trim() === ""}
               aria-label="Send message"
               title="Send (Enter · Shift+Enter for a new line)"
-              className="w-8 h-8 rounded-xl grid place-items-center shrink-0 transition-all hover:scale-105 active:scale-95 disabled:hover:scale-100"
+              // R100-D (research §C4.6): Send = the 28px CIRCLE, solid accent,
+              // NO box-shadow glow, NO hover-scale — hover is a border-
+              // strengthen only (the crisp accent-faded ring; no blur, no
+              // halo). The press contract (active:scale) stays.
+              className="w-7 h-7 rounded-full grid place-items-center shrink-0 transition-all hover:ring-2 hover:ring-accent-faded active:scale-95 disabled:hover:scale-100"
               style={
                 input.trim() !== ""
                   ? {
                       backgroundColor: styles.accent,
                       color: styles.accentText,
-                      boxShadow: `0 2px 10px ${withAlpha(styles.accent, 0.35)}`,
                     }
                   : { backgroundColor: styles.inputBg, color: styles.textTertiary }
               }

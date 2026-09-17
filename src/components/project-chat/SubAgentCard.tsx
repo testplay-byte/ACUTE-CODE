@@ -4,7 +4,9 @@ import {
   Bot,
   CheckCircle2,
   ChevronDown,
+  CircleCheck,
   CircleDashed,
+  CircleX,
   Loader2,
   PanelRightOpen,
   RefreshCw,
@@ -100,7 +102,9 @@ export function SubAgentCard({
 
   return (
     <div
-      className="rounded-[12px] border overflow-hidden"
+      // R100-D: rounded-[12px] → rounded-xl (the scale spelling of the
+      // same 12px card step).
+      className="rounded-xl border overflow-hidden"
       style={{ borderColor: withAlpha(statusTone, 0.35), background: styles.card }}
     >
       {/* Row — clicking the body opens the sub-agent tab in the right sidebar
@@ -117,19 +121,17 @@ export function SubAgentCard({
             openInSidebar();
           }
         }}
-        className="w-full flex items-center gap-2.5 px-3 h-11 text-left cursor-pointer transition-colors"
+        // R100-D (TOKENS §6): the hover wash is the CSS class (hover:bg-hover
+        // — the CSS-var leg; the old JS handler painted a status-tinted wash,
+        // which the neutral hover token replaces — one hover idiom).
+        className="w-full flex items-center gap-2.5 px-3 h-11 text-left cursor-pointer transition-colors hover:bg-hover"
         style={{ color: styles.text }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = withAlpha(statusTone, 0.06);
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "transparent";
-        }}
         title={`Open ${role ?? child?.subRole ?? "sub-agent"} in sidebar`}
         aria-label={`Open ${role ?? child?.subRole ?? "sub-agent"} ${task ?? ""} in sidebar`}
       >
         <span
-          className="w-7 h-7 shrink-0 rounded-[9px] grid place-items-center"
+          // R100-D: rounded-[9px] → rounded-lg (the 8px chips step).
+          className="w-7 h-7 shrink-0 rounded-lg grid place-items-center"
           style={{ background: withAlpha(statusTone, 0.12), color: statusTone }}
         >
           {child?.status === "running" ? (
@@ -144,12 +146,15 @@ export function SubAgentCard({
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
-            <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: statusTone }}>
+            {/* R100-D: the role kicker snaps — font-medium + tracking-[0.08em]
+                (THE one tracking spelling; font-black is wizard display only). */}
+            <span className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: statusTone }}>
               {role ?? child?.subRole ?? "agent"}
             </span>
             {child?.taskId != null && (
               <span
-                className="text-[9px] font-mono px-1.5 py-0.5 rounded-md max-w-[130px] truncate"
+                // R100-D: 9→10px (the type floor).
+                className="text-[10px] font-mono px-1.5 py-0.5 rounded-md max-w-[130px] truncate"
                 style={{ color: styles.textSecondary, background: withAlpha(styles.textTertiary, 0.12) }}
                 title={`Background task id ${child.taskId} — delegate_task {"resume":"${child.taskId}"} collects it`}
                 data-testid="subagent-card-taskid"
@@ -158,18 +163,20 @@ export function SubAgentCard({
               </span>
             )}
             <span
-              className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+              // R100-D: 9→10px + font-medium (the weight law).
+              className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
               style={{ background: withAlpha(statusTone, 0.12), color: statusTone }}
             >
               {child?.status ?? "queued"}
             </span>
             {child && child.todosTotal > 0 && (
-              <span className="text-[9px] font-mono" style={{ color: styles.textTertiary }}>
+              // R100-D: 9→10px + tabular-nums (numbers discipline).
+              <span className="text-[10px] font-mono tabular-nums" style={{ color: styles.textTertiary }}>
                 {child.todosDone}/{child.todosTotal} todos
               </span>
             )}
             {child && (child.inputTokens > 0 || child.outputTokens > 0) && (
-              <span className="text-[9px] font-mono" style={{ color: styles.textTertiary }}>
+              <span className="text-[10px] font-mono tabular-nums" style={{ color: styles.textTertiary }}>
                 ↑{fmtTokens(child.inputTokens)} ↓{fmtTokens(child.outputTokens)}
               </span>
             )}
@@ -189,14 +196,9 @@ export function SubAgentCard({
           aria-expanded={logOpen}
           aria-label="Toggle inline sub-agent log"
           title="Toggle inline log"
-          className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors"
+          // R100-D (TOKENS §6): the hover wash is the CSS class.
+          className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors hover:bg-hover"
           style={{ color: styles.textTertiary }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = styles.subtleHover;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-          }}
         >
           {logOpen ? (
             <PanelRightOpen size={12} />
@@ -218,7 +220,8 @@ export function SubAgentCard({
                 void queryClient.invalidateQueries({ queryKey: ["subagents", parentSessionId ?? sessionId] });
               });
             }}
-            className="h-7 px-2.5 rounded-full text-[10.5px] font-bold flex items-center gap-1.5"
+            // R100-D: 10.5→10px; buttons are 600 per the weight law.
+            className="h-7 px-2.5 rounded-full text-[10px] font-semibold flex items-center gap-1.5"
             style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.1), color: SEMANTIC_COLORS.danger }}
           >
             <RefreshCw size={10} /> Retry (resumes from where it stopped)
@@ -272,7 +275,8 @@ function SubAgentLog({ childId }: { childId: string }) {
           if (e.type === "message.user") {
             const content = (e.payload as { content?: unknown }).content;
             return (
-              <div key={i} className="text-[11px] font-medium rounded-[8px] px-2 py-1" style={{ background: withAlpha(styles.accent, 0.08), color: styles.textSecondary }}>
+              // R100-D: rounded-[8px] → rounded-lg (the scale spelling).
+              <div key={i} className="text-[11px] font-medium rounded-lg px-2 py-1" style={{ background: withAlpha(styles.accent, 0.08), color: styles.textSecondary }}>
                 {String(content ?? "").slice(0, 200)}
               </div>
             );
@@ -292,9 +296,14 @@ function SubAgentLog({ childId }: { childId: string }) {
           const p = e.payload as { toolName?: string; ok?: boolean };
           return (
             <div key={i} className="text-[10px] font-mono flex items-center gap-1.5" style={{ color: styles.textTertiary }}>
-              <span style={{ color: p.ok === false ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}>
-                {p.ok === false ? "✗" : "✓"}
-              </span>
+              {/* R100-D (§C4.5 — every status glyph an icon): the ✓/✗ TEXT
+                  glyphs are now 10px lucide icons in the same semantic colors
+                  (aria-hidden — the row is a muted log line, not a control). */}
+              {p.ok === false ? (
+                <CircleX size={10} style={{ color: SEMANTIC_COLORS.danger }} aria-hidden />
+              ) : (
+                <CircleCheck size={10} style={{ color: SEMANTIC_COLORS.success }} aria-hidden />
+              )}
               {p.toolName}
             </div>
           );

@@ -103,10 +103,12 @@ export function MermaidDiagram({ code }: { code: string }) {
       >
         <span className="flex min-w-0 items-center gap-2">
           {/* The EXACT CodeBlock badge spelling (ChatMarkdown's data-code-lang
-              chip) so the diagram card reads as one of the fence family. */}
+              chip) so the diagram card reads as one of the fence family.
+              R100-D: snapped with its CodeBlock twin — rounded-sm (the 4px
+              step) + 10px/medium (the type floor + weight law). */}
           <span
             data-code-lang="mermaid"
-            className="shrink-0 rounded-[5px] px-1.5 py-px font-mono text-[9.5px] font-bold uppercase tracking-wide"
+            className="shrink-0 rounded-sm px-1.5 py-px font-mono text-[10px] font-medium uppercase tracking-wide"
             style={{
               background: withAlpha(styles.accent, styles.isDark ? 0.16 : 0.1),
               color: styles.accent,

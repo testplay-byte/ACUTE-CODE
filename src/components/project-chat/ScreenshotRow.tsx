@@ -111,9 +111,10 @@ export function ScreenshotRow({ shot }: ScreenshotRowProps) {
             />
           ) : state.expired ? (
             // The honest expired row (rasters are in-memory only, 10-minute
-            // TTL — by design, see the docblock).
+            // TTL — by design, see the docblock). R100-D: 9.5→10px (the
+            // type floor).
             <span
-              className="flex flex-col items-center gap-1 text-[9.5px] leading-tight px-1 text-center"
+              className="flex flex-col items-center gap-1 text-[10px] leading-tight px-1 text-center"
               style={{ color: styles.textTertiary }}
             >
               <ImageIcon size={14} aria-hidden />
@@ -127,9 +128,10 @@ export function ScreenshotRow({ shot }: ScreenshotRowProps) {
           )}
         </button>
         {/* The caption — WHAT the agent captured and WHEN (the entry's ts is
-            the capture moment; the row's position already tells the story). */}
+            the capture moment; the row's position already tells the story).
+            R100-D: 9.5→10px (the type floor). */}
         <figcaption
-          className="text-[9.5px] text-center truncate"
+          className="text-[10px] text-center truncate"
           style={{ color: styles.textTertiary }}
           title={`Screenshot · ${shot.tool}`}
         >

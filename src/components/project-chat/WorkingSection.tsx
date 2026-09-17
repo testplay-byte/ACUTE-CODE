@@ -4,8 +4,11 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Check,
   ChevronDown,
+  CircleCheck,
+  CircleX,
   FileCode2,
   Globe,
+  Loader,
   Loader2,
   PanelRightOpen,
   RotateCcw,
@@ -292,7 +295,7 @@ export function SubAgentCodeChip({
   const styles = useThemeStyles();
   return (
     <span
-      className="shrink-0 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-md tracking-[0.08em]"
+      className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md tracking-[0.08em]"
       style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
       title={title ?? `Sub-agent code ${code}`}
       data-testid="subagent-code-chip"
@@ -364,21 +367,15 @@ function LiveDelegateRow({
           open();
         }
       }}
-      className="w-full rounded-[10px] border px-2 py-1.5 text-left cursor-pointer transition-colors"
-      style={{ borderColor: withAlpha(tone, 0.35), background: styles.card }}
+      className="w-full rounded-lg border px-2 py-1.5 text-left cursor-pointer transition-colors bg-card hover:bg-hover"
+      style={{ borderColor: withAlpha(tone, 0.35) }}
       aria-label={`Open sub-agent ${code} · ${title} in sidebar`}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = withAlpha(tone, 0.06);
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = styles.card;
-      }}
       data-testid="live-delegate-row"
     >
       <div className="flex items-center gap-1.5 min-w-0">
         <SubAgentCodeChip code={code} />
         <span
-          className="shrink-0 text-[9px] font-black uppercase tracking-widest"
+          className="shrink-0 text-[10px] font-medium uppercase tracking-[0.08em]"
           style={{ color: tone }}
         >
           {role}
@@ -387,18 +384,18 @@ function LiveDelegateRow({
           {title}
         </span>
         <span
-          className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+          className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full"
           style={{ background: withAlpha(tone, 0.12), color: tone }}
         >
           {stopping ? "stopping…" : status}
         </span>
         {todosTotal > 0 ? (
-          <span className="shrink-0 text-[9px] font-mono" style={{ color: styles.textTertiary }}>
+          <span className="shrink-0 text-[10px] font-mono tabular-nums" style={{ color: styles.textTertiary }}>
             {todosDone}/{todosTotal} todos
           </span>
         ) : null}
         {child.inputTokens > 0 || child.outputTokens > 0 ? (
-          <span className="shrink-0 text-[9px] font-mono" style={{ color: styles.textTertiary }}>
+          <span className="shrink-0 text-[10px] font-mono tabular-nums" style={{ color: styles.textTertiary }}>
             ↑{fmtTokens(child.inputTokens)} ↓{fmtTokens(child.outputTokens)}
           </span>
         ) : null}
@@ -409,14 +406,8 @@ function LiveDelegateRow({
             disabled={stopping}
             aria-label={`Stop sub-agent ${code}`}
             title="Stop this sub-agent (the parent keeps running)"
-            className="shrink-0 w-6 h-6 grid place-items-center rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="shrink-0 w-6 h-6 grid place-items-center rounded-lg transition-colors hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ color: SEMANTIC_COLORS.danger }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = withAlpha(SEMANTIC_COLORS.danger, 0.1);
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-            }}
             data-testid="stop-subagent-btn"
           >
             <Square size={11} fill="currentColor" strokeWidth={0} />
@@ -441,7 +432,7 @@ function LiveDelegateRow({
               tool count; amber when the child looks stalled. */}
           {watch !== undefined && status === "running" ? (
             <span
-              className="shrink-0 font-mono text-[9px]"
+              className="shrink-0 font-mono text-[10px] tabular-nums"
               style={{ color: watch.stalled ? AMBER : styles.textTertiary }}
               title={
                 watch.stalled
@@ -459,7 +450,7 @@ function LiveDelegateRow({
       {/* ROUND-52 (R52-c): WHY a terminal frame fired — "stopped by the
           owner" / "stalled — …" — instead of a bare failed chip. */}
       {live?.detail !== undefined && (status === "failed" || status === "completed") ? (
-        <div className="mt-0.5 text-[9.5px] font-medium truncate" style={{ color: styles.textTertiary }}>
+        <div className="mt-0.5 text-[10px] truncate" style={{ color: styles.textTertiary }}>
           {live.detail}
         </div>
       ) : null}
@@ -486,7 +477,7 @@ function LiveDelegateRows({
   const styles = useThemeStyles();
   if (rows.length === 0) {
     return (
-      <div className="px-1 py-1 text-[10.5px] font-mono" style={{ color: styles.textTertiary }}>
+      <div className="px-1 py-1 text-[10px] font-mono" style={{ color: styles.textTertiary }}>
         delegating<span className="ac-ellipsis" aria-hidden />
       </div>
     );
@@ -644,19 +635,18 @@ export function ThoughtRow({
         }}
         aria-expanded={open}
         aria-label={`${open ? "Collapse" : "Expand"} thought`}
-        className="flex items-center gap-1.5 h-6 max-w-full px-1 -ml-1 rounded-md transition-colors"
+        className="flex items-center gap-1.5 h-6 max-w-full px-1 -ml-1 rounded-md transition-colors hover:bg-hover"
         style={{ color: styles.textTertiary }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
         <ChevronDown
           size={10}
           style={{ transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}
         />
-        <span className="text-[11px] font-semibold italic shrink-0">{durationLabel}</span>
+        {/* R100-D: the duration number goes tabular (numbers discipline). */}
+        <span className="text-[11px] font-medium italic shrink-0 tabular-nums">{durationLabel}</span>
         {live && <span className="ac-ellipsis" aria-hidden />}
         {!open && !live && (
-          <span className="text-[10.5px] font-mono italic truncate max-w-[420px]" style={{ color: styles.textTertiary }}>
+          <span className="text-[10px] font-mono italic truncate max-w-[420px]" style={{ color: styles.textTertiary }}>
             {preview}
           </span>
         )}
@@ -689,7 +679,7 @@ export function ThoughtRow({
               <div
                 ref={thoughtScrollRef}
                 data-thinking-scroll
-                className="chat-thinking rounded-[10px] px-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll"
+                className="chat-thinking rounded-lg px-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll"
                 style={{ background: styles.subtle, color: styles.textSecondary, ["--chat-base-size" as string]: "11px" } as React.CSSProperties}
               >
                 {/* The single content wrapper: the stick hook's
@@ -768,8 +758,8 @@ function NarrationRow({ content }: { content: string }) {
   // Appearance → Text Size) with the answer + thinking surfaces.
   return (
     <div
-      className="chat-narration min-w-0 break-words py-0.5 text-[12.5px] leading-[1.6]"
-      style={{ color: styles.text, ["--chat-base-size" as string]: "12.5px" } as React.CSSProperties}
+      className="chat-narration min-w-0 break-words py-0.5 text-[13px] leading-[1.6]"
+      style={{ color: styles.text, ["--chat-base-size" as string]: "13px" } as React.CSSProperties}
     >
       {content}
     </div>
@@ -888,7 +878,9 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
   };
 
   // ROUND-46 (R46-c): the Restore affordance, styled like the Open pill
-  // (h-5 px-2 rounded-full text-[10px] font-bold) so it reads as one family.
+  // (h-5 px-2 rounded-full text-[10px] font-medium) so it reads as one family.
+  // R100-D: the pill's rest/hover backgrounds moved to the CSS-var leg
+  // (bg-subtle + hover:bg-hover — no JS hover painting).
   const restoreUi = (() => {
     if (restoreState === "restoring") {
       return (
@@ -896,8 +888,8 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
           disabled
           aria-live="polite"
           title="Restoring the file to its content before this change…"
-          className="shrink-0 h-5 px-2 rounded-full text-[10px] font-bold flex items-center gap-1 cursor-default"
-          style={{ background: styles.subtle, color: styles.textSecondary }}
+          className="shrink-0 h-5 px-2 rounded-full text-[10px] font-medium flex items-center gap-1 cursor-default bg-subtle"
+          style={{ color: styles.textSecondary }}
         >
           <Loader2 size={10} className="animate-spin" /> Restoring…
         </button>
@@ -906,7 +898,7 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
     if (restoreState === "restored") {
       return (
         <span
-          className="shrink-0 h-5 px-2 rounded-full text-[10px] font-bold flex items-center gap-1"
+          className="shrink-0 h-5 px-2 rounded-full text-[10px] font-medium flex items-center gap-1"
           style={{
             background: withAlpha(SEMANTIC_COLORS.success, 0.12),
             color: SEMANTIC_COLORS.success,
@@ -923,7 +915,7 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
           <button
             onClick={() => void onRestore()}
             title="Overwrite the file on disk with its recorded content from before this change"
-            className="shrink-0 h-5 px-2 rounded-full text-[10px] font-bold border-[1.5px] transition-colors flex items-center gap-1"
+            className="shrink-0 h-5 px-2 rounded-full text-[10px] font-medium border-[1.5px] transition-colors flex items-center gap-1"
             style={{
               borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
               color: SEMANTIC_COLORS.danger,
@@ -933,8 +925,8 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
           </button>
           <button
             onClick={() => setRestoreState("idle")}
-            className="shrink-0 h-5 px-2 rounded-full text-[10px] font-bold transition-colors"
-            style={{ background: styles.subtle, color: styles.textSecondary }}
+            className="shrink-0 h-5 px-2 rounded-full text-[10px] font-medium transition-colors bg-subtle hover:bg-hover"
+            style={{ color: styles.textSecondary }}
           >
             Cancel
           </button>
@@ -945,10 +937,8 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
       <button
         onClick={() => setRestoreState("confirm")}
         title="Restore the file on disk to its content from before this change"
-        className="shrink-0 h-5 px-2 rounded-full text-[10px] font-bold transition-colors flex items-center gap-1"
-        style={{ background: styles.subtle, color: styles.textSecondary }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-        onMouseLeave={(e) => (e.currentTarget.style.background = styles.subtle)}
+        className="shrink-0 h-5 px-2 rounded-full text-[10px] font-medium transition-colors flex items-center gap-1 bg-subtle hover:bg-hover"
+        style={{ color: styles.textSecondary }}
       >
         <RotateCcw size={10} /> Restore
       </button>
@@ -974,7 +964,7 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
             edits (the numbers come from the real before/after snapshot). */}
         {kind === "create" ? (
           <span
-            className="shrink-0 px-1.5 py-0.5 rounded-full text-[9.5px] font-bold"
+            className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
             style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
             data-diff-kind="create"
           >
@@ -983,7 +973,7 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
         ) : null}
         {kind === "delete" ? (
           <span
-            className="shrink-0 px-1.5 py-0.5 rounded-full text-[9.5px] font-bold"
+            className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
             style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.1), color: SEMANTIC_COLORS.danger }}
             data-diff-kind="delete"
           >
@@ -991,7 +981,7 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
           </span>
         ) : null}
         {diff !== null && added !== undefined && removed !== undefined ? (
-          <span className="shrink-0 flex items-center gap-1 font-mono text-[10px] font-bold">
+          <span className="shrink-0 flex items-center gap-1 font-mono text-[10px] tabular-nums">
             <span className="px-1.5 py-0.5 rounded-full" style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}>
               +{added}
             </span>
@@ -1006,10 +996,8 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
             onClick={() => {
               if (activeProjectId !== null) openFileInSidebar(activeProjectId, path);
             }}
-            className="shrink-0 h-5 px-2 rounded-full text-[10px] font-bold transition-colors"
-            style={{ background: styles.subtle, color: styles.textSecondary }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = styles.subtle)}
+            className="shrink-0 h-5 px-2 rounded-full text-[10px] font-medium transition-colors bg-subtle hover:bg-hover"
+            style={{ color: styles.textSecondary }}
             title={`Open ${path}`}
           >
             Open
@@ -1030,7 +1018,9 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
         </div>
       ) : (
         <div
-          className="rounded-[10px] max-h-96 overflow-y-auto auto-scroll font-mono text-[11px] leading-[1.55] border"
+          // R100-D (research §C4.5): the expanded diff card snaps to the 8px
+          // radius step (rounded-lg), 1px border — the spec's exact card.
+          className="rounded-lg max-h-96 overflow-y-auto auto-scroll font-mono text-[11px] leading-[1.55] border"
           style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.25)" : styles.bg }}
         >
           {diff.hunks.map((hunk, hi) => (
@@ -1163,7 +1153,7 @@ export function LiveOutputTail({ output }: { output: string }) {
       <div className="flex items-center gap-1.5 h-4 px-0.5">
         <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: RUNNING_BLUE }} aria-hidden />
         <span
-          className="text-[9px] font-mono font-bold uppercase tracking-[0.14em]"
+          className="text-[10px] font-mono font-medium uppercase tracking-[0.08em]"
           style={{ color: RUNNING_BLUE }}
         >
           live
@@ -1171,7 +1161,7 @@ export function LiveOutputTail({ output }: { output: string }) {
       </div>
       <div
         ref={ref}
-        className="rounded-[10px] border px-2.5 py-1.5 max-h-32 overflow-y-auto auto-scroll font-mono text-[10px] leading-[1.5] break-words"
+        className="rounded-lg border px-2.5 py-1.5 max-h-32 overflow-y-auto auto-scroll font-mono text-[10px] leading-[1.5] break-words"
         style={{
           borderColor: withAlpha(RUNNING_BLUE, 0.35),
           background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)",
@@ -1252,7 +1242,7 @@ export function LiveWritePreview({ raw }: { raw: string }) {
             aware — same as LiveOutputTail). */}
         <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: RUNNING_BLUE }} aria-hidden />
         <span
-          className="text-[9px] font-mono font-bold uppercase tracking-[0.14em] truncate"
+          className="text-[10px] font-mono font-medium uppercase tracking-[0.08em] truncate"
           style={{ color: RUNNING_BLUE }}
           title={path.found ? path.value : undefined}
         >
@@ -1261,7 +1251,7 @@ export function LiveWritePreview({ raw }: { raw: string }) {
       </div>
       <div
         ref={ref}
-        className="rounded-[10px] border px-2.5 py-1.5 max-h-40 overflow-y-auto auto-scroll font-mono text-[11px] leading-[1.5] break-words whitespace-pre-wrap"
+        className="rounded-lg border px-2.5 py-1.5 max-h-40 overflow-y-auto auto-scroll font-mono text-[11px] leading-[1.5] break-words whitespace-pre-wrap"
         style={{
           borderColor: withAlpha(RUNNING_BLUE, 0.35),
           background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)",
@@ -1295,7 +1285,7 @@ function LiveWritePendingRow({ toolName, raw }: { toolName: string; raw: string 
         style={{ color: styles.textTertiary }}
       >
         <ToolIconChip Icon={Icon} background={withAlpha(RUNNING_BLUE, 0.12)} color={RUNNING_BLUE} />
-        <span className="shrink-0 text-[11px] font-semibold" style={{ color: styles.textSecondary }}>
+        <span className="shrink-0 text-[11px] font-medium" style={{ color: styles.textSecondary }}>
           Writing
         </span>
         <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: styles.textTertiary }} title={path.found ? path.value : undefined}>
@@ -1329,14 +1319,16 @@ function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
   const rest = lines.slice(3);
   if (output === null) {
     return (
-      <div className="px-1 py-1 text-[10.5px] font-mono" style={{ color: styles.textTertiary }}>
+      <div className="px-1 py-1 text-[10px] font-mono" style={{ color: styles.textTertiary }}>
         {tool.ok === null ? "running…" : "no output"}
       </div>
     );
   }
   return (
     <div
-      className="rounded-[10px] border px-3 py-2 font-mono text-[10.5px] leading-[1.55] max-h-56 overflow-y-auto auto-scroll"
+      // R100-D (research §C4.5): expanded terminal card = 8px radius + 1px
+      // border; 10.5→10px mono per the type floor snap.
+      className="rounded-lg border px-3 py-2 font-mono text-[10px] leading-[1.55] max-h-56 overflow-y-auto auto-scroll"
       style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)", color: styles.textSecondary }}
     >
       {preview.map((line, i) => (
@@ -1349,7 +1341,7 @@ function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
           ))}
           <button
             onClick={() => setExpanded((v) => !v)}
-            className="mt-1 text-[10px] font-bold underline"
+            className="mt-1 text-[10px] font-medium underline"
             style={{ color: styles.accent }}
           >
             {expanded ? "Show less" : `+${rest.length} more line${rest.length === 1 ? "" : "s"}`}
@@ -1366,14 +1358,14 @@ function OutputDetail({ tool }: { tool: ToolUseEntry }) {
   const styles = useThemeStyles();
   if (tool.outputSummary === undefined || tool.outputSummary.length === 0) {
     return (
-      <div className="px-1 py-1 text-[10.5px] font-mono" style={{ color: styles.textTertiary }}>
+      <div className="px-1 py-1 text-[10px] font-mono" style={{ color: styles.textTertiary }}>
         {tool.ok === null ? "running…" : "no output"}
       </div>
     );
   }
   return (
     <div
-      className="rounded-[10px] border px-3 py-2 font-mono text-[10.5px] leading-[1.55] max-h-48 overflow-y-auto auto-scroll whitespace-pre-wrap break-words"
+      className="rounded-lg border px-3 py-2 font-mono text-[10px] leading-[1.55] max-h-48 overflow-y-auto auto-scroll whitespace-pre-wrap break-words"
       style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.22)" : "rgba(0,0,0,0.02)", color: styles.textSecondary }}
     >
       {tool.outputSummary}
@@ -1436,11 +1428,11 @@ function ApprovalRow({
       entry.status === "approved" ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger;
     return (
       <div className="flex items-center gap-2 h-7 px-1 -ml-1 font-mono text-[11px] min-w-0">
-        <span className="shrink-0 font-semibold" style={{ color: tone }}>
+        <span className="shrink-0 font-medium" style={{ color: tone }}>
           {decisionText}
         </span>
         {attributedCode !== undefined ? (
-          <span className="shrink-0 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-md" style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}>
+          <span className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md" style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}>
             {attributedCode}
           </span>
         ) : null}
@@ -1453,18 +1445,21 @@ function ApprovalRow({
 
   return (
     <div
-      className="rounded-[12px] border-[1.5px] px-3 py-2.5 my-1"
+      // R100-D: the approval card keeps its semantic anatomy (§C4.5) — the
+      // radius snaps 12px via the scale utility; the amber literals ride
+      // SEMANTIC_COLORS.warning (the ONE documented spelling).
+      className="rounded-xl border-[1.5px] px-3 py-2.5 my-1"
       style={{
-        borderColor: withAlpha("#f59e0b", 0.55),
-        background: withAlpha("#f59e0b", styles.isDark ? 0.08 : 0.05),
+        borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.55),
+        background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.08 : 0.05),
       }}
       role="alert"
     >
       <div className="flex items-center gap-2 mb-1.5">
-        <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: "#f59e0b" }} aria-hidden />
+        <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: SEMANTIC_COLORS.warning }} aria-hidden />
         {needsLookup ? (
           <span
-            className="flex items-center gap-1 text-[11.5px] font-bold min-w-0"
+            className="flex items-center gap-1 text-[12px] font-semibold min-w-0"
             style={{ color: styles.text }}
             data-testid="subagent-approval-attribution"
           >
@@ -1472,7 +1467,7 @@ function ApprovalRow({
             {attributedCode !== undefined && attributedRole !== undefined ? (
               <>
                 <span
-                  className="shrink-0 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-md tracking-[0.08em]"
+                  className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md tracking-[0.08em]"
                   style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
                 >
                   {attributedCode}
@@ -1484,7 +1479,7 @@ function ApprovalRow({
             )}
           </span>
         ) : null}
-        <span className="text-[11.5px] font-bold shrink-0" style={{ color: styles.text }}>
+        <span className="text-[12px] font-semibold shrink-0" style={{ color: styles.text }}>
           Permission needed
         </span>
         <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full shrink-0" style={{ background: styles.subtle, color: styles.textTertiary }}>
@@ -1492,7 +1487,7 @@ function ApprovalRow({
         </span>
       </div>
       <div
-        className="rounded-[8px] px-2.5 py-1.5 font-mono text-[11.5px] break-all mb-2"
+        className="rounded-lg px-2.5 py-1.5 font-mono text-[12px] break-all mb-2"
         style={{ background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.04)", color: styles.text }}
       >
         {entry.argsSummary || entry.toolName}
@@ -1501,21 +1496,23 @@ function ApprovalRow({
         <div className="flex items-center gap-2">
           <button
             onClick={() => onDecision(entry.approvalId, "approved", "once")}
-            className="h-7 px-3 rounded-full text-[11px] font-bold transition-transform hover:scale-[1.02] active:scale-95"
+            // R100-D (TOKENS §6 press law): the hover:scale is gone — resting
+            // UI never fidgets; the active:scale press stays.
+            className="h-7 px-3 rounded-full text-[11px] font-semibold transition-transform active:scale-95"
             style={{ background: styles.accent, color: styles.accentText }}
           >
             Allow once
           </button>
           <button
             onClick={() => onDecision(entry.approvalId, "approved", "always")}
-            className="h-7 px-3 rounded-full text-[11px] font-bold border-[1.5px] transition-colors"
+            className="h-7 px-3 rounded-full text-[11px] font-semibold border-[1.5px] transition-colors"
             style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
           >
             Always allow
           </button>
           <button
             onClick={() => onDecision(entry.approvalId, "denied", "once")}
-            className="h-7 px-3 rounded-full text-[11px] font-bold border-[1.5px] transition-colors"
+            className="h-7 px-3 rounded-full text-[11px] font-semibold border-[1.5px] transition-colors"
             style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
           >
             Deny
@@ -1526,7 +1523,7 @@ function ApprovalRow({
           </span>
         </div>
       ) : (
-        <div className="text-[10.5px] font-mono" style={{ color: styles.textTertiary }}>
+        <div className="text-[10px] font-mono" style={{ color: styles.textTertiary }}>
           waiting for decision…
         </div>
       )}
@@ -1618,7 +1615,7 @@ function ToolStatusChip({ detail }: { detail: NonNullable<ReturnType<typeof tool
     // The +/- pair — the diff card's own chip language (green/red).
     const [plus, minus] = detail.label.split(" ");
     return (
-      <span className="shrink-0 flex items-center gap-0.5 font-mono text-[10px] font-bold tabular-nums" data-tool-status={detail.label}>
+      <span className="shrink-0 flex items-center gap-0.5 font-mono text-[10px] tabular-nums" data-tool-status={detail.label}>
         <span className="px-1.5 py-0.5 rounded-full" style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}>
           {plus}
         </span>
@@ -1664,7 +1661,7 @@ function ToolIconChip({
 }) {
   return (
     <span
-      className="shrink-0 grid h-5 w-5 place-items-center rounded-[6px]"
+      className="shrink-0 grid h-5 w-5 place-items-center rounded-lg"
       style={{ background, color }}
       data-testid="tool-icon-chip"
       aria-hidden="true"
@@ -1733,11 +1730,18 @@ function ToolLine({
   // anatomy (VS Code/Cursor tool pills lead with the outcome). The status
   // WORD rides the row's aria-label (a button's aria-label replaces interior
   // content, so interior sr-only text would never be announced).
+  // R100-D (research §C4.5, the every-glyph-an-icon law): the TEXT glyphs
+  // (✓/✗/◌) are now LUCIDE components at the spec'd 12px — CircleCheck
+  // success / CircleX danger / Loader in-flight — in the same semantic
+  // colors (statusColor below is unchanged: tertiary while running, amber
+  // while an approval waits). data-tool-status-kind carries the state for
+  // tests/inspection (the icon renders no text).
   // DURATION HONESTY: no per-tool duration renders — neither the SSE
   // tool-result frame nor the persisted event carries timing data (the
   // R96-H noted-not-invented contract); the turn-level duration lives in
   // the section header's chip.
-  const statusGlyph = tool.ok === false ? "✗" : tool.ok === null ? "◌" : "✓";
+  const statusKind = tool.ok === false ? "failed" : tool.ok === null ? "running" : "ok";
+  const StatusIcon = tool.ok === false ? CircleX : tool.ok === null ? Loader : CircleCheck;
   const statusColor =
     tool.ok === false
       ? SEMANTIC_COLORS.danger
@@ -1839,32 +1843,33 @@ function ToolLine({
             ? `Open sub-agent ${singleLiveChild.code} in the right sidebar`
             : `${tool.toolName} ${tool.argsSummary}`
         }
-        className="flex items-center gap-2 h-7 w-full max-w-full px-1 -ml-1 rounded-md transition-colors text-left"
+        // R100-D: the row's hover wash is a CSS class (hover:bg-hover), gated
+        // to interactive rows exactly as the old JS handler was — the
+        // non-interactive rows (rowAction === null) never paint a hover.
+        className={`flex items-center gap-2 h-7 w-full max-w-full px-1 -ml-1 rounded-md transition-colors text-left ${
+          rowAction !== null ? "hover:bg-hover" : ""
+        }`}
         style={{
           color: styles.textTertiary,
           cursor: rowAction !== null ? "pointer" : "default",
         }}
-        onMouseEnter={(e) => {
-          if (rowAction !== null) e.currentTarget.style.background = styles.subtleHover;
-        }}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
         {/* R99-B: the leading outcome glyph (see the statusWord derive above
-            for the honesty/a11y notes). */}
+            for the honesty/a11y notes) — R100-D: the 12px lucide status icon. */}
         <span
           data-testid="tool-status-glyph"
-          className="shrink-0 w-3.5 text-center text-[10px] font-bold leading-none"
-          style={{ color: statusColor }}
+          data-tool-status-kind={statusKind}
+          className="shrink-0 w-3.5 grid place-items-center leading-none"
           aria-hidden="true"
         >
-          {statusGlyph}
+          <StatusIcon size={12} style={{ color: statusColor }} strokeWidth={2.25} />
         </span>
         {chipTone !== null ? (
           <ToolIconChip Icon={Icon} background={chipTone.background} color={chipTone.color} />
         ) : (
           <Icon size={11} className="shrink-0" style={{ color: styles.textTertiary }} />
         )}
-        <span className="shrink-0 text-[11px] font-semibold" style={{ color: styles.textSecondary }}>
+        <span className="shrink-0 text-[11px] font-medium" style={{ color: styles.textSecondary }}>
           {label}
         </span>
         <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: styles.textTertiary }}>
@@ -1873,7 +1878,7 @@ function ToolLine({
         {statusDetail !== null ? <ToolStatusChip detail={statusDetail} /> : null}
         {rowAction === "open-subagent" ? (
           <span
-            className="shrink-0 flex items-center gap-1 text-[10px] font-bold"
+            className="shrink-0 flex items-center gap-1 text-[10px] font-medium"
             style={{ color: styles.accent }}
           >
             live
@@ -2176,16 +2181,16 @@ export function WorkingSection({
           /* The completed mark — success ✓ (the folded work stands done). */
           <Check size={11} strokeWidth={2.5} className="shrink-0" style={{ color: SEMANTIC_COLORS.success }} aria-hidden />
         )}
-        <span className="text-[11.5px] font-semibold truncate" style={{ color: styles.textSecondary }}>
+        <span className="text-[12px] font-medium truncate" style={{ color: styles.textSecondary }}>
           {headerLabel}
         </span>
         {!live && toolCount > 0 && !pendingApproval ? (
-          <span className="shrink-0 text-[10.5px] tabular-nums" style={{ color: styles.textTertiary }}>
+          <span className="shrink-0 text-[10px] font-mono tabular-nums" style={{ color: styles.textTertiary }}>
             · {toolCount} {toolWord}
           </span>
         ) : null}
         {pendingApproval ? (
-          <span className="shrink-0 text-[10.5px] font-semibold" style={{ color: AMBER }}>
+          <span className="shrink-0 text-[10px] font-medium" style={{ color: AMBER }}>
             · waiting for approval
           </span>
         ) : null}
@@ -2193,12 +2198,12 @@ export function WorkingSection({
         {/* The right-aligned numeric cluster — actions + clock while LIVE,
             the duration chip when folded (mono tabular-nums both). */}
         {live && liveActionLabel !== "" ? (
-          <span className="shrink-0 font-mono text-[10.5px] tabular-nums" style={{ color: styles.textTertiary }}>
+          <span className="shrink-0 font-mono text-[10px] tabular-nums" style={{ color: styles.textTertiary }}>
             {liveActionLabel}
           </span>
         ) : null}
         {liveClock !== null ? (
-          <span className="shrink-0 font-mono text-[10.5px] tabular-nums" style={{ color: styles.textTertiary }}>
+          <span className="shrink-0 font-mono text-[10px] tabular-nums" style={{ color: styles.textTertiary }}>
             {liveClock}
           </span>
         ) : null}

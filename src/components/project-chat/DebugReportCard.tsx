@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Bug, ChevronDown, LoaderCircle } from "lucide-react";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 
@@ -53,8 +54,11 @@ export interface DebugReportCardProps {
 
 /** The amber status color — the SEMANTIC_COLORS exception pattern: a
  * documented cross-theme token (the debug analyst's failure is a warning,
- * not the red of a failed turn — the turn itself succeeded). */
-const AMBER = "#d97706";
+ * not the red of a failed turn — the turn itself succeeded).
+ * R100-D: the local #d97706 hex is retired — the ONE documented spelling
+ * is SEMANTIC_COLORS.warning (semantics.ts), same as every other amber
+ * surface after the R100-D sweep. */
+const AMBER = SEMANTIC_COLORS.warning;
 
 /**
  * ROUND-67 (R67-B): the clipboard payload for the "Copy report" button.
@@ -99,7 +103,8 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
   return (
     <div
       data-testid="debug-report-card"
-      className="rounded-[14px] border overflow-hidden"
+      // R100-D: 14px arbitrary radius → rounded-xl (the 12px card step).
+      className="rounded-xl border overflow-hidden"
       style={{ borderColor: borderTone, background: styles.subtle }}
     >
       {/* Header row (ROUND-67 R67-B: the whole row is the collapse toggle):
@@ -115,13 +120,9 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
         aria-expanded={open}
         aria-label={`${open ? "Collapse" : "Expand"} debug report`}
         data-testid="debug-report-toggle"
-        className="w-full text-left px-3.5 py-2.5 flex items-center gap-2.5 flex-wrap min-w-0 transition-colors"
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = styles.subtleHover;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "transparent";
-        }}
+        // R100-D (TOKENS §6): the hover wash is the CSS class (hover:bg-hover
+        // — the CSS-var leg; no JS hover painting).
+        className="w-full text-left px-3.5 py-2.5 flex items-center gap-2.5 flex-wrap min-w-0 transition-colors hover:bg-hover"
       >
         <Bug
           size={14}
@@ -129,12 +130,15 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
           style={{ color: isError ? AMBER : styles.textTertiary }}
           aria-hidden
         />
-        <span className="text-[12px] font-bold shrink-0" style={{ color: titleTone }}>
+        {/* R100-D (weight law): the card title is 600 (bold is wizard
+            display only). */}
+        <span className="text-[12px] font-semibold shrink-0" style={{ color: titleTone }}>
           Debug report
         </span>
         {report.model ? (
           <span
-            className="font-mono text-[10.5px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate"
+            // R100-D: 10.5→10px mono (the meta-mono tier).
+            className="font-mono text-[10px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate"
             style={{ background: styles.card, color: styles.textTertiary }}
             title={report.model}
           >
@@ -142,7 +146,7 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
           </span>
         ) : null}
         <span
-          className="text-[10.5px] min-w-0 truncate"
+          className="text-[10px] min-w-0 truncate"
           style={{ color: styles.textTertiary }}
           title="Produced by a separate context-free analyst after the turn completed"
         >
@@ -150,7 +154,7 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
         </span>
         <span
           data-testid="debug-report-status"
-          className="ml-auto shrink-0 flex items-center gap-1.5 text-[10.5px] font-semibold"
+          className="ml-auto shrink-0 flex items-center gap-1.5 text-[10px] font-medium"
           style={{ color: isError ? AMBER : styles.textTertiary }}
         >
           {isStreaming ? (
@@ -190,7 +194,8 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
             <div data-testid="debug-report-body" className="px-3.5 pb-3 pt-0.5 min-w-0">
               {isError ? (
                 <div
-                  className="text-[11.5px] leading-[1.5] break-words"
+                  // R100-D: 11.5→12px (the no-half-pixel snap).
+                  className="text-[12px] leading-[1.5] break-words"
                   style={{ color: withAlpha(AMBER, styles.isDark ? 0.95 : 0.9) }}
                   role="alert"
                 >
@@ -201,7 +206,7 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
               ) : isStreaming ? (
                 // Streaming with no text yet — the loading animation is the whole
                 // body (the header spinner + this quiet placeholder).
-                <div className="text-[11.5px]" style={{ color: styles.textTertiary }}>
+                <div className="text-[12px]" style={{ color: styles.textTertiary }}>
                   Analyzing the last execution…
                 </div>
               ) : null}
@@ -231,7 +236,8 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
             }}
             aria-label="Copy debug report"
             data-testid="debug-report-copy"
-            className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-colors"
+            // R100-D: 11.5→12px; buttons are 600 per the weight law.
+            className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors"
             style={{ borderColor: styles.border, color: styles.textSecondary }}
           >
             {copied ? "Copied" : "Copy report"}

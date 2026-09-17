@@ -28,6 +28,7 @@ import {
 import { useStreamStore } from "../../lib/stream-store";
 import { useSession } from "../../hooks/use-sessions";
 import { pushLocalToast } from "../../hooks/use-notifications";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 import {
@@ -208,7 +209,8 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
     >
       {expanded ? (
         <div
-          className="w-full rounded-[14px] border-[1.5px] shadow-lg overflow-hidden"
+          // R100-D: 14px arbitrary radius → rounded-xl (the 12px card step).
+          className="w-full rounded-xl border-[1.5px] shadow-lg overflow-hidden"
           style={{
             borderColor: cardBorder,
             // R89-F1 (the owner: "there should be a blur around its corners so
@@ -230,12 +232,14 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
             style={{ borderColor: withAlpha(styles.text, 0.08) }}
           >
             <ListTodo size={13} style={{ color: styles.accent }} aria-hidden />
-            <span className="text-[11px] font-bold tracking-wide" style={{ color: styles.text }}>
+            {/* R100-D (weight law): the header is 600 — bold is wizard-only. */}
+            <span className="text-[11px] font-semibold tracking-wide" style={{ color: styles.text }}>
               TO-DO LIST
             </span>
             {userEdit ? (
               <span
-                className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full"
+                // R100-D: 9→10px + font-medium (the type floor + weight law).
+                className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full"
                 style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
                 title="You edited this list — the agent follows your changes."
               >
@@ -244,7 +248,7 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
             ) : null}
             {state.streamBusy ? (
               <span
-                className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full"
+                className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full"
                 style={{ background: withAlpha(styles.accent, 0.08), color: styles.textTertiary }}
                 title="A turn is running — edits reach the agent on its next message."
               >
@@ -252,7 +256,12 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
               </span>
             ) : null}
             <div className="flex-1" />
-            <span className="text-[10px] font-mono font-bold" style={{ color: complete ? "#22c55e" : styles.textTertiary }}>
+            {/* R100-D: #22c55e → SEMANTIC_COLORS.success (the ONE documented
+                spelling); numbers go tabular + medium. */}
+            <span
+              className="text-[10px] font-mono font-medium tabular-nums"
+              style={{ color: complete ? SEMANTIC_COLORS.success : styles.textTertiary }}
+            >
               {done}/{total}
             </span>
             {!editing ? (
@@ -261,7 +270,9 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                 onClick={beginEdit}
                 aria-label="Edit the to-do list"
                 title="Edit the to-do list — the agent works with your changes"
-                className="flex items-center justify-center w-6 h-6 rounded-[7px] transition-colors hover:bg-black/5"
+                // R100-D: rounded-[7px] → rounded-lg; hover:bg-black/5 → the
+                // ONE hover idiom (hover:bg-hover, the CSS-var leg).
+                className="flex items-center justify-center w-6 h-6 rounded-lg transition-colors hover:bg-hover"
                 style={{ color: styles.textTertiary }}
               >
                 <Pencil size={12} />
@@ -271,7 +282,7 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
               type="button"
               onClick={() => setExpanded(false)}
               aria-label="Collapse the to-do list"
-              className="flex items-center justify-center w-6 h-6 rounded-[7px] transition-colors hover:bg-black/5"
+              className="flex items-center justify-center w-6 h-6 rounded-lg transition-colors hover:bg-hover"
               style={{ color: styles.textTertiary }}
             >
               <ChevronDown size={13} />
@@ -293,11 +304,13 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                       onClick={() => cycleStatus(i)}
                       aria-label={`Cycle status (now ${row.status})`}
                       title={`Status: ${row.status} — click to cycle`}
-                      className="flex items-center justify-center w-[18px] h-[18px] rounded-[5px] border-[1.5px] shrink-0 transition-colors"
+                      // R100-D: rounded-[5px] → rounded-sm (the 4px step);
+                      // #22c55e → SEMANTIC_COLORS.success.
+                      className="flex items-center justify-center w-[18px] h-[18px] rounded-sm border-[1.5px] shrink-0 transition-colors"
                       style={{
                         borderColor:
-                          row.status === "completed" ? "#22c55e" : row.status === "in_progress" ? styles.accent : withAlpha(styles.text, 0.25),
-                        background: row.status === "completed" ? "#22c55e" : "transparent",
+                          row.status === "completed" ? SEMANTIC_COLORS.success : row.status === "in_progress" ? styles.accent : withAlpha(styles.text, 0.25),
+                        background: row.status === "completed" ? SEMANTIC_COLORS.success : "transparent",
                       }}
                     >
                       {row.status === "completed" ? (
@@ -312,7 +325,8 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                         setDraft((rows) => rows.map((r, ri) => (ri === i ? { ...r, content: e.target.value } : r)))
                       }
                       aria-label={`Task ${i + 1} content`}
-                      className="flex-1 min-w-0 text-[11.5px] rounded-[7px] border px-2 py-1.5 outline-none focus:border-current"
+                      // R100-D: 11.5→12px + rounded-lg (the 8px input step).
+                      className="flex-1 min-w-0 text-[12px] rounded-lg border px-2 py-1.5 outline-none focus:border-current"
                       style={{
                         background: styles.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)",
                         borderColor: withAlpha(styles.text, 0.12),
@@ -324,7 +338,7 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                       onClick={() => move(i, -1)}
                       aria-label={`Move task ${i + 1} up`}
                       disabled={i === 0}
-                      className="flex items-center justify-center w-6 h-6 rounded-[7px] transition-colors hover:bg-black/5 disabled:opacity-25"
+                      className="flex items-center justify-center w-6 h-6 rounded-lg transition-colors hover:bg-hover disabled:opacity-25"
                       style={{ color: styles.textTertiary }}
                     >
                       <ArrowUp size={12} />
@@ -334,7 +348,7 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                       onClick={() => move(i, 1)}
                       aria-label={`Move task ${i + 1} down`}
                       disabled={i === draft.length - 1}
-                      className="flex items-center justify-center w-6 h-6 rounded-[7px] transition-colors hover:bg-black/5 disabled:opacity-25"
+                      className="flex items-center justify-center w-6 h-6 rounded-lg transition-colors hover:bg-hover disabled:opacity-25"
                       style={{ color: styles.textTertiary }}
                     >
                       <ArrowDown size={12} />
@@ -343,8 +357,10 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                       type="button"
                       onClick={() => setDraft((rows) => rows.filter((_, ri) => ri !== i))}
                       aria-label={`Delete task ${i + 1}`}
-                      className="flex items-center justify-center w-6 h-6 rounded-[7px] transition-colors hover:bg-black/5"
-                      style={{ color: withAlpha("#ef4444", 0.75) }}
+                      // R100-D: rounded-lg + hover:bg-hover; #ef4444 →
+                      // SEMANTIC_COLORS.danger (the ONE documented spelling).
+                      className="flex items-center justify-center w-6 h-6 rounded-lg transition-colors hover:bg-hover"
+                      style={{ color: withAlpha(SEMANTIC_COLORS.danger, 0.75) }}
                     >
                       <Trash2 size={12} />
                     </button>
@@ -353,7 +369,8 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                 <button
                   type="button"
                   onClick={() => setDraft((rows) => [...rows, { content: "", status: "pending" }])}
-                  className="flex items-center gap-1.5 text-[11px] font-medium px-2 py-1.5 rounded-[7px] transition-colors self-start mt-0.5"
+                  // R100-D: rounded-[7px] → rounded-lg.
+                  className="flex items-center gap-1.5 text-[11px] font-medium px-2 py-1.5 rounded-lg transition-colors self-start mt-0.5"
                   style={{ color: styles.accent, background: withAlpha(styles.accent, 0.07) }}
                   data-testid="todo-float-add-row"
                 >
@@ -365,7 +382,8 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                 style={{ borderColor: withAlpha(styles.text, 0.08) }}
               >
                 {saveError !== null ? (
-                  <span className="text-[10px] flex-1 min-w-0" style={{ color: "#ef4444" }} data-testid="todo-float-save-error">
+                  // R100-D: #ef4444 → SEMANTIC_COLORS.danger.
+                  <span className="text-[10px] flex-1 min-w-0" style={{ color: SEMANTIC_COLORS.danger }} data-testid="todo-float-save-error">
                     {saveError}
                   </span>
                 ) : (
@@ -377,7 +395,7 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                   type="button"
                   onClick={cancelEdit}
                   disabled={saving}
-                  className="text-[11px] font-semibold px-2.5 py-1 rounded-[7px] transition-colors"
+                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
                   style={{ color: styles.textTertiary }}
                 >
                   Cancel
@@ -386,7 +404,7 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                   type="button"
                   onClick={() => void save()}
                   disabled={saving}
-                  className="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-[7px] transition-colors disabled:opacity-60"
+                  className="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-60"
                   style={{ background: styles.accent, color: "#fff" }}
                   data-testid="todo-float-save"
                 >
@@ -400,7 +418,8 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
               {/* the list — ALL rows rendered, the container caps at TEN visible
                   (scroll reveals the rest — the owner's spec). */}
               <ul
-                className="flex flex-col overflow-y-auto px-3 py-2 gap-[3px]"
+                // R100-D: gap-[3px] → gap-1 (the 4px base grid).
+                className="flex flex-col overflow-y-auto px-3 py-2 gap-1"
                 style={{ maxHeight: ROWS_MAX_H }}
                 data-testid="todo-float-rows"
               >
@@ -410,10 +429,12 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                   return (
                     <li key={i} className="flex items-start gap-2 min-w-0 h-9 py-1" data-testid="todo-float-row">
                       <span
-                        className="flex items-center justify-center w-[15px] h-[15px] rounded-[4px] border-[1.5px] shrink-0 mt-[2px] transition-colors"
+                        // R100-D: rounded-[4px] → rounded-sm (the scale
+                        // spelling); #22c55e → SEMANTIC_COLORS.success.
+                        className="flex items-center justify-center w-[15px] h-[15px] rounded-sm border-[1.5px] shrink-0 mt-[2px] transition-colors"
                         style={{
-                          borderColor: isDone ? "#22c55e" : isActive ? styles.accent : withAlpha(styles.text, 0.25),
-                          background: isDone ? "#22c55e" : "transparent",
+                          borderColor: isDone ? SEMANTIC_COLORS.success : isActive ? styles.accent : withAlpha(styles.text, 0.25),
+                          background: isDone ? SEMANTIC_COLORS.success : "transparent",
                         }}
                         aria-hidden
                       >
@@ -424,7 +445,8 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                         ) : null}
                       </span>
                       <span
-                        className={`text-[11.5px] leading-[1.45] break-words ${isDone ? "line-through" : ""}`}
+                        // R100-D: 11.5→12px (the no-half-pixel snap).
+                        className={`text-[12px] leading-[1.45] break-words ${isDone ? "line-through" : ""}`}
                         style={{
                           color: isDone ? styles.textTertiary : isActive ? styles.text : withAlpha(styles.text, 0.75),
                           fontWeight: isActive ? 600 : 400,
@@ -455,9 +477,11 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
         aria-label={expanded ? "Collapse the to-do list" : "Expand the to-do list"}
-        className="group flex items-center gap-2 rounded-full @max-[520px]:rounded-[16px] border-[1.5px] pl-2.5 pr-2 py-1.5 shadow-sm transition-all hover:shadow-md max-w-full text-left"
+        className="group flex items-center gap-2 rounded-full @max-[520px]:rounded-2xl border-[1.5px] pl-2.5 pr-2 py-1.5 shadow-sm transition-all hover:shadow-md max-w-full text-left"
         style={{
-          borderColor: complete ? withAlpha("#22c55e", 0.45) : cardBorder,
+          // R100-D: #22c55e → SEMANTIC_COLORS.success; the narrow-tier
+          // radius snaps rounded-[16px] → rounded-2xl (the scale spelling).
+          borderColor: complete ? withAlpha(SEMANTIC_COLORS.success, 0.45) : cardBorder,
           // R89-F1: the same frosted treatment on the pill.
           background: styles.isDark ? "rgba(44,44,46,0.72)" : "rgba(255,255,255,0.72)",
           backdropFilter: "blur(12px) saturate(1.15)",
@@ -466,10 +490,10 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
         data-testid="todo-float-pill"
       >
         <span
-          className="flex items-center justify-center w-[15px] h-[15px] rounded-[4px] border-[1.5px] shrink-0"
+          className="flex items-center justify-center w-[15px] h-[15px] rounded-sm border-[1.5px] shrink-0"
           style={{
-            borderColor: complete ? "#22c55e" : current !== null ? styles.accent : "#22c55e",
-            background: complete ? "#22c55e" : "transparent",
+            borderColor: complete ? SEMANTIC_COLORS.success : current !== null ? styles.accent : SEMANTIC_COLORS.success,
+            background: complete ? SEMANTIC_COLORS.success : "transparent",
           }}
           aria-hidden
         >
@@ -493,8 +517,13 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
           {current !== null ? current.content : "All tasks done"}
         </span>
         <span
-          className="text-[9.5px] font-mono font-bold shrink-0 px-1.5 py-0.5 rounded-full"
-          style={{ background: withAlpha(complete ? "#22c55e" : styles.accent, 0.1), color: complete ? "#22c55e" : styles.accent }}
+          // R100-D: 9.5→10px + font-medium + tabular-nums; the success hex
+          // rides SEMANTIC_COLORS (the ONE documented spelling).
+          className="text-[10px] font-mono font-medium tabular-nums shrink-0 px-1.5 py-0.5 rounded-full"
+          style={{
+            background: withAlpha(complete ? SEMANTIC_COLORS.success : styles.accent, 0.1),
+            color: complete ? SEMANTIC_COLORS.success : styles.accent,
+          }}
         >
           {done}/{total}
         </span>

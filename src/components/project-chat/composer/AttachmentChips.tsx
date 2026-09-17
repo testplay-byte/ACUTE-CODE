@@ -34,7 +34,7 @@ export function AttachmentChips({
               ? `${a.path} · ${fmtBytes(a.size)}${a.text === null ? " · no readable text" : ""}`
               : `${a.name} · ${fmtBytes(a.size)}${a.text === null ? " · no readable text" : ""}`
           }
-          className="inline-flex items-center gap-1.5 h-7 pl-2 pr-1 rounded-[10px] border max-w-full"
+          className="inline-flex items-center gap-1.5 h-7 pl-2 pr-1 rounded-lg border max-w-full"
           style={{
             borderColor: withAlpha(styles.accent, styles.isDark ? 0.28 : 0.2),
             background: withAlpha(styles.accent, styles.isDark ? 0.1 : 0.06),
@@ -47,12 +47,12 @@ export function AttachmentChips({
           >
             {a.name}
           </span>
-          <span className="font-mono text-[9.5px] shrink-0" style={{ color: styles.textTertiary }}>
+          <span className="font-mono text-[10px] shrink-0" style={{ color: styles.textTertiary }}>
             {fmtBytes(a.size)}
           </span>
           {a.truncated ? (
             <span
-              className="font-mono text-[9px] font-bold px-1 rounded-md shrink-0"
+              className="font-mono text-[10px] font-medium px-1 rounded-md shrink-0"
               style={{ background: styles.subtle, color: styles.textTertiary }}
               title="Only the first 128KB was read"
             >
@@ -61,7 +61,7 @@ export function AttachmentChips({
           ) : null}
           {a.text === null ? (
             <span
-              className="font-mono text-[9px] font-bold px-1 rounded-md shrink-0"
+              className="font-mono text-[10px] font-medium px-1 rounded-md shrink-0"
               style={{ background: styles.subtle, color: styles.textTertiary }}
               title="Binary or unreadable — the model sees a placeholder note"
             >
@@ -73,14 +73,8 @@ export function AttachmentChips({
             onClick={() => onRemove(a.id)}
             aria-label={`Remove attachment ${a.name}`}
             title={`Remove ${a.name}`}
-            className="w-5 h-5 rounded-md grid place-items-center shrink-0 transition-colors"
+            className="w-5 h-5 rounded-md grid place-items-center shrink-0 transition-colors hover:bg-hover"
             style={{ color: styles.textTertiary }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = styles.subtleHover;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-            }}
           >
             <X size={10} />
           </button>

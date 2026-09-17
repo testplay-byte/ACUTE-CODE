@@ -210,16 +210,20 @@ describe("ChatMarkdown block rendering", () => {
     // element (the text node's parent) for the heading's own styling.
     const blockFor = (text: string): HTMLElement =>
       (screen.getByText(text) as HTMLElement).parentElement as HTMLElement;
+    // R100-D re-pin (§C4.4 + TOKENS §2): markdown headings snapped to the
+    // ladder — 600 weight everywhere (font-semibold; 700 is wizard display
+    // only), h1–h3 at 13px (the `section` tier) and h4–h6 at 12px — the old
+    // 15/13.5/12.5px staircase was the measured "AI-generated" tell.
     for (const text of ["Big", "Medium", "Small", "Tiny"]) {
-      expect(blockFor(text).className).toContain("font-bold");
+      expect(blockFor(text).className).toContain("font-semibold");
     }
     expect(document.body.textContent).not.toContain("##");
     expect(document.body.textContent).not.toContain("####");
-    // h1/h2/h3 sizes per the R64-c spec (h4 is body-size bold).
-    expect(blockFor("Big").style.fontSize).toBe("15px");
-    expect(blockFor("Medium").style.fontSize).toBe("13.5px");
-    expect(blockFor("Small").style.fontSize).toBe("12.5px");
-    expect(blockFor("Tiny").style.fontSize).toBe("");
+    // h1–h3 = 13px (the cliff: body 13 → title 24, no in-between); h4 = 12px.
+    expect(blockFor("Big").style.fontSize).toBe("13px");
+    expect(blockFor("Medium").style.fontSize).toBe("13px");
+    expect(blockFor("Small").style.fontSize).toBe("13px");
+    expect(blockFor("Tiny").style.fontSize).toBe("12px");
   });
 
   it("bullets render with markers, one nesting level, and inline marks inside items", () => {

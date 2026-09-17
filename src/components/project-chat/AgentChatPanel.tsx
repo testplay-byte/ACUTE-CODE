@@ -232,14 +232,10 @@ function CopyButton({
       }}
       aria-label={label}
       title={title}
-      className="w-6 h-6 rounded-md grid place-items-center transition-colors"
+      // R100-D: the hover wash is a CSS class (hover:bg-hover — the CSS-var
+      // leg); no JS hover painting.
+      className="w-6 h-6 rounded-md grid place-items-center transition-colors hover:bg-hover"
       style={{ color: styles.textTertiary }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = styles.subtleHover;
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-      }}
     >
       {copied ? <Check size={11} style={{ color: SEMANTIC_COLORS.success }} /> : <Icon size={11} />}
     </button>
@@ -273,7 +269,7 @@ function ReplyStats({
   return (
     <span
       data-reply-stats
-      className="ml-auto pl-2 shrink-0 font-mono text-[9.5px] tabular-nums whitespace-nowrap"
+      className="ml-auto pl-2 shrink-0 font-mono text-[10px] tabular-nums whitespace-nowrap"
       style={{ color: styles.textTertiary }}
     >
       {parts.join(" · ")}
@@ -445,14 +441,8 @@ function TurnFooter({
         aria-pressed={filled}
         title={label}
         data-testid={`rate-${value}`}
-        className="w-6 h-6 rounded-md grid place-items-center transition-colors"
+        className="w-6 h-6 rounded-md grid place-items-center transition-colors hover:bg-hover"
         style={{ color: filled ? styles.accent : styles.textTertiary }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = styles.subtleHover;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "transparent";
-        }}
       >
         <Icon size={11} style={filled ? { fill: "currentColor" } : undefined} />
       </button>
@@ -508,7 +498,7 @@ function TurnFooter({
                 aria-label="Edit the saved rating note"
                 title={`Saved note: ${current.note}`}
                 data-testid="rating-note-chip"
-                className="ml-0.5 flex h-5 max-w-[180px] items-center gap-1 rounded-full px-1.5 text-[10px] font-semibold"
+                className="ml-0.5 flex h-5 max-w-[180px] items-center gap-1 rounded-full px-1.5 text-[10px] font-medium"
                 style={{ background: styles.subtle, color: styles.textTertiary }}
               >
                 <MessageSquareText size={10} aria-hidden />
@@ -550,7 +540,7 @@ function TurnFooter({
             onClick={onNoteSave}
             aria-label="Save rating note"
             data-testid="rating-note-save"
-            className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border"
+            className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border"
             style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
           >
             Save
@@ -559,7 +549,7 @@ function TurnFooter({
             type="button"
             onClick={() => setNoteOpen(false)}
             aria-label="Cancel rating note"
-            className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border"
+            className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border"
             style={{ borderColor: styles.border, color: styles.textSecondary }}
           >
             Cancel
@@ -687,14 +677,14 @@ function TranscriptSkeleton() {
   return (
     <div className="flex flex-col gap-4" aria-hidden>
       <div className="flex justify-end">
-        <SkeletonBlock className="h-10 w-[38%] max-w-[300px] rounded-[16px] rounded-br-[5px]" style={{ background: bubbleTint }} />
+        <SkeletonBlock className="h-10 w-[38%] max-w-[300px] rounded-xl" style={{ background: bubbleTint }} />
       </div>
       <div className="flex flex-col gap-2">
         <SkeletonBlock className="h-3.5 w-[52%] max-w-[420px] rounded-full" />
         <SkeletonBlock className="h-3.5 w-[44%] max-w-[380px] rounded-full" />
       </div>
       <div className="flex justify-end">
-        <SkeletonBlock className="h-10 w-[30%] max-w-[240px] rounded-[16px] rounded-br-[5px]" style={{ background: bubbleTint }} />
+        <SkeletonBlock className="h-10 w-[30%] max-w-[240px] rounded-xl" style={{ background: bubbleTint }} />
       </div>
       <div className="flex flex-col gap-2">
         <SkeletonBlock className="h-3.5 w-[58%] max-w-[460px] rounded-full" />
@@ -715,13 +705,13 @@ function ChatLoadErrorCard({ onRetry }: { onRetry: () => void }) {
     <div
       role="alert"
       data-chat-load-error
-      className="max-w-md rounded-[14px] border px-4 py-3.5 text-center"
+      className="max-w-md rounded-xl border px-4 py-3.5 text-center"
       style={{
         borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
         background: withAlpha(SEMANTIC_COLORS.danger, styles.isDark ? 0.08 : 0.05),
       }}
     >
-      <div className="text-[12.5px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+      <div className="text-[13px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
         Could not load this conversation
       </div>
       <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
@@ -776,8 +766,14 @@ function UserMessage({
   // so… the user has to manually click the expand button to see the full
   // one"): the bubble clamps at 10 lines with a Show more/less toggle —
   // short messages render exactly as before.
-  const bubbleBg = withAlpha(styles.accent, styles.isDark ? 0.18 : 0.1);
-  const bubbleBorder = withAlpha(styles.accent, styles.isDark ? 0.32 : 0.22);
+  // R100-D (research §C4.3 — THE structural move, the input-row idiom): the
+  // messenger tail is DELETED (uniform 12px radius), the row caps at
+  // min(65%, 640px), the fill snaps to the accent-soft strengths (9–11%
+  // alpha) with a 1px accent@0.18 border, the text is 13px/400 (the
+  // font-medium is gone — body weight per the weight law), padding
+  // 10px 14px, leading 1.55. The attachment chips go mono 10px rounded-lg.
+  const bubbleBg = withAlpha(styles.accent, styles.isDark ? 0.11 : 0.09);
+  const bubbleBorder = withAlpha(styles.accent, 0.18);
   return (
     <motion.div
       className="flex justify-end group"
@@ -793,8 +789,10 @@ function UserMessage({
           R99-B (the research anatomy — user = INPUT, a bubble never a
           document): the row caps at min(75%, 640px) of the reading column —
           wide windows used to stretch the bubble to 82% (~885px), reading
-          like a full-width document instead of a message. */}
-      <div className="flex items-end gap-1 max-w-[min(75%,640px)] @max-[420px]:max-w-[92%] min-w-0">
+          like a full-width document instead of a message.
+          R100-D (§C4.3): the cap tightens to min(65%, 640px) — the input-row
+          idiom; 75% let a short prompt read as a document. */}
+      <div className="flex items-end gap-1 max-w-[min(65%,640px)] @max-[420px]:max-w-[92%] min-w-0">
         {/* R97-H: the hover time chip joins the actions cluster (the same
             reveal animation — the cluster is already invisible until hover).
             R99-B: ONE unified hover row — timestamp · copy · revert, gap-1,
@@ -809,21 +807,15 @@ function UserMessage({
               disabled={revertDisabled}
               aria-label="Revert to this message"
               title="Revert to this message"
-              className="w-6 h-6 rounded-md grid place-items-center transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+              className="w-6 h-6 rounded-md grid place-items-center transition-colors hover:bg-hover disabled:cursor-not-allowed disabled:opacity-40"
               style={{ color: styles.textTertiary }}
-              onMouseEnter={(e) => {
-                if (!revertDisabled) e.currentTarget.style.background = styles.subtleHover;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
-              }}
             >
               <History size={11} />
             </button>
           ) : null}
         </div>
         <div
-          className="rounded-[16px] rounded-br-[5px] px-3.5 py-2.5 text-[13px] leading-[1.55] font-medium border min-w-0"
+          className="rounded-xl px-3.5 py-2.5 text-[13px] leading-[1.55] border min-w-0"
           style={{
             background: bubbleBg,
             borderColor: bubbleBorder,
@@ -841,13 +833,13 @@ function UserMessage({
                 <span
                   key={`${a.path ?? a.name}-${i}`}
                   title={a.path ?? a.name}
-                  className="inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-md font-mono text-[9.5px] max-w-[220px]"
+                  className="inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-lg font-mono text-[10px] max-w-[220px]"
                   style={{
                     background: withAlpha(styles.accent, styles.isDark ? 0.14 : 0.1),
                     color: styles.textSecondary,
                   }}
                 >
-                  <File size={9} className="shrink-0" style={{ color: styles.accent }} />
+                  <File size={10} className="shrink-0" style={{ color: styles.accent }} />
                   <span className="truncate">
                     {a.name}
                     {a.size !== undefined ? ` · ${fmtBytes(a.size)}` : ""}
@@ -1128,7 +1120,7 @@ export function TurnErrorCard({
     <motion.div variants={msgVariants} initial="initial" animate="animate" className="min-w-0">
       <div
         role="alert"
-        className="rounded-[14px] border px-3.5 py-2.5 flex items-start gap-2.5"
+        className="rounded-xl border px-3.5 py-2.5 flex items-start gap-2.5"
         style={{
           borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4),
           background: withAlpha(SEMANTIC_COLORS.danger, styles.isDark ? 0.09 : 0.05),
@@ -1136,10 +1128,10 @@ export function TurnErrorCard({
       >
         <AlertTriangle size={14} className="mt-0.5 shrink-0 text-red-500" aria-hidden />
         <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+          <div className="text-[12px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
             Generation failed
             {error.attempts !== undefined ? (
-              <span className="ml-1.5 font-semibold" style={{ color: styles.textSecondary }}>
+              <span className="ml-1.5" style={{ color: styles.textSecondary }}>
                 after {error.attempts} attempt{error.attempts === 1 ? "" : "s"}
               </span>
             ) : null}
@@ -1156,7 +1148,7 @@ export function TurnErrorCard({
             ) : null}
             {error.model ? (
               <span
-                className="font-mono text-[10.5px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate"
+                className="font-mono text-[10px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate"
                 style={{ background: styles.subtle, color: styles.textTertiary }}
                 title={error.model}
               >
@@ -1171,14 +1163,14 @@ export function TurnErrorCard({
             {error.usage ? (
               <span
                 data-error-usage
-                className="font-mono text-[10.5px] px-1.5 py-0.5 rounded-md shrink-0"
+                className="font-mono text-[10px] tabular-nums px-1.5 py-0.5 rounded-md shrink-0"
                 style={{ background: styles.subtle, color: styles.textSecondary }}
                 title="The tokens this failed turn actually spent (completed iterations + the failed call's streamed-so-far)"
               >
                 {fmtTokens(error.usage.inputTokens)} sent ↑ · {fmtTokens(error.usage.outputTokens)} received ↓
               </span>
             ) : null}
-            <span className="text-[11.5px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
+            <span className="text-[12px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
               {shortReason}
             </span>
             {/* R93-B1: the stranded queue is never silent — the card says
@@ -1187,7 +1179,7 @@ export function TurnErrorCard({
             {error.queuedKept !== undefined ? (
               <span
                 data-error-queued-kept
-                className="text-[11px] font-semibold px-2 py-0.5 rounded-md shrink-0"
+                className="text-[11px] font-medium px-2 py-0.5 rounded-md shrink-0"
                 style={{ background: withAlpha(SEMANTIC_COLORS.warning, 0.12), color: SEMANTIC_COLORS.warning }}
                 title="They stay queued server-side and send with your next message"
               >
@@ -1214,7 +1206,7 @@ export function TurnErrorCard({
           {expanded ? (
             <pre
               data-error-full-text
-              className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10.5px] leading-[1.55] whitespace-pre-wrap break-words min-w-0"
+              className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10px] leading-[1.55] whitespace-pre-wrap break-words min-w-0"
               style={{
                 borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3),
                 background: styles.subtle,
@@ -1235,7 +1227,7 @@ export function TurnErrorCard({
                 disabled={disabled}
                 aria-label="Retry the failed message"
                 title={disabled ? "Wait for the current turn to finish" : "Send the same message again"}
-                className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
               >
                 Retry
@@ -1250,7 +1242,7 @@ export function TurnErrorCard({
                 });
               }}
               aria-label="Copy error details"
-              className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-colors"
+              className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors"
               style={{ borderColor: styles.border, color: styles.textSecondary }}
             >
               {copied ? "Copied" : "Copy details"}
@@ -1290,7 +1282,7 @@ export function ThinkingStoppedCard({
       <div
         role="status"
         data-testid="thinking-stopped-card"
-        className="rounded-[14px] border px-3.5 py-2.5 flex items-start gap-2.5"
+        className="rounded-xl border px-3.5 py-2.5 flex items-start gap-2.5"
         style={{
           borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4),
           background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.09 : 0.05),
@@ -1298,10 +1290,10 @@ export function ThinkingStoppedCard({
       >
         <Brain size={14} className="mt-0.5 shrink-0" style={{ color: SEMANTIC_COLORS.warning }} aria-hidden />
         <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-bold" style={{ color: SEMANTIC_COLORS.warning }}>
+          <div className="text-[12px] font-semibold" style={{ color: SEMANTIC_COLORS.warning }}>
             Thinking stopped by the guard
           </div>
-          <div className="mt-1 text-[11.5px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
+          <div className="mt-1 text-[12px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
             The model kept reasoning with no text, tool call, or finish past your thresholds, so the thinking-loop
             guard stopped it (one de-escalating retry was attempted first). This is not a provider failure — the
             guard is a setting you control.
@@ -1309,7 +1301,7 @@ export function ThinkingStoppedCard({
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
             {error.model ? (
               <span
-                className="font-mono text-[10.5px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate"
+                className="font-mono text-[10px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate"
                 style={{ background: styles.subtle, color: styles.textTertiary }}
                 title={error.model}
               >
@@ -1318,7 +1310,7 @@ export function ThinkingStoppedCard({
             ) : null}
             <span className="text-[11px]" style={{ color: styles.textTertiary }}>
               Turn it off or tune it in{" "}
-              <Link to="/settings?tab=advanced" className="font-bold underline" style={{ color: SEMANTIC_COLORS.warning }}>
+              <Link to="/settings?tab=advanced" className="font-semibold underline" style={{ color: SEMANTIC_COLORS.warning }}>
                 {/* R98-I1: the label follows the honest rename ("General" →
                     "Functionality", the owner's word) — the URL id stays
                     "advanced" (the load-bearing deep-link contract). */}
@@ -1331,7 +1323,7 @@ export function ThinkingStoppedCard({
                 type="button"
                 onClick={onRetry}
                 disabled={disabled}
-                className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-colors disabled:opacity-50"
+                className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors disabled:opacity-50"
                 style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4), color: SEMANTIC_COLORS.warning }}
               >
                 Retry
@@ -1401,13 +1393,13 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
       <div
         role="status"
         data-retry-status-card
-        className="rounded-[16px] border px-3.5 py-3 flex items-start gap-3"
+        // R100-D: the card's 135° amber GRADIENT is retired (TOKENS §5 —
+        // gradient fills are wizard + primary-CTA only); the flat amber wash
+        // matches every other status card. 16px radius via the scale utility.
+        className="rounded-2xl border px-3.5 py-3 flex items-start gap-3"
         style={{
           borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4),
-          background: `linear-gradient(135deg, ${withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.1 : 0.07)} 0%, ${withAlpha(
-            SEMANTIC_COLORS.warning,
-            styles.isDark ? 0.05 : 0.03,
-          )} 100%)`,
+          background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.09 : 0.05),
         }}
       >
         {/* The spinner badge — the slow patient rotation (R75) now inside a
@@ -1417,12 +1409,12 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
           style={{ background: withAlpha(SEMANTIC_COLORS.warning, 0.16) }}
           aria-hidden
         >
-          <RefreshCw size={13} className="ac-retry-spin" style={{ color: "#d97706" }} />
+          <RefreshCw size={13} className="ac-retry-spin" style={{ color: SEMANTIC_COLORS.warning }} />
         </div>
         <div className="min-w-0 flex-1">
           {/* Header + the attempt dot-ladder. */}
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="text-[12px] font-bold" style={{ color: "#d97706" }}>
+            <span className="text-[12px] font-semibold" style={{ color: SEMANTIC_COLORS.warning }}>
               Retrying — attempt {retry.attempt} of {retry.totalAttempts}
             </span>
             <span className="flex items-center gap-[3px]" aria-hidden data-retry-dots>
@@ -1437,7 +1429,7 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
                       width: isCurrent ? 7 : 5,
                       height: isCurrent ? 7 : 5,
                       background: isDone
-                        ? withAlpha("#d97706", 0.55)
+                        ? withAlpha(SEMANTIC_COLORS.warning, 0.55)
                         : isCurrent
                           ? SEMANTIC_COLORS.warning
                           : "transparent",
@@ -1452,12 +1444,12 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
             <span
               className="text-[10px] font-mono px-2 py-0.5 rounded-full shrink-0 uppercase tracking-wide"
-              style={{ background: withAlpha(SEMANTIC_COLORS.warning, 0.14), color: "#d97706" }}
+              style={{ background: withAlpha(SEMANTIC_COLORS.warning, 0.14), color: SEMANTIC_COLORS.warning }}
               title={`provider error class: ${retry.errorClass}`}
             >
               {classLabel}
             </span>
-            <span className="text-[11.5px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
+            <span className="text-[12px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
               {retry.classMessage}
             </span>
           </div>
@@ -1474,7 +1466,7 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
           {providerShort !== null ? (
             <div className="mt-1.5 min-w-0" data-retry-provider-error>
               <div
-                className={`font-mono text-[10.5px] leading-[1.55] min-w-0 break-words ${
+                className={`font-mono text-[10px] leading-[1.55] min-w-0 break-words ${
                   providerExpanded ? "" : "line-clamp-3"
                 }`}
                 style={{ color: styles.textSecondary }}
@@ -1489,7 +1481,7 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
                     aria-expanded={providerExpanded}
                     data-retry-provider-expand
                     className="mt-1 h-6 px-2 rounded-lg text-[11px] font-semibold border transition-colors shrink-0"
-                    style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4), color: "#d97706" }}
+                    style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4), color: SEMANTIC_COLORS.warning }}
                     title={
                       providerExpanded
                         ? "Collapse the provider text"
@@ -1501,7 +1493,7 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
                   {providerExpanded ? (
                     <pre
                       data-retry-provider-error-full
-                      className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10.5px] leading-[1.55] whitespace-pre-wrap break-words min-w-0"
+                      className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10px] leading-[1.55] whitespace-pre-wrap break-words min-w-0"
                       style={{
                         borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.3),
                         background: styles.subtle,
@@ -1518,8 +1510,8 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
           {/* The countdown — a mono label + a thin fill bar that empties
               into the next attempt (progress IS the reassurance). */}
           <div className="mt-2 flex items-center gap-2">
-            <Timer size={11} className="shrink-0" style={{ color: "#d97706" }} aria-hidden />
-            <span className="text-[11px] font-mono shrink-0 tabular-nums" style={{ color: "#d97706" }}>
+            <Timer size={11} className="shrink-0" style={{ color: SEMANTIC_COLORS.warning }} aria-hidden />
+            <span className="text-[11px] font-mono shrink-0 tabular-nums" style={{ color: SEMANTIC_COLORS.warning }}>
               next attempt in {remainingLabel}
             </span>
             <div
@@ -1539,8 +1531,8 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
           </div>
           {/* The reassurance line. */}
           <div className="mt-1.5 flex items-center gap-1.5">
-            <Info size={10.5} className="shrink-0" style={{ color: styles.textTertiary }} aria-hidden />
-            <span className="text-[10.5px] min-w-0" style={{ color: styles.textTertiary }}>
+            <Info size={10} className="shrink-0" style={{ color: styles.textTertiary }} aria-hidden />
+            <span className="text-[10px] min-w-0" style={{ color: styles.textTertiary }}>
               the agent keeps working automatically — no action needed
             </span>
           </div>
@@ -1567,7 +1559,7 @@ export function TurnStoppedCard({ ts }: { ts: string }) {
       <div
         role="status"
         data-stopped-card
-        className="rounded-[14px] border px-3.5 py-2.5 flex items-center gap-2.5"
+        className="rounded-xl border px-3.5 py-2.5 flex items-center gap-2.5"
         style={{ borderColor: styles.borderSubtle, background: styles.subtle }}
       >
         <Square size={12} strokeWidth={2.5} className="mt-0.5 shrink-0" style={{ color: styles.textTertiary }} aria-hidden />
@@ -1619,15 +1611,15 @@ export function QueuedMessageChip({
       <div
         data-testid="queued-chip"
         data-queued-seq={entry.seq}
-        className="rounded-[14px] border px-3.5 py-2.5 flex items-start gap-2.5"
+        className="rounded-xl border px-3.5 py-2.5 flex items-start gap-2.5"
         style={{
           borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4),
           background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.08 : 0.05),
         }}
       >
-        <Clock size={13} className="mt-0.5 shrink-0" style={{ color: "#d97706" }} aria-hidden />
+        <Clock size={13} className="mt-0.5 shrink-0" style={{ color: SEMANTIC_COLORS.warning }} aria-hidden />
         <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-bold" style={{ color: "#d97706" }}>
+          <div className="text-[12px] font-semibold" style={{ color: SEMANTIC_COLORS.warning }}>
             Queued — sends after the current step
           </div>
           {/* The message text, clamped to two lines (the full text lives in
@@ -1651,7 +1643,7 @@ export function QueuedMessageChip({
                 title="Stop waiting — send this message as a new turn right away"
                 data-queued-send-now
                 className="h-6 px-2 rounded-lg text-[11px] font-semibold border transition-colors shrink-0"
-                style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.45), color: "#d97706" }}
+                style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.45), color: SEMANTIC_COLORS.warning }}
               >
                 Send now
               </button>
@@ -1665,10 +1657,8 @@ export function QueuedMessageChip({
             aria-label="Remove the queued message"
             title="Remove the queued message"
             data-queued-remove
-            className="w-6 h-6 rounded-md grid place-items-center shrink-0 transition-colors"
+            className="w-6 h-6 rounded-md grid place-items-center shrink-0 transition-colors hover:bg-hover"
             style={{ color: styles.textTertiary }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             <X size={11} />
           </button>
@@ -3022,7 +3012,7 @@ export function AgentChatPanel({
 
   return (
     <div
-      className="flex flex-col h-full w-full min-w-0 rounded-[16px] overflow-hidden @container"
+      className="flex flex-col h-full w-full min-w-0 rounded-2xl overflow-hidden @container"
       style={{ backgroundColor: styles.card }}
     >
       {/* ⌘K / Ctrl+K CommandPalette (files/symbols/content search — WS-H) */}
@@ -3131,10 +3121,14 @@ export function AgentChatPanel({
                 <div className="flex flex-col items-center gap-4">
                   <AcuteLogo size={52} ariaLabel="Acute" />
                   <div className="min-w-0 max-w-md">
-                    <div className="text-[22px] font-black tracking-tight leading-tight" style={{ color: styles.text }}>
+                    {/* R100-D (ladder): the greeting title snaps to the `title`
+                        tier — 24px/600 (font-black is wizard-only; §C4.7's one
+                        borrowed wizard element stays unused — no dot-grid, no
+                        glow: the greeting stays clean). */}
+                    <div className="text-[24px] font-semibold leading-[1.2]" style={{ color: styles.text }}>
                       How can I help with {project.name}?
                     </div>
-                    <div className="text-[12.5px] mt-2 leading-relaxed" style={{ color: styles.textSecondary }}>
+                    <div className="text-[13px] mt-2 leading-relaxed" style={{ color: styles.textSecondary }}>
                       {agent?.name ?? "Acute"} · {agent?.model ?? "no model"} · streaming replies with live tool calls
                     </div>
                     {agents.length === 0 && !agentsQuery.isPending && !agentsQuery.isError ? (
@@ -3289,7 +3283,7 @@ export function AgentChatPanel({
                     visible (previously an untyped fall-through frame). */}
                 {liveTurn.note !== null ? (
                   <div
-                    className="mb-2 min-w-0 text-[11.5px] font-mono px-3 py-1.5 rounded-[10px] border"
+                    className="mb-2 min-w-0 text-[12px] font-mono px-3 py-1.5 rounded-lg border"
                     style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.35), color: styles.textSecondary, background: withAlpha(SEMANTIC_COLORS.warning, 0.05) }}
                   >
                     {liveTurn.note}
@@ -3461,7 +3455,7 @@ export function AgentChatPanel({
             {queueKeptNotice !== null && queueKeptNotice > 0 && !streamBusy ? (
               <div
                 data-testid="queue-kept-notice"
-                className="mt-2 rounded-[12px] border px-3 py-2 text-[11.5px] font-semibold flex items-center gap-2"
+                className="mt-2 rounded-xl border px-3 py-2 text-[12px] font-semibold flex items-center gap-2"
                 style={{
                   borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.35),
                   background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.08 : 0.05),
@@ -3524,7 +3518,7 @@ export function AgentChatPanel({
               px here (the alert box spans the reading column). */}
           <div
             role="alert"
-            className={`${CONTENT_COL_CLASS} mb-1.5 flex items-start gap-2 rounded-[12px] border py-2 text-[12px]`}
+            className={`${CONTENT_COL_CLASS} mb-1.5 flex items-start gap-2 rounded-xl border py-2 text-[12px]`}
             style={{
               borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4),
               color: SEMANTIC_COLORS.danger,
