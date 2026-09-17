@@ -61,6 +61,8 @@ import {
 } from "lucide-react";
 import { APP_NAME, APP_VERSION, PHASE } from "../../lib/version";
 import { isTauri } from "../../lib/sidecar";
+import { useConfigStore } from "../../lib/config-store";
+import { retryConnection } from "../../lib/sidecar-connection";
 // R99-A: the ONE sanctioned link router — the Releases link opens in the
 // app's OWN browser panel by default; the external affordance beside it is
 // the deliberate escape hatch to the device's browser.
@@ -238,6 +240,15 @@ function VersionCard() {
   // window survives. A REJECTED silent launch surfaces the wizard escape
   // hatch (offerWizard); a rejected wizard launch keeps the plain error
   // (the fallback itself failed — ACUTE.bat + the Releases page remain).
+  //
+  // ROUND-101 (R101-B): the flag + the recovery. `updateInFlight` is set
+  // BEFORE the invoke — the Rust side kills the sidecar tree inside that
+  // call, and the ConnectionGate swaps the whole UI to the calm Restarting
+  // splash the moment the flag flips (no watchdog offline flip, no query
+  // error flash — the v0.98.0 "environment crashed" report). If the invoke
+  // REJECTS, the app lives on with a DEAD engine — the recovery clears the
+  // flag and auto-restarts the backend (retryConnection), so the owner is
+  // never stranded on the offline screen with a manual Restart chore.
   const launchInstaller = async (path: string, silent: boolean, version: string) => {
     setInstall({ kind: "installing", version, silent });
     const invoke = tauriInvoke();
@@ -249,10 +260,14 @@ function VersionCard() {
       });
       return;
     }
+    useConfigStore.getState().setUpdateInFlight({ version });
     try {
       await invoke("run_update_installer", { path, silent });
       setInstall({ kind: "launched", version, silent });
     } catch (err) {
+      // The engine died for nothing — bring it back before anything else.
+      useConfigStore.getState().setUpdateInFlight(null);
+      void retryConnection().catch(() => {});
       setInstall({
         kind: "error",
         message: err instanceof Error ? err.message : String(err),

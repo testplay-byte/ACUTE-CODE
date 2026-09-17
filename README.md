@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-100 -->
+<!-- last-reviewed: 2026-09-17 round-101 -->
 # ACUTE-CODE
 
 Local-first, closed-source multi-agent engineering workbench for Windows
@@ -23,16 +23,30 @@ Node sidecar; `shared/` holds domain types; `src-tauri/` is the Rust shell.
 - `pnpm dev` — Vite dev server on port 5173 (UI only)
 - **Desktop app:** `pnpm build`, then from `src-tauri/`: `cargo run` — debug builds load the embedded `../dist`; at launch the shell spawns `agent-core/dist/main.js`, does the stdout ready-line handshake, and injects provider keys from the OS secure store (Windows Credential Manager; the Linux Secret Service — ADR-0031). A `pnpm tauri` script exists (`package.json`), but the documented path remains build-then-cargo.
 
-## Linux release (round-100)
+## Linux release (round-100; ARM64 since round-101)
 
-Two installers ship on every tagged release (built by the `linux-bundles`
-job in `.github/workflows/release.yml`):
+Four installers ship on every tagged release (built by the `linux-bundles`
++ `linux-bundles-arm64` jobs in `.github/workflows/release.yml`) — x64
+(`amd64`, the default for typical desktops) and ARM64 (`arm64`):
 
-- **`ACUTE-CODE_<version>_amd64.deb`** — Debian/Ubuntu: `sudo apt install
-  ./ACUTE-CODE_<version>_amd64.deb` (the package pulls its dependencies,
-  incl. WebKitGTK, from apt).
-- **`ACUTE-CODE_<version>_amd64.AppImage`** — any distro: `chmod +x` and
-  run; no installation, no root.
+- **`ACUTE-CODE_<version>_amd64.deb`** — Debian/Ubuntu x86_64: `sudo apt
+  install ./ACUTE-CODE_<version>_amd64.deb` (the package pulls its
+  dependencies, incl. WebKitGTK, from apt).
+- **`ACUTE-CODE_<version>_amd64.AppImage`** — any x86_64 distro: `chmod +x`
+  and run; no installation, no root.
+- **`ACUTE-CODE_<version>_arm64.deb`** — Debian/Ubuntu aarch64: same flow,
+  `sudo apt install ./ACUTE-CODE_<version>_arm64.deb`.
+- **`ACUTE-CODE_<version>_arm64.AppImage`** — any aarch64 distro: `chmod
+  +x` and run; no installation, no root.
+
+**Which arch?** `amd64` is the right download for typical Intel/AMD
+desktops and laptops. `arm64` (round-101) is for aarch64 machines —
+Raspberry Pi 5-class boards running a desktop environment, aarch64 Linux
+laptops, and Snapdragon X / DevKit machines running an arm64 distro.
+Requirements are identical on both arches (the WebKitGTK runtime and the
+Secret Service keyring below), and the same feature matrix applies — the
+ARM64 bundles are built natively on an arm64 runner with the same boot
+gate, not cross-compiled.
 
 **Requirements:** a WebKitGTK 4.1 runtime (`libwebkit2gtk-4.1-0` — present
 on every current Debian/Ubuntu/Fedora desktop) and, for provider API keys,

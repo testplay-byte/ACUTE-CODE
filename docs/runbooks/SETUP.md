@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-100 -->
+<!-- last-reviewed: 2026-09-17 round-101 -->
 # Development Environment Setup (ACUTE-CODE)
 
 Status: Phase 0 snapshot — updated each phase by the Scribe.
@@ -24,19 +24,28 @@ Status: Phase 0 snapshot — updated each phase by the Scribe.
 
 Rationale for deferral: nothing in Phases 0–1 research/design compiles Rust; the toolchain is only needed at the first native build, and rustup without MSVC produces a half-broken toolchain.
 
-## Linux prerequisites (ROUND-100 — R100-B)
+## Linux prerequisites (ROUND-100 — R100-B; ARM64 added ROUND-101 — R101-E)
 
-The Linux build (deb + AppImage, released by the `linux-bundles` job) needs
-the Tauri v2 prerequisites — the same list CI installs
-(`.github/workflows/release.yml` / `ci.yml`'s `rust-linux` job;
-v2.tauri.app/start/prerequisites — the WebKitGTK **4.1** line; the 4.0
-series is gone from Ubuntu 24.04's repos):
+The Linux build (deb + AppImage for BOTH arches — `linux-bundles` on x64,
+`linux-bundles-arm64` on the native ARM64 runner) needs the same Tauri v2
+prerequisites on either arch — the same list CI installs
+(`.github/workflows/release.yml` / `ci.yml`'s `rust-linux` +
+`rust-linux-arm64` jobs; v2.tauri.app/start/prerequisites — the WebKitGTK
+**4.1** line; the 4.0 series is gone from Ubuntu 24.04's repos, and every
+package below is published for amd64 AND arm64):
 
 ```bash
 sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
   curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
   librsvg2-dev
 ```
+
+An aarch64 dev machine (Raspberry Pi 5-class, aarch64 laptop, Snapdragon X
+dev kit) follows the exact same commands — the apt list, `pnpm install`,
+and `cargo check` are arch-neutral. One arch-specific note: node-pty ships
+prebuilds only for darwin/win32, so on Linux (either arch) `pnpm install`
+compiles it from source — `build-essential` in the list above is what
+makes that work.
 
 Provider keys on a Linux dev checkout flow from the `ACUTE_PROVIDER_<ID>`
 env vars / `~/.acute/*.key` files as always (dev.mjs); the packaged app

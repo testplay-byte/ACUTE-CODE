@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Copy, Loader2, RotateCcw, ScrollText, Unplug } from "lucide-react";
-import { useConfigStore } from "../../lib/config-store";
+import { useConfigStore, type UpdateInFlight } from "../../lib/config-store";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { beginSidecarConnect, retryConnection } from "../../lib/sidecar-connection";
 import { getSidecarLogTail, isTauri, type SidecarLogTail } from "../../lib/sidecar";
@@ -21,25 +21,94 @@ import { AcuteLogo } from "./Sidebar";
  *   connected  → children render
  *
  * Browser dev passes straight through (no __TAURI__): identical to pre-R53.
+ *
+ * ROUND-101 (R101-B): while `updateInFlight` is set, the gate renders the
+ * calm RESTARTING splash instead of the app tree — an update install has
+ * begun, the sidecar was killed on purpose, and the window exits seconds
+ * after the installer launches. Unmounting the children also cancels every
+ * in-flight query, so no error banner can flash during the hand-off (the
+ * v0.98.0 report: the offline screen read as "the environment crashed").
+ * The `update-installing` Tauri event (emitted by run_update_installer
+ * BEFORE the pre-install kill) is the belt-and-suspenders leg — any future
+ * entry point that launches the installer gets the same calm treatment even
+ * if it forgot to set the flag itself.
  */
 export function ConnectionGate({ children }: { children: ReactNode }) {
   const connection = useConfigStore((s) => s.connection);
   const connectionError = useConfigStore((s) => s.connectionError);
+  const updateInFlight = useConfigStore((s) => s.updateInFlight);
   const bootedRef = useRef(false);
 
   useEffect(() => {
     if (bootedRef.current) return;
     bootedRef.current = true;
     beginSidecarConnect();
+    // R101-B: the shell's own announcement that the pre-install kill is
+    // about to run — sets the flag even when an entry point other than the
+    // About tab drove the install. Payload-less: the version (when known)
+    // arrives with the About tab's own set call.
+    const shell =
+      typeof window !== "undefined"
+        ? (window as { __TAURI__?: { event?: { listen?: (event: string, handler: (ev: { payload: unknown }) => void) => Promise<() => void> } } })
+            .__TAURI__
+        : undefined;
+    const shellEvent = shell?.event;
+    const maybeListen = shellEvent?.listen;
+    if (typeof maybeListen === "function") {
+      void maybeListen
+        .call(shellEvent, "update-installing", () => {
+          const current = useConfigStore.getState().updateInFlight;
+          if (current === null) {
+            useConfigStore.getState().setUpdateInFlight({ version: null });
+          }
+        })
+        .catch(() => {});
+    }
   }, []);
 
   if (!isTauri() || connection === "connected") {
-    return <>{children}</>;
+    return updateInFlight !== null ? <RestartingSplash update={updateInFlight} /> : <>{children}</>;
+  }
+  // R101-B: the update owns the exit — never show the offline/connecting
+  // screens for a backend the app killed on purpose.
+  if (updateInFlight !== null) {
+    return <RestartingSplash update={updateInFlight} />;
   }
   if (connection === "offline") {
     return <OfflineScreen error={connectionError} />;
   }
   return <ConnectingSplash />;
+}
+
+/**
+ * R101-B: the update hand-off splash — the app is closing so the installer
+ * can replace it (the NSIS `/R` leg relaunches it afterwards). Calm by
+ * design: logo, spinner, one honest line. No errors, no Retry — there is
+ * nothing for the owner to do for the next few seconds.
+ */
+function RestartingSplash({ update }: { update: UpdateInFlight }) {
+  return (
+    <div
+      className="flex h-full w-full flex-col items-center justify-center gap-6"
+      style={{ backgroundColor: "var(--ac-bg)" }}
+      role="status"
+      aria-live="polite"
+      data-testid="update-restarting-splash"
+    >
+      <AcuteLogo size={72} ariaLabel="ACUTE-CODE" />
+      <div className="flex flex-col items-center gap-2">
+        <div className="flex items-center gap-2.5">
+          <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--ac-accent)" }} />
+          <span className="text-sm font-medium" style={{ color: "var(--ac-text-secondary)" }}>
+            {update.version !== null ? `Restarting into ${update.version}…` : "Restarting into the new version…"}
+          </span>
+        </div>
+        <span className="text-xs" style={{ color: "var(--ac-text-tertiary)" }}>
+          installing the update — your data is kept, the app comes back by itself
+        </span>
+      </div>
+    </div>
+  );
 }
 
 /** Branded full-viewport splash — the wizard's atmosphere, spinner + status.

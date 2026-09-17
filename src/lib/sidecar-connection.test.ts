@@ -41,6 +41,7 @@ function resetStore(): void {
     demoData: true,
     connection: "connected",
     connectionError: null,
+    updateInFlight: null,
   });
 }
 
@@ -128,6 +129,41 @@ describe("connect loop — failure paths", () => {
     expect(useConfigStore.getState().connectionError).toContain("stopped");
   });
 
+  it("R101-B: phase=stopped while an update installs holds the line (no offline flip)", async () => {
+    vi.useFakeTimers();
+    sidecarMock.getSidecarInfo.mockResolvedValue(null);
+    sidecarMock.getSidecarStatus.mockResolvedValue({ phase: "stopped" });
+    useConfigStore.setState({ updateInFlight: { version: "0.99.0" } });
+
+    beginSidecarConnect();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The pre-install kill did this on purpose — the app exits seconds later;
+    // flipping to offline would render the "environment crashed" screen.
+    expect(useConfigStore.getState().connection).toBe("connecting");
+    expect(useConfigStore.getState().connectionError).toBeNull();
+    // And the loop STOPPED (no polling storm against the dead backend).
+    const callsAfterFirst = sidecarMock.getSidecarInfo.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sidecarMock.getSidecarInfo.mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  it("R101-B: phase=failed still fails honestly even mid-update (a real spawn failure is never masked)", async () => {
+    vi.useFakeTimers();
+    sidecarMock.getSidecarInfo.mockResolvedValue(null);
+    sidecarMock.getSidecarStatus.mockResolvedValue({
+      phase: "failed",
+      error: "spawning `node.exe` failed",
+    });
+    useConfigStore.setState({ updateInFlight: { version: "0.99.0" } });
+
+    beginSidecarConnect();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(useConfigStore.getState().connection).toBe("offline");
+    expect(useConfigStore.getState().connectionError).toContain("spawning");
+  });
+
   it("times out honestly after the deadline (cold-boot migrations can't hang forever)", async () => {
     vi.useFakeTimers();
     sidecarMock.getSidecarInfo.mockResolvedValue(null);
@@ -199,6 +235,29 @@ describe("connect loop — watchdog", () => {
     expect(s.connection).toBe("connected");
     expect(s.baseUrl).toBe("http://127.0.0.1:56001");
     expect(invalidateQueries).toHaveBeenCalled();
+  });
+
+  it("R101-B: a dead ping while an update installs stops the watchdog silently (no reconnect storm)", async () => {
+    vi.useFakeTimers();
+    sidecarMock.getSidecarInfo.mockResolvedValue({ port: 55963, token: "tok-53" });
+
+    beginSidecarConnect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useConfigStore.getState().connection).toBe("connected");
+
+    // The updater kills the backend on purpose; the next ping finds it dead.
+    useConfigStore.setState({ updateInFlight: { version: "0.99.0" } });
+    sidecarMock.pingSidecar.mockResolvedValueOnce(false);
+    sidecarMock.getSidecarInfo.mockClear();
+    sidecarMock.getSidecarStatus.mockClear();
+
+    await vi.advanceTimersByTimeAsync(20_100);
+
+    // Still "connected" (the splash owns the screen), and the loop never
+    // re-entered — no diagnostics against a deliberately-dead backend.
+    expect(useConfigStore.getState().connection).toBe("connected");
+    expect(sidecarMock.getSidecarInfo).not.toHaveBeenCalled();
+    expect(sidecarMock.getSidecarStatus).not.toHaveBeenCalled();
   });
 });
 

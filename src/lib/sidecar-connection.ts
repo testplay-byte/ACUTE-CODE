@@ -79,6 +79,18 @@ async function connectLoop(gen: number): Promise<void> {
     const status = await getSidecarStatus();
     if (gen !== generation) return;
     if (status && (status.phase === "failed" || status.phase === "stopped")) {
+      // R101-B: "stopped" while an update install is in flight is the
+      // pre-install kill doing its job — the app exits moments after the
+      // installer launches. Hold the line: no offline flip, no error screen;
+      // the ConnectionGate shows the calm Restarting splash instead. (A
+      // "failed" phase is still a real failure — the update path never
+      // produces it, so it stays honest.)
+      if (
+        status.phase === "stopped" &&
+        useConfigStore.getState().updateInFlight !== null
+      ) {
+        return;
+      }
       const error =
         status.phase === "failed"
           ? status.error
@@ -104,6 +116,12 @@ async function connectLoop(gen: number): Promise<void> {
  * Mid-session watchdog: ping every 20s; a dead backend flips the app to
  * connecting → the loop either reconnects (transient blip) or lands on
  * offline with the shell's exit reason + the Restart button.
+ *
+ * ROUND-101 (R101-B): while `updateInFlight` is set, a dead ping is the
+ * EXPECTED state — the updater killed the backend on purpose (the R96-I
+ * pre-install contract) and this process exits seconds later. The watchdog
+ * just stops; no reconnect storm against a deliberately-dead sidecar, no
+ * offline flip, no error screen for the final seconds of the window.
  */
 function startWatchdog(gen: number): void {
   const timer = setInterval(async () => {
@@ -118,6 +136,9 @@ function startWatchdog(gen: number): void {
     }
     if (!alive) {
       clearInterval(timer);
+      // R101-B: the update install owns the exit — never diagnose a backend
+      // the app itself killed on purpose.
+      if (useConfigStore.getState().updateInFlight !== null) return;
       // Re-enter the loop: bump generation so any stale loop/watchdog dies.
       generation += 1;
       void connectLoop(generation);

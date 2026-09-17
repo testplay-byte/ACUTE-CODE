@@ -155,6 +155,26 @@
   outline-offset: 2px;
 }
 
+/* ── ROUND-101 (R101-D, owner: "it apparently selected the message entry
+   area and highlighted it and the area around it" — the v0.98.0 verdict on
+   the composer's focus treatment) ─────────────────────────────────────────
+   Text-entry surfaces answer focus with a SUBTLE border-color swap ONLY:
+   same 1px hairline width (no layout shift, no thickness change), no
+   outline ring floating around the container (the R100-D JS-swapped
+   border-[1.5px] + outline-2 ring is deleted). The textarea itself keeps
+   the global :focus-visible rule above for keyboard users — the container
+   never paints its own ring. Border-color lives HERE (not as an inline
+   style) precisely so :focus-within can compose with it: inline styles
+   would win over both classes. The composer keeps dragActive's accent
+   border as an inline style (a REAL state, applied above this class pair).
+   color-mix expresses accent@0.55 on the --ac-* bridge vars (no hex). */
+.composer-shell {
+  border-color: var(--ac-border);
+}
+.composer-shell:focus-within {
+  border-color: color-mix(in srgb, var(--ac-accent) 55%, transparent);
+}
+
 @layer base {
   html,
   body,

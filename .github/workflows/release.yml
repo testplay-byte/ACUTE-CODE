@@ -23,12 +23,25 @@ name: Release
 # bash) — only the bundler targets differ (`--bundles` overrides
 # tauri.conf.json's ["nsis"] per invocation, so no conf-file split).
 #
+# ROUND-101 (R101-E): `linux-bundles-arm64` — the aarch64 twin of the
+# above (the owner asked for ARM64 IN ADDITION to x64; v0.98.0 shipped
+# amd64 only). Runs on GitHub's NATIVE ARM64 runner (ubuntu-24.04-arm),
+# NOT a cross-compile: node-pty ships prebuilds only for darwin/win32, so
+# on Linux it compiles from source for the HOST arch — an x64 runner with
+# `--target aarch64` would link an x86_64 pty.node into an arm64 bundle.
+# Natively, the x64 job's whole recipe runs unmodified (no --target flag,
+# no qemu). COST: the repo is private, so ARM runner minutes are billed —
+# acceptable because this workflow fires only on manual dispatch and v*
+# tags (never per-push), bounding the cost to releases. ci.yml's
+# `rust-linux-arm64` leg carries the per-push compile gate instead.
+#
 # Triggers (same for all jobs):
 #   - workflow_dispatch (optionally with a `version` input — when set, it must
 #     match the repo's version, guarding "tagged but forgot to bump" mistakes)
 #     → ALL jobs build (artifacts on every dispatch; the draft release only
 #     happens on tags)
-#   - push of a v* tag (the release path: kit + installer + Linux bundles + draft release)
+#   - push of a v* tag (the release path: kit + installer + Linux bundles
+#     x64 AND ARM64 + draft release)
 #
 # The draft release is tag-only by design: an untagged dispatch still produces
 # the installer + Linux-bundle ARTIFACTS (CI-verifiable), just no release.
@@ -348,11 +361,15 @@ jobs:
       - name: Build the workspace (shared + agent-core + vite)
         run: pnpm build
 
-      # ADR-0009 sidecar staging: pruned node_modules (linux-x64 prebuilds
-      # only — better-sqlite3 ships `linux-x64.node` files, node-pty ships
-      # `linux-x64/` dirs; both loaders were verified in the R51 staging
-      # notes, so no compiler toolchain lands in the bundle), exact
-      # lockfile versions, vendored `shared` with a runnable package.json.
+      # ADR-0009 sidecar staging: pruned node_modules, exact lockfile
+      # versions, vendored `shared` with a runnable package.json. Native
+      # addons on Linux (R101-E truth, verified in the tarballs):
+      # better-sqlite3 ships `linux-x64.node` prebuilds (loaded directly,
+      # no install script), while node-pty ships NO Linux prebuilds at all
+      # (its prebuilds/ holds darwin + win32 only) — it BUILDS FROM SOURCE
+      # during the staging install (the generated pnpm-workspace.yaml
+      # allowBuilds + the build-essential in the apt list above), which is
+      # also why this job cannot be cross-compiled from another arch.
       - name: Stage the sidecar bundle
         run: node scripts/release/stage-sidecar.mjs --platform linux-x64
 
@@ -393,9 +410,10 @@ jobs:
       # before it is packed — the REAL pinned `node` binary against the
       # staged app with the same env the Rust shell passes (ACUTE_TOKEN /
       # ACUTE_DB_PATH, cwd = the app dir), polling for the ACUTE_READY
-      # handshake line. This is also the proof the linux-x64 prebuilds
-      # (better-sqlite3, node-pty) load on this platform — the exact class
-      # of failure the Windows gate exists for. A failed boot prints the
+      # handshake line. This is also the proof the staged native addons
+      # load on this platform — better-sqlite3's `linux-x64` prebuild is on
+      # the boot path (SQL migrations run before ACUTE_READY) — the exact
+      # class of failure the Windows gate exists for. A failed boot prints the
       # engine's stdout/stderr tails and fails the build BEFORE
       # `pnpm tauri build` can pack a dead engine.
       - name: Boot the staged engine on Linux (pre-pack gate)
@@ -491,9 +509,208 @@ jobs:
           path: bundle-flat/*
           if-no-files-found: error
 
+  # ROUND-101 (R101-E): the Linux ARM64 (aarch64) bundles — deb + AppImage on
+  # ubuntu-24.04-arm, GitHub's NATIVE ARM64 runner. A copy of `linux-bundles`
+  # above with only the arch swapped. NATIVE, not cross: node-pty ships
+  # prebuilds only for darwin/win32 — on Linux it compiles from source for
+  # the HOST arch — so an x64 runner with `--target aarch64` would link an
+  # x86_64 pty.node into an arm64 bundle; natively, every step of the x64
+  # recipe (WebKitGTK apt, rust, the source-built node-pty, the boot gate,
+  # deb + AppImage bundling) runs unmodified. better-sqlite3 ships a
+  # `linux-arm64.node` prebuild (verified in the tarball), so it still needs
+  # no toolchain. COST: the repo is private → ARM runner minutes are billed;
+  # acceptable because this workflow fires only on manual dispatch + v*
+  # tags, never per-push (ci.yml's `rust-linux-arm64` is the per-push gate).
+  linux-bundles-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      # PINNED to the SAME version as the Windows + x64-Linux jobs above —
+      # the shipped runtime IS the tested one on EVERY platform, and the
+      # three must never drift. Bump deliberately, together with
+      # SIDECAR_NODE_VERSION below AND the other jobs' copies.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Same Tauri v2 prerequisites as the x64 job, byte-identical: every
+      # package here is published for arm64 in Ubuntu 24.04's repos
+      # (WebKitGTK 4.1 included). build-essential is load-bearing — see the
+      # staging step below.
+      - name: Install WebKitGTK + bundle deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+            curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Version consistency
+        run: pnpm version:check
+
+      # Same contract as the Windows + x64-Linux jobs: the workspace build
+      # runs BEFORE staging (stage-sidecar.mjs copies agent-core/dist +
+      # shared/dist); `pnpm tauri build` below re-runs `pnpm build` via
+      # beforeBuildCommand — idempotent, same commit, same output.
+      - name: Build the workspace (shared + agent-core + vite)
+        run: pnpm build
+
+      # ADR-0009 sidecar staging, arch-swapped: better-sqlite3 keeps only
+      # its `linux-arm64.node` prebuild (verified shipped); node-pty has NO
+      # Linux prebuilds (darwin/win32 only) and its install script compiles
+      # pty.node from source for the HOST arch — arm64 here, which is the
+      # whole reason this job runs natively (see the job comment above).
+      - name: Stage the sidecar bundle
+        run: node scripts/release/stage-sidecar.mjs --platform linux-arm64
+
+      # The pinned Linux ARM64 Node runtime (the SAME version the Windows
+      # and x64-Linux jobs ship — 30.8 MB tarball, nodejs.org/dist
+      # HEAD-verified R101-E) + its license texts for the bundle's LICENSES/
+      # dir (SPEC §6 / ADR-0009: the RUNTIME's compliance vehicle is
+      # shipping its notices inside the installer). The binary lands as
+      # `sidecar/node` — the sidecar.rs resolve order (node.exe, then node)
+      # picks it up.
+      - name: Bundle the pinned Node runtime + licenses
+        env:
+          # Must match setup-node above — the shipped runtime IS the tested one.
+          SIDECAR_NODE_VERSION: 24.20.0
+        run: |
+          set -euo pipefail
+          ver="$SIDECAR_NODE_VERSION"
+          tarball="node-v${ver}-linux-arm64.tar.xz"
+          curl -fSL -o "$tarball" "https://nodejs.org/dist/v${ver}/${tarball}"
+          rm -rf /tmp/node-extract && mkdir -p /tmp/node-extract
+          tar -xJf "$tarball" -C /tmp/node-extract
+          extract="/tmp/node-extract/node-v${ver}-linux-arm64"
+          sidecar="src-tauri/staging/sidecar"
+          # install (not cp) pins the exec bit — the gate below runs it and
+          # the bundler preserves resource modes.
+          install -m 755 "$extract/bin/node" "$sidecar/node"
+          mkdir -p "$sidecar/LICENSES"
+          cp "$extract/LICENSE" "$sidecar/LICENSES/node-v${ver}-LICENSE.txt"
+          # v24 ships one combined LICENSE (older releases split a separate
+          # ThirdPartyNotices.md — copy it too when present, future-proof).
+          if [ -f "$extract/ThirdPartyNotices.md" ]; then
+            cp "$extract/ThirdPartyNotices.md" "$sidecar/LICENSES/node-v${ver}-ThirdPartyNotices.md"
+          fi
+          ls -la "$sidecar"
+          test -x "$sidecar/node" || { echo "::error::$sidecar/node was not staged"; exit 1; }
+
+      # ROUND-101 — THE ARM64 PRE-PACK BOOT GATE (the R100 bash gate copied
+      # verbatim; it runs natively on ARM): the staged engine must actually
+      # BOOT before it is packed — the REAL pinned `node` binary against
+      # the staged app with the same env the Rust shell passes (ACUTE_TOKEN
+      # / ACUTE_DB_PATH, cwd = the app dir), polling for the ACUTE_READY
+      # handshake line. This is also the proof the staged native addons load
+      # on aarch64 — better-sqlite3's `linux-arm64` prebuild is on the boot
+      # path (SQL migrations run before ACUTE_READY). A failed boot prints
+      # the engine's stdout/stderr tails and fails the build BEFORE
+      # `pnpm tauri build` can pack a dead engine.
+      - name: Boot the staged engine on Linux ARM64 (pre-pack gate)
+        env:
+          ACUTE_BOOT_TIMEOUT_S: "90"
+        run: |
+          set -euo pipefail
+          # ALL paths ABSOLUTE (the R57 lesson): no dependence on the
+          # working directory beyond the deliberate cd below.
+          sidecar="$PWD/src-tauri/staging/sidecar"
+          out="/tmp/acute-boot-stdout.log"
+          err="/tmp/acute-boot-stderr.log"
+          db="/tmp/acute-boot-test.db"
+          rm -f "$out" "$err" "$db"
+          export ACUTE_TOKEN="ci-boot-token"
+          export ACUTE_DB_PATH="$db"
+          # cwd = the app dir (the Windows gate's -WorkingDirectory): the
+          # engine's default log file lands at <cwd>/.dev/acute.log and
+          # migrations resolve via import.meta.url regardless.
+          cd "$sidecar/app"
+          "$sidecar/node" "$sidecar/app/dist/main.js" >"$out" 2>"$err" &
+          pid=$!
+          ready=0
+          deadline=$(( $(date +%s) + ACUTE_BOOT_TIMEOUT_S ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if ! kill -0 "$pid" 2>/dev/null; then break; fi
+            if grep -q "ACUTE_READY" "$out" 2>/dev/null; then ready=1; break; fi
+            sleep 0.5
+          done
+          if [ "$ready" -eq 1 ]; then
+            echo "R101 boot gate: staged engine is UP on Linux ARM64 — $(grep ACUTE_READY "$out" | head -1)"
+          else
+            echo "::error::R101 boot gate: staged engine did not report ACUTE_READY within ${ACUTE_BOOT_TIMEOUT_S}s. NEVER pack this tree — this is the 'Can't reach agent-core' failure mode."
+            if [ -f "$out" ]; then echo "--- engine stdout tail ---"; tail -40 "$out"; fi
+            if [ -f "$err" ]; then echo "--- engine stderr tail ---"; tail -40 "$err"; fi
+            kill "$pid" 2>/dev/null || true
+            exit 1
+          fi
+          # Tree-kill (taskkill /T /F's mirror): the engine may hold sqlite
+          # + children; kill the children first, then the engine, a
+          # bounded wait, SIGKILL last — a leaked node would hold the temp
+          # DB and slow every later retry.
+          pkill -TERM -P "$pid" 2>/dev/null || true
+          kill -TERM "$pid" 2>/dev/null || true
+          for _ in $(seq 1 20); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.25
+          done
+          kill -KILL "$pid" 2>/dev/null || true
+          rm -f "$out" "$err" "$db"
+
+      # deb + AppImage ONLY, same exclusion as the x64 job (rpm OUT on the
+      # tauri #15698 CI-hang evidence; AppImage is documented "only fully
+      # supported on Ubuntu build systems" — ubuntu-24.04-arm qualifies).
+      - name: Build the Linux bundles
+        run: pnpm tauri build --bundles deb,appimage
+
+      # Bundler contract (tauri-bundler 2.x linux): files are
+      # <productName>_<version>_<arch>.deb / .AppImage →
+      # ACUTE-CODE_<v>_arm64.{deb,AppImage} on aarch64 (dpkg's arch name —
+      # the ARM twin of the x64 job's _amd64). The exact version-stamped
+      # names are asserted (not just "some .deb exists") so a wrong-arch or
+      # wrong-version artifact fails LOUDLY here, before the release job.
+      - name: Verify + collect the bundles
+        run: |
+          set -euo pipefail
+          ver="$(node scripts/release/version.mjs get)"
+          deb="src-tauri/target/release/bundle/deb/ACUTE-CODE_${ver}_arm64.deb"
+          appimage="src-tauri/target/release/bundle/appimage/ACUTE-CODE_${ver}_arm64.AppImage"
+          if [ ! -f "$deb" ] || [ ! -f "$appimage" ]; then
+            echo "::error::expected ACUTE-CODE_${ver}_arm64.{deb,AppImage} — got:"
+            ls -R src-tauri/target/release/bundle 2>/dev/null || true
+            exit 1
+          fi
+          echo "built: $deb ($(du -h "$deb" | cut -f1))"
+          echo "built: $appimage ($(du -h "$appimage" | cut -f1))"
+          # R100 hotfix 4 (same as the x64 job): upload-artifact@v4 derives
+          # paths from the LEAST COMMON ANCESTOR of every matched file —
+          # copy into ONE flat dir first: a single glob uploads bare
+          # filenames, the download lands them flat in
+          # linux-bundles-arm64/, and every downstream check matches.
+          mkdir -p bundle-flat
+          cp "$deb" "$appimage" bundle-flat/
+
+      - name: Upload Linux ARM64 bundles artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: acute-bundles-linux-arm64
+          path: bundle-flat/*
+          if-no-files-found: error
+
   # Draft release ONLY on tag pushes — the owner reviews + publishes manually.
   github-release:
-    needs: [launcher-kit, desktop-installer, linux-bundles]
+    needs: [launcher-kit, desktop-installer, linux-bundles, linux-bundles-arm64]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -518,6 +735,15 @@ jobs:
           name: acute-bundles-linux
           path: linux-bundles
 
+      # ROUND-101 (R101-E): the ARM64 Linux bundles join the same draft
+      # release (kept in a DISTINCT dir — the tag-verify + files globs
+      # below address each arch by name).
+      - name: Download the Linux ARM64 bundles artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: acute-bundles-linux-arm64
+          path: linux-bundles-arm64
+
       - name: Verify the tag matches the released version
         run: |
           if [ "${{ github.ref_name }}" != "v${{ needs.launcher-kit.outputs.version }}" ]; then
@@ -537,6 +763,13 @@ jobs:
             echo "::error::expected linux-bundles/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_amd64.{deb,AppImage} — got: $(ls linux-bundles/)"
             exit 1
           fi
+          # And the ARM64 bundles (bundler contract: _arm64 on aarch64 —
+          # R101-E; same guard, different arch suffix).
+          if ! ls "linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_arm64.deb" >/dev/null 2>&1 \
+            || ! ls "linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_arm64.AppImage" >/dev/null 2>&1; then
+            echo "::error::expected linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_arm64.{deb,AppImage} — got: $(ls linux-bundles-arm64/)"
+            exit 1
+          fi
 
       - name: Create draft GitHub release
         uses: softprops/action-gh-release@v2
@@ -548,5 +781,7 @@ jobs:
             installer/ACUTE-CODE_*_x64-setup.exe
             linux-bundles/ACUTE-CODE_*_amd64.deb
             linux-bundles/ACUTE-CODE_*_amd64.AppImage
+            linux-bundles-arm64/ACUTE-CODE_*_arm64.deb
+            linux-bundles-arm64/ACUTE-CODE_*_arm64.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

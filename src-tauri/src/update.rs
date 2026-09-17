@@ -88,7 +88,7 @@
 //! installer has really launched, so the "launched" reply stays honest.
 
 use std::path::Path;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 /// The minimum plausible installer size (bytes). The real bundle is ~35 MB;
 /// anything smaller is an error page / JSON body the download step saved
@@ -135,6 +135,17 @@ pub async fn run_update_installer(
         ));
     }
 
+    // ROUND-101 (R101-B): tell the webview BEFORE the kill. The frontend
+    // sets `updateInFlight` on the About-tab leg (before this invoke even
+    // starts), but this event is the belt-and-suspenders leg — any future
+    // entry point that launches an installer gets the same calm
+    // hand-off: the ConnectionGate swaps to the Restarting splash, the
+    // watchdog/connect loop suppress the offline flip for the deliberately
+    // dead backend, and the v0.98.0 "the environment crashed" flash can
+    // not recur. Payload-less: the version (when the UI knows it) rides
+    // the store, and the `let _` keeps a dead-webview edge non-fatal.
+    let _ = app.emit("update-installing", ());
+
     // R96-I — THE PRE-INSTALL KILL, in ORDER: the sidecar tree dies (and its
     // handles are RELEASED) BEFORE the installer launches, or the NSIS File
     // instructions race the node processes holding $INSTDIR\sidecar\* open —
@@ -144,9 +155,9 @@ pub async fn run_update_installer(
     // 300ms handle-release grace contract (sidecar::shutdown_before_install);
     // it blocks this command's runtime thread for at most that budget and
     // logs every step to sidecar.log — the app's one diagnostics channel.
-    // The phase flips to Stopped, so the UI's health polling may flash the
-    // offline banner for the ~1.5s that remain before the exit below: honest,
-    // and cheaper than lying about a backend that is deliberately gone.
+    // R101-B: the phase flips to Stopped AND the webview already knows why
+    // (the event above) — the UI's health polling is suppressed, so the
+    // offline banner no longer flashes for the ~1.5s before the exit below.
     let kill_outcome = crate::sidecar::shutdown_before_install(&app);
     crate::sidecar::log_line(&format!(
         "update: installer launch proceeding after pre-install kill — {}",

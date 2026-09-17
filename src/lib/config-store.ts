@@ -29,6 +29,34 @@ import { isTauri } from "./sidecar";
 
 export type ConnectionPhase = "connecting" | "connected" | "offline";
 
+/**
+ * ROUND-101 (R101-B): the update-restart contract.
+ *
+ * The owner's v0.98.0 report: clicking Install on an update killed the
+ * sidecar (the R96-I pre-install contract), the 20s watchdog noticed the
+ * deliberately-dead backend, and the whole UI was replaced by the offline
+ * error screen ("Can't reach agent-core … didn't come up") for the seconds
+ * before the app exited — reading exactly like "the environment crashed".
+ *
+ * `updateInFlight` says: an update install has begun, the sidecar's death
+ * is DELIBERATE, and this process is about to exit. Consumers:
+ *   · sidecar-connection.ts — the watchdog and connect loop suppress the
+ *     offline flip (no error screen, no reconnect storm against a backend
+ *     that was killed on purpose);
+ *   · ConnectionGate — renders the calm Restarting splash instead of the
+ *     app tree, so no query/banner can surface an error mid-update;
+ *   · AboutTab — sets it before invoking run_update_installer and CLEARS
+ *     it (plus auto-restarts the engine) if the launch is rejected, so a
+ *     failed install never strands the owner on a dead engine.
+ *
+ * `version` rides along so the splash can say "Restarting into v0.99.0";
+ * null keeps the generic line. Deliberately NOT persisted anywhere — it
+ * describes THIS process's final seconds, never a future session.
+ */
+export interface UpdateInFlight {
+  version: string | null;
+}
+
 interface ConfigState {
   /** Sidecar REST base URL, no trailing slash; loopback only. */
   baseUrl: string;
@@ -40,6 +68,9 @@ interface ConfigState {
   connection: ConnectionPhase;
   /** R53: the shell-reported failure when connection === "offline". */
   connectionError: string | null;
+  /** R101-B: non-null while an update install is in flight (see UpdateInFlight). */
+  updateInFlight: UpdateInFlight | null;
+  setUpdateInFlight: (update: UpdateInFlight | null) => void;
   setBaseUrl: (url: string) => void;
   setToken: (token: string | null) => void;
   setDemoData: (on: boolean) => void;
@@ -64,6 +95,8 @@ export const useConfigStore = create<ConfigState>()(
       // decide liveness); inside Tauri the connect loop drives this.
       connection: isTauri() ? "connecting" : "connected",
       connectionError: null,
+      updateInFlight: null,
+      setUpdateInFlight: (updateInFlight) => set({ updateInFlight }),
       setBaseUrl: (baseUrl) => set({ baseUrl: baseUrl.replace(/\/+$/, "") }),
       setToken: (token) => set({ token }),
       setDemoData: (demoData) => set({ demoData }),

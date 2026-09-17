@@ -49,10 +49,11 @@ import {
 import { useProjectFilePaths } from "./useProjectFiles";
 
 /**
- * ROUND-50 (R50-c2): the owner-spec composer — ONE rounded box (R32 visual
- * language: radius 18, warm bg, accent border + soft glow ring on focus)
- * containing the auto-growing textarea on top, the attachment chip row when
- * any, and the TOOLBAR ROW at the bottom INSIDE the box (owner: "These
+ * ROUND-50 (R50-c2): the owner-spec composer — ONE rounded box (R101-D:
+ * rounded-xl, 1px hairline, warm bg; focus = a border-color swap only —
+ * see the .composer-shell pair in index.css) containing the auto-growing
+ * textarea on top, the attachment chip row when any, and the TOOLBAR ROW
+ * at the bottom INSIDE the box (owner: "These
  * options will not be shown below it but inside the chat section itself.
  * There will be a dedicated background and on that background area I can
  * enter the message.").
@@ -154,7 +155,6 @@ export function Composer({
   inputRef?: RefObject<HTMLTextAreaElement>;
 }) {
   const styles = useThemeStyles();
-  const [composerFocused, setComposerFocused] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [atToken, setAtToken] = useState<AtToken | null>(null);
@@ -516,22 +516,28 @@ export function Composer({
   return (
     <div
       data-composer
-      // R100-D (research §C4.6): the composer container snaps 18→12px radius
-      // (rounded-xl — the scale utility). THE one focus idiom: focused =
-      // 1.5px border at accent@0.4 + the 2px accent ring (outline, 2px offset —
-      // the same rule index.css lands globally); the old 4px box-shadow halo
-      // is gone (no glows on working chrome).
-      className={`@container relative flex flex-col rounded-xl border transition-all ${
-        composerFocused ? "border-[1.5px] outline outline-2 outline-offset-2 outline-accent" : ""
-      }`}
+      // R101-D (owner: "it apparently selected the message entry area and
+      // highlighted it and the area around it" — the v0.98.0 report): the
+      // composer answers focus with a SUBTLE border-color swap ONLY. The
+      // R100-D JS-swapped border-[1.5px] + outline-2 ring (a 2px halo
+      // floating AROUND the whole box, plus a width change) is deleted —
+      // no JS focus state at all: the `.composer-shell` class pair in
+      // index.css swaps border-color on :focus-within (accent@0.55), the
+      // 1px width NEVER changes (no layout shift) and transition-colors
+      // animates just the color legs. Keyboard users still get the global
+      // :focus-visible ring on the textarea itself (index.css :where rule).
+      // dragActive keeps its inline accent border + tint — a REAL state.
+      className="@container relative flex flex-col rounded-xl border transition-colors composer-shell"
       style={{
         background: dragActive
           ? withAlpha(styles.accent, styles.isDark ? 0.1 : 0.07)
           : styles.isDark
             ? "rgba(255,255,255,0.04)"
             : styles.bg,
-        borderColor:
-          dragActive || composerFocused ? withAlpha(styles.accent, 0.4) : styles.border,
+        // Only the DRAG state paints the border inline (it must beat the
+        // composer-shell class pair); undefined lets the CSS leg own the
+        // resting/focus-within colors.
+        borderColor: dragActive ? withAlpha(styles.accent, 0.4) : undefined,
       }}
       data-dragging={dragActive ? "true" : undefined}
       onDragOver={(e) => {
@@ -579,8 +585,6 @@ export function Composer({
             setAtToken(token);
           }
         }}
-        onFocus={() => setComposerFocused(true)}
-        onBlur={() => setComposerFocused(false)}
         onKeyDown={onInputKeyDown}
         onPaste={onPaste}
         rows={1}

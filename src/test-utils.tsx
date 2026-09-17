@@ -34,7 +34,13 @@ export function resetTestState() {
   resetFixtureAgents();
   resetFixtureProjects();
   resetFixtureSessions();
-  useConfigStore.setState({ baseUrl: "http://127.0.0.1:5178", token: null, demoData: true });
+  useConfigStore.setState({
+    baseUrl: "http://127.0.0.1:5178",
+    token: null,
+    demoData: true,
+    // R101-B: never inherit a prior test's update hand-off (the splash flag).
+    updateInFlight: null,
+  });
   useThemeStore.setState({ themeId: "nova", mode: "dark" });
   // ROUND-62: the sidebar minimize flag is PERSISTED (the owner expects his
   // rail to survive a restart) — reset it so tests never inherit a prior

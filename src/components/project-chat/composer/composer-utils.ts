@@ -12,7 +12,8 @@ import type { AttachmentReadResult, TreeNode } from "../../../lib/api";
  * small helpers used by every subcomponent under project-chat/composer/.
  *
  * The composer's layout contract (owner, verbatim intent): ONE rounded box
- * (radius 18, warm bg, accent border + soft glow on focus) with the
+ * (R101-D: rounded-xl, warm bg, 1px hairline — focus is a border-color swap
+ * only, the .composer-shell:focus-within pair in index.css) with the
  * auto-growing textarea on top, an attachment chip row when any, and a
  * TOOLBAR ROW at the bottom INSIDE the box — left: Add Context + mode
  * switcher; right: context donut · model selector · thinking level · Send.

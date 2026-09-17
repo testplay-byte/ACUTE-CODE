@@ -1122,4 +1122,33 @@ describe("Settings nav column + search (R100-E1)", () => {
     // No font-black/font-bold anywhere on the page (the weight law).
     expect(document.body.innerHTML).not.toMatch(/font-black|font-bold/);
   });
+
+  // R101-C (owner v0.98.0: the settings nav column's look "was not a good
+  // experience"): the column gets the PANE treatment — the search + nav list
+  // wrap in a rounded-xl bordered card (the SectionCard grammar's
+  // inside-panel tier) with the search docked under its top hairline. The IA
+  // is untouched (same tabs, same search, same ?tab= machine — pinned above).
+  it("R101-C: the nav column renders as a bordered PANE — rounded-xl card, search docked at its top, nav inside", () => {
+    renderWithProviders(<SettingsPage />);
+
+    const pane = screen.getByTestId("settings-nav-pane");
+    // The border treatment: the 12px radius step + the 1px border-line
+    // hairline + the card surface (TOKENS §4/§5).
+    expect(pane.className).toContain("rounded-xl");
+    expect(pane.className).toContain("border");
+    expect(pane.className).toContain("border-line");
+    expect(pane.className).toContain("bg-card");
+    // The search box + the nav list live INSIDE the pane.
+    expect(pane.contains(screen.getByTestId("settings-nav-search"))).toBe(true);
+    expect(pane.contains(screen.getByTestId("settings-nav"))).toBe(true);
+    // The search is DOCKED: its wrapper row carries the border-b hairline.
+    const search = screen.getByTestId("settings-nav-search");
+    expect(search.parentElement?.className).toContain("border-b");
+    expect(search.parentElement?.className).toContain("p-2");
+    // The column's own full-height right hairline is RETIRED — the pane's
+    // border is the separation now (no double lines).
+    expect(screen.getByTestId("settings-nav-column").className).not.toContain("lg:border-r");
+    // The group kickers stay INSIDE the container.
+    expect(pane.contains(screen.getByTestId("settings-group-Workspace"))).toBe(true);
+  });
 });

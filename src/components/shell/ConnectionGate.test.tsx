@@ -44,6 +44,7 @@ beforeEach(() => {
     demoData: true,
     connection: "connecting",
     connectionError: null,
+    updateInFlight: null,
   });
 });
 
@@ -146,5 +147,63 @@ describe("ConnectionGate — R54 offline screen", () => {
     await waitFor(() => {
       expect(connectionMock.retryConnection).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("ConnectionGate — R101-B the update hand-off", () => {
+  it("renders the calm Restarting splash (not the app tree) while an update installs", () => {
+    useConfigStore.setState({ connection: "connected", updateInFlight: { version: "0.99.0" } });
+    render(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    // Children unmount → every in-flight query cancels, no error banner flash.
+    expect(screen.queryByText("APP TREE")).toBeNull();
+    const splash = screen.getByTestId("update-restarting-splash");
+    expect(splash.textContent).toContain("Restarting into 0.99.0");
+    expect(splash.textContent).toContain("your data is kept");
+  });
+
+  it("the OFFLINE screen never shows mid-update — the splash outranks it", () => {
+    // The v0.98.0 report: the deliberately-killed sidecar flipped the app to
+    // the "Can't reach agent-core" error screen seconds before the exit.
+    useConfigStore.setState({
+      connection: "offline",
+      connectionError: "agent-core stopped — restart it from the app",
+      updateInFlight: { version: null },
+    });
+    render(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    expect(screen.queryByText("Can't reach agent-core")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    const splash = screen.getByTestId("update-restarting-splash");
+    expect(splash.textContent).toContain("Restarting into the new version");
+  });
+
+  it("listens for the shell's update-installing event and arms the flag (belt-and-suspenders leg)", async () => {
+    const listen = vi.fn().mockResolvedValue(() => {});
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = { event: { listen } };
+    try {
+      render(
+        <ConnectionGate>
+          <p>APP TREE</p>
+        </ConnectionGate>,
+      );
+      expect(listen).toHaveBeenCalledWith("update-installing", expect.any(Function));
+      // Fire the handler the way the shell would — the flag arms, the splash
+      // takes over even though nothing else in the app set it.
+      const handler = listen.mock.calls[0]![1] as (ev: { payload: unknown }) => void;
+      handler({ payload: null });
+      expect(useConfigStore.getState().updateInFlight).toEqual({ version: null });
+      await waitFor(() => {
+        expect(screen.getByTestId("update-restarting-splash")).toBeTruthy();
+      });
+    } finally {
+      delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    }
   });
 });

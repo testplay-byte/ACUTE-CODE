@@ -489,6 +489,36 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     }
   });
 
+  it("R101-D: composer focus is a border-color swap ONLY — no ring, no width change, no JS focus state", async () => {
+    await renderEmptyPanel();
+    const box = composerBox();
+    // R101-D re-pin (owner: "it apparently selected the message entry area
+    // and highlighted it and the area around it"): the R100-D idiom — the JS
+    // composerFocused state swapping border-[1.5px] + outline-2 ring classes
+    // — is deleted. The resting/focused border color lives in the CSS leg
+    // (.composer-shell / .composer-shell:focus-within in index.css) so the
+    // 1px width never changes and no ring floats around the container.
+    expect(box.className).toContain("composer-shell");
+    expect(box.className).toContain("border");
+    expect(box.className).not.toContain("border-[1.5px]");
+    expect(box.className).not.toContain("outline");
+    // Only the color legs animate (a width/thickness leg would shift layout).
+    expect(box.className).toContain("transition-colors");
+    expect(box.className).not.toContain("transition-all");
+    // No inline borderColor at rest — an inline style would beat the class
+    // pair and :focus-within could never compose (dragActive is the one
+    // state allowed to paint the border inline).
+    expect(box.style.borderColor).toBe("");
+
+    // Focusing the textarea changes NOTHING in the DOM: the whole affordance
+    // is the :focus-within CSS rule (keyboard users still get the global
+    // :focus-visible ring on the textarea itself, painted by index.css).
+    fireEvent.focus(textarea());
+    expect(box.className).not.toContain("outline");
+    expect(box.className).not.toContain("border-[1.5px]");
+    expect(box.style.borderColor).toBe("");
+  });
+
   it("the old flat footer (ctx bar / hint text below the box) is gone", async () => {
     await renderEmptyPanel();
     expect(document.body.textContent).not.toContain("Ctrl K search");

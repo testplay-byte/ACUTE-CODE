@@ -96,3 +96,47 @@ jobs:
 
       - name: Type-check the Rust shell on Linux
         run: cargo check --manifest-path src-tauri/Cargo.toml
+
+  # ROUND-101 (R101-E): the ARM64 Linux compile gate — the ARM twin of
+  # rust-linux above. The release workflow now builds ARM64 bundles on
+  # ubuntu-24.04-arm, so the same class needs a per-push check: the Rust
+  # shell and its platform-gated deps (keyring/secret-service/zbus) must
+  # compile on aarch64 too, not just x86_64. Deliberately minimal (same
+  # shape as rust-linux: no pnpm, no frontend build, no tests — the compile
+  # is the whole point). COST NOTE: the repo is private → this leg bills
+  # ARM runner minutes on every push/PR; kept minimal to bound that cost.
+  # If it ever hurts, gate it behind a paths filter (src-tauri/**) or
+  # dispatch-only — the release workflow's `linux-bundles-arm64` job
+  # remains the hard gate either way.
+  rust-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Same Tauri v2 prerequisites as rust-linux — every package here is
+      # published for arm64 in Ubuntu 24.04's repos (WebKitGTK 4.1 included).
+      - name: Install WebKitGTK + shell deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+            curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      # R100 hotfix 2 (same as rust-linux): `tauri::generate_context!`
+      # panics when frontendDist ("../dist") doesn't exist — this job is
+      # deliberately frontend-less; the stub dist satisfies the path check
+      # without paying the pnpm build (the real dist is what the release
+      # job packs).
+      - name: Stub the frontend dist for generate_context!
+        run: |
+          mkdir -p dist
+          printf '<!doctype html><title>stub</title>' > dist/index.html
+
+      - name: Type-check the Rust shell on Linux ARM64
+        run: cargo check --manifest-path src-tauri/Cargo.toml

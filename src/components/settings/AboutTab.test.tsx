@@ -34,6 +34,7 @@ import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 // R99-C: the badge-sync store (the manual check refreshes the sidebar dot).
 import { useUpdateCheckerStore } from "../../lib/update-checker";
 import { resetTestState, renderWithProviders } from "../../test-utils";
+import { useConfigStore } from "../../lib/config-store";
 import { AboutTab } from "./AboutTab";
 
 vi.mock("../../lib/api", () => ({
@@ -46,6 +47,14 @@ vi.mock("../../lib/api", () => ({
   // kicked in these tests; the router’s default cache stands).
   fetchBrowserSettings: vi.fn(),
 }));
+
+// R101-B: the launch leg's recovery — a REJECTED invoke auto-restarts the
+// engine instead of stranding the owner on the offline screen. Mocked so
+// the real connect loop never runs inside these DOM tests.
+const sidecarConnectionMock = vi.hoisted(() => ({
+  retryConnection: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../lib/sidecar-connection", () => sidecarConnectionMock);
 
 afterEach(() => {
   cleanup();
@@ -65,6 +74,7 @@ beforeEach(() => {
   vi.mocked(resetApplication).mockReset();
   vi.mocked(startUpdateDownload).mockReset();
   vi.mocked(fetchUpdateDownloadProgress).mockReset();
+  sidecarConnectionMock.retryConnection.mockClear();
 });
 
 describe("AboutTab (ROUND-89 R89-A)", () => {
@@ -410,6 +420,10 @@ describe("AboutTab R99-C: the one-click silent update", () => {
       { timeout: 6_000 },
     );
     expect(screen.getByTestId("update-launched").textContent).toContain("your data is kept");
+    // R101-B: the hand-off flag armed BEFORE the invoke (the ConnectionGate
+    // shows the Restarting splash from the moment the kill starts) — and it
+    // STAYS armed: the app is exiting, nothing clears it on the success leg.
+    expect(useConfigStore.getState().updateInFlight).toEqual({ version: "0.87.0" });
   });
 
   it("a REJECTED silent invoke shows the honest error + the wizard escape hatch — which reuses the verified installer (no re-download)", async () => {
@@ -437,6 +451,11 @@ describe("AboutTab R99-C: the one-click silent update", () => {
       { timeout: 6_000 },
     );
     expect(screen.getByTestId("update-flow-error").getAttribute("role")).toBe("alert");
+    // R101-B: the failed launch left the engine dead for nothing — the flag
+    // is CLEARED and the engine auto-restarts (no manual Restart chore, no
+    // offline screen for a backend the update path killed on purpose).
+    expect(useConfigStore.getState().updateInFlight).toBeNull();
+    expect(sidecarConnectionMock.retryConnection).toHaveBeenCalledTimes(1);
     const fallback = screen.getByTestId("update-wizard-fallback");
     expect(fallback.textContent).toBe("Run the setup wizard manually");
 

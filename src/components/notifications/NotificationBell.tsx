@@ -37,6 +37,10 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { useThemeStyles } from "../../lib/use-theme-styles";
+// R101-C: the badge's colors ride the sanctioned semantic token + the
+// pipeline's contrast helper instead of inline hex (TOKENS §1 rules 1–2).
+import { SEMANTIC_COLORS } from "../../lib/semantics";
+import { getContrastText } from "../../lib/themes";
 import { withAlpha } from "../dashboard/helpers";
 import { cn } from "../../lib/utils";
 import {
@@ -242,6 +246,13 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
   };
 
   // Common button styling (collapsed vs expanded variants handled below).
+  // R101-C (the rail-polish round): the button snaps to the radius scale
+  // (rounded-xl 12px collapsed / rounded-lg 8px expanded — TOKENS §4; the
+  // arbitrary rounded-[12px]/rounded-[10px] spellings are retired) and the
+  // JS onMouseEnter/onMouseLeave pair is retired for the CSS wash (TOKENS
+  // §6 — hover is a class, never a handler). The OPEN state keeps its
+  // accent tint on the inline leg, which wins over the hover classes
+  // exactly as before.
   const button = (
     <button
       ref={btnRef}
@@ -253,32 +264,23 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
       title={collapsed ? "Notifications" : undefined}
       className={cn(
         "relative grid place-items-center transition-all",
-        collapsed ? "w-9 h-9 mx-auto rounded-[12px]" : "w-9 h-9 rounded-[10px]",
+        collapsed ? "w-9 h-9 mx-auto rounded-xl" : "w-9 h-9 rounded-lg",
+        "text-muted hover:bg-hover hover:text-ink",
       )}
       style={{
-        background: open ? withAlpha(styles.accent, 0.12) : "transparent",
-        color: open ? styles.accent : styles.textSecondary,
-      }}
-      onMouseEnter={(e) => {
-        if (!open) {
-          e.currentTarget.style.background = styles.sidebarHover;
-          e.currentTarget.style.color = styles.text;
-        }
-      }}
-      onMouseLeave={(e) => {
-        if (!open) {
-          e.currentTarget.style.background = "transparent";
-          e.currentTarget.style.color = styles.textSecondary;
-        }
+        background: open ? withAlpha(styles.accent, 0.12) : undefined,
+        color: open ? styles.accent : undefined,
       }}
     >
       <BellIcon size={16} strokeWidth={2} />
       {badge && (
         <span
-          className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] px-1 grid place-items-center rounded-full text-[10px] font-bold leading-none"
+          // R101-C: the badge snaps to the scale utilities (min-w-4/h-4) and
+          // the weight law (500 — font-bold is wizard + StatCard only).
+          className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 grid place-items-center rounded-full text-[10px] font-medium leading-none"
           style={{
-            background: "#EF4444",
-            color: "#FFFFFF",
+            background: SEMANTIC_COLORS.danger,
+            color: getContrastText(SEMANTIC_COLORS.danger),
             boxShadow: `0 0 0 2px ${styles.sidebarBg}`,
           }}
         >

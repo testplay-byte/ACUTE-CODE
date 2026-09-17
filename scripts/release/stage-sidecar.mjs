@@ -27,13 +27,18 @@
  *                                 no `shared` (vendored below)
  *     pnpm-workspace.yaml      ← standalone-project marker (also stops pnpm
  *                                 from walking up into the repo workspace) +
- *                                 allowBuilds so pnpm exits 0 (the flagged
- *                                 scripts are no-ops: better-sqlite3 13 ships
- *                                 all-platform prebuilds in its tarball and
- *                                 node-pty 1.1.0 loads its bundled
- *                                 prebuilds/<platform>-<arch>/ binaries
- *                                 directly, no build script needed) +
- *                                 nodeLinker: hoisted (see R57 below)
+ *                                 allowBuilds so pnpm exits 0 AND so
+ *                                 node-pty's install script may run —
+ *                                 better-sqlite3 13 ships all-platform
+ *                                 prebuilds in its tarball (no build
+ *                                 script at all), but node-pty 1.1.0 ships
+ *                                 prebuilds ONLY for darwin/win32
+ *                                 (R101-E verified: its prebuilds/ has no
+ *                                 linux-* entries) — on Linux there is
+ *                                 nothing to load, so its install script
+ *                                 compiles pty.node from source for the
+ *                                 HOST arch) + nodeLinker: hoisted (see R57
+ *                                 below)
  *     node_modules/            ← `pnpm install --prod` (registry deps only),
  *                                 HOISTED npm-style: real directories
  *     node_modules/shared/     ← VENDORED: shared/dist + a patched
@@ -231,9 +236,10 @@ writeFileSync(
   [
     "# ROUND-51 (R51-a): standalone-project marker — keeps pnpm from walking up",
     "# into the repo workspace. allowBuilds mirrors the repo root policy so the",
-    "# install exits 0; better-sqlite3 ships all-platform prebuilds and node-pty",
-    "# loads its bundled prebuilds/<platform>-<arch>/ binaries without any build",
-    "# script, so allowing them changes nothing on disk.",
+    "# install exits 0; better-sqlite3 ships all-platform prebuilds (its install",
+    "# script is a no-op), while node-pty ships prebuilds ONLY for darwin/win32",
+    "# — on Linux its install script compiles pty.node from source for the",
+    "# HOST arch, so allowing it is load-bearing there (R101-E).",
     "# ROUND-57: hoisted (npm-style, real directories — zero symlinks/junctions).",
     "# The default pnpm layout is a link farm (junctions on Windows) that does",
     "# not survive tauri-bundler + NSIS pack/extract — the packaged engine died",
@@ -295,15 +301,21 @@ writeFileSync(
 );
 
 // ── 6. prune other platforms' prebuilds (optional, --platform) ───────────────
-// better-sqlite3 (17 MB) and node-pty (58 MB) both ship prebuilds for EVERY
-// platform inside their tarballs; a Windows installer only ever loads the
-// win32-x64 one. Two directory shapes exist (both verified in the staged
-// tree): better-sqlite3 keeps FILES like `win32-x64.node`, node-pty keeps
-// DIRECTORIES like `win32-x64/`. Verified loaders: better-sqlite3 13 has NO
-// install script (its runtime resolves prebuilds/<platform>-<arch>[.node]
-// itself) and node-pty's lib/utils.js checks build/Release → build/Debug →
-// prebuilds/<platform>-<arch>/, so deleting the other platforms' entries is
-// inert for the kept one.
+// better-sqlite3 (17 MB) ships prebuilds for EVERY platform in its tarball;
+// node-pty (58 MB) ships prebuilds ONLY for darwin/win32 (R101-E verified:
+// no linux-* entries — on Linux the staging install compiles pty.node from
+// source via the allowBuilds entry above, so its binary always matches the
+// HOST arch; this is exactly why the ARM64 release job runs on a NATIVE
+// runner instead of cross-compiling). Two directory shapes exist (both
+// verified in the staged tree): better-sqlite3 keeps FILES like
+// `win32-x64.node`, node-pty keeps DIRECTORIES like `win32-x64/`.
+// Verified loaders: better-sqlite3 13 has NO install script (its runtime
+// resolves prebuilds/<platform>-<arch>[.node] itself) and node-pty's
+// lib/utils.js checks build/Release → build/Debug →
+// prebuilds/<platform>-<arch>/, so deleting the other platforms' entries
+// is inert for the kept one (and on Linux, where node-pty keeps no
+// prebuild at all, its source-built build/Release binary is untouched by
+// this prune).
 if (argPlatform !== null && argPlatform !== "") {
   const isTarget = (entry) => entry === argPlatform || entry === `${argPlatform}.node`;
   let pruned = 0;

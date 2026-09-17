@@ -218,77 +218,98 @@ export function SettingsPage() {
 
       {/* R100-E1: the settings-local nav column (left, 200px) + the content
           pane. Below lg the column becomes a horizontal scrollable strip
-          under the header — same tab state, same buttons. */}
+          under the header — same tab state, same buttons.
+          R101-C (owner v0.98.0: the column's look "was not a good
+          experience"): the column's own full-height hairlines (border-b
+          below lg / border-r at lg) are RETIRED — the PANE below is the
+          separation now. */}
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <aside
           data-testid="settings-nav-column"
-          className="shrink-0 border-b border-line px-4 pt-3 pb-3 md:px-6 lg:flex lg:w-50 lg:flex-col lg:border-b-0 lg:border-r lg:px-3 lg:py-4"
+          className="shrink-0 px-4 pt-3 pb-3 md:px-6 lg:flex lg:w-50 lg:flex-col lg:px-3 lg:py-4"
         >
-          {/* The nav's search box (R100-E1): 12px text, 28px height,
-              rounded-lg, border-line; focus = the GLOBAL :focus-visible rule
-              index.css already ships (R100-D) — deliberately no local
-              focus: classes here. */}
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search settings"
-            aria-label="Search settings"
-            data-testid="settings-nav-search"
-            className="mb-3 h-7 w-full shrink-0 rounded-lg border border-line bg-input px-2.5 text-[12px] text-ink placeholder:text-muted"
-          />
-          <nav
-            aria-label="Settings navigation"
-            data-testid="settings-nav"
-            className="flex min-h-0 flex-1 flex-col"
+          {/* R101-C: the PANE treatment — the search + the nav list wrap in
+              a rounded-xl bordered card (the SectionCard grammar's
+              inside-panel tier: 12px radius, the 1px border-line hairline,
+              bg-card — TOKENS §4/§5; lg:overflow-hidden keeps the lg scroll
+              inside the rounded corners). The search docks at the pane's top
+              under a border-b hairline; the nav list sits below at the
+              comfortable p-2 inset. The SAME pane composes below lg (the
+              horizontal strip inside the card — no unfinished bare strip).
+              IA is UNTOUCHED: same tabs, same search, same ?tab= machine. */}
+          <div
+            data-testid="settings-nav-pane"
+            className="flex min-h-0 flex-1 flex-col rounded-xl border border-line bg-card lg:overflow-hidden"
           >
-            {/* The list: a horizontal scroll strip below lg (group kickers
-                hidden — a strip has no room for headers), the 200px column's
-                clustered list at lg. */}
-            <div className="flex gap-1 overflow-x-auto pb-1 lg:flex-1 lg:flex-col lg:gap-0.5 lg:overflow-y-auto lg:pb-0">
-              {visibleTabs.map((t, index) => {
-                const { id, label, icon: Icon, group } = t;
-                const active = id === tab;
-                const groupHeader =
-                  index === 0 || group !== visibleTabs[index - 1].group ? group : undefined;
-                return (
-                  <Fragment key={id}>
-                    {groupHeader !== undefined && (
-                      <Kicker
-                        testId={`settings-group-${groupHeader}`}
-                        className="px-2 pb-1 pt-3 max-lg:hidden lg:first:pt-0"
-                      >
-                        {groupHeader}
-                      </Kicker>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setSearchParams({ tab: id })}
-                      aria-current={active ? "page" : undefined}
-                      data-testid={`settings-nav-${id}`}
-                      className={cn(
-                        "relative flex min-h-[30px] shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-2 text-[12px] font-normal text-muted transition-colors hover:bg-hover",
-                        active && "bg-accent-soft font-medium text-accent",
-                      )}
-                    >
-                      {/* Selection grammar (TOKENS §6): accent text + soft bg
-                          + the 2px accent bar on the leading edge. */}
-                      {active ? (
-                        <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />
-                      ) : null}
-                      <Icon size={14} className="shrink-0" aria-hidden />
-                      <span className="truncate">{label}</span>
-                    </button>
-                  </Fragment>
-                );
-              })}
+            {/* The nav's search box (R100-E1): 12px text, 28px height,
+                rounded-lg, border-line; focus = the GLOBAL :focus-visible rule
+                index.css already ships (R100-D) — deliberately no local
+                focus: classes here. R101-C: docked at the pane's top. */}
+            <div className="shrink-0 border-b border-line p-2">
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search settings"
+                aria-label="Search settings"
+                data-testid="settings-nav-search"
+                className="h-7 w-full rounded-lg border border-line bg-input px-2.5 text-[12px] text-ink placeholder:text-muted"
+              />
             </div>
-            {needle !== "" && visibleTabs.length === 0 ? (
-              <p data-testid="settings-nav-empty" className="px-2 py-3 text-[12px] text-muted">
-                No settings match
-              </p>
-            ) : null}
-          </nav>
+            <nav
+              aria-label="Settings navigation"
+              data-testid="settings-nav"
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              {/* The list: a horizontal scroll strip below lg (group kickers
+                  hidden — a strip has no room for headers), the 200px column's
+                  clustered list at lg. R101-C: the p-2 inset is the pane's
+                  comfortable padding. */}
+              <div className="flex gap-1 overflow-x-auto p-2 lg:flex-1 lg:flex-col lg:gap-0.5 lg:overflow-y-auto">
+                {visibleTabs.map((t, index) => {
+                  const { id, label, icon: Icon, group } = t;
+                  const active = id === tab;
+                  const groupHeader =
+                    index === 0 || group !== visibleTabs[index - 1].group ? group : undefined;
+                  return (
+                    <Fragment key={id}>
+                      {groupHeader !== undefined && (
+                        <Kicker
+                          testId={`settings-group-${groupHeader}`}
+                          className="px-2 pb-1 pt-3 max-lg:hidden lg:first:pt-0"
+                        >
+                          {groupHeader}
+                        </Kicker>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setSearchParams({ tab: id })}
+                        aria-current={active ? "page" : undefined}
+                        data-testid={`settings-nav-${id}`}
+                        className={cn(
+                          "relative flex min-h-[30px] shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-2 text-[12px] font-normal text-muted transition-colors hover:bg-hover",
+                          active && "bg-accent-soft font-medium text-accent",
+                        )}
+                      >
+                        {/* Selection grammar (TOKENS §6): accent text + soft bg
+                            + the 2px accent bar on the leading edge. */}
+                        {active ? (
+                          <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />
+                        ) : null}
+                        <Icon size={14} className="shrink-0" aria-hidden />
+                        <span className="truncate">{label}</span>
+                      </button>
+                    </Fragment>
+                  );
+                })}
+              </div>
+              {needle !== "" && visibleTabs.length === 0 ? (
+                <p data-testid="settings-nav-empty" className="px-2 py-3 text-[12px] text-muted">
+                  No settings match
+                </p>
+              ) : null}
+            </nav>
+          </div>
         </aside>
 
         {/* ROUND-34: wider content (the master-detail provider screen needs the

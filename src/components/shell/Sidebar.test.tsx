@@ -437,6 +437,108 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
   });
 });
 
+/* ── R101-C (owner v0.98.0: the minimized rail "was apparently not handled
+ * properly. It was not looking pro-good"): the rail-polish round — styled
+ * hover/focus label chips (RailLabel), the active accent bar on rail nav,
+ * and the +N projects-overflow affordance. */
+describe("Sidebar minimized rail polish (R101-C)", () => {
+  /** Render the rail minimized on "/" with the minimal route stubs. */
+  function renderMinimizedRail() {
+    useProjectChatStore.setState({ appSidebarMinimized: true });
+    return renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+        </Routes>
+      </>,
+    );
+  }
+
+  it("R101-C: every rail button renders its styled hover/focus label chip — the affordance the bare rail lacked", async () => {
+    renderMinimizedRail();
+    await screen.findByTestId("sidebar-rail");
+
+    // The chips render INSIDE their buttons carrying the full label text
+    // (the native title tooltips stay, but the VISIBLE chip is the new
+    // affordance): CSS-only reveal on group-hover / keyboard focus.
+    const chipIn = (text: string) => {
+      const chip = screen.getByText(text);
+      expect(chip.getAttribute("data-testid")).toBe("rail-label");
+      expect(chip.className).toContain("group-hover:opacity-100");
+      expect(chip.className).toContain("group-focus-visible:opacity-100");
+      expect(chip.className).toContain("opacity-0");
+      return chip;
+    };
+    expect(chipIn("Expand sidebar").closest("button")?.getAttribute("data-testid")).toBe("sidebar-expand");
+    expect(chipIn("Dashboard").closest("button")?.getAttribute("data-testid")).toBe("rail-dashboard");
+    expect(chipIn("Usage").closest("button")?.getAttribute("data-testid")).toBe("rail-usage");
+    expect(chipIn("Settings").closest("button")?.getAttribute("data-testid")).toBe("rail-settings");
+    // The project tile's chip carries the FULL untruncated project name —
+    // the whole point of the chip (color identity alone was not enough).
+    const projectChip = await screen.findByText("marketing-site");
+    expect(projectChip.closest("button")?.getAttribute("aria-label")).toBe("Open marketing-site");
+    // The bell keeps its own button; its chip rides the group WRAPPER
+    // (group-focus-within covers the bell's keyboard focus through it).
+    const bellChip = chipIn("Notifications");
+    expect(bellChip.parentElement?.querySelector("[data-notification-bell-button]")).toBeTruthy();
+  });
+
+  it("R101-C: the ACTIVE rail nav button carries the 2px leading accent bar (the full NavButton's selection grammar)", async () => {
+    renderMinimizedRail();
+    await screen.findByTestId("sidebar-rail");
+
+    // "/" is active → the rail's Dashboard button keeps bg-accent-soft AND
+    // gains the leading accent bar; the resting Usage button has neither bar.
+    const dashboard = screen.getByTestId("rail-dashboard");
+    expect(dashboard.className).toContain("bg-accent-soft");
+    const bar = dashboard.querySelector(".bg-accent");
+    expect(bar).toBeTruthy();
+    expect(bar?.className).toContain("w-0.5");
+    expect(screen.getByTestId("rail-usage").querySelector(".bg-accent")).toBeNull();
+  });
+
+  it("R101-C: >10 projects renders the +N overflow tile; clicking it EXPANDS the sidebar without navigating", async () => {
+    // 2 seeds + 10 created = 12 projects → 10 rail tiles + a "+2" tile.
+    const backend = getFixtureProjects();
+    for (let i = 0; i < 10; i += 1) {
+      await backend.create(`extra-${i}`, `/tmp/extra-${i}`);
+    }
+    renderMinimizedRail();
+    await screen.findByTestId("sidebar-rail");
+
+    // The cap stays 10 tiles — never a silent cut.
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: /^open /i, hidden: true })).toHaveLength(10);
+    });
+    const overflow = await screen.findByTestId("rail-projects-overflow");
+    expect(overflow.textContent).toContain("+2");
+    expect(overflow.getAttribute("aria-label")).toBe("2 more projects — expand to see all");
+    // The chip carries the same honest copy.
+    expect(overflow.querySelector('[data-testid="rail-label"]')?.textContent).toBe(
+      "2 more projects — expand to see all",
+    );
+
+    // Click → the sidebar EXPANDS (the R87-A1 expand-first pattern) and the
+    // URL does NOT move — expanding, not navigating, is the honest behavior.
+    fireEvent.click(overflow);
+    expect(await screen.findByText("Navigation")).toBeTruthy();
+    expect(screen.queryByTestId("sidebar-rail")).toBeNull();
+    expect(useProjectChatStore.getState().appSidebarMinimized).toBe(false);
+    expect(screen.getByText("dashboard stub")).toBeTruthy();
+  });
+
+  it("R101-C: ≤10 projects renders NO overflow tile (the affordance appears only when the cap bites)", async () => {
+    renderMinimizedRail();
+    await screen.findByTestId("sidebar-rail");
+    // 2 fixture projects → 2 tiles, no overflow tile.
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: /^open /i, hidden: true })).toHaveLength(2);
+    });
+    expect(screen.queryByTestId("rail-projects-overflow")).toBeNull();
+  });
+});
+
 describe("Sidebar session rows (R43 depth pass: border + state-aware icons)", () => {
   it("gives every session row a dedicated border — accent on the active row, hairline at rest", async () => {
     const [project] = await getFixtureProjects().list();

@@ -304,8 +304,18 @@ export function Sidebar() {
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
       className={cn(
-        "shrink-0 flex flex-col overflow-hidden rounded-2xl border-[1.5px] transition-[width] duration-200",
-        minimized ? "w-12" : "w-60",
+        "shrink-0 flex flex-col rounded-2xl border-[1.5px] transition-[width] duration-200",
+        // R101-C (owner v0.98.0: the minimized rail "was not looking
+        // pro-good"): minimized, the panel opens its HORIZONTAL clip so the
+        // rail's hover/focus label chips (RailLabel below) can paint past
+        // the 48px rail over the content pane — `overflow-x: visible` is
+        // preserved when the other axis is `clip` (the one sanctioned axis
+        // pair; scroll/auto/hidden would force x to auto and swallow the
+        // chips). Vertical overflow stays clipped at the panel edge.
+        // Expanded, overflow-hidden stays: it clips the full sidebar's
+        // content during the 240↔48 width transition (the rail content is
+        // never wider than the animating panel, so nothing spills).
+        minimized ? "w-12 overflow-x-visible overflow-y-clip" : "w-60 overflow-hidden",
         // ROUND-45: below md this is an overlay drawer, not a flex column.
         "max-md:fixed max-md:inset-y-3 max-md:left-3 max-md:z-50 max-md:shadow-2xl",
         mobileOpen ? "max-md:translate-x-0" : "max-md:-translate-x-[120%] max-md:pointer-events-none",
@@ -408,9 +418,11 @@ export function Sidebar() {
  * column (R100-F: 64→48px, the activity-bar standard) with the restore
  * button at the very top, then Dashboard/Usage, the
  * project tiles (click → that project's chat; the running dot carries the
- * live-work signal), a flexible spacer, and the collapsed bell + settings
- * gear at the bottom. Every button carries a `title` tooltip so the rail
- * stays fully usable without labels. The mobile drawer reuses the same rail
+ * live-work signal), a +N overflow tile when the 10-tile cap cuts the list
+ * (R101-C), a flexible spacer, and the collapsed bell + settings
+ * gear at the bottom. Every button keeps its `title` tooltip AND carries a
+ * styled hover/focus label chip (R101-C's RailLabel) so the rail stays fully
+ * usable without permanent labels. The mobile drawer reuses the same rail
  * body (a narrow drawer of icons is still perfectly navigable).
  */
 // R99-C: the update-pending dot shared by every "Settings" entry point —
@@ -431,6 +443,39 @@ function UpdatePendingDot({ styles }: { styles: ReturnType<typeof useThemeStyles
       />
       <span className="sr-only">update available</span>
     </>
+  );
+}
+
+/**
+ * R101-C (owner v0.98.0: "when the sidebar was minimized, it was apparently
+ * not handled properly. It was not looking pro-good"): the minimized
+ * rail's styled hover/focus LABEL CHIP. The rail previously carried its
+ * labels ONLY as native `title` tooltips — no styled affordance, and the
+ * bare 48px column read as unstructured. Every rail button (the `group`)
+ * now renders this chip beside it: a rounded-lg label on the panel's own
+ * surface tokens that fades in on CSS `group-hover` and on keyboard focus
+ * (`group-focus-visible`; `group-focus-within` covers the wrapped
+ * NotificationBell, whose focusable button is a DOM child of its group
+ * wrapper) — TOKENS §6: hover is a class, never a JS handler. The chip
+ * duplicates its button's aria-label, so it is aria-hidden; the native
+ * title stays (it costs nothing).
+ */
+function RailLabel({
+  text,
+  styles,
+}: {
+  text: string;
+  styles: ReturnType<typeof useThemeStyles>;
+}) {
+  return (
+    <span
+      aria-hidden
+      data-testid="rail-label"
+      className="pointer-events-none absolute left-full top-1/2 z-50 ml-2.5 -translate-y-1/2 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-[12px] font-medium opacity-0 shadow-sm transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 group-focus-within:opacity-100"
+      style={{ background: styles.sidebarBg, borderColor: styles.sidebarBorder, color: styles.text }}
+    >
+      {text}
+    </span>
   );
 }
 
@@ -467,12 +512,20 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
       // R100-F: the 48px rail's 36px buttons (≥28px targets); active = the
       // soft-accent selection grammar (the solid accent fill + accent glow
       // is retired); hover = the CSS wash — no JS handlers.
+      // R101-C: `group` hosts the button's hover/focus LABEL CHIP (RailLabel),
+      // and the ACTIVE button gains the same 2px leading accent bar the
+      // expanded NavButton carries (~line 603) — the rail's selection
+      // grammar now mirrors the full panel's.
       className={cn(
-        "relative w-9 h-9 shrink-0 grid place-items-center rounded-lg transition-colors",
+        "group relative w-9 h-9 shrink-0 grid place-items-center rounded-lg transition-colors",
         active ? "bg-accent-soft text-accent" : "text-muted hover:bg-hover",
       )}
     >
+      {active ? (
+        <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />
+      ) : null}
       {icon}
+      <RailLabel text={label} styles={styles} />
       {/* R99-C: the update-pending dot on the rail's SETTINGS entry (the
           full sidebar's SettingsButton carries the same dot). */}
       {showUpdateDot && <UpdatePendingDot styles={styles} />}
@@ -481,21 +534,30 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
 
   return (
     <div
-      className="flex-1 min-h-0 flex flex-col items-center gap-1.5 px-1.5 pt-2.5 pb-2.5 overflow-y-auto"
+      // R101-C: the rail body no longer scrolls (overflow-y-auto dropped):
+      // a scroll container clips on BOTH axes (visible x computes to auto),
+      // which would swallow the RailLabel chips — the point of this round.
+      // The 10-project cap + the +N overflow tile below bound the rail's
+      // height, and the aside's overflow-y-clip cuts anything past the
+      // panel edge, so the rail keeps its visual integrity on short windows.
+      className="flex-1 min-h-0 flex flex-col items-center gap-1.5 px-1.5 pt-2.5 pb-2.5"
       data-testid="sidebar-rail"
     >
       {/* RESTORE — at the rail's very top (the minimize button's mirror).
           R100-F: 36px rounded-lg on the CSS-var leg (bg-input + the hover
-          wash class — the JS hover pair is retired). */}
+          wash class — the JS hover pair is retired).
+          R101-C: carries the rail's hover/focus label chip like every other
+          rail button. */}
       <button
         onClick={onExpand}
         aria-label="Expand sidebar"
         title="Expand sidebar"
         data-testid="sidebar-expand"
-        className="w-9 h-9 shrink-0 grid place-items-center rounded-lg bg-input transition-colors hover:bg-hover"
+        className="group relative w-9 h-9 shrink-0 grid place-items-center rounded-lg bg-input transition-colors hover:bg-hover"
         style={{ color: styles.textTertiary }}
       >
         <PanelLeftOpen size={16} />
+        <RailLabel text="Expand sidebar" styles={styles} />
       </button>
 
       {/* R100-E1 (research §C2 P1(a)): the rail's settings VARIANT is
@@ -545,13 +607,17 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
                 // R100-F: 36px rounded-lg; the active tint follows the
                 // project's own color (dynamic — the JS leg); hover = the
                 // CSS wash (no JS handlers); the border drops 1.5→1px.
-                className="relative w-9 h-9 shrink-0 grid place-items-center rounded-lg transition-colors hover:bg-hover"
+                // R101-C: `group` hosts the FULL-NAME label chip — the
+                // project's identity survives minimization with an actual
+                // styled affordance, not just a native title tooltip.
+                className="group relative w-9 h-9 shrink-0 grid place-items-center rounded-lg transition-colors hover:bg-hover"
                 style={{
                   background: active ? withAlpha(project.color, 0.14) : undefined,
                   border: active ? `1px solid ${withAlpha(project.color, 0.4)}` : "1px solid transparent",
                 }}
               >
                 <ProjectTile color={project.color} name={project.name} />
+                <RailLabel text={project.name} styles={styles} />
                 {running && (
                   <span
                     aria-label="Running"
@@ -563,6 +629,27 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
             );
           })
         )}
+        {/* R101-C (owner v0.98.0): the rail's projects cap at 10 tiles — the
+            cut now has an AFFORDANCE instead of a silent disappearance: a
+            +N tile in the rail's own button geometry whose click EXPANDS the
+            sidebar (the R87-A1 expand-first pattern at the tiles above —
+            expanding WITHOUT navigating is the honest behavior; the full
+            projects list lives in the expanded panel). */}
+        {projects.length > 10 && (
+          <button
+            onClick={onExpand}
+            aria-label={`${projects.length - 10} more projects — expand to see all`}
+            title={`${projects.length - 10} more projects — expand to see all`}
+            data-testid="rail-projects-overflow"
+            className="group relative w-9 h-9 shrink-0 grid place-items-center rounded-lg text-[11px] font-medium tabular-nums text-muted transition-colors hover:bg-hover"
+          >
+            +{projects.length - 10}
+            <RailLabel
+              text={`${projects.length - 10} more projects — expand to see all`}
+              styles={styles}
+            />
+          </button>
+        )}
       </div>
 
       {/* Spacer pushes the footer icons to the bottom (the full sidebar's
@@ -571,8 +658,14 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
 
       {/* FOOTER — collapsed bell + settings gear (the rail's one "Settings"
           entry — R100-E1: it navigates to /settings, where the page's own
-          nav column takes over). */}
-      <NotificationBell collapsed />
+          nav column takes over).
+          R101-C: the bell keeps its own button (badge + popover); the group
+          WRAPPER hosts its label chip — the chip's group-focus-within leg
+          covers the bell's keyboard focus through the wrapper. */}
+      <div className="group relative shrink-0">
+        <NotificationBell collapsed />
+        <RailLabel text="Notifications" styles={styles} />
+      </div>
       {railBtn("Settings", <Settings size={16} strokeWidth={2} />, settingsActive, () => navigate("/settings"), "rail-settings", true)}
     </div>
   );
