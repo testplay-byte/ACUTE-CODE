@@ -266,7 +266,8 @@ Round-100 reverts that trade and de-brands what remains:
 - **The engine line** (Settings → Browser + the About tab): the panel runs
   the OS webview — WebView2 (Chromium-based, ACUTE-branded UA) on Windows,
   WebKitGTK on Linux. Stated plainly; the question never needs asking
-  again.
+  again. The Linux release (R100-B) ships deb + AppImage with the panel on
+  WebKitGTK — the genuinely-not-Edge leg of round-100.
 - **The trilemma, on record** (`docs/research/browser-engine-and-linux-round-100.md`
   §B.0): on Windows in 2026 you pick two of {not-Chromium-lineage,
   production web compatibility, installer ≤ ~100 MB}. Servo is 66.4% WPT

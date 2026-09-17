@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-100 -->
 # Development Environment Setup (ACUTE-CODE)
 
 Status: Phase 0 snapshot — updated each phase by the Scribe.
@@ -23,6 +23,26 @@ Status: Phase 0 snapshot — updated each phase by the Scribe.
 2. **Rust via rustup** (`winget install Rustlang.Rustup` or https://rustup.rs), stable toolchain, `x86_64-pc-windows-msvc` host. Verify: `rustc --version && cargo --version`.
 
 Rationale for deferral: nothing in Phases 0–1 research/design compiles Rust; the toolchain is only needed at the first native build, and rustup without MSVC produces a half-broken toolchain.
+
+## Linux prerequisites (ROUND-100 — R100-B)
+
+The Linux build (deb + AppImage, released by the `linux-bundles` job) needs
+the Tauri v2 prerequisites — the same list CI installs
+(`.github/workflows/release.yml` / `ci.yml`'s `rust-linux` job;
+v2.tauri.app/start/prerequisites — the WebKitGTK **4.1** line; the 4.0
+series is gone from Ubuntu 24.04's repos):
+
+```bash
+sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+  curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
+  librsvg2-dev
+```
+
+Provider keys on a Linux dev checkout flow from the `ACUTE_PROVIDER_<ID>`
+env vars / `~/.acute/*.key` files as always (dev.mjs); the packaged app
+additionally stores them in the Secret Service (ADR-0031) — gnome-keyring
+on a desktop session, nothing on headless (reads return none, saves error
+honestly).
 
 ## Everyday commands
 

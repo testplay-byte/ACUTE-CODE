@@ -15,15 +15,23 @@ name: Release
 # browser flow always ran in the SYSTEM browser where the native child
 # webviews never activate.
 #
-# Triggers (same for both jobs):
+# ROUND-100 (R100-B): `linux-bundles` — the Linux release (deb + AppImage,
+# research docs/research/browser-engine-and-linux-round-100.md §C). A
+# SIBLING of desktop-installer (they share nothing but checkout): same
+# sidecar staging contract (ADR-0009, `--platform linux-x64`), same pinned
+# Node runtime, same pre-pack boot gate (the R57 discipline, ported to
+# bash) — only the bundler targets differ (`--bundles` overrides
+# tauri.conf.json's ["nsis"] per invocation, so no conf-file split).
+#
+# Triggers (same for all jobs):
 #   - workflow_dispatch (optionally with a `version` input — when set, it must
 #     match the repo's version, guarding "tagged but forgot to bump" mistakes)
-#     → BOTH jobs build (artifacts on every dispatch; the draft release only
+#     → ALL jobs build (artifacts on every dispatch; the draft release only
 #     happens on tags)
-#   - push of a v* tag (the release path: kit + installer + draft release)
+#   - push of a v* tag (the release path: kit + installer + Linux bundles + draft release)
 #
 # The draft release is tag-only by design: an untagged dispatch still produces
-# the installer ARTIFACT (CI-verifiable), just no release.
+# the installer + Linux-bundle ARTIFACTS (CI-verifiable), just no release.
 
 on:
   workflow_dispatch:
@@ -288,9 +296,197 @@ jobs:
           path: src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
 
+  # ROUND-100 (R100-B): the Linux bundles — deb + AppImage on ubuntu-latest
+  # (the documented-supported AppImage build system; WebKitGTK 4.1 is in
+  # 24.04's apt). Mirrors desktop-installer step-for-step: pinned pnpm/node
+  # → rust → workspace build → ADR-0009 sidecar staging (linux-x64 prebuilds)
+  # → the pinned Linux Node runtime → the R57-style pre-pack boot gate
+  # (bash port) → tauri build with --bundles deb,appimage → artifact upload.
+  linux-bundles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      # PINNED to the SAME version as the Windows job above — the shipped
+      # runtime IS the tested one on BOTH platforms, and the two must never
+      # drift. Bump deliberately, together with SIDECAR_NODE_VERSION below
+      # AND the Windows job's copy.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Tauri v2 prerequisites (v2.tauri.app/start/prerequisites): the
+      # WebKitGTK 4.1 line (4.0 is gone from Ubuntu 24.04's repos — build
+      # on ubuntu-latest/24.04) + the bundler's system libs.
+      - name: Install WebKitGTK + bundle deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+            curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Version consistency
+        run: pnpm version:check
+
+      # Same contract as the Windows job: the workspace build runs BEFORE
+      # staging (stage-sidecar.mjs copies agent-core/dist + shared/dist);
+      # `pnpm tauri build` below re-runs `pnpm build` via beforeBuildCommand
+      # — idempotent, same commit, same output.
+      - name: Build the workspace (shared + agent-core + vite)
+        run: pnpm build
+
+      # ADR-0009 sidecar staging: pruned node_modules (linux-x64 prebuilds
+      # only — better-sqlite3 ships `linux-x64.node` files, node-pty ships
+      # `linux-x64/` dirs; both loaders were verified in the R51 staging
+      # notes, so no compiler toolchain lands in the bundle), exact
+      # lockfile versions, vendored `shared` with a runnable package.json.
+      - name: Stage the sidecar bundle
+        run: node scripts/release/stage-sidecar.mjs --platform linux-x64
+
+      # The pinned Linux Node runtime (the SAME version the Windows job
+      # ships as node.exe — 31.8 MB tarball, HEAD-verified in research §C.3)
+      # + its license texts for the bundle's LICENSES/ dir (SPEC §6 /
+      # ADR-0009: the RUNTIME's compliance vehicle is shipping its notices
+      # inside the installer). The binary lands as `sidecar/node` — the
+      # sidecar.rs resolve order (node.exe, then node) picks it up.
+      - name: Bundle the pinned Node runtime + licenses
+        env:
+          # Must match setup-node above — the shipped runtime IS the tested one.
+          SIDECAR_NODE_VERSION: 24.20.0
+        run: |
+          set -euo pipefail
+          ver="$SIDECAR_NODE_VERSION"
+          tarball="node-v${ver}-linux-x64.tar.xz"
+          curl -fSL -o "$tarball" "https://nodejs.org/dist/v${ver}/${tarball}"
+          rm -rf /tmp/node-extract && mkdir -p /tmp/node-extract
+          tar -xJf "$tarball" -C /tmp/node-extract
+          extract="/tmp/node-extract/node-v${ver}-linux-x64"
+          sidecar="src-tauri/staging/sidecar"
+          # install (not cp) pins the exec bit — the gate below runs it and
+          # the bundler preserves resource modes.
+          install -m 755 "$extract/bin/node" "$sidecar/node"
+          mkdir -p "$sidecar/LICENSES"
+          cp "$extract/LICENSE" "$sidecar/LICENSES/node-v${ver}-LICENSE.txt"
+          # v24 ships one combined LICENSE (older releases split a separate
+          # ThirdPartyNotices.md — copy it too when present, future-proof).
+          if [ -f "$extract/ThirdPartyNotices.md" ]; then
+            cp "$extract/ThirdPartyNotices.md" "$sidecar/LICENSES/node-v${ver}-ThirdPartyNotices.md"
+          fi
+          ls -la "$sidecar"
+          test -x "$sidecar/node" || { echo "::error::$sidecar/node was not staged"; exit 1; }
+
+      # ROUND-100 — THE LINUX PRE-PACK BOOT GATE (the R57 Windows gate,
+      # ported to bash): the staged engine must actually BOOT on Linux
+      # before it is packed — the REAL pinned `node` binary against the
+      # staged app with the same env the Rust shell passes (ACUTE_TOKEN /
+      # ACUTE_DB_PATH, cwd = the app dir), polling for the ACUTE_READY
+      # handshake line. This is also the proof the linux-x64 prebuilds
+      # (better-sqlite3, node-pty) load on this platform — the exact class
+      # of failure the Windows gate exists for. A failed boot prints the
+      # engine's stdout/stderr tails and fails the build BEFORE
+      # `pnpm tauri build` can pack a dead engine.
+      - name: Boot the staged engine on Linux (pre-pack gate)
+        env:
+          ACUTE_BOOT_TIMEOUT_S: "90"
+        run: |
+          set -euo pipefail
+          # ALL paths ABSOLUTE (the R57 lesson): no dependence on the
+          # working directory beyond the deliberate cd below.
+          sidecar="$PWD/src-tauri/staging/sidecar"
+          out="/tmp/acute-boot-stdout.log"
+          err="/tmp/acute-boot-stderr.log"
+          db="/tmp/acute-boot-test.db"
+          rm -f "$out" "$err" "$db"
+          export ACUTE_TOKEN="ci-boot-token"
+          export ACUTE_DB_PATH="$db"
+          # cwd = the app dir (the Windows gate's -WorkingDirectory): the
+          # engine's default log file lands at <cwd>/.dev/acute.log and
+          # migrations resolve via import.meta.url regardless.
+          cd "$sidecar/app"
+          "$sidecar/node" "$sidecar/app/dist/main.js" >"$out" 2>"$err" &
+          pid=$!
+          ready=0
+          deadline=$(( $(date +%s) + ACUTE_BOOT_TIMEOUT_S ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if ! kill -0 "$pid" 2>/dev/null; then break; fi
+            if grep -q "ACUTE_READY" "$out" 2>/dev/null; then ready=1; break; fi
+            sleep 0.5
+          done
+          if [ "$ready" -eq 1 ]; then
+            echo "R100 boot gate: staged engine is UP on Linux — $(grep ACUTE_READY "$out" | head -1)"
+          else
+            echo "::error::R100 boot gate: staged engine did not report ACUTE_READY within ${ACUTE_BOOT_TIMEOUT_S}s. NEVER pack this tree — this is the 'Can't reach agent-core' failure mode."
+            if [ -f "$out" ]; then echo "--- engine stdout tail ---"; tail -40 "$out"; fi
+            if [ -f "$err" ]; then echo "--- engine stderr tail ---"; tail -40 "$err"; fi
+            kill "$pid" 2>/dev/null || true
+            exit 1
+          fi
+          # Tree-kill (taskkill /T /F's mirror): the engine may hold sqlite
+          # + children; kill the children first, then the engine, a
+          # bounded wait, SIGKILL last — a leaked node would hold the temp
+          # DB and slow every later retry.
+          pkill -TERM -P "$pid" 2>/dev/null || true
+          kill -TERM "$pid" 2>/dev/null || true
+          for _ in $(seq 1 20); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.25
+          done
+          kill -KILL "$pid" 2>/dev/null || true
+          rm -f "$out" "$err" "$db"
+
+      # deb + AppImage ONLY. rpm is deliberately OUT despite research
+      # §C.1's "+rpm if cheap": it is not cheap — the tauri-bundler rpm
+      # backend hangs indefinitely in CI on current versions (tauri issue
+      # #15698, reproduced with `--bundles deb,rpm` alone on
+      # ubuntu-latest/24.04 and 22.04; tauri 2.11.4 / tauri-bundler 2.9.4 —
+      # the exact versions this repo's `tauri = "2"` resolves). Revisit
+      # when the issue closes. AppImage itself is documented "only fully
+      # supported on Ubuntu build systems" — ubuntu-latest qualifies.
+      - name: Build the Linux bundles
+        run: pnpm tauri build --bundles deb,appimage
+
+      # Bundler contract (tauri-bundler 2.x linux): files are
+      # <productName>_<version>_<arch>.deb / .AppImage →
+      # ACUTE-CODE_<v>_amd64.{deb,AppImage} on x86_64.
+      - name: Verify + collect the bundles
+        run: |
+          set -euo pipefail
+          debs="$(ls src-tauri/target/release/bundle/deb/*.deb 2>/dev/null || true)"
+          appimages="$(ls src-tauri/target/release/bundle/appimage/*.AppImage 2>/dev/null || true)"
+          if [ -z "$debs" ] || [ -z "$appimages" ]; then
+            echo "::error::expected a .deb and an .AppImage — got:"
+            ls -R src-tauri/target/release/bundle 2>/dev/null || true
+            exit 1
+          fi
+          for f in $debs $appimages; do
+            echo "built: $f ($(du -h "$f" | cut -f1))"
+          done
+
+      - name: Upload Linux bundles artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: acute-bundles-linux
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+
   # Draft release ONLY on tag pushes — the owner reviews + publishes manually.
   github-release:
-    needs: [launcher-kit, desktop-installer]
+    needs: [launcher-kit, desktop-installer, linux-bundles]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -308,6 +504,13 @@ jobs:
           name: acute-installer-windows-x64
           path: installer
 
+      # ROUND-100 (R100-B): the Linux bundles join the same draft release.
+      - name: Download the Linux bundles artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: acute-bundles-linux
+          path: linux-bundles
+
       - name: Verify the tag matches the released version
         run: |
           if [ "${{ github.ref_name }}" != "v${{ needs.launcher-kit.outputs.version }}" ]; then
@@ -320,6 +523,13 @@ jobs:
             echo "::error::expected installer/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_x64-setup.exe — got: $(ls installer/)"
             exit 1
           fi
+          # Same guard for the Linux bundles (bundler contract:
+          # <productName>_<version>_<arch>.deb/.AppImage → _amd64).
+          if ! ls "linux-bundles/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_amd64.deb" >/dev/null 2>&1 \
+            || ! ls "linux-bundles/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_amd64.AppImage" >/dev/null 2>&1; then
+            echo "::error::expected linux-bundles/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_amd64.{deb,AppImage} — got: $(ls linux-bundles/)"
+            exit 1
+          fi
 
       - name: Create draft GitHub release
         uses: softprops/action-gh-release@v2
@@ -329,5 +539,7 @@ jobs:
           files: |
             acute-launcher-kit-v*.zip
             installer/ACUTE-CODE_*_x64-setup.exe
+            linux-bundles/ACUTE-CODE_*_amd64.deb
+            linux-bundles/ACUTE-CODE_*_amd64.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

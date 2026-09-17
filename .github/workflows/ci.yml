@@ -53,3 +53,36 @@ jobs:
 
       - name: Type-check the Rust shell
         run: cargo check --manifest-path src-tauri/Cargo.toml
+
+  # ROUND-100 (R100-B, ADR-0031): the Linux compile gate. The verify job
+  # above runs on windows-latest, so until now NOTHING checked that the Rust
+  # shell (and its platform-gated deps — keyring/secret-service/zbus since
+  # the Linux key store, windows-sys never) compiles on Linux; the class
+  # surfaced only when the linux-bundles release job was added. Deliberately
+  # minimal: no pnpm, no frontend build, no tests — the Rust shell compile
+  # is the whole point (the committed src-tauri/staging/sidecar/README.md
+  # placeholder keeps tauri-build's resource validation green on a fresh
+  # checkout, same as the Windows job).
+  rust-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # The Tauri v2 prerequisites (v2.tauri.app/start/prerequisites):
+      # WebKitGTK 4.1 (the 4.0 series is gone from Ubuntu 24.04's repos) +
+      # the bundler's system libs. `pkg-config` ships with the runner image.
+      - name: Install WebKitGTK + shell deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+            curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Type-check the Rust shell on Linux
+        run: cargo check --manifest-path src-tauri/Cargo.toml

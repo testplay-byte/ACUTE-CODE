@@ -1,6 +1,7 @@
-//! Windows Credential Manager (generic credentials) — the app's only key
-//! store (ARCHITECTURE §7 / SPEC hard rule: provider API keys live in
-//! Credential Manager behind DPAPI, never on disk).
+//! The provider-key store (ARCHITECTURE §7 / SPEC hard rule: provider API
+//! keys live in the OS secure store, never on disk) — Windows Credential
+//! Manager (generic credentials, DPAPI) on Windows; the freedesktop Secret
+//! Service on Linux (ADR-0031, ROUND-100).
 //!
 //! ROUND-55 (R55) — WHY THIS MODULE EXISTS. This replaced the `keyring`
 //! crate's `Entry::new(service, user)`: on Windows, keyring 4.x derives the
@@ -26,6 +27,18 @@
 //!
 //! Keys cross this boundary only through the functions below and the
 //! commands in keys.rs: never REST bodies, never localStorage, never logs.
+//!
+//! ROUND-100 (R100-B, ADR-0031) — THE LINUX STORE. A third imp (below)
+//! backs the same three functions with the freedesktop Secret Service
+//! (gnome-keyring/KWallet, encrypted at rest by the desktop keyring
+//! daemon) via the `keyring` crate — `Entry::new(service, user)` with
+//! service = the SAME canonical target string and user = keys.rs's
+//! TARGET_USER, so the Secret Service item's attributes mirror the
+//! Windows credential's (TargetName, UserName) pair. There is no
+//! launcher/cmdkey interop on Linux (nothing seeds keys there), so the
+//! R55 exact-TargetName constraint does not port; headless machines
+//! (no keyring daemon) get the honest fallback — reads return none,
+//! writes error pointing at the ACUTE_PROVIDER_<ID> env vars.
 
 #[cfg(windows)]
 mod imp {
@@ -123,16 +136,84 @@ mod imp {
     }
 }
 
-/// Non-Windows (dev checkouts on Linux/macOS): keys flow from dev.mjs env
-/// injection instead — credential storage is a packaged-Windows-app concern,
-/// and the stub keeps every call site honest instead of silently pretending.
-#[cfg(not(windows))]
+/// Linux (+ the BSDs): the freedesktop Secret Service via the `keyring`
+/// crate — the Linux release's key store (ADR-0031). `Entry::new(service,
+/// user)` with service = the canonical target string and user = keys.rs's
+/// TARGET_USER; the Secret Service item's `service`/`username` attributes
+/// then mirror the Windows credential's (TargetName, UserName) pair.
+///
+/// Honest headless fallback (no gnome-keyring/KWallet daemon on the session
+/// bus): reads return `Ok(None)` — a store that cannot be reached holds no
+/// key — and writes error pointing at the ACUTE_PROVIDER_<ID> env vars (the
+/// dev path that already works, `scripts/dev.mjs`). Error strings carry
+/// keyring's classification, never the secret.
+#[cfg(all(unix, not(target_os = "macos")))]
+mod imp {
+    /// The Secret Service entry for `target`. `Entry::new` only maps the
+    /// (service, user) pair to item attributes — no bus I/O — so it cannot
+    /// fail for storage reasons, only for malformed inputs.
+    fn entry_for(target: &str) -> Result<keyring::Entry, String> {
+        keyring::Entry::new(target, crate::keys::TARGET_USER)
+            .map_err(|e| format!("creating the Secret Service entry for {target} failed: {e}"))
+    }
+
+    /// Reads the Secret Service item at `target`. `Ok(None)` = no such
+    /// entry (normal: key not stored yet) OR no reachable keyring daemon
+    /// (NoStorageAccess — the honest headless fallback, ADR-0031).
+    pub(crate) fn read(target: &str) -> Result<Option<String>, String> {
+        let entry = entry_for(target)?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(keyring::Error::NoStorageAccess(_)) => Ok(None),
+            Err(e) => Err(format!(
+                "reading the Secret Service entry for {target} failed: {e}"
+            )),
+        }
+    }
+
+    /// Writes (or rotates) the Secret Service item at `target` with user
+    /// `user`. `set_password` updates an existing matching item in place,
+    /// so re-saving rotates rather than duplicating.
+    pub(crate) fn write(target: &str, user: &str, value: &str) -> Result<(), String> {
+        keyring::Entry::new(target, user)
+            .map_err(|e| format!("creating the Secret Service entry for {target} failed: {e}"))?
+            .set_password(value)
+            .map_err(|e| {
+                format!(
+                    "storing the key in the freedesktop Secret Service failed: {e} — \
+                     on headless Linux (no gnome-keyring/KWallet daemon), provide the \
+                     ACUTE_PROVIDER_<ID> environment variables instead"
+                )
+            })
+    }
+
+    /// Deletes the Secret Service item at `target`. `Ok(false)` = nothing
+    /// was there (or no daemon could be reached — nothing to retire).
+    pub(crate) fn delete(target: &str) -> Result<bool, String> {
+        let entry = entry_for(target)?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(keyring::Error::NoStorageAccess(_)) => Ok(false),
+            Err(e) => Err(format!(
+                "deleting the Secret Service entry for {target} failed: {e}"
+            )),
+        }
+    }
+}
+
+/// Everything else (dev checkouts on macOS, exotic unixes): keys flow from
+/// dev.mjs env injection instead — credential storage is a
+/// packaged-Windows/Linux-app concern, and the stub keeps every call site
+/// honest instead of silently pretending.
+#[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
 mod imp {
     pub(crate) fn read(_target: &str) -> Result<Option<String>, String> {
         Ok(None)
     }
     pub(crate) fn write(_target: &str, _user: &str, _value: &str) -> Result<(), String> {
-        Err("credential storage is only available in the packaged Windows app".into())
+        Err("credential storage is only available in the packaged Windows and Linux apps".into())
     }
     pub(crate) fn delete(_target: &str) -> Result<bool, String> {
         Ok(false)

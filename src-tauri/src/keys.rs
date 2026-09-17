@@ -47,7 +47,12 @@ const TARGET_PREFIX: &str = "ACUTE-CODE/provider/";
 /// The pre-R55 keyring crate derived this target form from
 /// `{user}.{service}`; ≤ 0.54.0 app builds wrote their keys here.
 const LEGACY_TARGET_PREFIX: &str = "api-key.ACUTE-CODE/provider/";
-const TARGET_USER: &str = "api-key";
+/// The credential user name — the launcher's cmdkey convention ("api-key").
+/// pub(crate) since ROUND-100 (R100-B, ADR-0031): the Linux wincred imp
+/// (Secret Service via the keyring crate) also identifies entries by the
+/// (service, user) pair, so its read/delete legs resolve the SAME pair the
+/// write call sites here pass.
+pub(crate) const TARGET_USER: &str = "api-key";
 
 fn canonical_target(provider_id: &str) -> String {
     format!("{TARGET_PREFIX}{provider_id}")

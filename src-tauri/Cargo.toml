@@ -70,3 +70,18 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }
+
+# ROUND-100 (R100-B, ADR-0031): the Linux key store — the freedesktop Secret
+# Service (gnome-keyring/KWallet, encrypted at rest by the desktop keyring
+# daemon) via the keyring crate, target-gated exactly like windows-sys above
+# so the Windows build is untouched. keyring 3.x has NO default features —
+# `sync-secret-service` is the crate README's documented Linux combo
+# (zbus-based, synchronous; the crate's docs note there is no reason to use
+# the async variant since its access is always blocking). Deliberately NOT
+# `linux-native*` (kernel keyutils — not persistent across reboots, not the
+# desktop keyring daemon's encrypted store). The R55 reason for dropping
+# keyring on Windows (its `{user}.{service}` TargetName vs cmdkey) does not
+# exist on Linux — nothing seeds keys there. See
+# docs/decisions/0031-linux-key-store.md.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
