@@ -17,6 +17,12 @@ import { formatCompactTokens, formatCost, modelColor, shortModelName } from "./u
  * R99-E (anti-jitter kit): the card reserves its final height
  * (min-h-[184px]/md:192px — header + the fixed 120px ring); legend rows
  * truncate (never wrap-jitter) and every number renders tabular-nums.
+ *
+ * R100-G (research §C2 P3, the ladder sweep): the header label snapped to
+ * the label tier (11px/500/0.08em), the ring's headline stat snapped to the
+ * ladder's `value` token (22px/600, tabular — font-black + tracking-tighter
+ * were the wizard display tell), and the card rides the 16px radius step
+ * (rounded-2xl). The model palette + the fixed-height reserves stay.
  */
 
 const SIZE = 120;
@@ -59,13 +65,13 @@ export function ModelDonut({
   return (
     <div
       data-testid="model-donut"
-      className="flex min-h-[184px] flex-col rounded-[24px] border-[1.5px] p-4 md:min-h-[192px] md:p-5"
+      className="flex min-h-[184px] flex-col rounded-2xl border-[1.5px] p-4 md:min-h-[192px] md:p-5"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
     >
       <div className="mb-4 flex shrink-0 items-center gap-2">
         <ChartPie size={13} style={{ color: accent, opacity: 0.7 }} />
         <span
-          className="text-[11px] font-bold uppercase leading-none tracking-widest"
+          className="text-[11px] font-medium uppercase leading-none tracking-[0.08em]"
           style={{ color: textTertiary }}
         >
           Model Usage · Share of Tokens
@@ -125,7 +131,7 @@ export function ModelDonut({
                 <div className="font-mono text-[10px] font-semibold" style={{ color: textSecondary }}>
                   {shortModelName(top.model)}
                 </div>
-                <div className="text-[20px] font-black leading-tight tabular-nums tracking-tighter" style={{ color: text }}>
+                <div className="text-[22px] font-semibold leading-none tabular-nums" style={{ color: text }}>
                   {topSharePct}%
                 </div>
               </div>

@@ -307,7 +307,9 @@ describe("TitleBar — Tauri chrome", () => {
 
     const bar = container.firstElementChild as HTMLElement;
     expect(bar.tagName).toBe("HEADER");
-    expect(bar.className).toContain("rounded-[14px]");
+    // R100-F re-pin: the radius snapped to the 5-step scale — rounded-2xl
+    // (16px) for the top-level bar card (was the arbitrary 14px).
+    expect(bar.className).toContain("rounded-2xl");
     expect(bar.className).toContain("border-[1.5px]");
     // The old full-bleed bottom-strip chrome is gone.
     expect(bar.className).not.toContain("border-b");
@@ -316,7 +318,8 @@ describe("TitleBar — Tauri chrome", () => {
     // The controls carry their own rounding (inset buttons, not slabs).
     for (const name of ["Minimize window", "Maximize window", "Close window"]) {
       const btn = screen.getByRole("button", { name }) as HTMLElement;
-      expect(btn.className).toContain("rounded-[9px]");
+      // R100-F re-pin: the controls snapped to rounded-lg (8px, was 9px).
+      expect(btn.className).toContain("rounded-lg");
       expect(btn.className).toContain("h-8");
     }
   });

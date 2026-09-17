@@ -6,6 +6,8 @@ import { formatWhen } from "../../lib/format";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { bdr, withAlpha } from "../dashboard/helpers";
+// R100-F (research §C2 P5): the Sessions header rides THE one kicker.
+import { Kicker } from "../ui/Kicker";
 
 /**
  * Project view (owner round-8): selecting a sidebar project opens THIS — the
@@ -46,16 +48,18 @@ export function ProjectView() {
   if (projectsQuery.isError && projectsQuery.data === undefined) {
     return (
       <div className="grid h-full place-items-center p-6">
+        {/* R100-F: rounded-2xl (the card tier); the weight law — 600 for
+            the error title, 600 for the retry button. */}
         <div
           role="alert"
           data-project-load-error
-          className="max-w-md rounded-[14px] border-[1.5px] px-4 py-3.5 text-center"
+          className="max-w-md rounded-2xl border-[1.5px] px-4 py-3.5 text-center"
           style={{
             borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
             background: withAlpha(SEMANTIC_COLORS.danger, 0.06),
           }}
         >
-          <p className="text-[13px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+          <p className="text-[13px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
             Could not load projects
           </p>
           <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
@@ -79,7 +83,7 @@ export function ProjectView() {
     return (
       <div className="grid h-full place-items-center p-6">
         <div className="text-center">
-          <p className="text-[14px] font-semibold" style={{ color: styles.text }}>
+          <p className="text-[13px] font-semibold" style={{ color: styles.text }}>
             Project not found
           </p>
           <button
@@ -101,17 +105,24 @@ export function ProjectView() {
       <div className="mx-auto max-w-3xl">
         {/* Project header */}
         <div className="flex items-center gap-3">
+          {/* R100-F: the header tile mirrors the sidebar's flattened
+              ProjectTile grammar — flat project color + a 1px border, the
+              13px/600 letter (the `${color}CC` string-suffix hack becomes
+              withAlpha(color, 0.8) per TOKENS §1 rule 3). */}
           <div
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl text-lg font-bold text-white"
-            style={{ backgroundColor: `${project.color}CC` }}
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl text-[13px] font-semibold text-white"
+            style={{
+              backgroundColor: withAlpha(project.color, 0.8),
+              border: "1px solid rgba(0, 0, 0, 0.14)",
+            }}
           >
             {letter}
           </div>
           <div className="min-w-0">
-            <h1 className="truncate text-[22px] font-bold tracking-tight" style={{ color: styles.text }}>
+            <h1 className="truncate text-[24px] font-semibold" style={{ color: styles.text }}>
               {project.name}
             </h1>
-            <div className="truncate font-mono text-[11px]" style={{ color: styles.textTertiary }}>
+            <div className="truncate font-mono text-[11px] tabular-nums" style={{ color: styles.textTertiary }}>
               {project.rootPath}
             </div>
           </div>
@@ -119,7 +130,7 @@ export function ProjectView() {
 
         {/* Project chat entry point (M3 project-chat screen) */}
         <div
-          className="mt-5 rounded-[14px] border-[1.5px] p-4"
+          className="mt-5 rounded-2xl border-[1.5px] p-4"
           style={{
             background: withAlpha(project.color, 0.06),
             borderColor: withAlpha(project.color, 0.25),
@@ -127,7 +138,7 @@ export function ProjectView() {
         >
           <div className="flex items-center gap-2">
             <MessagesSquare size={14} style={{ color: styles.text }} />
-            <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+            <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
               Project chat
             </span>
           </div>
@@ -135,9 +146,11 @@ export function ProjectView() {
             Agents work on this project in a dedicated chat window — files, tools and turns side
             by side. Opening it starts (or resumes) a session bound to this workspace.
           </p>
+          {/* R100-F (research §C2 P5): the CTA radius snaps rounded-[8px] →
+              rounded-lg and the label to the 13px/600 button tier. */}
           <button
             onClick={() => id && navigate(`/project/${id}/chat`)}
-            className="mt-3 h-10 cursor-pointer rounded-[8px] px-4 text-sm font-semibold transition-opacity hover:opacity-90"
+            className="mt-3 h-10 cursor-pointer rounded-lg px-4 text-[13px] font-semibold transition-opacity hover:opacity-90"
             style={{ backgroundColor: styles.accent, color: styles.accentText }}
           >
             Open project chat
@@ -145,24 +158,23 @@ export function ProjectView() {
         </div>
 
         {/* Sessions bound to this project (client-side projectId filter) */}
-        <h2
-          className="mb-2 mt-6 text-[11px] font-bold uppercase tracking-widest"
-          style={{ color: styles.textTertiary }}
-        >
+        {/* R100-F: THE one kicker (ui/Kicker) — the 11px font-bold
+            tracking-widest hand-rolled header is retired. */}
+        <Kicker as="h2" className="mb-2 mt-6">
           Sessions
-        </h2>
+        </Kicker>
         {sessionsQuery.isPending ? (
           <div className="h-[52px] w-full animate-pulse rounded-lg" style={{ background: styles.subtle }} />
         ) : sessionsQuery.isError ? (
           /* R97-I part 2: a failed sessions fetch is an ERROR, not the false
              "No sessions yet" — one honest line in the empty-state box's own
-             shape, danger-tinted (role=alert). */
+             shape, danger-tinted (role=alert). R100-F: the 1px hairline. */
           <div
             role="alert"
             data-project-sessions-error
             className="rounded-lg px-3 py-4 text-[12px] font-semibold"
             style={{
-              border: bdr("1.5px", withAlpha(SEMANTIC_COLORS.danger, 0.35)),
+              border: bdr("1px", withAlpha(SEMANTIC_COLORS.danger, 0.35)),
               color: SEMANTIC_COLORS.danger,
               background: withAlpha(SEMANTIC_COLORS.danger, 0.05),
             }}
@@ -171,8 +183,8 @@ export function ProjectView() {
           </div>
         ) : sessions.length === 0 ? (
           <div
-            className="rounded-lg px-3 py-4 text-[12px]"
-            style={{ border: bdr("1.5px", styles.border), color: styles.textTertiary }}
+            className="rounded-lg px-3 py-4 text-[12px] border border-line"
+            style={{ color: styles.textTertiary }}
           >
             No sessions yet
           </div>
@@ -182,20 +194,21 @@ export function ProjectView() {
               <button
                 key={s.id}
                 onClick={() => id && navigate(`/project/${id}/chat`)}
-                className="flex w-full cursor-pointer items-center justify-between rounded-lg px-3 py-2.5 text-left transition-colors"
-                style={{ border: bdr("1.5px", styles.border) }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                /* R100-F: hover = the CSS wash (the JS onMouseEnter/Leave
+                   pair is retired — TOKENS §6); the border rides the
+                   border-line utility; row title 500, status + timestamp
+                   meta-mono (mono, tabular). */
+                className="flex w-full cursor-pointer items-center justify-between rounded-lg border border-line px-3 py-2.5 text-left transition-colors hover:bg-hover"
               >
                 <span className="min-w-0">
-                  <span className="block truncate text-[12px] font-semibold" style={{ color: styles.text }}>
+                  <span className="block truncate text-[12px] font-medium" style={{ color: styles.text }}>
                     {s.title ?? "Untitled"}
                   </span>
-                  <span className="block text-[10px]" style={{ color: styles.textTertiary }}>
+                  <span className="block font-mono text-[10px] tabular-nums" style={{ color: styles.textTertiary }}>
                     {s.status}
                   </span>
                 </span>
-                <span className="shrink-0 text-[10px]" style={{ color: styles.textTertiary }}>
+                <span className="shrink-0 font-mono text-[10px] tabular-nums" style={{ color: styles.textTertiary }}>
                   {formatWhen(s.updatedAt)}
                 </span>
               </button>

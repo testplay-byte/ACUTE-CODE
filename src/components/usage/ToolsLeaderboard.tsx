@@ -26,24 +26,24 @@ export function ToolsLeaderboard({
   return (
     <motion.div
       variants={scaleIn}
-      className="rounded-[24px] border-[1.5px] p-4 md:p-5 flex flex-col"
+      className="rounded-2xl border-[1.5px] p-4 md:p-5 flex flex-col"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
     >
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Wrench size={13} style={{ color: accent, opacity: 0.7 }} />
-          <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <span className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
             Tool Leaderboard
           </span>
         </div>
-        <span className="text-[11px] font-medium" style={{ color: textSecondary }}>
+        <span className="text-[11px] tabular-nums" style={{ color: textSecondary }}>
           {tools.length} {tools.length === 1 ? "tool" : "tools"}
         </span>
       </div>
 
       {top.length === 0 ? (
         <p
-          className="flex flex-1 items-center justify-center py-8 text-center text-[12px] font-medium"
+          className="flex flex-1 items-center justify-center py-8 text-center text-[12px]"
           style={{ color: textSecondary }}
         >
           No tool calls yet — they rank here as soon as agents start working.
@@ -54,17 +54,17 @@ export function ToolsLeaderboard({
             <li key={tool.tool} className="min-w-0">
               <div className="flex items-baseline justify-between gap-2">
                 <span
-                  className="truncate font-mono text-[11.5px] font-semibold"
+                  className="truncate font-mono text-[12px] font-medium"
                   style={{ color: text }}
                   title={tool.tool}
                 >
                   {tool.tool}
                 </span>
-                <span className="shrink-0 text-[11px] font-semibold" style={{ color: textSecondary }}>
+                <span className="shrink-0 text-[11px] font-medium tabular-nums" style={{ color: textSecondary }}>
                   {tool.count.toLocaleString()}
                   {tool.failures > 0 ? (
                     <span
-                      className="ml-1.5 font-bold"
+                      className="ml-1.5 font-semibold tabular-nums"
                       style={{ color: SEMANTIC_COLORS.danger }}
                       title={`${tool.failures} failed ${tool.failures === 1 ? "call" : "calls"}`}
                     >

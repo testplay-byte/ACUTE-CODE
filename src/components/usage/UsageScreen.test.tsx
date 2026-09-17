@@ -236,7 +236,11 @@ describe("UsageScreen (ROUND-52 R52-b)", () => {
     renderUsageScreen();
 
     // Hero (kicker + title + range selector).
-    expect(await screen.findByText(/Usage Analytics/i)).toBeTruthy();
+    // R100-G re-pin: the hero de-costumed — the rotated display hero is
+    // gone; the Kicker ("Data & Statistics") + the 24px/600 "Usage" title
+    // + the one-line secondary description replace it (WIZARD-DNA §8).
+    expect(await screen.findByText("Data & Statistics")).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "Usage" })).toBeTruthy();
     expect(screen.getByRole("group", { name: /day range/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Last 30 days" })).toBeTruthy();
 

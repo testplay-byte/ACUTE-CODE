@@ -36,6 +36,9 @@ import { useProjectChatStore } from "../../lib/project-chat-store";
 import { useUpdateCheckerStore } from "../../lib/update-checker";
 import { withAlpha } from "../dashboard/helpers";
 import { SkeletonRows } from "../shared/Skeletons";
+// R100-F (research §C2 P2): the section headers ride THE one kicker — the
+// ui/Kicker primitive (11px/500/uppercase/tracking-[0.08em]/tertiary).
+import { Kicker } from "../ui/Kicker";
 import { NotificationBell } from "../notifications/NotificationBell";
 
 type TauriGlobal = {
@@ -54,29 +57,18 @@ function readExpanded(): string[] {
   try { return JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]") as string[]; } catch { return []; }
 }
 
-/** ROUND-42: shade a hex color ±percent — feeds the project tile gradient
- * (owner: "the project's actual images need to be a bit better"). */
-function shadeHex(hex: string, percent: number): string {
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.trim());
-  if (m === null) return hex;
-  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
-  const r = clamp(parseInt(m[1], 16) + 255 * percent);
-  const g = clamp(parseInt(m[2], 16) + 255 * percent);
-  const b = clamp(parseInt(m[3], 16) + 255 * percent);
-  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
-}
-
-/** ROUND-42: the project's tile — a soft vertical gradient derived from the
- * project's own color, with an inner top highlight + soft shadow. Replaces
- * the flat colored square (owner: modern, beautiful, cleaner, smoother).
- * R60-C: the `selected` inset-ring variant died with the collapsed rail —
- * the tile is the expanded-row mark only. */
+/** R100-F (research §C2 P2): the project's tile — FLAT project color + a 1px
+ * border. The ROUND-42 vertical gradient + inner highlight + text-shadow is
+ * retired (the "gradient tile" slop pattern — JetBrains new UI deliberately
+ * flattens project icons); the tile keeps its color-identity job. R60-C: the
+ * `selected` inset-ring variant died with the collapsed rail — the tile is
+ * the expanded-row mark only. */
 function ProjectTile({
   color,
   name,
-  size = 32,
-  radius = 10,
-  fontSize = 13,
+  size = 24,
+  radius = 8,
+  fontSize = 12,
 }: {
   color: string;
   name: string;
@@ -86,16 +78,14 @@ function ProjectTile({
 }) {
   return (
     <span
-      className="shrink-0 grid place-items-center font-black select-none"
+      className="shrink-0 grid place-items-center font-semibold text-white select-none"
       style={{
         width: size,
         height: size,
         borderRadius: radius,
         fontSize,
-        color: "#fff",
-        background: `linear-gradient(150deg, ${shadeHex(color, 0.22)} 0%, ${color} 45%, ${shadeHex(color, -0.24)} 100%)`,
-        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -1px 2px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.14)",
-        textShadow: "0 1px 1px rgba(0,0,0,0.22)",
+        background: color,
+        border: "1px solid rgba(0, 0, 0, 0.14)",
       }}
       aria-hidden
     >
@@ -124,29 +114,33 @@ function ProjectTile({
  */
 export function AcuteLogo({
   size = 32,
+  radius,
   hoverToggle = false,
   onClick,
   ariaLabel,
   title,
 }: {
   size?: number;
+  /** R100-F: explicit ladder radius (4/8/12/16) — defaults to the brand
+   * formula (size × 0.28, the favicon mirror) when unset. */
+  radius?: number;
   hoverToggle?: boolean;
   onClick?: () => void;
   ariaLabel?: string;
   title?: string;
 }) {
-  const [hovered, setHovered] = useState(false);
+  // R100-F: the hover morph is PURE CSS now (group + group-hover opacity
+  // crossfade) — the useState + onMouseEnter/Leave pair is retired
+  // (TOKENS §6: hover is a class, never a JS handler).
   // Shared presentation for both element kinds (button when interactive).
   const shared = {
     "aria-label": ariaLabel ?? "Acute",
     title,
-    onMouseEnter: () => setHovered(true),
-    onMouseLeave: () => setHovered(false),
-    className: "relative grid place-items-center transition-transform hover:scale-[1.05] active:scale-95",
+    className: "relative group grid place-items-center transition-transform active:scale-95",
     style: {
       width: size,
       height: size,
-      borderRadius: Math.round(size * 0.28),
+      borderRadius: radius ?? Math.round(size * 0.28),
       background: "linear-gradient(155deg, #FF8147 0%, #FF6B2C 52%, #ED5A17 100%)",
       boxShadow: "inset 0 1px 0 rgba(255,255,255,0.32), 0 2px 10px rgba(255,107,44,0.35)",
     },
@@ -155,19 +149,18 @@ export function AcuteLogo({
     <>
       {/* The cat-face silhouette — solid white head with pointed ears; the
           slanted almond eyes + triangular nose are evenodd punch-outs (the
-          tile gradient shows through). Fades out on hover when hoverToggle. */}
+          tile gradient shows through). Fades out on hover when hoverToggle
+          (R100-F: the CSS group-hover leg, no JS state). */}
       <svg
         width={size}
         height={size}
         viewBox="0 0 32 32"
         fill="none"
         aria-hidden
-        style={{
-          position: "absolute",
-          inset: 0,
-          opacity: hoverToggle && hovered ? 0 : 1,
-          transition: "opacity 0.15s",
-        }}
+        className={cn(
+          "absolute inset-0 transition-opacity",
+          hoverToggle && "group-hover:opacity-0",
+        )}
       >
         <path
           d="M7 13.4 L8 4.8 L12.6 8.8 Q14.2 7.9 16 7.9 Q17.8 7.9 19.4 8.8 L24 4.8 L25 13.4 Q25.5 18 21.2 22 Q18.6 24.8 16 25 Q13.4 24.8 10.8 22 Q6.5 18 7 13.4 Z
@@ -178,7 +171,8 @@ export function AcuteLogo({
           fillRule="evenodd"
         />
       </svg>
-      {/* The panel-left toggle icon — fades in on hover when hoverToggle */}
+      {/* The panel-left toggle icon — fades in on hover when hoverToggle
+          (R100-F: the CSS group-hover leg, no JS state). */}
       {hoverToggle && (
         <svg
           width={size * 0.55}
@@ -190,11 +184,7 @@ export function AcuteLogo({
           strokeLinecap="round"
           strokeLinejoin="round"
           aria-hidden
-          style={{
-            position: "absolute",
-            opacity: hovered ? 1 : 0,
-            transition: "opacity 0.15s",
-          }}
+          className="absolute opacity-0 transition-opacity group-hover:opacity-100"
         >
           <rect x="3" y="3" width="18" height="18" rx="3" />
           <path d="M9 3v18" />
@@ -217,7 +207,7 @@ export function AcuteLogo({
  * - NO header row in normal mode — R60-C (owner): the app logo lives in the
  *   TITLE BAR now and THAT identity control (logo + name, top-left of the
  *   window) is the one toggle for showing/hiding this whole panel; the
- *   in-sidebar logo + the collapse button + the 64px collapsed rail are
+ *   in-sidebar logo + the collapse button + the old collapsed rail are
  *   GONE. The panel is either fully visible (AppShell's appSidebarVisible)
  *   or fully absent — no intermediate state, no COLLAPSE_KEY persistence.
  * - R100-E1 (research §C2 P1(a)): the ROUND-34 "settings mode" is RETIRED —
@@ -255,8 +245,9 @@ export function Sidebar() {
   // the floating Acute logo in web dev mode) mounts/unmounts this whole
   // component. ROUND-62 (owner: "i should be given the option to minimize
   // it rather than just hiding it completely") adds the SECOND state on
-  // top: MINIMIZED — the sidebar becomes its 64px icon rail (nav icons +
-  // project tiles + bell/settings) with the restore button at its very
+  // top: MINIMIZED — the sidebar becomes its 48px icon rail (R100-F: rail
+  // 64→48px, the activity-bar standard — nav icons + project tiles +
+  // bell/settings) with the restore button at its very
   // top. Orthogonal to the full hide; persisted in the project-chat store.
   const minimized = useProjectChatStore((s) => s.appSidebarMinimized);
   const setAppSidebarMinimized = useProjectChatStore((s) => s.setAppSidebarMinimized);
@@ -280,11 +271,12 @@ export function Sidebar() {
       {/* ROUND-45: mobile trigger — the app logo, the ONLY mobile affordance
           (mobile has no title bar to host the R60-C identity toggle); visible
           below md whenever the drawer is closed. R58: in Tauri the custom
-          TitleBar owns the top 40px — drop below it. */}
+          TitleBar owns the top 40px — drop below it. R100-F: the offsets snap
+          to the grid utilities (top-12 under the 40px bar · left-2.5). */}
       {!mobileOpen && (
         <div
-          className={`fixed left-[10px] z-50 md:hidden ${
-            isTauri() ? "top-[50px]" : "top-[10px]"
+          className={`fixed left-2.5 z-50 md:hidden ${
+            isTauri() ? "top-12" : "top-2.5"
           }`}
         >
           <AcuteLogo
@@ -303,14 +295,17 @@ export function Sidebar() {
       // title-bar toggle brings it back. The mobile drawer slide is the
       // Tailwind `translate` property below (it composes with framer's
       // `transform` — different CSS properties).
-      // ROUND-62: the width is rail-conditional again (270px full · 64px
-      // minimized) with a 200ms width transition so minimizing feels alive.
+      // ROUND-62: the width is rail-conditional again with a 200ms width
+      // transition so minimizing feels alive. R100-F (research §C2 P2):
+      // 270→240px full (VS Code's 300 is for trees; ours is nav) · 64→48px
+      // rail (the activity-bar standard), both as SCALE utilities; the panel
+      // radius snaps 20→16px (rounded-2xl, the card/panel tier).
       initial={{ opacity: 0, x: -14 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
       className={cn(
-        "shrink-0 flex flex-col overflow-hidden rounded-[20px] border-[1.5px] transition-[width] duration-200",
-        minimized ? "w-[64px]" : "w-[270px]",
+        "shrink-0 flex flex-col overflow-hidden rounded-2xl border-[1.5px] transition-[width] duration-200",
+        minimized ? "w-12" : "w-60",
         // ROUND-45: below md this is an overlay drawer, not a flex column.
         "max-md:fixed max-md:inset-y-3 max-md:left-3 max-md:z-50 max-md:shadow-2xl",
         mobileOpen ? "max-md:translate-x-0" : "max-md:-translate-x-[120%] max-md:pointer-events-none",
@@ -341,32 +336,26 @@ export function Sidebar() {
           {/* ROUND-62: the MINIMIZE row — the owner's directive ("option at
               the very top to minimize it"). One quiet icon button,
               right-aligned where the panel meets the chat (the direction it
-              shrinks toward); its mirror is the rail's expand button. */}
+              shrinks toward); its mirror is the rail's expand button.
+              R100-F: 28px target, rounded-lg, hover = the CSS wash. */}
           <div className="shrink-0 flex items-center justify-end px-2.5 pt-2.5 pb-0.5">
             <button
               onClick={() => setAppSidebarMinimized(true)}
               aria-label="Minimize sidebar"
               title="Minimize sidebar"
               data-testid="sidebar-minimize"
-              className="w-7 h-7 rounded-[9px] grid place-items-center transition-colors"
+              className="w-7 h-7 rounded-lg grid place-items-center transition-colors hover:bg-hover"
               style={{ color: styles.textTertiary }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             >
-              <PanelLeftClose size={15} />
+              <PanelLeftClose size={16} />
             </button>
           </div>
 
           {/* NAVIGATION SECTION — dedicated section for Dashboard + Usage.
-              ROUND-42: same heading language as the refreshed Projects
-              header (heavier weight, wider tracking). */}
+              R100-F: the header rides THE one kicker (ui/Kicker) — the
+              10.5px font-black hand-rolled variant is retired. */}
           <div className="shrink-0 flex items-center px-4 pt-3 pb-1.5">
-            <span
-              className="text-[10.5px] font-black uppercase tracking-[0.14em]"
-              style={{ color: styles.textTertiary }}
-            >
-              Navigation
-            </span>
+            <Kicker>Navigation</Kicker>
           </div>
           <nav
             className="flex flex-col gap-1 px-2.5 pb-3 pt-1"
@@ -379,8 +368,10 @@ export function Sidebar() {
             <UsageButton />
           </nav>
 
-          {/* Divider — generous spacing around it (owner round-33). */}
-          <div className="shrink-0 mx-3 my-4 border-t-[1.5px]" style={{ borderColor: styles.sidebarBorder }} />
+          {/* Divider — generous spacing around it (owner round-33).
+              R100-F: 1.5→1px hairline (TOKENS §5 — 1.5px is top-level
+              bento only; this is an inside-panel line). */}
+          <div className="shrink-0 mx-3 my-4 border-t" style={{ borderColor: styles.sidebarBorder }} />
 
           {/* PROJECTS SECTION — expandable tree */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -413,8 +404,9 @@ export function Sidebar() {
 
 /**
  * ROUND-62 (owner: "i should be given the option to minimize it rather than
- * just hiding it completely") — the sidebar's MINIMIZED icon rail: a 64px
- * column with the restore button at the very top, then Dashboard/Usage, the
+ * just hiding it completely") — the sidebar's MINIMIZED icon rail: a 48px
+ * column (R100-F: 64→48px, the activity-bar standard) with the restore
+ * button at the very top, then Dashboard/Usage, the
  * project tiles (click → that project's chat; the running dot carries the
  * live-work signal), a flexible spacer, and the collapsed bell + settings
  * gear at the bottom. Every button carries a `title` tooltip so the rail
@@ -434,7 +426,7 @@ function UpdatePendingDot({ styles }: { styles: ReturnType<typeof useThemeStyles
       <span
         aria-hidden
         data-testid="settings-update-dot"
-        className="absolute -top-0.5 -right-0.5 w-[10px] h-[10px] rounded-full border-2"
+        className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2"
         style={{ background: styles.accent, borderColor: styles.sidebarBg }}
       />
       <span className="sr-only">update available</span>
@@ -472,18 +464,13 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
       aria-current={active ? "page" : undefined}
       title={label}
       data-testid={testId}
-      className="relative w-10 h-10 shrink-0 grid place-items-center rounded-[12px] transition-all duration-200"
-      style={{
-        background: active ? styles.accent : "transparent",
-        color: active ? styles.accentText : styles.textSecondary,
-        boxShadow: active ? `0 2px 8px ${withAlpha(styles.accent, 0.3)}` : "none",
-      }}
-      onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.background = styles.sidebarHover;
-      }}
-      onMouseLeave={(e) => {
-        if (!active) e.currentTarget.style.background = "transparent";
-      }}
+      // R100-F: the 48px rail's 36px buttons (≥28px targets); active = the
+      // soft-accent selection grammar (the solid accent fill + accent glow
+      // is retired); hover = the CSS wash — no JS handlers.
+      className={cn(
+        "relative w-9 h-9 shrink-0 grid place-items-center rounded-lg transition-colors",
+        active ? "bg-accent-soft text-accent" : "text-muted hover:bg-hover",
+      )}
     >
       {icon}
       {/* R99-C: the update-pending dot on the rail's SETTINGS entry (the
@@ -497,16 +484,16 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
       className="flex-1 min-h-0 flex flex-col items-center gap-1.5 px-1.5 pt-2.5 pb-2.5 overflow-y-auto"
       data-testid="sidebar-rail"
     >
-      {/* RESTORE — at the rail's very top (the minimize button's mirror). */}
+      {/* RESTORE — at the rail's very top (the minimize button's mirror).
+          R100-F: 36px rounded-lg on the CSS-var leg (bg-input + the hover
+          wash class — the JS hover pair is retired). */}
       <button
         onClick={onExpand}
         aria-label="Expand sidebar"
         title="Expand sidebar"
         data-testid="sidebar-expand"
-        className="w-10 h-10 shrink-0 grid place-items-center rounded-[12px] transition-colors"
-        style={{ color: styles.textTertiary, background: styles.inputBg }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
-        onMouseLeave={(e) => (e.currentTarget.style.background = styles.inputBg)}
+        className="w-9 h-9 shrink-0 grid place-items-center rounded-lg bg-input transition-colors hover:bg-hover"
+        style={{ color: styles.textTertiary }}
       >
         <PanelLeftOpen size={16} />
       </button>
@@ -515,14 +502,15 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
           retired with the sidebar's settings mode — the rail renders the
           normal dashboard/usage/projects body on /settings routes too; the
           gear (rail-settings) below is the one "Settings" entry. */}
-      {railBtn("Dashboard", <LayoutDashboard size={17} strokeWidth={2} />, pathname === "/", () => navigate("/"), "rail-dashboard")}
-      {railBtn("Usage", <BarChart3 size={17} strokeWidth={2} />, pathname.startsWith("/usage"), () => navigate("/usage"), "rail-usage")}
+      {railBtn("Dashboard", <LayoutDashboard size={16} strokeWidth={2} />, pathname === "/", () => navigate("/"), "rail-dashboard")}
+      {railBtn("Usage", <BarChart3 size={16} strokeWidth={2} />, pathname.startsWith("/usage"), () => navigate("/usage"), "rail-usage")}
 
-      {/* Hairline divider (the full sidebar's section divider, rail-sized). */}
-      <div className="w-8 shrink-0 border-t-[1.5px] my-1" style={{ borderColor: styles.sidebarBorder }} />
+      {/* Hairline divider (the full sidebar's section divider, rail-sized).
+          R100-F: 1.5→1px hairline. */}
+      <div className="w-8 shrink-0 border-t my-1" style={{ borderColor: styles.sidebarBorder }} />
 
       {/* PROJECT TILES — click opens the project's chat; the tile is the
-          project's own gradient mark (ProjectTile), so color identity
+          project's own color mark (ProjectTile), so color identity
           survives minimization; running projects get the live dot.
           R87-A1 (owner: "if I click on any one of the projects, then the
           left sidebar should apparently expand fully"): the click EXPANDS
@@ -533,13 +521,13 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
         {projectsQuery.isPending ? (
           /* R97-I part 2 (owner: a UI "aware of its states"): the projects
              strip holds its SHAPE while the list is in flight — 4 skeleton
-             tiles in the real tile button's exact geometry (w-10 h-10, the
-             primitives' 12px radius), never a blank rail that reads as
-             "no projects". Decorative on purpose: the rail stays quiet; the
-             expanded sidebar owns the one role=status announcement. On
-             ERROR the rail renders nothing extra — the full sidebar owns the
-             retryable error surface. */
-          <SkeletonRows rows={4} rowClassName="w-10 h-10" gap={1.5} />
+             tiles in the real tile button's exact geometry (R100-F: w-9 h-9,
+             the 48px rail's 36px buttons, rounded-lg), never a blank rail
+             that reads as "no projects". Decorative on purpose: the rail
+             stays quiet; the expanded sidebar owns the one role=status
+             announcement. On ERROR the rail renders nothing extra — the full
+             sidebar owns the retryable error surface. */
+          <SkeletonRows rows={4} rowClassName="w-9 h-9" gap={1.5} />
         ) : (
           projects.slice(0, 10).map((project) => {
             const active = activeProjectId === project.id;
@@ -554,23 +542,20 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
                 aria-label={`Open ${project.name}`}
                 title={project.name}
                 aria-current={active ? "page" : undefined}
-                className="relative w-10 h-10 shrink-0 grid place-items-center rounded-[12px] transition-all duration-200"
+                // R100-F: 36px rounded-lg; the active tint follows the
+                // project's own color (dynamic — the JS leg); hover = the
+                // CSS wash (no JS handlers); the border drops 1.5→1px.
+                className="relative w-9 h-9 shrink-0 grid place-items-center rounded-lg transition-colors hover:bg-hover"
                 style={{
-                  background: active ? withAlpha(project.color, 0.14) : "transparent",
-                  border: active ? `1.5px solid ${withAlpha(project.color, 0.4)}` : "1.5px solid transparent",
-                }}
-                onMouseEnter={(e) => {
-                  if (!active) e.currentTarget.style.background = styles.sidebarHover;
-                }}
-                onMouseLeave={(e) => {
-                  if (!active) e.currentTarget.style.background = "transparent";
+                  background: active ? withAlpha(project.color, 0.14) : undefined,
+                  border: active ? `1px solid ${withAlpha(project.color, 0.4)}` : "1px solid transparent",
                 }}
               >
-                <ProjectTile color={project.color} name={project.name} size={26} radius={8} fontSize={11} />
+                <ProjectTile color={project.color} name={project.name} />
                 {running && (
                   <span
                     aria-label="Running"
-                    className="absolute -top-0.5 -right-0.5 w-[10px] h-[10px] rounded-full border-2"
+                    className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2"
                     style={{ background: styles.accent, borderColor: styles.sidebarBg }}
                   />
                 )}
@@ -588,7 +573,7 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
           entry — R100-E1: it navigates to /settings, where the page's own
           nav column takes over). */}
       <NotificationBell collapsed />
-      {railBtn("Settings", <Settings size={17} strokeWidth={2} />, settingsActive, () => navigate("/settings"), "rail-settings", true)}
+      {railBtn("Settings", <Settings size={16} strokeWidth={2} />, settingsActive, () => navigate("/settings"), "rail-settings", true)}
     </div>
   );
 }
@@ -598,25 +583,26 @@ function NavButton({
 }: {
   icon: typeof LayoutDashboard; label: string; active: boolean; onClick: () => void;
 }) {
-  const styles = useThemeStyles();
+  // R100-F (research §C2 P2): 40→32px row (the row table), 13px/400 label
+  // (500 + accent when active) — the E1 settings-nav selection grammar
+  // (TOKENS §6): accent text + bg-accent-soft + the 2px accent bar on the
+  // leading edge. The ROUND-42 solid-accent fill + accent glow is retired;
+  // hover is the CSS wash (the JS handlers are gone).
   return (
     <button
       onClick={onClick}
       aria-current={active ? "page" : undefined}
-      className="h-10 flex items-center px-3 gap-2.5 rounded-[12px] transition-all duration-200 text-[13px] font-bold"
-      style={{
-        background: active ? styles.accent : "transparent",
-        color: active ? styles.accentText : styles.textSecondary,
-        boxShadow: active ? `0 2px 8px ${withAlpha(styles.accent, 0.3)}` : "none",
-      }}
-      onMouseEnter={(e) => {
-        if (!active) { e.currentTarget.style.background = styles.sidebarHover; e.currentTarget.style.color = styles.text; }
-      }}
-      onMouseLeave={(e) => {
-        if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = styles.textSecondary; }
-      }}
+      className={cn(
+        "relative flex h-8 items-center gap-2.5 rounded-lg px-3 text-[13px] transition-colors",
+        active
+          ? "bg-accent-soft font-medium text-accent"
+          : "font-normal text-muted hover:bg-hover",
+      )}
     >
-      <Icon size={16} strokeWidth={2} className="shrink-0" />
+      {active ? (
+        <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />
+      ) : null}
+      <Icon size={16} strokeWidth={2} className="shrink-0" aria-hidden />
       <span>{label}</span>
     </button>
   );
@@ -640,36 +626,39 @@ function UsageButton() {
  * Sessions live on INSIDE each project (its chat conversations). */
 
 /** Prominent Settings button (owner round-33): a card-style row — icon tile
- * in an accent-tinted square + bold label — visually distinct from the plain
+ * in an accent-tinted square + label — visually distinct from the plain
  * nav rows above the divider. R60-C: expanded card only (the collapsed gear
  * tile went with the rail). R99-C: carries the update-pending DOT while a
  * newer release is waiting (the rail's settings gear mirrors it).
+ * R100-F: 44→32px (the row table), rounded-lg, 13px/400 (500 when active),
+ * hover = the CSS border-strong + bg wash (the lift + softShadow hover pair
+ * is retired — resting UI never fidgets).
  */
 function SettingsButton() {
   const styles = useThemeStyles();
   const navigate = useNavigate();
   const active = useLocation().pathname.startsWith("/settings");
-  const [hovered, setHovered] = useState(false);
   return (
     <button
       onClick={() => navigate("/settings")}
       aria-current={active ? "page" : undefined}
-      className="relative w-full h-11 flex items-center gap-2.5 px-2.5 rounded-[12px] border-[1.5px] transition-all hover:-translate-y-px"
-      style={{
-        background: active ? withAlpha(styles.accent, 0.12) : styles.card,
-        borderColor: active ? withAlpha(styles.accent, 0.4) : styles.border,
-        boxShadow: hovered ? styles.softShadow : "none",
-      }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      className={cn(
+        "relative w-full h-8 flex items-center gap-2.5 px-2.5 rounded-lg border-[1.5px] border-line transition-colors",
+        active
+          ? "bg-accent-soft"
+          : "bg-card hover:bg-hover hover:border-[color:var(--ac-border-strong)]",
+      )}
+      style={active ? { borderColor: withAlpha(styles.accent, 0.4) } : undefined}
     >
+      {/* R100-F: the icon tile drops to the CSS-var leg (bg-accent-soft +
+          text-accent utilities, rounded-lg) and the label to the weight law
+          (400, 500 + accent when active). */}
       <span
-        className="w-7 h-7 rounded-[9px] grid place-items-center shrink-0"
-        style={{ background: withAlpha(styles.accent, 0.13), color: styles.accent }}
+        className="w-7 h-7 rounded-lg grid place-items-center shrink-0 bg-accent-soft text-accent"
       >
         <Settings size={14} />
       </span>
-      <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+      <span className={cn("text-[13px] font-normal text-ink", active && "font-medium text-accent")}>
         Settings
       </span>
       {/* R99-C: the update-pending dot (see UpdatePendingDot above). */}
@@ -759,20 +748,15 @@ function ProjectSection() {
 
   return (
     <>
-      {/* ROUND-42: refreshed section header — bold uppercase label + a mono
-          count chip + a ghost icon Add button (owner: "the project headings
-          do not look proper… make them modern, cleaner, smoother"). */}
+      {/* R100-F: the header rides THE one kicker (ui/Kicker) + the
+          meta-mono count chip (10px floor, 500) + a 28px Add button on the
+          accent-soft leg (the ROUND-42 black-cap + scale hover is retired). */}
       <div className="flex items-center justify-between px-4 pb-2">
         <div className="flex items-center gap-1.5 min-w-0">
-          <span
-            className="text-[10.5px] font-black uppercase tracking-[0.14em]"
-            style={{ color: styles.textTertiary }}
-          >
-            Projects
-          </span>
+          <Kicker>Projects</Kicker>
           {projects.length > 0 ? (
             <span
-              className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full tabular-nums"
+              className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full tabular-nums"
               style={{ color: styles.textTertiary, background: styles.subtle }}
             >
               {projects.length}
@@ -783,22 +767,23 @@ function ProjectSection() {
           onClick={() => setShowAddDialog(true)}
           title="Add project"
           aria-label="Add project"
-          className="w-6 h-6 grid place-items-center rounded-[8px] transition-all hover:scale-110 active:scale-95"
-          style={{ color: styles.accent, background: withAlpha(styles.accent, 0.1) }}
+          // R100-F: a ≥28px target on the CSS-var leg (bg-accent-soft →
+          // bg-accent-faded hover; the scale-110 fidget is retired).
+          className="w-7 h-7 grid place-items-center rounded-lg bg-accent-soft text-accent transition-colors hover:bg-accent-faded"
         >
-          <Plus size={13} strokeWidth={2.5} />
+          <Plus size={14} strokeWidth={2.5} />
         </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-2.5 pb-2 space-y-0.5" style={{ scrollbarWidth: "thin" }}>
         {/* R97-I part 2 (owner: a UI "aware of its states") — LOADING: 4
-            skeleton rows in the real ProjectRow's exact geometry (h-11, the
-            primitives' 12px radius, the list's space-y-0.5 rhythm) hold the
+            skeleton rows in the real ProjectRow's exact geometry (R100-F:
+            h-[30px], the list's space-y-0.5 rhythm) hold the
             section open while the query is in flight. Pre-R97 this area
             flashed the FALSE "Add your first project" on every first paint. */}
         {projectsQuery.isPending && (
           <div role="status" aria-label="Loading projects" data-projects-skeleton>
-            <SkeletonRows rows={4} rowClassName="h-11" gap={0.5} />
+            <SkeletonRows rows={4} rowClassName="h-[30px]" gap={0.5} />
           </div>
         )}
 
@@ -810,13 +795,15 @@ function ProjectSection() {
           <div
             role="alert"
             data-projects-load-error
-            className="h-10 flex items-center justify-between gap-2 rounded-[12px] border-[1.5px] px-3"
+            // R100-F: rounded-lg + the 1px hairline; 11.5→12px; the weight
+            // law (600 error titles, 600 buttons).
+            className="h-10 flex items-center justify-between gap-2 rounded-lg border px-3"
             style={{
               borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
               background: withAlpha(SEMANTIC_COLORS.danger, styles.isDark ? 0.08 : 0.05),
             }}
           >
-            <span className="text-[11.5px] font-bold truncate" style={{ color: SEMANTIC_COLORS.danger }}>
+            <span className="text-[12px] font-semibold truncate" style={{ color: SEMANTIC_COLORS.danger }}>
               Projects failed to load
             </span>
             <button
@@ -826,7 +813,7 @@ function ProjectSection() {
                 void sessionsQuery.refetch();
               }}
               aria-label="Retry loading projects"
-              className="shrink-0 h-7 px-2.5 rounded-lg text-[11px] font-bold border transition-opacity hover:opacity-85"
+              className="shrink-0 h-7 px-2.5 rounded-lg text-[11px] font-semibold border transition-opacity hover:opacity-85"
               style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
             >
               Retry
@@ -842,7 +829,7 @@ function ProjectSection() {
           <p
             role="alert"
             data-sessions-load-error
-            className="px-2 py-1.5 text-[10.5px]"
+            className="px-2 py-1.5 text-[11px]"
             style={{ color: styles.textTertiary }}
           >
             Sessions failed to load — Retry above reloads them too.
@@ -857,8 +844,8 @@ function ProjectSection() {
           return (
             <div key={project.id}>
               {/* Project row — click toggles sessions; the + button starts a
-                  new session directly (owner round-33). ROUND-42: gradient
-                  tile + the running animation lives HERE when collapsed. */}
+                  new session directly (owner round-33). ROUND-42: the running
+                  animation lives HERE when collapsed. */}
               <ProjectRow
                 project={project}
                 active={isActive}
@@ -889,7 +876,7 @@ function ProjectSection() {
                         />
                       ))}
                       {projSessions.length > 8 && (
-                        <span className="block px-2 py-1 text-[10px]" style={{ color: styles.textTertiary }}>
+                        <span className="block px-2 py-1 text-[10px] tabular-nums" style={{ color: styles.textTertiary }}>
                           +{projSessions.length - 8} more
                         </span>
                       )}
@@ -908,10 +895,13 @@ function ProjectSection() {
         {!projectsQuery.isPending && !projectsQuery.isError && projects.length === 0 && (
           <button
             onClick={() => setShowAddDialog(true)}
-            className="h-10 w-full flex items-center justify-center gap-2 rounded-[14px] border-[1.5px] border-dashed text-[12px] font-bold transition-all hover:-translate-y-px"
-            style={{ borderColor: styles.border, background: "transparent", color: styles.textTertiary }}
+            // R100-F: rounded-lg + the CSS hover wash (the -translate-y-px
+            // lift is retired — MOTION.md §4: list-row hover = a wash, no
+            // movement); 500 weight, the border on the utility leg.
+            className="h-10 w-full flex items-center justify-center gap-2 rounded-lg border border-dashed border-line text-[12px] font-medium transition-colors hover:bg-hover"
+            style={{ background: "transparent", color: styles.textTertiary }}
           >
-            <Plus size={13} strokeWidth={2.5} />
+            <Plus size={14} strokeWidth={2.5} />
             <span>Add your first project</span>
           </button>
         )}
@@ -939,25 +929,22 @@ function ProjectRow({
   onNewSession: () => void;
 }) {
   const styles = useThemeStyles();
-  const [hovered, setHovered] = useState(false);
 
   return (
     <div
-      className="group relative h-11 flex items-center gap-2.5 rounded-[12px] px-2 cursor-pointer transition-all duration-200"
+      // R100-F (research §C2 P2): 44→30px (the row table), rounded-lg, the
+      // flat 24px tile, a 12px/400 label (500 + ink when active). Hover =
+      // the CSS wash + group-hover action reveal — the JS hovered state is
+      // retired (TOKENS §6); the border drops 1.5→1px.
+      className="group relative h-[30px] flex items-center gap-2 rounded-lg px-2 cursor-pointer transition-colors hover:bg-hover"
       style={{
         // ROUND-48 (R48-a): the active highlight follows the PROJECT'S OWN
         // color (withAlpha tint), not the theme accent — with per-project
         // palette colors the whole row now reads as belonging to that
         // project (owner: "projects should be given different colors").
-        border: active ? `1.5px solid ${withAlpha(project.color, 0.4)}` : "1.5px solid transparent",
-        background: active
-          ? withAlpha(project.color, 0.1)
-          : hovered
-            ? styles.sidebarHover
-            : "transparent",
+        border: active ? `1px solid ${withAlpha(project.color, 0.4)}` : "1px solid transparent",
+        background: active ? withAlpha(project.color, 0.1) : undefined,
       }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
       onClick={onToggle}
       role="button"
       tabIndex={0}
@@ -965,13 +952,12 @@ function ProjectRow({
       aria-expanded={expanded}
       aria-label={`Project ${project.name} — click to ${expanded ? "collapse" : "expand"} sessions${running ? " (working)" : ""}`}
     >
-      {/* ROUND-42: gradient tile (owner: "the project's actual images need
-          to be a bit better"). */}
-      <ProjectTile color={project.color} name={project.name} size={32} radius={10} fontSize={13} />
+      {/* R100-F: the flat tile (see ProjectTile) — the ROUND-42 gradient
+          decoration is retired. */}
+      <ProjectTile color={project.color} name={project.name} />
       <div className="flex min-w-0 flex-1 flex-col">
         <span
-          className="text-[12px] font-bold truncate"
-          style={{ color: active ? styles.text : styles.textSecondary }}
+          className={cn("text-[12px] font-normal text-muted truncate", active && "font-medium text-ink")}
         >
           {project.name}
         </span>
@@ -991,21 +977,18 @@ function ProjectRow({
         </span>
       ) : null}
       {/* ROUND-33 (owner): the "+ new session" button lives ON the project row
-          itself; no chevron, no session count. */}
+          itself; no chevron, no session count. R100-F: a ≥28px target,
+          rounded-lg, revealed by the CSS group-hover (no JS state, no
+          scale fidget). */}
       <button
         onClick={(e) => { e.stopPropagation(); onNewSession(); }}
         aria-label={`Start new session in ${project.name}`}
         title="New session"
-        className="relative z-20 w-6 h-6 grid place-items-center rounded-md transition-all hover:scale-110"
-        style={{
-          color: styles.accent,
-          opacity: hovered ? 1 : 0,
-          background: hovered ? withAlpha(styles.accent, 0.1) : "transparent",
-        }}
+        className="relative z-20 w-7 h-7 grid place-items-center rounded-lg bg-accent-soft text-accent opacity-0 transition-opacity group-hover:opacity-100"
       >
-        <Plus size={13} strokeWidth={2.5} />
+        <Plus size={14} strokeWidth={2.5} />
       </button>
-      <DeleteProjectButton projectId={project.id} projectName={project.name} visible={hovered} />
+      <DeleteProjectButton projectId={project.id} projectName={project.name} />
     </div>
   );
 }
@@ -1023,15 +1006,21 @@ export function deriveSessionRowState(session: Session, running: boolean): Sessi
 /**
  * ROUND-33 SessionRow · ROUND-43 depth pass (owner: “each individual session
  * could be given a dedicated border around it… the icons could be improved
- * and handled better”). Every row is now its own bordered card — hairline
- * neutral border at rest, stronger on hover, accent-tinted when ACTIVE —
- * with a 1-level shadow + inset highlight matching the R42 ProjectTile
- * gradient language. The leading icon is STATE-AWARE: spinner while a turn
+ * and handled better”). Every row is its own bordered card — hairline
+ * neutral border at rest, stronger on hover, accent-tinted when ACTIVE.
+ * R100-F (research §C2 P2): the 26px-row density snap (the row table) +
+ * the ROUND-43 decorative inner-shadow/inset-highlight depth pass is
+ * RETIRED (flat working rows — the same flattening the ProjectTile got);
+ * hover is the CSS wash + group-hover action reveal (no JS state), the
+ * active bar is the E1 selection grammar (2px accent bar), the label is
+ * 11px/400 (500 + ink when active — the 700 inline weight is gone), and
+ * the border is the 1px hairline everywhere.
+ * The leading icon stays STATE-AWARE: spinner while a turn
  * is in flight, chat bubble at rest, alert glyph on failed/cancelled
  * sessions. The R38 pixel-stream on the right is preserved and composes
  * with the running icon (rail-side flourish + at-a-glance state).
- * ACTIVE session (matching the ?session= URL param) keeps the accent fill,
- * bold text + 2.5px indicator bar. Hover reveals RENAME (round-33) and
+ * ACTIVE session (matching the ?session= URL param) keeps the accent tint,
+ * 500-weight text + the indicator bar. Hover reveals RENAME (round-33) and
  * DELETE (round-30). Rename switches to an inline input (Enter · Escape).
  */
 function SessionRow({
@@ -1048,7 +1037,6 @@ function SessionRow({
   const location = useLocation();
   const deleteSession = useDeleteSession();
   const renameSession = useRenameSession();
-  const [hovered, setHovered] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title ?? "");
   // ROUND-38: pixelated activity indicator on the right when this session
@@ -1090,7 +1078,10 @@ function SessionRow({
           }}
           onBlur={commitRename}
           aria-label="Rename session"
-          className="flex-1 min-w-0 h-6 px-2 rounded-[6px] border-[1.5px] text-[11px] outline-none"
+          // R100-F: rounded-sm (the 4px step) + the 1px hairline; focus =
+          // the GLOBAL :focus-visible rule (the outline-none that beat it
+          // is gone).
+          className="flex-1 min-w-0 h-6 px-2 rounded-sm border text-[11px]"
           style={{
             background: styles.card,
             borderColor: withAlpha(styles.accent, 0.5),
@@ -1100,118 +1091,101 @@ function SessionRow({
         <button
           onClick={() => setEditing(false)}
           aria-label="Cancel rename"
-          className="w-5 h-5 grid place-items-center rounded-md shrink-0"
+          className="w-6 h-6 grid place-items-center rounded-lg shrink-0 transition-colors hover:bg-hover"
           style={{ color: styles.textTertiary }}
         >
-          <X size={10} />
+          <X size={12} />
         </button>
       </div>
     );
   }
-
-  // ROUND-43: the dedicated border — neutral hairline at rest, stronger on
-  // hover, accent-tinted on the active row; a failed session leans red so
-  // the problem row is findable at a glance.
-  const borderColor = active
-    ? withAlpha(styles.accent, 0.45)
-    : state === "failed"
-      ? withAlpha(SEMANTIC_COLORS.danger, hovered ? 0.5 : 0.35)
-      : hovered
-        ? styles.border
-        : styles.borderSubtle;
-  // Depth consistent with the R42 ProjectTile treatment: a 1-level shadow +
-  // a soft inset top highlight (instead of heavier borders).
-  const rowShadow = active
-    ? styles.isDark
-      ? `inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 4px ${withAlpha(styles.accent, 0.25)}`
-      : `inset 0 1px 0 rgba(255,255,255,0.8), 0 1px 4px ${withAlpha(styles.accent, 0.18)}`
-    : styles.isDark
-      ? "inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 2px rgba(0,0,0,0.22)"
-      : "inset 0 1px 0 rgba(255,255,255,0.65), 0 1px 2px rgba(0,0,0,0.05)";
 
   return (
     <div
       data-session-row
       data-state={state}
       data-active={active ? "true" : "false"}
-      className="group relative flex items-center gap-0.5 rounded-[9px] pl-0.5 pr-1 py-[3px] transition-all duration-150"
-      style={{
-        border: `1px solid ${borderColor}`,
-        background: active
-          ? withAlpha(styles.accent, 0.1)
+      // R100-F: the dedicated border (the owner's R43 ask) on the utility
+      // leg — borderSubtle at rest, border on hover — with the dynamic
+      // ACTIVE/FAILED tints overriding via the JS inline leg; backgrounds:
+      // subtle at rest, the hover wash, accent-soft when active, the danger
+      // tints when failed (all CSS classes — zero JS hover state).
+      className={cn(
+        "group relative flex items-center gap-0.5 rounded-lg pl-0.5 pr-1 border transition-colors border-[color:var(--ac-border-subtle)]",
+        active
+          ? "bg-accent-soft"
           : state === "failed"
-            ? hovered
-              ? withAlpha(SEMANTIC_COLORS.danger, 0.08)
-              : withAlpha(SEMANTIC_COLORS.danger, 0.05)
-            : hovered
-              ? styles.sidebarHover
-              : styles.subtle,
-        boxShadow: rowShadow,
+            ? "bg-[color-mix(in_srgb,var(--ac-danger)_5%,transparent)] hover:bg-[color-mix(in_srgb,var(--ac-danger)_8%,transparent)]"
+            : "bg-subtle hover:bg-hover hover:border-line",
+      )}
+      style={{
+        borderColor: active
+          ? withAlpha(styles.accent, 0.45)
+          : state === "failed"
+            ? withAlpha(SEMANTIC_COLORS.danger, 0.35)
+            : undefined,
       }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
     >
       {/* Active indicator bar — the clear "currently selected" signal,
-          sitting just inside the row's border. */}
+          sitting just inside the row's border (the E1 selection grammar). */}
       <span
-        className="absolute left-[3px] top-1 bottom-1 w-[2.5px] rounded-full transition-opacity"
-        style={{ background: styles.accent, opacity: active ? 1 : 0 }}
+        className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-accent transition-opacity"
+        style={{ opacity: active ? 1 : 0 }}
         aria-hidden
       />
       <button
         onClick={() => navigate(`/project/${projectId}/chat?session=${session.id}`)}
         aria-current={active ? "true" : undefined}
-        className="flex-1 min-w-0 h-[26px] flex items-center gap-2 px-2 text-[11px] truncate"
-        style={{
-          color: active ? styles.text : hovered ? styles.textSecondary : styles.textTertiary,
-          fontWeight: active ? 700 : 500,
-        }}
+        className={cn(
+          "flex-1 min-w-0 h-[26px] flex items-center gap-2 px-2 text-[11px] font-normal text-muted truncate",
+          active && "font-medium text-ink",
+        )}
         title={session.title ?? "Untitled"}
       >
         {/* ROUND-43 state-aware icon: running → spinner, failed → alert,
-            idle → chat bubble. */}
+            idle → chat bubble. R100-F: 12px (the row-icon tier). */}
         {state === "running" ? (
           <LoaderCircle
-            size={11}
-            className="shrink-0 animate-spin"
-            style={{ color: styles.accent }}
+            size={12}
+            className="shrink-0 animate-spin text-accent"
             aria-label="Session is working"
           />
         ) : state === "failed" ? (
           <CircleAlert
-            size={11}
-            className="shrink-0"
-            style={{ color: SEMANTIC_COLORS.danger }}
+            size={12}
+            className="shrink-0 text-[color:var(--ac-danger)]"
             aria-label="Session failed"
           />
         ) : (
           <MessageSquare
-            size={10}
+            size={12}
             className="shrink-0"
             style={{ color: active ? styles.accent : styles.textTertiary }}
           />
         )}
         <span className="truncate">{session.title ?? "Untitled"}</span>
       </button>
-      {/* Rename (round-33) — ROUND-42: smooth opacity transition. */}
+      {/* Rename (round-33) — revealed by the CSS group-hover (R100-F: the
+          JS opacity state + the fixed black/10 overlay are retired for the
+          theme-correct hover wash). */}
       <button
         onClick={(e) => { e.stopPropagation(); setDraft(session.title ?? ""); setEditing(true); }}
         aria-label={`Rename session ${session.title ?? "Untitled"}`}
         title="Rename session"
-        className="relative z-10 w-5 h-5 grid place-items-center rounded-md transition-opacity duration-150 hover:bg-black/10"
-        style={{ color: styles.textTertiary, opacity: hovered ? 1 : 0 }}
+        className="relative z-10 w-6 h-6 grid place-items-center rounded-lg transition-opacity duration-150 opacity-0 group-hover:opacity-100 hover:bg-hover"
+        style={{ color: styles.textTertiary }}
       >
-        <Pencil size={10} />
+        <Pencil size={12} />
       </button>
       <button
         onClick={(e) => { e.stopPropagation(); remove(); }}
         disabled={deleteSession.isPending}
         aria-label={`Delete session ${session.title ?? "Untitled"}`}
         title="Delete session"
-        className="relative z-10 w-5 h-5 grid place-items-center rounded-md transition-opacity duration-150 hover:bg-black/10"
-        style={{ color: styles.textTertiary, opacity: hovered ? 1 : 0 }}
+        className="relative z-10 w-6 h-6 grid place-items-center rounded-lg transition-opacity duration-150 opacity-0 group-hover:opacity-100 hover:bg-hover"
+        style={{ color: styles.textTertiary }}
       >
-        <Trash2 size={10} />
+        <Trash2 size={12} />
       </button>
       {/* ROUND-38 (owner: "the currently running session will have some
           animation to it, like a pixelated kind of animation playing along
@@ -1233,9 +1207,9 @@ function SessionRow({
 }
 
 function DeleteProjectButton({
-  projectId, projectName, visible,
+  projectId, projectName,
 }: {
-  projectId: string; projectName: string; visible: boolean;
+  projectId: string; projectName: string;
 }) {
   const styles = useThemeStyles();
   const { remove } = useDeleteProjectSimple();
@@ -1244,10 +1218,12 @@ function DeleteProjectButton({
       onClick={(e) => { e.stopPropagation(); remove(projectId); }}
       aria-label={`Delete ${projectName}`}
       title={`Delete ${projectName}`}
-      className="relative z-20 w-6 h-6 grid place-items-center rounded-md transition-opacity"
-      style={{ color: styles.textTertiary, opacity: visible ? 1 : 0 }}
+      // R100-F: revealed by the CSS group-hover (the `visible` prop + the
+      // parent's JS hovered state are retired); rounded-lg + the hover wash.
+      className="relative z-20 w-6 h-6 grid place-items-center rounded-lg transition-opacity opacity-0 group-hover:opacity-100 hover:bg-hover"
+      style={{ color: styles.textTertiary }}
     >
-      <Trash2 size={11} />
+      <Trash2 size={12} />
     </button>
   );
 }
@@ -1350,24 +1326,31 @@ function AddProjectDialog({
   return (
     <div className="fixed inset-0 z-50 grid place-items-center" style={{ background: "rgba(0,0,0,0.55)" }} onClick={onClose}>
       <div
-        className="w-[min(440px,90vw)] rounded-[24px] border-[1.5px] p-5"
-        style={{ background: styles.card, borderColor: styles.borderStrong, boxShadow: styles.bentoShadow }}
+        // R100-F: the ladder sweep — dialog radius 24→12px (rounded-xl, the
+        // dialogs tier of TOKENS §4), the floating softShadow (bentoShadow is
+        // wizard + primary CTA only), the section-tier heading (13px/600 —
+        // the 15px font-black is retired), the kicker-tier form label, the
+        // rounded-lg 40px input + Browse (1px hairlines), and the CTA at
+        // 13px/600 with NO glow and NO hover-scale (the chat Send precedent,
+        // §C4.6) — hover = opacity only, the universal press stays.
+        className="w-[min(440px,90vw)] rounded-xl border-[1.5px] p-5"
+        style={{ background: styles.card, borderColor: styles.borderStrong, boxShadow: styles.softShadow }}
         onClick={(e) => e.stopPropagation()}
         role="dialog" aria-modal="true" aria-label="Add a new project"
       >
-        <h3 className="text-[15px] font-black tracking-tight mb-4" style={{ color: styles.text }}>Add New Project</h3>
+        <h3 className="text-[13px] font-semibold mb-4" style={{ color: styles.text }}>Add New Project</h3>
         <div className="flex flex-col gap-3.5">
           <div>
-            <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest" style={{ color: styles.textTertiary }}>Project Folder</label>
+            <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: styles.textTertiary }}>Project Folder</label>
             <div className="flex gap-2">
               <input ref={pathRef} value={rootPath} onChange={(e) => setRootPath(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && void submit()}
                 placeholder="C:\projects\my-app  —  the project takes the folder's name"
-                className="h-12 min-w-0 flex-1 rounded-[14px] border-[1.5px] px-4 font-mono text-[12px] outline-none"
+                className="h-10 min-w-0 flex-1 rounded-lg border px-4 font-mono text-[12px]"
                 style={is} />
               {isTauri() || !demoData ? (
                 <button onClick={() => void handleBrowse()} disabled={picking}
-                  className="h-12 shrink-0 flex items-center gap-1.5 rounded-[14px] border-[1.5px] px-3.5 text-[12px] font-bold disabled:opacity-60"
+                  className="h-10 shrink-0 flex items-center gap-1.5 rounded-lg border px-3.5 text-[12px] font-semibold disabled:opacity-60"
                   style={{ background: styles.subtle, borderColor: styles.border, color: styles.textSecondary }}>
                   <FolderOpen size={13} /> Browse
                 </button>
@@ -1376,15 +1359,15 @@ function AddProjectDialog({
             {pickHint && <p className="mt-1.5 text-[11px]" style={{ color: styles.textTertiary }}>{pickHint}</p>}
           </div>
           {formError && (
-            <p role="alert" className="rounded-[12px] border px-3 py-2 text-[12px]"
+            <p role="alert" className="rounded-lg border px-3 py-2 text-[12px] font-semibold"
               style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3), background: withAlpha(SEMANTIC_COLORS.danger, 0.08), color: SEMANTIC_COLORS.danger }}>
               {formError}
             </p>
           )}
           <button onClick={() => void submit()}
             disabled={rootPath.trim().length === 0 || createProject.isPending}
-            className="h-12 w-full rounded-full font-black text-[14px] tracking-[-0.01em] transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:hover:scale-100"
-            style={{ background: styles.accent, color: styles.accentText, border: `1.5px solid ${styles.accent}`, boxShadow: `0 4px 16px ${withAlpha(styles.accent, 0.25)}` }}>
+            className="h-10 w-full rounded-full font-semibold text-[13px] transition-[opacity,transform] hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
+            style={{ background: styles.accent, color: styles.accentText, border: `1px solid ${styles.accent}` }}>
             {createProject.isPending ? "Creating…" : "Create Project"}
           </button>
         </div>

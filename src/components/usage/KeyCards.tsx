@@ -25,9 +25,11 @@ import { formatCompactTokens, formatCost } from "./usage-helpers";
  *     provider" note (tombstoned rows, migration 0010).
  *
  * Design: the neighboring cards' DNA (ModelCards/ProjectsDrilldown) —
- * useThemeStyles colors, rounded-[12px] cards with subtle borders, mono
+ * useThemeStyles colors, rounded-xl cards with subtle borders, mono
  * masked previews, tabular-nums numerics, a share-of-total bar relative to
  * the priciest key, and the semantic danger color only for removals.
+ * (R100-G: radii/weights snapped to the round-100 ladder — the label tier
+ * is 11px/500/0.08em, values carry 600, cards ride the 16px step.)
  */
 
 /** One rendered card: the join of a pool slot with its usage rollup. */
@@ -141,17 +143,17 @@ function KeyCard({
   return (
     <motion.article
       variants={staggerItem}
-      className="rounded-[12px] border-[1.5px] p-4"
+      className="rounded-2xl border-[1.5px] p-4"
       style={{ backgroundColor: bg, borderColor: border, boxShadow: softShadow }}
       aria-label={`API key ${card.providerName} ${card.slotLabel}`}
     >
       <div className="flex items-baseline justify-between gap-2">
         <div className="flex min-w-0 items-baseline gap-2">
-          <span className="truncate text-[13px] font-bold" style={{ color: text }} title={card.providerName}>
+          <span className="truncate text-[13px] font-semibold" style={{ color: text }} title={card.providerName}>
             {card.providerName}
           </span>
           <span
-            className="shrink-0 font-mono text-[10px] font-bold uppercase tracking-wide"
+            className="shrink-0 font-mono text-[10px] font-medium uppercase tracking-[0.08em]"
             style={{ color: card.slot === 0 ? accent : textSecondary }}
           >
             {card.slotLabel}
@@ -191,11 +193,11 @@ function KeyCard({
 
       <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="min-w-0">
-          <dt className="text-[10px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
             Turns
           </dt>
           <dd
-            className="mt-0.5 truncate text-[12px] font-bold tabular-nums"
+            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
             style={{ color: text }}
             title={`${(usage?.requests ?? 0).toLocaleString()} turns on this key (one usage row per turn — the ROUND-83 honest relabel)`}
           >
@@ -203,11 +205,11 @@ function KeyCard({
           </dd>
         </div>
         <div className="min-w-0">
-          <dt className="text-[10px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
             Sent / Recv
           </dt>
           <dd
-            className="mt-0.5 truncate text-[12px] font-bold tabular-nums"
+            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
             style={{ color: text }}
             title={`${(usage?.inputTokens ?? 0).toLocaleString()} sent · ${(usage?.outputTokens ?? 0).toLocaleString()} received`}
           >
@@ -215,11 +217,11 @@ function KeyCard({
           </dd>
         </div>
         <div className="min-w-0">
-          <dt className="text-[10px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
             Cost
           </dt>
           <dd
-            className="mt-0.5 truncate text-[12px] font-bold tabular-nums"
+            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
             style={{ color: text }}
             title={`${formatCost(usage?.costUsd ?? 0)} on this key`}
           >
@@ -227,17 +229,17 @@ function KeyCard({
           </dd>
         </div>
         <div className="min-w-0">
-          <dt className="text-[10px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
             Last used
           </dt>
-          <dd className="mt-0.5 truncate text-[12px] font-bold" style={{ color: text }}>
+          <dd className="mt-0.5 truncate text-[12px] font-semibold tabular-nums" style={{ color: text }}>
             {usage ? formatWhen(usage.lastUsedAt) : <span style={{ color: textTertiary }}>—</span>}
           </dd>
         </div>
       </dl>
 
       {usage === null && (
-        <p className="mt-2 text-[11px] font-medium" style={{ color: textTertiary }}>
+        <p className="mt-2 text-[11px]" style={{ color: textTertiary }}>
           Not used yet — requests, tokens and cost land here the moment a turn runs on this key.
         </p>
       )}
@@ -282,11 +284,11 @@ export function KeyCards({
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <KeyRound size={13} style={{ color: accent, opacity: 0.7 }} />
-          <h2 className="text-[11px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
             API keys
           </h2>
         </div>
-        <span className="text-[11px] font-medium" style={{ color: textSecondary }}>
+        <span className="text-[11px] tabular-nums" style={{ color: textSecondary }}>
           {cards.length === 1 ? "1 key" : `${cards.length} keys`} · {formatCost(totalCost)} all-time
         </span>
       </div>

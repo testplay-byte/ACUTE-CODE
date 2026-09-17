@@ -123,7 +123,7 @@ export function AppShell() {
       <div className="relative z-10 flex h-full gap-2 p-2">
         {showFloatingHamburger && <FloatingSidebarToggle />}
         {/* R60-C: showSidebar === appSidebarVisible on EVERY route — the
-            sidebar is either fully here (270px floating panel) or fully
+            sidebar is either fully here (240px floating panel) or fully
             absent (main takes the full width). */}
         {showSidebar && <Sidebar />}
         {/* Round-32: every route keeps the floating-panel language — the chat
@@ -149,13 +149,18 @@ export function AppShell() {
  * WEB DEV MODE ONLY — the desktop app's title-bar identity control owns the
  * toggle in Tauri, so this never renders there (AppShell gates it on
  * !isTauri()); its top offset is therefore the plain web-mode inset.
+ * R100-F (research §C2 P5): the magic top-[18px] left-[18px] pins snap to
+ * the FRAME-INSET token (top-2 left-2 — the App root's p-2, exactly where
+ * the sidebar panel lives), and the mark snaps to the grid/ladder
+ * (40px tile, 12px radius — the ladder step the 0.28-formula landed near).
  */
 function FloatingSidebarToggle() {
   const setAppSidebarVisible = useProjectChatStore((s) => s.setAppSidebarVisible);
   return (
-    <div className="fixed top-[18px] left-[18px] z-50">
+    <div className="fixed top-2 left-2 z-50">
       <AcuteLogo
-        size={38}
+        size={40}
+        radius={12}
         hoverToggle
         onClick={() => setAppSidebarVisible(true)}
         ariaLabel="Acute — show sidebar"

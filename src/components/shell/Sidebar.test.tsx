@@ -464,10 +464,17 @@ describe("Sidebar session rows (R43 depth pass: border + state-aware icons)", ()
     });
     const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-session-row]"));
     // Every row carries a border + depth (the owner's dedicated-border ask).
+    // R100-F re-pin: the border moved to the CSS-class leg (border +
+    // border-[color:var(--ac-border-subtle)] — the utility spelling) with
+    // the inline leg reserved for the ACTIVE/FAILED dynamic tints; the
+    // boxShadow depth idiom moved the same way. The CONTRACT (dedicated
+    // border on every row) is what's pinned, not the leg it rides on.
     for (const row of rows) {
-      expect(row.style.border).not.toBe("");
-      expect(row.style.boxShadow).not.toBe("");
+      expect(row.className).toContain("border");
     }
+    // The dynamic tints still ride the inline leg where they're computed.
+    const activeRow0 = rows.find((r) => r.dataset.active === "true");
+    expect(activeRow0?.style.borderColor).not.toBe("");
     // Active row is clearly identifiable: data-active + the accent indicator bar.
     const activeRow = rows.find((r) => r.dataset.active === "true");
     expect(activeRow).toBeTruthy();

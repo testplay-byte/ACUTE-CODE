@@ -208,31 +208,24 @@ export function ConsolePanel({ projectId, tab }: { projectId: string; tab: Right
         style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle }}
       >
         <Activity size={13} style={{ color: styles.accent }} className="shrink-0" />
-        <div className="flex-1 min-w-0 truncate text-[11.5px] font-semibold" style={{ color: styles.text }}>
+        <div className="flex-1 min-w-0 truncate text-[12px] font-semibold" style={{ color: styles.text }}>
           Console
         </div>
         <span
-          className="shrink-0 text-[9.5px] font-mono font-bold uppercase px-1.5 py-0.5 rounded-md"
+          className="shrink-0 text-[10px] font-mono font-medium uppercase px-1.5 py-0.5 rounded-md"
           style={{ color: styles.textTertiary, background: withAlpha(styles.textTertiary, 0.1) }}
           data-testid="console-count"
         >
           {entries.length} errors
         </span>
-        {/* Refresh: re-poll the engine ring now (frontend half is live). */}
+        {/* Refresh: re-poll the engine ring now (frontend half is live).
+            R100-G: hover = the CSS wash. */}
         <button
           onClick={() => void sidecarQuery.refetch()}
           aria-label="Refresh engine errors"
           title="Refresh engine errors"
-          className="w-5 h-5 grid place-items-center rounded shrink-0 transition-colors"
+          className="w-5 h-5 grid place-items-center rounded-lg shrink-0 transition-colors hover:bg-hover"
           style={{ color: styles.textTertiary }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = withAlpha(styles.accent, 0.12);
-            e.currentTarget.style.color = styles.accent;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = styles.textTertiary;
-          }}
         >
           <RefreshCw size={11} />
         </button>
@@ -242,16 +235,8 @@ export function ConsolePanel({ projectId, tab }: { projectId: string; tab: Right
           aria-label="Copy all entries"
           title="Copy all entries"
           disabled={entries.length === 0}
-          className="w-5 h-5 grid place-items-center rounded shrink-0 transition-colors disabled:opacity-40"
+          className="w-5 h-5 grid place-items-center rounded-lg shrink-0 transition-colors hover:bg-hover disabled:opacity-40"
           style={{ color: styles.textTertiary }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = withAlpha(styles.accent, 0.12);
-            e.currentTarget.style.color = styles.accent;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = styles.textTertiary;
-          }}
         >
           <Copy size={11} />
         </button>
@@ -261,16 +246,8 @@ export function ConsolePanel({ projectId, tab }: { projectId: string; tab: Right
           aria-label="Clear all errors"
           title="Clear all errors (frontend + engine)"
           disabled={clearing || entries.length === 0}
-          className="w-5 h-5 grid place-items-center rounded shrink-0 transition-colors disabled:opacity-40"
+          className="w-5 h-5 grid place-items-center rounded-lg shrink-0 transition-colors hover:bg-hover disabled:opacity-40"
           style={{ color: styles.textTertiary }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = withAlpha(SEMANTIC_COLORS.danger, 0.12);
-            e.currentTarget.style.color = SEMANTIC_COLORS.danger;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = styles.textTertiary;
-          }}
         >
           {clearing ? <LoaderCircle size={11} className="animate-spin" /> : <Trash2 size={11} />}
         </button>
@@ -288,23 +265,23 @@ export function ConsolePanel({ projectId, tab }: { projectId: string; tab: Right
           // the sibling error card (MemoryPanel's visual language).
           <div className="px-3 py-3">
             <div
-              className="rounded-[12px] px-3 py-3 flex flex-col gap-2"
+              className="rounded-xl px-3 py-3 flex flex-col gap-2"
               style={{
                 background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
                 border: `1px solid ${withAlpha(SEMANTIC_COLORS.danger, 0.3)}`,
               }}
             >
-              <div className="flex items-center gap-1.5 text-[11px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
                 Couldn&apos;t load engine errors
               </div>
-              <div className="text-[10.5px]" style={{ color: styles.textSecondary }}>
+              <div className="text-[11px]" style={{ color: styles.textSecondary }}>
                 {sidecarQuery.error instanceof Error
                   ? sidecarQuery.error.message
                   : "The sidecar didn't answer."}
               </div>
               <button
                 onClick={() => void sidecarQuery.refetch()}
-                className="self-start h-6 px-2.5 rounded-full text-[10px] font-bold inline-flex items-center gap-1.5"
+                className="self-start h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5"
                 style={{ background: styles.card, color: styles.text, border: `1px solid ${styles.border}` }}
               >
                 <RefreshCw size={10} /> Try again
@@ -332,7 +309,7 @@ export function ConsolePanel({ projectId, tab }: { projectId: string; tab: Right
           <div className="px-2.5 py-2.5 flex flex-col gap-1.5" data-testid="console-entries">
             {clearError !== null || showSidecarError ? (
               <div
-                className="rounded-[12px] px-3 py-2 text-[10.5px]"
+                className="rounded-xl px-3 py-2 text-[11px]"
                 style={{ color: SEMANTIC_COLORS.danger, background: withAlpha(SEMANTIC_COLORS.danger, 0.08) }}
                 role="alert"
                 data-testid="console-sidecar-error-note"
@@ -363,7 +340,7 @@ export function ConsolePanel({ projectId, tab }: { projectId: string; tab: Right
 
       {/* ── Footer hint: what this console watches ── */}
       <div
-        className="shrink-0 flex items-center gap-1.5 px-3 h-7 border-t text-[9.5px]"
+        className="shrink-0 flex items-center gap-1.5 px-3 h-7 border-t text-[10px]"
         style={{ borderColor: styles.border, color: styles.textTertiary, background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle }}
       >
         <Activity size={10} style={{ color: styles.accent }} className="shrink-0" />
@@ -399,7 +376,7 @@ function ConsoleRow({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.97 }}
       transition={{ duration: 0.14, ease }}
-      className="rounded-[12px] px-2.5 py-2 group relative"
+      className="rounded-xl px-2.5 py-2 group relative"
       style={{
         background: styles.isDark ? "rgba(0,0,0,0.14)" : styles.card,
         border: `1px solid ${styles.border}`,
@@ -411,7 +388,7 @@ function ConsoleRow({
       {/* Chip row: source+kind chip · ts · ×count badge */}
       <div className="flex items-center gap-2 min-w-0">
         <span
-          className="text-[9px] font-mono font-bold uppercase px-1.5 py-0.5 rounded-md shrink-0 max-w-[45%] truncate"
+          className="text-[10px] font-mono font-medium uppercase px-1.5 py-0.5 rounded-md shrink-0 max-w-[45%] truncate"
           style={{ color, background: withAlpha(color, 0.14) }}
           data-kind-chip={`${entry.source}/${entry.kind}`}
           title={`${entry.source} · ${entry.kind}`}
@@ -419,7 +396,7 @@ function ConsoleRow({
           {entry.source}/{entry.kind}
         </span>
         <span
-          className="text-[9.5px] shrink-0"
+          className="text-[10px] shrink-0"
           style={{ color: styles.textTertiary }}
           title={new Date(entry.ts).toISOString()}
         >
@@ -427,7 +404,7 @@ function ConsoleRow({
         </span>
         {entry.count > 1 ? (
           <span
-            className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-md shrink-0"
+            className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-md shrink-0 tabular-nums"
             style={{ color: SEMANTIC_COLORS.danger, background: withAlpha(SEMANTIC_COLORS.danger, 0.12) }}
             data-testid="console-entry-count"
             title={`fired ${entry.count} times`}
@@ -436,7 +413,8 @@ function ConsoleRow({
           </span>
         ) : null}
         <span className="flex-1" />
-        {/* Hover-revealed row actions: copy + dismiss. */}
+        {/* Hover-revealed row actions: copy + dismiss (R100-G: the hover
+            wash is the CSS class). */}
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -444,16 +422,8 @@ function ConsoleRow({
           }}
           aria-label={`Copy error: ${entry.message.slice(0, 60)}`}
           title="Copy this entry"
-          className="w-5 h-5 grid place-items-center rounded shrink-0 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+          className="w-5 h-5 grid place-items-center rounded-lg shrink-0 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-hover"
           style={{ color: styles.textTertiary }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = withAlpha(styles.accent, 0.12);
-            e.currentTarget.style.color = styles.accent;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = styles.textTertiary;
-          }}
         >
           <Copy size={11} />
         </button>
@@ -464,16 +434,8 @@ function ConsoleRow({
           }}
           aria-label={`Dismiss error: ${entry.message.slice(0, 60)}`}
           title="Dismiss this entry"
-          className="w-5 h-5 grid place-items-center rounded shrink-0 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+          className="w-5 h-5 grid place-items-center rounded-lg shrink-0 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-hover"
           style={{ color: styles.textTertiary }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = withAlpha(SEMANTIC_COLORS.danger, 0.12);
-            e.currentTarget.style.color = SEMANTIC_COLORS.danger;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = styles.textTertiary;
-          }}
         >
           <X size={11} />
         </button>
@@ -497,7 +459,7 @@ function ConsoleRow({
       {expanded ? (
         <pre
           data-testid="console-entry-detail"
-          className="mt-1.5 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-[8px] px-2 py-1.5 text-[10px] font-mono leading-[1.5] custom-scrollbar"
+          className="mt-1.5 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-lg px-2 py-1.5 text-[10px] font-mono leading-[1.5] custom-scrollbar"
           style={{ background: styles.isDark ? "rgba(0,0,0,0.2)" : styles.subtle, color: styles.textSecondary }}
         >
           {[entry.detail, entry.componentStack].filter((s) => s !== undefined).join("\n\n") ||

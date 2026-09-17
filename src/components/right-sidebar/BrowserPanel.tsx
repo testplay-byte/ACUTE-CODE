@@ -1697,7 +1697,6 @@ export function BrowserPanel({
 
   const ghostBtn = (extraStyle?: CSSProperties): CSSProperties => ({
     color: styles.textSecondary,
-    background: "transparent",
     border: `1px solid ${styles.border}`,
     ...extraStyle,
   });
@@ -1720,7 +1719,7 @@ export function BrowserPanel({
         >
           <Globe size={26} style={{ color: styles.accent }} />
         </div>
-        <div className="text-[12.5px] font-medium" style={{ color: styles.textSecondary }}>
+        <div className="text-[13px] font-medium" style={{ color: styles.textSecondary }}>
           Embedded browser
         </div>
         <div className="text-[11px] mt-1.5 max-w-xs mx-auto leading-relaxed" style={{ color: styles.textTertiary }}>
@@ -1746,10 +1745,8 @@ export function BrowserPanel({
             <button
               key={link.url}
               onClick={() => onQuickLink(link.url)}
-              className="inline-flex items-center gap-1 h-7 px-3 rounded-full text-[11px] font-medium transition-colors"
+              className="inline-flex items-center gap-1 h-7 px-3 rounded-full text-[11px] font-medium transition-colors hover:bg-hover"
               style={ghostBtn()}
-              onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
             >
               <Globe size={10} />
               {link.label}
@@ -1769,14 +1766,17 @@ export function BrowserPanel({
       {/* ── Chrome bar: navigation + address + explicit external actions.
           R60-D: the R59 rounded-card language — each panel row is a rounded
           card on the panel's ambient strip (the pop-out window's exact
-          rhythm, at side-panel scale).
+          rhythm, at side-panel scale). R100-G (research §C2 P4): the ONE
+          36px toolbar grammar — h-9 row, 28px (w-7 h-7 rounded-lg) icon
+          buttons, the flex-1 mono 12px address field, and the CSS
+          hover:bg-hover wash on every button (the JS pairs are gone).
           R96-G: an honest LOADING edge — while the tab navigates, a subtle
           accent progress line pulses along the bar's bottom (native-feel:
           the round's owner wants the browser to read "as a part of our
           application itself"), and it can never stick: the echo-suppressed
           navigation hook now clears `loading` too (file:// pages included). ── */}
       <div
-        className="relative shrink-0 flex items-center gap-1 px-2 h-9 rounded-[12px] border"
+        className="relative shrink-0 flex items-center gap-1 px-2 h-9 rounded-xl border"
         style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.15)" : styles.card }}
       >
         <button
@@ -1785,10 +1785,8 @@ export function BrowserPanel({
           data-testid="browser-back"
           aria-label="Back"
           title="Back"
-          className="w-6 h-6 grid place-items-center rounded-md transition-colors disabled:opacity-30"
+          className="w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover disabled:opacity-30 disabled:hover:bg-transparent"
           style={{ color: styles.textSecondary }}
-          onMouseEnter={(e) => { if (state?.canBack) e.currentTarget.style.background = styles.subtleHover; }}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           <ArrowLeft size={13} />
         </button>
@@ -1798,10 +1796,8 @@ export function BrowserPanel({
           data-testid="browser-forward"
           aria-label="Forward"
           title="Forward"
-          className="w-6 h-6 grid place-items-center rounded-md transition-colors disabled:opacity-30"
+          className="w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover disabled:opacity-30 disabled:hover:bg-transparent"
           style={{ color: styles.textSecondary }}
-          onMouseEnter={(e) => { if (state?.canForward) e.currentTarget.style.background = styles.subtleHover; }}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           <ArrowRight size={13} />
         </button>
@@ -1812,10 +1808,8 @@ export function BrowserPanel({
           data-testid="browser-home"
           aria-label="Home"
           title="Home"
-          className="w-6 h-6 grid place-items-center rounded-md transition-colors"
+          className="w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover"
           style={{ color: styles.textSecondary }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           <Home size={13} />
         </button>
@@ -1827,10 +1821,8 @@ export function BrowserPanel({
           data-testid="browser-reload"
           aria-label="Reload"
           title={state?.loading ? "Reload — the page is still loading" : "Reload"}
-          className="w-6 h-6 grid place-items-center rounded-md transition-colors disabled:opacity-30"
+          className="w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover disabled:opacity-30 disabled:hover:bg-transparent"
           style={{ color: styles.textSecondary }}
-          onMouseEnter={(e) => { if (hasPage) e.currentTarget.style.background = styles.subtleHover; }}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           {/* R96-G: the reload icon SPINS while the tab loads (the classic
               browser affordance — the old X glyph read as a stop the click
@@ -1893,7 +1885,7 @@ export function BrowserPanel({
               data-testid="browser-address-input"
               spellCheck={false}
               autoComplete="off"
-              className="flex-1 min-w-0 bg-transparent outline-none text-[11.5px]"
+              className="flex-1 min-w-0 bg-transparent outline-none font-mono text-[12px]"
               style={{ color: styles.text }}
             />
           </div>
@@ -1904,10 +1896,8 @@ export function BrowserPanel({
             onClick={() => void onPopOut()}
             aria-label="Pop out window"
             title="Pop out to the native Acute browser window (shared profile — same browser profile as the embedded browser)"
-            className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors"
+            className="shrink-0 w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover"
             style={{ color: styles.textTertiary }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent" }}
           >
             <PanelTopOpen size={13} />
           </button>
@@ -1917,10 +1907,8 @@ export function BrowserPanel({
           aria-label="Open externally"
           title="Open the current page in your system browser (explicit action)"
           data-testid="browser-open-external"
-          className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors"
+          className="shrink-0 w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover"
           style={{ color: styles.textTertiary }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           <ExternalLink size={13} />
         </button>
@@ -1954,7 +1942,7 @@ export function BrowserPanel({
           title says so instead of a dead click. ── */}
       <div
         data-testid="browser-viewport-bar"
-        className="shrink-0 flex min-h-8 flex-wrap items-center gap-x-1.5 gap-y-1 px-2 py-1 rounded-[12px] border text-[10.5px]"
+        className="shrink-0 flex min-h-8 flex-wrap items-center gap-x-1.5 gap-y-1 px-2 py-1 rounded-xl border text-[11px]"
         style={{ borderColor: styles.border, color: styles.textTertiary, background: styles.isDark ? "rgba(0,0,0,0.08)" : "transparent" }}
       >
         {/* Group 1 — size: preset, W×H, zoom. */}
@@ -1975,7 +1963,7 @@ export function BrowserPanel({
             }}
             aria-label="Display size preset"
             data-testid="browser-preset-select"
-            className="h-6 min-w-0 max-w-[118px] rounded-full border px-2 outline-none cursor-pointer"
+            className="h-6 min-w-0 max-w-32 rounded-full border px-2 outline-none cursor-pointer tabular-nums"
             style={{ background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
           >
             {/* ROUND-50: native-mode default — fill the panel like a real
@@ -2022,7 +2010,7 @@ export function BrowserPanel({
             onChange={(e) => void setViewport(tabId, { zoom: Number(e.target.value) / 100 })}
             aria-label="Zoom"
             data-testid="browser-zoom-select"
-            className="h-6 rounded-full border px-2 outline-none cursor-pointer"
+            className="h-6 rounded-full border px-2 outline-none cursor-pointer tabular-nums"
             style={{ background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
           >
             {ZOOM_STEPS.map((z) => (
@@ -2042,10 +2030,8 @@ export function BrowserPanel({
             aria-label="Rotate viewport"
             title={rotate ? "Rotate back to portrait" : "Rotate (swap width/height)"}
             data-testid="browser-rotate"
-            className="w-6 h-6 grid place-items-center rounded-md transition-colors"
+            className="w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover"
             style={{ color: rotate ? styles.accent : styles.textTertiary }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = styles.subtleHover; }}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             <Smartphone size={12} style={rotate ? { transform: "rotate(90deg)" } : undefined} />
           </button>
@@ -2062,16 +2048,14 @@ export function BrowserPanel({
                   : "1:1 — scroll the panel instead"
             }
             data-testid="browser-fit"
-            className="w-6 h-6 grid place-items-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-30"
+            className="w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
             style={{ color: fit && !nativeMode ? styles.accent : styles.textTertiary }}
-            onMouseEnter={(e) => { if (!nativeMode) e.currentTarget.style.background = styles.subtleHover; }}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             {fit ? <Shrink size={12} /> : <Expand size={12} />}
           </button>
         </span>
         <span
-          className="ml-auto shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded-full"
+          className="ml-auto shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded-full tabular-nums"
           data-testid="browser-readout"
           style={{ background: styles.subtle, color: styles.textTertiary }}
           title={
@@ -2088,7 +2072,7 @@ export function BrowserPanel({
           rounded card in the same row rhythm (R60-D). ── */}
       {state?.error != null ? (
         <div
-          className="shrink-0 flex items-start gap-2 px-3 py-2 text-[11px] rounded-[12px] border"
+          className="shrink-0 flex items-start gap-2 px-3 py-2 text-[11px] rounded-xl border"
           style={{
             background: styles.isDark ? "rgba(220,38,38,0.12)" : "rgba(254,226,226,1)",
             color: styles.isDark ? "#fca5a5" : "#b91c1c",
@@ -2127,7 +2111,7 @@ export function BrowserPanel({
           The proxy path's geometry below is EXACTLY as before. ── */}
       <div
         ref={contentRef}
-        className="relative flex-1 min-h-0 overflow-auto rounded-[12px] border"
+        className="relative flex-1 min-h-0 overflow-auto rounded-xl border"
         style={{ background: styles.isDark ? "rgba(0,0,0,0.22)" : styles.subtle, borderColor: styles.border }}
       >
         {nativeMode ? (
@@ -2149,13 +2133,13 @@ export function BrowserPanel({
           <div
             ref={placeholderRef}
             data-testid="browser-native-placeholder"
-            className="absolute inset-[4px] rounded-[12px]"
+            className="absolute inset-[4px] rounded-xl"
           >
             {!hasPage ? (
               emptyState
             ) : popoverTabId === tabId || overlayCoversPanel ? (
               <div
-                className="absolute inset-0 grid place-items-center rounded-[12px]"
+                className="absolute inset-0 grid place-items-center rounded-xl"
                 style={{
                   background: styles.isDark ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.25)",
                   backdropFilter: "blur(2px)",
@@ -2163,7 +2147,7 @@ export function BrowserPanel({
                 aria-hidden
               >
                 <span
-                  className="text-[11px] font-bold tracking-widest uppercase"
+                  className="text-[11px] font-medium tracking-[0.08em] uppercase"
                   style={{ color: "rgba(255,255,255,0.75)" }}
                 >
                   browser paused while the menu is open

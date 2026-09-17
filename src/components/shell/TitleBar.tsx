@@ -112,7 +112,9 @@ function RestoreGlyph() {
  * = accent@22% + icon scale, close = danger@16% + icon scale.
  */
 const WINDOW_CONTROL_BASE =
-  "group grid h-8 w-10 place-items-center rounded-[9px] border " +
+  // R100-F: the chips snap to the ladder — rounded-[9px] → rounded-lg (the
+  // 8px buttons tier, TOKENS §4). Everything else is the R98-C1 grammar.
+  "group grid h-8 w-10 place-items-center rounded-lg border " +
   "bg-[color-mix(in_srgb,var(--ac-subtle)_70%,transparent)] " +
   "border-[color:var(--ac-border-subtle)] " +
   "text-[color:var(--ac-text-secondary)] " +
@@ -232,7 +234,10 @@ export function TitleBar() {
     // so their hover fills never break the corner radii.
     <header
       data-tauri-drag-region
-      className="flex h-10 w-full shrink-0 select-none items-center justify-between rounded-[14px] border-[1.5px] backdrop-blur"
+      // R100-F: the bar's radius snaps 14→16px (rounded-2xl — the panel tier
+      // the sidebar + top-level cards ride); the identity button's chip
+      // snaps 10→8px (rounded-lg, the buttons tier).
+      className="flex h-10 w-full shrink-0 select-none items-center justify-between rounded-2xl border-[1.5px] backdrop-blur"
       style={{
         // Translucent frosted chrome over the app's ambient background (the
         // color-mix idiom from index.css/ActionButton) — never a hard edge.
@@ -256,12 +261,15 @@ export function TitleBar() {
         aria-label={appSidebarVisible ? "Hide sidebar" : "Show sidebar"}
         aria-pressed={appSidebarVisible}
         title={appSidebarVisible ? "Hide sidebar" : "Show sidebar"}
-        className="flex h-8 shrink-0 items-center gap-2.5 rounded-[10px] pl-3.5 pr-3 transition-colors hover:bg-hover"
+        className="flex h-8 shrink-0 items-center gap-2.5 rounded-lg pl-3.5 pr-3 transition-colors hover:bg-hover"
       >
         <AcuteLogo size={18} ariaLabel={APP_NAME} />
+        {/* R100-F (research §C2 P5): the identity label snaps to THE kicker
+            tier — 11px/500/tracking-[0.08em] (the loud 0.18em semibold is
+            retired). The hover grammar (hover:bg-hover on the CSS-var leg —
+            the research's model-citizen praise) stays exactly as built. */}
         <span
-          className="text-[11px] font-semibold tracking-[0.18em]"
-          style={{ color: "var(--ac-text-secondary)" }}
+          className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted"
         >
           {APP_NAME}
         </span>

@@ -92,17 +92,17 @@ export function TokenBarChart({
   return (
     <motion.div
       variants={scaleIn}
-      className="rounded-[24px] border-[1.5px] p-4 md:p-5"
+      className="rounded-2xl border-[1.5px] p-4 md:p-5"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
     >
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Zap size={13} style={{ color: accent, opacity: 0.7 }} />
-          <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <span className="text-[11px] font-medium uppercase tracking-[0.08em] tabular-nums" style={{ color: textTertiary }}>
             Token Usage · 14 days
           </span>
         </div>
-        <span className="text-[11px] font-medium" style={{ color: textSecondary }}>
+        <span className="text-[11px] font-medium tabular-nums" style={{ color: textSecondary }}>
           {isPending ? "…" : `${totalTokens.toLocaleString()} total`}
         </span>
       </div>
@@ -221,7 +221,8 @@ export function TokenBarChart({
                   textAnchor="middle"
                   fill={isHovered || isLast ? accent : textSecondary}
                   fontSize={10}
-                  fontWeight={isHovered || isLast ? 700 : 500}
+                  fontWeight={isHovered || isLast ? 600 : 500}
+                  className="tabular-nums"
                 >
                   {shortUtcDay(day.date)}
                 </text>
@@ -248,15 +249,15 @@ export function TokenBarChart({
                   style={{
                     backgroundColor: card,
                     border: bdr("1.5px", border),
-                    borderRadius: "10px",
+                    borderRadius: "12px",
                     boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
                   }}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold" style={{ color: text }}>
+                    <span className="text-[11px] font-semibold" style={{ color: text }}>
                       {utcDateLabel(days[hoveredIdx].date)}
                     </span>
-                    <span className="text-[11px] font-bold" style={{ color: accent }}>
+                    <span className="text-[11px] font-semibold tabular-nums" style={{ color: accent }}>
                       {dayTotal(days[hoveredIdx]).toLocaleString()}
                     </span>
                   </div>
@@ -286,10 +287,10 @@ export function TokenBarChart({
                     className="flex items-center justify-between pt-1"
                     style={{ borderTop: bdr("1px", border) }}
                   >
-                    <span className="text-[10px]" style={{ color: textSecondary }}>
+                    <span className="text-[10px] tabular-nums" style={{ color: textSecondary }}>
                       {days[hoveredIdx].requests} requests
                     </span>
-                    <span className="text-[10px] font-semibold" style={{ color: textSecondary }}>
+                    <span className="text-[10px] font-semibold tabular-nums" style={{ color: textSecondary }}>
                       {fmtCost(days[hoveredIdx].costUsd)}
                     </span>
                   </div>

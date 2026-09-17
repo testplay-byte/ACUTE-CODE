@@ -6,8 +6,11 @@ import { useProjects } from "../../hooks/use-projects";
 import { useSessions, useUsageSummary } from "../../hooks/use-sessions";
 import { formatTokenCount } from "../../lib/format";
 import { ease, fadeInUp, staggerContainer } from "../../lib/motion";
-import { useThemeStyles } from "../../lib/use-theme-styles";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
+import { useThemeStyles } from "../../lib/use-theme-styles";
+// R100-G (research §C2 P3 + §C3): the de-costumed hero rides the round-100
+// Kicker primitive (label tier) + the 24px/600 title.
+import { Kicker } from "../ui/Kicker";
 import { useGreeting, withAlpha } from "./helpers";
 import { SkeletonBlock } from "../shared/Skeletons";
 import { StatCard } from "./StatCard";
@@ -16,11 +19,11 @@ import { QuickActions } from "./QuickActions";
 import { RecentActivity } from "./RecentActivity";
 
 /**
- * Dashboard screen (round-21 UI overhaul): wizard design DNA —
- * full-width container ladder (1280→1640px), font-black hero greeting with
- * accent highlight box, 20px-radius stat cards with solid accent icon tiles
- * and softShadow, uppercase tracked section labels, and the wizard's
- * bentoShadow card system. AppShell's main is transparent; cards float.
+ * Dashboard screen (round-21 UI overhaul): the working-UI card ladder
+ * (1280→1640px container), StatCard row, section labels and softShadow
+ * cards (de-costumed R100-G per research §C2 P3 + §C3 — the wizard-DNA
+ * hero violations below are deleted, not restyled). AppShell's main is
+ * transparent; cards float.
  */
 export function DashboardScreen() {
   const navigate = useNavigate();
@@ -55,10 +58,9 @@ export function DashboardScreen() {
   const loadError =
     sessionsQuery.isError || agentsQuery.isError || projectsQuery.isError || usage.isError;
 
-  // Greeting split: "Good evening" → last word gets the accent highlight box
-  const greetingWords = greeting.split(" ");
-  const greetingMain = greetingWords.slice(0, -1).join(" ");
-  const greetingLast = greetingWords[greetingWords.length - 1] ?? "";
+  // R100-G: the greeting is ONE plain title now — the accent-box split
+  // (last word in the rotated highlight) was the wizard display hero this
+  // wave deleted; the time-of-day greeting reads fine as a 24px/600 title.
 
   return (
     <motion.div
@@ -68,49 +70,33 @@ export function DashboardScreen() {
       className="h-full overflow-y-auto"
     >
       <div className="mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px] px-5 md:px-8 2xl:px-14 py-6 md:py-10 pb-16">
-        {/* Hero — wizard typography (kicker + font-black greeting + accent box) */}
+        {/* Hero — R100-G (research §C2 P3): the de-costumed working-screen
+            header — label-tier Kicker + 24px/600 title + one-line 13px
+            secondary description (the rotated accent-box font-black display
+            hero is deleted: wizard DNA stays in the wizard). */}
         <motion.div
           initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease }}
           className="mb-8 md:mb-10"
         >
-          <p
-            className="text-[13px] md:text-[14px] font-bold uppercase tracking-[0.18em] mb-2"
-            style={{ color: styles.textSecondary }}
-          >
-            Workspace Overview
-          </p>
-          <h1
-            className="font-black leading-[0.95] tracking-[-0.03em]"
-            style={{ color: styles.text, fontSize: "clamp(2.75rem, 5.5vw, 4.5rem)" }}
-          >
-            {greetingMain}{" "}
-            <span
-              className="inline-block px-3 md:px-4 rounded-[14px] md:rounded-[18px] border-[2.5px] -rotate-1"
-              style={{
-                background: styles.accent,
-                color: styles.accentText,
-                borderColor: styles.borderStrong,
-                boxShadow: styles.bentoShadow,
-              }}
-            >
-              {greetingLast}
-            </span>
+          <Kicker className="mb-1">Workspace Overview</Kicker>
+          <h1 className="text-[24px] font-semibold tracking-tight leading-[1.2]" style={{ color: styles.text }}>
+            {greeting}
           </h1>
           <p
-            className="mt-3 text-[15px] md:text-[16px] font-medium max-w-[520px]"
+            className="mt-2 text-[13px] max-w-[520px]"
             style={{ color: styles.textSecondary }}
           >
             Here&apos;s what&apos;s happening across your workspace.
           </p>
         </motion.div>
 
-        {/* Stat cards — wizard recipe: card bg, softShadow, solid accent icon tiles.
-            R97-I part 2: while any source is still loading the row is 4
-            StatCard-shaped skeleton blocks in the same grid (92px tall, 20px
-            radius, the hairline border — the UsageScreen loading recipe),
-            announced once by the role=status wrapper. NEVER false zeros. */}
+        {/* Stat cards — the bento recipe: card bg, softShadow, solid accent
+            icon tiles. R97-I part 2: while any source is still loading the
+            row is 4 StatCard-shaped skeleton blocks in the same grid (92px
+            tall, 16px radius — the UsageScreen loading recipe), announced
+            once by the role=status wrapper. NEVER false zeros. */}
         {statsLoading ? (
           <div
             role="status"
@@ -121,8 +107,8 @@ export function DashboardScreen() {
             {[0, 1, 2, 3].map((i) => (
               <SkeletonBlock
                 key={i}
-                className="h-[92px] w-full border-[1.5px]"
-                style={{ borderColor: styles.borderSubtle, borderRadius: "20px" }}
+                className="h-[92px] w-full border-[1.5px] rounded-2xl"
+                style={{ borderColor: styles.borderSubtle }}
               />
             ))}
           </div>
@@ -153,7 +139,7 @@ export function DashboardScreen() {
           </motion.div>
         )}
 
-        {/* Chart + Quick Actions — wizard card scale (24px radius, p-4/5) */}
+        {/* Chart + Quick Actions — the bento card scale (rounded-2xl, p-4/5) */}
         <div className="mb-4 md:mb-6 grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
           <TokenBarChart
             days={usage.data?.days ?? []}
@@ -168,7 +154,7 @@ export function DashboardScreen() {
         {loadError ? (
           <div
             role="alert"
-            className="mb-4 md:mb-6 rounded-[16px] border-[1.5px] px-4 py-3 text-[12px] font-medium flex flex-wrap items-center gap-x-3 gap-y-1"
+            className="mb-4 md:mb-6 rounded-2xl border-[1.5px] px-4 py-3 text-[12px] font-medium flex flex-wrap items-center gap-x-3 gap-y-1"
             style={{
               borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3),
               background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
@@ -193,7 +179,7 @@ export function DashboardScreen() {
                 if (usage.isError) void usage.refetch();
               }}
               aria-label="Retry loading workspace data"
-              className="shrink-0 h-7 px-3 rounded-lg text-[11.5px] font-bold border transition-opacity hover:opacity-85"
+              className="shrink-0 h-7 px-3 rounded-lg text-[12px] font-semibold border transition-opacity hover:opacity-85"
               style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
             >
               Retry
@@ -207,7 +193,7 @@ export function DashboardScreen() {
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
-                className="h-[64px] w-full animate-pulse rounded-[16px] border-[1.5px]"
+                className="h-[64px] w-full animate-pulse rounded-2xl border-[1.5px]"
                 style={{ backgroundColor: styles.subtle, borderColor: styles.borderSubtle }}
               />
             ))}

@@ -1,13 +1,20 @@
 import { motion } from "framer-motion";
-import { useState, type ElementType } from "react";
+import type { ElementType } from "react";
 import type { ThemeStyles } from "../../lib/themes";
 import { scaleIn } from "../../lib/motion";
 
 /**
- * Stat card (round-21 wizard DNA): 20px-radius card with softShadow,
- * solid accent icon tile (w-10 h-10, full opacity — no translucent soup),
- * font-black value + uppercase tracked label. Hover = 2px lift + shadow
- * deepen. `highlight` fills the whole card with accent (the bold moment).
+ * Stat card (round-21 wizard DNA, de-costumed R100-G per research §C2 P3 +
+ * §C3 — the wizard-DNA boundary: working screens earn trust through
+ * restraint): 16px-radius card (rounded-2xl, the 5-step scale) with
+ * softShadow, solid accent icon tile (w-10 h-10, full opacity — no
+ * translucent soup), 22px/600 tabular value (the ladder's `value` token —
+ * font-black + tracking-tighter were the wizard display tell) and the
+ * label-tier label (11px/500/0.08em uppercase, TOKENS §2). Hover = the
+ * CSS-class border-strong swap (TOKENS §1a/§6 — the borderLineStrong
+ * utility; the old useState lift + bentoShadowSm deepen are gone: resting
+ * UI never fidgets). `highlight` fills the whole card with accent (the one
+ * bold moment).
  *
  * R99-E (the usage anti-jitter kit, research §3.2): the card is pinned at
  * h-[92px] — the height every StatCard-shaped skeleton across the app
@@ -30,40 +37,36 @@ export function StatCard({
   /** The "bold moment" card — accent-filled with accentText (wizard recipe). */
   highlight?: boolean;
 }) {
-  const [hovered, setHovered] = useState(false);
-  const { card, border, text, textTertiary, accent, accentText, softShadow, bentoShadowSm } = styles;
+  const { card, text, textTertiary, accent, accentText, softShadow } = styles;
 
   return (
     <motion.div
       variants={scaleIn}
-      className="relative flex h-[92px] cursor-default flex-col justify-center overflow-hidden rounded-[20px] border-[1.5px] p-4 transition-all duration-200"
+      className="relative flex h-[92px] cursor-default flex-col justify-center overflow-hidden rounded-2xl border-[1.5px] border-line p-4 transition-colors duration-150 hover:border-line-strong"
       style={{
         backgroundColor: highlight ? accent : card,
-        borderColor: highlight ? accent : border,
-        boxShadow: hovered ? bentoShadowSm : softShadow,
-        transform: hovered ? "translateY(-2px)" : "translateY(0)",
+        borderColor: highlight ? accent : undefined,
+        boxShadow: softShadow,
       }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
       title={title}
     >
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div
-            className="truncate text-[22px] font-black tabular-nums tracking-tighter leading-none"
+            className="truncate text-[22px] font-semibold tabular-nums leading-none"
             style={{ color: highlight ? accentText : text }}
           >
             {value}
           </div>
           <div
-            className="mt-1.5 text-[11px] font-bold uppercase tracking-widest"
+            className="mt-1.5 text-[11px] font-medium uppercase tracking-[0.08em]"
             style={{ color: highlight ? withAlphaF(accentText, 0.8) : textTertiary }}
           >
             {label}
           </div>
         </div>
         <div
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px]"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
           style={{
             backgroundColor: highlight ? withAlphaF(accentText, 0.2) : accent,
             color: highlight ? accentText : accentText,

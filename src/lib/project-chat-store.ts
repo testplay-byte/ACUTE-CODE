@@ -78,8 +78,9 @@ export interface ProjectChatState {
   appSidebarVisible: boolean;
   /** ROUND-62 (owner: "i should be given the option to minimize it rather
    * than just hiding it completely — at the very top of the left sidebar"):
-   * when true the sidebar renders its ICON RAIL (~64px — navigation icons,
-   * project tiles, settings/bell) instead of the full panel. The FULL hide
+   * when true the sidebar renders its ICON RAIL (R100-F: ~48px, the
+   * activity-bar standard — navigation icons, project tiles, settings/bell)
+   * instead of the full panel. The FULL hide
    * (appSidebarVisible, title-bar identity control) stays orthogonal — hide
    * > minimize in precedence. PERSISTED (a layout preference like the panel
    * widths — the owner expects his rail to still be a rail after a

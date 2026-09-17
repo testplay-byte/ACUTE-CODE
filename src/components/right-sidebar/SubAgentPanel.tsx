@@ -668,7 +668,7 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
   if (subAgentId === null) {
     return (
       <div className="h-full grid place-items-center px-6 text-center">
-        <div className="text-[11.5px]" style={{ color: styles.textTertiary }}>
+        <div className="text-[12px]" style={{ color: styles.textTertiary }}>
           No sub-agent bound to this tab.
         </div>
       </div>
@@ -693,7 +693,7 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
       >
         {code !== null ? (
           <span
-            className="shrink-0 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-md tracking-[0.08em]"
+            className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md tracking-[0.08em]"
             style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
             title={`Sub-agent code ${code}`}
             data-testid="subagent-code-chip"
@@ -712,17 +712,17 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
           </span>
         ) : null}
         <span
-          className="text-[9px] font-mono font-bold uppercase shrink-0 px-1.5 py-0.5 rounded-md"
+          className="text-[10px] font-mono font-medium uppercase shrink-0 px-1.5 py-0.5 rounded-md"
           style={{ color: roleColor, background: withAlpha(roleColor, 0.14) }}
         >
           {role}
         </span>
-        <div className="flex-1 min-w-0 truncate text-[11.5px] font-semibold" style={{ color: styles.text }} title={headerTitle}>
+        <div className="flex-1 min-w-0 truncate text-[12px] font-semibold" style={{ color: styles.text }} title={headerTitle}>
           {headerTitle}
         </div>
         {isWorking ? (
           <span
-            className="shrink-0 text-[9.5px] font-mono tabular-nums"
+            className="shrink-0 text-[10px] font-mono tabular-nums"
             style={{ color: styles.textTertiary }}
             data-testid="subagent-elapsed"
           >
@@ -740,16 +740,8 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
             disabled={stopping}
             aria-label={`Stop sub-agent ${code ?? subAgentId}`}
             title={stopping ? "Stopping…" : "Stop this sub-agent (the parent turn continues)"}
-            className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors disabled:opacity-50"
+            className="shrink-0 w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover disabled:opacity-50"
             style={{ color: stopping ? SEMANTIC_COLORS.danger : styles.textTertiary }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = withAlpha(SEMANTIC_COLORS.danger, 0.12);
-              e.currentTarget.style.color = SEMANTIC_COLORS.danger;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-              e.currentTarget.style.color = String(styles.textTertiary);
-            }}
             data-testid="subagent-stop-button"
           >
             <Square size={10} fill="currentColor" strokeWidth={0} aria-hidden />
@@ -792,18 +784,18 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
             </div>
           ) : loadError ? (
             <div
-              className="rounded-[12px] px-3 py-3 flex flex-col gap-2"
+              className="rounded-xl px-3 py-3 flex flex-col gap-2"
               style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.08), border: `1px solid ${withAlpha(SEMANTIC_COLORS.danger, 0.3)}` }}
             >
-              <div className="flex items-center gap-1.5 text-[11px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
                 <AlertTriangle size={12} /> Couldn&apos;t load this sub-agent
               </div>
-              <div className="text-[10.5px]" style={{ color: styles.textSecondary }}>
+              <div className="text-[11px]" style={{ color: styles.textSecondary }}>
                 {detailQuery.error instanceof Error ? detailQuery.error.message : "The sidecar didn't answer."}
               </div>
               <button
                 onClick={() => void detailQuery.refetch()}
-                className="self-start h-6 px-2.5 rounded-full text-[10px] font-bold inline-flex items-center gap-1.5"
+                className="self-start h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5"
                 style={{ background: styles.card, color: styles.text, border: `1px solid ${styles.border}` }}
               >
                 <RefreshCw size={10} /> Try again
@@ -821,7 +813,7 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -6 }}
                     transition={{ duration: 0.25, ease }}
-                    className="rounded-[12px] px-3 py-2.5 flex flex-col gap-2"
+                    className="rounded-xl px-3 py-2.5 flex flex-col gap-2"
                     style={{
                       background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
                       border: `1px solid ${withAlpha(SEMANTIC_COLORS.danger, 0.35)}`,
@@ -829,7 +821,7 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
                     role="alert"
                     data-testid="subagent-failed-banner"
                   >
-                    <div className="flex items-center gap-1.5 text-[11px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+                    <div className="flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
                       <AlertTriangle size={12} /> Sub-agent failed
                     </div>
                     {failureReason !== null ? (
@@ -846,17 +838,16 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
                       onClick={() => void doRetry()}
                       disabled={retrying || parentSessionId === null}
                       aria-label="Retry sub-agent"
-                      className="self-start h-7 px-3 rounded-full text-[10.5px] font-bold inline-flex items-center gap-1.5 transition-transform active:scale-95 disabled:opacity-60"
+                      className="self-start h-7 px-3 rounded-full text-[11px] font-semibold inline-flex items-center gap-1.5 transition-transform active:scale-95 disabled:opacity-60"
                       style={{
                         background: SEMANTIC_COLORS.danger,
                         color: "#fff",
-                        boxShadow: `0 2px 8px ${withAlpha(SEMANTIC_COLORS.danger, 0.35)}`,
                       }}
                     >
                       <RefreshCw size={11} className={retrying ? "animate-spin" : ""} />
                       {retrying ? "Retrying…" : "Retry"}
                     </button>
-                    <div className="text-[9.5px]" style={{ color: styles.textTertiary }}>
+                    <div className="text-[10px]" style={{ color: styles.textTertiary }}>
                       Retry resumes from the last completed step in the event log.
                     </div>
                   </motion.div>
@@ -903,7 +894,7 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
                   segment ISN'T carrying the feed — no live data = the
                   pre-R50-b polled-only view). */}
               {isWorking && !liveSegmentVisible ? (
-                <div className="flex items-center gap-2 px-1.5 h-6 text-[10.5px]" style={{ color: styles.textTertiary }}>
+                <div className="flex items-center gap-2 px-1.5 h-6 text-[11px]" style={{ color: styles.textTertiary }}>
                   <PulsingDot color={RUNNING_BLUE} size={6} />
                   {renderItems.some((it) => it.kind === "tool" || it.kind === "assistant")
                     ? "working…"
@@ -934,7 +925,9 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
 }
 
 /** The delegation prompt — the main chat's user-bubble language (R38's calm
- * accent-tinted bubble), scaled for the sidebar. */
+ * accent-tinted bubble), scaled for the sidebar. R100-G: the R100-D
+ * user-message translation — uniform 12px radius (the br-[4px] tail is
+ * deleted) + 400 weight prose. */
 function TaskBubble({ content }: { content: string }) {
   const styles = useThemeStyles();
   const bubbleBg = withAlpha(styles.accent, styles.isDark ? 0.18 : 0.1);
@@ -942,7 +935,7 @@ function TaskBubble({ content }: { content: string }) {
   return (
     <div className="flex justify-end min-w-0">
       <div
-        className="max-w-[88%] rounded-[14px] rounded-br-[4px] px-3 py-2 border text-[12px] leading-[1.55] font-medium"
+        className="max-w-[88%] rounded-xl px-3 py-2 border text-[12px] leading-[1.55]"
         style={{ background: bubbleBg, borderColor: bubbleBorder, color: styles.text }}
         data-testid="subagent-task-bubble"
       >
@@ -973,7 +966,7 @@ function AssistantBubble({ content, isReport }: { content: string; isReport: boo
         <Bot size={11} />
       </span>
       <div
-        className="min-w-0 flex-1 rounded-[12px] px-2.5 py-1.5 border"
+        className="min-w-0 flex-1 rounded-xl px-2.5 py-1.5 border"
         style={{
           background: styles.isDark ? "rgba(0,0,0,0.14)" : styles.subtle,
           borderColor: styles.borderSubtle,
@@ -982,7 +975,7 @@ function AssistantBubble({ content, isReport }: { content: string; isReport: boo
       >
         {isReport ? (
           <div
-            className="text-[9px] font-semibold uppercase tracking-[0.14em] mb-1"
+            className="text-[10px] font-medium uppercase tracking-[0.08em] mb-1"
             style={{ color: styles.textTertiary }}
             data-testid="subagent-final-report-label"
           >
@@ -1021,18 +1014,14 @@ function TranscriptToolRow({ tool }: { tool: ToolCard }) {
         aria-expanded={expandable ? open : undefined}
         aria-label={`${label} ${tool.argsSummary}`}
         data-testid="subagent-tool-row"
-        className="flex items-center gap-2 h-7 w-full max-w-full px-1.5 -ml-1.5 rounded-md transition-colors text-left"
+        className={`flex items-center gap-2 h-7 w-full max-w-full px-1.5 -ml-1.5 rounded-md transition-colors text-left ${expandable ? "hover:bg-hover" : ""}`}
         style={{
           color: styles.textTertiary,
           cursor: expandable ? "pointer" : "default",
         }}
-        onMouseEnter={(e) => {
-          if (expandable) e.currentTarget.style.background = styles.subtleHover;
-        }}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
         <Icon size={11} className="shrink-0" style={{ color: styles.textTertiary }} />
-        <span className="shrink-0 text-[11px] font-semibold" style={{ color: styles.textSecondary }}>
+        <span className="shrink-0 text-[11px] font-medium" style={{ color: styles.textSecondary }}>
           {label}
         </span>
         <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: styles.textTertiary }}>
@@ -1070,7 +1059,7 @@ function TranscriptToolRow({ tool }: { tool: ToolCard }) {
             <LiveOutputTail output={liveOutput} />
           ) : (
             <div
-              className="rounded-[10px] px-2.5 py-1.5 border font-mono text-[10px] leading-[1.5] break-words"
+              className="rounded-lg px-2.5 py-1.5 border font-mono text-[10px] leading-[1.5] break-words"
               style={{
                 background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
                 borderColor: styles.borderSubtle,
@@ -1113,7 +1102,7 @@ function TodoLine({ todos }: { todos: TodoCardData }) {
       initial={{ opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease }}
-      className="rounded-[10px] border px-2 py-1.5 min-w-0"
+      className="rounded-lg border px-2 py-1.5 min-w-0"
       style={{
         background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
         borderColor: styles.borderSubtle,
@@ -1130,7 +1119,7 @@ function TodoLine({ todos }: { todos: TodoCardData }) {
           />
         </div>
         <span
-          className="shrink-0 font-mono text-[10px] font-bold tabular-nums"
+          className="shrink-0 font-mono text-[10px] font-medium tabular-nums"
           style={{ color: styles.textSecondary }}
         >
           {todos.done}/{todos.total}
@@ -1159,7 +1148,7 @@ function TodoLine({ todos }: { todos: TodoCardData }) {
               )}
             </span>
             <span
-              className="min-w-0 flex-1 truncate text-[10.5px] leading-[1.4]"
+              className="min-w-0 flex-1 truncate text-[11px] leading-[1.4]"
               title={item.content}
               style={{
                 color:
@@ -1202,7 +1191,7 @@ function ApprovalLine({ approval }: { approval: ApprovalCardData }) {
       initial={{ opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease }}
-      className="rounded-[10px] border px-2 py-1.5 min-w-0"
+      className="rounded-lg border px-2 py-1.5 min-w-0"
       style={{ borderColor: withAlpha(tone, 0.35), background: withAlpha(tone, 0.06) }}
       data-testid="subagent-approval-card"
     >
@@ -1212,7 +1201,7 @@ function ApprovalLine({ approval }: { approval: ApprovalCardData }) {
         ) : (
           <Check size={11} className="shrink-0" style={{ color: tone }} />
         )}
-        <span className="text-[10.5px] font-bold shrink-0" style={{ color: tone }}>
+        <span className="text-[11px] font-medium shrink-0" style={{ color: tone }}>
           {title}
         </span>
         <span
@@ -1224,7 +1213,7 @@ function ApprovalLine({ approval }: { approval: ApprovalCardData }) {
         </span>
       </div>
       {pending ? (
-        <div className="mt-1 text-[9.5px]" style={{ color: styles.textTertiary }}>
+        <div className="mt-1 text-[10px]" style={{ color: styles.textTertiary }}>
           Decide in the main chat — the ask appears there with this sub-agent&apos;s code.
         </div>
       ) : null}
@@ -1243,7 +1232,7 @@ function ErrorLine({ error }: { error: ErrorCardData }) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease }}
       role="alert"
-      className="rounded-[12px] border px-2.5 py-2 flex items-start gap-2 min-w-0"
+      className="rounded-xl border px-2.5 py-2 flex items-start gap-2 min-w-0"
       style={{
         borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4),
         background: withAlpha(SEMANTIC_COLORS.danger, 0.07),
@@ -1252,13 +1241,13 @@ function ErrorLine({ error }: { error: ErrorCardData }) {
     >
       <AlertTriangle size={12} className="mt-0.5 shrink-0" style={{ color: SEMANTIC_COLORS.danger }} />
       <div className="min-w-0">
-        <div className="text-[11px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+        <div className="text-[11px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
           Turn failed
         </div>
         <div className="mt-0.5 font-mono text-[10px] leading-[1.5] break-words" style={{ color: styles.textSecondary }}>
           {reason}
         </div>
-        <div className="mt-0.5 text-[9.5px] font-mono" style={{ color: styles.textTertiary }}>
+        <div className="mt-0.5 text-[10px] font-mono" style={{ color: styles.textTertiary }}>
           {error.code}
         </div>
       </div>
@@ -1292,7 +1281,7 @@ function LiveStreamSegment({ entry, streaming }: { entry: SubAgentLiveEntry; str
     <div className="flex flex-col gap-1.5 min-w-0" data-testid="subagent-live-stream">
       {streaming ? (
         <div
-          className="flex items-center gap-2 px-1.5 h-5 text-[9.5px] font-mono uppercase tracking-[0.12em]"
+          className="flex items-center gap-2 px-1.5 h-5 text-[10px] font-mono uppercase tracking-[0.08em]"
           style={{ color: RUNNING_BLUE }}
         >
           <PulsingDot color={RUNNING_BLUE} size={5} />
@@ -1369,7 +1358,7 @@ function StatCell({
   return (
     <span className="flex flex-col items-center min-w-0 shrink-0" title={title} data-testid={testId}>
       <span
-        className="text-[8px] font-bold uppercase tracking-[0.14em] leading-[1.1] text-center"
+        className="text-[10px] font-medium uppercase tracking-[0.08em] leading-[1.1] text-center"
         style={{ color: styles.textTertiary }}
       >
         {label}
@@ -1556,7 +1545,7 @@ function StatusChip({
               : styles.textTertiary;
   return (
     <div
-      className="shrink-0 flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9.5px] font-bold uppercase tracking-wider"
+      className="shrink-0 flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium uppercase tracking-[0.08em]"
       style={{ background: withAlpha(tone, 0.14), color: tone }}
       data-testid="subagent-status-chip"
     >

@@ -24,6 +24,12 @@ import { formatCompactTokens } from "./usage-helpers";
  * header rows render leading-none so the height is data-independent; every
  * number renders tabular-nums. The DataStatsPanel's loading skeleton
  * mirrors this exact geometry.
+ *
+ * R100-G (research §C2 P3, the ladder sweep): the header label snapped to
+ * the label tier (11px/500/0.08em), the axis label font sizes sit at the
+ * 10px floor, and the card rides the 16px radius step (rounded-2xl). The
+ * accent intensity ladder (the owner-approved GitHub-style palette) is
+ * untouched.
  */
 
 const CELL = 10;
@@ -108,7 +114,7 @@ export function UsageHeatmap({
   return (
     <div
       data-testid="usage-heatmap"
-      className="flex min-h-[184px] flex-col rounded-[24px] border-[1.5px] p-4 md:min-h-[192px] md:p-5"
+      className="flex min-h-[184px] flex-col rounded-2xl border-[1.5px] p-4 md:min-h-[192px] md:p-5"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
       aria-label={
         layout === null
@@ -120,7 +126,7 @@ export function UsageHeatmap({
         <div className="flex min-w-0 items-center gap-2">
           <CalendarDays size={13} style={{ color: accent, opacity: 0.7 }} />
           <span
-            className="truncate text-[11px] font-bold uppercase leading-none tracking-widest tabular-nums"
+            className="truncate text-[11px] font-medium uppercase leading-none tracking-[0.08em] tabular-nums"
             style={{ color: textTertiary }}
           >
             Token Activity · {days.length} {days.length === 1 ? "day" : "days"}
@@ -157,7 +163,7 @@ export function UsageHeatmap({
                 y={MONTH_ROW + row * PITCH + CELL / 2 + 3}
                 textAnchor="end"
                 fill={textTertiary}
-                fontSize={9}
+                fontSize={10}
                 fontWeight={500}
               >
                 {label}
@@ -167,9 +173,9 @@ export function UsageHeatmap({
               <text
                 key={`${label}-${col}`}
                 x={WEEKDAY_GUTTER + col * PITCH}
-                y={10}
+                y={12}
                 fill={textTertiary}
-                fontSize={9}
+                fontSize={10}
                 fontWeight={500}
               >
                 {label}

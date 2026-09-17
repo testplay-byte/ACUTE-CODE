@@ -1,5 +1,4 @@
 import { motion } from "framer-motion";
-import { useState } from "react";
 import type { Agent, Session } from "../../lib/api";
 import type { ThemeStyles } from "../../lib/themes";
 import { staggerContainer, staggerItem } from "../../lib/motion";
@@ -7,9 +6,10 @@ import { formatWhen } from "../../lib/format";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 
 /**
- * Recent activity (round-21 wizard DNA): 16px-radius row cards with
- * border, softShadow on the section container, uppercase tracked label,
- * w-7 h-7 letter tiles, 13px/11px text (never 9px).
+ * Recent activity (round-21, de-costumed R100-G): 16px-radius row cards
+ * (rounded-2xl) with border + the CSS hover:bg-hover wash (the JS lift +
+ * softShadow deepen are gone — resting UI never fidgets), label-tier
+ * section header, w-7 h-7 letter tiles, 13px/11px text.
  */
 function RecentSessionRow({
   session,
@@ -22,8 +22,7 @@ function RecentSessionRow({
   onOpen: () => void;
   styles: ThemeStyles;
 }) {
-  const { card, text, textSecondary, textTertiary, border, subtleHover, softShadow } = styles;
-  const [hovered, setHovered] = useState(false);
+  const { text, textSecondary, textTertiary, border } = styles;
   const initial = (agentName || session.title || "?").charAt(0).toUpperCase();
 
   return (
@@ -31,25 +30,20 @@ function RecentSessionRow({
       variants={staggerItem}
       onClick={onOpen}
       aria-label={`Open session ${session.title ?? agentName}`}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      className="w-full cursor-pointer rounded-[16px] border-[1.5px] p-3.5 text-left transition-all duration-200"
+      className="w-full cursor-pointer rounded-2xl border-[1.5px] bg-card p-3.5 text-left transition-colors duration-200 hover:bg-hover"
       style={{
-        backgroundColor: hovered ? subtleHover : card,
         borderColor: border,
-        boxShadow: hovered ? softShadow : "none",
-        transform: hovered ? "translateY(-1px)" : "translateY(0)",
       }}
     >
       <div className="flex items-center gap-3">
         <span
-          className="w-7 h-7 shrink-0 rounded-[8px] grid place-items-center font-black text-[11px]"
+          className="w-7 h-7 shrink-0 rounded-lg grid place-items-center font-semibold text-[11px]"
           style={{ background: styles.accent, color: styles.accentText }}
         >
           {initial}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-bold" style={{ color: text }}>
+          <div className="truncate text-[13px] font-semibold" style={{ color: text }}>
             {session.title ?? "Untitled session"}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -92,20 +86,20 @@ export function RecentActivity({
     <section aria-label="Recent activity" className="min-h-[120px]">
       <div className="mb-3 flex items-center justify-between">
         <h2
-          className="text-[11px] font-bold uppercase tracking-widest"
+          className="text-[11px] font-medium uppercase tracking-[0.08em]"
           style={{ color: textTertiary }}
         >
           Recent Activity
         </h2>
         <span
-          className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+          className="px-2 py-0.5 rounded-full text-[10px] font-medium"
           style={{ background: styles.subtle, color: textTertiary }}
         >
           Across all agents
         </span>
       </div>
       {recent.length === 0 ? (
-        <p className="py-6 text-center text-[12px] font-medium" style={{ color: textSecondary }}>
+        <p className="py-6 text-center text-[12px]" style={{ color: textSecondary }}>
           No sessions yet — start one from Quick Actions.
         </p>
       ) : (

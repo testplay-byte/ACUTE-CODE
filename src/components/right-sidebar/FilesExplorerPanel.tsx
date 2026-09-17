@@ -145,23 +145,16 @@ function TreeRow({
         data-tree-path={node.path}
         aria-expanded={isFolder ? expanded : undefined}
         aria-current={selected ? "true" : undefined}
-        className="w-full flex items-center gap-1.5 h-[30px] px-1.5 text-left transition-colors rounded-md"
+        className="w-full flex items-center gap-1.5 h-[30px] px-1.5 text-left transition-colors rounded-md hover:bg-hover"
         style={{
           paddingLeft: `${depth * 12 + 6}px`,
           background: selected
             ? withAlpha(styles.accent, styles.isDark ? 0.12 : 0.1)
-            : "transparent",
+            : undefined,
         }}
         onClick={() => {
           if (isFolder) onToggleFolder(node.path);
           else onSelectFile(node.path);
-        }}
-        onMouseEnter={(e) => {
-          if (!selected)
-            e.currentTarget.style.background = styles.isDark ? styles.inputBg : styles.subtleHover;
-        }}
-        onMouseLeave={(e) => {
-          if (!selected) e.currentTarget.style.background = "transparent";
         }}
         title={node.path}
       >
@@ -186,7 +179,7 @@ function TreeRow({
           <FileIcon name={node.name} />
         )}
         <span
-          className="text-[11.5px] font-mono truncate"
+          className="text-[12px] font-mono truncate"
           style={{
             color: selected ? styles.text : styles.textSecondary,
             fontWeight: selected ? 500 : 400,
@@ -223,8 +216,9 @@ function TreeRow({
   );
 }
 
-/** Small header icon-button (Search / tree toggle): tertiary color, subtle
- * hover tint — the same affordance language as the tab-strip buttons. */
+/** Small header icon-button (Search / tree toggle): tertiary color, the
+ * CSS hover wash (R100-G) — the same affordance language as the tab-strip
+ * buttons. */
 function HeaderIconButton({
   label,
   onClick,
@@ -240,16 +234,8 @@ function HeaderIconButton({
       onClick={onClick}
       aria-label={label}
       title={label}
-      className="w-7 h-7 grid place-items-center rounded-lg transition-colors shrink-0"
+      className="w-7 h-7 grid place-items-center rounded-lg transition-colors shrink-0 hover:bg-hover"
       style={{ color: styles.textTertiary }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = styles.subtleHover;
-        e.currentTarget.style.color = styles.text;
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.color = styles.textTertiary;
-      }}
     >
       {children}
     </button>
@@ -292,16 +278,8 @@ function ErrorRetry({
       </div>
       <button
         onClick={onRetry}
-        className="self-start flex items-center gap-1.5 h-7 px-2.5 rounded-lg border text-[11px] font-medium transition-colors"
-        style={{ borderColor: styles.border, color: styles.textSecondary, background: styles.card }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5);
-          e.currentTarget.style.color = styles.text;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.borderColor = styles.border;
-          e.currentTarget.style.color = styles.textSecondary;
-        }}
+        className="self-start flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-line bg-card text-[11px] font-medium transition-colors hover:bg-hover"
+        style={{ color: styles.textSecondary }}
       >
         <RefreshCw size={11} />
         Try again
@@ -482,7 +460,7 @@ export function FilesExplorerPanel({
                 {content.split("\n").map((line, idx) => (
                   <div key={idx} className="flex">
                     <span
-                      className="w-7 shrink-0 text-right pr-2 select-none font-mono text-[9.5px] leading-[1.6]"
+                      className="w-7 shrink-0 text-right pr-2 select-none font-mono text-[10px] leading-[1.6]"
                       style={{ color: styles.textTertiary }}
                     >
                       {idx + 1}

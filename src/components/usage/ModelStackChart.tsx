@@ -26,6 +26,13 @@ import { formatCompactTokens, modelColor } from "./usage-helpers";
  * header never wraps (the label truncates, the picker is shrink-0) so the
  * height is width-independent; every number — axis labels, tooltip rows,
  * the range buttons — renders tabular-nums.
+ *
+ * R100-G (research §C2 P3, the ladder sweep): the header label snapped to
+ * the label tier (11px/500/0.08em — the ONE kicker spelling), the range
+ * picker snapped to the DataStatsPanel picker grammar (rounded-xl segments,
+ * rounded-lg buttons, 600 weights), the axis/label font sizes sit at the
+ * 10px floor, and the card rides the 16px radius step (rounded-2xl). The
+ * model palette + the fixed-height reserves stay untouched.
  */
 
 const RANGE_OPTIONS = [7, 30, 90, 365] as const;
@@ -83,14 +90,14 @@ export function ModelStackChart({
   return (
     <div
       data-testid="model-stack-chart"
-      className="flex min-h-[264px] flex-col rounded-[24px] border-[1.5px] p-4 md:min-h-[272px] md:p-5"
+      className="flex min-h-[264px] flex-col rounded-2xl border-[1.5px] p-4 md:min-h-[272px] md:p-5"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
     >
       <div className="mb-4 flex shrink-0 items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <Layers size={13} style={{ color: accent, opacity: 0.7 }} />
           <span
-            className="truncate text-[11px] font-bold uppercase leading-none tracking-widest tabular-nums"
+            className="truncate text-[11px] font-medium uppercase leading-none tracking-[0.08em] tabular-nums"
             style={{ color: textTertiary }}
           >
             Model Mix · {visible.length} {visible.length === 1 ? "day" : "days"}
@@ -99,7 +106,7 @@ export function ModelStackChart({
         <div
           role="group"
           aria-label="Model mix day range"
-          className="flex shrink-0 items-center gap-1 rounded-[14px] border-[1.5px] p-1"
+          className="flex shrink-0 items-center gap-1 rounded-xl border-[1.5px] p-1"
           style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
         >
           {RANGE_OPTIONS.map((option) => {
@@ -114,7 +121,7 @@ export function ModelStackChart({
                 }}
                 aria-pressed={active}
                 aria-label={`Last ${option} days`}
-                className="cursor-pointer rounded-[10px] px-2.5 py-1.5 text-[12px] font-bold tabular-nums transition-colors duration-200"
+                className="cursor-pointer rounded-lg px-2.5 py-1.5 text-[12px] font-semibold tabular-nums transition-colors duration-200"
                 style={{
                   backgroundColor: active ? accent : "transparent",
                   color: active ? styles.accentText : textSecondary,
@@ -162,7 +169,7 @@ export function ModelStackChart({
                     y={CHART_HEIGHT - CHART_HEIGHT * pct + 3}
                     textAnchor="end"
                     fill={textTertiary}
-                    fontSize={9}
+                    fontSize={10}
                     fontWeight={500}
                     className="tabular-nums"
                   >
@@ -239,7 +246,7 @@ export function ModelStackChart({
                         y={CHART_HEIGHT + 15}
                         textAnchor="middle"
                         fill={textTertiary}
-                        fontSize={9}
+                        fontSize={10}
                         fontWeight={500}
                         className="tabular-nums"
                       >
@@ -269,15 +276,15 @@ export function ModelStackChart({
                     style={{
                       backgroundColor: card,
                       border: bdr("1.5px", border),
-                      borderRadius: "10px",
+                      borderRadius: "12px",
                       boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
                     }}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold" style={{ color: text }}>
+                      <span className="text-[11px] font-semibold" style={{ color: text }}>
                         {utcDateLabel(hovered.date)}
                       </span>
-                      <span className="text-[11px] font-bold tabular-nums" style={{ color: accent }}>
+                      <span className="text-[11px] font-semibold tabular-nums" style={{ color: accent }}>
                         {dayTotal(hovered).toLocaleString()}
                       </span>
                     </div>

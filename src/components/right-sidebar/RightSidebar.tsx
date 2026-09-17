@@ -544,7 +544,8 @@ export function RightSidebar({
   }, []);
 
   if (!open) {
-    // Collapsed rail — a reopen button.
+    // Collapsed rail — a reopen button (R100-G: hover = the CSS wash —
+    // bg-card/hover:bg-hover classes, no JS pair).
     return (
       <motion.button
         onClick={() => toggleOpen(projectId)}
@@ -553,10 +554,8 @@ export function RightSidebar({
         initial={{ opacity: 0, width: 0 }}
         animate={{ opacity: 1, width: 36 }}
         transition={{ duration: 0.2, ease }}
-        className="shrink-0 self-stretch rounded-2xl grid place-items-center transition-colors"
-        style={{ background: styles.card, border: `1.5px solid ${styles.border}`, color: styles.textTertiary }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-        onMouseLeave={(e) => (e.currentTarget.style.background = styles.card)}
+        className="shrink-0 self-stretch rounded-2xl grid place-items-center border-[1.5px] border-line bg-card transition-colors hover:bg-hover"
+        style={{ color: styles.textTertiary }}
       >
         <PanelRightClose size={14} className="rotate-180" />
       </motion.button>
@@ -581,7 +580,12 @@ export function RightSidebar({
       className="shrink-0 flex flex-col overflow-hidden rounded-2xl"
       style={{ background: styles.card, border: `1.5px solid ${styles.border}` }}
     >
-      {/* ── Browser-style tab strip header ──
+      {/* ── Browser-style tab strip header — R100-G: the ONE 36px toolbar
+          grammar (research §C2 P4 + TOKENS §3's row-height table): the strip
+          is h-9, every icon button is a 28px rounded-lg target, tab labels
+          are 12px/400 with the ACTIVE tab at 500 + accent ink (the accent =
+          selection discipline, TOKENS §1a), and every styling-only hover is
+          the CSS hover:bg-hover wash (the JS pairs are gone).
           ROUND-41 (owner: "the collapse button was properly there and it
           would never disappear, which is good, but there were issues with
           it. The issue was that it was not like a dedicated section kind of
@@ -599,7 +603,7 @@ export function RightSidebar({
       <div className="flex shrink-0 items-stretch">
         {/* Column 1: scrollable tab strip — tabs + "+" only. */}
         <div
-          className="flex-1 min-w-0 flex items-stretch gap-0.5 h-10 border-b overflow-x-auto"
+          className="flex-1 min-w-0 flex items-stretch gap-0.5 h-9 border-b overflow-x-auto"
           style={{
             borderColor: styles.border,
             background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle,
@@ -628,22 +632,19 @@ export function RightSidebar({
                     setActiveTab(projectId, tab.id);
                   }
                 }}
-                className="group relative flex items-center gap-1.5 pl-2.5 pr-1.5 h-full min-w-[120px] max-w-[180px] cursor-pointer transition-colors shrink-0"
+                className="group relative flex items-center gap-1.5 pl-2.5 pr-1 h-full min-w-[120px] max-w-[180px] cursor-pointer transition-colors shrink-0"
                 style={{
                   background: active ? styles.card : "transparent",
                   color: active ? styles.text : styles.textSecondary,
                   borderBottom: active ? `2px solid ${styles.accent}` : `2px solid transparent`,
                 }}
-                onMouseEnter={(e) => {
-                  if (!active) e.currentTarget.style.background = styles.subtleHover;
-                }}
-                onMouseLeave={(e) => {
-                  if (!active) e.currentTarget.style.background = "transparent";
-                }}
                 title={tab.title}
               >
                 <Icon size={13} style={{ color: iconColor }} className="shrink-0" />
-                <span className="flex-1 min-w-0 truncate text-[11px] font-medium">
+                <span
+                  className="flex-1 min-w-0 truncate text-[12px]"
+                  style={{ color: active ? styles.accent : undefined, fontWeight: active ? 500 : 400 }}
+                >
                   {tab.title}
                 </span>
                 <button
@@ -653,16 +654,8 @@ export function RightSidebar({
                   }}
                   aria-label={`Close ${tab.title}`}
                   title="Close tab"
-                  className="w-5 h-5 grid place-items-center rounded shrink-0 transition-colors"
+                  className="w-7 h-7 grid place-items-center rounded-lg shrink-0 transition-colors hover:bg-hover"
                   style={{ color: styles.textTertiary }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = withAlpha(styles.accent, 0.12);
-                    e.currentTarget.style.color = styles.text;
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                    e.currentTarget.style.color = styles.textTertiary;
-                  }}
                 >
                   <X size={11} />
                 </button>
@@ -689,22 +682,10 @@ export function RightSidebar({
               }}
               aria-label="New tab"
               title="New tab"
-              className="w-8 h-full grid place-items-center transition-colors"
+              className="w-7 h-7 my-auto grid place-items-center rounded-lg transition-colors hover:bg-hover"
               style={{
                 color: quickMenuOpen ? styles.accent : styles.textTertiary,
-                background: quickMenuOpen ? withAlpha(styles.accent, 0.12) : "transparent",
-              }}
-              onMouseEnter={(e) => {
-                if (!quickMenuOpen) {
-                  e.currentTarget.style.background = styles.subtleHover;
-                  e.currentTarget.style.color = styles.text;
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!quickMenuOpen) {
-                  e.currentTarget.style.background = "transparent";
-                  e.currentTarget.style.color = styles.textTertiary;
-                }
+                background: quickMenuOpen ? withAlpha(styles.accent, 0.12) : undefined,
               }}
             >
               <Plus size={14} />
@@ -720,19 +701,10 @@ export function RightSidebar({
           onClick={() => toggleOpen(projectId)}
           aria-label="Collapse right sidebar"
           title="Collapse"
-          className="shrink-0 w-9 h-10 grid place-items-center border-l transition-colors"
+          className="shrink-0 w-9 h-9 grid place-items-center border-l bg-subtle transition-colors hover:bg-hover"
           style={{
             color: styles.textTertiary,
             borderColor: styles.border,
-            background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = styles.subtleHover;
-            e.currentTarget.style.color = styles.text;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle;
-            e.currentTarget.style.color = styles.textTertiary;
           }}
         >
           <PanelRightClose size={13} />
@@ -945,7 +917,7 @@ function QuickMenu({
       }}
     >
       <div
-        className="px-1.5 pt-0.5 pb-1 text-[9.5px] font-bold uppercase tracking-wider"
+        className="px-1.5 pt-0.5 pb-1 text-[10px] font-medium uppercase tracking-[0.08em]"
         style={{ color: styles.textTertiary }}
       >
         New tab
@@ -954,16 +926,14 @@ function QuickMenu({
         <button
           key={type}
           onClick={() => onPick(type)}
-          className="w-full flex items-start gap-2 px-1.5 py-1.5 rounded-lg transition-colors text-left"
-          onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          className="w-full flex items-start gap-2 px-1.5 py-1.5 rounded-lg transition-colors text-left hover:bg-hover"
         >
           <Icon size={16} style={{ color: styles.accent }} className="mt-0.5 shrink-0" />
           <div className="min-w-0">
-            <div className="text-[12px] font-semibold leading-tight" style={{ color: styles.text }}>
+            <div className="text-[12px] font-medium leading-tight" style={{ color: styles.text }}>
               {label}
             </div>
-            <div className="text-[10.5px] leading-tight mt-0.5" style={{ color: styles.textTertiary }}>
+            <div className="text-[11px] leading-tight mt-0.5" style={{ color: styles.textTertiary }}>
               {desc}
             </div>
           </div>
@@ -1023,7 +993,7 @@ function SubAgentPicker({
       }}
     >
       <div
-        className="px-1.5 pt-0.5 pb-1 text-[9.5px] font-bold uppercase tracking-wider"
+        className="px-1.5 pt-0.5 pb-1 text-[10px] font-medium uppercase tracking-[0.08em]"
         style={{ color: styles.textTertiary }}
       >
         Sub-agents
@@ -1040,9 +1010,7 @@ function SubAgentPicker({
             <button
               key={sub.id}
               onClick={() => onPick(sub)}
-              className="w-full flex items-center gap-2 px-1.5 py-1.5 rounded-lg transition-colors text-left"
-              onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              className="w-full flex items-center gap-2 px-1.5 py-1.5 rounded-lg transition-colors text-left hover:bg-hover"
             >
               {/* ROUND-48 (R48-e2, owner: "so I can easily identify which
                   sub-agent is which"): the leading monospace code badge —
@@ -1050,14 +1018,14 @@ function SubAgentPicker({
                   mark the Delegated rows / panel header / approval
                   attribution use. */}
               <span
-                className="shrink-0 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-md tracking-[0.08em]"
+                className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md tracking-[0.08em]"
                 style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
                 data-testid="subagent-picker-code"
               >
                 {sub.code}
               </span>
               <span
-                className="text-[9px] font-mono font-bold uppercase shrink-0 px-1.5 py-0.5 rounded-md"
+                className="text-[10px] font-mono font-medium uppercase shrink-0 px-1.5 py-0.5 rounded-md"
                 style={{ color, background: withAlpha(color, 0.14) }}
               >
                 {role}
@@ -1103,25 +1071,16 @@ function EmptyState({
       <div>
         <button
           onClick={onNewTab}
-          className="w-12 h-12 mx-auto mb-3 grid place-items-center rounded-2xl border-2 border-dashed transition-colors"
+          className="w-12 h-12 mx-auto mb-3 grid place-items-center rounded-2xl border-2 border-dashed border-line transition-colors hover:border-accent"
           style={{
-            borderColor: styles.border,
             color: styles.textTertiary,
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5);
-            e.currentTarget.style.color = styles.accent;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = styles.border;
-            e.currentTarget.style.color = styles.textTertiary;
           }}
           aria-label="Open a new tab"
           title="Open a new tab"
         >
           <Plus size={20} />
         </button>
-        <div className="text-[12.5px] font-medium" style={{ color: styles.textSecondary }}>
+        <div className="text-[13px] font-medium" style={{ color: styles.textSecondary }}>
           No tabs open
         </div>
         <div className="text-[11px] mt-1.5 mb-3" style={{ color: styles.textTertiary }}>
@@ -1132,19 +1091,9 @@ function EmptyState({
             <button
               key={label}
               onClick={onClick}
-              className="w-full flex items-center gap-2 h-9 px-3 rounded-xl border text-[12px] font-medium transition-all hover:-translate-y-px"
+              className="w-full flex items-center gap-2 h-9 px-3 rounded-xl border border-line bg-subtle text-[12px] font-medium transition-colors hover:bg-hover"
               style={{
-                borderColor: styles.border,
-                background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle,
                 color: styles.textSecondary,
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5);
-                e.currentTarget.style.color = styles.text;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = styles.border;
-                e.currentTarget.style.color = styles.textSecondary;
               }}
             >
               <Icon size={14} style={{ color: styles.accent }} className="shrink-0" />

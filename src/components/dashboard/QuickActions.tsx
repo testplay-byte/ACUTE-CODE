@@ -1,15 +1,15 @@
 import { motion } from "framer-motion";
-import { useState } from "react";
 import { Bot, MessageSquare, Settings, Terminal } from "lucide-react";
 import type { ThemeStyles } from "../../lib/themes";
 import { scaleIn } from "../../lib/motion";
 import { useProjects } from "../../hooks/use-projects";
 
 /**
- * Quick actions (round-21 wizard DNA): 24px-radius card with softShadow,
- * uppercase tracked label header, action buttons with solid accent icons
- * and wizard hover physics (subtleHover bg + translate-x). The primary
- * action is an accent-filled pill.
+ * Quick actions (round-21, de-costumed R100-G): 16px-radius card
+ * (rounded-2xl) with softShadow, label-tier header, action buttons with
+ * solid accent icons and the CSS hover:bg-hover wash (the wizard hover
+ * physics — translate-x + bentoShadowSm scale — are deleted per TOKENS §6:
+ * resting UI never fidgets). The primary action is an accent-filled pill.
  *
  * ROUND-48 (R48-a): the primary no longer targets /sessions — the Sessions
  * screen left the sidebar nav (owner: "remove the sessions section
@@ -32,8 +32,7 @@ export function QuickActions({
   onNavigate: (to: string) => void;
   styles: ThemeStyles;
 }) {
-  const { card, border, text, textSecondary, accent, accentText, subtle, subtleHover, softShadow, bentoShadowSm } = styles;
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const { card, border, text, accent, accentText, softShadow } = styles;
 
   // Newest project first (the live backend lists created_at DESC; the demo
   // fixture returns seed order). Shared query key — no extra fetch.
@@ -55,37 +54,31 @@ export function QuickActions({
   return (
     <motion.div
       variants={scaleIn}
-      className="rounded-[24px] border-[1.5px] p-4 md:p-5"
+      className="rounded-2xl border-[1.5px] p-4 md:p-5"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
     >
       <div className="mb-3 flex items-center gap-2.5">
         <Terminal size={13} style={{ color: accent }} strokeWidth={2} />
-        <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: textSecondary }}>
+        <span className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: text }}>
           Quick Actions
         </span>
       </div>
       <div className="flex flex-col gap-2">
-        {actions.map(({ label, to, icon: Icon, primary }, i) => (
+        {actions.map(({ label, to, icon: Icon, primary }) => (
           <button
             key={to}
             onClick={() => onNavigate(to)}
-            onMouseEnter={() => setHoveredIndex(i)}
-            onMouseLeave={() => setHoveredIndex(null)}
-            className={primary ? "w-full cursor-pointer rounded-full h-12 px-5 flex items-center gap-2.5 text-[14px] font-bold transition-all duration-200" : "w-full cursor-pointer rounded-[14px] border-[1.5px] h-11 px-4 flex items-center gap-2.5 text-[13px] font-bold transition-all duration-200"}
+            className={primary ? "w-full cursor-pointer rounded-full h-12 px-5 flex items-center gap-2.5 text-[13px] font-semibold transition-colors duration-150" : "w-full cursor-pointer rounded-xl border-[1.5px] h-11 px-4 flex items-center gap-2.5 text-[13px] font-medium transition-colors duration-150 bg-subtle hover:bg-hover"}
             style={
               primary
                 ? {
                     backgroundColor: accent,
                     color: accentText,
                     border: `1.5px solid ${accent}`,
-                    boxShadow: hoveredIndex === i ? bentoShadowSm : "none",
-                    transform: hoveredIndex === i ? "scale(1.02)" : "scale(1)",
                   }
                 : {
-                    backgroundColor: hoveredIndex === i ? subtleHover : subtle,
                     borderColor: border,
                     color: text,
-                    transform: hoveredIndex === i ? "translateX(3px)" : "translateX(0)",
                   }
             }
           >

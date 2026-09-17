@@ -41,8 +41,7 @@ function SessionRow({
   onOpen: (sessionId: string, projectId: string | null) => void;
   styles: ThemeStyles;
 }) {
-  const { card, text, textSecondary, textTertiary, border, subtleHover, softShadow } = styles;
-  const [hovered, setHovered] = useState(false);
+  const { text, textSecondary, textTertiary, border, softShadow } = styles;
 
   return (
     <motion.button
@@ -54,20 +53,16 @@ function SessionRow({
       }}
       aria-label={`Open session ${session.title}`}
       title={toolBreakdownTitle(session)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      className="w-full cursor-pointer rounded-[16px] border-[1.5px] p-3.5 text-left transition-all duration-200"
+      className="w-full cursor-pointer rounded-2xl border-[1.5px] bg-card p-3.5 text-left transition-colors duration-200 hover:bg-hover"
       style={{
-        backgroundColor: hovered ? subtleHover : card,
         borderColor: border,
-        boxShadow: hovered ? softShadow : "none",
-        transform: hovered ? "translateY(-1px)" : "translateY(0)",
+        boxShadow: softShadow,
       }}
     >
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-[13px] font-bold" style={{ color: text }}>
+            <span className="truncate text-[13px] font-semibold" style={{ color: text }}>
               {session.title}
             </span>
             <span
@@ -128,19 +123,15 @@ function SubAgentRow({
   onOpen: (sessionId: string, projectId: string | null) => void;
   styles: ThemeStyles;
 }) {
-  const { text, textSecondary, textTertiary, border, subtle, accent, accentText } = styles;
-  const [hovered, setHovered] = useState(false);
+  const { text, textSecondary, textTertiary, border, accent, accentText } = styles;
 
   return (
     <div
-      className="ml-4 sm:ml-6 rounded-[14px] border-[1.5px] border-l-[3px] p-3 transition-colors duration-200"
+      className="ml-4 sm:ml-6 rounded-xl border-[1.5px] border-l-[3px] p-3 transition-colors duration-200 hover:bg-hover"
       style={{
-        backgroundColor: hovered ? subtle : "transparent",
         borderColor: border,
         borderLeftColor: accent,
       }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
     >
       <button
         type="button"
@@ -151,13 +142,13 @@ function SubAgentRow({
       >
         <div className="flex items-center gap-2">
           <span
-            className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
+            className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
             style={{ backgroundColor: accent, color: accentText }}
           >
             <Bot size={10} strokeWidth={2.5} />
             sub-agent{session.role ? ` · ${session.role}` : ""}
           </span>
-          <span className="truncate text-[12px] font-semibold" style={{ color: text }}>
+          <span className="truncate text-[12px] font-medium" style={{ color: text }}>
             {session.title}
           </span>
           <span
@@ -195,7 +186,9 @@ function ProjectSection({
   const { card, text, textSecondary, textTertiary, border, subtleHover, softShadow } = styles;
   const [open, setOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
-  const [hovered, setHovered] = useState(false);
+
+  /* R100-G: hover is the CSS bg-hover wash now — no `hovered` state (the
+     old JS pair painted subtleHover + a lift). */
 
   const mains = project.sessions.filter((s) => !s.isSubagent);
   const subs = project.sessions.filter((s) => s.isSubagent);
@@ -219,7 +212,7 @@ function ProjectSection({
 
   return (
     <div
-      className="rounded-[20px] border-[1.5px]"
+      className="rounded-2xl border-[1.5px]"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
     >
       <button
@@ -227,10 +220,7 @@ function ProjectSection({
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-label={`Toggle project ${project.name} sessions`}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        className="flex w-full cursor-pointer items-center gap-3 rounded-[20px] p-4 text-left transition-colors duration-200"
-        style={{ backgroundColor: hovered ? subtleHover : "transparent" }}
+        className="flex w-full cursor-pointer items-center gap-3 rounded-2xl p-4 text-left transition-colors duration-200 hover:bg-hover"
       >
         <span style={{ color: textTertiary }} className="shrink-0">
           {open ? <ChevronDown size={16} strokeWidth={2.5} /> : <ChevronRight size={16} strokeWidth={2.5} />}
@@ -242,12 +232,12 @@ function ProjectSection({
         />
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
-            <span className="truncate text-[14px] font-bold" style={{ color: text }}>
+            <span className="truncate text-[13px] font-semibold" style={{ color: text }}>
               {project.name}
             </span>
             {project.synthetic ? (
               <span
-                className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold"
+                className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium"
                 style={{ backgroundColor: subtleHover, color: textTertiary }}
               >
                 no project
@@ -335,7 +325,7 @@ function ProjectSection({
             <button
               type="button"
               onClick={() => setShowAll(true)}
-              className="mt-2 w-full cursor-pointer rounded-[12px] py-2 text-[12px] font-bold transition-colors"
+              className="mt-2 w-full cursor-pointer rounded-xl py-2 text-[12px] font-semibold transition-colors"
               style={{ color: styles.accent }}
             >
               Show all {mains.length} sessions
@@ -363,11 +353,11 @@ export function ProjectsDrilldown({
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full" style={{ backgroundColor: accent }} aria-hidden="true" />
-          <h2 className="text-[11px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
             Projects &amp; Sessions
           </h2>
         </div>
-        <span className="text-[11px] font-medium" style={{ color: textTertiary }}>
+        <span className="text-[11px]" style={{ color: textTertiary }}>
           Sub-agent runs nest under their parent
         </span>
       </div>

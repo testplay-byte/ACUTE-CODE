@@ -19,13 +19,13 @@ function ModelCard({ model, maxCalls, styles }: { model: DetailedUsageModel; max
   return (
     <motion.article
       variants={staggerItem}
-      className="rounded-[20px] border-[1.5px] p-4"
+      className="rounded-2xl border-[1.5px] p-4"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
       aria-label={`Model ${model.model}`}
     >
       <div className="flex items-baseline justify-between gap-2">
         <span
-          className="truncate font-mono text-[12px] font-bold"
+          className="truncate font-mono text-[12px] font-semibold"
           style={{ color: text }}
           title={model.model}
         >
@@ -48,11 +48,11 @@ function ModelCard({ model, maxCalls, styles }: { model: DetailedUsageModel; max
       </div>
       <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="min-w-0">
-          <dt className="text-[10px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
             Sent
           </dt>
           <dd
-            className="mt-0.5 truncate text-[12px] font-bold"
+            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
             style={{ color: text }}
             title={`${model.tokens.input.toLocaleString()} tokens`}
           >
@@ -60,11 +60,11 @@ function ModelCard({ model, maxCalls, styles }: { model: DetailedUsageModel; max
           </dd>
         </div>
         <div className="min-w-0">
-          <dt className="text-[10px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
             Received
           </dt>
           <dd
-            className="mt-0.5 truncate text-[12px] font-bold"
+            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
             style={{ color: text }}
             title={`${model.tokens.output.toLocaleString()} tokens`}
           >
@@ -72,11 +72,11 @@ function ModelCard({ model, maxCalls, styles }: { model: DetailedUsageModel; max
           </dd>
         </div>
         <div className="min-w-0">
-          <dt className="text-[10px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
             Cached
           </dt>
           <dd
-            className="mt-0.5 truncate text-[12px] font-bold"
+            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
             style={{ color: text }}
             title={`${model.tokens.cached.toLocaleString()} tokens`}
           >
@@ -84,11 +84,11 @@ function ModelCard({ model, maxCalls, styles }: { model: DetailedUsageModel; max
           </dd>
         </div>
         <div className="min-w-0">
-          <dt className="text-[10px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
             Cost
           </dt>
           <dd
-            className="mt-0.5 truncate text-[12px] font-bold"
+            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
             style={{ color: text }}
             title={
               model.costKnown === false
@@ -134,16 +134,16 @@ export function ModelCards({
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Cpu size={13} style={{ color: accent, opacity: 0.7 }} />
-          <h2 className="text-[11px] font-bold uppercase tracking-widest" style={{ color: textTertiary }}>
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
             Models
           </h2>
         </div>
-        <span className="text-[11px] font-medium" style={{ color: textSecondary }}>
+        <span className="text-[11px] tabular-nums" style={{ color: textSecondary }}>
           {models.length} {models.length === 1 ? "model" : "models"}
         </span>
       </div>
       {sorted.length === 0 ? (
-        <p className="py-4 text-[12px] font-medium" style={{ color: textSecondary }}>
+        <p className="py-4 text-[12px]" style={{ color: textSecondary }}>
           No model calls recorded yet.
         </p>
       ) : (

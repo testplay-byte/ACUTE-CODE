@@ -7,6 +7,11 @@ import { formatTokenCount } from "../../lib/format";
 import { ease, fadeInUp, staggerContainer } from "../../lib/motion";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
+// R100-G (research §C2 P3 + §C3): the de-costumed hero rides the round-100
+// primitives — the Kicker (label tier) + 24px/600 title; the empty state's
+// framing card rides SectionCard.
+import { Kicker } from "../ui/Kicker";
+import { SectionCard } from "../ui/SectionCard";
 import { StatCard } from "../dashboard/StatCard";
 import { withAlpha } from "../dashboard/helpers";
 import { KeyCards } from "./KeyCards";
@@ -20,12 +25,21 @@ import { DataStatsPanel } from "./DataStatsPanel";
 
 /**
  * ROUND-52 (R52-b): the in-app Usage screen (/usage) — the owner-approved
- * DASHBOARD usage page layout rebuilt in the app's wizard design DNA
- * (DashboardScreen's container ladder, StatCard/TokenBarChart patterns,
- * useThemeStyles colors, framer-motion entrance). Sections: hero + range
- * selector, overview stat cards, activity chart + tool leaderboard, model
- * cards, and the projects → sessions drill-down with nested sub-agent runs.
- * Overview/drill-down rollups are whole-history; `days` scopes the chart.
+ * DASHBOARD usage page layout rebuilt in the app's working-UI design
+ * language (DashboardScreen's container ladder, StatCard/TokenBarChart
+ * patterns, useThemeStyles colors, framer-motion entrance). Sections: hero +
+ * range selector, overview stat cards, activity chart + tool leaderboard,
+ * model cards, and the projects → sessions drill-down with nested
+ * sub-agent runs. Overview/drill-down rollups are whole-history; `days`
+ * scopes the chart.
+ *
+ * R100-G (research §C2 P3): the hero is DE-COSTUMED — the rotated
+ * accent-box font-black display (clamp 2.75–4.5rem + -rotate-1 +
+ * bentoShadow, WIZARD-DNA §8's working-screen violations) is replaced by
+ * the label-tier Kicker + 24px/600 title + one-line 13px secondary
+ * description (the SettingsPage header grammar). The chart's range picker
+ * snapped to the DataStatsPanel picker grammar (rounded-xl segments,
+ * rounded-lg buttons, 600 weights).
  */
 
 const RANGE_OPTIONS = [7, 14, 30, 90] as const;
@@ -44,7 +58,7 @@ function RangeSelector({
     <div
       role="group"
       aria-label="Activity chart day range"
-      className="flex shrink-0 items-center gap-1 rounded-[14px] border-[1.5px] p-1"
+      className="flex shrink-0 items-center gap-1 rounded-xl border-[1.5px] p-1"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
     >
       {RANGE_OPTIONS.map((option) => {
@@ -56,7 +70,7 @@ function RangeSelector({
             onClick={() => onChange(option)}
             aria-pressed={active}
             aria-label={`Last ${option} days`}
-            className="cursor-pointer rounded-[10px] px-2.5 py-1.5 text-[12px] font-bold transition-colors duration-200"
+            className="cursor-pointer rounded-lg px-2.5 py-1.5 text-[12px] font-semibold tabular-nums transition-colors duration-200"
             style={{ backgroundColor: active ? accent : "transparent", color: active ? accentText : textSecondary }}
           >
             {option}d
@@ -106,8 +120,11 @@ export function UsageScreen() {
       className="h-full overflow-y-auto"
     >
       <div className="mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px] px-5 md:px-8 2xl:px-14 py-6 md:py-10 pb-16">
-        {/* Hero — wizard typography (kicker + font-black title in the accent
-            box) with the chart's day-range selector beside it */}
+        {/* Hero — R100-G (research §C2 P3): the de-costumed working-screen
+            header — label-tier Kicker + 24px/600 title + one-line 13px
+            secondary description (the rotated accent-box display hero is
+            deleted: wizard DNA stays in the wizard) — with the chart's
+            day-range picker beside it */}
         <motion.div
           initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
@@ -115,30 +132,15 @@ export function UsageScreen() {
           className="mb-8 md:mb-10 flex flex-col gap-4 md:flex-row md:items-end md:justify-between"
         >
           <div className="min-w-0">
-            <p
-              className="text-[13px] md:text-[14px] font-bold uppercase tracking-[0.18em] mb-2"
-              style={{ color: styles.textSecondary }}
-            >
-              Usage Analytics
-            </p>
+            <Kicker className="mb-1">Data &amp; Statistics</Kicker>
             <h1
-              className="font-black leading-[0.95] tracking-[-0.03em]"
-              style={{ color: styles.text, fontSize: "clamp(2.75rem, 5.5vw, 4.5rem)" }}
+              className="text-[24px] font-semibold tracking-tight leading-[1.2]"
+              style={{ color: styles.text }}
             >
-              <span
-                className="inline-block px-3 md:px-4 rounded-[14px] md:rounded-[18px] border-[2.5px] -rotate-1"
-                style={{
-                  background: styles.accent,
-                  color: styles.accentText,
-                  borderColor: styles.borderStrong,
-                  boxShadow: styles.bentoShadow,
-                }}
-              >
-                Usage
-              </span>
+              Usage
             </h1>
             <p
-              className="mt-3 text-[15px] md:text-[16px] font-medium max-w-[560px]"
+              className="mt-2 text-[13px] max-w-[560px]"
               style={{ color: styles.textSecondary }}
             >
               Every project, every session, every tool call — tokens, cost and
@@ -156,21 +158,21 @@ export function UsageScreen() {
               {[0, 1, 2, 3].map((i) => (
                 <div
                   key={i}
-                  className="h-[92px] w-full animate-pulse rounded-[20px] border-[1.5px]"
+                  className="h-[92px] w-full animate-pulse rounded-2xl border-[1.5px]"
                   style={{ backgroundColor: styles.subtle, borderColor: styles.borderSubtle }}
                 />
               ))}
             </div>
             <div
               aria-label="Loading usage activity"
-              className="mb-4 md:mb-6 h-[248px] w-full animate-pulse rounded-[24px] border-[1.5px]"
+              className="mb-4 md:mb-6 h-[248px] w-full animate-pulse rounded-2xl border-[1.5px]"
               style={{ backgroundColor: styles.subtle, borderColor: styles.borderSubtle }}
             />
             <div className="flex flex-col gap-3">
               {[0, 1, 2].map((i) => (
                 <div
                   key={i}
-                  className="h-[64px] w-full animate-pulse rounded-[16px] border-[1.5px]"
+                  className="h-[64px] w-full animate-pulse rounded-2xl border-[1.5px]"
                   style={{ backgroundColor: styles.subtle, borderColor: styles.borderSubtle }}
                 />
               ))}
@@ -179,7 +181,7 @@ export function UsageScreen() {
         ) : usage.isError ? (
           <div
             role="alert"
-            className="mb-4 md:mb-6 rounded-[16px] border-[1.5px] px-4 py-3 text-[12px] font-medium flex flex-wrap items-center gap-x-3 gap-y-1"
+            className="mb-4 md:mb-6 rounded-2xl border-[1.5px] px-4 py-3 text-[12px] font-medium flex flex-wrap items-center gap-x-3 gap-y-1"
             style={{
               borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3),
               background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
@@ -197,7 +199,7 @@ export function UsageScreen() {
               type="button"
               onClick={() => void usage.refetch()}
               aria-label="Retry loading usage analytics"
-              className="shrink-0 h-7 px-3 rounded-lg text-[11.5px] font-bold border transition-opacity hover:opacity-85"
+              className="shrink-0 h-7 px-3 rounded-lg text-[12px] font-semibold border transition-opacity hover:opacity-85"
               style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
             >
               Retry
@@ -205,19 +207,17 @@ export function UsageScreen() {
           </div>
         ) : !hasData ? (
           <>
-            {/* Empty state — the whole ledger is blank */}
-            <div
-              className="rounded-[24px] border-[1.5px] p-10 text-center"
-              style={{ backgroundColor: styles.card, borderColor: styles.border, boxShadow: styles.softShadow }}
-            >
-              <p className="text-[14px] font-bold" style={{ color: styles.text }}>
+            {/* Empty state — the whole ledger is blank (R100-G: SectionCard
+                framing + the ladder's section tier for the title). */}
+            <SectionCard ariaLabel="Usage empty state" size="lg" className="py-10 text-center">
+              <p className="text-[13px] font-semibold" style={{ color: styles.text }}>
                 No usage yet — start a conversation
               </p>
               <p className="mt-1.5 text-[12px]" style={{ color: styles.textSecondary }}>
                 Tokens, tool calls and sub-agent runs land here the moment your
                 first session makes a model call.
               </p>
-            </div>
+            </SectionCard>
             {/* ROUND-64 (R64-e): configured keys still show with "not used yet". */}
             {keyCardsSection}
           </>

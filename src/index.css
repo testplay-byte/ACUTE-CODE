@@ -128,6 +128,11 @@
   --color-ink: var(--text);
   --color-muted: var(--muted);
   --color-line: var(--border);
+  /* R100-G: the strong-line utility — TOKENS §1a's `border-strong` step
+     ("hover border swap, top-level card lines") reaches the CSS-class leg so
+     working cards (StatCard) can hover-swap borders WITHOUT a JS handler
+     (TOKENS §6: hover is a class, never onMouseEnter). */
+  --color-line-strong: var(--ac-border-strong);
   --color-accent: var(--accent);
   --color-accent-2: var(--accent-2);
   --color-accent-faded: var(--accent-faded);

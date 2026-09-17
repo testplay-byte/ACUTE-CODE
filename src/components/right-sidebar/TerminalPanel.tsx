@@ -20,7 +20,6 @@ import { useRightSidebarStore, stateKey, type RightSidebarTab } from "../../lib/
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
-import { withAlpha } from "../dashboard/helpers";
 
 /**
  * ROUND-38/39 right-sidebar Terminal tab (owner: "I can see the terminal on
@@ -149,13 +148,13 @@ function BackgroundJobsSection({ projectId }: { projectId: string }) {
     >
       <div className="flex items-center gap-1.5">
         <span
-          className="text-[9.5px] font-bold uppercase tracking-[0.12em]"
+          className="text-[10px] font-medium uppercase tracking-[0.08em]"
           style={{ color: styles.textTertiary }}
         >
           Background jobs
         </span>
         <span
-          className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full"
+          className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full tabular-nums"
           style={{ background: styles.subtleHover, color: styles.textSecondary }}
         >
           {jobs.length}
@@ -182,14 +181,8 @@ function BackgroundJobsSection({ projectId }: { projectId: string }) {
                   setExpandedId(expanded ? null : job.id);
                 }
               }}
-              className="flex items-center gap-2 h-6 rounded-md -mx-1 px-1 cursor-pointer transition-colors min-w-0"
+              className="flex items-center gap-2 h-6 rounded-lg -mx-1 px-1 cursor-pointer transition-colors min-w-0 hover:bg-hover"
               title={`${job.command}\n${job.cwd}`}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = styles.subtleHover;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
-              }}
             >
               <span
                 className={`w-1.5 h-1.5 rounded-full shrink-0 ${alive ? "ac-pulse" : ""}`}
@@ -197,7 +190,7 @@ function BackgroundJobsSection({ projectId }: { projectId: string }) {
                 aria-hidden
               />
               <span
-                className="min-w-0 flex-1 truncate font-mono text-[10.5px]"
+                className="min-w-0 flex-1 truncate font-mono text-[11px]"
                 style={{ color: styles.textSecondary }}
               >
                 {job.command}
@@ -219,21 +212,15 @@ function BackgroundJobsSection({ projectId }: { projectId: string }) {
                   disabled={stopJob.isPending}
                   aria-label={`Stop background job ${job.id}`}
                   title="Stop this background job"
-                  className="shrink-0 w-6 h-6 grid place-items-center rounded-md transition-colors disabled:opacity-50"
+                  className="shrink-0 w-6 h-6 grid place-items-center rounded-lg transition-colors hover:bg-hover disabled:opacity-50"
                   style={{ color: SEMANTIC_COLORS.danger }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = withAlpha(SEMANTIC_COLORS.danger, 0.12);
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                  }}
                   data-testid="background-job-stop"
                 >
                   <Square size={9} fill="currentColor" strokeWidth={0} aria-hidden />
                 </button>
               ) : job.exitCode !== null ? (
                 <span
-                  className="shrink-0 font-mono text-[10px] font-bold"
+                  className="shrink-0 font-mono text-[10px] font-medium tabular-nums"
                   style={{ color: job.exitCode === 0 ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger }}
                 >
                   exit {job.exitCode}
@@ -242,7 +229,7 @@ function BackgroundJobsSection({ projectId }: { projectId: string }) {
             </div>
             {expanded && tail.length > 0 ? (
               <div
-                className="mt-0.5 mb-0.5 ml-3.5 rounded-[8px] border px-2 py-1 max-h-40 overflow-y-auto auto-scroll font-mono text-[10px] leading-[1.5] whitespace-pre-wrap break-words"
+                className="mt-0.5 mb-0.5 ml-3.5 rounded-lg border px-2 py-1 max-h-40 overflow-y-auto auto-scroll font-mono text-[10px] leading-[1.5] whitespace-pre-wrap break-words"
                 style={{
                   borderColor: styles.borderSubtle,
                   background: styles.isDark ? "rgba(0,0,0,0.25)" : styles.bg,
@@ -619,7 +606,7 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
         <div
           role="tablist"
           aria-label="Terminal mode"
-          className="flex items-center rounded-md border overflow-hidden"
+          className="flex items-center rounded-lg border overflow-hidden"
           style={{ borderColor: styles.border }}
         >
           <button
@@ -627,10 +614,10 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
             role="tab"
             aria-selected={mode === "run"}
             onClick={() => setMode("run")}
-            className="px-2 py-0.5 text-[10.5px] font-medium transition-colors"
+            className="px-2 py-0.5 text-[11px] font-medium transition-colors"
             style={{
               background: mode === "run" ? styles.accent : "transparent",
-              color: mode === "run" ? "#fff" : styles.textTertiary,
+              color: mode === "run" ? styles.accentText : styles.textTertiary,
             }}
           >
             Run
@@ -643,10 +630,10 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
               setMode("shell");
               activateShell();
             }}
-            className="px-2 py-0.5 text-[10.5px] font-medium transition-colors"
+            className="px-2 py-0.5 text-[11px] font-medium transition-colors"
             style={{
               background: mode === "shell" ? styles.accent : "transparent",
-              color: mode === "shell" ? "#fff" : styles.textTertiary,
+              color: mode === "shell" ? styles.accentText : styles.textTertiary,
             }}
           >
             Shell
@@ -664,7 +651,7 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
       </div>
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto auto-scroll px-3 py-2 font-mono text-[11.5px] leading-[1.55]"
+        className="flex-1 min-h-0 overflow-y-auto auto-scroll px-3 py-2 font-mono text-[12px] leading-[1.55]"
         style={{ background: styles.isDark ? "rgba(0,0,0,0.25)" : styles.bg }}
         onClick={() => inputRef.current?.focus()}
       >
@@ -768,7 +755,7 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
             onClick={stop}
             aria-label="Stop command"
             title="Stop the running command"
-            className="shrink-0 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium border transition-colors"
+            className="shrink-0 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] font-medium border transition-colors"
             style={{ color: SEMANTIC_COLORS.danger, borderColor: styles.border }}
           >
             <Square size={10} fill="currentColor" strokeWidth={0} aria-hidden />
@@ -783,7 +770,7 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
               aria-label="Kill shell"
               title="Kill the shell session and clear the output"
               disabled={shellSession === null && shellLines.length === 0}
-              className="shrink-0 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium border transition-colors disabled:opacity-40"
+              className="shrink-0 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] font-medium border transition-colors disabled:opacity-40"
               style={{ color: SEMANTIC_COLORS.danger, borderColor: styles.border }}
             >
               <Trash2 size={10} aria-hidden />
@@ -794,7 +781,7 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
               onClick={() => void newShell()}
               aria-label="New shell"
               title="Kill this shell and start a fresh one"
-              className="shrink-0 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium border transition-colors"
+              className="shrink-0 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] font-medium border transition-colors"
               style={{ color: styles.textSecondary, borderColor: styles.border }}
             >
               <RefreshCw size={10} aria-hidden />

@@ -7,6 +7,7 @@ import { openLink } from "../../lib/open-link";
 import type { RightSidebarTab } from "../../lib/right-sidebar-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { highlightLine, getFileColor, SYNTAX_COLORS } from "../project-chat/highlight";
 import { withAlpha } from "../dashboard/helpers";
 
@@ -72,12 +73,12 @@ export function Markdown({ content, projectId }: { content: string; projectId?: 
       out.push(
         <pre
           key={`pre-${key++}`}
-          className="my-2 rounded-[10px] p-3 font-mono text-[11.5px] leading-[1.55] overflow-x-auto auto-scroll border"
+          className="my-2 rounded-lg p-3 font-mono text-[12px] leading-[1.55] overflow-x-auto auto-scroll border"
           style={{ background: "rgba(0,0,0,0.18)", borderColor: withAlpha(SYNTAX_COLORS.comment, 0.3), color: "#d4d4d4" }}
         >
           <code>{buf.join("\n")}</code>
           {lang ? (
-            <span className="block mt-1 text-[10px] font-bold opacity-60">{lang}</span>
+            <span className="block mt-1 text-[10px] font-medium opacity-60">{lang}</span>
           ) : null}
         </pre>,
       );
@@ -87,9 +88,13 @@ export function Markdown({ content, projectId }: { content: string; projectId?: 
     if (h) {
       flushList();
       const level = h[1].length;
-      const sizes: Record<number, string> = { 1: "20px", 2: "17px", 3: "15px", 4: "14px", 5: "13px", 6: "12px" };
+      // R100-G: markdown headings snap to the ladder per TOKENS §2 (the
+      // ChatMarkdown HEADING_SIZES grammar) — h1–h3 = 13px/600, h4–h6 =
+      // 12px/600; the old 20/17/15/14/13/12 font-black staircase was the
+      // measured "AI-generated" tell.
+      const sizes: Record<number, string> = { 1: "13px", 2: "13px", 3: "13px", 4: "12px", 5: "12px", 6: "12px" };
       out.push(
-        <div key={`h-${key++}`} className="font-black mt-3 mb-1.5" style={{ fontSize: sizes[level] ?? "13px" }}>
+        <div key={`h-${key++}`} className="font-semibold mt-3 mb-1.5" style={{ fontSize: sizes[level] ?? "13px" }}>
           {inlineMd(h[2], projectId)}
         </div>,
       );
@@ -116,7 +121,7 @@ export function Markdown({ content, projectId }: { content: string; projectId?: 
     }
     flushList();
     out.push(
-      <p key={`p-${key++}`} className="text-[12.5px] leading-[1.65] my-0.5">
+      <p key={`p-${key++}`} className="text-[13px] leading-[1.65] my-0.5">
         {inlineMd(line, projectId)}
       </p>,
     );
@@ -150,7 +155,7 @@ function inlineMd(text: string, projectId?: string): ReactNode[] {
       parts.push(<strong key={`b-${k++}`}>{m[2]}</strong>);
     } else if (m[3] !== undefined) {
       parts.push(
-        <code key={`c-${k++}`} className="px-1.5 py-0.5 rounded-md font-mono text-[11.5px]" style={{ background: "rgba(255,255,255,0.08)" }}>
+        <code key={`c-${k++}`} className="px-1.5 py-0.5 rounded-md font-mono text-[12px]" style={{ background: "rgba(255,255,255,0.08)" }}>
           {m[3]}
         </code>,
       );
@@ -197,7 +202,7 @@ export function FileViewerPanel({ projectId, tab }: { projectId: string; tab: Ri
   if (filePath === null) {
     return (
       <div className="h-full grid place-items-center px-6 text-center">
-        <div className="text-[11.5px]" style={{ color: styles.textTertiary }}>
+        <div className="text-[12px]" style={{ color: styles.textTertiary }}>
           No file bound to this tab.
         </div>
       </div>
@@ -213,7 +218,7 @@ export function FileViewerPanel({ projectId, tab }: { projectId: string; tab: Ri
     <div className="h-full flex flex-col min-h-0">
       {/* File path breadcrumb */}
       <div
-        className="shrink-0 flex items-center gap-1.5 px-3 h-7 border-b font-mono text-[10.5px] truncate"
+        className="shrink-0 flex items-center gap-1.5 px-3 h-7 border-b font-mono text-[11px] truncate"
         style={{
           borderColor: styles.border,
           color: styles.textSecondary,
@@ -232,7 +237,7 @@ export function FileViewerPanel({ projectId, tab }: { projectId: string; tab: Ri
             loading…
           </div>
         ) : error ? (
-          <div className="px-3 py-2 text-[11px] font-mono" style={{ color: "#ef4444" }}>
+          <div className="px-3 py-2 text-[11px] font-mono" style={{ color: SEMANTIC_COLORS.danger }}>
             {error instanceof Error ? error.message : "failed to load file"}
           </div>
         ) : isMd ? (
@@ -240,7 +245,7 @@ export function FileViewerPanel({ projectId, tab }: { projectId: string; tab: Ri
             <Markdown content={content} projectId={projectId} />
           </div>
         ) : (
-          <pre className="p-2 font-mono text-[11.5px] leading-[1.6]">
+          <pre className="p-2 font-mono text-[12px] leading-[1.6]">
             {lines.map((line, idx) => (
               <div key={idx} className="flex">
                 <span
