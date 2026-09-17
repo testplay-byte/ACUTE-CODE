@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-15 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-101 -->
 # ADR-0030: Mermaid diagram rendering in the chat (mermaid v11 + two ADR-classified license pins)
 
 - **Status:** ACCEPTED
@@ -67,13 +67,15 @@ mermaid fence mounts — mid-stream unclosed fences stay plain CodeBlocks;
 `securityLevel: "strict"` always; the theme follows the app theme store
 (dark → "dark", light → "default"); a failed render degrades to the source
 in an ordinary CodeBlock under an amber one-line note — never a crash, never
-a blank.
+a blank. (Round 101 hardened this contract — see the addendum below.)
 
 ## Consequences
 
 - The chat renders mermaid flow (and sequence, state, ER, gantt…) diagrams
-  inline; everything else (every non-mermaid fence, unclosed fences,
-  thinking blocks) keeps the exact pre-R98 CodeBlock behavior.
+  inline; everything else keeps the exact pre-R98 CodeBlock behavior — every
+  non-mermaid fence and unclosed fences. (Thinking blocks originally stayed
+  CodeBlocks too; round 101 reversed that for mermaid fences — see the
+  addendum below.)
 - The two pins are load-bearing: a version bump of either pinned package
   re-fails the audit until the pin is re-verified against the new version
   (this is intentional — the audit must stay honest about what ships).
@@ -81,3 +83,41 @@ a blank.
   override rows — no data, no wire format, no migration involved.
 - Bundle impact stays lazy: the mermaid chunk loads only when a completed
   mermaid fence actually renders, never for ordinary chat traffic.
+
+---
+
+## Round-101 addendum (R101-F — the owner's v0.98.0 report)
+
+> "I want you to handle the mermaid flow diagrams properly too, because in
+> the chat area it was not showing me the properly rendered flow diagrams as
+> I hoped for it to be."
+
+The report traced to four verified defects, all fixed in round 101
+(2026-09-17) without changing this ADR's decision (mermaid@11.17.2 + the two
+license pins stand):
+
+- **Thinking/work sections render diagrams too (the old answer-text-only
+  scope was the defect).** A ```mermaid fence the model emitted inside a
+  thinking block showed as SOURCE forever: WorkingSection's fence-split
+  rendered every closed fence through the plain CodeBlock. A closed
+  mermaid fence there now mounts the SAME MermaidDiagram (mounted exactly
+  as ChatMarkdown mounts it — `code` only; the theme rides the app store).
+  The thinking-note container design is untouched.
+- **Errors surface.** The silent `catch {}` is gone: every failure logs
+  `console.warn("[mermaid] render failed:", err)` and the amber note carries
+  the reason in a mono sub-line (`data-testid="mermaid-error-detail"`) —
+  the message's first line, capped at 140 characters, with the `cause` chain
+  walked so wrapped loader errors ("Failed to fetch dynamically imported
+  module") stay diagnosable.
+- **One bounded retry on both legs.** The lazy-chunk import retries once
+  (400ms gap): a single WebView2 asset-protocol/AV hiccup no longer silently
+  degrades every diagram forever. `mermaid.render` retries once with a
+  FRESH `acute-mermaid-<seq>` id (transient font/theme timing on a freshly
+  mounted webview); the cancelled-flag race guard spans both attempts on
+  both legs. A second failure flows into the honest note, message and all.
+- **The chunk ships or the build fails.**
+  `scripts/release/check-mermaid-chunk.mjs` (wired into `pnpm build`) globs
+  `dist/assets/mermaid*.js` (today's shape: `mermaid.core-<hash>.js`, ~668
+  KiB — mermaid@11's ESM entry) and exits 1 with a loud message when the lazy
+  chunk is missing — the packaged-app failure mode is now a build-time gate
+  instead of a silent runtime degradation.

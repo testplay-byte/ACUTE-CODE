@@ -858,11 +858,10 @@ function renderBlocks(content: string, projectId: string, styles: ThemeStyles): 
         // everything else keeps the ordinary CodeBlock — every other
         // language, and an UNCLOSED mid-stream mermaid fence (terminated is
         // false while the diagram source is still streaming; the diagram
-        // mounts only once the closing fence lands). THINKING blocks stay
-        // CodeBlocks by design: WorkingSection's fence-split renders them
-        // directly as archival mono (R97-F), deliberately outside this
-        // branch — a diagram grammar has no business inside a reasoning
-        // trace, and the mono rendering is the thinking area's identity.
+        // mounts only once the closing fence lands). R101-F (DEFECT 4): the
+        // thinking-area's mermaid fences render as diagrams TOO now —
+        // WorkingSection's fence-split mounts the SAME MermaidDiagram for
+        // its closed mermaid parts (this branch stays the ANSWER-text leg).
         return b.lang.toLowerCase() === "mermaid" && b.terminated ? (
           <MermaidDiagram key={`md-diagram-${i}`} code={b.code} />
         ) : (

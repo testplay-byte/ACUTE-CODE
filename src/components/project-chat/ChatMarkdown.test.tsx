@@ -40,21 +40,47 @@ import { renderWithProviders } from "../../test-utils";
 // module scope). initialize/render are plain vi.fn()s; behaviors are armed
 // per-test because the afterEach restoreAllMocks wipes them, and call counts
 // are cleared in the mermaid describe's beforeEach.
-const mockMermaid = vi.hoisted(() => ({
-  factoryRuns: 0,
-  initialize: vi.fn(),
-  render: vi.fn(),
-}));
-
-vi.mock("mermaid", () => {
-  mockMermaid.factoryRuns += 1;
+//
+// R101-F: the factory can be armed to THROW (factoryFailures > 0) — a
+// throwing factory makes import("mermaid") REJECT (Vitest wraps the throw;
+// the original error rides its `cause`), and the mock registry caches only
+// SUCCESSFUL factory results, so the NEXT import re-runs the factory: the
+// exact observable the bounded import retry (DEFECT 2) needs. The mermaid
+// describe re-registers the mock per-test (vi.doMock) so every test starts
+// with a COLD cache — otherwise a warm cache answers imports without ever
+// evaluating the factory and the run counter stops being an observable.
+const mockMermaid = vi.hoisted(() => {
+  /** The ONE factory body — used by the hoisted vi.mock and the per-test
+   * vi.doMock re-registration alike (a plain hoisted function, not a vi.fn,
+   * so restoreAllMocks never wipes its counting). */
+  function factory() {
+    mockMermaid.factoryRuns += 1;
+    if (mockMermaid.factoryFailures > 0) {
+      mockMermaid.factoryFailures -= 1;
+      // The production-shaped message: the exact string a WebView2 lazy-chunk
+      // fetch failure produces ("Failed to fetch dynamically imported
+      // module"), so the error-detail assertions pin real-world behavior.
+      throw new Error(
+        `Failed to fetch dynamically imported module: mermaid (factory run ${mockMermaid.factoryRuns})`,
+      );
+    }
+    return {
+      default: {
+        initialize: mockMermaid.initialize,
+        render: mockMermaid.render,
+      },
+    };
+  }
   return {
-    default: {
-      initialize: mockMermaid.initialize,
-      render: mockMermaid.render,
-    },
+    factoryRuns: 0,
+    factoryFailures: 0,
+    factory,
+    initialize: vi.fn(),
+    render: vi.fn(),
   };
 });
+
+vi.mock("mermaid", () => mockMermaid.factory());
 
 afterEach(() => {
   cleanup();
@@ -661,9 +687,15 @@ describe("ROUND-95 (R95-F) helper contracts (matchUrl · isSafeUrl · decodeEnti
 describe("ROUND-98 (R98-D) mermaid diagrams (ADR-0030)", () => {
   // Call counts are cleared per-test (implementations are armed per-test;
   // the file-level afterEach restoreAllMocks wipes the armed behaviors).
+  // R101-F: the vi.doMock re-registration resets the mock to a COLD cache
+  // (mockPath deletes the previous cached exports — see the mock's header
+  // note) and factoryFailures re-arms to zero, so the factory-run counter is
+  // a per-test observable for the retry legs below.
   beforeEach(() => {
     mockMermaid.initialize.mockClear();
     mockMermaid.render.mockClear();
+    mockMermaid.factoryFailures = 0;
+    vi.doMock("mermaid", () => mockMermaid.factory());
   });
 
   it("the scanner's `terminated` flag — true only when the CLOSING fence line arrived", () => {
@@ -780,6 +812,85 @@ describe("ROUND-98 (R98-D) mermaid diagrams (ADR-0030)", () => {
     act(() => {
       useThemeStore.setState({ mode: "dark" });
     });
+  });
+
+  it("(e) R101-F: a chunk-import failure retries ONCE — the factory runs twice, the diagram still renders", async () => {
+    // DEFECT 2: a transient lazy-chunk fetch failure (asset-protocol hiccup,
+    // AV interference in the packaged app) must not degrade the diagram —
+    // it gets ONE bounded retry (the 400ms gap is real time; wait generous).
+    mockMermaid.factoryFailures = 1; // the FIRST import("mermaid") rejects
+    mockMermaid.render.mockResolvedValue({ svg: '<svg data-acute-mermaid="import-retry"></svg>' });
+    const runsBefore = mockMermaid.factoryRuns;
+    renderMd("```mermaid\ngraph TD;\nA-->B\n```");
+    await waitFor(
+      () => expect(document.querySelector('[data-acute-mermaid="import-retry"]')).toBeTruthy(),
+      { timeout: 3000 },
+    );
+    // ONE retry — exactly TWO factory evaluations (the failed attempt + the
+    // retry): the cold-cache re-registration makes the counter observable.
+    expect(mockMermaid.factoryRuns).toBe(runsBefore + 2);
+    expect(mockMermaid.render).toHaveBeenCalledTimes(1);
+    // Recovered: no amber note anywhere.
+    expect(screen.queryByText("Diagram could not be rendered — showing source")).toBeNull();
+  });
+
+  it("(f) R101-F: an import failure that PERSISTS surfaces its message — the note + the mono error detail", async () => {
+    // DEFECT 2 + DEFECT 1: the SECOND rejection flows into the failure note
+    // WITH its message — "Failed to fetch dynamically imported module" is
+    // finally visible and diagnosable, not a silent amber catch. (Vitest
+    // wraps the factory throw; the component walks `cause` to the reason.)
+    mockMermaid.factoryFailures = 2; // BOTH attempts reject
+    renderMd("```mermaid\ngraph TD;\nA-->B\n```");
+    await waitFor(
+      () => expect(screen.getByText("Diagram could not be rendered — showing source")).toBeTruthy(),
+      { timeout: 3000 },
+    );
+    const detail = document.querySelector('[data-testid="mermaid-error-detail"]');
+    expect(detail?.textContent).toContain("Failed to fetch dynamically imported module");
+    // The source still survives as the ordinary CodeBlock fallback.
+    expect(screen.getByRole("button", { name: "Copy code" })).toBeTruthy();
+    expect(screen.getByText("graph TD;")).toBeTruthy();
+    // render never ran — the chunk never loaded.
+    expect(mockMermaid.render).not.toHaveBeenCalled();
+  });
+
+  it("(g) R101-F: a TRANSIENT render failure retries once with a FRESH id — the SVG lands", async () => {
+    // DEFECT 3: mermaid.render can fail transiently (font/theme timing on a
+    // freshly-mounted webview) even with valid syntax — mockRejectedValueOnce
+    // is the observable shape for the single-throw case.
+    mockMermaid.render
+      .mockRejectedValueOnce(new Error("transient webview font timing"))
+      .mockResolvedValue({ svg: '<svg data-acute-mermaid="render-retry"></svg>' });
+    renderMd("```mermaid\ngraph TD;\nA-->B\n```");
+    await waitFor(
+      () => expect(document.querySelector('[data-acute-mermaid="render-retry"]')).toBeTruthy(),
+      { timeout: 3000 },
+    );
+    // Exactly two render attempts, with DIFFERENT ids (the monotonic seq
+    // bumps per attempt — an id mermaid may have registered is never reused).
+    expect(mockMermaid.render).toHaveBeenCalledTimes(2);
+    const ids = mockMermaid.render.mock.calls.map((call) => call[0]);
+    expect(ids[0]).toMatch(/^acute-mermaid-\d+$/);
+    expect(ids[1]).toMatch(/^acute-mermaid-\d+$/);
+    expect(ids[0]).not.toBe(ids[1]);
+    // Recovered: no amber note anywhere.
+    expect(screen.queryByText("Diagram could not be rendered — showing source")).toBeNull();
+  });
+
+  it("(h) R101-F: a PERSISTENT render failure surfaces its message — the note + the mono error detail", async () => {
+    // DEFECT 3 + DEFECT 1: both render attempts throw (a syntax error fails
+    // twice identically — the honest price of covering the transient case)
+    // → the amber note AND the reason, never a silent degradation.
+    mockMermaid.render.mockRejectedValue(new Error("unknown diagram type"));
+    renderMd("```mermaid\nthis is not a diagram\n```");
+    await waitFor(() =>
+      expect(screen.getByText("Diagram could not be rendered — showing source")).toBeTruthy(),
+    );
+    const detail = document.querySelector('[data-testid="mermaid-error-detail"]');
+    expect(detail?.textContent).toContain("unknown diagram type");
+    // Two attempts (the bounded retry), then the honest source fallback.
+    expect(mockMermaid.render).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("this is not a diagram")).toBeTruthy();
   });
 });
 

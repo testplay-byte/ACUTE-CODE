@@ -45,6 +45,13 @@ import { SubAgentCard } from "./SubAgentCard";
 // R97-F: the thinking body renders fenced code blocks through the SAME
 // CodeBlock the answers use (syntax colors + the language badge + Copy).
 import { CodeBlock } from "./ChatMarkdown";
+// R101-F (DEFECT 4, owner v0.98.0: "it was not showing me the properly
+// rendered flow diagrams"): a CLOSED ```mermaid fence inside a thinking/
+// work block mounts the SAME diagram renderer the answers use — mirroring
+// ChatMarkdown's mount exactly (code only; the theme rides the app store,
+// no container context needed). The component itself stays lazy: mermaid
+// loads only when such a fence actually mounts.
+import { MermaidDiagram } from "./MermaidDiagram";
 // ROUND-95 (R95-D): the small-block stick-to-bottom primitive — the live
 // thinking block's body follows its own stream (see use-stick-to-bottom.ts).
 import { useStickToBottom } from "./use-stick-to-bottom";
@@ -529,9 +536,10 @@ function useLiveSeconds(startedAtMs: number | undefined, running: boolean): numb
  */
 /** R97-F: split the thinking text on CLOSED ``` fences — the prose parts
  * render as the quiet mono notes; each CLOSED fence renders as a CodeBlock
- * ({lang, code}). An UNCLOSED trailing fence stays in the prose (the stream
- * is still emitting it — the block never pops in/out mid-stream). Pure;
- * exported for tests. */
+ * ({lang, code}) — or, since R101-F, as a MermaidDiagram when the fence's
+ * language is mermaid (see ThoughtRow's render). An UNCLOSED trailing fence
+ * stays in the prose (the stream is still emitting it — the block never
+ * pops in/out mid-stream). Pure; exported for tests. */
 export function splitThinkingFences(
   text: string,
 ): Array<{ kind: "text"; text: string } | { kind: "code"; lang: string; code: string }> {
@@ -698,6 +706,16 @@ export function ThoughtRow({
                           {part.text}
                           {pi < fenceParts.length - 1 ? "\n" : ""}
                         </span>
+                      ) : part.lang.toLowerCase() === "mermaid" ? (
+                        // R101-F (DEFECT 4): splitThinkingFences only emits
+                        // CLOSED fences (an unclosed tail stays prose), so
+                        // every mermaid part here is the complete source —
+                        // the same gate ChatMarkdown's `terminated` flag
+                        // applies. The diagram renders wherever the fence
+                        // text rendered, in the collapsed AND expanded body
+                        // alike (no state change needed); the thinking-note
+                        // container itself is untouched.
+                        <MermaidDiagram key={pi} code={part.code} />
                       ) : (
                         <CodeBlock key={pi} code={part.code} lang={part.lang === "" ? undefined : part.lang} />
                       ),

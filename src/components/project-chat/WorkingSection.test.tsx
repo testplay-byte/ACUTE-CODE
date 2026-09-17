@@ -52,6 +52,24 @@ vi.mock("../../lib/api", async () => {
   };
 });
 
+// R101-F (DEFECT 4): the mermaid mock — a CLOSED ```mermaid fence inside a
+// thinking block now mounts MermaidDiagram (the same renderer the answers
+// use). The vi.mock shape mirrors ChatMarkdown.test's: nothing here imports
+// mermaid at module scope, so the mock only ever answers the component's
+// LAZY dynamic import — and initialize/render are vi.fn()s armed per-test
+// (the file-level afterEach restoreAllMocks wipes the behaviors).
+const mockMermaid = vi.hoisted(() => ({
+  initialize: vi.fn(),
+  render: vi.fn(),
+}));
+
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: mockMermaid.initialize,
+    render: mockMermaid.render,
+  },
+}));
+
 // Vitest globals are off, so RTL's auto-cleanup does not hook in — do it by hand.
 afterEach(() => {
   cleanup();
@@ -1750,5 +1768,49 @@ describe("R99-B working-section summaries + tool-row anatomy", () => {
     const readRow = screen.getByRole("button", { name: /^Read path: src\/app\.ts — completed$/ });
     const summary = readRow.querySelector('[data-tool-status="42 lines"]');
     expect(summary!.className).toContain("tabular-nums");
+  });
+});
+
+// ── ROUND-101 (R101-F, DEFECT 4): mermaid fences in the thinking area ─────────
+// Owner (v0.98.0): "in the chat area it was not showing me the properly
+// rendered flow diagrams" — the ANSWER leg rendered diagrams since R98-D, but
+// a ```mermaid fence the model emitted inside a thinking block showed as
+// SOURCE forever: WorkingSection's fence-split rendered every fence through
+// the plain CodeBlock. Now a mermaid-language fence mounts MermaidDiagram.
+describe("mermaid fences in the thinking area (ROUND-101 R101-F)", () => {
+  it("a CLOSED ```mermaid fence in a thought mounts MermaidDiagram with the exact code", async () => {
+    mockMermaid.render.mockResolvedValue({ svg: '<svg data-acute-mermaid="working-probe"></svg>' });
+    renderWithProviders(
+      <WorkingSection
+        entries={[
+          {
+            type: "thinking",
+            text: "I will sketch the flow first.\n```mermaid\ngraph TD;\nA-->B\n```",
+            ts: "t",
+          },
+        ]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    // ThoughtRow starts collapsed — expand it (the diagram renders wherever
+    // the fence text renders; the collapsed/expanded states are unchanged).
+    fireEvent.click(screen.getByRole("button", { name: "Expand thought" }));
+    // The prose part survives as the quiet mono note...
+    expect(screen.getByText("I will sketch the flow first.")).toBeTruthy();
+    // ...and the fence mounts the DIAGRAM (the fence-family card's badge +
+    // the injected SVG), with the fence's code handed over VERBATIM.
+    await waitFor(
+      () => expect(document.querySelector('[data-acute-mermaid="working-probe"]')).toBeTruthy(),
+      { timeout: 3000 },
+    );
+    expect(document.querySelector('[data-code-lang="mermaid"]')?.textContent).toBe("mermaid");
+    expect(mockMermaid.render).toHaveBeenCalledWith(
+      expect.stringMatching(/^acute-mermaid-\d+$/),
+      "graph TD;\nA-->B",
+    );
+    // It is NOT a plain CodeBlock anymore — no Copy button for the fence.
+    expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull();
   });
 });
