@@ -1273,3 +1273,28 @@ truncates release bodies at 125,000 characters — v0.99.0's body is exactly
 that truncation signature (124,996 chars, mid-history cut) — so release
 notes are now truncated DELIBERATELY at a paragraph boundary with a
 pointer to the repository's CHANGELOG.md.
+(h) A FAILED UPLOAD MAY STILL HAVE COMMITTED — ALWAYS RE-CHECK THE DRAFT
+BEFORE RE-SENDING: uploads.github.com's intermittent 500 window (seen
+live on the v0.100.0 dispatch — nine 500s in a row for ONE asset at a
+time, each after the FULL body was sent, while other assets succeeded,
+healing in ~5–10 min) can return an error AFTER accepting the body. The
+uploader now polls the draft after every failed attempt (the
+"landed-check") and counts a byte-exact, state=uploaded asset as DONE no
+matter what the error response said. Key resume on OBSERVED STATE, never
+on the error path; and prefer backoff ladders (30/60/120 s) over rapid
+retries when a platform window is poisoned — hammering only burns the
+window. Also: empty the "Expect:" header for large POSTs (one fewer
+100-continue round-trip on the slow path), and log the failure BODY (the
+500 body carries diagnostics the curl line does not).
+(i) WHEN THE PLATFORM IS SICK, THE OPERATOR IS THE RETRY POLICY — IF THE
+PIPELINE IS RESUMABLE. The runner's 15–30-minute ceilings cannot (and
+should not) out-wait an hours-long endpoint degradation; the v0.100.0
+finish took the manual path instead: download the run's own artifacts,
+byte-match them against the runner's log numbers, bank the missing
+assets from the operator's (healthy) network with a patient loop, then
+re-run the job for the formal green — 6 SKIPs + byte verification in
+nine seconds. That finish is only possible because every failure had
+stayed loud, bounded, and non-destructive: banked assets were never
+deleted by re-runs (the incident's most expensive defect), so finishing
+by hand cost minutes instead of another hour of gambling. Design every
+pipeline so the operator can finish it by hand.

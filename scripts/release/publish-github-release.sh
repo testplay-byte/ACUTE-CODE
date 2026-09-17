@@ -216,51 +216,71 @@ else
   echo "refreshed the draft's name/body from ${CHANGELOG}"
 fi
 
-# --- 3. live asset lookup on the draft (name → "id size") -----------------
+# --- 3. live asset lookup on the draft (name → "id size state") -------------
 # Re-fetched before EACH asset decision so skip/delete sees live state.
-asset_lookup() { # $1 = asset name; prints "id size" (or nothing)
+# State matters: a row in a non-"uploaded" state is a STUCK upload — it
+# must be deleted, never trusted (a size-match on a stuck row would skip
+# an asset nobody can download).
+asset_lookup() { # $1 = asset name; prints "id size state" (or nothing)
   api "${API}/repos/${REPO}/releases/${RELEASE_ID}" > "${TMPI}/release.json"
   python3 - "$1" "${TMPI}/release.json" <<'PY'
 import json, sys
 want, path = sys.argv[1], sys.argv[2]
 for a in json.load(open(path)).get("assets", []):
     if a.get("name") == want:
-        print("%s %s" % (a["id"], a.get("size") or 0))
+        print("%s %s %s" % (a["id"], a.get("size") or 0, a.get("state") or "?"))
         break
 PY
 }
 
-# --- 4. upload one asset: SKIP same-size, DELETE stale, POST with the
-#        bounded + retrying curl profile ------------------------------------
+# --- 4. upload one asset: SKIP same-size-uploaded, DELETE stale/stuck,
+#        POST with the bounded curl profile, RIDE OUT the 500 window -----
+#
+# THE 500 WINDOW (learned live on the v0.100.0 dispatch, runs 35258020425
+# attempts 1–2): uploads.github.com intermittently answers HTTP 500 to a
+# FULLY-SENT large upload — nine times in a row for ONE asset at a time
+# (~40–70 s of transfer, then 500), while other assets succeed, and the
+# window heals after ~5–10 minutes (arm64.deb 500ed 18:27–18:32, uploaded
+# fine at 18:35; amd64.AppImage then took its turn). Two defenses:
+#   - THE 500-COMMIT RACE: a failed upload may STILL have been committed
+#     server-side — after every failed attempt, re-check the draft; if the
+#     asset is there, state=uploaded, byte-exact, it COUNTS as done.
+#   - THE BACKOFF LADDER: 30/60/120 s between script-level attempts (4
+#     attempts), riding out the window instead of hammering it — curl's
+#     own rapid retries only burn the poisoned window.
 upload_asset() { # $1 = file path
-  local file="$1" name size existing id esize attempt rc
+  local file="$1" name size existing id esize estate attempt rc
   name="$(basename "${file}")"
   size="$(stat -c%s "${file}")"
   existing="$(asset_lookup "${name}" || true)"
   if [ -n "${existing}" ]; then
-    read -r id esize <<<"${existing}"
-    if [ "${esize}" = "${size}" ]; then
+    read -r id esize estate <<<"${existing}"
+    if [ "${estate}" = "uploaded" ] && [ "${esize}" = "${size}" ]; then
       echo "SKIP    ${name} — already on the draft at ${size} B (resumable contract)"
       return 0
     fi
-    echo "STALE   ${name} — draft has ${esize} B, disk has ${size} B → delete + re-upload"
+    echo "STALE   ${name} — draft has ${esize} B (${estate}), disk has ${size} B → delete + re-upload"
     if ! api -X DELETE "${API}/repos/${REPO}/releases/assets/${id}" > /dev/null; then
       echo "::error::failed to delete stale asset ${name} (${id})"
       return 1
     fi
   fi
   echo "UPLOAD  ${name} (${size} B)"
-  for attempt in 1 2; do # one script-level re-attempt on top of curl's own retries
+  local backoff=(30 60 120)
+  for attempt in 1 2 3 4; do
     rc=0
+    # "Expect:" is emptied deliberately: no 100-continue round-trip for
+    # large bodies — one fewer server handshake on the slow upload path.
     curl -sS --fail-with-body \
       -X POST \
       -H "Authorization: token ${GH_TOKEN}" \
       -H "Content-Type: application/octet-stream" \
       -H "X-GitHub-Api-Version: 2022-11-28" \
+      -H "Expect:" \
       --connect-timeout 30 \
       --max-time 420 \
       --speed-limit 1024 --speed-time 60 \
-      --retry 3 --retry-delay 10 --retry-all-errors \
+      --retry 2 --retry-delay 15 --retry-all-errors \
       --data-binary @"${file}" \
       -o "${TMPI}/upload-response.json" \
       "${UP}/repos/${REPO}/releases/${RELEASE_ID}/assets?name=${name}" || rc=$?
@@ -277,12 +297,37 @@ PY
       echo "OK      ${name} — upload confirmed by the API response"
       return 0
     fi
-    echo "::warning::attempt ${attempt} for ${name} failed (curl rc=${rc})"
-    if [ "${attempt}" -eq 2 ]; then
-      echo "::error::upload of ${name} failed after all retries"
+    # Surface the failure body (up to 300 B) — the 500 body carries the
+    # diagnostic the raw curl line does not.
+    if [ -s "${TMPI}/upload-response.json" ]; then
+      echo "::warning::attempt ${attempt} for ${name} failed (curl rc=${rc}) — response body: $(head -c 300 "${TMPI}/upload-response.json" | tr '\n' ' ')"
+    else
+      echo "::warning::attempt ${attempt} for ${name} failed (curl rc=${rc}, empty response)"
+    fi
+    # THE 500-COMMIT RACE: the upload may have landed despite the error —
+    # poll the draft for up to 45 s before burning another attempt.
+    local landed=""
+    for poll in 1 2 3; do
+      existing="$(asset_lookup "${name}" || true)"
+      if [ -n "${existing}" ]; then
+        read -r id esize estate <<<"${existing}"
+        if [ "${estate}" = "uploaded" ] && [ "${esize}" = "${size}" ]; then
+          landed="${id}"
+          break
+        fi
+      fi
+      sleep 15
+    done
+    if [ -n "${landed}" ]; then
+      echo "OK      ${name} — committed server-side DESPITE the error response (the 500-commit race); verified on the draft at ${size} B"
+      return 0
+    fi
+    if [ "${attempt}" -eq 4 ]; then
+      echo "::error::upload of ${name} failed after all retries (4 attempts + landed-checks + the 30/60/120s backoff ladder)"
       return 1
     fi
-    sleep 10
+    echo "        backing off ${backoff[$((attempt - 1))]}s before attempt $((attempt + 1)) (the 500 window heals in ~5–10 min)"
+    sleep "${backoff[$((attempt - 1))]}"
   done
 }
 

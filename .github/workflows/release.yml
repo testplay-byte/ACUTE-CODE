@@ -722,8 +722,12 @@ jobs:
     # ROUND-103 (the release-pipeline hardening): bounded like its siblings.
     # The v0.100.0 tag run (35243431119) hung 27+ minutes in the old
     # softprops uploader with NO timeout until manual cancellation; this
-    # backstop now caps the whole job.
-    timeout-minutes: 25
+    # backstop now caps the whole job. 30 (not 25): the uploader's
+    # backoff ladder (30/60/120s) + landed-check polls deliberately ride
+    # out uploads.github.com's intermittent 500 window (~5–10 min, seen
+    # live on the v0.100.0 dispatch) — bounded-and-slower beats hung, and
+    # a re-run resumes from the banked assets anyway.
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
@@ -799,7 +803,7 @@ jobs:
       # the round (fresh upload / pure resume / stale replace / re-tag
       # dedupe) — see docs/ui-iterations/round-103.md §2.
       - name: Create draft GitHub release (bounded, retrying, resumable)
-        timeout-minutes: 15
+        timeout-minutes: 20
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}

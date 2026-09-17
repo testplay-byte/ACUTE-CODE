@@ -170,6 +170,39 @@ proved the fixed path end-to-end (draft created, 6/6 assets, body at a
 AGENT-MEMORY #104(g): fixtures must match the real payload's SHAPE, not
 just its names.
 
+**The second real dispatch (run 35258020425) met the real enemy — and the
+design held.** With the argv fix in, the uploader banked the kit, the
+Windows setup, and the amd64.deb (catching and recovering from one real
+mid-upload stall on the way) — and then hit **uploads.github.com's
+intermittent 500 window**: the arm64.deb got HTTP 500 nine times in a row
+for ~5 minutes (each after the FULL 67 MB was sent), while other assets
+succeeded; the window healed, and the re-run uploaded that same asset
+fine 3 minutes later — only for the amd64.AppImage to take its turn
+(attempt 2: nine 500s; attempt 3: a zero-byte stall that the detector
+caught at 60 s and the 420 s max-time then bounded; the endpoint was so
+degraded that a 30-byte probe took 17.7 s). Every failure was LOUD and
+BOUNDED — 2 s, 8 min, 8 min, 15 min — never a hang, never a
+half-emptied draft (the incident's 0-asset ending never recurred; every
+attempt left the banked assets intact and the re-runs SKIPped them).
+
+**The finish — operator banking + the resumable contract.** With the
+endpoint too sick for the runner's 15-minute ceiling but healthy from
+the operator's sandbox (a 5 MB probe flew at 2.2 MB/s), the last two
+AppImages were uploaded MANUALLY: the run's own artifacts were
+downloaded (201 MB + 199 MB at ~1.9 MB/s), extracted, byte-matched
+against the runner's own log numbers, and uploaded with a patient
+retry loop — both landed on the FIRST attempt. Then the job was re-run
+one last time: **6 SKIPs + the byte-exact final verification, GREEN in
+nine seconds of script time** (run attempt 4). CI 35258001371 green on
+the same commit; the release was PUBLISHED (id 390953974, latest) with
+all six assets. The 500-window defenses learned on the way (the
+500-COMMIT-RACE landed-check — a failed upload may still have committed
+server-side; the 30/60/120 s backoff ladder; `Expect:` dropped to skip
+the 100-continue round-trip; failure-body logging; state-aware asset
+rows — a non-"uploaded" row is deleted, never trusted; step/job
+ceilings raised to 20/30 min to let the ladder ride out a window) are
+in the script on main for every FUTURE release.
+
 ## §3 The model evaluation — `stealth/union-alpha` (the short version)
 
 Full evidence, response fragments, and the 23-call latency table:
@@ -203,21 +236,28 @@ Full evidence, response fragments, and the 23-call latency table:
 
 ## §4 The verification numbers
 
+- **v0.100.0 PUBLISHED** — release 390953974, latest, six assets:
+  `ACUTE-CODE_0.100.0_x64-setup.exe` 38,746,943 B + `amd64.deb`
+  67,291,130 B + `amd64.AppImage` 134,990,328 B + `arm64.deb`
+  67,240,846 B + `aarch64.AppImage` 132,729,352 B + the launcher kit
+  125,148 B — every asset byte-verified on the draft by the workflow
+  itself before publication.
+- **Release run 35258020425: SUCCESS** (attempt 4 — the resumable
+  contract: 6 SKIPs + byte verification after the operator banked the
+  last two AppImages through the 500 window). **CI run 35258001371:
+  SUCCESS** on the same commit (322304e; the earlier CI 35256890313 was
+  also green on 3c125ab).
 - **The rig: 5/5 passes green against the live GitHub API** (§2) — the
   original four plus the real-CHANGELOG argv regression pass; one pass
-  caught a real mid-upload stall and recovered transparently; the first
-  REAL dispatch's two-second loud failure was root-caused and covered by
-  the fifth pass.
+  caught a real mid-upload stall and recovered transparently.
 - **Both workflows YAML-validated; every job in both carries a
-  `timeout-minutes`** (release: 15/30/30/30/25; CI: 30/20/20).
+  `timeout-minutes`** (release: 15/30/30/30/30; CI: 30/20/20).
 - `bash -n` clean on the script; executable bit set; stdlib-only (bash,
   curl, python3).
 - **No application code touched** — the root suite is byte-identical to
   the R102 close-out (208 files / 3,823 passed); lint, typecheck,
   `version:check` (×4 at 0.100.0), and `docs:check` (223 docs / 0
-  failures) green on the round's tree. The v0.100.0 re-dispatch
-  references live in the status.json `ci` field, per the standing
-  discipline.
+  failures) green on the round's tree.
 - The release list was verified clean (published releases only) before
   each tag re-dispatch; the incident's two zombie drafts, the rig's
   drafts, and the argv-pass draft are all gone.
@@ -255,17 +295,37 @@ Full evidence, response fragments, and the 23-call latency table:
   pass ran with the REAL changelog file. Match sizes and shapes, not
   just names — and keep the loud-failure path so the rig's blind spots
   surface in seconds, not hours.
+- **A failed upload may still have COMMITTED — always re-check the draft
+  before re-sending.** The 500 window's nastiest property is the
+  commit-race: the server can return an error AFTER accepting the full
+  body. The uploader now polls the draft after every failed attempt (the
+  landed-check) and counts a byte-exact asset as DONE no matter what the
+  error said. Corollary: never key resume on the error path — key it on
+  the observed state.
+- **When the platform is sick, the operator IS the retry policy.** The
+  runner's 15–30-minute ceiling cannot out-wait an hours-long endpoint
+  degradation — and it should not. The resumable contract is what made
+  the manual finish possible: download the run's own artifacts,
+  byte-match them against the runner's log numbers, bank the missing
+  assets from anywhere with a patient loop, then re-run the job to get
+  the formal green (6 SKIPs + verification in 9 seconds). Every failure
+  stayed loud, bounded, and non-destructive — so finishing by hand took
+  minutes instead of another hour of gambling.
 
 ## §6 What ships to the owner
 
-- **v0.100.0, content unchanged from round 102** — the Linux key-store
-  fix, the restored settings sidebar, the Mermaid viewer, the quiet
-  composer, the roomy rail. The owner's TEST CHECKLIST remains
-  `round-102.md` §5. What changed is the delivery: the tag was moved to
-  the pipeline-hardening commit and re-dispatched through the new
-  uploader, with both workflows green before publication.
+- **v0.100.0 PUBLISHED** (release 390953974, latest) — content unchanged
+  from round 102: the Linux key-store fix, the restored settings sidebar,
+  the Mermaid viewer, the quiet composer, the roomy rail. The owner's TEST
+  CHECKLIST remains `round-102.md` §5. The delivery itself is part of
+  this round's story: three dispatches through a degraded
+  uploads.github.com, every failure loud and bounded, the assets banked
+  to completion (runner + operator), and the release published only
+  after the workflow's own byte-exact verification went green.
 - **A release pipeline that cannot hang silently**: bounded, retrying,
-  resumable, one-draft-per-tag, byte-verified before the draft is left.
+  resumable, one-draft-per-tag, byte-verified before the draft is left —
+  plus the 500-window defenses (landed-check, backoff ladder, state-aware
+  asset rows, failure-body logging) on main for every future release.
 - **The union-alpha answer** (§3 + the research doc): fully functioning
   (tools/vision/JSON/streaming), genuinely free, genuinely slow — usable
   today via the BYO OpenRouter provider; the thinking on/off claim does
