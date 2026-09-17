@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-15 round-99 -->
+<!-- last-reviewed: 2026-09-17 round-103 -->
 # Motion — the animation grammar
 
 Serves DESIGN-SYSTEM §4 (motion). Owner direction (round-98): "animations

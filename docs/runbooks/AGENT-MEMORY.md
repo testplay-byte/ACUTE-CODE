@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-17 round-103 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -1222,3 +1222,40 @@ cheap when the history is in git — `git show <old-round>:<file>` is the
 reference implementation. Also: one shared module (settings-sections.ts)
 beats two synced lists — the R44 id-sync discipline now holds by
 construction.
+
+#104 (2026-09-17, round 103 — the release pipeline made bounded/retrying/
+resumable): (a) A RELEASE PIPELINE IS PRODUCTION INFRASTRUCTURE — BOUND IT.
+The v0.100.0 tag run hung 27+ minutes (after two "Headers Timeout Error"
+deaths) because no layer carried a timeout: no timeout-minutes on the job,
+no client-side timeout in the action's uploader, GitHub's 6-hour default
+as the only backstop. The owner's "it should not take more than 10
+minutes" is a REQUIREMENT on the pipeline, and every job in both workflows
+now carries timeout-minutes — an unbounded job is an outage with a delay.
+(b) IDEMPOTENCY IS THE DIFFERENCE BETWEEN A 2-MINUTE RE-RUN AND A
+30-MINUTE ONE. The incident's most expensive defect was not the hang — it
+was the re-run DELETING the five already-uploaded assets before re-sending
+everything, so every retry re-paid ~440 MB and re-exposed the one flaky
+asset. Key every uploaded artifact by (name, size), SKIP what is already
+done, and one bad asset can never hold six good ones hostage again.
+(c) FOR THE ONE STEP THAT MOVES 400 MB, RAW CURL WITH EXPLICIT BOUNDS
+BEATS A POPULAR ACTION. Third-party actions are black boxes in exactly
+the failure mode that matters: no timeout on the wire, no resumability,
+opaque retry policy. The replacement script's curl profile (--max-time,
+--speed-limit 1024/--speed-time 60 as the stalled-transfer detector,
+--retry-all-errors) is auditable and was proven against the live API.
+(d) PROVE RELEASE INFRA WITH A THROWAWAY RIG BEFORE BETTING THE REAL TAG
+ON IT. Six tiny files + a scratch draft exercised fresh upload, resume,
+stale replace, AND the re-tag zombie-draft path — catching two real bugs
+and one live mid-upload stall (recovered transparently) for minutes of
+cost against the incident's hour-and-a-half. (e) DRAFTS ORPHANED BY A
+RE-TAG REPORT THEMSELVES AS untagged-<sha> — match drafts by NAME too, or
+every hotfix re-tag mints an invisible zombie draft; the reuse PATCH
+should re-point tag_name at the freshly pushed tag in the same call.
+(f) THE MODEL-EVAL ARM OF THE ROUND: "it has two thinking modes" claims
+must be tested, not trusted — union-alpha's reasoning param is silently
+dropped (object form) or 400-rejected (boolean form), the :thinking
+variant 404s, and reasoning_tokens is always 0; a mode toggle for such a
+model is client-side prompt injection, and wiring reasoning params to it
+is actively harmful. Free models with 1.4–40 s variance on identical
+prompts are fallback-tier, not primary-tier, regardless of how well their
+tool calling works.

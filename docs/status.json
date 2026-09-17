@@ -346,11 +346,11 @@
     }
   ],
   "plan": {
-    "current": "R101 — the calm update hand-off + the chat timeline + honest Mermaid + Linux ARM64, v0.98.0 → v0.99.0",
+    "current": "R103 — the release pipeline made bounded/retrying/resumable + the stealth/union-alpha evaluation, v0.100.0's delivery unblocked (content unchanged from R102)",
     "upcoming": [
       {
-        "title": "The owner's v0.99.0 walkthrough",
-        "detail": "The R101 test checklist lives in round-101.md §5 — the update arc (the calm Restarting splash, the self-healing failed install), the composer focus fix, the chat timeline rail, the sidebar rail label chips, the settings nav pane, Mermaid in answers AND thinking sections, and the Linux arm64 bundles."
+        "title": "The owner's v0.100.0 walkthrough",
+        "detail": "The test checklist lives in round-102.md §5 (the content shipped unchanged; only the delivery pipeline was hardened in R103): the Linux key-save arc (incl. the amber key-file fallback note), the single settings sidebar, the Mermaid viewer (zoom/pan/source), the quiet composer, the roomy minimized rail — plus the new release delivery itself."
       },
       {
         "title": "The owner's UI references (promised)",
@@ -367,6 +367,6 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 102,
-  "ci": "PENDING — round 102 (v0.99.0 → v0.100.0) pushed; CI + the v0.100.0 Release dispatch verification in flight (this field flips to GREEN with both run ids the moment they verify, per the standing discipline). The round: the Linux key store made real (async key commands + 20s-bounded keyring I/O + the disclosed 0600 key-file fallback with amber UI disclosure — the owner's 'API keys were not being properly saved at all' answered at the root, live-verified 10/10 on a daemon-less Linux), the settings sidebar RESTORED (one shared section list; the left sidebar becomes the settings nav; the page-local column deleted), the Mermaid interactive viewer (zoom/pan/source/reset), the minimized rail's roomy geometry, and the quiet composer (focus paints nothing)."
+  "round": 103,
+  "ci": "PENDING — round 103 (the release-pipeline hardening + the stealth/union-alpha evaluation) pushed; CI + the v0.100.0 re-dispatch verification in flight (this field flips to GREEN with both run ids the moment they verify, per the standing discipline). The round: the v0.100.0 tag run hung three times in softprops' uploader (two 'Headers Timeout Error' deaths + a 27-minute silent stall, with every re-run deleting the five banked assets before re-sending everything — 1 h 28 m against the 10-minute norm); softprops is now REPLACED by scripts/release/publish-github-release.sh — bounded (per-call timeouts + the stalled-transfer detector), retrying (per-asset curl retries), resumable ((name,size)-keyed uploads SKIP what is done), with one-draft-per-tag hygiene and a byte-exact final verify; every job in both workflows now carries timeout-minutes; proven against the live API in four rig passes (one caught a real mid-upload stall and recovered). No application code changed — v0.100.0's content is exactly round 102's. The union-alpha verdict (23 live calls): tools/JSON/vision/streaming work, the 'two thinking modes' do NOT exist at the API level, latency varies 1.4–40 s — free fallback-tier, not primary; evidence in docs/research/model-eval-union-alpha-round-103.md."
 }

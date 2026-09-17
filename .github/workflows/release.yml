@@ -60,6 +60,10 @@ on:
 jobs:
   launcher-kit:
     runs-on: ubuntu-latest
+    # ROUND-103: every job in this workflow is bounded — a wedged job
+    # fails visibly in minutes instead of hanging for hours (the v0.100.0
+    # incident: a 27-minute silent stall that needed manual cancellation).
+    timeout-minutes: 15
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -715,6 +719,11 @@ jobs:
     needs: [launcher-kit, desktop-installer, linux-bundles, linux-bundles-arm64]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    # ROUND-103 (the release-pipeline hardening): bounded like its siblings.
+    # The v0.100.0 tag run (35243431119) hung 27+ minutes in the old
+    # softprops uploader with NO timeout until manual cancellation; this
+    # backstop now caps the whole job.
+    timeout-minutes: 25
     permissions:
       contents: write
     steps:
@@ -774,17 +783,26 @@ jobs:
             exit 1
           fi
 
-      - name: Create draft GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          body_path: CHANGELOG.md
-          files: |
-            acute-launcher-kit-v*.zip
-            installer/ACUTE-CODE_*_x64-setup.exe
-            linux-bundles/ACUTE-CODE_*_amd64.deb
-            linux-bundles/ACUTE-CODE_*_amd64.AppImage
-            linux-bundles-arm64/ACUTE-CODE_*_arm64.deb
-            linux-bundles-arm64/ACUTE-CODE_*_aarch64.AppImage
+      # ROUND-103 (the release-pipeline hardening): the softprops action is
+      # GONE. Its concurrent uploader hung three times on the 135 MB
+      # amd64.AppImage during the v0.100.0 tag run (35243431119) — two
+      # "Headers Timeout Error" deaths and a 27-minute silent stall that
+      # needed manual cancellation — because it configures NO client-side
+      # upload timeout, and every re-run deleted the five already-uploaded
+      # assets before re-sending everything (non-idempotent: one flaky
+      # asset became a multi-hour stall with a half-emptied draft).
+      # The replacement is scripts/release/publish-github-release.sh:
+      # BOUNDED (per-call timeouts + a stalled-transfer detector), RETRYING
+      # (per-asset curl retries), and RESUMABLE (same-name-same-size assets
+      # are skipped, so re-running the job re-sends only what is missing).
+      # Proven end-to-end against the live API in four rig passes during
+      # the round (fresh upload / pure resume / stale replace / re-tag
+      # dedupe) — see docs/ui-iterations/round-103.md §2.
+      - name: Create draft GitHub release (bounded, retrying, resumable)
+        timeout-minutes: 15
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.launcher-kit.outputs.version }}
+        run: bash scripts/release/publish-github-release.sh
