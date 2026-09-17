@@ -122,6 +122,18 @@ Two reports, both committed at 1a7ba1c and normative for the round:
   end-to-end proof (including the first Linux bundles).
 - The live-fire battery (R100-H): 7 legs, real OpenRouter turns, disk
   truth as ground truth — all green post-fix.
+- **The release runs (final): CI 35202716106 + Release 35202722327 both
+  SUCCESS; v0.98.0 PUBLISHED (release 390567270, latest).** The asset
+  numbers that answer the owner's complaint: setup.exe **38,724,392 B
+  (36.9 MB)** — byte-comparable to v0.96.0's evergreen installer, down
+  from v0.97.0's 270,884,416 B; the FIRST Linux bundles:
+  ACUTE-CODE_0.98.0_amd64.deb 67,231,760 B + ACUTE-CODE_0.98.0_amd64.
+  AppImage 134,937,080 B; the launcher kit 122,907 B. Four CI-caught
+  hotfixes landed on the way (the unbalanced cfg paren in browser.rs, the
+  RGBA icon ladder the AppImage leg requires, the rust-linux dist stub,
+  the flat artifact staging for upload-artifact's LCA path rule) — each
+  one a lesson the sandbox could not have taught locally (it cannot
+  compile Rust); CI earned its keep as the only Rust gate.
 
 ## §4 The round's lessons (also AGENT-MEMORY #101)
 

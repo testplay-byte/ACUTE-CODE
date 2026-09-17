@@ -303,7 +303,7 @@
     }
   ],
   "quality": {
-    "ci": "PENDING — the v0.98.0 tag run (the first with the linux-bundles job: deb+AppImage) is dispatched; this line flips GREEN when CI + Release both land SUCCESS (the R99 close-out precedent).",
+    "ci": "GREEN — CI 35202716106 and Release 35202722327 both SUCCESS on 939c997+hotfixes (the final tag 9ec0c3b→bundle-flat leg; lint, both typechecks, the root suite, design:audit at baseline, docs:check 219/0/0, version ×4 at 0.98.0, cargo check green on BOTH platforms via verify + the new rust-linux job). v0.98.0 PUBLISHED (release 390567270, latest — THE EVERGREEN INSTALLER: setup.exe 38,724,392 B = 36.9 MB, back from v0.97.0's 258 MB — the owner's 4x complaint answered with the number; + THE FIRST LINUX BUNDLES: ACUTE-CODE_0.98.0_amd64.deb 67,231,760 B + ACUTE-CODE_0.98.0_amd64.AppImage 134,937,080 B + the launcher kit 122,907 B). Four CI-caught hotfixes on the way (the unbalanced cfg paren, the RGBA icon ladder, the rust-linux dist stub, the flat artifact staging) — the sandbox cannot compile Rust; CI is that gate and it earned its keep.",
     "suites": [
       {
         "name": "frontend",
@@ -355,5 +355,5 @@
     ]
   },
   "round": 100,
-  "ci": "PENDING — the v0.98.0 tag run (the first with the linux-bundles job: deb+AppImage) is dispatched; this line flips GREEN when CI + Release both land SUCCESS (the R99 close-out precedent)."
+  "ci": "GREEN — CI 35202716106 and Release 35202722327 both SUCCESS on 939c997+hotfixes (the final tag 9ec0c3b→bundle-flat leg; lint, both typechecks, the root suite, design:audit at baseline, docs:check 219/0/0, version ×4 at 0.98.0, cargo check green on BOTH platforms via verify + the new rust-linux job). v0.98.0 PUBLISHED (release 390567270, latest — THE EVERGREEN INSTALLER: setup.exe 38,724,392 B = 36.9 MB, back from v0.97.0's 258 MB — the owner's 4x complaint answered with the number; + THE FIRST LINUX BUNDLES: ACUTE-CODE_0.98.0_amd64.deb 67,231,760 B + ACUTE-CODE_0.98.0_amd64.AppImage 134,937,080 B + the launcher kit 122,907 B). Four CI-caught hotfixes on the way (the unbalanced cfg paren, the RGBA icon ladder, the rust-linux dist stub, the flat artifact staging) — the sandbox cannot compile Rust; CI is that gate and it earned its keep."
 }
