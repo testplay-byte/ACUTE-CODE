@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
 import {
@@ -19,7 +19,7 @@ import {
   type RetrySettings,
   type ThinkingLoopSettings,
 } from "../lib/api";
-import { Bot, Brain, Globe, Info, Minus, Monitor, Moon, Palette, Plus, PlugZap, RefreshCw, RotateCcw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Timer, Trash2, Users } from "lucide-react";
+import { Bot, Brain, Check, Globe, Info, Minus, Monitor, Moon, Palette, Plus, PlugZap, RefreshCw, RotateCcw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Timer, Trash2, Users } from "lucide-react";
 // R98-J: the desktop-notifications card's BellRing icon (the bridge card
 // lives in AdvancedTab beside DebugModeCard).
 import { BellRing } from "lucide-react";
@@ -66,6 +66,14 @@ import { ComputerUseTab } from "../components/settings/ComputerUseTab";
 // section" directive. Deep-link ?tab=vision.
 import { ImageAnalysisTab } from "../components/settings/ImageAnalysisTab";
 import { bdr, withAlpha } from "../components/dashboard/helpers";
+// R100-E1 (research §C2 P1(b)): the round-100 ui/ primitives — the settings
+// page's own cards ride SectionCard, its label+control rows ride SettingsRow,
+// and every kicker (page, group headers, in-card labels) is the ONE Kicker
+// spelling (11px/500/0.08em uppercase — TOKENS §2's label tier).
+import { Kicker } from "../components/ui/Kicker";
+import { SectionCard } from "../components/ui/SectionCard";
+import { SettingsRow } from "../components/ui/SettingsRow";
+import { cn } from "../lib/utils";
 
 // R98-I1 (owner: "add a dedicated section for functionality… separate the
 // different side options into different categories, like basic agent
@@ -133,20 +141,65 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
+// R100-E1 (research §C2 P1(a) — the VS Code settings-search pattern): the
+// per-tab keyword list backing the settings nav's SEARCH BOX. Honest scope:
+// the query filters the TAB LIST by matching the tab label + these keywords
+// (each list extracted from that tab's real setting labels — "api key",
+// "provider", "zoom"…), case-insensitive substring. It NEVER touches the
+// tab state machine — the URL ?tab= stays the one truth (deep links keep
+// working; a hidden active tab keeps rendering until the user picks another).
+const SEARCH_KEYWORDS: Record<TabId, readonly string[]> = {
+  appearance: ["theme", "light", "dark", "mode", "density", "text size", "timestamps", "tool activity"],
+  agents: ["agent", "create agent", "instructions", "template", "tools"],
+  subagents: ["sub-agent", "api key", "model", "parallelism", "supervision"],
+  skills: ["skill", "prompt module", "new skill", "skill body"],
+  prompts: ["system prompt", "prompt section", "override", "preview", "project"],
+  api: ["api key", "provider", "model", "openrouter", "anthropic", "openai", "google", "preset", "catalog", "context window", "price"],
+  mcp: ["mcp", "server", "stdio", "command", "tool server"],
+  computeruse: ["computer use", "desktop control", "master switch", "posture", "safety"],
+  vision: ["vision", "image analysis", "model", "api key", "provider"],
+  browser: ["search engine", "homepage", "home page", "zoom", "link opening", "quick links"],
+  data: ["data", "statistics", "tokens", "heatmap", "model mix", "agent health", "clear data", "usage"],
+  advanced: ["retry", "rate limit", "timeout", "network", "thinking loop", "debug", "analyst", "memory", "desktop notifications", "schedule"],
+  about: ["version", "update", "reset", "engine", "releases"],
+};
+
 /**
  * Settings (owner round-8): the ONE place for configuration — appearance
  * (theme + mode moved here from the deleted top bar), agents management
  * (moved out of the sidebar), API keys per provider with a live connection
  * test, and the advanced data-source panel. Deep-linkable via ?tab=.
+ *
+ * R100-E1 (research §C2 P1(a), the VS Code pattern): the page owns its own
+ * LEFT NAV COLUMN (200px, 30px rows, 12px/400 labels, active = accent bar +
+ * soft bg + 500) with a SEARCH BOX that filters the tab list by label + the
+ * SEARCH_KEYWORDS index — the app sidebar keeps only its "Settings" entry
+ * now (Sidebar.tsx lost its settings-mode section list this round). The tab
+ * state machine is UNTOUCHED: nav clicks write the same ?tab= param the
+ * deep links have always used. Below lg the column collapses to a
+ * horizontal scrollable tab strip (group kickers hidden — no room).
  */
 export function SettingsPage() {
-  const styles = useThemeStyles();
-  const [params] = useSearchParams();
+  const [params, setSearchParams] = useSearchParams();
   const tabParam = params.get("tab");
   const tab: TabId = (TABS.find((t) => t.id === tabParam)?.id ?? "appearance") as TabId;
 
+  // R100-E1: the nav's search state — filters the TAB LIST only (never the
+  // mounted tab; the URL param stays the single source of truth).
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const visibleTabs =
+    needle === ""
+      ? TABS
+      : TABS.filter(
+          (t) =>
+            t.label.toLowerCase().includes(needle) ||
+            SEARCH_KEYWORDS[t.id].some((k) => k.toLowerCase().includes(needle)),
+        );
+
   // ROUND-34: the in-page tab bar is GONE — the sidebar is the settings nav
   // (owner design frame 1a). The page header adapts per section.
+  // R100-E1: superseded — the settings-local nav column below IS the nav now.
   const activeMeta = TABS.find((t) => t.id === tab) ?? TABS[0];
 
   return (
@@ -154,58 +207,130 @@ export function SettingsPage() {
       {/* ROUND-60 (R60-B): the owner's padding directive — "All of the
           settings have a lot of extra unnecessary padding on the right and
           left sides… minimize the padding as much as possible." The header
-          strip drops to px-4/px-6. */}
-      <div className="shrink-0 border-b-[1.5px] px-4 md:px-6 py-4" style={{ borderColor: styles.border }}>
-        <p
-          className="text-[11px] font-bold uppercase tracking-[0.18em] mb-1"
-          style={{ color: styles.textTertiary }}
-        >
-          Settings
-        </p>
-        <h1 className="text-[24px] font-black tracking-tight" style={{ color: styles.text }}>
-          {activeMeta.label}
-        </h1>
+          strip drops to px-4/px-6.
+          R100-E1 (research §C2 P1(d)): the header = the label-tier Kicker +
+          the 24px/600 title (the old 11px-bold/0.18em + font-black pair was
+          the pre-round-100 spelling the ladder retired). */}
+      <div className="shrink-0 border-b border-line px-4 md:px-6 py-4">
+        <Kicker className="mb-1">Settings</Kicker>
+        <h1 className="text-[24px] font-semibold tracking-tight text-ink">{activeMeta.label}</h1>
       </div>
 
-      {/* ROUND-34: wider content (the master-detail provider screen needs the
-          room); the appearance page constrains itself internally.
-          ROUND-50 (R50-d): for Models & Providers the content area LOCKS to
-          the viewport (overflow-hidden, no page scroll) — the tab's provider
-          list and detail pane each scroll INDEPENDENTLY (owner directive).
-          ROUND-60 (R60-B): the padding is minimal (px-4/px-6, py-4) and the
-          Models & Providers tab fills the FULL available width — no max-w
-          cap, no mx-auto centering (the master-detail owns every pixel);
-          the form tabs keep a tighter max-w-4xl for readable lines. */}
-      <div
-        className={
-          tab === "api"
-            ? "flex min-h-0 flex-1 flex-col overflow-hidden px-4 md:px-6 py-4 w-full"
-            : "min-h-0 flex-1 overflow-y-auto px-4 md:px-6 py-4 mx-auto w-full max-w-4xl"
-        }
-      >
-        {/* ROUND-35 → ROUND-95 (R95-A): the "Back to dashboard" pill that
-            used to live HERE is GONE — the owner: "on any of the pages there
-            is no need to show the Back to Dashboard page button. The only
-            place where the option needs to be shown is in the left sidebar."
-            The sidebar's settings header (and its minimized rail) is the ONE
-            back affordance now. */}
-        {tab === "appearance" && <AppearanceTab />}
-        {tab === "agents" && <AgentsScreen embedded />}
-        {tab === "api" && (
-          <div className="flex min-h-0 flex-1 flex-col">
-            <ModelsProvidersTab />
-          </div>
-        )}
-        {tab === "subagents" && <SubAgentsTab />}
-        {tab === "skills" && <SkillsTab />}
-        {tab === "prompts" && <PromptsTab />}
-        {tab === "mcp" && <McpTab />}
-        {tab === "computeruse" && <ComputerUseTab />}
-        {tab === "vision" && <ImageAnalysisTab />}
-        {tab === "browser" && <BrowserTab />}
-        {tab === "data" && <DataStatsPanel />}
-        {tab === "advanced" && <AdvancedTab />}
-        {tab === "about" && <AboutTab />}
+      {/* R100-E1: the settings-local nav column (left, 200px) + the content
+          pane. Below lg the column becomes a horizontal scrollable strip
+          under the header — same tab state, same buttons. */}
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <aside
+          data-testid="settings-nav-column"
+          className="shrink-0 border-b border-line px-4 pt-3 pb-3 md:px-6 lg:flex lg:w-50 lg:flex-col lg:border-b-0 lg:border-r lg:px-3 lg:py-4"
+        >
+          {/* The nav's search box (R100-E1): 12px text, 28px height,
+              rounded-lg, border-line; focus = the GLOBAL :focus-visible rule
+              index.css already ships (R100-D) — deliberately no local
+              focus: classes here. */}
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search settings"
+            aria-label="Search settings"
+            data-testid="settings-nav-search"
+            className="mb-3 h-7 w-full shrink-0 rounded-lg border border-line bg-input px-2.5 text-[12px] text-ink placeholder:text-muted"
+          />
+          <nav
+            aria-label="Settings navigation"
+            data-testid="settings-nav"
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            {/* The list: a horizontal scroll strip below lg (group kickers
+                hidden — a strip has no room for headers), the 200px column's
+                clustered list at lg. */}
+            <div className="flex gap-1 overflow-x-auto pb-1 lg:flex-1 lg:flex-col lg:gap-0.5 lg:overflow-y-auto lg:pb-0">
+              {visibleTabs.map((t, index) => {
+                const { id, label, icon: Icon, group } = t;
+                const active = id === tab;
+                const groupHeader =
+                  index === 0 || group !== visibleTabs[index - 1].group ? group : undefined;
+                return (
+                  <Fragment key={id}>
+                    {groupHeader !== undefined && (
+                      <Kicker
+                        testId={`settings-group-${groupHeader}`}
+                        className="px-2 pb-1 pt-3 max-lg:hidden lg:first:pt-0"
+                      >
+                        {groupHeader}
+                      </Kicker>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setSearchParams({ tab: id })}
+                      aria-current={active ? "page" : undefined}
+                      data-testid={`settings-nav-${id}`}
+                      className={cn(
+                        "relative flex min-h-[30px] shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-2 text-[12px] font-normal text-muted transition-colors hover:bg-hover",
+                        active && "bg-accent-soft font-medium text-accent",
+                      )}
+                    >
+                      {/* Selection grammar (TOKENS §6): accent text + soft bg
+                          + the 2px accent bar on the leading edge. */}
+                      {active ? (
+                        <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />
+                      ) : null}
+                      <Icon size={14} className="shrink-0" aria-hidden />
+                      <span className="truncate">{label}</span>
+                    </button>
+                  </Fragment>
+                );
+              })}
+            </div>
+            {needle !== "" && visibleTabs.length === 0 ? (
+              <p data-testid="settings-nav-empty" className="px-2 py-3 text-[12px] text-muted">
+                No settings match
+              </p>
+            ) : null}
+          </nav>
+        </aside>
+
+        {/* ROUND-34: wider content (the master-detail provider screen needs the
+            room); the appearance page constrains itself internally.
+            ROUND-50 (R50-d): for Models & Providers the content area LOCKS to
+            the viewport (overflow-hidden, no page scroll) — the tab's provider
+            list and detail pane each scroll INDEPENDENTLY (owner directive).
+            ROUND-60 (R60-B): the padding is minimal (px-4/px-6, py-4) and the
+            Models & Providers tab fills the FULL available width — no max-w
+            cap, no mx-auto centering (the master-detail owns every pixel);
+            the form tabs keep a tighter max-w-4xl for readable lines. */}
+        <div
+          className={
+            tab === "api"
+              ? "flex min-h-0 flex-1 flex-col overflow-hidden px-4 md:px-6 py-4 w-full"
+              : "min-h-0 flex-1 overflow-y-auto px-4 md:px-6 py-4 mx-auto w-full max-w-4xl"
+          }
+        >
+          {/* ROUND-35 → ROUND-95 (R95-A): the "Back to dashboard" pill that
+              used to live HERE is GONE — the owner: "on any of the pages there
+              is no need to show the Back to Dashboard page button. The only
+              place where the option needs to be shown is in the left sidebar."
+              The app sidebar's Dashboard nav row is the ONE back affordance
+              now (R100-E1: the sidebar renders the normal nav on /settings). */}
+          {tab === "appearance" && <AppearanceTab />}
+          {tab === "agents" && <AgentsScreen embedded />}
+          {tab === "api" && (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <ModelsProvidersTab />
+            </div>
+          )}
+          {tab === "subagents" && <SubAgentsTab />}
+          {tab === "skills" && <SkillsTab />}
+          {tab === "prompts" && <PromptsTab />}
+          {tab === "mcp" && <McpTab />}
+          {tab === "computeruse" && <ComputerUseTab />}
+          {tab === "vision" && <ImageAnalysisTab />}
+          {tab === "browser" && <BrowserTab />}
+          {tab === "data" && <DataStatsPanel />}
+          {tab === "advanced" && <AdvancedTab />}
+          {tab === "about" && <AboutTab />}
+        </div>
       </div>
     </div>
   );
@@ -242,15 +367,20 @@ function AppearanceTab() {
     <div className="mx-auto flex max-w-3xl flex-col gap-4">
       {/* ── Theme: light/dark segmented control directly above the grid ── */}
       <section>
-        <SectionTitle>Theme</SectionTitle>
+        <Kicker as="h2" className="mb-2">
+          Theme
+        </Kicker>
+        {/* R100-E1 ladder sweep: radii snap to the 5-step scale (16 card /
+            12 inner knob), labels follow the weight law (500 active, 400
+            rest), max-w-[320px] → max-w-80 (the scale spelling). */}
         <div
-          className="relative mb-3 grid w-full max-w-[320px] grid-cols-2 gap-1.5 rounded-[16px] p-1"
+          className="relative mb-3 grid w-full max-w-80 grid-cols-2 gap-1.5 rounded-2xl p-1"
           role="radiogroup"
           aria-label="Theme mode"
           style={{ background: styles.toggleTrack, border: bdr("1.5px", styles.border) }}
         >
           <div
-            className="absolute bottom-1 top-1 w-[calc(50%-6px)] rounded-[12px] transition-all duration-300"
+            className="absolute bottom-1 top-1 w-[calc(50%-6px)] rounded-xl transition-all duration-300"
             style={{ left: mode === "dark" ? "calc(50% + 2px)" : "4px", background: styles.toggleActive }}
           />
           {(["light", "dark"] as const).map((m) => {
@@ -263,7 +393,10 @@ function AppearanceTab() {
                 role="radio"
                 aria-checked={active}
                 aria-label={`${m} mode`}
-                className="relative z-10 flex h-10 cursor-pointer items-center justify-center gap-1.5 rounded-[12px] border-none bg-transparent text-[13px] font-bold capitalize transition-colors"
+                className={cn(
+                  "relative z-10 flex h-10 cursor-pointer items-center justify-center gap-1.5 rounded-xl border-none bg-transparent text-[13px] capitalize transition-colors",
+                  active ? "font-medium" : "font-normal",
+                )}
                 style={{ color: active ? getContrastText(styles.toggleActive) : styles.textTertiary }}
               >
                 <Icon size={14} />
@@ -283,35 +416,38 @@ function AppearanceTab() {
                 onClick={() => setTheme(t.id)}
                 aria-pressed={selected}
                 aria-label={`Theme ${t.name}`}
-                className="flex cursor-pointer items-center gap-3 rounded-[14px] border-[1.5px] px-4 py-3 text-left transition-all hover:translate-y-[-1px]"
-                style={{
-                  background: styles.card,
-                  borderColor: selected ? styles.accent : styles.border,
-                  boxShadow: selected
-                    ? `${styles.bentoShadowSm}, 0 0 0 3px ${withAlpha(styles.accent, 0.18)}`
-                    : "none",
-                }}
+                className={cn(
+                  "flex cursor-pointer items-center gap-3 rounded-2xl border-[1.5px] bg-card px-4 py-3 text-left transition-colors hover:bg-hover",
+                  selected ? "border-accent" : "border-line",
+                )}
+                style={
+                  selected
+                    ? { boxShadow: `${styles.bentoShadowSm}, 0 0 0 3px ${withAlpha(styles.accent, 0.18)}` }
+                    : undefined
+                }
               >
                 <span
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full border text-[13px] font-black"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full border text-[13px] font-semibold"
                   style={{ background: t.accent, borderColor: styles.border, color: getContrastText(t.accent) }}
                 >
                   Aa
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[14px] font-bold" style={{ color: styles.text }}>
+                  <span className="block truncate text-[13px] font-medium" style={{ color: styles.text }}>
                     {t.name}
                   </span>
                   {/* Swatch strip: subtle bg + strong border so dark swatches
-                       stay visible against the dark card bg (owner R28 fix). */}
+                       stay visible against the dark card bg (owner R28 fix).
+                       R100-E1: 14px swatches on the scale (h-3.5/w-3.5),
+                       4px radius (rounded-sm), 2px pad (p-0.5). */}
                   <span
-                    className="mt-1 flex gap-[3px] rounded-[5px] p-[2px]"
+                    className="mt-1 flex gap-1 rounded-sm p-0.5"
                     style={{ background: withAlpha(styles.text, 0.06), border: `1px solid ${withAlpha(styles.text, 0.18)}` }}
                   >
                     {colors.map((c, i) => (
                       <span
                         key={i}
-                        className="h-[14px] w-[14px] rounded-[4px]"
+                        className="h-3.5 w-3.5 rounded-sm"
                         style={{ background: c, border: `1px solid ${withAlpha(styles.text, 0.22)}` }}
                       />
                     ))}
@@ -322,7 +458,9 @@ function AppearanceTab() {
                     className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[12px]"
                     style={{ background: styles.accent, color: getContrastText(styles.accent) }}
                   >
-                    ✓
+                    {/* R100-E1: the one-spelling rule — lucide glyph, not a
+                        text ✓ (the wave-D discipline). */}
+                    <Check size={12} aria-hidden />
                   </span>
                 ) : null}
               </button>
@@ -333,15 +471,17 @@ function AppearanceTab() {
 
       {/* ── Chat density (owner design frame 2) ─────────────────────────── */}
       <section>
-        <SectionTitle>Chat Density</SectionTitle>
+        <Kicker as="h2" className="mb-2">
+          Chat Density
+        </Kicker>
         <div
-          className="relative grid w-full max-w-[320px] grid-cols-2 gap-1.5 rounded-[16px] p-1"
+          className="relative grid w-full max-w-80 grid-cols-2 gap-1.5 rounded-2xl p-1"
           role="radiogroup"
           aria-label="Chat density"
           style={{ background: styles.toggleTrack, border: bdr("1.5px", styles.border) }}
         >
           <div
-            className="absolute bottom-1 top-1 w-[calc(50%-6px)] rounded-[12px] transition-all duration-300"
+            className="absolute bottom-1 top-1 w-[calc(50%-6px)] rounded-xl transition-all duration-300"
             style={{ left: density === "compact" ? "calc(50% + 2px)" : "4px", background: styles.toggleActive }}
           />
           {(["comfortable", "compact"] as const).map((d) => {
@@ -353,7 +493,10 @@ function AppearanceTab() {
                 role="radio"
                 aria-checked={active}
                 aria-label={`${d} density`}
-                className="relative z-10 flex h-10 cursor-pointer items-center justify-center rounded-[12px] border-none bg-transparent text-[13px] font-bold capitalize transition-colors"
+                className={cn(
+                  "relative z-10 flex h-10 cursor-pointer items-center justify-center rounded-xl border-none bg-transparent text-[13px] capitalize transition-colors",
+                  active ? "font-medium" : "font-normal",
+                )}
                 style={{ color: active ? getContrastText(styles.toggleActive) : styles.textTertiary }}
               >
                 {d}
@@ -368,7 +511,9 @@ function AppearanceTab() {
 
       {/* ── R97-H: chat text size (the owner's customizability ask) ──── */}
       <section>
-        <SectionTitle>Text Size</SectionTitle>
+        <Kicker as="h2" className="mb-2">
+          Text Size
+        </Kicker>
         <p className="mt-0 mb-3 text-[12px]" style={{ color: styles.textSecondary }}>
           The chat's reading surfaces — answers, thinking, narration.
         </p>
@@ -393,7 +538,9 @@ function AppearanceTab() {
 
       {/* ── R97-H: message timestamps ────────────────────────────────── */}
       <section>
-        <SectionTitle>Timestamps</SectionTitle>
+        <Kicker as="h2" className="mb-2">
+          Timestamps
+        </Kicker>
         <p className="mt-0 mb-3 text-[12px]" style={{ color: styles.textSecondary }}>
           When a message was sent, revealed by hovering it.
         </p>
@@ -417,7 +564,9 @@ function AppearanceTab() {
 
       {/* ── Tool activity (ROUND-35: the owner's tool-calls preferences) ── */}
       <section>
-        <SectionTitle>Tool activity</SectionTitle>
+        <Kicker as="h2" className="mb-2">
+          Tool activity
+        </Kicker>
         <p className="mt-0 mb-3 text-[12px]" style={{ color: styles.textSecondary }}>
           How the agent's tool activity appears in the chat.
         </p>
@@ -448,9 +597,11 @@ function AppearanceTab() {
 }
 
 /** R97-H: the appearance tab's radio card — the exact Tool-activity card
- * pattern (radio circle + bold label + one-line description, active accent
- * ring) extracted so the two NEW sections (Text Size, Timestamps) speak the
- * same design without duplicating the markup. */
+ * pattern (radio circle + one-line description, active accent ring)
+ * extracted so the sections speak the same design without duplicating the
+ * markup. R100-E1 ladder sweep: 16px card radius (rounded-2xl, the card
+ * step), 500 label weight (the law's active/selected tier), hover = the
+ * CSS bg wash (the translate fidget is gone — TOKENS §6). */
 function ChoiceCard({
   active,
   label,
@@ -467,12 +618,19 @@ function ChoiceCard({
     <button
       onClick={onSelect}
       aria-pressed={active}
-      className="relative rounded-[14px] border-[1.5px] p-3 text-left transition-all hover:-translate-y-px"
-      style={{
-        background: active ? withAlpha(styles.accent, 0.06) : styles.card,
-        borderColor: active ? styles.accent : styles.border,
-        boxShadow: active ? `0 0 0 3px ${withAlpha(styles.accent, 0.15)}` : "none",
-      }}
+      className={cn(
+        "relative rounded-2xl border-[1.5px] p-3 text-left transition-colors hover:bg-hover",
+        active ? "border-accent" : "border-line bg-card",
+      )}
+      style={
+        active
+          ? {
+              background: withAlpha(styles.accent, 0.06),
+              borderColor: styles.accent,
+              boxShadow: `0 0 0 3px ${withAlpha(styles.accent, 0.15)}`,
+            }
+          : undefined
+      }
     >
       <div className="flex items-center gap-2">
         <span
@@ -485,7 +643,7 @@ function ChoiceCard({
         >
           {active && <span className="w-1.5 h-1.5 rounded-full" style={{ background: styles.accentText }} />}
         </span>
-        <span className="text-[13px] font-bold" style={{ color: styles.text }}>
+        <span className="text-[13px] font-medium" style={{ color: styles.text }}>
           {label}
         </span>
       </div>
@@ -496,17 +654,10 @@ function ChoiceCard({
   );
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  const styles = useThemeStyles();
-  return (
-    <h2
-      className="mb-2 text-[11px] font-bold uppercase tracking-widest"
-      style={{ color: styles.textTertiary }}
-    >
-      {children}
-    </h2>
-  );
-}
+/* R100-E1: SectionTitle is DELETED — every 11px-uppercase section heading is
+ * the Kicker primitive now (the ONE label-tier spelling, 11px/500/0.08em
+ * tertiary — the old hand-rolled bold/widest variant was exactly the
+ * four-spellings problem the round-100 ladder retired). */
 
 /* ── API & Providers ──────────────────────────────────────
  * ROUND-47 (R47-c1): the legacy ApiTab / ProviderKeyCard pair is DELETED —
@@ -550,15 +701,17 @@ function AdvancedTab() {
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
       {/* R98-I1: short section header — the tab is the engine's behavior
           switches under its two categories, with the standing pointer to
-          the Sub-agents page that owns the rest. */}
+          the Sub-agents page that owns the rest.
+          R100-E1 (research §C2 P1(d)): the tab-intro header is the label
+          tier + a 13px/600 section title — a TAB, not a page (the page
+          header above already carries the 24px/600 title). */}
       <div className="pb-1">
-        <h2 className="text-[16px] font-black" style={{ color: styles.text }}>
-          Functionality
-        </h2>
+        <Kicker className="mb-1">System</Kicker>
+        <h2 className="text-[13px] font-semibold text-ink">Functionality</h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
           The engine&apos;s behavior switches, grouped by category. Sub-agent keys, model, parallelism, and supervision
           live on the{" "}
-          <Link to="/settings?tab=subagents" className="font-bold underline" style={{ color: styles.accent }}>
+          <Link to="/settings?tab=subagents" className="font-medium underline" style={{ color: styles.accent }}>
             Sub-agents
           </Link>{" "}
           page.
@@ -567,7 +720,9 @@ function AdvancedTab() {
       {/* R98-I1 category header — the owner's "basic agent capabilities":
           the five engine cards (retry, thinking-loop, debug, desktop
           notifications, memory). */}
-      <SectionTitle>Basic agent capabilities</SectionTitle>
+      <Kicker as="h2" className="mb-2">
+        Basic agent capabilities
+      </Kicker>
       <RetryConfigCard />
       <ThinkingLoopCard />
       <DebugModeCard />
@@ -575,7 +730,9 @@ function AdvancedTab() {
       <MemoryCard />
       {/* R98-I1 category header — the owner's "data and statistics": one
           cross-link card pointing at the Data & Statistics tab below. */}
-      <SectionTitle>Data &amp; insights</SectionTitle>
+      <Kicker as="h2" className="mb-2">
+        Data &amp; insights
+      </Kicker>
       <DataInsightsCrossLinkCard />
     </div>
   );
@@ -583,35 +740,25 @@ function AdvancedTab() {
 
 /* ── R98-I1: the Data & insights category's ONE card — a cross-link to the
  * Data & Statistics tab (the owner's second category name, "data and
- * statistics"). No existing cross-link CARD existed to copy (the only
- * cross-links in the settings are inline Links in header copy, e.g. the
- * Sub-agents pointer above), so this follows the tab's own card grammar —
- * rounded-lg p-4, card bg, 1.5px border, the 13px accent icon + 12px
- * semibold title row every card here uses — with that inline-Link idiom
- * for the jump itself. */
+ * statistics"). R100-E1: the card rides the SectionCard primitive now
+ * (rounded-2xl/1.5px/border-line/bg-card) with its 13px/600 title — the
+ * inline rounded-lg p-4 + bdr() spelling is gone. */
 function DataInsightsCrossLinkCard() {
   const styles = useThemeStyles();
   return (
-    <section
-      data-testid="data-insights-crosslink-card"
-      className="rounded-lg p-4"
-      style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      aria-label="Data and insights"
-    >
+    <SectionCard testId="data-insights-crosslink-card" ariaLabel="Data and insights">
       <div className="mb-3 flex items-center gap-2">
         <BarChart3 size={13} style={{ color: styles.accent, opacity: 0.7 }} />
-        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
-          Data &amp; insights
-        </span>
+        <span className="text-[13px] font-semibold text-ink">Data &amp; insights</span>
       </div>
       <div className="text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
         Total tokens, peak day, the activity heatmap, the model mix, and agent health live on the{" "}
-        <Link to="/settings?tab=data" className="font-bold underline" style={{ color: styles.accent }}>
+        <Link to="/settings?tab=data" className="font-medium underline" style={{ color: styles.accent }}>
           Data &amp; Statistics
         </Link>{" "}
         tab — the usage ledger the engine records on every turn.
       </div>
-    </section>
+    </SectionCard>
   );
 }
 
@@ -638,13 +785,15 @@ function SettingsLoadErrorCard({
     <div
       role="alert"
       data-settings-load-error
-      className="rounded-[14px] border px-4 py-3.5"
+      className="rounded-2xl border px-4 py-3.5"
       style={{
         borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
         background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
       }}
     >
-      <div className="text-[12.5px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+      {/* R100-E1: 13px/600 (the error heading is a section header, the
+          weight law's 600 tier — the old 12.5px-bold was off-ladder twice). */}
+      <div className="text-[13px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
         Could not load {what} settings
       </div>
       <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
@@ -728,7 +877,7 @@ function CommitNumberInput({
           setDraft(null);
         }
       }}
-      className="h-7 w-[84px] rounded-lg px-2 font-mono text-[11.5px] outline-none transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-60"
+      className="h-7 w-21 rounded-lg px-2 font-mono text-[12px] outline-none transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-60"
       style={style}
     />
   );
@@ -758,32 +907,26 @@ function ThinkingLoopCard() {
   // R97-I part 3: the ERROR branch comes FIRST — with the pre-R97 gate a
   // failed GET (data undefined) hung on "loading…" forever. Stale data on a
   // background-refetch failure still renders the card normally below.
+  // R100-E1: the card rides the SectionCard primitive (rounded-2xl,
+  // 1.5px border-line, bg-card) — same testid, same branches.
   if (settingsQuery.isError && current === undefined) {
     return (
-      <section
-        data-testid="thinking-loop-card"
-        className="rounded-lg p-4"
-        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      >
+      <SectionCard testId="thinking-loop-card">
         <SettingsLoadErrorCard
           what="thinking-loop"
           error={settingsQuery.error}
           onRetry={() => void settingsQuery.refetch()}
         />
-      </section>
+      </SectionCard>
     );
   }
   if (settingsQuery.isLoading || current === undefined) {
     return (
-      <section
-        data-testid="thinking-loop-card"
-        className="rounded-lg p-4"
-        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      >
+      <SectionCard testId="thinking-loop-card">
         <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
           loading thinking-loop settings…
         </span>
-      </section>
+      </SectionCard>
     );
   }
 
@@ -808,31 +951,18 @@ function ThinkingLoopCard() {
   } as const;
 
   return (
-    <section
-      data-testid="thinking-loop-card"
-      className="rounded-lg p-4"
-      style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      aria-label="Thinking-loop guard"
-    >
+    <SectionCard testId="thinking-loop-card" ariaLabel="Thinking-loop guard">
       <div className="mb-3 flex items-center gap-2">
         <Brain size={13} style={{ color: styles.accent, opacity: 0.7 }} />
-        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
-          Thinking-loop guard
-        </span>
+        <span className="text-[13px] font-semibold text-ink">Thinking-loop guard</span>
       </div>
       {/* The master switch — OFF by default (the owner's directive: the model
-          thinks as much as it needs to). */}
-      <div className="flex items-start gap-3">
-        <div className="min-w-[200px] flex-1">
-          <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
-            Stop stuck reasoning
-          </div>
-          <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-            When ON, a model that keeps reasoning with no text, tool call, or finish for the stall window below is
-            stopped (one de-escalating retry, then an honest notice). OFF (default) — the model thinks as long as it
-            needs to.
-          </div>
-        </div>
+          thinks as much as it needs to). R100-E1: the row rides SettingsRow
+          (13px/400 label + 11px tertiary description + right control slot). */}
+      <SettingsRow
+        label="Stop stuck reasoning"
+        description="When ON, a model that keeps reasoning with no text, tool call, or finish for the stall window below is stopped (one de-escalating retry, then an honest notice). OFF (default) — the model thinks as long as it needs to."
+      >
         <button
           type="button"
           role="switch"
@@ -857,27 +987,20 @@ function ThinkingLoopCard() {
             }}
           />
         </button>
-      </div>
+      </SettingsRow>
 
       {/* The thresholds — editable only while the guard is ON (the honest
           “nothing to edit while off” posture; they still render so the
           contract is visible). */}
-      <div className="mt-4 pt-3" style={{ borderTop: bdr("1.5px", styles.border) }}>
+      <div className="mt-4 border-t border-line pt-3">
         <div className="mb-2.5 flex items-center gap-2">
           <Timer size={12} style={{ color: styles.accent, opacity: 0.7 }} />
-          <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
-            Thresholds
-          </span>
+          <span className="text-[13px] font-semibold text-ink">Thresholds</span>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="min-w-[200px] flex-1">
-            <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
-              Stall window
-            </div>
-            <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-              Seconds of pure reasoning with no progress before the guard fires (30–600).
-            </div>
-          </div>
+        <SettingsRow
+          label="Stall window"
+          description="Seconds of pure reasoning with no progress before the guard fires (30–600)."
+        >
           <CommitNumberInput
             value={current.stallSeconds}
             min={30}
@@ -889,16 +1012,11 @@ function ThinkingLoopCard() {
             disabled={busy || !current.enabled}
             style={inputStyle}
           />
-        </div>
-        <div className="mt-3 flex items-center gap-3">
-          <div className="min-w-[200px] flex-1">
-            <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
-              Reasoning volume
-            </div>
-            <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-              KB of reasoning accumulated in that window before the guard fires (8–256). Both conditions must hold.
-            </div>
-          </div>
+        </SettingsRow>
+        <SettingsRow
+          label="Reasoning volume"
+          description="KB of reasoning accumulated in that window before the guard fires (8–256). Both conditions must hold."
+        >
           <CommitNumberInput
             value={current.reasoningBytesKB}
             min={8}
@@ -910,7 +1028,7 @@ function ThinkingLoopCard() {
             disabled={busy || !current.enabled}
             style={inputStyle}
           />
-        </div>
+        </SettingsRow>
       </div>
 
       {error ? (
@@ -923,7 +1041,7 @@ function ThinkingLoopCard() {
           ? `The guard fires after ${current.stallSeconds}s of pure reasoning with ${current.reasoningBytesKB}KB accumulated — one de-escalating retry, then an honest amber notice (never a red “generation failed”).`
           : "OFF — the model can think as much as it needs to. Turn it on only if a model ever gets stuck in a true reasoning loop."}
       </div>
-    </section>
+    </SectionCard>
   );
 }
 
@@ -991,32 +1109,25 @@ function RetryConfigCard() {
   // R97-I part 3: the ERROR branch comes FIRST — with the pre-R97 gate a
   // failed GET (data undefined) hung on "loading…" forever. Stale data on a
   // background-refetch failure still renders the card normally below.
+  // R100-E1: SectionCard primitive (same testid, same branches).
   if (settingsQuery.isError && current === undefined) {
     return (
-      <section
-        data-testid="retry-settings-card"
-        className="rounded-lg p-4"
-        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      >
+      <SectionCard testId="retry-settings-card">
         <SettingsLoadErrorCard
           what="retry"
           error={settingsQuery.error}
           onRetry={() => void settingsQuery.refetch()}
         />
-      </section>
+      </SectionCard>
     );
   }
   if (settingsQuery.isLoading || current === undefined) {
     return (
-      <section
-        data-testid="retry-settings-card"
-        className="rounded-lg p-4"
-        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      >
+      <SectionCard testId="retry-settings-card">
         <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
           loading retry settings…
         </span>
-      </section>
+      </SectionCard>
     );
   }
 
@@ -1075,29 +1186,16 @@ function RetryConfigCard() {
   } as const;
 
   return (
-    <section
-      data-testid="retry-settings-card"
-      className="rounded-lg p-4"
-      style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      aria-label="Auto-retry"
-    >
+    <SectionCard testId="retry-settings-card" ariaLabel="Auto-retry">
       <div className="mb-3 flex items-center gap-2">
         <RefreshCw size={13} style={{ color: styles.accent, opacity: 0.7 }} />
-        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
-          Auto-retry
-        </span>
+        <span className="text-[13px] font-semibold text-ink">Auto-retry</span>
       </div>
-      <div className="flex flex-col gap-3">
+      {/* R100-E1: the three switch rows ride SettingsRow (the primitive's
+          13px/400 label + 11px tertiary description anatomy). */}
+      <div className="flex flex-col gap-1">
         {RETRY_SWITCHES.map(({ key, label, description }) => (
-          <div key={key} className="flex items-start gap-3">
-            <div className="min-w-[200px] flex-1">
-              <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
-                {label}
-              </div>
-              <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-                {description}
-              </div>
-            </div>
+          <SettingsRow key={key} label={label} description={description}>
             <button
               type="button"
               role="switch"
@@ -1123,7 +1221,7 @@ function RetryConfigCard() {
                 }}
               />
             </button>
-          </div>
+          </SettingsRow>
         ))}
       </div>
 
@@ -1131,24 +1229,14 @@ function RetryConfigCard() {
           the provider call timeout. Every value edits through the same
           PUT /settings/retry mutation (validated server-side against the
           same bounds the runtime resolves with). */}
-      <div className="mt-4 pt-3" style={{ borderTop: bdr("1.5px", styles.border) }}>
+      <div className="mt-4 border-t border-line pt-3">
         <div className="mb-2.5 flex items-center gap-2">
           <Timer size={12} style={{ color: styles.accent, opacity: 0.7 }} />
-          <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
-            Schedule
-          </span>
+          <span className="text-[13px] font-semibold text-ink">Schedule</span>
         </div>
 
         {/* Max attempts stepper */}
-        <div className="flex items-center gap-3">
-          <div className="min-w-[200px] flex-1">
-            <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
-              Max attempts
-            </div>
-            <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-              Total provider attempts per turn (initial call + retries).
-            </div>
-          </div>
+        <SettingsRow label="Max attempts" description="Total provider attempts per turn (initial call + retries).">
           <div className="flex items-center gap-1.5 shrink-0" data-testid="retry-max-attempts-group">
             <button
               type="button"
@@ -1163,7 +1251,7 @@ function RetryConfigCard() {
             </button>
             <span
               data-testid="retry-max-attempts"
-              className="w-8 text-center text-[13px] font-mono font-bold"
+              className="w-8 text-center text-[13px] font-mono font-semibold tabular-nums"
               style={{ color: styles.text }}
             >
               {current.maxAttempts}
@@ -1180,20 +1268,19 @@ function RetryConfigCard() {
               <Plus size={12} />
             </button>
           </div>
-        </div>
+        </SettingsRow>
 
-        {/* Per-rung waits (minutes) */}
+        {/* Per-rung waits (minutes) — a wrapped input cluster, not a
+            single label+control row (stays hand-rolled; sizes snapped). */}
         <div className="mt-3">
-          <div className="text-[12.5px] font-bold mb-1" style={{ color: styles.text }}>
-            Wait before each retry
-          </div>
+          <div className="text-[13px] font-normal text-ink mb-1">Wait before each retry</div>
           <div className="text-[11px] mb-2" style={{ color: styles.textTertiary }}>
             Minutes to wait before each retry attempt (0 = retry immediately).
           </div>
           <div className="flex flex-wrap gap-2">
             {rungs.map((i) => (
               <label key={i} className="flex items-center gap-1.5" data-testid={`retry-wait-row-${i}`}>
-                <span className="text-[10.5px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
+                <span className="text-[11px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
                   #{i + 2}
                 </span>
                 <input
@@ -1218,10 +1305,10 @@ function RetryConfigCard() {
                       e.target.value = String(current.waitMinutes[i] ?? 30);
                     }
                   }}
-                  className="h-7 w-[74px] rounded-lg px-2 font-mono text-[11.5px] outline-none transition-colors disabled:cursor-wait disabled:opacity-60"
+                  className="h-7 w-18 rounded-lg px-2 font-mono text-[12px] outline-none transition-colors disabled:cursor-wait disabled:opacity-60"
                   style={inputStyle}
                 />
-                <span className="text-[10.5px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
+                <span className="text-[11px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
                   min
                 </span>
               </label>
@@ -1230,15 +1317,11 @@ function RetryConfigCard() {
         </div>
 
         {/* Provider call timeout */}
-        <div className="mt-3 flex items-center gap-3">
-          <div className="min-w-[200px] flex-1">
-            <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
-              Provider call timeout
-            </div>
-            <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-              Seconds before a stuck provider call aborts (then retries if timeouts are on).
-            </div>
-          </div>
+        <SettingsRow
+          label="Provider call timeout"
+          description="Seconds before a stuck provider call aborts (then retries if timeouts are on)."
+          className="mt-3"
+        >
           <input
             type="number"
             min={60}
@@ -1258,10 +1341,10 @@ function RetryConfigCard() {
                 e.target.value = String(current.providerTimeoutSeconds);
               }
             }}
-            className="h-7 w-[84px] rounded-lg px-2 font-mono text-[11.5px] outline-none transition-colors shrink-0 disabled:cursor-wait disabled:opacity-60"
+            className="h-7 w-21 rounded-lg px-2 font-mono text-[12px] outline-none transition-colors shrink-0 disabled:cursor-wait disabled:opacity-60"
             style={inputStyle}
           />
-        </div>
+        </SettingsRow>
 
         {/* Reset to defaults */}
         <div className="mt-3">
@@ -1270,7 +1353,7 @@ function RetryConfigCard() {
             disabled={busy}
             data-testid="retry-reset"
             onClick={resetDefaults}
-            className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ borderColor: styles.border, color: styles.textSecondary }}
           >
             <RotateCcw size={11} />
@@ -1288,7 +1371,7 @@ function RetryConfigCard() {
         When a switch is off, that failure type shows immediately with the provider&apos;s real error text instead of
         auto-retrying ({current.maxAttempts} attempts: {scheduleLabel}).
       </div>
-    </section>
+    </SectionCard>
   );
 }
 
@@ -1328,57 +1411,46 @@ function DebugModeCard() {
   // background-refetch failure still renders the card normally below.
   if (settingsQuery.isError && current === undefined) {
     return (
-      <section className="rounded-lg p-4" style={{ background: styles.card, border: bdr("1.5px", styles.border) }}>
+      <SectionCard>
         <SettingsLoadErrorCard
           what="debug"
           error={settingsQuery.error}
           onRetry={() => void settingsQuery.refetch()}
         />
-      </section>
+      </SectionCard>
     );
   }
   if (settingsQuery.isLoading || current === undefined) {
     return (
-      <section className="rounded-lg p-4" style={{ background: styles.card, border: bdr("1.5px", styles.border) }}>
+      <SectionCard>
         <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
           loading debug settings…
         </span>
-      </section>
+      </SectionCard>
     );
   }
 
   const busy = toggle.isPending;
 
   return (
-    <section
-      className="rounded-lg p-4"
-      style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      aria-label="Debug mode"
-    >
+    <SectionCard ariaLabel="Debug mode">
       <div className="mb-3 flex items-center gap-2">
         <SlidersHorizontal size={13} style={{ color: styles.accent, opacity: 0.7 }} />
-        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
-          Debug mode
-        </span>
+        <span className="text-[13px] font-semibold text-ink">Debug mode</span>
       </div>
-      <div className="flex items-start gap-3">
-        <div className="min-w-[200px] flex-1">
-          <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+      <SettingsRow
+        label={
+          <>
             Post-turn debug analyst
-          </div>
-          <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-            While ON, the agent answers normally — then a separate, context-free analyst reviews the
-            whole conversation (every tool call's full result, what was resolved, what failed) and
-            streams its execution report live in a dedicated section under the answer. The report
-            never feeds back into the conversation, so follow-up messages stay clean. Applies to
-            the next message you send.
-          </div>
-          {error ? (
-            <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
-              {error}
-            </div>
-          ) : null}
-        </div>
+            {error ? (
+              <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+                {error}
+              </div>
+            ) : null}
+          </>
+        }
+        description="While ON, the agent answers normally — then a separate, context-free analyst reviews the whole conversation (every tool call's full result, what was resolved, what failed) and streams its execution report live in a dedicated section under the answer. The report never feeds back into the conversation, so follow-up messages stay clean. Applies to the next message you send."
+      >
         <button
           type="button"
           role="switch"
@@ -1403,8 +1475,8 @@ function DebugModeCard() {
             }}
           />
         </button>
-      </div>
-    </section>
+      </SettingsRow>
+    </SectionCard>
   );
 }
 
@@ -1456,65 +1528,46 @@ function DesktopNotificationsCard() {
   // background-refetch failure still renders the card normally below.
   if (settingsQuery.isError && current === undefined) {
     return (
-      <section
-        data-testid="desktop-notifications-card"
-        className="rounded-lg p-4"
-        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      >
+      <SectionCard testId="desktop-notifications-card">
         <SettingsLoadErrorCard
           what="desktop-notifications"
           error={settingsQuery.error}
           onRetry={() => void settingsQuery.refetch()}
         />
-      </section>
+      </SectionCard>
     );
   }
   if (settingsQuery.isLoading || current === undefined) {
     return (
-      <section
-        data-testid="desktop-notifications-card"
-        className="rounded-lg p-4"
-        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      >
+      <SectionCard testId="desktop-notifications-card">
         <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
           loading desktop notification settings…
         </span>
-      </section>
+      </SectionCard>
     );
   }
 
   const busy = toggle.isPending;
 
   return (
-    <section
-      data-testid="desktop-notifications-card"
-      className="rounded-lg p-4"
-      style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      aria-label="Desktop notifications"
-    >
+    <SectionCard testId="desktop-notifications-card" ariaLabel="Desktop notifications">
       <div className="mb-3 flex items-center gap-2">
         <BellRing size={13} style={{ color: styles.accent, opacity: 0.7 }} />
-        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
-          Desktop notifications
-        </span>
+        <span className="text-[13px] font-semibold text-ink">Desktop notifications</span>
       </div>
-      <div className="flex items-start gap-3">
-        <div className="min-w-[200px] flex-1">
-          <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+      <SettingsRow
+        label={
+          <>
             OS notifications
-          </div>
-          <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-            While ON, task-complete, task-failed, and permission-needed alerts fire a
-            native OS notification when the app window is not visible (the same rule
-            the in-app toasts already follow). Sub-agent activity stays in-app only.
-            Applies to the very next notification.
-          </div>
-          {error ? (
-            <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
-              {error}
-            </div>
-          ) : null}
-        </div>
+            {error ? (
+              <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+                {error}
+              </div>
+            ) : null}
+          </>
+        }
+        description="While ON, task-complete, task-failed, and permission-needed alerts fire a native OS notification when the app window is not visible (the same rule the in-app toasts already follow). Sub-agent activity stays in-app only. Applies to the very next notification."
+      >
         <button
           type="button"
           role="switch"
@@ -1539,8 +1592,8 @@ function DesktopNotificationsCard() {
             }}
           />
         </button>
-      </div>
-    </section>
+      </SettingsRow>
+    </SectionCard>
   );
 }
 
@@ -1575,56 +1628,46 @@ function MemoryCard() {
   // background-refetch failure still renders the card normally below.
   if (settingsQuery.isError && current === undefined) {
     return (
-      <section className="rounded-lg p-4" style={{ background: styles.card, border: bdr("1.5px", styles.border) }}>
+      <SectionCard>
         <SettingsLoadErrorCard
           what="memory"
           error={settingsQuery.error}
           onRetry={() => void settingsQuery.refetch()}
         />
-      </section>
+      </SectionCard>
     );
   }
   if (settingsQuery.isLoading || current === undefined) {
     return (
-      <section className="rounded-lg p-4" style={{ background: styles.card, border: bdr("1.5px", styles.border) }}>
+      <SectionCard>
         <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
           loading memory settings…
         </span>
-      </section>
+      </SectionCard>
     );
   }
 
   const busy = toggle.isPending;
 
   return (
-    <section
-      className="rounded-lg p-4"
-      style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-      aria-label="Agent memory"
-    >
+    <SectionCard ariaLabel="Agent memory">
       <div className="mb-3 flex items-center gap-2">
         <Brain size={13} style={{ color: styles.accent, opacity: 0.7 }} />
-        <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
-          Agent memory
-        </span>
+        <span className="text-[13px] font-semibold text-ink">Agent memory</span>
       </div>
-      <div className="flex items-start gap-3">
-        <div className="min-w-[200px] flex-1">
-          <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
+      <SettingsRow
+        label={
+          <>
             Project memory system
-          </div>
-          <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-            While ON, agents auto-load each project's saved facts, decisions and preferences at
-            every turn and can save new ones (memory_save / memory_recall / memory_list). Turn it
-            OFF to run every session on its own context alone — no memory is injected and the
-            memory tools are not offered. Saved memories are kept and restored when re-enabled.
-          </div>
-          {error ? (
-            <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
-              {error}
-            </div>
-          ) : null}
-        </div>
+            {error ? (
+              <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+                {error}
+              </div>
+            ) : null}
+          </>
+        }
+        description="While ON, agents auto-load each project's saved facts, decisions and preferences at every turn and can save new ones (memory_save / memory_recall / memory_list). Turn it OFF to run every session on its own context alone — no memory is injected and the memory tools are not offered. Saved memories are kept and restored when re-enabled."
+      >
         <button
           type="button"
           role="switch"
@@ -1649,8 +1692,8 @@ function MemoryCard() {
             }}
           />
         </button>
-      </div>
-    </section>
+      </SettingsRow>
+    </SectionCard>
   );
 }
 
@@ -1708,32 +1751,24 @@ function BrowserTab() {
   if (settingsQuery.isError && current === undefined) {
     return (
       <div className="mx-auto flex max-w-2xl flex-col gap-4">
-        <section
-          data-testid="browser-settings-card"
-          className="rounded-lg p-4"
-          style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-        >
+        <SectionCard testId="browser-settings-card" ariaLabel="Browser settings">
           <SettingsLoadErrorCard
             what="browser"
             error={settingsQuery.error}
             onRetry={() => void settingsQuery.refetch()}
           />
-        </section>
+        </SectionCard>
       </div>
     );
   }
   if (settingsQuery.isLoading || current === undefined) {
     return (
       <div className="mx-auto flex max-w-2xl flex-col gap-4">
-        <section
-          data-testid="browser-settings-card"
-          className="rounded-lg p-4"
-          style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-        >
+        <SectionCard testId="browser-settings-card" ariaLabel="Browser settings">
           <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
             loading browser settings…
           </span>
-        </section>
+        </SectionCard>
       </div>
     );
   }
@@ -1751,10 +1786,13 @@ function BrowserTab() {
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
+      {/* R100-E1 (research §C2 P1(d)): the tab-intro header — label-tier
+          Kicker (the tab's group) + a 13px/600 section title. A TAB, not a
+          page: the page header above already carries the 24px/600 title
+          (the old 16px font-black h2 was the spelling the ladder retired). */}
       <div className="pb-1">
-        <h2 className="text-[16px] font-black" style={{ color: styles.text }}>
-          Browser
-        </h2>
+        <Kicker className="mb-1">Integrations</Kicker>
+        <h2 className="text-[13px] font-semibold text-ink">Browser</h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
           The embedded browser's address bar, home page, default zoom, link opening, and quick links.
         </p>
@@ -1786,28 +1824,13 @@ function BrowserTab() {
         </div>
       </div>
 
-      <section
-        data-testid="browser-settings-card"
-        className="rounded-lg p-4"
-        style={{ background: styles.card, border: bdr("1.5px", styles.border) }}
-        aria-label="Browser settings"
-      >
-        {/* The search engine */}
-        <div className="mb-3 flex items-center gap-2">
-          <Globe size={13} style={{ color: styles.accent, opacity: 0.7 }} />
-          <span className="text-[12px] font-semibold" style={{ color: styles.text }}>
-            Address bar
-          </span>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="min-w-[200px] flex-1">
-            <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
-              Search engine
-            </div>
-            <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-              Used when the address bar text is a query, not a URL.
-            </div>
-          </div>
+      <SectionCard testId="browser-settings-card" ariaLabel="Browser settings">
+        {/* The search engine — the card's in-card label is the Kicker
+            (label tier), the row itself rides SettingsRow. */}
+        <Kicker icon={Globe} className="mb-3">
+          Address bar
+        </Kicker>
+        <SettingsRow label="Search engine" description="Used when the address bar text is a query, not a URL.">
           <div className="flex flex-wrap gap-1.5 justify-end" data-testid="browser-engine-group">
             {SEARCH_ENGINE_OPTIONS.map((opt) => {
               const active = current.searchEngine === opt.id;
@@ -1819,7 +1842,7 @@ function BrowserTab() {
                   data-testid={`browser-engine-${opt.id}`}
                   aria-pressed={active}
                   onClick={() => update.mutate({ searchEngine: opt.id })}
-                  className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-colors cursor-pointer disabled:opacity-50"
+                  className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors hover:bg-hover cursor-pointer disabled:opacity-50"
                   style={{
                     ...(active
                       ? { background: withAlpha(styles.accent, 0.12), borderColor: styles.accent, color: styles.accent }
@@ -1831,90 +1854,77 @@ function BrowserTab() {
               );
             })}
           </div>
-        </div>
+        </SettingsRow>
 
         {/* The homepage */}
-        <div className="mt-4 pt-3" style={{ borderTop: bdr("1.5px", styles.border) }}>
-          <div className="flex items-center gap-3">
-            <div className="min-w-[200px] flex-1">
-              <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
-                Home page
-              </div>
-              <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-                Where the Home button goes. Use <span className="font-mono">acute://home</span> for the quick-links page, or any URL / local path.
-              </div>
-            </div>
-            <input
-              type="text"
-              disabled={busy}
-              data-testid="browser-homepage"
-              aria-label="Home page URL"
-              defaultValue={current.homepage}
-              onBlur={(e) => {
-                const value = e.target.value.trim();
-                if (value !== current.homepage) update.mutate({ homepage: value });
-              }}
-              className="h-7 w-[220px] rounded-lg px-2 font-mono text-[11.5px] outline-none transition-colors shrink-0 disabled:opacity-60"
-              style={inputStyle}
-            />
-          </div>
-        </div>
+        <SettingsRow
+          divider
+          label="Home page"
+          description={
+            <>
+              Where the Home button goes. Use <span className="font-mono">acute://home</span> for the quick-links page, or any URL / local path.
+            </>
+          }
+        >
+          <input
+            type="text"
+            disabled={busy}
+            data-testid="browser-homepage"
+            aria-label="Home page URL"
+            defaultValue={current.homepage}
+            onBlur={(e) => {
+              const value = e.target.value.trim();
+              if (value !== current.homepage) update.mutate({ homepage: value });
+            }}
+            className="h-7 w-55 rounded-lg px-2 font-mono text-[12px] outline-none transition-colors shrink-0 disabled:opacity-60"
+            style={inputStyle}
+          />
+        </SettingsRow>
 
-        {/* The default zoom */}
-        <div className="mt-4 pt-3" style={{ borderTop: bdr("1.5px", styles.border) }}>
-          <div className="flex items-center gap-3">
-            <div className="min-w-[200px] flex-1">
-              <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
-                Default zoom
-              </div>
-              <div className="text-[11px]" style={{ color: styles.textTertiary }}>
-                New browser sessions start at this zoom (25%–300%).
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0" data-testid="browser-zoom-group">
-              <button
-                type="button"
-                aria-label="Decrease default zoom"
-                disabled={busy || current.defaultZoom <= 0.25}
-                onClick={() => update.mutate({ defaultZoom: Math.max(0.25, Math.round((current.defaultZoom - 0.25) * 100) / 100) })}
-                className="h-7 w-7 grid place-items-center rounded-lg border transition-colors disabled:opacity-40 cursor-pointer"
-                style={inputStyle}
-              >
-                <Minus size={12} />
-              </button>
-              <span
-                data-testid="browser-zoom-value"
-                className="w-14 text-center text-[13px] font-mono font-bold"
-                style={{ color: styles.text }}
-              >
-                {Math.round(current.defaultZoom * 100)}%
-              </span>
-              <button
-                type="button"
-                aria-label="Increase default zoom"
-                disabled={busy || current.defaultZoom >= 3}
-                onClick={() => update.mutate({ defaultZoom: Math.min(3, Math.round((current.defaultZoom + 0.25) * 100) / 100) })}
-                className="h-7 w-7 grid place-items-center rounded-lg border transition-colors disabled:opacity-40 cursor-pointer"
-                style={inputStyle}
-              >
-                <Plus size={12} />
-              </button>
-            </div>
+        {/* The default zoom — tabular-nums on the value (the native-feel
+            checklist: numbers never reflow on change). */}
+        <SettingsRow divider label="Default zoom" description="New browser sessions start at this zoom (25%–300%).">
+          <div className="flex items-center gap-1.5 shrink-0" data-testid="browser-zoom-group">
+            <button
+              type="button"
+              aria-label="Decrease default zoom"
+              disabled={busy || current.defaultZoom <= 0.25}
+              onClick={() => update.mutate({ defaultZoom: Math.max(0.25, Math.round((current.defaultZoom - 0.25) * 100) / 100) })}
+              className="h-7 w-7 grid place-items-center rounded-lg border transition-colors disabled:opacity-40 cursor-pointer"
+              style={inputStyle}
+            >
+              <Minus size={12} />
+            </button>
+            <span
+              data-testid="browser-zoom-value"
+              className="w-14 text-center text-[13px] font-mono font-semibold tabular-nums"
+              style={{ color: styles.text }}
+            >
+              {Math.round(current.defaultZoom * 100)}%
+            </span>
+            <button
+              type="button"
+              aria-label="Increase default zoom"
+              disabled={busy || current.defaultZoom >= 3}
+              onClick={() => update.mutate({ defaultZoom: Math.min(3, Math.round((current.defaultZoom + 0.25) * 100) / 100) })}
+              className="h-7 w-7 grid place-items-center rounded-lg border transition-colors disabled:opacity-40 cursor-pointer"
+              style={inputStyle}
+            >
+              <Plus size={12} />
+            </button>
           </div>
-        </div>
+        </SettingsRow>
 
         {/* R99-A: LINK OPENING — where the app's own links land (chat, file
             previews, the About tab). The shared ChoiceCard pattern (the
-            pick-one idiom: radio circle + bold label + one-line description,
+            pick-one idiom: radio circle + label + one-line description,
             active accent ring) — a labeled GROUP because the two cards are
             one radio decision (aria-pressed on the cards themselves, the
             Text Size / Timestamps precedent). Applied live via the effect
-            above. */}
-        <div className="mt-4 pt-3" style={{ borderTop: bdr("1.5px", styles.border) }}>
+            above. Stays the ChoiceCard GRID (not a SettingsRow). */}
+        <div className="mt-4 border-t border-line pt-3">
           <div className="mb-2">
-            <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
-              Link opening
-            </div>
+            <div className="text-[13px] font-normal text-ink">Link opening</div>
             <div className="text-[11px]" style={{ color: styles.textTertiary }}>
               Where links inside the app open — chat, file previews, and the About tab.
             </div>
@@ -1936,12 +1946,10 @@ function BrowserTab() {
         </div>
 
         {/* The quick links */}
-        <div className="mt-4 pt-3" style={{ borderTop: bdr("1.5px", styles.border) }}>
+        <div className="mt-4 border-t border-line pt-3">
           <div className="mb-2 flex items-center justify-between">
             <div>
-              <div className="text-[12.5px] font-bold" style={{ color: styles.text }}>
-                Quick links
-              </div>
+              <div className="text-[13px] font-normal text-ink">Quick links</div>
               <div className="text-[11px]" style={{ color: styles.textTertiary }}>
                 The shortcuts on the home page ({current.quickLinks.length}/12).
               </div>
@@ -1951,7 +1959,7 @@ function BrowserTab() {
               disabled={busy || current.quickLinks.length >= 12}
               data-testid="browser-quicklink-add"
               onClick={() => setQuickLinks([...current.quickLinks, { label: "New link", url: "https://" }])}
-              className="h-7 px-2.5 rounded-lg text-[11.5px] font-semibold border transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+              className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
               style={{ borderColor: styles.border, color: styles.textSecondary }}
             >
               <Plus size={11} />
@@ -1971,7 +1979,7 @@ function BrowserTab() {
                     next[i] = { ...next[i]!, label: e.target.value.trim() || link.label };
                     if (next[i]!.label !== link.label) setQuickLinks(next);
                   }}
-                  className="h-7 flex-1 min-w-0 rounded-lg px-2 text-[11.5px] outline-none transition-colors disabled:opacity-60"
+                  className="h-7 flex-1 min-w-0 rounded-lg px-2 text-[12px] outline-none transition-colors disabled:opacity-60"
                   style={inputStyle}
                 />
                 <input
@@ -2008,7 +2016,7 @@ function BrowserTab() {
             {error}
           </div>
         ) : null}
-      </section>
+      </SectionCard>
     </div>
   );
 }

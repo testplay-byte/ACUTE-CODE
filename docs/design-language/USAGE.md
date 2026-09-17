@@ -85,7 +85,9 @@ contracts:
   utility, not `rounded-[16px]`), 1.5px `border-line`, `bg-card`, `size`
   md=p-5/lg=p-6, optional `shadow` (softShadow), optional `kicker` +
   `title` header slot (title wires `aria-labelledby` to its 13px/600
-  heading). Every new settings tab starts its cards here.
+  heading), and an optional `ariaLabel` passthrough (R100-E1: the adopting
+  settings cards carried aria-labels their tests pin — adoption must not
+  drop them). Every new settings tab starts its cards here.
 - **`SettingsRow`** (`src/components/ui/SettingsRow.tsx`) — the
   label+control row: 36px min-height, 13px/400 label + optional 11px
   tertiary `description`, `flex-1 min-w-[200px]` label block, right-aligned

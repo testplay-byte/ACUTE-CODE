@@ -252,7 +252,12 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     expect(await screen.findByText("settings stub")).toBeTruthy();
   });
 
-  it("R62: settings mode keeps the header (back + title) and now ALSO the minimize control", () => {
+  // R100-E1 (research §C2 P1(a)): RE-PINNED — the ROUND-34 settings mode
+  // is RETIRED. The settings page owns its own nav column + search now, so
+  // the sidebar renders the NORMAL nav on /settings routes: the Navigation
+  // heading + the Dashboard row (the R95-A back affordance) + the minimize
+  // control. No settings-mode header, no per-tab section list.
+  it("R100-E1: on a settings route the sidebar renders the NORMAL nav — the settings page owns its own nav column now", () => {
     renderWithProviders(
       <>
         <Sidebar />
@@ -262,22 +267,22 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
       </>,
       { route: "/settings?tab=appearance" },
     );
-    expect(screen.getByRole("button", { name: "Back to dashboard", hidden: true })).toBeTruthy();
-    expect(screen.getByText("Settings")).toBeTruthy();
-    // ROUND-62: minimize also lives at the very top of the settings sidebar.
+    expect(screen.getByText("Navigation")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^dashboard$/i, hidden: true })).toBeTruthy();
+    // The minimize control still lives at the very top (R62, mode-agnostic now).
     expect(screen.getByTestId("sidebar-minimize")).toBeTruthy();
-    // The settings sections replace the normal navigation.
-    expect(screen.getByRole("button", { name: /appearance/i, hidden: true })).toBeTruthy();
-    expect(screen.queryByText("Navigation")).toBeNull();
+    // The retired settings-mode chrome is GONE.
+    expect(screen.queryByTestId("sidebar-back-dashboard")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^appearance$/i, hidden: true })).toBeNull();
+    expect(document.querySelectorAll('[data-testid^="settings-group-"]')).toHaveLength(0);
   });
 
   // R95-A (the owner: "The left sidebar does have a Back to Dashboard button
-  // but it is not proper so I would like you to improve it and make it a
-  // better-looking button"): the settings-mode back affordance is a PROPER
-  // labeled pill — icon + "Dashboard" text in the app's pill idiom — and it
-  // navigates home. It is the ONE back affordance outside the minimized rail
-  // (the settings pages' own pills are gone).
-  it("R95-A: the settings sidebar's back button is a proper labeled pill that navigates to the dashboard", async () => {
+  // but it is not proper…"): RE-PINNED R100-E1 — the dedicated settings-mode
+  // back pill is gone with the settings-mode sidebar itself; the left
+  // sidebar STILL owns the back-to-dashboard affordance on settings routes,
+  // via the normal nav's Dashboard row.
+  it("R95-A (re-pinned R100-E1): on settings routes the left sidebar's Dashboard row navigates home — the back affordance it owns", async () => {
     renderWithProviders(
       <>
         <Sidebar />
@@ -288,18 +293,20 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
       </>,
       { route: "/settings?tab=api" },
     );
-    const back = screen.getByTestId("sidebar-back-dashboard");
-    expect(back.textContent).toContain("Dashboard");
-    expect(back.className).toContain("rounded-full");
-    expect(back.className).toContain("border-[1.5px]");
-    fireEvent.click(back);
+    // The old settings-mode back pill is gone; the Dashboard nav row is the affordance.
+    expect(screen.queryByTestId("sidebar-back-dashboard")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^dashboard$/i, hidden: true }));
     expect(await screen.findByText("dashboard stub")).toBeTruthy();
   });
 
-  it("R66 (B4): minimizing ON A SETTINGS ROUTE shows the SETTINGS rail, not the projects one", async () => {
-    // Seed a minimized store BEFORE mount at /settings?tab=vision (the
-    // owner's report: "when I minimize the settings sidebar, it shows me the
-    // wrong sidebar — the normal other sidebar with the projects and such").
+  // R66 (B4, owner report: "when I minimize the settings sidebar, it shows
+  // me the wrong sidebar — the normal other sidebar with the projects and
+  // such"): RE-PINNED R100-E1 — the rail's settings VARIANT is retired with
+  // the sidebar's settings mode. The rail now renders the NORMAL body
+  // (dashboard/usage/projects) on settings routes too; the per-tab settings
+  // icons (rail-settings-<id>) are gone — the gear (rail-settings) is the
+  // one "Settings" entry and the page's own nav owns ?tab=.
+  it("R66 (B4, re-pinned R100-E1): minimizing ON A SETTINGS ROUTE shows the normal rail — dashboard/usage/projects, no per-tab settings icons", async () => {
     useProjectChatStore.setState({ appSidebarMinimized: true });
     renderWithProviders(
       <>
@@ -313,24 +320,22 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     );
     const rail = await screen.findByTestId("sidebar-rail");
     expect(rail).toBeTruthy();
-    // The SETTINGS rail: back-to-dashboard + the section icons, with the
-    // ?tab= section (vision) marked active.
-    expect(screen.getByTestId("rail-back-dashboard")).toBeTruthy();
-    expect(screen.getByTestId("rail-settings-vision")).toBeTruthy();
-    expect(screen.getByTestId("rail-settings-computeruse")).toBeTruthy();
-    // The projects rail is deliberately ABSENT on a settings route.
-    expect(screen.queryByTestId("rail-dashboard")).toBeNull();
-    expect(screen.queryByTestId("rail-usage")).toBeNull();
-    expect(screen.queryByTestId("rail-projects")).toBeNull();
-    // Section click deep-links; back returns to the dashboard.
-    fireEvent.click(screen.getByTestId("rail-back-dashboard"));
+    // The NORMAL rail body — dashboard/usage present and navigable.
+    expect(screen.getByTestId("rail-dashboard")).toBeTruthy();
+    expect(screen.getByTestId("rail-usage")).toBeTruthy();
+    // The retired per-tab settings rail icons are gone.
+    expect(screen.queryByTestId("rail-settings-vision")).toBeNull();
+    expect(screen.queryByTestId("rail-back-dashboard")).toBeNull();
+    // Dashboard from the minimized rail still returns home.
+    fireEvent.click(screen.getByTestId("rail-dashboard"));
     expect(await screen.findByText("dashboard stub")).toBeTruthy();
   });
 
-  // R98-E1: the Prompts settings section is listed in BOTH nav shapes and
-  // navigates with the SettingsPage-tab-synced id — the R44 lesson (an entry
-  // in TABS without its sidebar twin is an unreachable tab).
-  it("R98-E1: the Prompts entry sits in the settings nav + the minimized rail, and navigates to ?tab=prompts", async () => {
+  // R98-E1: RE-PINNED R100-E1 — the sidebar carries NO per-tab settings
+  // entries anymore (the settings page's own nav column lists Prompts and
+  // deep-links ?tab=prompts — pinned in SettingsPage.test.tsx). The footer's
+  // ONE "Settings" entry navigates to the page.
+  it("R98-E1 (re-pinned R100-E1): NO Prompts entry in the sidebar — the footer Settings entry opens the settings page (its nav owns ?tab=)", async () => {
     function SearchProbe() {
       const { search } = useLocation();
       return <div data-testid="search-probe">{search}</div>;
@@ -345,45 +350,35 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
       { route: "/settings?tab=appearance" },
     );
 
-    // The full settings nav lists Prompts.
-    const entry = screen.getByRole("button", { name: /^prompts$/i, hidden: true });
-    expect(entry).toBeTruthy();
-    // Clicking it deep-links to the SettingsPage tab id.
-    fireEvent.click(entry);
-    expect((await screen.findByTestId("search-probe")).textContent).toContain("tab=prompts");
+    // No per-tab settings entries in the sidebar at all.
+    expect(screen.queryByRole("button", { name: /^prompts$/i, hidden: true })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^models & providers$/i, hidden: true })).toBeNull();
 
-    // The minimized settings rail carries the SAME id (rail-settings-prompts).
-    act(() => useProjectChatStore.setState({ appSidebarMinimized: true }));
-    expect(await screen.findByTestId("rail-settings-prompts")).toBeTruthy();
+    // The ONE Settings entry navigates to /settings (the page's own nav
+    // takes over from there — the probe's search drops the ?tab= param).
+    fireEvent.click(screen.getByRole("button", { name: /^settings$/i, hidden: true }));
+    await waitFor(() => {
+      expect((screen.getByTestId("search-probe")).textContent).not.toContain("tab=");
+    });
   });
 
   // R98-I1 (owner: "separate the different side options into different
-  // categories"): the settings nav is GROUPED — the five owner-named
-  // category headers (11px uppercase tracked, textTertiary) label the
-  // clusters, once per cluster (not per row), while the minimized rail
-  // stays FLAT (icons only — no headers, the R66 B4 mirror contract). The
-  // entry ids stay the SettingsPage TABS ids (the R44 lesson; deep-links
-  // keep working).
-  it("R98-I1: the settings nav renders the five GROUP headers (one per cluster) and the entries still deep-link; the minimized rail stays FLAT", async () => {
-    function SearchProbe() {
-      const { search } = useLocation();
-      return <div data-testid="search-probe">{search}</div>;
-    }
+  // categories"): RE-PINNED R100-E1 — the five group headers moved WITH the
+  // settings nav into the settings page's own nav column (pinned in
+  // SettingsPage.test.tsx: settings-group-Workspace … settings-group-System).
+  // The sidebar carries ZERO settings chrome.
+  it("R98-I1 (re-pinned R100-E1): ZERO group headers / settings entries in the sidebar — the five groups render in the settings page's own nav column", () => {
     renderWithProviders(
       <>
         <Sidebar />
         <Routes>
-          <Route path="/settings" element={<SearchProbe />} />
+          <Route path="/settings" element={<div>settings stub</div>} />
         </Routes>
       </>,
       { route: "/settings?tab=appearance" },
     );
 
-    // All five group headers, exactly ONE each (a header per CLUSTER, never
-    // per row — the count pins that). Pinned via the settings-group-*
-    // testids because "Data & Statistics" is BOTH a group name and the data
-    // entry's own label (a getAllByText count would conflate the two).
-    expect(document.querySelectorAll('[data-testid^="settings-group-"]')).toHaveLength(5);
+    expect(document.querySelectorAll('[data-testid^="settings-group-"]')).toHaveLength(0);
     for (const group of [
       "Workspace",
       "Agents & Skills",
@@ -391,50 +386,12 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
       "Data & Statistics",
       "System",
     ]) {
-      expect(document.querySelectorAll(`[data-testid="settings-group-${group}"]`)).toHaveLength(1);
-      // The header is the 11px uppercase tracked label in textTertiary (the
-      // SectionTitle idiom the dispatch asked for).
-      const header = document.querySelector(`[data-testid="settings-group-${group}"]`);
-      expect(header?.className).toContain("uppercase");
-      expect(header?.className).toContain("text-[11px]");
-      expect(header?.className).toContain("tracking-widest");
-    }
-
-    // The clustering itself: appearance (Workspace) sits ABOVE agents
-    // (Agents & Skills), which sits ABOVE the prompts entry (same cluster),
-    // which sits ABOVE api (Integrations) — the grouped order.
-    const appearance = screen.getByRole("button", { name: /^appearance$/i, hidden: true });
-    const agents = screen.getByRole("button", { name: /^agents$/i, hidden: true });
-    const prompts = screen.getByRole("button", { name: /^prompts$/i, hidden: true });
-    const api = screen.getByRole("button", { name: /^models & providers$/i, hidden: true });
-    const data = screen.getByRole("button", { name: /data & statistics/i, hidden: true });
-    expect(
-      (appearance.compareDocumentPosition(agents) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
-    ).toBe(true);
-    expect(
-      (agents.compareDocumentPosition(prompts) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
-    ).toBe(true);
-    expect(
-      (prompts.compareDocumentPosition(api) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
-    ).toBe(true);
-    expect(
-      (api.compareDocumentPosition(data) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
-    ).toBe(true);
-
-    // The renamed Functionality entry (id "advanced" — the load-bearing
-    // deep-link contract) navigates as before.
-    const functionality = screen.getByRole("button", { name: /^functionality$/i, hidden: true });
-    fireEvent.click(functionality);
-    expect((await screen.findByTestId("search-probe")).textContent).toContain("tab=advanced");
-
-    // The minimized rail: every section icon present, ZERO group headers
-    // (the full nav unmounts on minimize, so the group labels vanish with
-    // it — the rail is icons only).
-    act(() => useProjectChatStore.setState({ appSidebarMinimized: true }));
-    expect(await screen.findByTestId("rail-settings-advanced")).toBeTruthy();
-    for (const group of ["Workspace", "Agents & Skills", "Integrations", "Data & Statistics", "System"]) {
       expect(screen.queryByText(group)).toBeNull();
     }
+    // The dashed "more coming" slot went with the settings nav.
+    expect(screen.queryByText("More settings coming soon")).toBeNull();
+    // The normal nav is what renders on the settings route instead.
+    expect(screen.getByText("Navigation")).toBeTruthy();
   });
 
   it("R60-C: normal mode has no header row — the nav starts at the panel's top", () => {

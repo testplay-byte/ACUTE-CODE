@@ -852,6 +852,15 @@ describe("Browser tab: Link opening preference (ROUND-99 R99-A)", () => {
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=browser" });
 
     const inApp = await screen.findByRole("button", { name: /In-app browser \(recommended\)/ });
+
+    // R100-E1 (research §C2 P1(d)): the Browser tab-intro header — the
+    // group-name Kicker + a 13px/600 section title (the old 16px font-black
+    // h2 was the spelling the ladder retired). It renders with the loaded
+    // branch, so it is pinned after the card resolves. (The nav column's own
+    // group kicker carries the same "Integrations" text — no getByText here.)
+    const tabIntro = screen.getByRole("heading", { level: 2, name: "Browser" });
+    expect(tabIntro.className).toContain("text-[13px]");
+    expect(tabIntro.className).toContain("font-semibold");
     expect(inApp.getAttribute("aria-pressed")).toBe("true");
     const system = screen.getByRole("button", { name: /System browser/ });
     expect(system.getAttribute("aria-pressed")).toBe("false");
@@ -970,5 +979,147 @@ describe("Browser tab: Link opening preference (ROUND-99 R99-A)", () => {
       text: async () => JSON.stringify({ ...browserState }),
     } as unknown as Response);
     expect(await screen.findByRole("button", { name: /In-app browser \(recommended\)/ })).toBeTruthy();
+  });
+});
+
+/* ── ROUND-100 (R100-E1, research §C2 P1(a) — the VS Code pattern): the
+ * settings page's OWN nav column + search box. The page hosts a left nav
+ * (role=navigation "Settings navigation", 200px column at lg, horizontal
+ * scroll strip below), the five group kickers render between clusters
+ * (settings-group-*, moved here from the sidebar this round), the search
+ * box filters the tab list by tab label + the SEARCH_KEYWORDS index
+ * (case-insensitive substring), and nav clicks drive the SAME ?tab= state
+ * machine the deep links have always used. */
+describe("Settings nav column + search (R100-E1)", () => {
+  it("renders the settings-local nav: role navigation, the 13 tab rows, and the five group kickers", () => {
+    renderWithProviders(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "Settings navigation" });
+    expect(nav).toBeTruthy();
+    expect(nav.getAttribute("data-testid")).toBe("settings-nav");
+
+    // All 13 tabs render as nav rows with their accessible labels intact
+    // (the same names the tests + docs have always used).
+    for (const label of [
+      "Appearance",
+      "Agents",
+      "Sub-agents",
+      "Skills",
+      "Prompts",
+      "Models & Providers",
+      "MCP Servers",
+      "Computer Use",
+      "Image Analysis",
+      "Browser",
+      "Data & Statistics",
+      "Functionality",
+      "About",
+    ]) {
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
+
+    // The five owner-named group kickers, exactly ONE each — the ids the
+    // sidebar's settings nav used to carry (moved here R100-E1).
+    expect(document.querySelectorAll('[data-testid^="settings-group-"]')).toHaveLength(5);
+    for (const group of ["Workspace", "Agents & Skills", "Integrations", "Data & Statistics", "System"]) {
+      expect(document.querySelectorAll(`[data-testid="settings-group-${group}"]`)).toHaveLength(1);
+    }
+  });
+
+  it("the nav row contract: 30px rows, 12px/400 labels, active = 500 + accent bar + soft bg (the label-tier selection grammar)", () => {
+    renderWithProviders(<SettingsPage />);
+
+    const active = screen.getByTestId("settings-nav-appearance");
+    expect(active.getAttribute("aria-current")).toBe("page");
+    expect(active.className).toContain("min-h-[30px]");
+    expect(active.className).toContain("text-[12px]");
+    // Active escalates 400 → 500 + the accent selection grammar (TOKENS §6);
+    // cn/twMerge resolves the weight conflict to font-medium.
+    expect(active.className).toContain("font-medium");
+    expect(active.className).not.toContain("font-normal");
+    expect(active.className).toContain("bg-accent-soft");
+    expect(active.querySelector(".bg-accent")).toBeTruthy(); // the 2px accent bar
+
+    // A resting row: 400 weight, no selection chrome.
+    const browser = screen.getByTestId("settings-nav-browser");
+    expect(browser.getAttribute("aria-current")).toBeNull();
+    expect(browser.className).toContain("font-normal");
+    expect(browser.className).not.toContain("bg-accent-soft");
+    expect(browser.querySelector(".bg-accent")).toBeNull();
+  });
+
+  it("the search box filters the nav: 'provider' keeps the tab-label match, 'api key' rides the keyword index, 'zzz' shows the honest empty note", () => {
+    renderWithProviders(<SettingsPage />);
+
+    const search = screen.getByTestId("settings-nav-search") as HTMLInputElement;
+    expect(search.getAttribute("aria-label")).toBe("Search settings");
+    expect(screen.getByPlaceholderText("Search settings")).toBeTruthy();
+
+    // 'provider' matches the Models & Providers label (and Vision's keyword
+    // list) — Appearance (no match) is filtered OUT of the tab list.
+    fireEvent.change(search, { target: { value: "provider" } });
+    expect(screen.getByTestId("settings-nav-api")).toBeTruthy();
+    expect(screen.getByTestId("settings-nav-vision")).toBeTruthy();
+    expect(screen.queryByTestId("settings-nav-appearance")).toBeNull();
+
+    // 'api key' rides the per-tab keyword lists (Sub-agents + Vision + api).
+    fireEvent.change(search, { target: { value: "api key" } });
+    expect(screen.getByTestId("settings-nav-subagents")).toBeTruthy();
+    expect(screen.getByTestId("settings-nav-vision")).toBeTruthy();
+    expect(screen.getByTestId("settings-nav-api")).toBeTruthy();
+    expect(screen.queryByTestId("settings-nav-browser")).toBeNull();
+
+    // Nonsense → the honest empty note, never a blank nav.
+    fireEvent.change(search, { target: { value: "zzz" } });
+    expect(screen.getByTestId("settings-nav-empty").textContent).toBe("No settings match");
+    expect(screen.queryByTestId("settings-nav-api")).toBeNull();
+
+    // Clearing restores the full list.
+    fireEvent.change(search, { target: { value: "" } });
+    expect(screen.getByTestId("settings-nav-appearance")).toBeTruthy();
+    expect(screen.queryByTestId("settings-nav-empty")).toBeNull();
+  });
+
+  it("nav clicks drive the SAME tab state machine: clicking Browser writes ?tab=browser (deep links keep working)", async () => {
+    renderWithProviders(<SettingsPage />);
+
+    fireEvent.click(screen.getByTestId("settings-nav-browser"));
+
+    // The URL param flips → the h1 + the active row follow; the browser tab
+    // actually mounts (its card's loading branch carries the same testid).
+    expect(await screen.findByRole("heading", { level: 1, name: "Browser" })).toBeTruthy();
+    expect(screen.getByTestId("settings-nav-browser").getAttribute("aria-current")).toBe("page");
+    expect(screen.getByTestId("settings-nav-appearance").getAttribute("aria-current")).toBeNull();
+    expect(await screen.findByTestId("browser-settings-card")).toBeTruthy();
+  });
+
+  it("the ?tab=browser deep link still selects the Browser tab (the URL contract is untouched)", async () => {
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=browser" });
+
+    expect(screen.getByRole("heading", { level: 1, name: "Browser" })).toBeTruthy();
+    expect(screen.getByTestId("settings-nav-browser").getAttribute("aria-current")).toBe("page");
+    expect(await screen.findByTestId("browser-settings-card")).toBeTruthy();
+  });
+
+  it("R100-E1 ladder: the page header is the Kicker + 24px/600 title (no font-black), and the tab-intro headers are Kickers + 13px/600 section titles", () => {
+    // The Advanced tab renders its intro header unconditionally (the query
+    // gates live INSIDE its cards), so the file-level 401 stub suffices.
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
+
+    // Page header: the label-tier Kicker + the title tier (24px/600).
+    const h1 = screen.getByRole("heading", { level: 1, name: "Functionality" });
+    expect(h1.className).toContain("text-[24px]");
+    expect(h1.className).toContain("font-semibold");
+    expect(h1.className).not.toContain("font-black");
+
+    // The tab-intro header: Kicker (the group name — the nav column's own
+    // group kicker carries the same text, so no getByText here) + 13px/600
+    // section title — a TAB, not a page (research §C2 P1(d)).
+    const tabIntro = screen.getByRole("heading", { level: 2, name: "Functionality" });
+    expect(tabIntro.className).toContain("text-[13px]");
+    expect(tabIntro.className).toContain("font-semibold");
+
+    // No font-black/font-bold anywhere on the page (the weight law).
+    expect(document.body.innerHTML).not.toMatch(/font-black|font-bold/);
   });
 });

@@ -28,6 +28,7 @@ export function SectionCard({
   shadow = false,
   kicker,
   title,
+  ariaLabel,
   testId,
 }: {
   children: ReactNode;
@@ -40,6 +41,9 @@ export function SectionCard({
   kicker?: ReactNode;
   /** Optional 13px/600 section title for the card header. */
   title?: ReactNode;
+  /** R100-E1: optional accessible name — the adopting screens' pre-primitive
+   * cards carried aria-labels their tests pin; adoption must not drop them. */
+  ariaLabel?: string;
   testId?: string;
 }) {
   const styles = useThemeStyles();
@@ -47,6 +51,7 @@ export function SectionCard({
   return (
     <section
       data-testid={testId}
+      aria-label={ariaLabel}
       aria-labelledby={title !== undefined ? titleId : undefined}
       className={cn(
         "rounded-2xl border-[1.5px] border-line bg-card",

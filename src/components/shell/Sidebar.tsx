@@ -1,35 +1,23 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
+// R100-E1 (research §C2 P1(a)): the settings-section icons + FileText left
+// with the sidebar's settings mode — the settings page's own nav column
+// renders them now (SettingsPage.tsx).
 import {
-  ArrowLeft,
   BarChart3,
-  Bot,
   CircleAlert,
   FolderOpen,
-  Globe,
-  Info,
   LayoutDashboard,
   LoaderCircle,
   MessageSquare,
-  Monitor,
-  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
-  PlugZap,
   Plus,
-  ScanEye,
-  Server,
   Settings,
-  SlidersHorizontal,
-  Sparkles,
   Trash2,
-  Users,
   X,
 } from "lucide-react";
-// R98-E1: the Prompts settings section's FileText icon (id-synced with
-// SettingsPage TABS — the R44 lesson).
-import { FileText } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ApiError, pickFolderViaBackend, type Project, type Session } from "../../lib/api";
 import { cn } from "../../lib/utils";
@@ -232,7 +220,12 @@ export function AcuteLogo({
  *   in-sidebar logo + the collapse button + the 64px collapsed rail are
  *   GONE. The panel is either fully visible (AppShell's appSidebarVisible)
  *   or fully absent — no intermediate state, no COLLAPSE_KEY persistence.
- * - SETTINGS mode keeps its header row: back button + "Settings" title.
+ * - R100-E1 (research §C2 P1(a)): the ROUND-34 "settings mode" is RETIRED —
+ *   the settings page now hosts its own nav column + search (the VS Code
+ *   pattern), so the sidebar keeps only its ONE "Settings" entry (the
+ *   footer button + the rail's gear) pointing at /settings. On /settings
+ *   routes the sidebar renders the NORMAL nav — its Dashboard row is the
+ *   back affordance the R95-A owner directive assigned to the left sidebar.
  * - GENEROUS spacing between NAVIGATION and PROJECTS (owner: "way too close
  *   together").
  * - PROJECTS: no chevron, no session-count chip; the "+ new session" button
@@ -240,65 +233,6 @@ export function AcuteLogo({
  *   renameable (round-33).
  * - FOOTER: a PROMINENT Settings button (card-style, not a plain nav row).
  */
-/** ROUND-34 (owner design frame 1a): the settings sections that REPLACE the
- * normal navigation when the sidebar is in settings mode. ids stay the
- * SettingsPage tab ids so ?tab= deep links keep working.
- *
- * ROUND-98 (R98-I1, owner: "separate the different side options into
- * different categories"): every entry carries the same `group` as its
- * SettingsPage TABS twin (the five owner-named categories) and the list is
- * CLUSTERED by group in the same order — the full settings nav below renders
- * one 11px uppercase group header between clusters. The ids (and each
- * cluster's internal order) are UNTOUCHED; the minimized rail stays FLAT
- * (icons only — no headers, the R66 B4 mirror contract).
- * `group` is optional in the render (a groupless entry would render exactly
- * as pre-R98 — the header only fires when the group value CHANGES). */
-const SETTINGS_SECTIONS = [
-  { id: "appearance", label: "Appearance", icon: Palette, group: "Workspace" },
-  { id: "agents", label: "Agents", icon: Bot, group: "Agents & Skills" },
-  // ROUND-44 (VLM pass): this entry was MISSING — the R43 Sub-agents tab
-  // existed in SettingsPage TABS but the sidebar (the actual settings nav,
-  // R34 design) never listed it, making the whole tab unreachable except by
-  // hand-typing ?tab=subagents. Owners could not find the key pool at all.
-  { id: "subagents", label: "Sub-agents", icon: Users, group: "Agents & Skills" },
-  // ROUND-61 (R61, owner directive): the extensibility sections — skills
-  // (multiple user-addable prompt modules), MCP servers (user-configured
-  // stdio tool servers), computer use (the desktop-control master switch
-  // + the separate vision model). Same ids as SettingsPage TABS so the
-  // ?tab= deep links line up (the R44 lesson applied at birth).
-  { id: "skills", label: "Skills", icon: Sparkles, group: "Agents & Skills" },
-  // ROUND-98 (R98-E1/E3, owner directive): the prompt-customization section
-  // (per-project system-prompt overrides + the live composed preview). Same
-  // id as SettingsPage TABS so the ?tab=prompts deep link lines up — the
-  // R44 unreachable-tab lesson applied at birth.
-  { id: "prompts", label: "Prompts", icon: FileText, group: "Agents & Skills" },
-  { id: "api", label: "Models & Providers", icon: Server, group: "Integrations" },
-  { id: "mcp", label: "MCP Servers", icon: PlugZap, group: "Integrations" },
-  { id: "computeruse", label: "Computer Use", icon: Monitor, group: "Integrations" },
-  // ROUND-66 (R66, owner directive): the dedicated image-analysis section
-  // (the vision model's own home, split OUT of Computer Use). Same id as
-  // SettingsPage TABS so the ?tab=vision deep link lines up (the R44
-  // unreachable-tab lesson applied at birth).
-  { id: "vision", label: "Image Analysis", icon: ScanEye, group: "Integrations" },
-  // ROUND-97 (R97-G, owner directive): the dedicated BROWSER section (same id
-  // as SettingsPage TABS so the ?tab=browser deep link lines up).
-  { id: "browser", label: "Browser", icon: Globe, group: "Integrations" },
-  // ROUND-98 (R98-I2, owner directive): the Data & Statistics section (same
-  // id as SettingsPage TABS so the ?tab=data deep link lines up — the R44
-  // unreachable-tab lesson applied at birth). R98-I1: its OWN category in
-  // the grouped nav (the owner's "data and statistics").
-  { id: "data", label: "Data & Statistics", icon: BarChart3, group: "Data & Statistics" },
-  // R98-I1 (SettingsPage TABS twin): the label follows the honest rename —
-  // "Functionality" (the owner's word; it was "General" on the page side
-  // and "Advanced" here — one word now). The id STAYS "advanced" (the
-  // ?tab=advanced deep-link contract is load-bearing).
-  { id: "advanced", label: "Functionality", icon: SlidersHorizontal, group: "System" },
-  // ROUND-87 (R87, owner directive): the About section — version, update
-  // check, and the application-wide reset. Same id as SettingsPage TABS
-  // so the ?tab=about deep link lines up.
-  { id: "about", label: "About", icon: Info, group: "System" },
-] as const;
-
 export function Sidebar() {
   const styles = useThemeStyles();
   // ROUND-45 (VLM-pass find): MOBILE DRAWER. Below md the sidebar is a
@@ -307,17 +241,14 @@ export function Sidebar() {
   // closed by the backdrop, and auto-closed on navigation. R60-C: this is
   // the ONLY mobile affordance (mobile has no title bar) — kept exactly.
   const [mobileOpen, setMobileOpen] = useState(false);
-  const { pathname, search } = useLocation();
-  // ROUND-34: settings mode — the sidebar TRANSFORMS into the settings nav
-  // (owner design: "the whole sidebar should change into the settings sidebar").
-  const isSettingsRoute = pathname.startsWith("/settings");
-  const activeTab = new URLSearchParams(search).get("tab") ?? "appearance";
-  const navigate = useNavigate();
+  const { pathname } = useLocation();
 
   // ROUND-45: any navigation closes the mobile drawer (standard drawer UX).
+  // R100-E1: search dropped from the deps — the sidebar no longer watches
+  // ?tab= (the settings page's own nav owns that state now).
   useEffect(() => {
     setMobileOpen(false);
-  }, [pathname, search]);
+  }, [pathname]);
 
   // R60-C: the panel's own visibility is NOT decided here — AppShell's
   // appSidebarVisible (flipped by the TITLE BAR identity control in Tauri,
@@ -391,149 +322,20 @@ export function Sidebar() {
         borderColor: styles.sidebarBorder,
       }}
     >
-      {/* R60-C: NO header row in normal mode — the nav starts at the top
-          (the logo + collapse button moved out with the rail). ROUND-62: a
-          slim MINIMIZE row returns at the very top (owner: "i should be
-          given the option at the very top to minimize it") — one icon
-          button, right-aligned so it sits where the sidebar meets the chat
-          (the direction it shrinks toward); the rail's restore button is
-          its mirror. SETTINGS mode (ROUND-34 owner design frame 1a) keeps
-          its header: back button + "Settings" title + the same minimize
-          control at the row's end. */}
-      {/* ROUND-66 (R66, B4, owner report: "when I minimize the settings
-          sidebar, it shows me the wrong sidebar — the normal one with the
-          projects"): the minimized rail is now MODE-AWARE — on /settings it
-          renders the SETTINGS rail (back-to-dashboard + the section icons,
-          active = the ?tab=), never the normal projects nav. */}
+      {/* R60-C: NO header row — the nav starts at the panel's top (the
+          logo + collapse button moved out with the rail). ROUND-62: a slim
+          MINIMIZE row returns at the very top (owner: "i should be given
+          the option at the very top to minimize it") — one icon button,
+          right-aligned so it sits where the sidebar meets the chat (the
+          direction it shrinks toward); the rail's restore button is its
+          mirror.
+          R100-E1 (research §C2 P1(a)): the ROUND-34 SETTINGS MODE is
+          RETIRED — the settings page owns its nav column + search now, so
+          the sidebar renders the NORMAL nav on /settings routes too (the
+          Dashboard row is the back affordance; the footer Settings button
+          + the rail's gear are the one "Settings" entry). */}
       {minimized ? (
-        <MinimizedRail
-          onExpand={() => setAppSidebarMinimized(false)}
-          variant={isSettingsRoute ? "settings" : "normal"}
-          activeSettingsTab={isSettingsRoute ? activeTab : undefined}
-        />
-      ) : isSettingsRoute ? (
-        /* ── SETTINGS MODE (owner design frame 1a): the sidebar's whole body
-           becomes the settings section list (header row first, then nav).
-           ─────────────────────────────────────────────────────────────── */
-        <>
-        <div className="shrink-0 flex items-center gap-2 px-3 pt-3">
-          {/* ROUND-95 (R95-A, the owner: "on any of the pages there is no need
-              to show the Back to Dashboard page button. The only place where
-              the option needs to be shown is in the left sidebar… it is not
-              proper so I would like you to improve it and make it a
-              better-looking button"): the settings-mode back affordance is a
-              PROPER labeled pill now — icon + "Dashboard" in the app's pill
-              button idiom (bordered rounded-full h-9, hover fill) instead of
-              the old bare 7×7 icon that read as an unlabeled afterthought.
-              This is the ONE back-to-dashboard affordance outside the
-              minimized rail (the settings pages' own pills are gone). */}
-          <button
-            onClick={() => navigate("/")}
-            aria-label="Back to dashboard"
-            title="Back to dashboard"
-            data-testid="sidebar-back-dashboard"
-            className="h-9 shrink-0 inline-flex items-center gap-1.5 px-3.5 rounded-full border-[1.5px] text-[12px] font-bold transition-colors"
-            style={{ borderColor: styles.sidebarBorder, color: styles.textSecondary, background: styles.inputBg }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = styles.sidebarHover;
-              e.currentTarget.style.color = styles.text;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = styles.inputBg;
-              e.currentTarget.style.color = styles.textSecondary;
-            }}
-          >
-            <ArrowLeft size={13} /> Dashboard
-          </button>
-          <span className="text-[13px] font-black tracking-tight truncate" style={{ color: styles.text }}>
-            Settings
-          </span>
-          {/* ROUND-62: the minimize control also lives at the very top of the
-              settings sidebar (row's end) — same action as normal mode. */}
-          <button
-            onClick={() => setAppSidebarMinimized(true)}
-            aria-label="Minimize sidebar"
-            title="Minimize sidebar"
-            data-testid="sidebar-minimize"
-            className="w-7 h-7 shrink-0 ml-auto rounded-[9px] grid place-items-center transition-colors"
-            style={{ color: styles.textTertiary }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = styles.sidebarHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-          >
-            <PanelLeftClose size={14} />
-          </button>
-        </div>
-        <nav className="flex-1 flex flex-col gap-1 px-2.5 pt-3 overflow-y-auto" aria-label="Settings sections">
-          {/* R98-I1: the GROUPED settings nav — one 11px uppercase tracked
-              header (textTertiary, the SectionTitle idiom) between category
-              clusters. The header fires only when the running `group` value
-              CHANGES (a groupless entry renders exactly as pre-R98), so the
-              five owner-named categories label their clusters without
-              touching the row grammar or the deep-link ids. */}
-          {SETTINGS_SECTIONS.map((section, index) => {
-            const { id, label, icon: Icon } = section;
-            const active = activeTab === id;
-            const groupHeader =
-              index === 0 || section.group !== SETTINGS_SECTIONS[index - 1].group
-                ? section.group
-                : undefined;
-            return (
-              <Fragment key={id}>
-                {groupHeader !== undefined && (
-                  <div
-                    data-testid={`settings-group-${groupHeader}`}
-                    className="pt-2.5 pb-1 px-2.5 text-[11px] font-bold uppercase tracking-widest"
-                    style={{ color: styles.textTertiary }}
-                  >
-                    {groupHeader}
-                  </div>
-                )}
-                <button
-                  onClick={() => navigate(`/settings?tab=${id}`)}
-                  aria-current={active ? "true" : undefined}
-                  className="relative h-11 flex items-center gap-2.5 px-2.5 rounded-[12px] transition-all duration-200 text-[13px] font-bold"
-                  style={{
-                    background: active ? withAlpha(styles.accent, 0.12) : "transparent",
-                    color: active ? styles.text : styles.textSecondary,
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!active) e.currentTarget.style.background = styles.sidebarHover;
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!active) e.currentTarget.style.background = "transparent";
-                  }}
-                >
-                  {/* Active indicator bar — same language as session rows. */}
-                  {active && (
-                    <span
-                      className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-full"
-                      style={{ background: styles.accent }}
-                      aria-hidden
-                    />
-                  )}
-                  <span
-                    className="w-7 h-7 shrink-0 rounded-[9px] grid place-items-center"
-                    style={{
-                      background: active ? withAlpha(styles.accent, 0.14) : styles.inputBg,
-                      color: active ? styles.accent : styles.textSecondary,
-                    }}
-                  >
-                    <Icon size={14} />
-                  </span>
-                  <span className="truncate">{label}</span>
-                </button>
-              </Fragment>
-            );
-          })}
-          {/* The dashed "more coming" slot (owner design: future sections). */}
-          <div
-            className="mt-1 h-10 flex items-center justify-center rounded-[12px] border-[1.5px] border-dashed text-[11px] font-bold"
-            style={{ borderColor: styles.sidebarBorder, color: styles.textTertiary }}
-          >
-            More settings coming soon
-          </div>
-        </nav>
-        </>
+        <MinimizedRail onExpand={() => setAppSidebarMinimized(false)} />
       ) : (
         <>
           {/* ROUND-62: the MINIMIZE row — the owner's directive ("option at
@@ -619,11 +421,6 @@ export function Sidebar() {
  * stays fully usable without labels. The mobile drawer reuses the same rail
  * body (a narrow drawer of icons is still perfectly navigable).
  */
-/** ROUND-66 (R66): the rail's MODE — "normal" (dashboard/usage/projects)
- * or "settings" (the settings section icons — the owner's B4 report: the
- * minimized settings sidebar must NOT fall back to the projects rail). */
-export type RailVariant = "normal" | "settings";
-
 // R99-C: the update-pending dot shared by every "Settings" entry point —
 // the full sidebar's SettingsButton and the rail's settings gear. The DOT
 // mirrors the project tile's running-dot grammar (10px accent pill on a
@@ -645,16 +442,7 @@ function UpdatePendingDot({ styles }: { styles: ReturnType<typeof useThemeStyles
   );
 }
 
-function MinimizedRail({
-  onExpand,
-  variant = "normal",
-  activeSettingsTab,
-}: {
-  onExpand: () => void;
-  variant?: RailVariant;
-  /** The ?tab= id to mark active in the settings rail. */
-  activeSettingsTab?: string;
-}) {
+function MinimizedRail({ onExpand }: { onExpand: () => void }) {
   const styles = useThemeStyles();
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -723,38 +511,10 @@ function MinimizedRail({
         <PanelLeftOpen size={16} />
       </button>
 
-      {/* ROUND-66 (R66, B4): the SETTINGS rail — back-to-dashboard + the
-          section icons (active = the ?tab= deep-link id), mirroring the
-          expanded settings sidebar's list exactly (same ids, same order).
-          R98-I1: the rail stays FLAT — icons only, no group headers (the
-          64px rail has no room for labels; the grouped nav is the expanded
-          panel's job). The projects nav is deliberately NOT here: minimizing
-          a settings page must not teleport the owner into the projects world
-          (his report, verbatim: "it shows me the wrong sidebar"). */}
-      {variant === "settings" ? (
-        <>
-          {railBtn(
-            "Back to dashboard",
-            <ArrowLeft size={17} strokeWidth={2} />,
-            false,
-            () => navigate("/"),
-            "rail-back-dashboard",
-          )}
-          <div className="w-8 shrink-0 border-t-[1.5px] my-1" style={{ borderColor: styles.sidebarBorder }} />
-          {SETTINGS_SECTIONS.map(({ id, label, icon: Icon }) => (
-            <Fragment key={id}>
-              {railBtn(
-                label,
-                <Icon size={17} strokeWidth={2} />,
-                activeSettingsTab === id,
-                () => navigate(`/settings?tab=${id}`),
-                `rail-settings-${id}`,
-              )}
-            </Fragment>
-          ))}
-        </>
-      ) : (
-        <>
+      {/* R100-E1 (research §C2 P1(a)): the rail's settings VARIANT is
+          retired with the sidebar's settings mode — the rail renders the
+          normal dashboard/usage/projects body on /settings routes too; the
+          gear (rail-settings) below is the one "Settings" entry. */}
       {railBtn("Dashboard", <LayoutDashboard size={17} strokeWidth={2} />, pathname === "/", () => navigate("/"), "rail-dashboard")}
       {railBtn("Usage", <BarChart3 size={17} strokeWidth={2} />, pathname.startsWith("/usage"), () => navigate("/usage"), "rail-usage")}
 
@@ -824,13 +584,11 @@ function MinimizedRail({
           footer rhythm). */}
       <div className="flex-1 min-h-2" />
 
-      {/* FOOTER — collapsed bell (its own rail variant) + settings gear.
-          R66: inside the settings-variant conditional, so the settings rail
-          ends after the section icons (no projects footer there). */}
+      {/* FOOTER — collapsed bell + settings gear (the rail's one "Settings"
+          entry — R100-E1: it navigates to /settings, where the page's own
+          nav column takes over). */}
       <NotificationBell collapsed />
       {railBtn("Settings", <Settings size={17} strokeWidth={2} />, settingsActive, () => navigate("/settings"), "rail-settings", true)}
-        </>
-      )}
     </div>
   );
 }
