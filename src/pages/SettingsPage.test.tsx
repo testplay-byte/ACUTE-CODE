@@ -832,6 +832,22 @@ describe("Browser tab: Link opening preference (ROUND-99 R99-A)", () => {
     vi.unstubAllGlobals();
   });
 
+  it("R100-A: the ENGINE LINE renders the honest platform answer (no bundled-engine era copy)", async () => {
+    renderWithProviders(<SettingsPage />, { route: "/settings?tab=browser" });
+
+    // The honest-answer note: the panel runs the OS webview, ACUTE's own UA
+    // identity, never the device's BROWSER (the app-opens-links distinction).
+    const note = await screen.findByTestId("browser-engine-line");
+    expect(note.getAttribute("role")).toBe("note");
+    expect(note.textContent).toContain("Engine:");
+    expect(note.textContent).toContain("WebView2 (Chromium-based");
+    expect(note.textContent).toContain("WebKitGTK on Linux");
+    expect(note.textContent).toContain("ACUTE Browser");
+    // The retired contract must NOT resurface: no "ships with the installer"
+    // engine-bundling language anywhere in the tab.
+    expect(document.body.textContent ?? "").not.toMatch(/Fixed Version Runtime|ships with the app/i);
+  });
+
   it("the two cards render with the exact owner-facing copy in a LABELED group; the server's mode is the active one", async () => {
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=browser" });
 

@@ -114,6 +114,34 @@ const TAB_LABEL_PREFIX: &str = "acute-tab-";
 /// webviews are children of this window so they float over the UI.
 const MAIN_WINDOW_LABEL: &str = "main";
 
+/// ROUND-100 (R100-A): the browser panel's USER AGENT — the de-brand leg of
+/// the honest-browser rework. The owner's report: "it is still utilizing
+/// the Microsoft Edge browser under the hood" — the WebView2 evergreen
+/// runtime's default UA carries `Edg/153…` tokens, so every page the agent
+/// asked (and every `navigator.userAgent` read) answered "Microsoft Edge".
+/// This constant replaces the default UA on every CONTENT webview
+/// (`browser_tab_create` — the single chokepoint for panel tabs AND the
+/// pop-out's content): the engine-lineage tokens stay HONEST (Chromium's
+/// AppleWebKit/Chrome tokens on Windows — sites gatekeep on them), the
+/// Microsoft Edge brand token is GONE, and our own `AcuteBrowser/1.0`
+/// identity rides last. On Linux the webview is WebKitGTK (genuinely not
+/// Chromium) so that platform's string keeps WebKit's honest shape.
+/// Bump rule: when the evergreen floor moves past 153 (the `Chrome/` token
+/// below), bump this once — UA-version pinning is standard practice and
+/// sites feature-detect via JS APIs, not UA version numbers.
+#[cfg(windows)]
+const PANEL_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 AcuteBrowser/1.0";
+/// The Linux leg — WebKitGTK's lineage, our identity token, no Chromium
+/// pretense (the panel on Linux IS WebKit: the honest string says so).
+#[cfg(all(unix, not(target_os = "macos")))]
+const PANEL_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) acutewebviewer/1.0 Safari/537.36 AcuteBrowser/1.0";
+/// Other targets (macOS is not shipped): no override marker — the empty
+/// string means "keep the default UA" at the call site's cfg gate below.
+#[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+const PANEL_USER_AGENT_STR: &str = "";
+#[cfg(any(windows, all(unix, not(target_os = "macos")))))]
+const PANEL_USER_AGENT_STR: &str = PANEL_USER_AGENT;
+
 /// ROUND-50: the `browser-navigated` event payload (serde field names stay
 /// snake_case — the frontend reads `event.payload.tab_id` /
 /// `event.payload.url`).
@@ -923,9 +951,22 @@ pub async fn browser_tab_create(
         }
         _ => tab_scrollbar_init_script(hide_viewport_scrollbar.unwrap_or(false)),
     };
-    let builder = WebviewBuilder::new(label, WebviewUrl::External(parsed))
-        .data_directory(profile)
-        .initialization_script(init_script)
+    let builder = if PANEL_USER_AGENT_STR.is_empty() {
+        WebviewBuilder::new(label, WebviewUrl::External(parsed))
+            .data_directory(profile)
+            .initialization_script(init_script)
+    } else {
+        WebviewBuilder::new(label, WebviewUrl::External(parsed))
+            .data_directory(profile)
+            // R100-A: the de-branded panel UA (see PANEL_USER_AGENT above) —
+            // set at the CONTENT-webview chokepoint so every tab (panel +
+            // pop-out) presents ACUTE's identity; the app's own pages
+            // (main/mini/popout chrome) keep their default UA (local content
+            // never sees a UA).
+            .user_agent(PANEL_USER_AGENT_STR)
+            .initialization_script(init_script)
+    };
+    let builder = builder
         .on_navigation(move |nav: &Url| {
             // R95-C: file joins http/https — see the comment above the hook.
             if nav.scheme() == "http" || nav.scheme() == "https" || nav.scheme() == "file" {

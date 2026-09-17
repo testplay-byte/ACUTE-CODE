@@ -1760,6 +1760,32 @@ function BrowserTab() {
         </p>
       </div>
 
+      {/* R100-A: THE ENGINE LINE — the honest answer to "which browser is
+          this?". Round-99 shipped the WebView2 Fixed Version Runtime inside
+          the installer (~258 MB) and the owner read it for what it was:
+          Microsoft Edge bundled with the app. Round-100 reverts to the
+          evergreen runtime + the de-branded panel UA (no `Edg/` token,
+          `AcuteBrowser/1.0` identity — src-tauri/src/browser.rs
+          `PANEL_USER_AGENT`). This row states the engine plainly so the
+          question never needs asking again: no marketing, no hiding. */}
+      <div
+        data-testid="browser-engine-line"
+        className="flex items-start gap-2.5 rounded-lg px-3 py-2.5"
+        style={{ background: styles.subtle, border: bdr("1px", styles.border) }}
+        role="note"
+        aria-label="Browser engine"
+      >
+        <Info size={13} className="mt-0.5 shrink-0" style={{ color: styles.textTertiary }} />
+        <div className="text-[11.5px] leading-[1.5] min-w-0" style={{ color: styles.textSecondary }}>
+          <span className="font-semibold" style={{ color: styles.text }}>
+            Engine:
+          </span>{" "}
+          the panel runs the OS webview — WebView2 (Chromium-based, presented with ACUTE's own user agent) on
+          Windows, WebKitGTK on Linux. The app never launches your device's browser, and pages identify it as
+          ACUTE Browser.
+        </div>
+      </div>
+
       <section
         data-testid="browser-settings-card"
         className="rounded-lg p-4"

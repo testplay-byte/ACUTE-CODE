@@ -31,13 +31,11 @@
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
     "resources": {
-      "staging/sidecar/": "sidecar/",
-      "webview2-runtime/": "webview2-runtime/"
+      "staging/sidecar/": "sidecar/"
     },
     "windows": {
       "webviewInstallMode": {
-        "type": "fixedRuntime",
-        "path": "webview2-runtime"
+        "type": "downloadBootstrapper"
       },
       "nsis": {
         "installMode": "currentUser",

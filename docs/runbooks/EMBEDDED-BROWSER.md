@@ -1,12 +1,14 @@
-<!-- last-reviewed: 2026-09-15 round-99 -->
+<!-- last-reviewed: 2026-09-17 round-100 -->
 # EMBEDDED BROWSER — the agent's in-app browser panel (owner's guide)
 
 **Status:** normative · **Established:** round-43 (the panel + the tool);
 grown round-62 (read/eval/screenshot/tabs), round-66 (the page-action
 surface, the bot-wall checkpoint, the instant viewport apply), round-67
 (the working Windows bridge: the instant navigate frame, the WebView2 eval
-decoder, the chat-session tab binding, per-project cookies) and round-99
-(the engine SHIPS with the installer + the central in-app link router) ·
+decoder, the chat-session tab binding, per-project cookies), round-99
+(the central in-app link router) and round-100 (the honest engine rework:
+the evergreen runtime restored, the de-branded ACUTE user agent, the
+engine line in Settings/About — the fixedRuntime bundle RETIRED) ·
 **Audience:** the owner watching the panel and solving walls, and any agent
 maintaining the surface
 
@@ -232,64 +234,51 @@ R67-D addition: the `screenshot` action now also publishes the capture as
 a live chat THUMBNAIL (`screenshot` SSE frame + the ephemeral raster route
 — see [ATTACHMENTS](ATTACHMENTS.md), the ephemeral-rasters section).
 
-## The engine SHIPS with the app (R99-A — fixedRuntime)
+## The engine, honestly (R100-A — evergreen + the de-branded UA)
 
-The owner's round-99 directive: "add native browser support. I would like
-you to install the browser packages and ship them alongside the application
-so it does not have to rely on the device's browser itself." Before R99 the
-installer rode the DEVICE's WebView2 runtime (`webviewInstallMode` unset
-→ the NSIS bootstrapper downloads/repairs the evergreen runtime): a
-machine with no Edge-lineage runtime, an outdated one, or a locked-down one
-was the app's single point of failure. Since R99 the installer carries the
-WebView2 **Fixed Version Runtime** and the app always runs its own engine:
+Round-99 read the owner's directive ("ship the browser packages alongside
+the app") as "bundle the WebView2 Fixed Version Runtime inside the
+installer" — and the owner read the result for exactly what it was:
+**Microsoft Edge shipped with the app** (~258 MB installer, 4× the
+previous ~37 MB) with `msedgewebview2.exe` sitting in the install folder.
+Round-100 reverts that trade and de-brands what remains:
 
-- `src-tauri/tauri.conf.json` pins
-  `bundle.windows.webviewInstallMode = { type: "fixedRuntime", path:
-  "webview2-runtime" }` (the serde tag field is `type` — writing `mode`
-  fails CI's `tauri-build` with `missing field \`type\``; the R99-A first
-  push shipped exactly that bug and CI caught it) AND maps
-  `"webview2-runtime/": "webview2-runtime/"`
-  in `bundle.resources` — the bundler does NOT auto-add the runtime dir
-  as a resource; without the resources row the installed app points at an
-  empty path. The app runtime resolves the folder RELATIVE TO THE
-  EXECUTABLE (`WEBVIEW2_BROWSER_EXECUTABLE_FOLDER =
-  <exe_dir>\webview2-runtime`), so the resource map must land the files at
-  exactly that relative path.
-- With fixedRuntime the NSIS WebView2 install section does nothing (its
-  mode string is empty) — no bootstrapper, no evergreen dependency: the
-  app ALWAYS uses the bundled engine. Zero reliance on the device.
-- **The CI fetch**: `.github/workflows/release.yml`'s `desktop-installer`
-  job downloads the pinned cab (~308 MB) from Microsoft's official CDN,
-  verifies the size (> 250 MB), `expand.exe`-extracts it, and moves the
-  single versioned folder's CONTENTS so
-  `src-tauri/webview2-runtime/msedgewebview2.exe` sits DIRECTLY inside (the
-  fixedRuntime `path` needs exactly that layout) — all BEFORE
-  `pnpm tauri build` packs the installer. Pinned URL (x64, verified live):
-  https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/c3d95bc1-a0a7-4ca6-aaa1-fa0ac3dd1a37/Microsoft.WebView2.FixedVersionRuntime.153.0.4234.32.x64.cab
-- **How to bump**: grab the new x64 "Fixed Version" cab link from
-  https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section
-  (the per-arch direct links are embedded in that page's HTML JSON —
-  pin the exact URL, never float), update `WEBVIEW2_FIXED_RUNTIME_URL` in
-  the step, and re-run the workflow UNTAGGED (the dispatch path builds the
-  installer artifact without opening a release) before tagging. A Fixed
-  Version Runtime never auto-updates, so the pin is the engine every
-  installed copy runs until the next deliberate bump.
-- **The honest trade-off**: the cab is 308,367,262 bytes and the extracted
-  tree is larger still — the installer grows by roughly the
-  LZMA-compressed size of that tree. That is the price of "the browser
-  ships with the app" (the `desktop-installer` timeout is 45 min for the
-  heavier NSIS LZMA pass).
-- **Local-dev caveat**: `pnpm tauri dev` on Windows runs the shell exe from
-  `src-tauri/target/debug/`, where no runtime folder exists — stage
-  `src-tauri/target/debug/webview2-runtime/` yourself (mirror the CI step)
-  or temporarily drop the `webviewInstallMode` block to fall back to the
-  machine's evergreen runtime. Web dev mode (`pnpm dev` in a plain browser)
-  and the Linux sandbox never touch WebView2. **The release workflow is the
-  canonical bundling path** — `ci.yml` only runs `cargo check`, no
-  bundle, no runtime fetch.
-- The staged runtime is git-ignored (`/src-tauri/webview2-runtime/` + the
-  `-extract` scratch dir in `.gitignore`) — the same discipline as the
-  sidecar staging.
+- **`src-tauri/tauri.conf.json`** pins
+  `bundle.windows.webviewInstallMode = { type: "downloadBootstrapper" }`
+  — the evergreen contract: the installer carries only the tiny bootstrapper
+  (~2 MB); at install time it verifies the machine's WebView2 runtime and
+  downloads it ONLY when absent (every Windows 10/11 machine since 2021
+  has one — the bootstrapper is a repair path, not a dependency in
+  practice). The `webview2-runtime` resources row, the CI cab-fetch step,
+  the staging dir, and the 45-min NSIS timeout are all GONE (back to
+  30 min; the installer is ~37–40 MB again).
+- **The de-branded user agent** (`src-tauri/src/browser.rs`
+  `PANEL_USER_AGENT`): every CONTENT webview (`browser_tab_create` — panel
+  tabs AND the pop-out's page) presents
+  `…Chrome/153.0.0.0 Safari/537.36 AcuteBrowser/1.0` on Windows — the
+  engine-lineage tokens stay honest (sites gatekeep on them) but the
+  `Edg/…` Microsoft Edge brand token is GONE and our identity rides last.
+  On Linux the string keeps WebKitGTK's honest shape + `AcuteBrowser/1.0`.
+  The app's own chrome pages (main/mini/popout hosts) keep the default UA
+  — local content never sees a user agent. Bump rule: when the evergreen
+  floor passes 153, bump the `Chrome/` token once (UA-version pinning is
+  standard practice; sites feature-detect via JS APIs, not UA numbers).
+- **The engine line** (Settings → Browser + the About tab): the panel runs
+  the OS webview — WebView2 (Chromium-based, ACUTE-branded UA) on Windows,
+  WebKitGTK on Linux. Stated plainly; the question never needs asking
+  again.
+- **The trilemma, on record** (`docs/research/browser-engine-and-linux-round-100.md`
+  §B.0): on Windows in 2026 you pick two of {not-Chromium-lineage,
+  production web compatibility, installer ≤ ~100 MB}. Servo is 66.4% WPT
+  (real sites break); CEF adds +165 MB (worse than the complaint). The
+  opt-in experimental-engine fallback (research §B.2) is the documented
+  path if the owner ever rules Chromium-lineage unacceptable — it is NOT
+  the default because a 66%-compat browser would break the agent's core
+  browsing feature.
+- **Local-dev note**: `pnpm tauri dev` on Windows uses the machine's
+  evergreen runtime — nothing to stage anymore. Web dev mode (`pnpm dev`)
+  and the Linux sandbox never touch WebView2. The release workflow remains
+  the canonical bundling path — `ci.yml` only runs `cargo check`.
 
 ## Where links open (R99-A — the central link router)
 
@@ -370,11 +359,12 @@ user can always reach the device's browser deliberately.
 - **The page the panel shows can differ from a fresh fetch** (logins, JS):
   `read` = clean server-side text, `read_dom`/`click`/`type`/`press_key`/
   `source`/`eval` = the LIVE page, `screenshot` = the pixels you see.
-- **The shipped engine never auto-updates** (the fixedRuntime contract): the
-  pinned 153.0.4234.32 x64 build is the engine every installed copy runs
-  until a deliberate pin bump (the workflow comment + the section above say
-  how) — and the installer carries its ~300 MB payload (the honest
-  price of zero device dependency).
+- **The evergreen runtime auto-updates** (the R100-A contract — the
+  fixedRuntime bundle is retired): the machine's WebView2 runtime tracks
+  Microsoft's evergreen channel, and the panel's UA pin
+  (`PANEL_USER_AGENT`) is bumped deliberately when the floor moves (the
+  section above says how). The installer carries NO engine payload
+  (~37–40 MB).
 - **The router's in-app leg needs a project context** — a link clicked
   on a global surface before any project is opened degrades honestly to the
   system browser (the result says so).
@@ -399,9 +389,9 @@ user can always reach the device's browser deliberately.
   (`agent-core/src/browser-proxy.ts` + `src-tauri/src/browser.rs`), the
   eval double-parse `src/lib/native-browser.ts` (`parseWebViewEvalJson`),
   the central link router `src/lib/open-link.ts` (the scheme gate + the
-  linkOpeningMode preference + the in-app/system legs), the fixedRuntime
-  staging (the release.yml fetch step + the `src-tauri/tauri.conf.json`
-  webviewInstallMode + resources rows),
+  linkOpeningMode preference + the in-app/system legs), the de-branded UA
+  (`src-tauri/src/browser.rs` `PANEL_USER_AGENT` + the engine line in
+  Settings → Browser and the About tab),
   the panel `src/components/right-sidebar/BrowserPanel.tsx` (the
   agentNavSeq effect + the create-on-adopt poll backstop), the tab store +
   instant apply + the bind client `src/lib/browser-store.ts`, the sidebar

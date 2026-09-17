@@ -131,10 +131,9 @@ jobs:
   # (`pnpm build`) itself — one canonical build path, no divergent CI scripts.
   desktop-installer:
     runs-on: windows-latest
-    # ROUND-99 (R99-A): 30 → 45 — the WebView2 Fixed Version Runtime the
-    # installer now ships (the fetch step below) adds a several-hundred-MB
-    # payload that raises NSIS LZMA packing time well past the old budget.
-    timeout-minutes: 45
+    # ROUND-100 (R100-A): back to 30 — the fixedRuntime bundle is gone
+    # (the evergreen bootstrapper restored; the installer is ~37–40 MB again).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -174,83 +173,6 @@ jobs:
       # deploy was rejected (it ships a 202 MB non-running tree).
       - name: Stage the sidecar bundle
         run: node scripts/release/stage-sidecar.mjs --platform win32-x64
-
-      # ROUND-99 (R99-A, owner directive: "add native browser support… install
-      # the browser packages and ship them alongside the application so it
-      # does not have to rely on the device's browser itself") — SHIP THE
-      # BROWSER ENGINE WITH THE APP.
-      #
-      # WHY: tauri.conf.json pins bundle.windows.webviewInstallMode to
-      # { type: "fixedRuntime", path: "webview2-runtime" } (the serde tag field
-      # is `type` — the R99-A first push wrote `mode` and CI's tauri-build
-      # failed with "missing field `type`"; the re-pin) and the bundler
-      # does NOT auto-add the runtime dir as a resource — the resources map
-      # carries "webview2-runtime/": "webview2-runtime/" so the installer
-      # places the files at exactly the relative path the app runtime
-      # resolves (WEBVIEW2_BROWSER_EXECUTABLE_FOLDER = <exe_dir>\webview2-
-      # runtime at startup). With fixedRuntime the NSIS WebView2 bootstrapper
-      # section does nothing: the app ALWAYS runs the engine it ships — zero
-      # dependency on the device's Edge/WebView2 runtime (absent, outdated, or
-      # locked-down machines all get the same browser).
-      #
-      # HOW TO BUMP the pinned version: grab the new x64 "Fixed Version"
-      # .cab URL from the download section of
-      # https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section
-      # (the per-arch direct links are embedded in that page's HTML JSON —
-      # copy the exact msedge.sf.dl.delivery.mp.microsoft.com URL, never a
-      # floating "latest" page), update WEBVIEW2_FIXED_RUNTIME_URL below, and
-      # re-run this workflow UNTAGGED (the dispatch path builds the installer
-      # artifact without opening a release) before tagging. A Fixed Version
-      # Runtime never auto-updates, so this pin is the engine every installed
-      # copy runs until the next deliberate bump.
-      #
-      # HONEST TRADE-OFF: the pinned cab is 308,367,262 bytes and the
-      # extracted tree is larger still — the installer grows by roughly the
-      # LZMA-compressed size of that tree. That is the price of "the browser
-      # ships with the app".
-      - name: Fetch the WebView2 Fixed Version runtime (ship the browser with the app)
-        shell: pwsh
-        env:
-          WEBVIEW2_FIXED_RUNTIME_URL: "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/c3d95bc1-a0a7-4ca6-aaa1-fa0ac3dd1a37/Microsoft.WebView2.FixedVersionRuntime.153.0.4234.32.x64.cab"
-        run: |
-          $ErrorActionPreference = "Stop"
-          # pwsh's progress bar dominates a ~300 MB transfer's wall time.
-          $ProgressPreference = "SilentlyContinue"
-          $cab = "$env:TEMP\wv2-fixed.cab"
-          $runtimeDir = Join-Path $PWD "src-tauri\webview2-runtime"
-          $extractDir = Join-Path $PWD "src-tauri\webview2-runtime-extract"
-          Remove-Item $runtimeDir, $extractDir -Recurse -Force -ErrorAction SilentlyContinue
-          Invoke-WebRequest -Uri $env:WEBVIEW2_FIXED_RUNTIME_URL -OutFile $cab
-          # Size sanity: a truncated body or an HTML error page is refused
-          # before it can poison the bundle (the pinned cab is 308 MB).
-          $size = (Get-Item $cab).Length
-          if ($size -lt 250MB) {
-            throw "the WebView2 runtime cab is only $size bytes (expected ~308 MB) — the pinned URL is stale or truncated; re-pin it per this step's comment"
-          }
-          Write-Host "fetched $([math]::Round($size / 1MB, 1)) MB — extracting…"
-          # expand.exe preserves the cab's directory tree; its per-file lines
-          # would flood the log, so they are swallowed (a failure still sets
-          # $LASTEXITCODE).
-          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
-          & expand.exe -F:* $cab $extractDir | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "expand.exe failed (exit $LASTEXITCODE) unpacking the WebView2 cab" }
-          # The cab unpacks to ONE versioned folder (…Runtime.153.0.4234.32.
-          # x64) whose DIRECT child is msedgewebview2.exe — fixedRuntime's
-          # `path` needs exactly that layout, so the versioned folder's
-          # CONTENTS move up one level into src-tauri\webview2-runtime.
-          $versioned = @(Get-ChildItem $extractDir -Directory |
-            Where-Object { Test-Path (Join-Path $_.FullName "msedgewebview2.exe") })
-          if ($versioned.Count -ne 1) {
-            throw "expected exactly one versioned WebView2 runtime folder with msedgewebview2.exe at its root, found $($versioned.Count) — the cab layout changed; re-derive this staging step"
-          }
-          New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
-          Get-ChildItem $versioned[0].FullName | Move-Item -Destination $runtimeDir
-          Remove-Item $extractDir -Recurse -Force
-          if (-not (Test-Path (Join-Path $runtimeDir "msedgewebview2.exe"))) {
-            throw "src-tauri\webview2-runtime\msedgewebview2.exe did not land — the fixedRuntime path in tauri.conf.json would point at nothing"
-          }
-          Write-Host "staged the WebView2 Fixed Version runtime (top entries):"
-          Get-ChildItem $runtimeDir | Select-Object -First 8 | ForEach-Object { Write-Host "  $($_.Name)" }
 
       # The pinned Node runtime (MIT) beside the staged app + its license
       # texts for the bundle's LICENSES/ dir (SPEC §6 / ADR-0009: the license

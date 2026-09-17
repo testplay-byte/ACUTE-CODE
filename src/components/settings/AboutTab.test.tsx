@@ -68,6 +68,27 @@ beforeEach(() => {
 });
 
 describe("AboutTab (ROUND-89 R89-A)", () => {
+  it("R100-A: the About rows state the ENGINE honestly (the platform answer, not 'embedded webview shell')", async () => {
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: "0.97.0",
+      releasesUrl: "https://github.com/testplay-byte/ACUTE-CODE/releases",
+      ok: true,
+      latest: "0.97.0",
+      updateAvailable: false,
+    });
+    renderWithProviders(<AboutTab />);
+
+    // The About dl's Engine row — the owner's "which browser is this?"
+    // answered platform-explicitly (R100-A's honesty surface).
+    const row = await screen.findByText("Engine", { exact: true });
+    expect(row.textContent).toBe("Engine");
+    // The dd beside it carries the honest platform answer.
+    const dd = row.parentElement?.querySelector("dd");
+    expect(dd?.textContent).toContain("Windows: WebView2 (Chromium, ACUTE-branded UA)");
+    expect(dd?.textContent).toContain("Linux: WebKitGTK");
+    expect(dd?.textContent).toContain("local sidecar (agent-core)");
+  });
+
   it("A2: check-for-updates asks the SIDECAR and reports up-to-date", async () => {
     vi.mocked(fetchSystemUpdates).mockResolvedValue({
       current: "0.87.0",

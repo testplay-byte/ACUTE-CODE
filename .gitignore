@@ -32,13 +32,9 @@ Thumbs.db
 /src-tauri/staging/sidecar/*
 !/src-tauri/staging/sidecar/README.md
 
-# ROUND-99 (R99-A): the WebView2 Fixed Version Runtime staged for the NSIS
-# installer (release.yml fetches the pinned ~300 MB cab + extracts it here —
-# never committed; the same discipline as the sidecar staging above). The
-# -extract dir is the cab's intermediate unpack area, also CI-only.
-/src-tauri/webview2-runtime/*
-!/src-tauri/webview2-runtime/README.md
-/src-tauri/webview2-runtime-extract/
+# ROUND-100 (R100-A): the fixedRuntime bundle is RETIRED — the installer
+# returned to the evergreen downloadBootstrapper (~37–40 MB) and the
+# webview2-runtime staging dir + CI fetch are gone. Nothing to ignore anymore.
 
 # tooling caches
 .vite/

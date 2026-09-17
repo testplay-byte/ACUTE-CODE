@@ -593,7 +593,9 @@ function AboutCard() {
         ["Application", APP_NAME],
         ["Version", `v${APP_VERSION}`],
         ["Delivery phase", String(PHASE)],
-        ["Engine", "local sidecar (agent-core) + embedded webview shell"],
+        // R100-A: the honest engine line — the owner asked what browser the
+        // panel runs; the answer is platform-explicit and de-brand-honest.
+        ["Engine", "local sidecar (agent-core) + the OS webview shell — Windows: WebView2 (Chromium, ACUTE-branded UA) · Linux: WebKitGTK"],
         ["Storage", "SQLite + OS secure key store — everything stays on this PC"],
       ] as Array<[string, string]>,
     [],
