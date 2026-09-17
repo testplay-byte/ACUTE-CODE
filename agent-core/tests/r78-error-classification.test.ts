@@ -260,6 +260,20 @@ describe("R94-D1: malformed_response classification (the 'unknown object' dead e
     }
   });
 
+  it("R100-H: the live-fire battery's literal case — 'Invalid JSON response' (the openai-compatible non-streaming parser) → malformed_response, TRANSIENT", () => {
+    // The round-100 live-fire battery (leg 2, z-ai/glm-5.2:free via
+    // OpenRouter, a real turn): the tool call SUCCEEDED (disk truth proved
+    // it) but the follow-up model call answered a healthy 200 with a
+    // non-JSON body; the provider's parser threw the verbatim "Invalid
+    // JSON response"; NO pattern matched → `unknown` → fail-fast at
+    // attempts:1 — the R94-D1 dead-end class, back through a new door.
+    // The pin: this exact string classifies TRANSIENT and rides the ladder.
+    const classified = classifyProviderError(new Error("Invalid JSON response"));
+    expect(classified.class).toBe("malformed_response");
+    expect(isTransientApiFailure(classified.class)).toBe(true);
+    expect(classified.userMessage).toContain("Invalid JSON response");
+  });
+
   it("a RetryError wrapping the malformed body still classifies malformed (the unwrap happens first)", () => {
     const err = retryError(apiCallError(400, "unknown object"));
     expect(classifyProviderError(err).class).toBe("malformed_response");

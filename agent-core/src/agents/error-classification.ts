@@ -150,6 +150,16 @@ const MALFORMED_RESPONSE_PATTERNS: readonly RegExp[] = [
   /unexpected (?:token|chunk|part|object)/i,
   /invalid (?:response|chunk) (?:format|shape)/i,
   /malformed/i,
+  // R100-H (the live-fire battery, leg 2): the openai-compatible
+  // provider's NON-STREAMING body parser emits the verbatim "Invalid JSON
+  // response" when the endpoint answers a healthy HTTP 200 with a body
+  // that isn't JSON (OpenRouter's free tier does this transiently — an
+  // HTML interstitial/empty body). It matched NO pattern → `unknown` →
+  // fail-fast at attempts:1 — the same instant-dead-end class R94-D1
+  // killed for "unknown object". The shapeless-parse-failure reading
+  // (a garbage body from a healthy connection) is TRANSIENT by the same
+  // ruling: the retry ladder re-asks and the next body parses.
+  /invalid json/i,
 ];
 
 /** ROUND-78 (R78): message shapes that mean a 403 is about REGION / ACCESS /
