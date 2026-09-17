@@ -20,6 +20,10 @@ import { StatCard } from "../dashboard/StatCard";
 import { bdr, utcDateLabel, withAlpha } from "../dashboard/helpers";
 import { SkeletonBlock } from "../shared/Skeletons";
 import { ConfirmDialog } from "../settings/ConfirmDialog";
+// R100-E2: the round-100 card primitive (USAGE.md §3; TOKENS.md §4) — the
+// health sub-blocks ride it; their testids + aria-labels ride the
+// passthrough props.
+import { SectionCard } from "../ui/SectionCard";
 import { ModelDonut } from "./ModelDonut";
 import { ModelStackChart } from "./ModelStackChart";
 import { UsageHeatmap } from "./UsageHeatmap";
@@ -111,13 +115,15 @@ export function DataStatsPanel() {
       <div data-testid="data-stats-panel" className="flex w-full flex-col gap-4">
         <div
           role="alert"
-          className="rounded-[16px] border-[1.5px] px-4 py-3.5"
+          className="rounded-2xl border-[1.5px] px-4 py-3.5"
           style={{
             borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
             background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
           }}
         >
-          <div className="text-[12.5px] font-bold" style={{ color: SEMANTIC_COLORS.danger }}>
+          {/* R100-E2: 13px/600 (the error heading is a section header, the
+              weight law's 600 tier — the old 12.5px-bold was off-ladder). */}
+          <div className="text-[13px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
             Could not load data &amp; statistics
           </div>
           <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: textSecondary }}>
@@ -152,7 +158,7 @@ export function DataStatsPanel() {
             section-for-section (header → stat cards → heatmap → stack →
             donut → agent health → danger zone — same heights, same order)
             so the loading→ready swap never shifts the layout. */}
-        <SkeletonBlock className="h-[56px] rounded-[14px]" />
+        <SkeletonBlock className="h-[56px] rounded-xl" />
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
           {[0, 1, 2, 3].map((i) => (
             <SkeletonBlock key={i} className="h-[92px] rounded-[20px]" style={{ border: bdr("1.5px", border) }} />
@@ -162,14 +168,14 @@ export function DataStatsPanel() {
         <SkeletonBlock className="h-[264px] rounded-[24px] md:h-[272px]" style={{ border: bdr("1.5px", border) }} />
         <SkeletonBlock className="h-[184px] rounded-[24px] md:h-[192px]" style={{ border: bdr("1.5px", border) }} />
         <div>
-          <SkeletonBlock className="mb-2.5 h-[13px] w-[120px] rounded-[5px]" />
+          <SkeletonBlock className="mb-2.5 h-[13px] w-[120px] rounded-sm" />
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
             {[0, 1].map((i) => (
-              <SkeletonBlock key={i} className="h-[72px] rounded-[16px]" style={{ border: bdr("1.5px", border) }} />
+              <SkeletonBlock key={i} className="h-[72px] rounded-2xl" style={{ border: bdr("1.5px", border) }} />
             ))}
           </div>
         </div>
-        <SkeletonBlock className="h-[96px] rounded-[16px]" style={{ border: bdr("1.5px", border) }} />
+        <SkeletonBlock className="h-[96px] rounded-2xl" style={{ border: bdr("1.5px", border) }} />
       </div>
     );
   }
@@ -180,10 +186,10 @@ export function DataStatsPanel() {
     return (
       <div data-testid="data-stats-panel" className="flex w-full flex-col gap-4">
         <div
-          className="rounded-[24px] border-[1.5px] p-8 text-center"
+          className="rounded-2xl border-[1.5px] p-8 text-center"
           style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
         >
-          <p className="text-[14px] font-bold" style={{ color: text }}>
+          <p className="text-[13px] font-semibold" style={{ color: text }}>
             No usage statistics available
           </p>
           <p className="mt-1.5 text-[12px]" style={{ color: textSecondary }}>
@@ -203,7 +209,10 @@ export function DataStatsPanel() {
       {/* 1 — the months window picker (drives the whole panel's query). */}
       <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
         <div>
-          <h2 className="text-[16px] font-black" style={{ color: text }}>
+          {/* R100-E2: the panel title snapped 16px/font-black → 13px/600 (the
+              ladder's section tier — the settings page header and the /usage
+              hero each carry the page-level title above it, TOKENS.md §2). */}
+          <h2 className="text-[13px] font-semibold" style={{ color: text }}>
             Data &amp; Statistics
           </h2>
           <p className="mt-1 text-[12px]" style={{ color: textSecondary }}>
@@ -213,7 +222,7 @@ export function DataStatsPanel() {
         <div
           role="group"
           aria-label="Statistics months window"
-          className="flex shrink-0 items-center gap-1 rounded-[14px] border-[1.5px] p-1"
+          className="flex shrink-0 items-center gap-1 rounded-xl border-[1.5px] p-1"
           style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
         >
           {MONTHS_OPTIONS.map((option) => {
@@ -228,7 +237,7 @@ export function DataStatsPanel() {
                 }}
                 aria-pressed={active}
                 aria-label={`Last ${option} months`}
-                className="cursor-pointer rounded-[10px] px-2.5 py-1.5 text-[12px] font-bold tabular-nums transition-colors duration-200"
+                className="cursor-pointer rounded-lg px-2.5 py-1.5 text-[12px] font-semibold tabular-nums transition-colors duration-200"
                 style={{ backgroundColor: active ? accent : "transparent", color: active ? accentText : textSecondary }}
               >
                 {option}mo
@@ -301,7 +310,7 @@ export function DataStatsPanel() {
         <div className="mb-2.5 flex items-center gap-2">
           <ShieldCheck size={13} style={{ color: accent, opacity: 0.7 }} aria-hidden />
           <span
-            className="text-[11px] font-bold uppercase leading-none tracking-widest"
+            className="text-[11px] font-medium uppercase leading-none tracking-[0.08em]"
             style={{ color: styles.textTertiary }}
           >
             Agent health
@@ -340,19 +349,19 @@ export function DataStatsPanel() {
       <section
         data-testid="clear-usage-card"
         aria-label="Danger zone"
-        className="min-h-[96px] rounded-[16px] border-[1.5px] p-4"
+        className="min-h-[96px] rounded-2xl border-[1.5px] p-4"
         style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4) }}
       >
         <div className="mb-2.5 flex items-center gap-2">
           <span
-            className="text-[11px] font-bold uppercase leading-none tracking-widest"
+            className="text-[11px] font-medium uppercase leading-none tracking-[0.08em]"
             style={{ color: SEMANTIC_COLORS.danger }}
           >
             Danger zone
           </span>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="max-w-[520px] text-[11.5px] leading-relaxed" style={{ color: textSecondary }}>
+          <p className="max-w-[520px] text-[11px] leading-relaxed" style={{ color: textSecondary }}>
             Clear usage data — deletes every usage event in the ledger. Turns, sessions, and project
             data are untouched.
           </p>
@@ -361,7 +370,7 @@ export function DataStatsPanel() {
             disabled={clear.isPending}
             data-testid="clear-usage-button"
             onClick={() => setConfirmOpen(true)}
-            className="h-8 shrink-0 cursor-pointer rounded-lg border px-3.5 text-[12px] font-bold transition-opacity hover:opacity-85 disabled:cursor-wait disabled:opacity-60"
+            className="h-8 shrink-0 cursor-pointer rounded-lg border px-3.5 text-[12px] font-semibold transition-opacity hover:opacity-85 disabled:cursor-wait disabled:opacity-60"
             style={{
               borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
               color: SEMANTIC_COLORS.danger,
@@ -433,15 +442,14 @@ function HealthBlock({
   months: number;
   styles: ReturnType<typeof useThemeStyles>;
 }) {
-  const { text, textSecondary, textTertiary, border, card } = styles;
+  const { text, textSecondary, textTertiary } = styles;
   const count = issues.reduce((sum, issue) => sum + issue.count, 0);
   return (
-    <section
-      data-testid={testId}
-      aria-label={label}
-      className="min-h-[72px] rounded-[16px] border-[1.5px] p-3.5"
-      style={{ backgroundColor: card, borderColor: border }}
-    >
+    /* R100-E2: the SectionCard primitive (rounded-2xl / 1.5px border-line /
+       bg-card) — the testid + aria-label passthrough keeps the sub-block's
+       accessible name; the QUIET card contract (no tint, no shadow) is
+       unchanged. */
+    <SectionCard testId={testId} ariaLabel={label} className="min-h-[72px] p-3.5">
       <div className="flex items-center gap-2">
         <span className="shrink-0 leading-none" style={{ color: tone, opacity: 0.85 }} aria-hidden>
           {icon}
@@ -450,7 +458,7 @@ function HealthBlock({
           {label}
         </span>
         <span
-          className="ml-auto font-mono text-[12px] font-bold leading-none tabular-nums"
+          className="ml-auto font-mono text-[12px] font-semibold leading-none tabular-nums"
           style={{ color: count > 0 ? tone : textTertiary }}
           aria-label={`${count === 0 ? "No" : count.toLocaleString()} ${noun} in the last ${months} months`}
         >
@@ -458,7 +466,7 @@ function HealthBlock({
         </span>
       </div>
       {issues.length === 0 ? (
-        <p className="mt-2 text-[11.5px]" style={{ color: textSecondary }}>
+        <p className="mt-2 text-[11px]" style={{ color: textSecondary }}>
           {emptyLine}
         </p>
       ) : (
@@ -478,6 +486,6 @@ function HealthBlock({
           ))}
         </div>
       )}
-    </section>
+    </SectionCard>
   );
 }
