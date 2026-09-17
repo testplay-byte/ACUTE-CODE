@@ -1175,3 +1175,16 @@ icon rail require the container to let them paint PAST the column —
 constraint; `overflow-hidden` on the aside would swallow every chip). When
 a label chip "doesn't appear", audit the overflow geometry of every
 ancestor first.
+
+#102-addendum (2026-09-17, R101 hotfixes, same day): (d) A VERSION BUMP IS
+A CODE CHANGE — the r89-updates test's hardcoded "future" tag pin (v0.99.0,
+set two rounds earlier) aged out the exact moment the engine reached
+0.99.0, and the fast gates (lint/typecheck/docs/audit) were all green while
+the suite flipped. After version:set, RUN THE SUITE before tagging. Tests
+that mock "a newer release" must derive the version live (patch+1 from the
+manifest — the r89 NEWER_VERSION helper), never hardcode it. (e) The Linux
+arch-naming asymmetry, learned from the first real ARM64 run: dpkg names
+the arch `arm64`, the AppImage/Rust triple names it `aarch64` — the same
+release carries `_arm64.deb` + `_aarch64.AppImage`, and any pipeline that
+expects one spelling for both formats fails loudly (which is the design:
+the verify step caught it before publication).

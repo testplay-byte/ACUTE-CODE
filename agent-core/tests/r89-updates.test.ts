@@ -39,7 +39,7 @@
  *    open proxy for arbitrary URLs.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, rmSync as rm } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, rmSync as rm } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -79,6 +79,22 @@ function plantPat(home: string, pat: string | null): void {
   }
 }
 
+/** R101 hotfix (the v0.99.0 tag lesson): the mocked latest tag must be
+ * STRICTLY NEWER than the engine's own package.json version — the route
+ * compares them live, so a hardcoded "future" pin rots exactly on the
+ * release it predicted (the R99-C `v0.99.0` pin aged out the moment the
+ * engine reached 0.99.0 and flipped updateAvailable to false in CI).
+ * Derived synchronously from the manifest: patch+1, forever-green. */
+const ENGINE_VERSION: string = (
+  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+    version: string;
+  }
+).version;
+const NEWER_VERSION: string = (() => {
+  const [maj, min, patch] = ENGINE_VERSION.split(".").map((n) => Number.parseInt(n, 10));
+  return `${maj}.${min}.${patch + 1}`;
+})();
+
 beforeEach(() => {
   if (tempDir === "") tempDir = mkdtempSync(join(tmpdir(), "acute-r89-upd-"));
   // R90-B1: the env layer must start ABSENT so each test controls it — a
@@ -116,7 +132,7 @@ describe("GET /system/updates (R89-A2)", () => {
     // goes out ANONYMOUSLY and succeeds when GitHub answers 200.
     plantPat(home, null);
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ tag_name: "v0.99.0" }), {
+      new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
@@ -127,7 +143,7 @@ describe("GET /system/updates (R89-A2)", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as { ok: boolean; latest?: string; current: string };
     expect(body.ok).toBe(true);
-    expect(body.latest).toBe("0.99.0");
+    expect(body.latest).toBe(NEWER_VERSION);
     // The current version always rides along (the About tab renders it).
     expect(typeof body.current).toBe("string");
     // ANONYMOUS means anonymous: no Authorization header crossed the wire.
@@ -165,7 +181,7 @@ describe("GET /system/updates (R89-A2)", () => {
     plantPat(home, "github_pat_from_the_file");
     process.env.ACUTE_GITHUB_PAT = "github_pat_from_the_env";
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ tag_name: "v0.99.0" }), {
+      new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
@@ -188,7 +204,7 @@ describe("GET /system/updates (R89-A2)", () => {
     // ACUTE_GITHUB_PAT would brick the check even with a valid saved file.
     process.env.ACUTE_GITHUB_PAT = "   \n\t ";
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ tag_name: "v0.99.0" }), {
+      new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
@@ -208,17 +224,20 @@ describe("GET /system/updates (R89-A2)", () => {
     useFakeHome(home);
     plantPat(home, "github_pat_test");
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ tag_name: "v0.99.0", html_url: "https://x/releases/v0.99.0" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
+      new Response(
+        JSON.stringify({ tag_name: `v${NEWER_VERSION}`, html_url: `https://x/releases/v${NEWER_VERSION}` }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     const up = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
     const upBody = up.json() as { ok: boolean; latest?: string; updateAvailable?: boolean };
     expect(upBody.ok).toBe(true);
-    expect(upBody.latest).toBe("0.99.0");
+    expect(upBody.latest).toBe(NEWER_VERSION);
     expect(upBody.updateAvailable).toBe(true);
     // The Authorization header carried the planted PAT (server-side only).
     const [, init] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
@@ -246,10 +265,10 @@ describe("GET /system/updates (R89-A2)", () => {
     plantPat(home, "github_pat_test");
     // The real GitHub asset shape: BOTH url forms per asset.
     const asset = {
-      name: "ACUTE-CODE_0.99.0_x64-setup.exe",
+      name: `ACUTE-CODE_${NEWER_VERSION}_x64-setup.exe`,
       url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/77",
       browser_download_url:
-        "https://github.com/testplay-byte/ACUTE-CODE/releases/download/v0.99.0/ACUTE-CODE_0.99.0_x64-setup.exe",
+        `https://github.com/testplay-byte/ACUTE-CODE/releases/download/v${NEWER_VERSION}/ACUTE-CODE_${NEWER_VERSION}_x64-setup.exe`,
       size: 37_000_000,
       digest: `sha256:${"ab".repeat(32)}`,
     };
@@ -267,7 +286,7 @@ describe("GET /system/updates (R89-A2)", () => {
 
     // 1. Both URL forms present → the API `url` wins (the pre-R94 bug handed
     //    the browser_download_url to a gate that only accepted api.github.com).
-    mockFetchWith({ tag_name: "v0.99.0", assets: [asset] });
+    mockFetchWith({ tag_name: `v${NEWER_VERSION}`, assets: [asset] });
     const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
     const body = res.json() as { ok: boolean; asset?: { url: string; size: number; digest: string | null } };
     expect(body.ok).toBe(true);
@@ -276,13 +295,13 @@ describe("GET /system/updates (R89-A2)", () => {
     expect(body.asset?.digest).toBe(`sha256:${"ab".repeat(32)}`);
 
     // 2. API url absent/empty → the browser_download_url ships instead.
-    mockFetchWith({ tag_name: "v0.99.0", assets: [{ ...asset, url: "" }] });
+    mockFetchWith({ tag_name: `v${NEWER_VERSION}`, assets: [{ ...asset, url: "" }] });
     const res2 = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
     const body2 = res2.json() as { asset?: { url: string } };
     expect(body2.asset?.url).toBe(asset.browser_download_url);
 
     // 3. BOTH empty → no asset at all (nothing downloadable to offer).
-    mockFetchWith({ tag_name: "v0.99.0", assets: [{ ...asset, url: "", browser_download_url: "" }] });
+    mockFetchWith({ tag_name: `v${NEWER_VERSION}`, assets: [{ ...asset, url: "", browser_download_url: "" }] });
     const res3 = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
     const body3 = res3.json() as { asset?: { url: string } };
     expect(body3.asset).toBeUndefined();
@@ -337,7 +356,7 @@ describe("R99-C: the release-notes body passthrough (GET /system/updates)", () =
       vi.fn().mockResolvedValue(
         new Response(
           JSON.stringify({
-            tag_name: "v0.99.0",
+            tag_name: `v${NEWER_VERSION}`,
             body: "## What's new\n\n- the one-click silent update\n- the startup auto-check",
           }),
           { status: 200, headers: { "content-type": "application/json" } },
@@ -359,7 +378,7 @@ describe("R99-C: the release-notes body passthrough (GET /system/updates)", () =
     plantPat(home, null);
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify({ tag_name: "v0.99.0" }), {
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
         status: 200,
         headers: { "content-type": "application/json" },
       })),
@@ -380,7 +399,7 @@ describe("R99-C: the release-notes body passthrough (GET /system/updates)", () =
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ tag_name: "v0.99.0", body: longBody }), {
+        new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}`, body: longBody }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -400,7 +419,7 @@ describe("R99-C: the release-notes body passthrough (GET /system/updates)", () =
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ tag_name: "v0.99.0", body: "y".repeat(8_000) }), {
+        new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}`, body: "y".repeat(8_000) }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),

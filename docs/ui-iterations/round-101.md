@@ -116,15 +116,18 @@ inside) — the IA (tabs, search, `?tab=` state) untouched.
 `linux-bundles-arm64` job on GitHub's **native `ubuntu-24.04-arm` runner**
 (step-for-step twin of the x64 job — proven by a programmatic per-step diff;
 the only deltas: `--platform linux-arm64`, the `node-v24.20.0-linux-arm64`
-tarball, and the `_arm64` name verification), producing
-`ACUTE-CODE_<v>_arm64.{deb,AppImage}` wired into `github-release` (needs,
-downloads, tag-verify, the files list). Native — not cross — because
-node-pty has NO Linux prebuilds and builds for the HOST arch (the stale
-comments claiming otherwise are fixed). A `rust-linux-arm64` CI compile
-gate rides every push. **The first push proved the runner works:
-`rust-linux-arm64` → SUCCESS on c35da04.** Downstream safety verified: the
-launcher regex and the in-app updater matcher both ignore non-x64-setup
-assets.
+tarball, and the name verification), producing the ARM64 `.deb` +
+`.AppImage` wired into `github-release` (needs, downloads, tag-verify, the
+files list). Native — not cross — because node-pty has NO Linux prebuilds
+and builds for the HOST arch (the stale comments claiming otherwise are
+fixed). A `rust-linux-arm64` CI compile gate rides every push. **The first
+push proved the runner works: `rust-linux-arm64` → SUCCESS on c35da04.**
+Downstream safety verified: the launcher regex and the in-app updater
+matcher both ignore non-x64-setup assets. THE FIRST TAG RUN caught the
+naming asymmetry (see §3): the deb lands as `_arm64` (dpkg's name) while
+the AppImage lands as `_aarch64` (the Rust triple's name) — each matches
+its ecosystem's convention; the expectations + docs were corrected on the
+re-tag.
 
 **F — MERMAID, HONEST AND RESILIENT** (`MermaidDiagram.tsx`,
 `WorkingSection.tsx`, `ChatMarkdown.tsx` comment, `check-mermaid-chunk.mjs`
@@ -158,7 +161,17 @@ assets.
   `rust-linux-arm64` (the update.rs Emitter edit compiles on both
   platforms; the ARM64 runner is live for this account).
 - Version ×4 at 0.99.0; tag v0.99.0 → the Release dispatch carries the
-  first arm64 bundles.
+  first arm64 bundles. **Two CI-caught hotfixes on the first tag run (the
+  R100 pattern repeating, cheaper every time):** (1) the ARM64 boot gate
+  PASSED and both bundles BUILT — but the AppImage lands as
+  `_aarch64.AppImage` (the Rust triple) while the deb lands as `_arm64.deb`
+  (dpkg), so the verify step's `_arm64.{deb,AppImage}` expectation failed
+  loudly exactly as designed — the expectations + docs corrected; (2) the
+  r89-updates test's hardcoded "future" tag pin (`v0.99.0`, set in R99-C)
+  aged out the moment the engine reached 0.99.0 — `updateAvailable`
+  flipped false in CI. The file now derives its mocked tag live from the
+  engine's own manifest (patch+1, forever-green). The lesson: a version
+  bump is a CODE CHANGE — run the suite after it, not just the fast gates.
 
 ## §4 The round's lessons (also AGENT-MEMORY #102)
 
@@ -204,8 +217,10 @@ assets.
    diagram genuinely fails, the note now shows WHY (the actual error line).
 6. **Linux ARM64**: from the release page on an aarch64 machine (Pi
    5-class, ARM laptop, Snapdragon X dev box): `ACUTE-CODE_0.99.0_arm64.deb`
-   or the `_arm64.AppImage` — same app, same agent, WebKitGTK panel. The
-   amd64 builds remain for typical desktops.
+   or the `ACUTE-CODE_0.99.0_aarch64.AppImage` (the two formats name the
+   arch differently — dpkg's `arm64` vs the kernel/Rust `aarch64`, each
+   matching its ecosystem's convention) — same app, same agent, WebKitGTK
+   panel. The amd64 builds remain for typical desktops.
 
 ## §6 Round-cumulative design audit
 

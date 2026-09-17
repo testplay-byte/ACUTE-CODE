@@ -674,20 +674,22 @@ jobs:
       - name: Build the Linux bundles
         run: pnpm tauri build --bundles deb,appimage
 
-      # Bundler contract (tauri-bundler 2.x linux): files are
-      # <productName>_<version>_<arch>.deb / .AppImage →
-      # ACUTE-CODE_<v>_arm64.{deb,AppImage} on aarch64 (dpkg's arch name —
-      # the ARM twin of the x64 job's _amd64). The exact version-stamped
-      # names are asserted (not just "some .deb exists") so a wrong-arch or
-      # wrong-version artifact fails LOUDLY here, before the release job.
+      # Bundler contract (tauri-bundler 2.x linux) — PROVEN ON THE FIRST
+      # v0.99.0 RUN (the R101 hotfix): the two formats name the arch
+      # differently on aarch64. The deb uses dpkg's arch name
+      # (`_arm64`); the AppImage uses the Rust triple's arch name
+      # (`_aarch64`). That asymmetry IS the Linux convention (Debian vs
+      # kernel/Rust naming) — the exact version-stamped names are asserted
+      # (not just "some .deb exists") so a wrong-arch or wrong-version
+      # artifact fails LOUDLY here, before the release job.
       - name: Verify + collect the bundles
         run: |
           set -euo pipefail
           ver="$(node scripts/release/version.mjs get)"
           deb="src-tauri/target/release/bundle/deb/ACUTE-CODE_${ver}_arm64.deb"
-          appimage="src-tauri/target/release/bundle/appimage/ACUTE-CODE_${ver}_arm64.AppImage"
+          appimage="src-tauri/target/release/bundle/appimage/ACUTE-CODE_${ver}_aarch64.AppImage"
           if [ ! -f "$deb" ] || [ ! -f "$appimage" ]; then
-            echo "::error::expected ACUTE-CODE_${ver}_arm64.{deb,AppImage} — got:"
+            echo "::error::expected ACUTE-CODE_${ver}_arm64.deb + ACUTE-CODE_${ver}_aarch64.AppImage — got:"
             ls -R src-tauri/target/release/bundle 2>/dev/null || true
             exit 1
           fi
@@ -763,11 +765,12 @@ jobs:
             echo "::error::expected linux-bundles/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_amd64.{deb,AppImage} — got: $(ls linux-bundles/)"
             exit 1
           fi
-          # And the ARM64 bundles (bundler contract: _arm64 on aarch64 —
-          # R101-E; same guard, different arch suffix).
+          # And the ARM64 bundles (R101-E; the PROVEN first-run naming:
+          # the deb carries dpkg's `_arm64`, the AppImage carries the Rust
+          # triple's `_aarch64` — the R101 hotfix corrected the expectation).
           if ! ls "linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_arm64.deb" >/dev/null 2>&1 \
-            || ! ls "linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_arm64.AppImage" >/dev/null 2>&1; then
-            echo "::error::expected linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_arm64.{deb,AppImage} — got: $(ls linux-bundles-arm64/)"
+            || ! ls "linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_aarch64.AppImage" >/dev/null 2>&1; then
+            echo "::error::expected linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_arm64.deb + _aarch64.AppImage — got: $(ls linux-bundles-arm64/)"
             exit 1
           fi
 
@@ -782,6 +785,6 @@ jobs:
             linux-bundles/ACUTE-CODE_*_amd64.deb
             linux-bundles/ACUTE-CODE_*_amd64.AppImage
             linux-bundles-arm64/ACUTE-CODE_*_arm64.deb
-            linux-bundles-arm64/ACUTE-CODE_*_arm64.AppImage
+            linux-bundles-arm64/ACUTE-CODE_*_aarch64.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

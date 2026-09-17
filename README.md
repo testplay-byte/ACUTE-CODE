@@ -36,8 +36,10 @@ Four installers ship on every tagged release (built by the `linux-bundles`
   and run; no installation, no root.
 - **`ACUTE-CODE_<version>_arm64.deb`** — Debian/Ubuntu aarch64: same flow,
   `sudo apt install ./ACUTE-CODE_<version>_arm64.deb`.
-- **`ACUTE-CODE_<version>_arm64.AppImage`** — any aarch64 distro: `chmod
-  +x` and run; no installation, no root.
+- **`ACUTE-CODE_<version>_aarch64.AppImage`** — any aarch64 distro: `chmod
+  +x` and run; no installation, no root. (The two formats name the arch
+  differently — `arm64` is dpkg's name, `aarch64` the kernel/Rust name —
+  matching each ecosystem's convention.)
 
 **Which arch?** `amd64` is the right download for typical Intel/AMD
 desktops and laptops. `arm64` (round-101) is for aarch64 machines —

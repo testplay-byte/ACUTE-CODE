@@ -26,7 +26,7 @@ version number is single-sourced from the root `package.json`
 - Failures are no longer silent: if a diagram can't render, the fallback note shows **the actual error**, and both the diagram library load and the render itself get a bounded retry (a transient hiccup no longer degrades every diagram in the session). A build-time gate now proves the diagram library ships in every installer.
 
 ### Linux on ARM64
-- Every release now carries **`_arm64` .deb + .AppImage** builds (built natively, not emulated) alongside the amd64 ones — for Raspberry Pi 5-class machines, aarch64 laptops, and Snapdragon X dev boxes. Same app, same agent and tools, WebKitGTK panel, Secret Service keyring. The amd64 builds remain the default for typical desktops.
+- Every release now carries ARM64 builds (built natively on an arm64 runner, not emulated) alongside the amd64 ones — for Raspberry Pi 5-class machines, aarch64 laptops, and Snapdragon X dev boxes: the `.deb` ships as `_arm64` (dpkg's name) and the AppImage as `_aarch64` (the kernel/Rust name — each format follows its ecosystem's convention). Same app, same agent and tools, WebKitGTK panel, Secret Service keyring. The amd64 builds remain the default for typical desktops.
 
 ### The shell
 - The minimized sidebar rail: **styled label chips** on hover/focus (project tiles reveal the full project name), the active-page **accent bar**, and a **"+N" tile** when more than ten projects exist. The settings page's left navigation is a proper bordered pane with the search box docked at its top.
