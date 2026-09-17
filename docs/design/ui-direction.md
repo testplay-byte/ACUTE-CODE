@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # UI Direction — from owner-provided design demos (2026-08-22)
 
 Source: three demo projects provided by the owner, extracted to `C:\Users\khurr\Desktop\ZCODE\ACUTE_CODE\design-demos\` (outside the product repo; owner-owned designs, "just demos… there might be some adjusting"). These are the baseline design language for Phase 2+ UI work.

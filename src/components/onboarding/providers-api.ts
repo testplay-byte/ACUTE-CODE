@@ -182,13 +182,27 @@ export async function testConnection(providerId: string, model?: string): Promis
 
 /**
  * Store the key via the Tauri shell → Credential Manager. Browser dev (no
- * shell) resolves to false; callers show a "run the desktop app" note instead
+ * shell) resolves to null; callers show a "run the desktop app" note instead
  * of ever falling back to REST/localStorage.
+ *
+ * R102-A: the shell command now returns a KeyStoreReport — WHERE the key
+ * landed ("credential-manager" on Windows, "secret-service" or
+ * "key-file" on Linux) + the disclosure note for key-file saves (the
+ * ADR-0031-addendum fallback: no reachable Secret Service →
+ * ~/.acute/provider-keys.json, 0600). The Settings surfaces render the
+ * note amber so the owner always knows which store holds the key.
  */
-export async function storeProviderKey(providerId: string, key: string): Promise<boolean> {
-  if (!isTauri()) return false;
-  await tauriInvoke<void>("store_provider_key", { providerId, key });
-  return true;
+export interface KeyStoreReport {
+  store: "credential-manager" | "secret-service" | "key-file";
+  note?: string | null;
+}
+
+export async function storeProviderKey(
+  providerId: string,
+  key: string,
+): Promise<KeyStoreReport | null> {
+  if (!isTauri()) return null;
+  return tauriInvoke<KeyStoreReport>("store_provider_key", { providerId, key });
 }
 
 /**
@@ -199,17 +213,17 @@ export async function storeProviderKey(providerId: string, key: string): Promise
  * POST to the sidecar's internal route from the Rust side. This is THE fix
  * for the R47 bug where the pool UI's add invoked the slot-less
  * store_provider_key and OVERWROTE the primary key. Browser dev (no shell)
- * resolves to false — the REST pool routes (PUT /providers/:id/keys/:slot)
- * are the browser path.
+ * resolves to null — the REST pool routes (PUT /providers/:id/keys/:slot)
+ * are the browser path. R102-A: returns the KeyStoreReport (see
+ * storeProviderKey above) so the pool add-row can disclose key-file saves.
  */
 export async function storeProviderKeySlot(
   providerId: string,
   slot: number,
   key: string,
-): Promise<boolean> {
-  if (!isTauri()) return false;
-  await tauriInvoke<void>("store_provider_key_slot", { providerId, slot, key });
-  return true;
+): Promise<KeyStoreReport | null> {
+  if (!isTauri()) return null;
+  return tauriInvoke<KeyStoreReport>("store_provider_key_slot", { providerId, slot, key });
 }
 
 /**

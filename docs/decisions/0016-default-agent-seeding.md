@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # ADR-0016: Plug-and-play default agent ("Acute")
 
 - **Status:** ACCEPTED (backfilled round-17; decided in round-15, renamed round-16)

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # ADR-0028: Background delegation & task addressing (delegate_task task_id / background / resume)
 
 - **Status:** ACCEPTED

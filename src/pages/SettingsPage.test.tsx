@@ -990,114 +990,32 @@ describe("Browser tab: Link opening preference (ROUND-99 R99-A)", () => {
  * box filters the tab list by tab label + the SEARCH_KEYWORDS index
  * (case-insensitive substring), and nav clicks drive the SAME ?tab= state
  * machine the deep links have always used. */
-describe("Settings nav column + search (R100-E1)", () => {
-  it("renders the settings-local nav: role navigation, the 13 tab rows, and the five group kickers", () => {
+describe("R102-C: the settings-local nav column is GONE — the app sidebar owns the settings nav", () => {
+  // The owner's v0.99.0 report: "the left sidebar does not change and the
+  // settings sidebar shows on the right side of the left sidebar … handle
+  // it just like how it was handled previously." The R100-E1 settings-local
+  // nav column (its rows, its search, its pane) is DELETED; the restored
+  // sidebar settings mode carries all of it (pinned in Sidebar.test.tsx).
+  // THIS page is the content pane alone — the tab machine (?tab=) is the
+  // one contract that survives unchanged.
+  it("renders NO local nav: no nav column, no search box, no section rows — the page is the content pane alone", () => {
     renderWithProviders(<SettingsPage />);
 
-    const nav = screen.getByRole("navigation", { name: "Settings navigation" });
-    expect(nav).toBeTruthy();
-    expect(nav.getAttribute("data-testid")).toBe("settings-nav");
-
-    // All 13 tabs render as nav rows with their accessible labels intact
-    // (the same names the tests + docs have always used).
-    for (const label of [
-      "Appearance",
-      "Agents",
-      "Sub-agents",
-      "Skills",
-      "Prompts",
-      "Models & Providers",
-      "MCP Servers",
-      "Computer Use",
-      "Image Analysis",
-      "Browser",
-      "Data & Statistics",
-      "Functionality",
-      "About",
-    ]) {
-      expect(screen.getByRole("button", { name: label })).toBeTruthy();
-    }
-
-    // The five owner-named group kickers, exactly ONE each — the ids the
-    // sidebar's settings nav used to carry (moved here R100-E1).
-    expect(document.querySelectorAll('[data-testid^="settings-group-"]')).toHaveLength(5);
-    for (const group of ["Workspace", "Agents & Skills", "Integrations", "Data & Statistics", "System"]) {
-      expect(document.querySelectorAll(`[data-testid="settings-group-${group}"]`)).toHaveLength(1);
-    }
-  });
-
-  it("the nav row contract: 30px rows, 12px/400 labels, active = 500 + accent bar + soft bg (the label-tier selection grammar)", () => {
-    renderWithProviders(<SettingsPage />);
-
-    const active = screen.getByTestId("settings-nav-appearance");
-    expect(active.getAttribute("aria-current")).toBe("page");
-    expect(active.className).toContain("min-h-[30px]");
-    expect(active.className).toContain("text-[12px]");
-    // Active escalates 400 → 500 + the accent selection grammar (TOKENS §6);
-    // cn/twMerge resolves the weight conflict to font-medium.
-    expect(active.className).toContain("font-medium");
-    expect(active.className).not.toContain("font-normal");
-    expect(active.className).toContain("bg-accent-soft");
-    expect(active.querySelector(".bg-accent")).toBeTruthy(); // the 2px accent bar
-
-    // A resting row: 400 weight, no selection chrome.
-    const browser = screen.getByTestId("settings-nav-browser");
-    expect(browser.getAttribute("aria-current")).toBeNull();
-    expect(browser.className).toContain("font-normal");
-    expect(browser.className).not.toContain("bg-accent-soft");
-    expect(browser.querySelector(".bg-accent")).toBeNull();
-  });
-
-  it("the search box filters the nav: 'provider' keeps the tab-label match, 'api key' rides the keyword index, 'zzz' shows the honest empty note", () => {
-    renderWithProviders(<SettingsPage />);
-
-    const search = screen.getByTestId("settings-nav-search") as HTMLInputElement;
-    expect(search.getAttribute("aria-label")).toBe("Search settings");
-    expect(screen.getByPlaceholderText("Search settings")).toBeTruthy();
-
-    // 'provider' matches the Models & Providers label (and Vision's keyword
-    // list) — Appearance (no match) is filtered OUT of the tab list.
-    fireEvent.change(search, { target: { value: "provider" } });
-    expect(screen.getByTestId("settings-nav-api")).toBeTruthy();
-    expect(screen.getByTestId("settings-nav-vision")).toBeTruthy();
+    expect(screen.queryByTestId("settings-nav-column")).toBeNull();
+    expect(screen.queryByTestId("settings-nav-pane")).toBeNull();
+    expect(screen.queryByTestId("settings-nav")).toBeNull();
+    expect(screen.queryByTestId("settings-nav-search")).toBeNull();
     expect(screen.queryByTestId("settings-nav-appearance")).toBeNull();
-
-    // 'api key' rides the per-tab keyword lists (Sub-agents + Vision + api).
-    fireEvent.change(search, { target: { value: "api key" } });
-    expect(screen.getByTestId("settings-nav-subagents")).toBeTruthy();
-    expect(screen.getByTestId("settings-nav-vision")).toBeTruthy();
-    expect(screen.getByTestId("settings-nav-api")).toBeTruthy();
-    expect(screen.queryByTestId("settings-nav-browser")).toBeNull();
-
-    // Nonsense → the honest empty note, never a blank nav.
-    fireEvent.change(search, { target: { value: "zzz" } });
-    expect(screen.getByTestId("settings-nav-empty").textContent).toBe("No settings match");
-    expect(screen.queryByTestId("settings-nav-api")).toBeNull();
-
-    // Clearing restores the full list.
-    fireEvent.change(search, { target: { value: "" } });
-    expect(screen.getByTestId("settings-nav-appearance")).toBeTruthy();
-    expect(screen.queryByTestId("settings-nav-empty")).toBeNull();
-  });
-
-  it("nav clicks drive the SAME tab state machine: clicking Browser writes ?tab=browser (deep links keep working)", async () => {
-    renderWithProviders(<SettingsPage />);
-
-    fireEvent.click(screen.getByTestId("settings-nav-browser"));
-
-    // The URL param flips → the h1 + the active row follow; the browser tab
-    // actually mounts (its card's loading branch carries the same testid).
-    expect(await screen.findByRole("heading", { level: 1, name: "Browser" })).toBeTruthy();
-    expect(screen.getByTestId("settings-nav-browser").getAttribute("aria-current")).toBe("page");
-    expect(screen.getByTestId("settings-nav-appearance").getAttribute("aria-current")).toBeNull();
-    expect(await screen.findByTestId("browser-settings-card")).toBeTruthy();
+    expect(screen.queryByTestId("settings-nav-about")).toBeNull();
+    expect(document.querySelectorAll('[data-testid^="settings-group-"]')).toHaveLength(0);
+    // The page header still renders (Kicker + the active tab's title).
+    expect(screen.getByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
   });
 
   it("the ?tab=browser deep link still selects the Browser tab (the URL contract is untouched)", async () => {
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=browser" });
 
     expect(screen.getByRole("heading", { level: 1, name: "Browser" })).toBeTruthy();
-    expect(screen.getByTestId("settings-nav-browser").getAttribute("aria-current")).toBe("page");
     expect(await screen.findByTestId("browser-settings-card")).toBeTruthy();
   });
 
@@ -1123,32 +1041,8 @@ describe("Settings nav column + search (R100-E1)", () => {
     expect(document.body.innerHTML).not.toMatch(/font-black|font-bold/);
   });
 
-  // R101-C (owner v0.98.0: the settings nav column's look "was not a good
-  // experience"): the column gets the PANE treatment — the search + nav list
-  // wrap in a rounded-xl bordered card (the SectionCard grammar's
-  // inside-panel tier) with the search docked under its top hairline. The IA
-  // is untouched (same tabs, same search, same ?tab= machine — pinned above).
-  it("R101-C: the nav column renders as a bordered PANE — rounded-xl card, search docked at its top, nav inside", () => {
-    renderWithProviders(<SettingsPage />);
-
-    const pane = screen.getByTestId("settings-nav-pane");
-    // The border treatment: the 12px radius step + the 1px border-line
-    // hairline + the card surface (TOKENS §4/§5).
-    expect(pane.className).toContain("rounded-xl");
-    expect(pane.className).toContain("border");
-    expect(pane.className).toContain("border-line");
-    expect(pane.className).toContain("bg-card");
-    // The search box + the nav list live INSIDE the pane.
-    expect(pane.contains(screen.getByTestId("settings-nav-search"))).toBe(true);
-    expect(pane.contains(screen.getByTestId("settings-nav"))).toBe(true);
-    // The search is DOCKED: its wrapper row carries the border-b hairline.
-    const search = screen.getByTestId("settings-nav-search");
-    expect(search.parentElement?.className).toContain("border-b");
-    expect(search.parentElement?.className).toContain("p-2");
-    // The column's own full-height right hairline is RETIRED — the pane's
-    // border is the separation now (no double lines).
-    expect(screen.getByTestId("settings-nav-column").className).not.toContain("lg:border-r");
-    // The group kickers stay INSIDE the container.
-    expect(pane.contains(screen.getByTestId("settings-group-Workspace"))).toBe(true);
-  });
+  // R101-C's PANE test retired with the nav column itself (R102-C): the
+  // pane treatment belonged to the deleted settings-local column; the
+  // sidebar's restored settings mode carries the search + rows in the
+  // sidebar panel's own body (pinned in Sidebar.test.tsx).
 });

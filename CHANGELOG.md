@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-101 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -10,6 +10,25 @@ version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
 ## [Unreleased]
+
+## [0.100.0] - 2026-09-17 — the thirteenth-walkthrough round: keys that actually save on Linux, the settings sidebar back where it belongs, the diagram viewer, and the quiet composer
+
+### API keys on Linux (the round's headline)
+- **Saving a key can no longer freeze the app — and always saves.** The root cause of "I tried saving them but apparently nothing was happening at all": the key-saving commands ran on the app's main thread and the Linux keyring call (the freedesktop Secret Service over D-Bus) could block indefinitely — a locked keyring, a stuck daemon, or a missing session bus froze the whole window mid-save. Every key operation now runs off the main thread under a 20-second ceiling, so the worst case is one honest error message, never a frozen app.
+- **A fallback that actually works.** On desktops where no Secret Service keyring is reachable (common on minimalist setups, some distros, and WSL), keys previously could not be saved at all. They now land in a disclosed local key file — `~/.acute/provider-keys.json`, readable only by your user (0600) — and the app tells you exactly that, in an amber note with the path and how to move the key into the encrypted system store (install or unlock gnome-keyring/KWallet and re-save; the migration is automatic). Reads, deletes, the next boot's key injection, and the application-wide reset all treat the file as a first-class store.
+- Every key surface behaves the same: the setup wizard, Models & Providers (the primary key and every pool key), and the Image Analysis vision key.
+
+### The settings page, single-sidebar again
+- On the Settings page, **the left sidebar itself becomes the settings navigation** — the "← Dashboard" back pill, the settings search box, and the grouped section list (Workspace / Agents & Skills / Integrations / Data & Statistics / System) — and the page is the content pane alone. The previous layout stacked a second settings column beside the app sidebar; that doubled sidebar is gone. Minimizing the sidebar on a Settings page shows the section icons (plus the back-to-dashboard button) — never the projects list. Every `?tab=` deep link keeps working.
+
+### Diagrams you can work with
+- Mermaid diagrams in chat are now **interactive**: zoom with the toolbar buttons or ctrl+scroll / trackpad pinch (50–300%, with a live percentage), drag to pan (or focus the diagram and use the arrow keys), **View source** to inspect the raw Mermaid code and **View diagram** to return, and reset the view with one click or a double-click. A new diagram always starts at 100%.
+
+### The composer, quiet at last
+- Clicking into the message box **paints nothing at all** — no border, no ring, no highlight around the paste area. The text caret is the focus indicator (the standard chat-app idiom); the composer's outline stays the quiet resting hairline in every state.
+
+### The minimized sidebar
+- The minimized icon rail is wider and roomier (56px with larger buttons and proper breathing room to the panel edges) — it read as cramped before.
 
 ## [0.99.0] - 2026-09-17 — the twelfth-walkthrough round: the calm update hand-off, the chat timeline, honest Mermaid, and Linux ARM64
 

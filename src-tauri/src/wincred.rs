@@ -1,7 +1,9 @@
 //! The provider-key store (ARCHITECTURE §7 / SPEC hard rule: provider API
 //! keys live in the OS secure store, never on disk) — Windows Credential
 //! Manager (generic credentials, DPAPI) on Windows; the freedesktop Secret
-//! Service on Linux (ADR-0031, ROUND-100).
+//! Service on Linux (ADR-0031), with a disclosed owner-only key-file
+//! fallback for desktops where no Secret Service is reachable (ADR-0031
+//! addendum, ROUND-102).
 //!
 //! ROUND-55 (R55) — WHY THIS MODULE EXISTS. This replaced the `keyring`
 //! crate's `Entry::new(service, user)`: on Windows, keyring 4.x derives the
@@ -36,9 +38,30 @@
 //! TARGET_USER, so the Secret Service item's attributes mirror the
 //! Windows credential's (TargetName, UserName) pair. There is no
 //! launcher/cmdkey interop on Linux (nothing seeds keys there), so the
-//! R55 exact-TargetName constraint does not port; headless machines
-//! (no keyring daemon) get the honest fallback — reads return none,
-//! writes error pointing at the ACUTE_PROVIDER_<ID> env vars.
+//! R55 exact-TargetName constraint does not port.
+//!
+//! ROUND-102 (R102-A, ADR-0031 addendum) — THE LINUX STORE, MADE REAL.
+//! The owner's v0.99.0 field report: "I was having issues with saving the
+//! API keys. The API keys were not being properly saved at all in the
+//! Linux version. I tried saving them but apparently nothing was happening
+//! at all." Two defects, both fixed in the Linux imp below:
+//!   · EVERY keyring call now runs on its OWN thread under a 20s timeout
+//!     (`bounded`) — a hung gnome-keyring D-Bus call can never freeze the
+//!     app (the key commands also became async in keys.rs, so nothing
+//!     blocks the main thread); a once-per-process probe memoizes an
+//!     unreachable Secret Service so spawn-time injection does not pay the
+//!     timeout once per provider.
+//!   · A key that cannot land in the Secret Service (no daemon, locked
+//!     keyring, timeout, any write error) falls back to the DISCLOSED
+//!     key file `~/.acute/provider-keys.json` (owner-only 0600, atomic
+//!     tmp+rename writes) instead of erroring into "nothing happened".
+//!     Reads consult the file whenever the Secret Service holds nothing;
+//!     deletes clear both stores; a later successful Secret Service write
+//!     RETIRES the file copy (one namespace). This bends the SPEC's
+//!     "never on disk" hard rule deliberately — owner directive + the
+//!     AWS CLI / kubectl / gh CLI precedent (plaintext creds file, strict
+//!     perms, loud disclosure; a hardcoded-key "encryption" would be
+//!     theater) — see ADR-0031's addendum for the full reasoning.
 
 #[cfg(windows)]
 mod imp {
@@ -83,7 +106,11 @@ mod imp {
     /// Writes (or rotates) the generic credential at `target` with user
     /// `user` and a UTF-16LE blob — byte-compatible with the launcher's
     /// cmdkey writes (same type, persistence, and user name).
-    pub(crate) fn write(target: &str, user: &str, value: &str) -> Result<(), String> {
+    pub(crate) fn write(
+        target: &str,
+        user: &str,
+        value: &str,
+    ) -> Result<super::WriteOutcome, String> {
         let blob = super::value_to_blob(value);
         let mut target_name = to_utf16(target);
         let mut user_name = to_utf16(user);
@@ -112,7 +139,7 @@ mod imp {
             let code = unsafe { GetLastError() };
             return Err(format!("CredWriteW failed (win32 error {code})"));
         }
-        Ok(())
+        Ok(super::WriteOutcome::stored_in(super::KeyStore::CredentialManager))
     }
 
     /// Deletes the generic credential at `target`. `Ok(false)` = nothing was
@@ -137,68 +164,435 @@ mod imp {
 }
 
 /// Linux (+ the BSDs): the freedesktop Secret Service via the `keyring`
-/// crate — the Linux release's key store (ADR-0031). `Entry::new(service,
-/// user)` with service = the canonical target string and user = keys.rs's
-/// TARGET_USER; the Secret Service item's `service`/`username` attributes
-/// then mirror the Windows credential's (TargetName, UserName) pair.
+/// crate — the Linux release's key store (ADR-0031, R100) — with the
+/// ROUND-102 reliability + fallback layer (ADR-0031 addendum, R102-A).
+/// `Entry::new(service, user)` with service = the canonical target string
+/// and user = keys.rs's TARGET_USER; the Secret Service item's
+/// `service`/`username` attributes then mirror the Windows credential's
+/// (TargetName, UserName) pair.
 ///
-/// Honest headless fallback (no gnome-keyring/KWallet daemon on the session
-/// bus): reads return `Ok(None)` — a store that cannot be reached holds no
-/// key — and writes error pointing at the ACUTE_PROVIDER_<ID> env vars (the
-/// dev path that already works, `scripts/dev.mjs`). Error strings carry
-/// keyring's classification, never the secret.
+/// ROUND-102 (R102-A) shape, from the owner's v0.99.0 report ("the API keys
+/// were not being properly saved at all … nothing was happening at all"):
+///   · `bounded` runs EVERY keyring Entry operation on a dedicated thread
+///     under a 20-second deadline. The pre-R102 commands were SYNC, so
+///     Tauri ran them on the MAIN thread — a Secret Service D-Bus call
+///     that blocked (locked keyring whose unlock prompt cannot display,
+///     a half-dead daemon, a missing session bus that zbus probes slowly)
+///     froze the whole window and the invoke never resolved: exactly
+///     "nothing was happening at all". A hung op now costs at most one
+///     detached thread (bounded, documented) and surfaces as an error.
+///   · `SECRET_SERVICE_DOWN` memoizes the FIRST unreachable verdict
+///     (NoStorageAccess or a timeout) for the process lifetime, so the
+///     spawn-time injection loop (12+ targets, each a keyring read) pays
+///     the probe ONCE instead of 20s × N on daemon-less desktops. The
+///     next app start re-probes.
+///   · The DISCLOSED KEY FILE fallback (ADR-0031 addendum): when the
+///     Secret Service cannot take the key, it lands in
+///     `~/.acute/provider-keys.json` (0600, atomic tmp+rename, one JSON
+///     map keyed by the canonical target). Reads consult it whenever the
+///     Secret Service holds nothing; a later successful Secret Service
+///     write retires the file copy; deletes clear both. Error strings
+///     carry keyring's classification, never the secret.
 #[cfg(all(unix, not(target_os = "macos")))]
 mod imp {
-    /// The Secret Service entry for `target`. `Entry::new` only maps the
-    /// (service, user) pair to item attributes — no bus I/O — so it cannot
-    /// fail for storage reasons, only for malformed inputs.
-    fn entry_for(target: &str) -> Result<keyring::Entry, String> {
-        keyring::Entry::new(target, crate::keys::TARGET_USER)
-            .map_err(|e| format!("creating the Secret Service entry for {target} failed: {e}"))
+    use std::collections::BTreeMap;
+    use std::io::Write;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
+
+    /// The deadline for ONE keyring Entry operation (R102-A). Generous —
+    /// a legitimately busy gnome-keyring answering a collection unlock
+    /// round-trip should never trip it; a hang (the owner's freeze)
+    /// surfaces as an error after 20s instead of forever.
+    const KEYRING_IO_TIMEOUT: Duration = Duration::from_secs(20);
+
+    /// Process-lifetime memo: the Secret Service was proven unreachable
+    /// (NoStorageAccess, or an I/O timeout). Set once, never cleared —
+    /// every later call goes straight to the key file; the next app start
+    /// re-probes. Cheap read on every spawn-time injection target.
+    static SECRET_SERVICE_DOWN: AtomicBool = AtomicBool::new(false);
+
+    /// Serializes key-file writes (read-modify-write cycles must not
+    /// interleave; two pool-slot saves racing would otherwise lose one).
+    fn file_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
-    /// Reads the Secret Service item at `target`. `Ok(None)` = no such
-    /// entry (normal: key not stored yet) OR no reachable keyring daemon
-    /// (NoStorageAccess — the honest headless fallback, ADR-0031).
-    pub(crate) fn read(target: &str) -> Result<Option<String>, String> {
-        let entry = entry_for(target)?;
-        match entry.get_password() {
-            Ok(value) => Ok(Some(value)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(keyring::Error::NoStorageAccess(_)) => Ok(None),
+    fn secret_service_down() -> bool {
+        SECRET_SERVICE_DOWN.load(Ordering::Relaxed)
+    }
+
+    fn mark_secret_service_down() {
+        SECRET_SERVICE_DOWN.store(true, Ordering::Relaxed);
+    }
+
+    /// Runs one keyring Entry operation on a dedicated thread under the
+    /// 20s deadline. `op` owns its inputs (the thread outlives the call
+    /// only when it HANGS — the detached thread is the bounded price of
+    /// not freezing the app; documented above). `label` prefixes errors;
+    /// keyring error Display strings never contain the secret.
+    fn bounded<T, F>(label: &str, op: F) -> Result<Result<T, keyring::Error>, String>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, keyring::Error> + Send + 'static,
+    {
+        let (tx, rx) = std::sync::mpsc::channel::<Result<T, keyring::Error>>();
+        let spawned = std::thread::Builder::new()
+            .name("acute-keyring-io".into())
+            .spawn(move || {
+                // A send failure means the caller timed out and walked —
+                // the result is dropped with the thread. Nothing to do.
+                let _ = tx.send(op());
+            });
+        if let Err(e) = spawned {
+            return Err(format!("{label}: could not start the keyring worker: {e}"));
+        }
+        match rx.recv_timeout(KEYRING_IO_TIMEOUT) {
+            Ok(result) => Ok(result),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+                "{label}: the keyring did not answer within {} seconds \
+                 (a hung or locked gnome-keyring/KWallet is the usual cause)",
+                KEYRING_IO_TIMEOUT.as_secs()
+            )),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err(format!("{label}: the keyring worker crashed before answering"))
+            }
+        }
+    }
+
+    // ── The disclosed key file (ADR-0031 addendum, R102-A) ──────────────────
+    // One JSON map { "<canonical target>": "<value>" } at
+    // ~/.acute/provider-keys.json, 0600, atomic tmp+rename writes. The map
+    // is a BTreeMap on disk (sorted keys — stable diffs, no churn), the
+    // values are the SAME strings the Secret Service would hold.
+
+    fn key_file_path() -> std::path::PathBuf {
+        crate::keys::dot_acute_dir().join("provider-keys.json")
+    }
+
+    fn read_key_file_map() -> Result<Option<BTreeMap<String, String>>, String> {
+        let path = key_file_path();
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => {
+                return Err(format!("reading the key file {} failed: {e}", path.display()))
+            }
+        };
+        match serde_json::from_str(&text) {
+            Ok(map) => Ok(Some(map)),
             Err(e) => Err(format!(
-                "reading the Secret Service entry for {target} failed: {e}"
+                "parsing the key file {} failed: {e}",
+                path.display()
             )),
         }
     }
 
-    /// Writes (or rotates) the Secret Service item at `target` with user
-    /// `user`. `set_password` updates an existing matching item in place,
-    /// so re-saving rotates rather than duplicating.
-    pub(crate) fn write(target: &str, user: &str, value: &str) -> Result<(), String> {
-        keyring::Entry::new(target, user)
-            .map_err(|e| format!("creating the Secret Service entry for {target} failed: {e}"))?
-            .set_password(value)
-            .map_err(|e| {
-                format!(
-                    "storing the key in the freedesktop Secret Service failed: {e} — \
-                     on headless Linux (no gnome-keyring/KWallet daemon), provide the \
-                     ACUTE_PROVIDER_<ID> environment variables instead"
-                )
-            })
+    fn write_key_file_map(map: &BTreeMap<String, String>) -> Result<(), String> {
+        let path = key_file_path();
+        let dir = path
+            .parent()
+            .ok_or_else(|| "the key file has no parent directory".to_string())?;
+        // ~/.acute may not exist yet on a fresh install (the note files
+        // create it lazily too). Owner-traversal only (0700) — the key
+        // file's secrecy is the point of this directory.
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("creating {} failed: {e}", dir.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir)
+                .map(|m| m.permissions())
+                .map(|p| p.mode())
+                .unwrap_or(0o755);
+            if mode & 0o077 != 0 {
+                // Best-effort tightening — a pre-existing 0755 ~/.acute
+                // (the note files' default) must not expose key material.
+                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+        let json = serde_json::to_string_pretty(map)
+            .map_err(|e| format!("serializing the key file failed: {e}"))?;
+        // Atomic replace: write the tmp with 0600 FROM BIRTH (never a
+        // world-readable instant), then rename over the live file.
+        let tmp = dir.join("provider-keys.json.tmp");
+        #[cfg(unix)]
+        let write_result = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)
+                .and_then(|mut file| file.write_all(json.as_bytes()))
+        };
+        #[cfg(not(unix))]
+        let write_result = std::fs::write(&tmp, json.as_bytes());
+        write_result.map_err(|e| format!("writing {} failed: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, &path)
+            .map_err(|e| format!("publishing {} failed: {e}", path.display()))
     }
 
-    /// Deletes the Secret Service item at `target`. `Ok(false)` = nothing
-    /// was there (or no daemon could be reached — nothing to retire).
+    /// Reads one target from the key file. `Ok(None)` = not there (or no
+    /// file at all — a fresh install).
+    fn key_file_read(target: &str) -> Result<Option<String>, String> {
+        match read_key_file_map()? {
+            Some(map) => Ok(map.get(target).cloned()),
+            None => Ok(None),
+        }
+    }
+
+    /// Upserts one target into the key file (creating it). Lock-serialized.
+    fn key_file_write(target: &str, value: &str) -> Result<(), String> {
+        let _guard = file_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut map = read_key_file_map()?.unwrap_or_default();
+        map.insert(target.to_string(), value.to_string());
+        write_key_file_map(&map)
+    }
+
+    /// Removes one target from the key file; `Ok(false)` = it was not
+    /// there. An empty map leaves NO file behind (a keyless ~/.acute is
+    /// the honest resting state). Lock-serialized.
+    fn key_file_remove(target: &str) -> Result<bool, String> {
+        let _guard = file_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut map = match read_key_file_map()? {
+            Some(map) => map,
+            None => return Ok(false),
+        };
+        if map.remove(target).is_none() {
+            return Ok(false);
+        }
+        if map.is_empty() {
+            let path = key_file_path();
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(format!("removing {} failed: {e}", path.display()))
+                }
+            }
+            return Ok(true);
+        }
+        write_key_file_map(&map)?;
+        Ok(true)
+    }
+
+    /// The disclosed note the UI shows when a key lands in the file store
+    /// (never contains the secret; the path is the actionable part).
+    fn key_file_note() -> String {
+        format!(
+            "No Secret Service keyring could store the key, so it was saved to the \
+             local key file {} (owner-only, 0600). Installing or unlocking \
+             gnome-keyring/KWallet and re-saving the key moves it into the \
+             encrypted system store.",
+            key_file_path().display()
+        )
+    }
+
+    fn key_file_outcome() -> super::WriteOutcome {
+        super::WriteOutcome {
+            store: super::KeyStore::KeyFile,
+            note: Some(key_file_note()),
+        }
+    }
+
+    /// Reads the key for `target`: Secret Service first (bounded), the key
+    /// file whenever the Secret Service holds nothing reachable. `Ok(None)`
+    /// = neither store has it.
+    ///
+    /// Error classification (live-verified on a daemon-less Linux — the
+    /// dbus-secret-service backend maps "cannot connect to the bus" to
+    /// PlatformFailure, NOT NoStorageAccess): only `NoEntry` proves the
+    /// service ANSWERED — every other failure (NoStorageAccess,
+    /// PlatformFailure, timeout, worker crash) marks the service DOWN for
+    /// the process and the key file answers instead. A transient failure
+    /// on a healthy service therefore degrades to the file for the session
+    /// (fully functional; re-probed next boot) instead of erroring on every
+    /// keyless read — the safer side of the trade, documented in ADR-0031's
+    /// addendum.
+    pub(crate) fn read(target: &str) -> Result<Option<String>, String> {
+        if secret_service_down() {
+            return key_file_read(target);
+        }
+        let owned = target.to_string();
+        let label = format!("reading the Secret Service entry for {target}");
+        let outcome = bounded(&label, move || {
+            keyring::Entry::new(&owned, crate::keys::TARGET_USER)
+                .and_then(|entry| entry.get_password())
+        })?;
+        match outcome {
+            Ok(value) => Ok(Some(value)),
+            // NoEntry: the daemon answered — but a key saved earlier via
+            // the fallback (or by a pre-keyring app build) may still live
+            // in the file. One cheap file read before declaring absence.
+            // The service stays UP (it proved itself).
+            Err(keyring::Error::NoEntry) => key_file_read(target),
+            // Every other verdict = the service is unusable for our
+            // purposes: memoize, then answer from the key file.
+            Err(e) => {
+                mark_secret_service_down();
+                eprintln!("[keys] Secret Service read failed (falling back to the key file): {e}");
+                key_file_read(target)
+            }
+        }
+    }
+
+    /// Writes (or rotates) the key for `target`: Secret Service first
+    /// (bounded); a key the Service cannot take lands in the disclosed key
+    /// file instead of erroring (the owner's "nothing was happening at
+    /// all"). A SUCCESSFUL Secret Service write retires any stale key-file
+    /// copy — one namespace, migration on the next re-save.
+    pub(crate) fn write(
+        target: &str,
+        user: &str,
+        value: &str,
+    ) -> Result<super::WriteOutcome, String> {
+        if secret_service_down() {
+            key_file_write(target, value)?;
+            return Ok(key_file_outcome());
+        }
+        let owned_target = target.to_string();
+        let owned_user = user.to_string();
+        let owned_value = value.to_string();
+        let outcome = bounded(
+            "storing the key in the freedesktop Secret Service",
+            move || {
+                keyring::Entry::new(&owned_target, &owned_user)
+                    .and_then(|entry| entry.set_password(&owned_value))
+            },
+        );
+        match outcome {
+            Ok(Ok(())) => {
+                // Migration: the canonical store has the key now — retire
+                // any fallback copy (best-effort; the SS write is durable).
+                let _ = key_file_remove(target);
+                Ok(super::WriteOutcome::stored_in(super::KeyStore::SecretService))
+            }
+            // NoStorageAccess, PlatformFailure (the no-daemon / locked-
+            // keyring classes — live-verified: "cannot connect to the bus"
+            // arrives as PlatformFailure), timeout, worker crash: the
+            // service cannot take the key. Memoize the verdict, land the
+            // key in the disclosed file, report WHERE it went.
+            Ok(Err(e)) => {
+                mark_secret_service_down();
+                eprintln!("[keys] Secret Service write refused (falling back to the key file): {e}");
+                key_file_write(target, value)?;
+                Ok(key_file_outcome())
+            }
+            Err(timeout_or_crash) => {
+                mark_secret_service_down();
+                eprintln!("[keys] {timeout_or_crash}");
+                key_file_write(target, value)?;
+                Ok(key_file_outcome())
+            }
+        }
+    }
+
+    /// Deletes the key for `target` from BOTH stores (best-effort each:
+    /// the R90-A5/R87 semantics — a locked entry never fails the flow).
+    /// `Ok(false)` = neither store had it.
     pub(crate) fn delete(target: &str) -> Result<bool, String> {
-        let entry = entry_for(target)?;
-        match entry.delete_credential() {
-            Ok(()) => Ok(true),
-            Err(keyring::Error::NoEntry) => Ok(false),
-            Err(keyring::Error::NoStorageAccess(_)) => Ok(false),
-            Err(e) => Err(format!(
-                "deleting the Secret Service entry for {target} failed: {e}"
-            )),
+        let mut deleted = false;
+        if !secret_service_down() {
+            let owned = target.to_string();
+            let label = format!("deleting the Secret Service entry for {target}");
+            let outcome = bounded(&label, move || {
+                keyring::Entry::new(&owned, crate::keys::TARGET_USER)
+                    .and_then(|entry| entry.delete_credential())
+            });
+            match outcome {
+                Ok(Ok(())) => deleted = true,
+                // The service answered: nothing was there.
+                Ok(Err(keyring::Error::NoEntry)) => {}
+                // Everything else (NoStorageAccess, PlatformFailure,
+                // timeout, crash): unusable — memoize + the file still
+                // gets its retirement sweep below.
+                Ok(Err(e)) => {
+                    mark_secret_service_down();
+                    eprintln!("[keys] Secret Service delete failed (continuing with the key file): {e}");
+                }
+                Err(timeout_or_crash) => {
+                    mark_secret_service_down();
+                    eprintln!("[keys] {timeout_or_crash}");
+                }
+            }
+        }
+        if key_file_remove(target)? {
+            deleted = true;
+        }
+        Ok(deleted)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// R102-A: the key-file trio (read/write/remove) against a REAL
+        /// temp dir — the JSON map, the 0600 file perms, the empty-map
+        /// cleanup, and the upsert rotation. Runs on every Linux CI box
+        /// that executes cargo test (the mini-crate harness the round doc
+        /// describes ran the same assertions in the sandbox).
+        #[test]
+        fn key_file_round_trip() {
+            let home = std::env::temp_dir().join(format!(
+                "acute-keyfile-test-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&home);
+            std::fs::create_dir_all(&home).unwrap();
+            std::env::set_var("HOME", &home);
+            // dot_acute_dir resolves HOME at CALL time, so the isolation
+            // holds without process restarts.
+            let target = "ACUTE-CODE/provider/openrouter";
+
+            assert_eq!(key_file_read(target).unwrap(), None);
+            key_file_write(target, "sk-or-v1-first").unwrap();
+            assert_eq!(key_file_read(target).unwrap(), Some("sk-or-v1-first".into()));
+
+            // Rotation is an upsert, never a duplicate.
+            key_file_write(target, "sk-or-v1-second").unwrap();
+            assert_eq!(key_file_read(target).unwrap(), Some("sk-or-v1-second".into()));
+
+            // The file is owner-only.
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(key_file_path()).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+
+            // A second target shares the map; removing one keeps the other.
+            key_file_write("ACUTE-CODE/provider/nvidia", "nvapi-x").unwrap();
+            assert!(key_file_remove(target).unwrap());
+            assert_eq!(key_file_read(target).unwrap(), None);
+            assert_eq!(
+                key_file_read("ACUTE-CODE/provider/nvidia").unwrap(),
+                Some("nvapi-x".into())
+            );
+
+            // Removing the LAST entry removes the file itself.
+            assert!(key_file_remove("ACUTE-CODE/provider/nvidia").unwrap());
+            assert!(!key_file_path().exists());
+            // Idempotent absence.
+            assert!(!key_file_remove("ACUTE-CODE/provider/nvidia").unwrap());
+
+            let _ = std::fs::remove_dir_all(&home);
+        }
+
+        /// R102-A: `bounded` reports a CRASHED worker as a labeled error
+        /// (the Disconnected arm — the thread died before answering). The
+        /// Timeout arm is the same channel math with the clock instead of
+        /// the panicking thread; its 20s const is deliberately not paid
+        /// in the test suite (the sandbox mini-crate harness the round
+        /// doc describes verified the shape live).
+        #[test]
+        fn bounded_reports_a_crashed_worker() {
+            let outcome = bounded("probe", move || -> Result<String, keyring::Error> {
+                panic!("worker died");
+            });
+            assert!(outcome.is_err());
+            let message = outcome.unwrap_err();
+            assert!(message.contains("crashed before answering"));
         }
     }
 }
@@ -212,7 +606,11 @@ mod imp {
     pub(crate) fn read(_target: &str) -> Result<Option<String>, String> {
         Ok(None)
     }
-    pub(crate) fn write(_target: &str, _user: &str, _value: &str) -> Result<(), String> {
+    pub(crate) fn write(
+        _target: &str,
+        _user: &str,
+        _value: &str,
+    ) -> Result<super::WriteOutcome, String> {
         Err("credential storage is only available in the packaged Windows and Linux apps".into())
     }
     pub(crate) fn delete(_target: &str) -> Result<bool, String> {
@@ -252,6 +650,46 @@ pub(crate) fn value_to_blob(value: &str) -> Vec<u8> {
 }
 
 pub(crate) use imp::{delete, read, write};
+
+/// Which OS store a key write landed in (R102-A). The commands in keys.rs
+/// surface this to the webview as the `store` field of the save report so
+/// the Settings UI can disclose a key-file save (amber note) instead of
+/// presenting it as a Secret Service success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyStore {
+    /// Windows: Credential Manager (DPAPI at rest).
+    CredentialManager,
+    /// Linux: the freedesktop Secret Service (gnome-keyring/KWallet).
+    SecretService,
+    /// Linux fallback (ADR-0031 addendum): ~/.acute/provider-keys.json.
+    KeyFile,
+}
+
+impl KeyStore {
+    /// The wire spelling (keys.rs's KeyStoreReport.store).
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            KeyStore::CredentialManager => "credential-manager",
+            KeyStore::SecretService => "secret-service",
+            KeyStore::KeyFile => "key-file",
+        }
+    }
+}
+
+/// A successful write's receipt (R102-A): WHERE the key landed + the
+/// optional disclosure note (the key-file path story). Never carries key
+/// material.
+pub(crate) struct WriteOutcome {
+    pub(crate) store: KeyStore,
+    pub(crate) note: Option<String>,
+}
+
+impl WriteOutcome {
+    /// The no-disclosure success (the OS secure store took the key).
+    pub(crate) fn stored_in(store: KeyStore) -> Self {
+        WriteOutcome { store, note: None }
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # Round 65 — The honesty patch: the surface boundary, the auto-opening browser, debug mode, and the Advanced cleanup
 
 **Date:** 2026-09-02 · **Branch:** `main` · **Version:** 0.65.0 · **Owner directive (verbatim intent):** the live 0.63.0 computer-use report's hallucination ("it claimed it opened my Edge, searched, and read the page — NOTHING happened on my screen"; what actually ran was `browser_control` in the EMBEDDED browser), "the browser never even opened" after approving a browser action, "simple browsing operations should not ask permission", "remove the agent-core connection / bearer token from the advanced settings", and "debug mode — the agent reports the details of what it did, with a settings switch".

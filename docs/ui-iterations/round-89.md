@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # Round 89 — The owner's hands-on verdict round: About/Reset, provider identity, model UI, layout honesty, and the agent's HUMAN browser hands
 
 Date: 2026-09-11 · Version: 0.86.0 → 0.87.0 · Scope: UX + capability (the

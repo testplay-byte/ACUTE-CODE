@@ -1,10 +1,10 @@
 {
   "generated": "2026-09-17",
   "note": "Pinned by scripts/design-audit.mjs --update-baseline. The ratchet: counts may only go DOWN. A wave that finishes a cleanup re-pins (USAGE §2).",
-  "files": 100,
+  "files": 101,
   "rules": {
     "R1": 101,
-    "R2": 1519,
+    "R2": 1522,
     "R3": 0,
     "R4": 18,
     "R5": 31

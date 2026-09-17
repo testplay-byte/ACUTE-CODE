@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # ADR-0021: Public status dashboard in a separate repo (ACUTE-DASH)
 
 - **Status:** ACCEPTED (round-17; owner requested a visual GitHub Pages dashboard)

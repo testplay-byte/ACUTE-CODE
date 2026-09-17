@@ -49,9 +49,9 @@ import {
 import { useProjectFilePaths } from "./useProjectFiles";
 
 /**
- * ROUND-50 (R50-c2): the owner-spec composer — ONE rounded box (R101-D:
- * rounded-xl, 1px hairline, warm bg; focus = a border-color swap only —
- * see the .composer-shell pair in index.css) containing the auto-growing
+ * ROUND-50 (R50-c2): the owner-spec composer — ONE rounded box (R102-E:
+ * rounded-xl, 1px hairline, warm bg; focus paints NOTHING — the caret is
+ * the indicator, see the .composer-shell rule in index.css) containing the auto-growing
  * textarea on top, the attachment chip row when any, and the TOOLBAR ROW
  * at the bottom INSIDE the box (owner: "These
  * options will not be shown below it but inside the chat section itself.
@@ -516,17 +516,15 @@ export function Composer({
   return (
     <div
       data-composer
-      // R101-D (owner: "it apparently selected the message entry area and
-      // highlighted it and the area around it" — the v0.98.0 report): the
-      // composer answers focus with a SUBTLE border-color swap ONLY. The
-      // R100-D JS-swapped border-[1.5px] + outline-2 ring (a 2px halo
-      // floating AROUND the whole box, plus a width change) is deleted —
-      // no JS focus state at all: the `.composer-shell` class pair in
-      // index.css swaps border-color on :focus-within (accent@0.55), the
-      // 1px width NEVER changes (no layout shift) and transition-colors
-      // animates just the color legs. Keyboard users still get the global
-      // :focus-visible ring on the textarea itself (index.css :where rule).
-      // dragActive keeps its inline accent border + tint — a REAL state.
+      // R102-E (owner v0.99.0: "When I click on the area, the whole area
+      // where I can paste in the message gets a border around it, which is
+      // not good, not perfect"): the composer answers focus with NOTHING —
+      // the caret is the focus indicator (the Slack/ChatGPT/Discord idiom;
+      // the R101-D accent border-color swap still read as a border popping
+      // around the whole paste area on click, so the :focus-within leg is
+      // deleted from index.css's .composer-shell pair). The border stays
+      // the quiet resting hairline in every focus state; dragActive keeps
+      // its inline accent border + tint (a REAL state).
       className="@container relative flex flex-col rounded-xl border transition-colors composer-shell"
       style={{
         background: dragActive
@@ -535,8 +533,8 @@ export function Composer({
             ? "rgba(255,255,255,0.04)"
             : styles.bg,
         // Only the DRAG state paints the border inline (it must beat the
-        // composer-shell class pair); undefined lets the CSS leg own the
-        // resting/focus-within colors.
+        // composer-shell class); undefined lets the CSS leg own the resting
+        // color.
         borderColor: dragActive ? withAlpha(styles.accent, 0.4) : undefined,
       }}
       data-dragging={dragActive ? "true" : undefined}

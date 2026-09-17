@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
-// R100-E1 (research §C2 P1(a)): the settings-section icons + FileText left
-// with the sidebar's settings mode — the settings page's own nav column
-// renders them now (SettingsPage.tsx).
+// R102-C: the settings-section list + search keywords come from the ONE
+// shared module (settings-sections.ts) — the sidebar's restored SETTINGS
+// MODE and the SettingsPage's ?tab= machine render from the same source.
+import { SETTINGS_SECTIONS, sectionMatchesQuery } from "../settings/settings-sections";
+import { Search } from "lucide-react";
 import {
+  ArrowLeft,
   BarChart3,
   CircleAlert,
   FolderOpen,
@@ -231,11 +234,21 @@ export function Sidebar() {
   // closed by the backdrop, and auto-closed on navigation. R60-C: this is
   // the ONLY mobile affordance (mobile has no title bar) — kept exactly.
   const [mobileOpen, setMobileOpen] = useState(false);
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
+
+  // R102-C (owner v0.99.0): the ROUND-34 settings mode RESTORED — on
+  // /settings the sidebar's whole body becomes the settings nav (back pill
+  // + search + the grouped section list) and the settings page renders the
+  // content pane alone. The ?tab= param stays the one truth: nav clicks
+  // write it, the deep links keep working, the mobile drawer carries the
+  // same body below md.
+  const isSettingsRoute = pathname.startsWith("/settings");
+  const activeSettingsTab = new URLSearchParams(search).get("tab") ?? "appearance";
 
   // ROUND-45: any navigation closes the mobile drawer (standard drawer UX).
-  // R100-E1: search dropped from the deps — the sidebar no longer watches
-  // ?tab= (the settings page's own nav owns that state now).
+  // R102-C: search is BACK in the deps — the settings-mode body re-renders
+  // when ?tab= changes so the active row follows the URL (the R100-E1
+  // removal was for the retired mode; the restore needs the watch again).
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname]);
@@ -308,14 +321,22 @@ export function Sidebar() {
         // R101-C (owner v0.98.0: the minimized rail "was not looking
         // pro-good"): minimized, the panel opens its HORIZONTAL clip so the
         // rail's hover/focus label chips (RailLabel below) can paint past
-        // the 48px rail over the content pane — `overflow-x: visible` is
+        // the rail over the content pane — `overflow-x: visible` is
         // preserved when the other axis is `clip` (the one sanctioned axis
         // pair; scroll/auto/hidden would force x to auto and swallow the
         // chips). Vertical overflow stays clipped at the panel edge.
         // Expanded, overflow-hidden stays: it clips the full sidebar's
-        // content during the 240↔48 width transition (the rail content is
+        // content during the 240↔56 width transition (the rail content is
         // never wider than the animating panel, so nothing spills).
-        minimized ? "w-12 overflow-x-visible overflow-y-clip" : "w-60 overflow-hidden",
+        //
+        // R102-B (owner v0.99.0: "the left sidebar apparently looks a little
+        // bit squished when it is minimized"): the rail widens 48→56px
+        // (w-12→w-14) with 40px buttons + px-2 side insets — the 48px rail's
+        // 36px buttons left only 4.5px of breathing room per side (the
+        // 1.5px borders + 16px panel corners ate into it) and read as
+        // cramped. 56/40/8/8 is the roomy activity-bar geometry (VS Code's
+        // own ratio) — same expanded 240px, same 200ms width transition.
+        minimized ? "w-14 overflow-x-visible overflow-y-clip" : "w-60 overflow-hidden",
         // ROUND-45: below md this is an overlay drawer, not a flex column.
         "max-md:fixed max-md:inset-y-3 max-md:left-3 max-md:z-50 max-md:shadow-2xl",
         mobileOpen ? "max-md:translate-x-0" : "max-md:-translate-x-[120%] max-md:pointer-events-none",
@@ -334,13 +355,24 @@ export function Sidebar() {
           right-aligned so it sits where the sidebar meets the chat (the
           direction it shrinks toward); the rail's restore button is its
           mirror.
-          R100-E1 (research §C2 P1(a)): the ROUND-34 SETTINGS MODE is
-          RETIRED — the settings page owns its nav column + search now, so
-          the sidebar renders the NORMAL nav on /settings routes too (the
-          Dashboard row is the back affordance; the footer Settings button
-          + the rail's gear are the one "Settings" entry). */}
+          R100-E1 retired the ROUND-34 SETTINGS MODE (the settings page
+          owned its own nav column). R102-C RESTORES it (owner v0.99.0:
+          "the left sidebar does not change and the settings sidebar shows
+          on the right side of the left sidebar … handle it just like how
+          it was handled previously") — on /settings the sidebar's whole
+          body becomes the settings nav and the settings page is the
+          content pane alone (no doubled sidebar). */}
       {minimized ? (
-        <MinimizedRail onExpand={() => setAppSidebarMinimized(false)} />
+        <MinimizedRail
+          onExpand={() => setAppSidebarMinimized(false)}
+          variant={isSettingsRoute ? "settings" : "normal"}
+          activeSettingsTab={isSettingsRoute ? activeSettingsTab : undefined}
+        />
+      ) : isSettingsRoute ? (
+        <SettingsSidebarBody
+          activeTab={activeSettingsTab}
+          onMinimize={() => setAppSidebarMinimized(true)}
+        />
       ) : (
         <>
           {/* ROUND-62: the MINIMIZE row — the owner's directive ("option at
@@ -479,7 +511,155 @@ function RailLabel({
   );
 }
 
-function MinimizedRail({ onExpand }: { onExpand: () => void }) {
+/** R102-C: the sidebar's SETTINGS-MODE body (the ROUND-34 design restored —
+ * owner v0.99.0: "handle it just like how it was handled previously").
+ * On /settings the sidebar's whole body becomes the settings nav:
+ *  - the top row: the R95-A labeled "← Dashboard" back pill (the ONE back
+ *    affordance outside the rail) + the minimize button at the row's end;
+ *  - the search box (R100-E1's VS Code settings-search pattern, moved HERE
+ *    from the retired settings-local nav column — filters the section list
+ *    by label + the shared SEARCH_KEYWORDS, never touches the ?tab=
+ *    machine);
+ *  - the grouped section list (one Kicker between category clusters, the
+ *    NavButton row grammar: 32px rows, active = accent text + soft bg +
+ *    the 2px leading accent bar) — the About row carries the update dot.
+ * The ?tab= param stays the single source of truth: every row navigates
+ * to /settings?tab=<id> (same param the deep links have always used).
+ */
+function SettingsSidebarBody({
+  activeTab,
+  onMinimize,
+}: {
+  activeTab: string;
+  onMinimize: () => void;
+}) {
+  const styles = useThemeStyles();
+  const navigate = useNavigate();
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const visibleSections = SETTINGS_SECTIONS.filter((s) => sectionMatchesQuery(s, needle));
+
+  return (
+    <>
+      {/* The top row — the R95-A back pill + the minimize control (the
+          normal mode's minimize row's exact mirror). */}
+      <div className="shrink-0 flex items-center gap-1.5 px-2.5 pt-2.5 pb-1">
+        <button
+          onClick={() => navigate("/")}
+          aria-label="Back to dashboard"
+          title="Back to dashboard"
+          data-testid="sidebar-back-dashboard"
+          className="h-8 shrink-0 inline-flex items-center gap-1.5 px-3 rounded-full border-[1.5px] text-[12px] font-semibold transition-colors hover:bg-hover"
+          style={{ borderColor: styles.sidebarBorder, color: styles.textSecondary }}
+        >
+          <ArrowLeft size={13} /> Dashboard
+        </button>
+        <span className="text-[13px] font-semibold tracking-tight truncate" style={{ color: styles.text }}>
+          Settings
+        </span>
+        <button
+          onClick={onMinimize}
+          aria-label="Minimize sidebar"
+          title="Minimize sidebar"
+          data-testid="sidebar-minimize"
+          className="w-7 h-7 ml-auto shrink-0 rounded-lg grid place-items-center transition-colors hover:bg-hover"
+          style={{ color: styles.textTertiary }}
+        >
+          <PanelLeftClose size={16} />
+        </button>
+      </div>
+
+      {/* The search box (R100-E1's pattern, R102-C's home): 12px text, 28px
+          height, rounded-lg; focus = the GLOBAL :focus-visible rule — no
+          local focus: classes (the R100-D scoping discipline). */}
+      <div className="shrink-0 px-2.5 pt-1.5 pb-2">
+        <div className="relative">
+          <Search
+            size={12}
+            aria-hidden
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+            style={{ color: styles.textTertiary }}
+          />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search settings"
+            aria-label="Search settings"
+            data-testid="settings-nav-search"
+            className="h-7 w-full rounded-lg border border-line bg-input pl-7 pr-2.5 text-[12px] text-ink placeholder:text-muted"
+          />
+        </div>
+      </div>
+
+      {/* The grouped section list — the NavButton row grammar. */}
+      <nav
+        className="flex-1 min-h-0 flex flex-col gap-0.5 px-2.5 pb-3 pt-1 overflow-y-auto"
+        aria-label="Settings sections"
+      >
+        {visibleSections.map((section, index) => {
+          const { id, label, icon: Icon } = section;
+          const active = id === activeTab;
+          const groupHeader =
+            index === 0 || section.group !== visibleSections[index - 1].group
+              ? section.group
+              : undefined;
+          return (
+            <Fragment key={id}>
+              {groupHeader !== undefined && (
+                <Kicker testId={`settings-group-${groupHeader}`} className="px-2 pb-1 pt-3 first:pt-0">
+                  {groupHeader}
+                </Kicker>
+              )}
+              <button
+                onClick={() => navigate(`/settings?tab=${id}`)}
+                aria-current={active ? "page" : undefined}
+                data-testid={`settings-nav-${id}`}
+                className={cn(
+                  "relative flex h-8 items-center gap-2.5 rounded-lg px-3 text-[13px] transition-colors",
+                  active
+                    ? "bg-accent-soft font-medium text-accent"
+                    : "font-normal text-muted hover:bg-hover",
+                )}
+              >
+                {/* Selection grammar (TOKENS §6): accent text + soft bg + the
+                    2px accent bar on the leading edge. */}
+                {active ? (
+                  <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />
+                ) : null}
+                <Icon size={16} strokeWidth={2} className="shrink-0" aria-hidden />
+                <span className="truncate">{label}</span>
+                {/* R99-C: the update-pending dot rides the ABOUT row (the
+                    update check lives there; the normal sidebar's Settings
+                    button carries the same dot). */}
+                {id === "about" && <UpdatePendingDot styles={styles} />}
+              </button>
+            </Fragment>
+          );
+        })}
+        {needle !== "" && visibleSections.length === 0 ? (
+          <p data-testid="settings-nav-empty" className="px-2 py-3 text-[12px]" style={{ color: styles.textTertiary }}>
+            No settings match
+          </p>
+        ) : null}
+      </nav>
+    </>
+  );
+}
+
+function MinimizedRail({
+  onExpand,
+  variant = "normal",
+  activeSettingsTab,
+}: {
+  onExpand: () => void;
+  /** R102-C: the rail's settings variant (R66's behavior restored) — on
+   * /settings the rail renders back-to-dashboard + the section icons,
+   * never the projects tiles (minimizing a settings page must not teleport
+   * the owner into the projects world). */
+  variant?: "normal" | "settings";
+  activeSettingsTab?: string;
+}) {
   const styles = useThemeStyles();
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -509,15 +689,18 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
       aria-current={active ? "page" : undefined}
       title={label}
       data-testid={testId}
-      // R100-F: the 48px rail's 36px buttons (≥28px targets); active = the
+      // R100-F: the rail's buttons (≥28px targets); active = the
       // soft-accent selection grammar (the solid accent fill + accent glow
       // is retired); hover = the CSS wash — no JS handlers.
       // R101-C: `group` hosts the button's hover/focus LABEL CHIP (RailLabel),
       // and the ACTIVE button gains the same 2px leading accent bar the
-      // expanded NavButton carries (~line 603) — the rail's selection
-      // grammar now mirrors the full panel's.
+      // expanded NavButton carries — the rail's selection grammar mirrors
+      // the full panel's.
+      // R102-B (owner v0.99.0: the minimized rail "looks a little bit
+      // squished"): 36→40px buttons (w-10 h-10) in the 56px rail — the
+      // geometry change that answers the squish (see the aside's comment).
       className={cn(
-        "group relative w-9 h-9 shrink-0 grid place-items-center rounded-lg transition-colors",
+        "group relative w-10 h-10 shrink-0 grid place-items-center rounded-lg transition-colors",
         active ? "bg-accent-soft text-accent" : "text-muted hover:bg-hover",
       )}
     >
@@ -540,36 +723,72 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
       // The 10-project cap + the +N overflow tile below bound the rail's
       // height, and the aside's overflow-y-clip cuts anything past the
       // panel edge, so the rail keeps its visual integrity on short windows.
-      className="flex-1 min-h-0 flex flex-col items-center gap-1.5 px-1.5 pt-2.5 pb-2.5"
+      // R102-B: px-1.5→px-2 — the 56px rail's 40px buttons get 8px of
+      // breathing room per side (the squish fix's body-side half).
+      className="flex-1 min-h-0 flex flex-col items-center gap-1.5 px-2 pt-2.5 pb-2.5"
       data-testid="sidebar-rail"
     >
       {/* RESTORE — at the rail's very top (the minimize button's mirror).
-          R100-F: 36px rounded-lg on the CSS-var leg (bg-input + the hover
-          wash class — the JS hover pair is retired).
+          R100-F: rounded-lg on the CSS-var leg (bg-input + the hover wash
+          class — the JS hover pair is retired).
           R101-C: carries the rail's hover/focus label chip like every other
-          rail button. */}
+          rail button. R102-B: 40px (the squish fix). */}
       <button
         onClick={onExpand}
         aria-label="Expand sidebar"
         title="Expand sidebar"
         data-testid="sidebar-expand"
-        className="group relative w-9 h-9 shrink-0 grid place-items-center rounded-lg bg-input transition-colors hover:bg-hover"
+        className="group relative w-10 h-10 shrink-0 grid place-items-center rounded-lg bg-input transition-colors hover:bg-hover"
         style={{ color: styles.textTertiary }}
       >
         <PanelLeftOpen size={16} />
         <RailLabel text="Expand sidebar" styles={styles} />
       </button>
 
-      {/* R100-E1 (research §C2 P1(a)): the rail's settings VARIANT is
-          retired with the sidebar's settings mode — the rail renders the
-          normal dashboard/usage/projects body on /settings routes too; the
-          gear (rail-settings) below is the one "Settings" entry. */}
-      {railBtn("Dashboard", <LayoutDashboard size={16} strokeWidth={2} />, pathname === "/", () => navigate("/"), "rail-dashboard")}
-      {railBtn("Usage", <BarChart3 size={16} strokeWidth={2} />, pathname.startsWith("/usage"), () => navigate("/usage"), "rail-usage")}
+      {/* R102-C: the rail's SETTINGS VARIANT (R66's behavior restored) —
+          back-to-dashboard + the section icons, NEVER the projects tiles
+          (minimizing a settings page must not teleport the owner into the
+          projects world — his R66 report: "it shows me the wrong sidebar").
+          Flat, no group headers (the grouped nav is the expanded panel's
+          job); every icon carries the R101-C label chip + the active
+          selection grammar; the About icon carries the update dot. */}
+      {variant === "settings" ? (
+        <>
+          {railBtn(
+            "Back to dashboard",
+            <ArrowLeft size={16} strokeWidth={2} />,
+            false,
+            () => navigate("/"),
+            "rail-back-dashboard",
+          )}
+          <div className="w-9 shrink-0 border-t my-1" style={{ borderColor: styles.sidebarBorder }} />
+          {SETTINGS_SECTIONS.map(({ id, label, icon: Icon }) =>
+            railBtn(
+              label,
+              <Icon size={16} strokeWidth={2} />,
+              activeSettingsTab === id,
+              () => navigate(`/settings?tab=${id}`),
+              `rail-settings-${id}`,
+              id === "about",
+            ),
+          )}
+          {/* Spacer + the collapsed bell — footer parity with the normal
+              rail (notifications stay reachable while browsing settings). */}
+          <div className="flex-1 min-h-2" />
+          <div className="group relative shrink-0">
+            <NotificationBell collapsed />
+            <RailLabel text="Notifications" styles={styles} />
+          </div>
+        </>
+      ) : (
+        <>
+          {railBtn("Dashboard", <LayoutDashboard size={16} strokeWidth={2} />, pathname === "/", () => navigate("/"), "rail-dashboard")}
+          {railBtn("Usage", <BarChart3 size={16} strokeWidth={2} />, pathname.startsWith("/usage"), () => navigate("/usage"), "rail-usage")}
 
-      {/* Hairline divider (the full sidebar's section divider, rail-sized).
-          R100-F: 1.5→1px hairline. */}
-      <div className="w-8 shrink-0 border-t my-1" style={{ borderColor: styles.sidebarBorder }} />
+          {/* Hairline divider (the full sidebar's section divider, rail-sized).
+              R100-F: 1.5→1px hairline. R102-B: w-8→w-9 (the 56px rail's
+              proportion). */}
+          <div className="w-9 shrink-0 border-t my-1" style={{ borderColor: styles.sidebarBorder }} />
 
       {/* PROJECT TILES — click opens the project's chat; the tile is the
           project's own color mark (ProjectTile), so color identity
@@ -583,13 +802,14 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
         {projectsQuery.isPending ? (
           /* R97-I part 2 (owner: a UI "aware of its states"): the projects
              strip holds its SHAPE while the list is in flight — 4 skeleton
-             tiles in the real tile button's exact geometry (R100-F: w-9 h-9,
-             the 48px rail's 36px buttons, rounded-lg), never a blank rail
+             tiles in the real tile button's exact geometry (R102-B:
+             w-10 h-10, the 56px rail's 40px buttons, rounded-lg), never a
+             blank rail
              that reads as "no projects". Decorative on purpose: the rail
              stays quiet; the expanded sidebar owns the one role=status
              announcement. On ERROR the rail renders nothing extra — the full
              sidebar owns the retryable error surface. */
-          <SkeletonRows rows={4} rowClassName="w-9 h-9" gap={1.5} />
+          <SkeletonRows rows={4} rowClassName="w-10 h-10" gap={1.5} />
         ) : (
           projects.slice(0, 10).map((project) => {
             const active = activeProjectId === project.id;
@@ -604,13 +824,14 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
                 aria-label={`Open ${project.name}`}
                 title={project.name}
                 aria-current={active ? "page" : undefined}
-                // R100-F: 36px rounded-lg; the active tint follows the
+                // R100-F: rounded-lg; the active tint follows the
                 // project's own color (dynamic — the JS leg); hover = the
                 // CSS wash (no JS handlers); the border drops 1.5→1px.
+                // R102-B: 36→40px (the 56px rail's squish fix).
                 // R101-C: `group` hosts the FULL-NAME label chip — the
                 // project's identity survives minimization with an actual
                 // styled affordance, not just a native title tooltip.
-                className="group relative w-9 h-9 shrink-0 grid place-items-center rounded-lg transition-colors hover:bg-hover"
+                className="group relative w-10 h-10 shrink-0 grid place-items-center rounded-lg transition-colors hover:bg-hover"
                 style={{
                   background: active ? withAlpha(project.color, 0.14) : undefined,
                   border: active ? `1px solid ${withAlpha(project.color, 0.4)}` : "1px solid transparent",
@@ -641,7 +862,7 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
             aria-label={`${projects.length - 10} more projects — expand to see all`}
             title={`${projects.length - 10} more projects — expand to see all`}
             data-testid="rail-projects-overflow"
-            className="group relative w-9 h-9 shrink-0 grid place-items-center rounded-lg text-[11px] font-medium tabular-nums text-muted transition-colors hover:bg-hover"
+            className="group relative w-10 h-10 shrink-0 grid place-items-center rounded-lg text-[11px] font-medium tabular-nums text-muted transition-colors hover:bg-hover"
           >
             +{projects.length - 10}
             <RailLabel
@@ -657,8 +878,8 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
       <div className="flex-1 min-h-2" />
 
       {/* FOOTER — collapsed bell + settings gear (the rail's one "Settings"
-          entry — R100-E1: it navigates to /settings, where the page's own
-          nav column takes over).
+          entry — R102-C: it navigates to /settings, where the rail's
+          SETTINGS VARIANT above takes over).
           R101-C: the bell keeps its own button (badge + popover); the group
           WRAPPER hosts its label chip — the chip's group-focus-within leg
           covers the bell's keyboard focus through the wrapper. */}
@@ -667,6 +888,8 @@ function MinimizedRail({ onExpand }: { onExpand: () => void }) {
         <RailLabel text="Notifications" styles={styles} />
       </div>
       {railBtn("Settings", <Settings size={16} strokeWidth={2} />, settingsActive, () => navigate("/settings"), "rail-settings", true)}
+        </>
+      )}
     </div>
   );
 }

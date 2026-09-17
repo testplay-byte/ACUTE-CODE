@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
 import {
@@ -19,15 +19,21 @@ import {
   type RetrySettings,
   type ThinkingLoopSettings,
 } from "../lib/api";
-import { Bot, Brain, Check, Globe, Info, Minus, Monitor, Moon, Palette, Plus, PlugZap, RefreshCw, RotateCcw, ScanEye, Server, SlidersHorizontal, Sparkles, Sun, Timer, Trash2, Users } from "lucide-react";
+// R102-C: the section list + search keywords moved to the ONE shared module
+// (settings-sections.ts) — the app sidebar's restored SETTINGS MODE renders
+// from the same list, so the id-sync discipline is enforced by construction.
+// The icon imports the page itself still needs (cards, not nav): BarChart3
+// (the Data-insights cross-link card), SlidersHorizontal (the Debug card),
+// Info (the browser-engine line), plus the interactive-set below.
+import { BarChart3, Brain, Check, Globe, Info, Minus, Moon, Plus, RefreshCw, RotateCcw, SlidersHorizontal, Sun, Timer, Trash2 } from "lucide-react";
 // R98-J: the desktop-notifications card's BellRing icon (the bridge card
 // lives in AdvancedTab beside DebugModeCard).
 import { BellRing } from "lucide-react";
-// R98-I2: the Data & Statistics tab renders the shared usage panel.
-import { BarChart3 } from "lucide-react";
-// R98-E1: the Prompts tab's FileText icon (the prompt-modules sibling of
-// SkillsTab's Sparkles).
-import { FileText } from "lucide-react";
+// R102-C: the ONE section list (see settings-sections.ts for the history).
+import {
+  SETTINGS_SECTIONS,
+  type SettingsSectionId,
+} from "../components/settings/settings-sections";
 import { DataStatsPanel } from "../components/usage/DataStatsPanel";
 // R98-J: the LIVE in-memory push of the switch to the notification bridge
 // (the bridge caches the flag so a flip applies to the very next record).
@@ -77,92 +83,13 @@ import { cn } from "../lib/utils";
 
 // R98-I1 (owner: "add a dedicated section for functionality… separate the
 // different side options into different categories, like basic agent
-// capabilities, data and statistics"): the GROUPED settings map. Every
-// entry carries a `group` (the five owner-named categories, in nav order:
-// Workspace → Agents & Skills → Integrations → Data & Statistics → System)
-// and the list is CLUSTERED by group — appearance | agents + subagents +
-// skills + prompts | api + mcp + computeruse + vision + browser | data |
-// advanced + about — so the sidebar's settings nav (the actual navigation,
-// R34) can render one header between clusters. The ids (and each cluster's
-// internal order) are UNTOUCHED — every ?tab=<id> deep link keeps working
-// (the URL contract is load-bearing, the R44 lesson). The Sidebar's
-// SETTINGS_SECTIONS mirrors this grouping EXACTLY (same names, same
-// clusters — the id-sync discipline extended to the group field).
-type SettingsGroup = "Workspace" | "Agents & Skills" | "Integrations" | "Data & Statistics" | "System";
-
-const TABS = [
-  { id: "appearance", label: "Appearance", icon: Palette, group: "Workspace" },
-  { id: "agents", label: "Agents", icon: Bot, group: "Agents & Skills" },
-  // ROUND-43 (R43-5, owner directive): the temporary sub-agent section —
-  // dedicated API-key paste slots + model override. Deep-link ?tab=subagents.
-  { id: "subagents", label: "Sub-agents", icon: Users, group: "Agents & Skills" },
-  // ROUND-61 (R61, owner directive): the extensibility surface — skills,
-  // MCP servers, and computer use (with its separate vision model).
-  { id: "skills", label: "Skills", icon: Sparkles, group: "Agents & Skills" },
-  // ROUND-98 (R98-E1/E3, owner directive): the prompt-customization section —
-  // per-project system-prompt overrides + revert + drop + the live composed
-  // preview. Sits beside Skills (the prompt-modules family). Deep-link
-  // ?tab=prompts.
-  { id: "prompts", label: "Prompts", icon: FileText, group: "Agents & Skills" },
-  { id: "api", label: "Models & Providers", icon: Server, group: "Integrations" },
-  { id: "mcp", label: "MCP Servers", icon: PlugZap, group: "Integrations" },
-  { id: "computeruse", label: "Computer Use", icon: Monitor, group: "Integrations" },
-  // ROUND-66 (R66, owner directive): the dedicated image-analysis section —
-  // the vision model's OWN home (provider + model + API key), split out of
-  // Computer Use so it also serves the general analyze_image tool.
-  { id: "vision", label: "Image Analysis", icon: ScanEye, group: "Integrations" },
-  // ROUND-97 (R97-G, owner directive): the dedicated BROWSER section — the
-  // address-bar search engine, the homepage, the default zoom, and the
-  // editable quick links. Same id discipline (deep-link ?tab=browser).
-  { id: "browser", label: "Browser", icon: Globe, group: "Integrations" },
-  // ROUND-98 (R98-I2, owner directive): the Data & Statistics section —
-  // total tokens, peak day, the heatmap, the model-mix charts, agent
-  // health, and clear-all-data (the same DataStatsPanel the /usage screen
-  // hosts). Same id discipline (deep-link ?tab=data). R98-I1: its OWN
-  // category in the grouped nav (the owner's "data and statistics").
-  { id: "data", label: "Data & Statistics", icon: BarChart3, group: "Data & Statistics" },
-  // ROUND-78 (R78-C, owner: "General Settings 重试配置"): the tab was
-  // LABELED "General" then. R98-I1 (owner: "add a dedicated section for
-  // functionality…"): the LABEL is "Functionality" now — the owner's word
-  // for the category the engine switches live in. The id/deep-link STAYS
-  // "advanced" (every existing ?tab=advanced link + doc keeps working;
-  // the URL contract is load-bearing — changing it would break deep links).
-  { id: "advanced", label: "Functionality", icon: SlidersHorizontal, group: "System" },
-  // ROUND-87 (R87, owner directive): the dedicated ABOUT section — the app
-  // version, the update check (GitHub releases), and the application-wide
-  // reset. Deep-link ?tab=about.
-  { id: "about", label: "About", icon: Info, group: "System" },
-] as const satisfies ReadonlyArray<{
-  id: string;
-  label: string;
-  icon: unknown;
-  group: SettingsGroup;
-}>;
-
-type TabId = (typeof TABS)[number]["id"];
-
-// R100-E1 (research §C2 P1(a) — the VS Code settings-search pattern): the
-// per-tab keyword list backing the settings nav's SEARCH BOX. Honest scope:
-// the query filters the TAB LIST by matching the tab label + these keywords
-// (each list extracted from that tab's real setting labels — "api key",
-// "provider", "zoom"…), case-insensitive substring. It NEVER touches the
-// tab state machine — the URL ?tab= stays the one truth (deep links keep
-// working; a hidden active tab keeps rendering until the user picks another).
-const SEARCH_KEYWORDS: Record<TabId, readonly string[]> = {
-  appearance: ["theme", "light", "dark", "mode", "density", "text size", "timestamps", "tool activity"],
-  agents: ["agent", "create agent", "instructions", "template", "tools"],
-  subagents: ["sub-agent", "api key", "model", "parallelism", "supervision"],
-  skills: ["skill", "prompt module", "new skill", "skill body"],
-  prompts: ["system prompt", "prompt section", "override", "preview", "project"],
-  api: ["api key", "provider", "model", "openrouter", "anthropic", "openai", "google", "preset", "catalog", "context window", "price"],
-  mcp: ["mcp", "server", "stdio", "command", "tool server"],
-  computeruse: ["computer use", "desktop control", "master switch", "posture", "safety"],
-  vision: ["vision", "image analysis", "model", "api key", "provider"],
-  browser: ["search engine", "homepage", "home page", "zoom", "link opening", "quick links"],
-  data: ["data", "statistics", "tokens", "heatmap", "model mix", "agent health", "clear data", "usage"],
-  advanced: ["retry", "rate limit", "timeout", "network", "thinking loop", "debug", "analyst", "memory", "desktop notifications", "schedule"],
-  about: ["version", "update", "reset", "engine", "releases"],
-};
+// capabilities, data and statistics"): the GROUPED settings map — every
+// entry carries a `group` (the five owner-named categories).
+// R102-C: the TABS list + SEARCH_KEYWORDS map MOVED — their ONE home is
+// ../components/settings/settings-sections.ts (the app sidebar's restored
+// SETTINGS MODE renders from the same list; the id-sync discipline is now
+// enforced by construction instead of by mirror-comment). The per-entry
+// history comments moved with them.
 
 /**
  * Settings (owner round-8): the ONE place for configuration — appearance
@@ -170,37 +97,26 @@ const SEARCH_KEYWORDS: Record<TabId, readonly string[]> = {
  * (moved out of the sidebar), API keys per provider with a live connection
  * test, and the advanced data-source panel. Deep-linkable via ?tab=.
  *
- * R100-E1 (research §C2 P1(a), the VS Code pattern): the page owns its own
- * LEFT NAV COLUMN (200px, 30px rows, 12px/400 labels, active = accent bar +
- * soft bg + 500) with a SEARCH BOX that filters the tab list by label + the
- * SEARCH_KEYWORDS index — the app sidebar keeps only its "Settings" entry
- * now (Sidebar.tsx lost its settings-mode section list this round). The tab
- * state machine is UNTOUCHED: nav clicks write the same ?tab= param the
- * deep links have always used. Below lg the column collapses to a
- * horizontal scrollable tab strip (group kickers hidden — no room).
+ * R102-C (owner v0.99.0: "the left sidebar does not change and the settings
+ * sidebar shows on the right side of the left sidebar … handle it just like
+ * how it was handled previously"): the R100-E1 settings-local nav column is
+ * RETIRED — the doubled sidebar is gone. The APP SIDEBAR becomes the
+ * settings nav on /settings (Sidebar.tsx's restored settings mode: back
+ * pill + search + the grouped section list + the About update dot), and
+ * THIS page is the content pane alone. The tab state machine is UNTOUCHED:
+ * the sidebar's nav clicks write the same ?tab= param the deep links have
+ * always used; below md the mobile drawer carries the same settings nav.
  */
 export function SettingsPage() {
-  const [params, setSearchParams] = useSearchParams();
+  const [params] = useSearchParams();
   const tabParam = params.get("tab");
-  const tab: TabId = (TABS.find((t) => t.id === tabParam)?.id ?? "appearance") as TabId;
-
-  // R100-E1: the nav's search state — filters the TAB LIST only (never the
-  // mounted tab; the URL param stays the single source of truth).
-  const [query, setQuery] = useState("");
-  const needle = query.trim().toLowerCase();
-  const visibleTabs =
-    needle === ""
-      ? TABS
-      : TABS.filter(
-          (t) =>
-            t.label.toLowerCase().includes(needle) ||
-            SEARCH_KEYWORDS[t.id].some((k) => k.toLowerCase().includes(needle)),
-        );
+  const tab: SettingsSectionId = (
+    SETTINGS_SECTIONS.find((t) => t.id === tabParam)?.id ?? "appearance"
+  ) as SettingsSectionId;
 
   // ROUND-34: the in-page tab bar is GONE — the sidebar is the settings nav
   // (owner design frame 1a). The page header adapts per section.
-  // R100-E1: superseded — the settings-local nav column below IS the nav now.
-  const activeMeta = TABS.find((t) => t.id === tab) ?? TABS[0];
+  const activeMeta = SETTINGS_SECTIONS.find((t) => t.id === tab) ?? SETTINGS_SECTIONS[0];
 
   return (
     <div className="flex h-full flex-col">
@@ -216,102 +132,11 @@ export function SettingsPage() {
         <h1 className="text-[24px] font-semibold tracking-tight text-ink">{activeMeta.label}</h1>
       </div>
 
-      {/* R100-E1: the settings-local nav column (left, 200px) + the content
-          pane. Below lg the column becomes a horizontal scrollable strip
-          under the header — same tab state, same buttons.
-          R101-C (owner v0.98.0: the column's look "was not a good
-          experience"): the column's own full-height hairlines (border-b
-          below lg / border-r at lg) are RETIRED — the PANE below is the
-          separation now. */}
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <aside
-          data-testid="settings-nav-column"
-          className="shrink-0 px-4 pt-3 pb-3 md:px-6 lg:flex lg:w-50 lg:flex-col lg:px-3 lg:py-4"
-        >
-          {/* R101-C: the PANE treatment — the search + the nav list wrap in
-              a rounded-xl bordered card (the SectionCard grammar's
-              inside-panel tier: 12px radius, the 1px border-line hairline,
-              bg-card — TOKENS §4/§5; lg:overflow-hidden keeps the lg scroll
-              inside the rounded corners). The search docks at the pane's top
-              under a border-b hairline; the nav list sits below at the
-              comfortable p-2 inset. The SAME pane composes below lg (the
-              horizontal strip inside the card — no unfinished bare strip).
-              IA is UNTOUCHED: same tabs, same search, same ?tab= machine. */}
-          <div
-            data-testid="settings-nav-pane"
-            className="flex min-h-0 flex-1 flex-col rounded-xl border border-line bg-card lg:overflow-hidden"
-          >
-            {/* The nav's search box (R100-E1): 12px text, 28px height,
-                rounded-lg, border-line; focus = the GLOBAL :focus-visible rule
-                index.css already ships (R100-D) — deliberately no local
-                focus: classes here. R101-C: docked at the pane's top. */}
-            <div className="shrink-0 border-b border-line p-2">
-              <input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search settings"
-                aria-label="Search settings"
-                data-testid="settings-nav-search"
-                className="h-7 w-full rounded-lg border border-line bg-input px-2.5 text-[12px] text-ink placeholder:text-muted"
-              />
-            </div>
-            <nav
-              aria-label="Settings navigation"
-              data-testid="settings-nav"
-              className="flex min-h-0 flex-1 flex-col"
-            >
-              {/* The list: a horizontal scroll strip below lg (group kickers
-                  hidden — a strip has no room for headers), the 200px column's
-                  clustered list at lg. R101-C: the p-2 inset is the pane's
-                  comfortable padding. */}
-              <div className="flex gap-1 overflow-x-auto p-2 lg:flex-1 lg:flex-col lg:gap-0.5 lg:overflow-y-auto">
-                {visibleTabs.map((t, index) => {
-                  const { id, label, icon: Icon, group } = t;
-                  const active = id === tab;
-                  const groupHeader =
-                    index === 0 || group !== visibleTabs[index - 1].group ? group : undefined;
-                  return (
-                    <Fragment key={id}>
-                      {groupHeader !== undefined && (
-                        <Kicker
-                          testId={`settings-group-${groupHeader}`}
-                          className="px-2 pb-1 pt-3 max-lg:hidden lg:first:pt-0"
-                        >
-                          {groupHeader}
-                        </Kicker>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => setSearchParams({ tab: id })}
-                        aria-current={active ? "page" : undefined}
-                        data-testid={`settings-nav-${id}`}
-                        className={cn(
-                          "relative flex min-h-[30px] shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-2 text-[12px] font-normal text-muted transition-colors hover:bg-hover",
-                          active && "bg-accent-soft font-medium text-accent",
-                        )}
-                      >
-                        {/* Selection grammar (TOKENS §6): accent text + soft bg
-                            + the 2px accent bar on the leading edge. */}
-                        {active ? (
-                          <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />
-                        ) : null}
-                        <Icon size={14} className="shrink-0" aria-hidden />
-                        <span className="truncate">{label}</span>
-                      </button>
-                    </Fragment>
-                  );
-                })}
-              </div>
-              {needle !== "" && visibleTabs.length === 0 ? (
-                <p data-testid="settings-nav-empty" className="px-2 py-3 text-[12px] text-muted">
-                  No settings match
-                </p>
-              ) : null}
-            </nav>
-          </div>
-        </aside>
-
+      {/* R102-C: the settings-local nav column is DELETED — the app sidebar
+          (left) is the settings nav on /settings; this page is the content
+          pane alone, full width. The ?tab= machine + every deep link keep
+          working unchanged. */}
+      <div className="flex min-h-0 flex-1 flex-col">
         {/* ROUND-34: wider content (the master-detail provider screen needs the
             room); the appearance page constrains itself internally.
             ROUND-50 (R50-d): for Models & Providers the content area LOCKS to
@@ -332,8 +157,8 @@ export function SettingsPage() {
               used to live HERE is GONE — the owner: "on any of the pages there
               is no need to show the Back to Dashboard page button. The only
               place where the option needs to be shown is in the left sidebar."
-              The app sidebar's Dashboard nav row is the ONE back affordance
-              now (R100-E1: the sidebar renders the normal nav on /settings). */}
+              R102-C: the sidebar's restored SETTINGS MODE carries that back
+              affordance at its very top (the R95-A labeled pill). */}
           {tab === "appearance" && <AppearanceTab />}
           {tab === "agents" && <AgentsScreen embedded />}
           {tab === "api" && (

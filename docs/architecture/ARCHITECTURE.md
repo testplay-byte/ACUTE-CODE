@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-12 round-102 -->
 # ACUTE-CODE — System Architecture
 
 | | |
@@ -76,7 +76,7 @@ The shell is the parent and sole spawner of the sidecar. The pattern is Goose's 
 | Step | Actor | Action | Budget |
 |---|---|---|---|
 | 1 | shell | App launch; Tauri single-instance guard acquires lock (second launch focuses the first window) | — |
-| 2 | shell | Credentials: read provider API keys from Windows Credential Manager (DPAPI) via direct CredReadW/CredWriteW in `src-tauri/src/wincred.rs` (R55 — replaced the keyring crate, whose `{user}.{service}` TargetName never matched the launcher's cmdkey targets) | <100 ms |
+| 2 | shell | Credentials: read provider API keys — Windows: Credential Manager (DPAPI) via direct CredReadW/CredWriteW in `src-tauri/src/wincred.rs` (R55 — replaced the keyring crate, whose `{user}.{service}` TargetName never matched the launcher's cmdkey targets); Linux (R100/R102): the freedesktop Secret Service first, else the disclosed 0600 key file `~/.acute/provider-keys.json` (ADR-0031 + its round-102 addendum) — every read bounded at 20s on its own thread (R102-A) | <100 ms |
 | 3 | shell | Mint a 256-bit random bearer token (`getrandom`); hold in memory only | <1 ms |
 | 4 | shell | Spawn sidecar child (`CREATE_NO_WINDOW`): `agent-core.exe/node … --host 127.0.0.1 --port 0`, token + provider keys via **environment variables** | <200 ms |
 | 5 | sidecar | Bind an **ephemeral port itself** (`:0`) — no race — open SQLite, run pending migrations, emit one stdout ready line: `{"event":"listening","port":43127}`; **R98-K**: also write the user-local discovery file `<dbDir>/acute-portal.json` `{port, token, pid, startedAt}` (mode 0600) so the CLI harness can find the running app without env plumbing (removed on graceful shutdown; see CLI-HARNESS.md) | 0.3–1 s |
@@ -371,7 +371,7 @@ agent-core in-memory vault  ──▶ used only by providers/ at request time
 
 - The sidecar **never** writes keys to disk, never logs them (redaction middleware strips `Authorization`/`x-api-key`/key-shaped strings from every log line and error), and never echoes them into transcripts, tool args, or API responses (SPEC §5).
 - SQLite stores only `provider_id` + credential **names** ("openai/main"), never values.
-- Adding/rotating a key in Settings: UI → Tauri command `store_provider_key` (Rust writes Credential Manager) → shell pushes the new key to the running sidecar via authed internal endpoint → vault updates without restart. Revocation mirrors this.
+- Adding/rotating a key in Settings: UI → Tauri command `store_provider_key` (Rust writes Credential Manager on Windows; on Linux the Secret Service, with the disclosed `~/.acute/provider-keys.json` fallback when no keyring is reachable — R102-A, the command is async and returns a KeyStoreReport the UI discloses) → shell pushes the new key to the running sidecar via authed internal endpoint → vault updates without restart. Revocation mirrors this.
 - Diagnostics/logs may contain ports, session ids, error codes — never tokens or keys.
 
 ### 7.4 Transport & process boundaries

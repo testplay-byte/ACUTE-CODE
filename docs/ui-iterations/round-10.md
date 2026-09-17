@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # Round 10 — Agentic coding system for real: folder picker, full tool set, demo-parity chat UI, live P1 proof (2026-08-23)
 
 **Owner direction:** launcher works on his PC ✅. Next: make this a genuinely

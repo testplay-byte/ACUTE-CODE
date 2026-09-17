@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-15 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # Window controls — the app-frame spec
 
 Owner direction (round-98): "One thing which I do like about our design

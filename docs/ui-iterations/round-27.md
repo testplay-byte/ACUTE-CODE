@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # Round 27 — Web tools + critical deps-wiring fix + demo project
 
 **Date:** 2026-08-24

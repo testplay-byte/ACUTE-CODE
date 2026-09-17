@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-15 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # Wizard DNA — the owner-approved aesthetic, extracted
 
 Owner direction (round-98): "our setup page is quite good. It is proper and

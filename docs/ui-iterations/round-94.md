@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # Round 94 — the field-report round (v0.91.0 → v0.92.0)
 
 <!-- round: 94 -->

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # deepseek-harness — Loop-Hygiene & Plugin-Architecture Reference for ACUTE-CODE
 
 **Why this analysis exists (owner direction, 2026-08-30, R51):** the owner

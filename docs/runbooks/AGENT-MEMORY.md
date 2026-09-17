@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-101 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -1188,3 +1188,37 @@ the arch `arm64`, the AppImage/Rust triple names it `aarch64` — the same
 release carries `_arm64.deb` + `_aarch64.AppImage`, and any pipeline that
 expects one spelling for both formats fails loudly (which is the design:
 the verify step caught it before publication).
+
+#103 (2026-09-17, round 102 — the Linux key store made real): (a) A FALLBACK
+NOBODY CAN USE IS NOT HONESTY. ADR-0031's round-100 "honest fallback" for
+Linux machines without a Secret Service (error + point at the
+ACUTE_PROVIDER_<ID> env vars) was honest about the limit and useless to a
+desktop-app owner — his report was "nothing was happening at all." The fix
+stored the key SOMEWHERE (a disclosed 0600 key file, amber UI note, path +
+migration instructions) instead of refusing. When a SPEC hard rule collides
+with the product's core promise on some machine class, the answer is a
+DOCUMENTED, DISCLOSED exception that preserves the rule's intent — never a
+dead end, and never a silent bend. (b) "CANNOT COMPILE THE PLATFORM"
+usually means "cannot compile the FULL APP," which is not the same claim:
+the risky new Linux code needed only keyring + libdbus + a stub keys
+module, so a throwaway #[path]-include crate compiled the REAL wincred.rs
+natively on the sandbox (which IS Linux), with the libdbus dev files
+relocated into a user-local pkg-config prefix (no sudo). That harness
+CAUGHT the PlatformFailure-vs-NoStorageAccess classification defect that
+reading the docs never would have — keyring's sync-secret-service maps
+"cannot connect to the bus" to PlatformFailure, so code keyed on
+NoStorageAccess alone errors on every keyless read. Prefer a scoped
+harness over no verification; the R100 write-off was too hasty. (c) SYNC
+TAURI COMMANDS RUN ON THE MAIN THREAD: any command touching an OS API with
+unbounded latency (D-Bus, keyrings, shells) must be `async` AND wrap the
+call in a bounded worker thread (the 20s mpsc deadline pattern in
+wincred::imp::bounded). The owner's frozen-app report was not a keyring
+bug — it was our command shape. (d) THE OWNER'S "handle it just like how
+it was handled previously" IS A SPEC: R100-E1 retired the ROUND-34
+settings sidebar to satisfy a research pattern (VS Code's settings-local
+nav), and the owner rejected the doubled-sidebar result outright. Research
+patterns inform; the owner's lived preference decides. Restorations are
+cheap when the history is in git — `git show <old-round>:<file>` is the
+reference implementation. Also: one shared module (settings-sections.ts)
+beats two synced lists — the R44 id-sync discipline now holds by
+construction.

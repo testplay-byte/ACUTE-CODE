@@ -1,6 +1,18 @@
 //! Provider API-key storage (ARCHITECTURE §7, SPEC hard rule: secrets live
 //! only in Windows Credential Manager / DPAPI).
 //!
+//! ROUND-102 (R102-A, the owner's v0.99.0 report: "The API keys were not
+//! being properly saved at all in the Linux version. I tried saving them
+//! but apparently nothing was happening at all.") — EVERY shell command
+//! in this file is `async` now. The pre-R102 sync commands ran on the
+//! MAIN thread (Tauri's documented behavior for non-async commands), so a
+//! Secret Service D-Bus call that blocked on Linux froze the window and
+//! the invoke never resolved. Async commands run on the runtime; the
+//! wincred layer additionally bounds every keyring call at 20s on its own
+//! thread and falls back to the disclosed key file (ADR-0031 addendum).
+//! The save commands also RETURN a `KeyStoreReport` (store + note) so the
+//! Settings UI can tell the owner exactly where each key landed.
+//!
 //! ROUND-55 (R55) — ONE namespace, shared with the launcher. Targets are the
 //! launcher's canonical, cmdkey-seeded `ACUTE-CODE/provider/<providerId>`
 //! (user `api-key`) — read at every sidecar spawn AND written by the Settings
@@ -194,6 +206,14 @@ fn dirs_or_home() -> std::path::PathBuf {
     }
 }
 
+/// ROUND-102 (R102-A): the app's state dir `~/.acute` (Windows:
+/// `%USERPROFILE%\.acute`) — the note files' home and, on Linux, the
+/// disclosed key file's home (ADR-0031 addendum, wincred.rs). Resolved at
+/// CALL time (the key-file tests swap HOME for isolation).
+pub(crate) fn dot_acute_dir() -> std::path::PathBuf {
+    dirs_or_home().join(".acute")
+}
+
 /// Provider ids with a stored vision key (deduped, slug-validated).
 pub(crate) fn vision_provider_ids() -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(vision_provider_note_path()) else {
@@ -253,14 +273,20 @@ fn vision_env_name(slug: &str) -> String {
 /// injection → push into the RUNNING sidecar's in-memory vault via the
 /// internal handoff route (providerId "<id>-vision") so a connection test
 /// works without a respawn. The value never appears in any log.
+/// R102-A: async (off the main thread) + the KeyStoreReport payload — the
+/// Linux key-file fallback discloses itself through the same report.
 #[tauri::command]
-pub fn store_vision_key(app: AppHandle, provider_id: String, key: String) -> Result<(), String> {
+pub async fn store_vision_key(
+    app: AppHandle,
+    provider_id: String,
+    key: String,
+) -> Result<KeyStoreReport, String> {
     validate_provider_id(&provider_id)?;
     if key.trim().is_empty() {
         return Err("key must not be empty".into());
     }
     let slug = vision_slug(&provider_id);
-    crate::wincred::write(&canonical_target(&slug), TARGET_USER, &key)
+    let outcome = crate::wincred::write(&canonical_target(&slug), TARGET_USER, &key)
         .map_err(|e| format!("storing vision credential: {e}"))?;
 
     note_vision_provider(&provider_id);
@@ -287,12 +313,14 @@ pub fn store_vision_key(app: AppHandle, provider_id: String, key: String) -> Res
             ));
         }
     }
-    Ok(())
+    Ok(KeyStoreReport::from(outcome))
 }
 
 /// ROUND-61: does the vision key exist for this provider (Settings badge)?
+/// R102-A: async — the read consults the (bounded) Secret Service and the
+/// key file off the main thread.
 #[tauri::command]
-pub fn vision_key_status(provider_id: String) -> Result<bool, String> {
+pub async fn vision_key_status(provider_id: String) -> Result<bool, String> {
     validate_provider_id(&provider_id)?;
     let slug = vision_slug(&provider_id);
     Ok(read_provider_key_lossy(&slug).is_some())
@@ -612,20 +640,50 @@ pub(crate) fn read_provider_key_lossy(provider_id: &str) -> Option<String> {
     }
 }
 
+/// ROUND-102 (R102-A): the save commands' SUCCESS payload — WHERE the key
+/// landed + the optional disclosure note. The webview renders the note
+/// (amber) whenever `store` is `"key-file"` (the Linux fallback, ADR-0031
+/// addendum); `"credential-manager"` (Windows) and `"secret-service"`
+/// (Linux with a working keyring) carry no note. Never key material.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KeyStoreReport {
+    /// wincred::KeyStore::as_str() — the wire spelling above.
+    pub store: String,
+    /// The disclosure note for key-file saves; `None` for secure stores.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl From<crate::wincred::WriteOutcome> for KeyStoreReport {
+    fn from(outcome: crate::wincred::WriteOutcome) -> Self {
+        KeyStoreReport {
+            store: outcome.store.as_str().to_string(),
+            note: outcome.note,
+        }
+    }
+}
+
 /// Stores/rotates the provider API key at the canonical target, then
 /// best-effort retires the legacy-form entry (one namespace from now on) and
 /// pushes the key into the running sidecar's in-memory vault via the
 /// internal handoff route (API.md §2.3) so a connection test works without a
 /// respawn.
 #[tauri::command]
-pub fn store_provider_key(app: AppHandle, provider_id: String, key: String) -> Result<(), String> {
+pub async fn store_provider_key(
+    app: AppHandle,
+    provider_id: String,
+    key: String,
+) -> Result<KeyStoreReport, String> {
     validate_provider_id(&provider_id)?;
     if key.trim().is_empty() {
         return Err("key must not be empty".into());
     }
 
     // Deliberately NOT logged; the error carries no key material.
-    crate::wincred::write(&canonical_target(&provider_id), TARGET_USER, &key)
+    // R102-A: the write is BOUNDED (wincred's 20s thread) and, on Linux,
+    // falls back to the disclosed key file — this command resolving at
+    // all is the fix for the owner's "nothing was happening at all".
+    let outcome = crate::wincred::write(&canonical_target(&provider_id), TARGET_USER, &key)
         .map_err(|e| format!("storing credential: {e}"))?;
     // Best-effort retirement of the pre-R55 form — the canonical write is
     // already durable, so a failure here changes nothing for the user.
@@ -661,14 +719,15 @@ pub fn store_provider_key(app: AppHandle, provider_id: String, key: String) -> R
             eprintln!("[keys] sidecar vault handoff skipped: {e}");
         }
     }
-    Ok(())
+    Ok(KeyStoreReport::from(outcome))
 }
 
 /// True when a non-empty credential exists for the provider (no value leaves
 /// the credential store). Unknown provider id → validation error, same as
-/// store.
+/// store. R102-A: async — the read (bounded Secret Service + key file)
+/// never touches the main thread.
 #[tauri::command]
-pub fn provider_key_status(provider_id: String) -> Result<bool, String> {
+pub async fn provider_key_status(provider_id: String) -> Result<bool, String> {
     validate_provider_id(&provider_id)?;
     let key = read_provider_key(&provider_id)?;
     Ok(key.as_deref().map(|k| !k.is_empty()).unwrap_or(false))
@@ -687,7 +746,7 @@ pub fn provider_key_status(provider_id: String) -> Result<bool, String> {
 /// independent keys and keep their credentials + note lines; the frontend
 /// removes the slots it wants gone via remove_provider_key_slot.
 #[tauri::command]
-pub fn remove_provider_key(provider_id: String) -> Result<(), String> {
+pub async fn remove_provider_key(provider_id: String) -> Result<(), String> {
     validate_provider_id(&provider_id)?;
     let _ = crate::wincred::delete(&canonical_target(&provider_id));
     let _ = crate::wincred::delete(&legacy_target(&provider_id));
@@ -710,12 +769,12 @@ pub fn remove_provider_key(provider_id: String) -> Result<(), String> {
 /// handoff store_provider_key performs — now carrying the slot. Slot 0 is
 /// not a pool slot: the primary key stays store_provider_key's job.
 #[tauri::command]
-pub fn store_provider_key_slot(
+pub async fn store_provider_key_slot(
     app: AppHandle,
     provider_id: String,
     slot: u32,
     key: String,
-) -> Result<(), String> {
+) -> Result<KeyStoreReport, String> {
     validate_provider_id(&provider_id)?;
     validate_pool_slot(slot)?;
     if key.trim().is_empty() {
@@ -723,7 +782,8 @@ pub fn store_provider_key_slot(
     }
 
     // Deliberately NOT logged; the error carries no key material.
-    crate::wincred::write(
+    // R102-A: bounded + reported, same as the primary store command.
+    let outcome = crate::wincred::write(
         &pool_slot_credential_target(&provider_id, slot),
         TARGET_USER,
         &key,
@@ -772,7 +832,7 @@ pub fn store_provider_key_slot(
             eprintln!("[keys] sidecar vault handoff skipped: {e}");
         }
     }
-    Ok(())
+    Ok(KeyStoreReport::from(outcome))
 }
 
 /// ROUND-92 (R92-D): remove ONE pool-slot key — its credential (canonical
@@ -780,8 +840,10 @@ pub fn store_provider_key_slot(
 /// best-effort shape; no sidecar handoff (the caller's REST route clears
 /// the sidecar's in-memory pool slot it knows about, and a respawn reads
 /// only what still exists in Credential Manager anyway).
+/// R102-A: async — the deletes clear BOTH Linux stores (Secret Service +
+/// the key file) off the main thread.
 #[tauri::command]
-pub fn remove_provider_key_slot(provider_id: String, slot: u32) -> Result<(), String> {
+pub async fn remove_provider_key_slot(provider_id: String, slot: u32) -> Result<(), String> {
     validate_provider_id(&provider_id)?;
     validate_pool_slot(slot)?;
     let slug = pool_slot_slug(&provider_id, slot);
@@ -808,8 +870,10 @@ pub fn remove_provider_key_slot(provider_id: String, slot: u32) -> Result<(), St
 /// chance to know which custom targets to erase. Returns the number of
 /// credential entries actually deleted (misses are fine — a dev machine has
 /// none). Never logged, never echoes values.
+/// R102-A: async — the enumerate+delete sweep (each delete bounded, both
+/// Linux stores) runs off the main thread.
 #[tauri::command]
-pub fn purge_provider_keys() -> Result<u32, String> {
+pub async fn purge_provider_keys() -> Result<u32, String> {
     let mut ids: Vec<String> = BUILTIN_PROVIDER_IDS
         .iter()
         .map(|id| id.to_string())

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # Goose (Block / AAIF) — Research Summary
 
 **Target:** https://github.com/block/goose (repo now presented as `aaif-goose/goose` — project governance moved to the Agentic AI Foundation under the Linux Foundation; the `block/goose` URL still resolves)

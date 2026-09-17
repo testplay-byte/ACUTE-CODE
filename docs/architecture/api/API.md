@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-12 round-102 -->
 # ACUTE-CODE — Sidecar API Contracts (REST + WebSocket)
 
 | | |
@@ -501,7 +501,7 @@ Response `201` → provider object. Errors: `400 VALIDATION` (malformed URL, res
 
 ### 8.3 `POST /providers/{id}/keys` — add/replace a key (via shell)
 
-The UI calls the Tauri command `store_provider_key(providerId, keyName, value)`; the shell persists to Windows Credential Manager and pushes to the sidecar via §2.3. The sidecar also exposes the REST route for completeness:
+The UI calls the Tauri command `store_provider_key(providerId, key)`; the shell persists to Windows Credential Manager (or, on Linux, the Secret Service with the disclosed `~/.acute/provider-keys.json` fallback — R102-A; the command is async, every keyring call bounded at 20s, and the success payload is a `KeyStoreReport {store, note?}` the UI renders — amber for key-file saves) and pushes to the sidecar via §2.3. The sidecar also exposes the REST route for completeness:
 
 Request: `{"keyName": "main"}` (value arrives via the internal handoff; never accepted on this route). Response `202` `{"status": "pending_shell_handoff"}`. Errors: `401` · `404` · `400 VALIDATION`.
 

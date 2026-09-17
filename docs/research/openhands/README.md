@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # OpenHands — Research Summary (for ACUTE-CODE)
 
 Researched: 2026-08-21. Method: all claims verified against the live GitHub repos, raw manifests, and docs.openhands.dev unless marked [UNVERIFIED].

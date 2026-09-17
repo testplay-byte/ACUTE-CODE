@@ -33,7 +33,9 @@ import {
  */
 interface TauriGlobal {
   core: {
-    invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    // R102-A: generic like the providers-api bridge — the key-store commands
+    // resolve with their report payloads.
+    invoke: <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
   };
 }
 
@@ -47,12 +49,29 @@ interface TauriGlobal {
  * R61 ComputerUseTab (kept verbatim — the command args are {providerId,
  * key}: the shell maps them to the "<providerId>-vision" slot).
  */
-async function storeVisionKeyDurable(providerId: string, key: string): Promise<boolean> {
-  if (!isTauri()) return false;
+async function storeVisionKeyDurable(
+  providerId: string,
+  key: string,
+): Promise<{ store: "credential-manager" | "secret-service" | "key-file"; note?: string | null } | null> {
+  if (!isTauri()) return null;
   const shell = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
   if (!shell) throw new Error("Tauri shell unavailable");
-  await shell.core.invoke("store_vision_key", { providerId, key });
-  return true;
+  // R102-A: the command returns the KeyStoreReport (where the key landed +
+  // the key-file disclosure note) — the save flow renders the note amber.
+  const report = await shell.core.invoke<{ store: string; note?: string | null }>("store_vision_key", {
+    providerId,
+    key,
+  });
+  if (report.store === "credential-manager" || report.store === "secret-service") {
+    return { store: report.store, note: report.note ?? null };
+  }
+  if (report.store === "key-file") {
+    return { store: "key-file", note: report.note ?? null };
+  }
+  // An unexpected wire spelling (never happens with the shipped shell, but
+  // a stale shell + new UI must degrade honestly, not misreport the store):
+  // fall back to the REST route's caller path — the key DID save somewhere.
+  return { store: "credential-manager", note: null };
 }
 
 /**
@@ -165,16 +184,23 @@ function VisionModeCard() {
   const resetAfter = useTimeoutClear();
   const [msg, setMsg] = useState<string | null>(null);
   const [msgIsError, setMsgIsError] = useState(false);
+  // R102-A: the amber leg — the key-file disclosure (a successful save in
+  // the fallback store) must not read as an error.
+  const [msgIsWarning, setMsgIsWarning] = useState(false);
 
   const settingsQuery = useQuery({
     queryKey: ["vision-settings"],
     queryFn: fetchVisionSettings,
   });
 
-  const note = (text: string, isError = false) => {
+  const note = (text: string, isError = false, isWarning = false) => {
     setMsg(text);
     setMsgIsError(isError);
-    resetAfter(() => setMsg(null), 1500);
+    setMsgIsWarning(isWarning);
+    // R102-A: disclosures (warnings) stay up 8s — the key-file note carries
+    // actionable text (the path + how to migrate); 1.5s would erase it
+    // before it can be read. Errors keep the 1.5s cadence of the notes.
+    resetAfter(() => setMsg(null), isWarning ? 8000 : 1500);
   };
 
   const setMode = useMutation({
@@ -218,7 +244,13 @@ function VisionModeCard() {
         {msg && (
           <span
             className="text-[11px] font-medium"
-            style={{ color: msgIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+            style={{
+              color: msgIsError
+                ? SEMANTIC_COLORS.danger
+                : msgIsWarning
+                  ? SEMANTIC_COLORS.warning
+                  : SEMANTIC_COLORS.success,
+            }}
           >
             {msg}
           </span>
@@ -279,7 +311,7 @@ function SeparateModelCard({
   onNote,
 }: {
   settings: VisionSettings;
-  onNote: (text: string, isError?: boolean) => void;
+  onNote: (text: string, isError?: boolean, isWarning?: boolean) => void;
 }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
@@ -325,14 +357,28 @@ function SeparateModelCard({
     // store via store_vision_key (which ALSO pushes the key into the running
     // engine, so the REST keyring query sees it); web/dev mode falls back to
     // the REST in-memory route.
+    // R102-A: the shell returns the KeyStoreReport — a key-file save (the
+    // Linux fallback, no reachable Secret Service) discloses its note in
+    // amber instead of the plain green confirmation.
     mutationFn: async () => {
-      const usedShell = await storeVisionKeyDurable(savedProvider as string, keyDraft.trim());
-      if (!usedShell) {
+      const report = await storeVisionKeyDurable(savedProvider as string, keyDraft.trim());
+      if (!report) {
         await setVisionKey(savedProvider as string, keyDraft.trim());
+        return null;
       }
+      return report;
     },
-    onSuccess: () => {
-      onNote("Vision key saved.");
+    onSuccess: (report) => {
+      if (report?.store === "key-file") {
+        onNote(
+          report.note ??
+            "Vision key saved to the local key file — no Secret Service keyring was reachable.",
+          false,
+          true,
+        );
+      } else {
+        onNote("Vision key saved.");
+      }
       setKeyDraft("");
       setReplacing(false);
       void queryClient.invalidateQueries({ queryKey: ["vision-key", savedProvider] });
@@ -534,7 +580,7 @@ function VisionModelRow({
 }: {
   provider: ProviderView;
   model: ProviderModelConfig;
-  onNote: (text: string, isError?: boolean) => void;
+  onNote: (text: string, isError?: boolean, isWarning?: boolean) => void;
 }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();

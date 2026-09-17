@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # ADR-0024: Approval engine v1 (interactive run_command permission)
 
 **Status:** Accepted (round 37, 2026-08-25)

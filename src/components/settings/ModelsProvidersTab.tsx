@@ -4317,11 +4317,21 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
   // ROUND-59 (R59-C): copy confirmations/errors color themselves (a copy
   // failure must not inherit the save-mutation's green styling).
   const [keyStatusIsError, setKeyStatusIsError] = useState(false);
+  // R102-A: the key-file disclosure leg — a save that landed in
+  // ~/.acute/provider-keys.json (the ADR-0031-addendum Linux fallback)
+  // colors AMBER, not green: the note tells the owner WHERE the key went
+  // and how to move it into the encrypted store. Distinct from an error:
+  // the save SUCCEEDED.
+  const [keyStatusIsWarning, setKeyStatusIsWarning] = useState(false);
 
   // ── Key 2..N (the pool) + the add row ────────────────────────────────────
   const [newKey, setNewKey] = useState("");
   const [showNew, setShowNew] = useState(false);
   const [poolMsg, setPoolMsg] = useState<string | null>(null);
+  // R102-A: the pool add-row's amber leg — same disclosure semantics as
+  // the primary editor's keyStatusIsWarning (a key-file save is a SUCCESS
+  // in a different store, not an error).
+  const [poolMsgIsWarning, setPoolMsgIsWarning] = useState(false);
   // ROUND-58 (R58-d): per-row revealed pool values — masked by default; the
   // reveal fetch is ONE call per provider (the route returns every slot) and
   // its result is CACHED here, while the SHOWING state is a per-row toggle.
@@ -4377,29 +4387,52 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
     mutationFn: async (value: string) => {
       // Tauri: keys route through the shell into the OS secure store
       // (ADR-0012). Browser dev: the sidecar keyring endpoint.
+      // R102-A: the shell path now RETURNS a KeyStoreReport (where the key
+      // landed + the key-file disclosure note) — surfaced in onSuccess.
       if (isTauri()) {
         const { storeProviderKey: storeViaShell } = await import("../onboarding/providers-api");
-        const ok = await storeViaShell(provider.id, value);
-        if (!ok) throw new Error("the shell refused the key store request");
-        return;
+        const report = await storeViaShell(provider.id, value);
+        if (!report) throw new Error("the shell refused the key store request");
+        return report;
       }
       await storeProviderKey(provider.id, value);
+      return null;
     },
-    onSuccess: () => {
+    onSuccess: (report) => {
       // ROUND-60 (R60-B): a saved key exits edit mode (the masked
       // stored-key view returns — a stale revealed OLD value is dropped
       // too) and refreshes the pool listing so the masked slot-0 value is
       // the NEW key's, never the stale one.
       setKeyDraft(null);
       setRevealState({ kind: "idle" });
-      setKeyStatus("Key saved to the secure store.");
+      // R102-A: the disclosure — a key-file save (the Linux fallback when
+      // no Secret Service is reachable) renders its note AMBER so the
+      // owner knows the key is in ~/.acute/provider-keys.json (0600), not
+      // the encrypted store; every secure-store save stays the green
+      // one-liner.
+      if (report?.store === "key-file") {
+        setKeyStatusIsError(false);
+        setKeyStatusIsWarning(true);
+        setKeyStatus(
+          report.note ??
+            "Key saved to the local key file — no Secret Service keyring was reachable.",
+        );
+      } else {
+        setKeyStatusIsError(false);
+        setKeyStatusIsWarning(false);
+        setKeyStatus("Key saved to the secure store.");
+      }
       // ROUND-62 (R62-2b): hasKey flips — the picker's provider cache sees
       // it (the session page doesn't list keyless presets differently, but
       // one cache, one truth).
       invalidateProvidersEverywhere(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["key-pool", provider.id] });
     },
-    onError: (err: Error) => setKeyStatus(err.message),
+    onError: (err: Error) => {
+      setKeyStatusIsError(true);
+      setKeyStatusIsWarning(false);
+      setKeyStatus(err.message);
+    },
   });
 
   // ── The add row — THE R92-D3 / R47 FIX ────────────────────────────────────
@@ -4418,20 +4451,36 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
       if (slot < 0) throw new Error("the key pool is full (31 keys)");
       if (isTauri()) {
         const { storeProviderKeySlot: storeViaShell } = await import("../onboarding/providers-api");
-        const ok = await storeViaShell(provider.id, slot, value);
-        if (!ok) throw new Error("the shell refused the key store request");
-        return;
+        const report = await storeViaShell(provider.id, slot, value);
+        if (!report) throw new Error("the shell refused the key store request");
+        return report;
       }
       await setKeyPoolSlot(provider.id, slot, value);
+      return null;
     },
-    onSuccess: () => {
+    onSuccess: (report) => {
       setNewKey("");
-      setPoolMsg("Key added.");
-      resetAfter(() => setPoolMsg(null), 1500);
+      // R102-A: same disclosure as the primary editor — a key-file save
+      // renders its note amber (the save SUCCEEDED; the store differs).
+      if (report?.store === "key-file") {
+        setPoolMsgIsWarning(true);
+        setPoolMsg(
+          report.note ??
+            "Key saved to the local key file — no Secret Service keyring was reachable.",
+        );
+        resetAfter(() => setPoolMsg(null), 8000);
+      } else {
+        setPoolMsgIsWarning(false);
+        setPoolMsg("Key added.");
+        resetAfter(() => setPoolMsg(null), 1500);
+      }
       resetRevealCache();
       invalidate();
     },
-    onError: (err: Error) => setPoolMsg(err.message),
+    onError: (err: Error) => {
+      setPoolMsgIsWarning(false);
+      setPoolMsg(err.message);
+    },
   });
 
   // ── Pool-row removal — slot-aware in both modes ───────────────────────────
@@ -4959,8 +5008,15 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
       )}
       {keyStatus && (
         <p
+          data-testid={keyStatusIsWarning ? "key-store-disclosure" : undefined}
           className="text-[11px]"
-          style={{ color: saveKey.isError || keyStatusIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+          style={{
+            color: saveKey.isError || keyStatusIsError
+              ? SEMANTIC_COLORS.danger
+              : keyStatusIsWarning
+                ? SEMANTIC_COLORS.warning
+                : SEMANTIC_COLORS.success,
+          }}
         >
           {keyStatus}
         </p>
@@ -4969,7 +5025,13 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
       {poolMsg && (
         <p
           className="text-[11px]"
-          style={{ color: addKey.isError || removeKey.isError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+          style={{
+            color: addKey.isError || removeKey.isError
+              ? SEMANTIC_COLORS.danger
+              : poolMsgIsWarning
+                ? SEMANTIC_COLORS.warning
+                : SEMANTIC_COLORS.success,
+          }}
         >
           {poolMsg}
         </p>

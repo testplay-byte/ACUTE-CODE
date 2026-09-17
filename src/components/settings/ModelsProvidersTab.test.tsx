@@ -713,7 +713,19 @@ describe("ProviderKeysCard — the R47 TAURI FIX (R92-D3)", () => {
   const tauriCalls = () => shellInvoke.mock.calls as Array<[string, Record<string, unknown>]>;
 
   beforeEach(() => {
-    shellInvoke = vi.fn(async () => undefined);
+    // R102-A: the key-store commands now RESOLVE with a KeyStoreReport
+    // ({ store, note? }) — the mock answers the secure-store spelling; the
+    // key-file disclosure test below swaps in the fallback spelling.
+    shellInvoke = vi.fn(async (cmd: string) => {
+      if (
+        cmd === "store_provider_key" ||
+        cmd === "store_provider_key_slot" ||
+        cmd === "store_vision_key"
+      ) {
+        return { store: "secret-service" };
+      }
+      return undefined;
+    });
     // The sidecar helper + the providers-api wrapper both read window.__TAURI__.
     vi.stubGlobal("__TAURI__", { core: { invoke: shellInvoke } });
   });
@@ -807,6 +819,63 @@ describe("ProviderKeysCard — the R47 TAURI FIX (R92-D3)", () => {
     });
     // The slot-aware command is NOT part of the primary edit.
     expect(tauriCalls().some(([cmd]) => cmd === "store_provider_key_slot")).toBe(false);
+  });
+
+  /* ── R102-A: the Linux key-file fallback's DISCLOSURE (the owner's
+     v0.99.0 report: "the API keys were not being properly saved at all in
+     the Linux version … nothing was happening at all") ──────────────────── */
+
+  it("a KEY-FILE save (the Linux fallback) succeeds and renders its disclosure note — never the plain green line, never an error", async () => {
+    pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
+
+    const masked = (await screen.findByTestId("stored-key-masked")) as HTMLInputElement;
+    fireEvent.change(masked, { target: { value: "sk-or-v1-linux" } });
+    fireEvent.click(screen.getByTestId("save-key-button"));
+
+    // The shell answers the fallback spelling: store "key-file" + the note.
+    await waitFor(() => {
+      const call = tauriCalls().find(([cmd]) => cmd === "store_provider_key");
+      expect(call).toBeDefined();
+      expect(call?.[1]).toEqual({ providerId: "openrouter", key: "sk-or-v1-linux" });
+    });
+    // The first save (secure-store spelling) lands the plain green line —
+    // that ALSO proves the save completed before the mock swaps below.
+    await waitFor(() => {
+      expect(screen.getByText("Key saved to the secure store.")).toBeTruthy();
+    });
+
+    // Swap the mock's answer to the key-file spelling and save again — the
+    // disclosure must render (the amber note carries the path story).
+    shellInvoke.mockImplementation(async (cmd: string) =>
+      cmd === "store_provider_key"
+        ? {
+            store: "key-file",
+            note: "No Secret Service keyring could store the key, so it was saved to the local key file ~/.acute/provider-keys.json (owner-only, 0600).",
+          }
+        : { store: "secret-service" },
+    );
+    fireEvent.change(masked, { target: { value: "sk-or-v1-linux-2" } });
+    fireEvent.click(screen.getByTestId("save-key-button"));
+
+    const disclosure = await screen.findByTestId("key-store-disclosure");
+    expect(disclosure.textContent).toContain("provider-keys.json");
+    // The plain green line never co-renders with the disclosure.
+    expect(screen.queryByText("Key saved to the secure store.")).toBeNull();
+  });
+
+  it("a SECRET-SERVICE save stays the plain green confirmation (no disclosure testid)", async () => {
+    pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
+    renderWithProviders(<ProviderKeysCard provider={PROVIDER} />);
+
+    const masked = (await screen.findByTestId("stored-key-masked")) as HTMLInputElement;
+    fireEvent.change(masked, { target: { value: "sk-or-v1-green" } });
+    fireEvent.click(screen.getByTestId("save-key-button"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Key saved to the secure store.")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("key-store-disclosure")).toBeNull();
   });
 });
 

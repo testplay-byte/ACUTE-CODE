@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # SECURITY — posture & rules
 
 Round-17 (owner direction: proper documentation of all logic). Describes
@@ -31,8 +31,23 @@ tool outputs sent to it; (3) the local filesystem outside a project root;
    (`TOOL_NAMES`) with a drift-guard test.
 4. **Secrets custody — per surface** (the "Credential Manager only" rule,
    refined for reality):
-   - Owner's packaged app: Windows Credential Manager (DPAPI), key hand-off
+   - Owner's packaged app, Windows: Credential Manager (DPAPI), key hand-off
      via the shell (`ACUTE_PROVIDER_<ID>` env into the sidecar at spawn).
+   - Owner's packaged app, Linux (R102-A, ADR-0031 + its round-102
+     addendum): the freedesktop Secret Service (gnome-keyring/KWallet,
+     encrypted at rest) is the PRIMARY store, tried first on every
+     save/read/delete — and when no Secret Service is reachable (no daemon,
+     locked keyring that will not unlock, a D-Bus hang — all bounded at 20s
+     on their own threads, never the main thread), keys land in the
+     DISCLOSED fallback file `~/.acute/provider-keys.json` (owner-only
+     0600, atomic tmp+rename writes, `~/.acute` tightened to 0700, one JSON
+     map keyed by the canonical credential target). The UI discloses every
+     key-file save as an amber note (the path + how to migrate into the
+     encrypted store by re-saving once a keyring is available — the
+     migration retires the file copy automatically). This is the one
+     sanctioned on-disk exception to the "never on disk" rule — owner
+     directive + the AWS CLI / kubectl / gh CLI precedent, documented in
+     ADR-0031's addendum; every other custody surface is unchanged.
    - Launcher (owner's PC): `credentials.txt` next to the launcher (owner's
      explicit choice, rotates at will) + isolated `.acute/.git-credentials`
      (0600) + token-in-URL only for the single git command, remote sanitized

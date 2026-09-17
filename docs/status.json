@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.99.0",
+    "version": "0.100.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -305,6 +305,10 @@
     {
       "date": "2026-09-17",
       "label": "R101 — the twelfth-walkthrough round (v0.99.0): the calm update hand-off (no more 'environment crashed' flash + self-healing failed installs), the chat timeline rail, the composer focus fix, honest + resilient Mermaid, the minimized-rail label chips, and Linux ARM64 bundles"
+    },
+    {
+      "date": "2026-09-17",
+      "label": "R102 — the thirteenth-walkthrough round (v0.100.0): Linux keys that actually save (async + bounded + the disclosed key-file fallback), the settings sidebar restored to the left panel, the Mermaid viewer (zoom/pan/source), the roomy minimized rail, and the quiet composer"
     }
   ],
   "quality": {
@@ -363,6 +367,6 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 101,
-  "ci": "GREEN — CI 35217892441 and Release 35217892393 both SUCCESS on 7c34293 (the hotfix re-tag). v0.99.0 PUBLISHED (release 390674532, latest): setup.exe 36.9 MB + amd64 deb/AppImage + THE FIRST ARM64 BUNDLES (ACUTE-CODE_0.99.0_arm64.deb 67,180,798 B + ACUTE-CODE_0.99.0_aarch64.AppImage 132,663,816 B — the owner's ARM64 ask answered) + the launcher kit. The round: the calm update hand-off (the update-installing event + the updateInFlight suppression + the Restarting splash + self-healing failed launches), the chat timeline rail + the composer focus fix, honest + resilient Mermaid (thinking sections render now), the sidebar rail label chips + the settings nav pane, and the Linux ARM64 pipeline."
+  "round": 102,
+  "ci": "PENDING — round 102 (v0.99.0 → v0.100.0) pushed; CI + the v0.100.0 Release dispatch verification in flight (this field flips to GREEN with both run ids the moment they verify, per the standing discipline). The round: the Linux key store made real (async key commands + 20s-bounded keyring I/O + the disclosed 0600 key-file fallback with amber UI disclosure — the owner's 'API keys were not being properly saved at all' answered at the root, live-verified 10/10 on a daemon-less Linux), the settings sidebar RESTORED (one shared section list; the left sidebar becomes the settings nav; the page-local column deleted), the Mermaid interactive viewer (zoom/pan/source/reset), the minimized rail's roomy geometry, and the quiet composer (focus paints nothing)."
 }

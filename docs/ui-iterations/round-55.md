@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-12 round-98 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # Round 55 — The engine-boot round: the EISDIR verbatim-path crash (why the packaged engine NEVER started) + the Credential-Manager namespace split (why the packaged app never saw the launcher's keys)
 
 **Date:** 2026-08-31 · **Branch:** `main` · **Version:** 0.55.0 · **Owner directives:** the eighth Windows test session's report — the 0.54.0 install itself went cleanly (`✓ installed desktop app 0.54.0 is current`, `✓ ACUTE-CODE.exe is running (pid 6752)`) and the R54 diagnostics finally delivered the engine's own crash text: `Error: EISDIR: illegal operation on a directory, lstat 'C:'` on every handshake attempt, plus `sidecar: no provider keys found in Credential Manager` seconds after the launcher had stored all four keys. "Make sure that you handle each and everything properly… in the most optimal way."

@@ -155,24 +155,23 @@
   outline-offset: 2px;
 }
 
-/* ── ROUND-101 (R101-D, owner: "it apparently selected the message entry
-   area and highlighted it and the area around it" — the v0.98.0 verdict on
-   the composer's focus treatment) ─────────────────────────────────────────
-   Text-entry surfaces answer focus with a SUBTLE border-color swap ONLY:
-   same 1px hairline width (no layout shift, no thickness change), no
-   outline ring floating around the container (the R100-D JS-swapped
-   border-[1.5px] + outline-2 ring is deleted). The textarea itself keeps
-   the global :focus-visible rule above for keyboard users — the container
-   never paints its own ring. Border-color lives HERE (not as an inline
-   style) precisely so :focus-within can compose with it: inline styles
-   would win over both classes. The composer keeps dragActive's accent
-   border as an inline style (a REAL state, applied above this class pair).
-   color-mix expresses accent@0.55 on the --ac-* bridge vars (no hex). */
+/* ── ROUND-102 (R102-E, owner v0.99.0: "When I click on the area, the whole
+   area where I can paste in the message gets a border around it, which is
+   not good, not perfect") — the composer answers focus with NOTHING ───────
+   The R101-D treatment (a :focus-within border-color swap to accent@55%)
+   still read as "a border around the whole paste area" on a click: the
+   resting hairline is nearly invisible, so the swap's first frame is a
+   whole-box accent border appearing. The industry idiom for chat composers
+   (Slack, ChatGPT, Discord) is NO container focus chrome at all — the
+   TEXT CARET is the focus indicator (WCAG's exception for text-entry
+   surfaces), and the border stays the quiet resting hairline in every
+   state. The rule set is now: the class pins the RESTING border color
+   (inline styles would otherwise beat it), no :focus-within leg exists,
+   and dragActive keeps its inline accent border (a REAL state, applied in
+   Composer.tsx). Keyboard focus never paints the container either — the
+   caret carries it (the textarea's outline-none stands). */
 .composer-shell {
   border-color: var(--ac-border);
-}
-.composer-shell:focus-within {
-  border-color: color-mix(in srgb, var(--ac-accent) 55%, transparent);
 }
 
 @layer base {

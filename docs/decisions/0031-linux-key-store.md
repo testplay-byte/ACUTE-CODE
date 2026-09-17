@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-100 -->
+<!-- last-reviewed: 2026-09-17 round-102 -->
 # ADR-0031: The Linux key store — freedesktop Secret Service via the `keyring` crate
 
 - **Status:** ACCEPTED
@@ -120,3 +120,97 @@ re-gated so exactly ONE imp compiles per target triple.
   and this ADR — no data migration (the Secret Service items are simply
   orphaned in the user's keyring, visible/removable via seahorse/KWallet
   UI like any other credential).
+
+---
+
+## Addendum (round 102, R102-A): the reliability layer + the disclosed key-file fallback
+
+- **Status:** ACCEPTED
+- **Date:** 2026-09-17 (round 102; owner-directed — the v0.99.0 field report)
+
+### Context
+
+The owner ran v0.99.0 on Linux and reported: *"I was having issues with
+saving the API keys. The API keys were not being properly saved at all in
+the Linux version. I tried saving them but apparently nothing was happening
+at all."* Live verification against the real `keyring` 3.x
+`sync-secret-service` backend (a standalone harness on a daemon-less Linux;
+see `docs/ui-iterations/round-102.md` §2 A) surfaced three defects in the
+round-100 design:
+
+1. **The freeze.** The key shell commands were SYNC, and Tauri runs sync
+   commands on the MAIN thread. `sync-secret-service` rides the C libdbus
+   (`dbus-secret-service` → `libdbus-sys`), whose D-Bus round-trips block
+   without a deadline — a locked keyring whose unlock prompt cannot display,
+   a half-dead daemon, or a missing session bus can therefore freeze the
+   whole window while the invoke never resolves: exactly "nothing was
+   happening at all".
+2. **The classification gap.** On a machine with no reachable Secret
+   Service, the backend reports `PlatformFailure` ("Unable to autolaunch a
+   dbus-daemon…"), NOT `NoStorageAccess` — the round-100 code only treated
+   `NoStorageAccess` as "no store", so reads ERRORED on every keyless
+   provider and writes errored into a small red note that read as "nothing
+   happened".
+3. **The honesty dead-end.** The round-100 fallback for headless machines
+   was "error + point at `ACUTE_PROVIDER_<ID>` env vars". For a desktop app
+   user (the owner's own machine class), env vars are not an answer — the
+   app must either store the key somewhere or admit it cannot.
+
+### Options
+
+| Option | Verdict |
+| --- | --- |
+| Keep Secret Service only; fix the freeze + surface the error loudly | Fixes the hang, but the owner's desktop STILL cannot save a key — the round's actual complaint |
+| Encrypted file with an app-embedded key | Security theater: the "encryption" key ships in the same binary (Electron safeStorage's basic_text does this and says so); adds a crypto dep tree for zero real protection |
+| File-backed key store, owner-only perms, FULL disclosure (chosen) | The AWS CLI (`~/.aws/credentials`), kubectl (`~/.kube/config`), and gh CLI precedent: plaintext at strict perms with loud disclosure; honest about what it is |
+| Require env vars / refuse to save | The round-100 behavior the owner just rejected |
+
+### Decision
+
+1. **Bounded I/O, off the main thread.** Every keyring Entry operation runs
+   on a dedicated thread under a 20-second deadline (`wincred::imp::
+   bounded`); all key shell commands in `keys.rs` are `async` (Tauri runs
+   them on the runtime, never the main thread). A hang costs one detached
+   thread + one honest error, never the window.
+2. **Only `NoEntry` proves the service ANSWERED.** Every other verdict
+   (`NoStorageAccess`, `PlatformFailure`, timeout, worker crash) memoizes
+   the service DOWN for the process (one probe per boot, not 20s × N
+   targets) and routes to the key file.
+3. **The disclosed key file.** A key the Secret Service cannot take lands
+   in `~/.acute/provider-keys.json`: one JSON map keyed by the canonical
+   credential target, 0600 from birth (atomic tmp+rename), `~/.acute`
+   tightened to 0700, lock-serialized writes, empty map → no file. Reads
+   consult it whenever the Secret Service holds nothing; deletes clear
+   both stores; a later successful Secret Service write RETIRES the file
+   copy (migration on the next re-save, one namespace).
+4. **The UI tells the truth.** The save commands return a `KeyStoreReport`
+   (`store`: `credential-manager` | `secret-service` | `key-file`, plus the
+   note); Settings renders a key-file save as an AMBER disclosure (the
+   path, the perms, how to move the key into the encrypted store) — never
+   a green "saved to the secure store", never a silent catch.
+
+This deliberately bends SPEC §7's "never on disk" hard rule for the
+Linux-no-secure-store case, per the owner's directive and the CLI-tool
+precedent. The rule's intent (no lazy plaintext default, no leaks through
+logs/REST/transcripts) is preserved: the Secret Service remains the
+PRIMARY store and is always tried first; the file is a last-resort
+destination that the UI, the docs, and the file's own 0600/0700 perms all
+disclose.
+
+### Consequences
+
+- Keys save on EVERY Linux desktop the app can run on: working keyring →
+  encrypted store; broken/absent keyring → disclosed key file + amber note.
+- A transient Secret Service failure degrades to the file for the session
+  (fully functional, re-probed next boot) instead of erroring on every
+  keyless status check — the safer side of the trade.
+- WSL/headless: the round-100 "documented gap" becomes a working path
+  (the file store), still disclosed.
+- The spawn loop's env injection reads through the same unified path, so
+  a key-file key is injected on the next boot exactly like a keyring key.
+- `purge_provider_keys` (R87 reset) clears the key file too.
+- Sandbox-verified: the linux imp compiled + 10/10 tests green against the
+  real `keyring` 3.6 + libdbus stack on a daemon-less Linux (the harness
+  also caught the `PlatformFailure` classification defect before it could
+  ship). CI's `rust-linux`/`rust-linux-arm64` `cargo check` legs remain
+  the per-push compile gate.
