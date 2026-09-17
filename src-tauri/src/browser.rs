@@ -139,7 +139,7 @@ const PANEL_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.
 /// string means "keep the default UA" at the call site's cfg gate below.
 #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
 const PANEL_USER_AGENT_STR: &str = "";
-#[cfg(any(windows, all(unix, not(target_os = "macos")))))]
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 const PANEL_USER_AGENT_STR: &str = PANEL_USER_AGENT;
 
 /// ROUND-50: the `browser-navigated` event payload (serde field names stay
