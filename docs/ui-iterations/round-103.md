@@ -152,6 +152,24 @@ was re-dispatched. The rig also found and fixed two script bugs before
 they could ship (heredoc/pipe stdin conflicts; the untagged-draft
 matching + ascending-order sort).
 
+**The first real dispatch (run 35256890314) caught one more — exactly as
+designed.** All four build jobs went green, and the new uploader FAILED
+LOUDLY IN TWO SECONDS (no hang, no half-emptied draft) on a bug no
+tiny-fixture rig could catch: the release body was passed as a curl `-d`
+**argument**, and the real CHANGELOG.md is ~200 KB — past the kernel's
+128 KB single-argument ceiling ("Argument list too long", MAX_ARG_STRLEN).
+The fix: the notes payload is now WRITTEN TO A FILE and passed with
+`-d @file`. The same investigation exposed a latent pre-existing defect
+worth fixing in passing: GitHub silently truncates release bodies at
+125,000 characters — the v0.99.0 release body is exactly that truncation
+signature (124,996 chars, mid-history cut) — so the script now truncates
+DELIBERATELY at a paragraph boundary with an "older entries live in
+CHANGELOG.md" pointer. A fifth rig pass with the REAL 200 KB CHANGELOG
+proved the fixed path end-to-end (draft created, 6/6 assets, body at a
+121,432-char clean cut), and the rig fidelity lesson went into
+AGENT-MEMORY #104(g): fixtures must match the real payload's SHAPE, not
+just its names.
+
 ## §3 The model evaluation — `stealth/union-alpha` (the short version)
 
 Full evidence, response fragments, and the 23-call latency table:
@@ -185,22 +203,24 @@ Full evidence, response fragments, and the 23-call latency table:
 
 ## §4 The verification numbers
 
-- **The rig: 4/4 passes green against the live GitHub API** (§2) —
-  including one real mid-upload stall caught and recovered by the
-  detector/retry pair, and the full re-tag regression (untagged match,
-  dedupe, re-point, resume).
+- **The rig: 5/5 passes green against the live GitHub API** (§2) — the
+  original four plus the real-CHANGELOG argv regression pass; one pass
+  caught a real mid-upload stall and recovered transparently; the first
+  REAL dispatch's two-second loud failure was root-caused and covered by
+  the fifth pass.
 - **Both workflows YAML-validated; every job in both carries a
   `timeout-minutes`** (release: 15/30/30/30/25; CI: 30/20/20).
 - `bash -n` clean on the script; executable bit set; stdlib-only (bash,
   curl, python3).
 - **No application code touched** — the root suite is byte-identical to
   the R102 close-out (208 files / 3,823 passed); lint, typecheck,
-  `version:check` (×4 at 0.100.0), and `docs:check` re-run green on the
-  round's tree. The v0.100.0 re-dispatch references live in the
-  status.json `ci` field, per the standing discipline.
+  `version:check` (×4 at 0.100.0), and `docs:check` (223 docs / 0
+  failures) green on the round's tree. The v0.100.0 re-dispatch
+  references live in the status.json `ci` field, per the standing
+  discipline.
 - The release list was verified clean (published releases only) before
-  the tag re-dispatch; the incident's two zombie drafts and the rig's two
-  drafts are gone.
+  each tag re-dispatch; the incident's two zombie drafts, the rig's
+  drafts, and the argv-pass draft are all gone.
 
 ## §5 The round's lessons (also AGENT-MEMORY #104)
 
@@ -227,6 +247,14 @@ Full evidence, response fragments, and the 23-call latency table:
   the incident cost an hour and a half.
 - **Drafts orphaned by a re-tag report themselves as `untagged-<sha>`** —
   match by name or every hotfix re-tag mints an invisible zombie draft.
+- **Fixtures must match the real payload's SHAPE, not just its names.**
+  The tiny-fixture rig proved four behaviors and still missed the argv
+  ceiling, because only the real 200 KB CHANGELOG crosses the kernel's
+  128 KB single-argument limit. After the first real dispatch caught it
+  (loudly, in two seconds — the round's design working), the fifth rig
+  pass ran with the REAL changelog file. Match sizes and shapes, not
+  just names — and keep the loud-failure path so the rig's blind spots
+  surface in seconds, not hours.
 
 ## §6 What ships to the owner
 

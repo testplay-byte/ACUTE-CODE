@@ -1259,3 +1259,17 @@ model is client-side prompt injection, and wiring reasoning params to it
 is actively harmful. Free models with 1.4–40 s variance on identical
 prompts are fallback-tier, not primary-tier, regardless of how well their
 tool calling works.
+(g) FIXTURES MUST MATCH THE REAL PAYLOAD'S SHAPE, NOT JUST ITS NAMES: the
+tiny-asset rig proved four behaviors against the live API and still missed
+the argv ceiling, because only the REAL 200 KB CHANGELOG crosses the
+kernel's 128 KB single-argument limit (MAX_ARG_STRLEN — "Argument list
+too long"; the first real dispatch caught it loudly in two seconds, which
+is the design working: loud fast failure > silent slow hang). Two rules
+followed: pass large HTTP bodies via `-d @file`, never as command-line
+arguments; and after any rig blind spot surfaces, re-run the rig with the
+REAL payload (the fifth pass used the actual CHANGELOG.md and proved the
+fixed path). Related pre-existing defect fixed in passing: GitHub silently
+truncates release bodies at 125,000 characters — v0.99.0's body is exactly
+that truncation signature (124,996 chars, mid-history cut) — so release
+notes are now truncated DELIBERATELY at a paragraph boundary with a
+pointer to the repository's CHANGELOG.md.

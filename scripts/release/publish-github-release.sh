@@ -160,30 +160,47 @@ if [ -s "${TMPI}/matches.txt" ]; then
   done < "${TMPI}/matches.txt"
 fi
 
-# The release notes JSON (name + body from the tagged commit's CHANGELOG).
-notes_json() { # $1 = {"create":...} or {"refresh":...} — the python below keys off it
-  python3 - "$1" "${TAG}" "${CHANGELOG}" <<'PY'
+# The release notes JSON (name + body from the tagged commit's CHANGELOG),
+# WRITTEN TO A FILE — never passed as a curl -d ARGUMENT: the real
+# CHANGELOG is ~200 KB and a single argv string is capped at 128 KB by the
+# kernel (MAX_ARG_STRLEN — "Argument list too long", the bug the first
+# real dispatch caught that the tiny-fixture rig could not).
+# GitHub's release-body ceiling is 125,000 characters: a larger body is
+# silently truncated mid-sentence SERVER-SIDE (the v0.99.0 release body is
+# exactly that truncation signature at 124,996 chars). The script truncates
+# deliberately at a paragraph boundary with a pointer note instead.
+notes_file() { # $1 = "create"|"refresh"; writes ${TMPI}/release-notes.json
+  python3 - "$1" "${TAG}" "${CHANGELOG}" "${TMPI}/release-notes.json" <<'PY'
 import json, sys
-mode, tag, path = sys.argv[1], sys.argv[2], sys.argv[3]
+mode, tag, path, out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 try:
     with open(path, "r", encoding="utf-8") as fh:
         notes = fh.read()
 except OSError:
     notes = ""
+LIMIT = 124000  # GitHub truncates at 125,000 chars; leave margin for the note
+if len(notes) > LIMIT:
+    cut = notes.rfind("\n\n", 0, LIMIT)
+    if cut == -1:
+        cut = LIMIT
+    notes = notes[:cut] + "\n\n---\n\n(Older entries live in `CHANGELOG.md` in the repository.)\n"
 if mode == "create":
-    print(json.dumps({"tag_name": tag, "name": tag, "body": notes, "draft": True}))
+    payload = {"tag_name": tag, "name": tag, "body": notes, "draft": True}
 else:
     # tag_name is included so a re-tagged reused draft (tag_name=untagged-…)
     # is re-pointed at the freshly pushed tag in the same call.
-    print(json.dumps({"tag_name": tag, "name": tag, "body": notes}))
+    payload = {"tag_name": tag, "name": tag, "body": notes}
+with open(out, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh)
 PY
 }
 
 if [ -z "${RELEASE_ID}" ]; then
   echo "no draft for ${TAG} — creating one"
+  notes_file create
   RELEASE_ID=$(api -X POST "${API}/repos/${REPO}/releases" \
     -H "Content-Type: application/json" \
-    -d "$(notes_json create)" \
+    -d "@${TMPI}/release-notes.json" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])') || {
       echo "::error::draft release creation failed"
       exit 1
@@ -192,9 +209,10 @@ if [ -z "${RELEASE_ID}" ]; then
 else
   # Reused draft → refresh name+body from THIS commit's CHANGELOG so a
   # re-tag never leaves the previous attempt's notes behind.
+  notes_file refresh
   api -X PATCH "${API}/repos/${REPO}/releases/${RELEASE_ID}" \
     -H "Content-Type: application/json" \
-    -d "$(notes_json refresh)" > /dev/null
+    -d "@${TMPI}/release-notes.json" > /dev/null
   echo "refreshed the draft's name/body from ${CHANGELOG}"
 fi
 
