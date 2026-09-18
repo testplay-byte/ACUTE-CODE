@@ -1,5 +1,11 @@
-<!-- last-reviewed: 2026-09-18 round-105 -->
-<!-- status: planning (PLAN-CLI, R105) — implementation wave follows in a later round -->
+<!-- last-reviewed: 2026-09-18 round-106 -->
+<!-- status: APPROVED FOR IMPLEMENTATION (the owner's R106 review of the
+     R105 planning corpus was positive on the CLI design — "the planning
+     of the Android application, the linking protocol, and everything
+     like that… looking proper and quite good"). The R106 round builds
+     M1+M2 (attach-or-spawn, one-shot, REPL, sessions/models/status,
+     --mode json, tests); M3's launcher-kit bundling stays a documented
+     follow-up. -->
 <!-- planning-round: 1 of N (the owner's multi-round directive) -->
 
 # The `acute` Command-Line Interface — Design (PLAN-CLI)
