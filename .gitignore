@@ -44,3 +44,13 @@ coverage/
 .runner-bin/
 acute-runner.log.old
 __pycache__/
+
+# ROUND-106 (R106-S4a): the Android companion — mobile/ is a STANDALONE npm
+# workspace outside pnpm-workspace.yaml (own lockfile, ANDROID-R3 §2). Its
+# generated native shells and tool caches are never committed: CI prebuilds
+# and builds them fresh per run (the android-apk job), so only the source
+# (app/, src/, modules/, app.json, lockfile) lives in the repo.
+/mobile/android/
+/mobile/ios/
+/mobile/.expo/
+/mobile/web-build/

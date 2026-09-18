@@ -1,0 +1,7 @@
+{
+  "name": "acute-net",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ACUTE companion networking floor: pinned-TLS HTTP + SSE over OkHttp (local Expo module — autolinked from mobile/modules).",
+  "main": "index.ts"
+}

@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "ACUTE",
+    "slug": "acute-companion",
+    "version": "0.101.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "acute",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "com.acutecode.companion",
+      "versionCode": 10100,
+      "permissions": [
+        "INTERNET",
+        "CAMERA"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#FFFBF0",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFFBF0",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "permissions": [
+            "camera"
+          ]
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 29
+          }
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

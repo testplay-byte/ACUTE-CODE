@@ -1,0 +1,27 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.acutenet'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.acutenet"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  // OkHttp is provided transitively by React Native's `api` dependency at
+  // runtime (RN 0.86 pins okhttp 4.9.2 on the classpath). `compileOnly` keeps
+  // this module from forcing a different version onto the app's dependency
+  // graph — the surfaces used here (client, call, request, response, source)
+  // are stable across the 4.x line.
+  compileOnly "com.squareup.okhttp3:okhttp:4.9.2"
+}
