@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-09-18 round-105 -->
 <!-- status: planning (PLAN-ANDROID-R1, R105) — Round 2 resolves the open questions before any implementation -->
 <!-- planning-round: 1 of N (the owner's multi-round directive; Round 2 pending) -->
 

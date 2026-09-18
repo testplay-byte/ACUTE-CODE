@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-09-18 round-105 -->
 <!-- status: planning (PLAN-ADOPT, R105) — the R105 implementation set is named in §"The verdicts" -->
 <!-- source-study: https://github.com/can1357/oh-my-pi (MIT; see OMP research notes below) -->
 <!-- planning-round: 1 of N (the owner's multi-round directive) -->

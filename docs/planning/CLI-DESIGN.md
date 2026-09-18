@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-09-18 round-105 -->
 <!-- status: planning (PLAN-CLI, R105) — implementation wave follows in a later round -->
 <!-- planning-round: 1 of N (the owner's multi-round directive) -->
 
