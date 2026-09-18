@@ -516,16 +516,26 @@ export function Composer({
   return (
     <div
       data-composer
-      // R102-E (owner v0.99.0: "When I click on the area, the whole area
-      // where I can paste in the message gets a border around it, which is
-      // not good, not perfect"): the composer answers focus with NOTHING —
-      // the caret is the focus indicator (the Slack/ChatGPT/Discord idiom;
-      // the R101-D accent border-color swap still read as a border popping
-      // around the whole paste area on click, so the :focus-within leg is
-      // deleted from index.css's .composer-shell pair). The border stays
-      // the quiet resting hairline in every focus state; dragActive keeps
-      // its inline accent border + tint (a REAL state).
-      className="@container relative flex flex-col rounded-xl border transition-colors composer-shell"
+      // R105-B (owner v0.101.0 — the refined directive: "the whole
+      // section, which is for the input of the text and to configure the
+      // settings and such, should be highlighted when it is in
+      // selection"): this shell IS the whole bottom section (textarea +
+      // attachments + the toolbar row with the settings pills), and
+      // index.css's .composer-shell:focus-within pair now highlights it as
+      // ONE cohesive unit — the accent border edge + a soft accent-soft
+      // halo ring, smoothly faded via this element's transition. The stray
+      // "border around where the message was supposed to be entered" the
+      // owner still saw was the TEXTAREA's own ring from the global
+      // :focus-visible rule (unlayered, so outline-none could never beat
+      // it; text-entry elements match :focus-visible even on mouse click,
+      // and clicking a non-focusable message never blurs the textarea) —
+      // that rule now lives in @layer base and the textarea paints nothing
+      // (the caret is its own indicator). dragActive keeps its inline
+      // accent border + tint (a REAL state).
+      // The transition covers border-color + background (the dragActive
+      // inline swaps) AND box-shadow (the R105-B focus halo) — one smooth
+      // ease for every leg the CSS/inline styles can flip.
+      className="@container relative flex flex-col rounded-xl border transition-[border-color,background-color,box-shadow] duration-200 composer-shell"
       style={{
         background: dragActive
           ? withAlpha(styles.accent, styles.isDark ? 0.1 : 0.07)
@@ -534,7 +544,7 @@ export function Composer({
             : styles.bg,
         // Only the DRAG state paints the border inline (it must beat the
         // composer-shell class); undefined lets the CSS leg own the resting
-        // color.
+        // color AND the R105-B focus-within accent swap.
         borderColor: dragActive ? withAlpha(styles.accent, 0.4) : undefined,
       }}
       data-dragging={dragActive ? "true" : undefined}

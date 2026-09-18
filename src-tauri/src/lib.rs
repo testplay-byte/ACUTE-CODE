@@ -1,5 +1,11 @@
 mod browser;
 mod dialogs;
+// ROUND-105 (R105-A, Linux only): the child-webview GEOMETRY layer — the
+// Overlay+Fixed surgery that fixes the "app split into two halves" browser
+// panel on Linux (tauri-runtime-wry packs child webviews into tao's
+// vertical GtkBox; see the module docs for the full verified story).
+#[cfg(target_os = "linux")]
+mod gtk_child_webviews;
 mod keys;
 // ROUND-64 (R64-b): the always-on-top floating computer-use mini monitor
 // window (open/close_computer_mini — see src/mini for the page it hosts).

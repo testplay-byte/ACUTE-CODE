@@ -489,39 +489,47 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     }
   });
 
-  it("R102-E: composer focus paints NOTHING — no ring, no border-color swap, no width change (the caret is the indicator)", async () => {
+  it("R105-B: composer focus highlights the WHOLE section via CSS — no JS-painted chrome, no stray textarea ring (the shell is the unit)", async () => {
     await renderEmptyPanel();
     const box = composerBox();
-    // R102-E re-pin (owner v0.99.0: "the whole area where I can paste in
-    // the message gets a border around it, which is not good"): even the
-    // R101-D SUBTLE treatment (a :focus-within accent border-color swap)
-    // still read as a border popping around the paste area on click. The
-    // :focus-within leg is DELETED from index.css's .composer-shell pair —
-    // the class pins only the RESTING hairline, and no focus state of the
-    // composer paints anything (the caret is the focus indicator; the
-    // Slack/ChatGPT/Discord idiom).
+    // R105-B re-pin (owner v0.101.0, the refined directive: "the whole
+    // section — the input of the text and the settings row — should be
+    // highlighted when it is in selection"). The R102-E verdict ("focus
+    // paints NOTHING") was a misdiagnosis: the "border around the paste
+    // area" the owner kept seeing was the TEXTAREA's ring from the global
+    // :focus-visible rule — which sat UNLAYERED in index.css, so the
+    // textarea's outline-none utility could never beat it (cascade layers
+    // outrank specificity), and text-entry elements match :focus-visible
+    // even on MOUSE click while a click on a non-focusable message never
+    // blurs the textarea — the ring persisted while reading. That rule now
+    // lives in @layer base (below utilities) and the composer highlights
+    // as ONE unit through the .composer-shell:focus-within pair (accent@50%
+    // border + accent-soft halo, index.css).
     expect(box.className).toContain("composer-shell");
     expect(box.className).toContain("border");
     expect(box.className).not.toContain("border-[1.5px]");
     expect(box.className).not.toContain("outline");
-    // Only the color legs animate (a width/thickness leg would shift layout;
-    // dragActive — a REAL state — is the only border painter).
-    expect(box.className).toContain("transition-colors");
+    // Color + shadow legs animate (the R105-B halo among them); no
+    // width/thickness leg can shift layout (dragActive — a REAL state —
+    // remains the only inline border painter).
+    expect(box.className).toContain("transition-[border-color,background-color,box-shadow]");
     expect(box.className).not.toContain("transition-all");
     // No inline borderColor at rest — an inline style would beat the class
-    // and paint over the resting hairline (dragActive is the one state
-    // allowed to paint the border inline).
+    // and paint over the resting hairline AND the :focus-within accent
+    // swap (dragActive is the one state allowed to paint inline).
     expect(box.style.borderColor).toBe("");
 
-    // Focusing the textarea changes NOTHING in the DOM — no class flips, no
-    // inline style, no ring: the caret carries the focus.
+    // Focusing the textarea changes NOTHING in the DOM — the whole-section
+    // highlight is pure CSS (:focus-within on the shell); no class flips,
+    // no inline style, no JS-painted ring.
     fireEvent.focus(textarea());
     expect(box.className).not.toContain("outline");
     expect(box.className).not.toContain("border-[1.5px]");
     expect(box.style.borderColor).toBe("");
-    // The textarea itself never paints a ring either (its outline-none
-    // stands — a click must not outline the entry surface; keyboard focus
-    // is indicated by the caret, the WCAG text-entry exception).
+    // The textarea itself never paints a ring (its outline-none now
+    // ACTUALLY wins — the global rule sits in @layer base, below
+    // utilities; the caret is the input's own indicator, the WCAG
+    // text-entry exception).
     expect(textarea().className).toContain("outline-none");
   });
 

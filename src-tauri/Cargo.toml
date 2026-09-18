@@ -88,3 +88,14 @@ windows-sys = { version = "0.59", features = [
 # seeds keys there. See docs/decisions/0031-linux-key-store.md.
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }
+
+# ROUND-105 (R105-A): the Linux child-webview GEOMETRY layer
+# (src/gtk_child_webviews.rs) — direct access to the gtk 0.18 crate instance
+# wry/tauri-runtime-wry already resolve (same semver → same crate, feature-
+# unified), for the Overlay+Fixed widget-tree surgery that makes browser tab
+# webviews positionable on Linux (tauri's add_child packs them into tao's
+# vertical GtkBox; see the module docs for the source-verified story).
+# Gated to target_os = "linux" exactly like the `mod gtk_child_webviews`
+# declaration in lib.rs.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"

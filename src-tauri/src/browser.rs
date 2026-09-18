@@ -107,8 +107,10 @@ const BROWSER_WINDOW_LABEL: &str = "acute-browser";
 /// ROUND-50: child-webview labels are `acute-tab-<right-sidebar tab id>` —
 /// unique per browser tab, and a prefix we can sweep in
 /// `browser_tabs_close_all`. Must not collide with `BROWSER_WINDOW_LABEL`
-/// ("acute-browser" does not start with "acute-tab-").
-const TAB_LABEL_PREFIX: &str = "acute-tab-";
+/// ("acute-browser" does not start with "acute-tab-"). R105-A: also read
+/// by the Linux geometry layer (gtk_child_webviews) to pick a window's
+/// CHROME webview out of its webview list.
+pub(crate) const TAB_LABEL_PREFIX: &str = "acute-tab-";
 
 /// ROUND-50: the main app window (tauri.conf.json default label). All tab
 /// webviews are children of this window so they float over the UI.
@@ -932,6 +934,14 @@ pub async fn browser_tab_create(
     // and the profile-dir root still isolates us from the system browser.
     let profile = browser_profile_dir(&app)?;
 
+    // R105-A (Linux): make sure THIS window's widget tree can host
+    // positionable child webviews before the tab is born — the one-time,
+    // idempotent Overlay+Fixed surgery (see gtk_child_webviews). Windows
+    // is untouched: WebView2 child webviews honor set_position/set_size
+    // natively.
+    #[cfg(target_os = "linux")]
+    gtk_child_webviews::ensure_fixed_overlay(&host_window);
+
     // Emit `browser-navigated {tab_id, url}` for EVERY http/https/file
     // navigation (initial load, link clicks, redirects, form submits) so the
     // panel can keep the address bar and the sidecar's server-side history
@@ -993,6 +1003,13 @@ pub async fn browser_tab_create(
     webview
         .hide()
         .map_err(|e| format!("hide tab webview \"{tab_id}\" failed: {e}"))?;
+
+    // R105-A (Linux): pull the (hidden) tab webview out of tao's vertical
+    // GtkBox into the window's browser Fixed — while hidden, so the vbox
+    // split the box-packing would cause never becomes visible. On Windows
+    // the WebView2 child needs no adoption.
+    #[cfg(target_os = "linux")]
+    gtk_child_webviews::adopt_tab_webview(&webview);
     Ok(())
 }
 
@@ -1041,12 +1058,25 @@ pub fn browser_tab_set_bounds(
         .ok_or_else(|| format!("no native webview for tab \"{tab_id}\""))?;
     let safe_w = w.max(1.0);
     let safe_h = h.max(1.0);
-    webview
-        .set_position(LogicalPosition::new(x, y))
-        .map_err(|e| format!("set_position tab \"{tab_id}\" failed: {e}"))?;
-    webview
-        .set_size(LogicalSize::new(safe_w, safe_h))
-        .map_err(|e| format!("set_size tab \"{tab_id}\" failed: {e}"))?;
+    // R105-A: on Linux, Tauri's set_position/set_size are silent no-ops for
+    // box-packed child webviews (wry honors geometry only for GtkFixed
+    // children, and its is_in_fixed_parent flag is captured at BUILD time) —
+    // the GTK layer moves the webview instead, and self-adopts any webview
+    // still sitting in the vbox at these bounds. Windows keeps the native
+    // WebView2 path.
+    #[cfg(target_os = "linux")]
+    {
+        gtk_child_webviews::position_tab(&webview, x, y, safe_w, safe_h);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        webview
+            .set_position(LogicalPosition::new(x, y))
+            .map_err(|e| format!("set_position tab \"{tab_id}\" failed: {e}"))?;
+        webview
+            .set_size(LogicalSize::new(safe_w, safe_h))
+            .map_err(|e| format!("set_size tab \"{tab_id}\" failed: {e}"))?;
+    }
     remember_tab_bounds(&tab_id, x, y, safe_w, safe_h);
     Ok(())
 }
@@ -1083,8 +1113,19 @@ pub fn browser_tab_set_visible(
     if visible {
         if let Ok(map) = TAB_LAST_BOUNDS.lock() {
             if let Some(&(x, y, w, h)) = map.get(&tab_id) {
-                let _ = webview.set_position(LogicalPosition::new(x, y));
-                let _ = webview.set_size(LogicalSize::new(w, h));
+                // R105-A: the Linux re-assert rides the GTK layer (the
+                // tauri set_position/set_size pair is a no-op there); on
+                // Windows the recorded bounds re-apply through the native
+                // WebView2 path exactly as before.
+                #[cfg(target_os = "linux")]
+                {
+                    gtk_child_webviews::position_tab(&webview, x, y, w, h);
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = webview.set_position(LogicalPosition::new(x, y));
+                    let _ = webview.set_size(LogicalSize::new(w, h));
+                }
             }
         }
     }

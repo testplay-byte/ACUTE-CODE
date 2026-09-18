@@ -144,34 +144,49 @@
 
 /* ── ROUND-100 (R100-D, TOKENS §6): THE ONE global focus idiom ──────────────
    An accent ring, 2px, 2px offset, on every interactive element's
-   :focus-visible (keyboard focus — mouse clicks never paint it). The
-   :where() wrapper keeps specificity at ZERO, which IS the scoping
-   mechanism: any element that manages its own focus presentation (the
-   composer's focus ring below, `outline-none`/`focus:` utilities, custom
-   focus painting) overrides this rule by class specificity and never
-   double-rings. Every later screen inherits it for free. */
-:where(button, a, input, textarea, select, [tabindex]):focus-visible {
-  outline: 2px solid var(--ac-accent);
-  outline-offset: 2px;
+   :focus-visible (keyboard focus — mouse clicks never paint it on
+   buttons/links). R105-B: the rule now lives in @layer base — BELOW
+   Tailwind's utilities layer — which is what actually makes the documented
+   scoping work ("any element that manages its own focus presentation
+   overrides this rule"): the previous UNLAYERED placement beat every
+   utility (unlayered styles always outrank layered ones, regardless of
+   specificity), so `outline-none` could never win — the composer textarea
+   kept painting this ring whenever focused (text-entry elements ALWAYS
+   match :focus-visible, even on mouse click — and a click on a
+   non-focusable message never blurs the textarea, so the ring PERSISTED
+   while reading: the owner's "a border appeared around where the message
+   was supposed to be entered" report). In the base layer, element-level
+   focus presentation (outline-none, focus:* utilities, custom painting)
+   overrides this rule exactly as the comment always claimed. */
+@layer base {
+  :where(button, a, input, textarea, select, [tabindex]):focus-visible {
+    outline: 2px solid var(--ac-accent);
+    outline-offset: 2px;
+  }
 }
 
-/* ── ROUND-102 (R102-E, owner v0.99.0: "When I click on the area, the whole
-   area where I can paste in the message gets a border around it, which is
-   not good, not perfect") — the composer answers focus with NOTHING ───────
-   The R101-D treatment (a :focus-within border-color swap to accent@55%)
-   still read as "a border around the whole paste area" on a click: the
-   resting hairline is nearly invisible, so the swap's first frame is a
-   whole-box accent border appearing. The industry idiom for chat composers
-   (Slack, ChatGPT, Discord) is NO container focus chrome at all — the
-   TEXT CARET is the focus indicator (WCAG's exception for text-entry
-   surfaces), and the border stays the quiet resting hairline in every
-   state. The rule set is now: the class pins the RESTING border color
-   (inline styles would otherwise beat it), no :focus-within leg exists,
-   and dragActive keeps its inline accent border (a REAL state, applied in
-   Composer.tsx). Keyboard focus never paints the container either — the
-   caret carries it (the textarea's outline-none stands). */
+/* ── ROUND-105 (R105-B): the composer's whole-section focus highlight ──────
+   The owner's refined directive (v0.101.0): "the whole section — the input
+   of the text and the settings/configuration row — should be highlighted
+   when it is in selection." The composer-shell IS that whole section (the
+   textarea + the attachments + the toolbar row all live inside it), so the
+   focus state lands on the SHELL as one cohesive unit:
+     · border-color: the accent at 50% — the quiet resting hairline
+       (nearly invisible) wakes into the accent edge;
+     · box-shadow: a 3px accent-soft halo (9%/11% by mode) — the Slack/
+       Discord composer idiom: the whole box LIFTS as one selected surface.
+   Both ride the shell's color+shadow transition (set on the element), so
+   the highlight fades in/out smoothly — no border "popping" (the R102-E
+   verdict on the old hard swap). The textarea itself paints NOTHING (its
+   outline-none now actually wins — see the global rule's layer fix above);
+   the caret is the input's own focus indicator, and dragActive keeps its
+   inline accent border + tint (a REAL state, applied in Composer.tsx). */
 .composer-shell {
   border-color: var(--ac-border);
+}
+.composer-shell:focus-within {
+  border-color: color-mix(in srgb, var(--ac-accent) 50%, transparent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 @layer base {
