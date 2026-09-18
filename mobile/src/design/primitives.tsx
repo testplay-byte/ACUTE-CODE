@@ -151,8 +151,9 @@ export function Hairline({ inset = 0, style }: { inset?: number; style?: StylePr
 
 export interface BadgeProps {
   children: React.ReactNode;
-  /** "neutral" (subtle fill) · "accent" (accent fill + contrast text) · "danger". */
-  tone?: "neutral" | "accent" | "danger";
+  /** "neutral" (subtle fill) · "accent" · "danger" · "warning" (the fixed
+   * semantic hues of tokens.ts — warning is the running/waiting tone). */
+  tone?: "neutral" | "accent" | "danger" | "warning";
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
 }
@@ -160,8 +161,20 @@ export interface BadgeProps {
 /** The small pill — counts, scopes, status chips. 11pt, 8px radius. */
 export function Badge({ children, tone = "neutral", style, textStyle }: BadgeProps) {
   const { tokens } = useTheme();
-  const bg = tone === "accent" ? tokens.accent : tone === "danger" ? tokens.danger : tokens.pillBg;
-  const fg = tone === "accent" ? tokens.accentText : tone === "danger" ? "#FFFFFF" : tokens.textSecondary;
+  const bg =
+    tone === "accent"
+      ? tokens.accent
+      : tone === "danger"
+        ? tokens.danger
+        : tone === "warning"
+          ? tokens.warning
+          : tokens.pillBg;
+  const fg =
+    tone === "accent"
+      ? tokens.accentText
+      : tone === "danger" || tone === "warning"
+        ? "#FFFFFF"
+        : tokens.textSecondary;
   return (
     <View
       style={[
@@ -189,14 +202,17 @@ export interface TypeScaleProps {
   style?: StyleProp<TextStyle>;
   numberOfLines?: number;
   testID?: string;
+  /** Screen-reader label (the a11y discipline — every meaningful text row). */
+  accessibilityLabel?: string;
 }
 
 /** 15pt/600 — titles, the host card's machine name. */
-export function TypeTitle({ children, style, numberOfLines, testID }: TypeScaleProps) {
+export function TypeTitle({ children, style, numberOfLines, testID, accessibilityLabel }: TypeScaleProps) {
   const { tokens } = useTheme();
   return (
     <Text
       testID={testID}
+      accessibilityLabel={accessibilityLabel}
       numberOfLines={numberOfLines}
       style={[{ color: tokens.text, fontSize: TYPE_TITLE, fontFamily: fontStack.sans, fontWeight: "600" }, style]}
     >
@@ -206,11 +222,12 @@ export function TypeTitle({ children, style, numberOfLines, testID }: TypeScaleP
 }
 
 /** 13pt/400 — body and list rows. */
-export function TypeBody({ children, style, numberOfLines, testID }: TypeScaleProps) {
+export function TypeBody({ children, style, numberOfLines, testID, accessibilityLabel }: TypeScaleProps) {
   const { tokens } = useTheme();
   return (
     <Text
       testID={testID}
+      accessibilityLabel={accessibilityLabel}
       numberOfLines={numberOfLines}
       style={[{ color: tokens.text, fontSize: TYPE_BODY, fontFamily: fontStack.sans, fontWeight: "400" }, style]}
     >
@@ -220,11 +237,12 @@ export function TypeBody({ children, style, numberOfLines, testID }: TypeScalePr
 }
 
 /** 11pt/400 — captions, status lines, metadata (secondary tone by default). */
-export function TypeCaption({ children, style, numberOfLines, testID }: TypeScaleProps) {
+export function TypeCaption({ children, style, numberOfLines, testID, accessibilityLabel }: TypeScaleProps) {
   const { tokens } = useTheme();
   return (
     <Text
       testID={testID}
+      accessibilityLabel={accessibilityLabel}
       numberOfLines={numberOfLines}
       style={[
         { color: tokens.textSecondary, fontSize: TYPE_CAPTION, fontFamily: fontStack.sans, fontWeight: "400" },
@@ -237,11 +255,12 @@ export function TypeCaption({ children, style, numberOfLines, testID }: TypeScal
 }
 
 /** Machine text — commands, fingerprints, PINs, addresses (platform mono). */
-export function TypeMono({ children, style, numberOfLines, testID }: TypeScaleProps) {
+export function TypeMono({ children, style, numberOfLines, testID, accessibilityLabel }: TypeScaleProps) {
   const { tokens } = useTheme();
   return (
     <Text
       testID={testID}
+      accessibilityLabel={accessibilityLabel}
       numberOfLines={numberOfLines}
       style={[
         { color: tokens.textSecondary, fontSize: TYPE_CAPTION, fontFamily: fontStack.mono, fontWeight: "400" },

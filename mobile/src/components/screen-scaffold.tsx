@@ -5,7 +5,13 @@
  */
 
 import React from "react";
-import { Pressable, ScrollView, StyleSheet, View } from "react-native";
+import {
+  Pressable,
+  type RefreshControlProps,
+  ScrollView,
+  StyleSheet,
+  View,
+} from "react-native";
 import { ChevronLeft } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -21,9 +27,18 @@ export interface ScreenScaffoldProps {
   children: React.ReactNode;
   /** Wrap the body in a ScrollView (default true). */
   scroll?: boolean;
+  /** Pull-to-refresh, wired to the scroll body (the screens own the state). */
+  refreshControl?: React.ReactElement<RefreshControlProps>;
 }
 
-export function ScreenScaffold({ title, back = true, right, children, scroll = true }: ScreenScaffoldProps) {
+export function ScreenScaffold({
+  title,
+  back = true,
+  right,
+  children,
+  scroll = true,
+  refreshControl,
+}: ScreenScaffoldProps) {
   const { tokens } = useTheme();
   const router = useRouter();
 
@@ -54,7 +69,10 @@ export function ScreenScaffold({ title, back = true, right, children, scroll = t
       <Body
         style={{ flex: 1 }}
         {...(scroll
-          ? { contentContainerStyle: [styles.bodyContent, { backgroundColor: tokens.bg }] }
+          ? {
+              contentContainerStyle: [styles.bodyContent, { backgroundColor: tokens.bg }],
+              refreshControl,
+            }
           : { style: [{ flex: 1, backgroundColor: tokens.bg }] })}
       >
         {children}

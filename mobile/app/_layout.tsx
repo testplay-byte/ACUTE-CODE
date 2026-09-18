@@ -8,8 +8,9 @@
  *   /pairing     → QR scan + manual fallback + confirm + pair
  *   /settings    → themes, mode, host details, unpair, about
  *   /(tabs)/…    → home · projects · sessions · approvals · notifications
- *                  (the group renders the custom bottom bar; the four
- *                  non-home tabs are styled S4b placeholders today)
+ *                  (the group renders the custom bottom bar)
+ *   /session/:id → the pushed transcript + live stream + composer
+ *                  (OUTSIDE the tabs — a stack screen over them)
  */
 
 import { useEffect, useState } from "react";
@@ -51,6 +52,7 @@ function RootNavigator() {
         <Stack.Screen name="index" />
         <Stack.Screen name="pairing" />
         <Stack.Screen name="settings" />
+        <Stack.Screen name="session/[id]" />
         <Stack.Screen name="(tabs)" />
       </Stack>
     </View>

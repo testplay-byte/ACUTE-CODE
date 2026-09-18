@@ -20,6 +20,7 @@
     "expo-camera": "~57.0.5",
     "expo-constants": "~57.0.19",
     "expo-device": "~57.0.2",
+    "expo-haptics": "^57.0.3",
     "expo-router": "~57.0.22",
     "expo-secure-store": "~57.0.4",
     "expo-splash-screen": "~57.0.9",
