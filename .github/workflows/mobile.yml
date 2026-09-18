@@ -1,0 +1,125 @@
+name: Mobile APK
+
+# ROUND-106 (R106-S5): the Android companion's build pipeline — the owner's
+# rule: APKs are BUILT BY GITHUB ACTIONS, never on a local machine.
+#
+# Two dispatch modes, ONE job:
+#   · every push to main  → the debug APK as a workflow ARTIFACT only
+#     (side-by-side installable — applicationId com.acutecode.companion,
+#     so each artifact UPDATES rather than duplicating);
+#   · every v* tag        → the same debug APK artifact PLUS the attach job,
+#     which lands it on the tag's GitHub Release (the owner's R106 ruling:
+#     debug is THE artifact for now — release signing stays designed-but-
+#     dormant until asked; one release page, every platform).
+#
+# The build is the standard Expo-on-Actions recipe: npm ci →
+# expo prebuild -p android --clean → gradlew assembleDebug. The mobile/
+# workspace is standalone npm (outside pnpm-workspace.yaml), so the
+# desktop pipeline's --frozen-lockfile is untouched. Version alignment is
+# asserted BEFORE the build (node scripts/release/version.mjs check now
+# covers mobile/app.json's versionName + the derived versionCode — the
+# R2 decision "asserted in the workflow, not in prose").
+#
+# The attach job survives the cross-workflow race by design: release.yml
+# creates the tag's DRAFT release in its own (parallel) run — typically
+# 20–30 minutes after the tag. scripts/release/upload-apk-asset.sh polls
+# for the draft (60s × 35, bounded) and then uploads with the publisher's
+# exact bounded/retrying/resumable curl discipline.
+#
+# ROUND-103 discipline: every job bounded (timeout-minutes) — a wedged
+# build fails loudly in minutes, never hangs for hours.
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  android-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      # JDK for gradle (Expo SDK 57's AGP needs 17+; 21 is the safe floor).
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # The version gate BEFORE any minutes are spent on gradle: the APK's
+      # versionName (app.json) + versionCode (derived) must agree with the
+      # repo's seven version files (stdlib-only script — no install needed).
+      - name: Version consistency (incl. the APK versionName)
+        run: node scripts/release/version.mjs check
+
+      - name: Record version
+        id: version
+        run: echo "version=$(node scripts/release/version.mjs get)" >> "$GITHUB_OUTPUT"
+
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: npm ci
+
+      # --clean regenerates the android/ tree from app.json + the local
+      # modules (modules/acute-net autolinks here); the tree is untracked
+      # (mobile/android/ is gitignored) so every build is deterministic.
+      - name: Expo prebuild (android)
+        working-directory: mobile
+        run: npx expo prebuild -p android --clean
+
+      - name: Build the debug APK
+        working-directory: mobile/android
+        run: ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Collect the APK (repo asset naming)
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mv mobile/android/app/build/outputs/apk/debug/app-debug.apk \
+            "ACUTE-CODE_${VERSION}_android-debug.apk"
+          ls -lh "ACUTE-CODE_${VERSION}_android-debug.apk"
+
+      - name: Upload the debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: acute-apk-android-debug
+          path: ACUTE-CODE_${{ steps.version.outputs.version }}_android-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  # Tag dispatches only: land the APK on the release (the draft that
+  # release.yml's publisher creates in its parallel run).
+  attach-apk-to-release:
+    needs: android-apk
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: acute-apk-android-debug
+
+      - name: Attach the debug APK to the tag's release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          APK: ACUTE-CODE_${{ needs.android-apk.outputs.version }}_android-debug.apk
+        run: bash scripts/release/upload-apk-asset.sh

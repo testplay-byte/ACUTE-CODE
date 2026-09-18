@@ -29,7 +29,10 @@ const VERSION_FILES = [
   { rel: "package.json", label: "root package.json", kind: "json" },
   { rel: "agent-core/package.json", label: "agent-core/package.json", kind: "json" },
   { rel: "shared/package.json", label: "shared/package.json", kind: "json" },
+  { rel: "cli/package.json", label: "cli/package.json (the acute CLI)", kind: "json" },
   { rel: "src-tauri/tauri.conf.json", label: "src-tauri/tauri.conf.json", kind: "tauri" },
+  { rel: "mobile/package.json", label: "mobile/package.json (the Android companion)", kind: "json" },
+  { rel: "mobile/app.json", label: "mobile/app.json (APK versionName)", kind: "expo" },
 ];
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
@@ -43,11 +46,48 @@ function readVersion(file) {
     }
     return match[1];
   }
+  if (file.kind === "expo") {
+    // ROUND-106 (R106-S5): mobile/app.json carries the APK's versionName at
+    // expo.version — the outer package also has a stray "version"-less
+    // shape, so the nested read is explicit. The APK's versionCode is
+    // checked alongside (checkCmd) so it can never drift from the semver.
+    const app = JSON.parse(readFileSync(join(ROOT, file.rel), "utf8"));
+    const version = app?.expo?.version;
+    if (typeof version !== "string") {
+      throw new Error(`${file.rel}: no expo.version field found`);
+    }
+    return version;
+  }
   const pkg = JSON.parse(readFileSync(join(ROOT, file.rel), "utf8"));
   if (typeof pkg.version !== "string") {
     throw new Error(`${file.rel}: no "version" field found`);
   }
   return pkg.version;
+}
+
+/** The APK versionCode the semver implies: major*10000 + minor*100 + patch
+ * (prereleases ride the numeric triple — 0.102.0-rc.1 → 10200). */
+function derivedVersionCode(version) {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  if (!m) return null;
+  return Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]);
+}
+
+/** ROUND-106 (R106-S5): the expo app.json ALSO carries android.versionCode —
+ * the sidecar-form side of the APK's identity. A versionName match with a
+ * stale versionCode would install as a DOWNGRADE next to the previous APK;
+ * check treats that as drift (fail loudly, fix with version:set). */
+function checkExpoVersionCode(file, expected) {
+  const app = JSON.parse(readFileSync(join(ROOT, file.rel), "utf8"));
+  const code = app?.expo?.android?.versionCode;
+  const want = derivedVersionCode(expected);
+  if (typeof code !== "number" || code !== want) {
+    console.error(
+      `DRIFT  ${file.rel}: android.versionCode ${code} != derived ${want} (from ${expected})`,
+    );
+    return false;
+  }
+  return true;
 }
 
 /** Root package.json is the source of truth ("get" reads it, "check" compares
@@ -70,13 +110,21 @@ function checkCmd() {
     console.log(`${mark}  ${file.label}: ${version}`);
   }
 
-  if (drifted.length === 0) {
+  // ROUND-106: the expo versionCode rides the versionName check (an APK
+  // with a stale code installs as a downgrade — that is drift, loudly).
+  let expoCodeOk = true;
+  for (const file of VERSION_FILES) {
+    if (file.kind === "expo") expoCodeOk = checkExpoVersionCode(file, expected) && expoCodeOk;
+  }
+
+  if (drifted.length === 0 && expoCodeOk) {
     console.log(`version:check — all ${VERSION_FILES.length} files agree on ${expected}`);
     return 0;
   }
 
+  const codeNote = expoCodeOk ? "" : " (+ the expo versionCode is stale)";
   console.error(
-    `\nVersion drift detected (${drifted.length} file(s) disagree with root package.json ${expected}).\n` +
+    `\nVersion drift detected (${drifted.length} file(s) disagree with root package.json ${expected})${codeNote}.\n` +
       `Fix: pnpm version:set ${expected}\n` +
       `(or bump everywhere at once: pnpm version:set <new-semver>)`,
   );
@@ -122,6 +170,49 @@ function setCmd(rawVersion) {
       }
       writeFileSync(abs, next.join("\n"));
       console.log(`set   ${file.label}: ${version}`);
+      continue;
+    }
+
+    if (file.kind === "expo") {
+      // ROUND-106 (R106-S5): line-wise like the tauri config — app.json is
+      // hand-shaped (plugins, adaptive icons); a re-serialize would churn
+      // unrelated keys. TWO lines change: expo.version (the APK's
+      // versionName) and android.versionCode (the derived install code —
+      // a stale one installs as a downgrade).
+      const text = readFileSync(abs, "utf8");
+      const code = derivedVersionCode(version);
+      if (code === null) {
+        throw new Error(`cannot derive a versionCode from "${version}"`);
+      }
+      const versionRe = /^(\s*"version"\s*:\s*")([^"]+)("\s*,?\s*)$/;
+      const codeRe = /^(\s*"versionCode"\s*:\s*)(\d+)(\s*,?\s*)$/;
+      let setVersion = 0;
+      let setCode = 0;
+      const next = text.split("\n").map((line) => {
+        const vm = line.match(versionRe);
+        if (vm) {
+          setVersion += 1;
+          return vm[1] + version + vm[3];
+        }
+        const cm = line.match(codeRe);
+        if (cm) {
+          setCode += 1;
+          return cm[1] + code + cm[3];
+        }
+        return line;
+      });
+      if (setVersion !== 1) {
+        throw new Error(
+          `${file.rel}: expected exactly one "version" line to rewrite (found ${setVersion})`,
+        );
+      }
+      if (setCode !== 1) {
+        throw new Error(
+          `${file.rel}: expected exactly one "versionCode" line to rewrite (found ${setCode})`,
+        );
+      }
+      writeFileSync(abs, next.join("\n"));
+      console.log(`set   ${file.label}: ${version} (versionCode ${code})`);
       continue;
     }
 
