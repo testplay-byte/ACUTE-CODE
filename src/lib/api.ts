@@ -4749,3 +4749,100 @@ export async function listPlugins(projectId?: string): Promise<{
   const path = projectId ? `/plugins?projectId=${encodeURIComponent(projectId)}` : "/plugins";
   return request(path);
 }
+
+/* ── Device links / mobile companion (ROUND-106 R106-S2 — the Devices tab) ──
+ * The sidecar surface R106-S1 pinned (agent-core routes/mobile.ts +
+ * routes/settings.ts): the master link toggle, the pairing QR payload, the
+ * linked-device registry, and the one-shot link-info status. Every route
+ * here rides the SHELL bearer token (pair/claim — the phone's job — is
+ * deliberately NOT part of this client). Shapes are the backend's exact
+ * wire contract (LINKING-PROTOCOL.md §2/§5). */
+
+/** GET/PUT /settings/device-link — the "Allow device links" master switch.
+ * PUT true starts the TLS listener at runtime; false stops it. A failed
+ * start answers 400 + the error envelope and the setting stays OFF. */
+export interface DeviceLinkSettings {
+  enabled: boolean;
+}
+
+export async function fetchDeviceLinkSettings(): Promise<DeviceLinkSettings> {
+  return request<DeviceLinkSettings>("/settings/device-link");
+}
+
+export async function updateDeviceLinkSettings(
+  patch: Partial<DeviceLinkSettings>,
+): Promise<DeviceLinkSettings> {
+  return request<DeviceLinkSettings>("/settings/device-link", {
+    method: "PUT",
+    json: patch,
+  });
+}
+
+/** The one active pairing session as link-info reports it (null when no
+ * window is open — consumed, expired, or never started). */
+export interface ActivePairing {
+  pin: string;
+  /** Epoch ms — the 120s window's hard end. */
+  expiresAt: number;
+}
+
+/** GET /mobile/link-info — the Devices tab's one-shot status: the live
+ * listener state (port + LAN addresses the phone can reach) + the active
+ * pairing window, if any. */
+export interface MobileLinkInfo {
+  enabled: boolean;
+  port: number | null;
+  addrs: string[];
+  certFP: string | null;
+  machineId: string | null;
+  activePairing: ActivePairing | null;
+}
+
+export async function fetchMobileLinkInfo(): Promise<MobileLinkInfo> {
+  return request<MobileLinkInfo>("/mobile/link-info");
+}
+
+/** POST /mobile/pair/start — mints the ONE active pairing session and
+ * returns THE QR PAYLOAD verbatim: the desktop's ordered address list
+ * (LAN first, a tunnel URL joins later — never a single host field), the
+ * machine's TLS cert fingerprint + stable id, the 8-digit PIN, and the
+ * 120s TTL. The dialog encodes EXACTLY this object (one compact JSON
+ * string, fields untouched — the phone parses it). */
+export interface MobilePairingPayload {
+  v: number;
+  addrs: string[];
+  port: number;
+  certFP: string;
+  machineId: string;
+  pin: string;
+  ttl: number;
+  expiresAt: number;
+}
+
+export async function startMobilePairing(): Promise<MobilePairingPayload> {
+  return request<MobilePairingPayload>("/mobile/pair/start", { method: "POST", json: {} });
+}
+
+/** One row of GET /mobile/devices — a paired phone (label, scopes, epoch-ms
+ * timestamps; oldest first). lastSeenAt is display-only staleness (the
+ * long-lived-link ruling); revocation is the owner's manual act. */
+export interface MobileDeviceInfo {
+  id: string;
+  label: string;
+  scopes: string[];
+  createdAt: number;
+  lastSeenAt: number;
+}
+
+export async function fetchMobileDevices(): Promise<MobileDeviceInfo[]> {
+  const body = await request<{ devices: MobileDeviceInfo[] }>("/mobile/devices");
+  return body.devices;
+}
+
+/** DELETE /mobile/devices/:id — revoke (the row is DELETEd; the phone's
+ * next request falls back to its pairing screen). Unknown id → 404. */
+export async function revokeMobileDevice(id: string): Promise<{ ok: boolean; revoked: string }> {
+  return request<{ ok: boolean; revoked: string }>(`/mobile/devices/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}

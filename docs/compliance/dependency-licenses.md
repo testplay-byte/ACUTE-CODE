@@ -6,7 +6,7 @@ Policy (SPEC section 6): allowed - MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, 
 Forbidden - GPL, AGPL, LGPL and any license that cannot be classified (closed-source distribution).
 Every license exception must be recorded as an ADR under `docs/decisions/`.
 
-Audited production dependencies: 267. Verdict: CLEAN.
+Audited production dependencies: 296. Verdict: CLEAN.
 
 | Package | Version | License | Verdict |
 |---|---|---|---|
@@ -107,6 +107,8 @@ Audited production dependencies: 267. Verdict: CLEAN.
 | ai | 7.0.73 | Apache-2.0 | OK |
 | ajv | 8.20.0 | MIT | OK |
 | ajv-formats | 3.0.1 | MIT | OK |
+| ansi-regex | 5.0.1 | MIT | OK |
+| ansi-styles | 4.3.0 | MIT | OK |
 | aria-hidden | 1.2.6 | MIT | OK |
 | asn1.js | 5.4.1 | MIT | OK |
 | asn1js | 3.0.10 | BSD-3-Clause | OK |
@@ -116,7 +118,11 @@ Audited production dependencies: 267. Verdict: CLEAN.
 | bn.js | 4.12.5 | MIT | OK |
 | buffer-equal-constant-time | 1.0.1 | BSD-3-Clause | OK |
 | bytestreamjs | 2.0.1 | BSD-3-Clause | OK |
+| camelcase | 5.3.1 | MIT | OK |
+| cliui | 6.0.0 | ISC | OK |
 | clsx | 2.1.1 | MIT | OK |
+| color-convert | 2.0.1 | MIT | OK |
+| color-name | 1.1.4 | MIT | OK |
 | commander | 7.2.0 | MIT | OK |
 | commander | 8.3.0 | MIT | OK |
 | cookie | 1.1.1 | MIT | OK |
@@ -164,11 +170,14 @@ Audited production dependencies: 267. Verdict: CLEAN.
 | dagre-d3-es | 7.0.14 | MIT | OK |
 | dayjs | 1.11.23 | MIT | OK |
 | debug | 4.4.3 | MIT | OK |
+| decamelize | 1.2.0 | MIT | OK |
 | delaunator | 5.1.0 | ISC | OK |
 | dequal | 2.0.3 | MIT | OK |
 | detect-node-es | 1.1.0 | MIT | OK |
+| dijkstrajs | 1.0.3 | MIT | OK |
 | dompurify | 3.4.15 | (MPL-2.0 OR Apache-2.0) | OK (SPDX OR) |
 | ecdsa-sig-formatter | 1.0.11 | Apache-2.0 | OK |
+| emoji-regex | 8.0.0 | MIT | OK |
 | es-toolkit | 1.52.0 | MIT | OK |
 | eventsource-parser | 3.1.1 | MIT | OK |
 | fast-decode-uri-component | 1.0.1 | MIT | OK |
@@ -181,7 +190,9 @@ Audited production dependencies: 267. Verdict: CLEAN.
 | fastify | 5.12.1 | MIT | OK |
 | fastq | 1.20.1 | ISC | OK |
 | find-my-way | 9.8.0 | MIT | OK |
+| find-up | 4.1.0 | MIT | OK |
 | framer-motion | 13.1.1 | MIT | OK |
+| get-caller-file | 2.0.5 | ISC | OK |
 | get-nonce | 1.0.1 | MIT | OK |
 | hachure-fill | 0.5.2 | MIT | OK |
 | http_ece | 1.2.0 | MIT | OK |
@@ -192,6 +203,7 @@ Audited production dependencies: 267. Verdict: CLEAN.
 | internmap | 1.0.1 | ISC | OK |
 | internmap | 2.0.3 | ISC | OK |
 | ipaddr.js | 2.5.0 | MIT | OK |
+| is-fullwidth-code-point | 3.0.0 | MIT | OK |
 | js-tokens | 4.0.0 | MIT | OK |
 | json-schema | 0.4.0 | (AFL-2.1 OR BSD-3-Clause) | OK (SPDX OR) |
 | json-schema-ref-resolver | 3.0.0 | MIT | OK |
@@ -203,6 +215,7 @@ Audited production dependencies: 267. Verdict: CLEAN.
 | layout-base | 1.0.2 | MIT | OK |
 | layout-base | 2.0.1 | MIT | OK |
 | light-my-request | 6.6.0 | BSD-3-Clause | OK |
+| locate-path | 5.0.0 | MIT | OK |
 | lodash-es | 4.18.1 | MIT | OK |
 | loose-envify | 1.4.0 | MIT | OK |
 | lucide-react | 1.33.0 | ISC | OK |
@@ -217,12 +230,17 @@ Audited production dependencies: 267. Verdict: CLEAN.
 | node-addon-api | 8.9.2 | MIT | OK |
 | node-pty | 1.1.0 | MIT | OK |
 | on-exit-leak-free | 2.1.2 | MIT | OK |
+| p-limit | 2.3.0 | MIT | OK |
+| p-locate | 4.1.0 | MIT | OK |
+| p-try | 2.2.0 | MIT | OK |
 | package-manager-detector | 1.8.0 | MIT | OK |
 | path-data-parser | 0.1.0 | MIT | OK |
+| path-exists | 4.0.0 | MIT | OK |
 | pino | 10.3.1 | MIT | OK |
 | pino-abstract-transport | 3.0.0 | MIT | OK |
 | pino-std-serializers | 7.1.0 | MIT | OK |
 | pkijs | 3.4.0 | BSD-3-Clause | OK |
+| pngjs | 5.0.0 | MIT | OK |
 | pngjs | 7.0.0 | MIT | OK |
 | points-on-curve | 0.2.0 | MIT | OK |
 | points-on-path | 0.2.1 | MIT | OK |
@@ -231,6 +249,7 @@ Audited production dependencies: 267. Verdict: CLEAN.
 | process-warning | 5.1.0 | MIT | OK |
 | pvtsutils | 1.3.6 | MIT | OK |
 | pvutils | 1.2.0 | MIT | OK |
+| qrcode | 1.5.4 | MIT | OK |
 | quick-format-unescaped | 4.0.4 | MIT | OK |
 | react | 18.3.1 | MIT | OK |
 | react-dom | 18.3.1 | MIT | OK |
@@ -241,7 +260,9 @@ Audited production dependencies: 267. Verdict: CLEAN.
 | real-require | 0.2.0 | MIT | OK |
 | real-require | 1.0.0 | MIT | OK |
 | reflect-metadata | 0.2.2 | Apache-2.0 | OK |
+| require-directory | 2.1.1 | MIT | OK |
 | require-from-string | 2.0.2 | MIT | OK |
+| require-main-filename | 2.0.0 | ISC | OK |
 | ret | 0.5.0 | MIT | OK |
 | reusify | 1.1.0 | MIT | OK |
 | rfdc | 1.4.1 | MIT | OK |
@@ -256,10 +277,13 @@ Audited production dependencies: 267. Verdict: CLEAN.
 | secure-json-parse | 4.1.0 | BSD-3-Clause | OK |
 | selfsigned | 5.5.0 | MIT | OK |
 | semver | 7.8.5 | ISC | OK |
+| set-blocking | 2.0.0 | ISC | OK |
 | set-cookie-parser | 2.7.2 | MIT | OK |
 | sonic-boom | 4.2.1 | MIT | OK |
 | split2 | 4.2.0 | ISC | OK |
 | strictdom | 1.0.1 | MIT | OK |
+| string-width | 4.2.3 | MIT | OK |
+| strip-ansi | 6.0.1 | MIT | OK |
 | stylis | 4.4.0 | MIT | OK |
 | tailwind-merge | 3.6.0 | MIT | OK |
 | thread-stream | 4.2.0 | MIT | OK |
@@ -275,5 +299,10 @@ Audited production dependencies: 267. Verdict: CLEAN.
 | use-sidecar | 1.1.3 | MIT | OK |
 | uuid | 14.0.2 | MIT | OK |
 | web-push | 3.6.7 | MPL-2.0 | OK |
+| which-module | 2.0.1 | ISC | OK |
+| wrap-ansi | 6.2.0 | MIT | OK |
+| y18n | 4.0.3 | ISC | OK |
+| yargs | 15.4.1 | MIT | OK |
+| yargs-parser | 18.1.3 | ISC | OK |
 | zod | 4.4.3 | MIT | OK |
 | zustand | 5.0.15 | MIT | OK |

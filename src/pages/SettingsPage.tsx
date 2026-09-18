@@ -71,6 +71,10 @@ import { ComputerUseTab } from "../components/settings/ComputerUseTab";
 // owner's "remove the vision model from there and create a dedicated
 // section" directive. Deep-link ?tab=vision.
 import { ImageAnalysisTab } from "../components/settings/ImageAnalysisTab";
+// ROUND-106 (R106-S2): the DEVICES tab — the desktop half of device linking
+// (the allow-links toggle, the QR+PIN pairing window, the linked-devices
+// list with revoke). Deep-link ?tab=devices.
+import { DevicesTab } from "../components/settings/DevicesTab";
 import { bdr, withAlpha } from "../components/dashboard/helpers";
 // R100-E1 (research §C2 P1(b)): the round-100 ui/ primitives — the settings
 // page's own cards ride SectionCard, its label+control rows ride SettingsRow,
@@ -106,6 +110,9 @@ import { cn } from "../lib/utils";
  * THIS page is the content pane alone. The tab state machine is UNTOUCHED:
  * the sidebar's nav clicks write the same ?tab= param the deep links have
  * always used; below md the mobile drawer carries the same settings nav.
+ * R106-S2: the Devices tab (?tab=devices) joins the render map — the
+ * settings-sections.ts list is the ONE source (the sidebar's settings mode
+ * renders from the same module, so the nav picks it up by construction).
  */
 export function SettingsPage() {
   const [params] = useSearchParams();
@@ -173,6 +180,7 @@ export function SettingsPage() {
           {tab === "computeruse" && <ComputerUseTab />}
           {tab === "vision" && <ImageAnalysisTab />}
           {tab === "browser" && <BrowserTab />}
+          {tab === "devices" && <DevicesTab />}
           {tab === "data" && <DataStatsPanel />}
           {tab === "advanced" && <AdvancedTab />}
           {tab === "about" && <AboutTab />}

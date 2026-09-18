@@ -10,6 +10,7 @@ import {
   ScanEye,
   Server,
   SlidersHorizontal,
+  Smartphone,
   Sparkles,
   Users,
   type LucideIcon,
@@ -76,6 +77,12 @@ export const SETTINGS_SECTIONS = [
   // address-bar search engine, the homepage, the default zoom, and the
   // editable quick links. Same id discipline (deep-link ?tab=browser).
   { id: "browser", label: "Browser", icon: Globe, group: "Integrations" },
+  // ROUND-106 (R106-S2, per ANDROID-R3-OWNER-RULINGS §3.2): the dedicated
+  // DEVICES section — the desktop half of device linking: the allow-links
+  // master toggle, "Link a device" (QR + PIN + the live 120s countdown +
+  // the manual fallback), and the linked-devices list with revoke. Same id
+  // discipline (deep-link ?tab=devices).
+  { id: "devices", label: "Devices", icon: Smartphone, group: "Integrations" },
   // ROUND-98 (R98-I2, owner directive): the Data & Statistics section —
   // total tokens, peak day, the heatmap, the model-mix charts, agent
   // health, and clear-all-data (the same DataStatsPanel the /usage screen
@@ -124,6 +131,7 @@ export const SEARCH_KEYWORDS: Record<SettingsSectionId, readonly string[]> = {
   computeruse: ["computer use", "desktop control", "master switch", "posture", "safety"],
   vision: ["vision", "image analysis", "model", "api key", "provider"],
   browser: ["search engine", "homepage", "home page", "zoom", "link opening", "quick links"],
+  devices: ["device", "phone", "link", "pair", "pairing", "qr", "pin", "android", "companion", "revoke", "last seen"],
   data: ["data", "statistics", "tokens", "heatmap", "model mix", "agent health", "clear data", "usage"],
   advanced: ["retry", "rate limit", "timeout", "network", "thinking loop", "debug", "analyst", "memory", "desktop notifications", "schedule"],
   about: ["version", "update", "reset", "engine", "releases"],
