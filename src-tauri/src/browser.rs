@@ -94,6 +94,11 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+// R105-A: the Linux child-webview geometry layer (crate::gtk_child_webviews)
+// — ensure/adopt/position ride its Overlay+Fixed surgery. The import is
+// cfg-gated exactly like the module declaration in lib.rs.
+#[cfg(target_os = "linux")]
+use crate::gtk_child_webviews;
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder,
     WebviewUrl, WebviewWindowBuilder,

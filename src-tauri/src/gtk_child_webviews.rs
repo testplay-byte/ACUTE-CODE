@@ -194,14 +194,18 @@ pub fn adopt_tab_webview(webview: &Webview) {
         let Some(fixed) = find_browser_fixed(&widget) else {
             return;
         };
-        let in_fixed = widget
-            .parent()
+        // Bind the parent Option first — the downcast_ref borrow must
+        // outlive the is_some_and comparison (an inline and_then would
+        // return a reference to its own parameter: E0515).
+        let parent = widget.parent();
+        let in_fixed = parent
+            .as_ref()
             .and_then(|p| p.downcast_ref::<Fixed>())
             .is_some_and(|f| f == &fixed);
         if in_fixed {
             fixed.move_(&widget, 0, 0);
         } else {
-            if let Some(p) = widget.parent() {
+            if let Some(p) = parent {
                 if let Ok(vbox) = p.downcast::<GtkBox>() {
                     vbox.remove(&widget);
                 }
@@ -239,14 +243,18 @@ pub fn position_tab(webview: &Webview, x: f64, y: f64, w: f64, h: f64) {
         let Some(fixed) = find_browser_fixed(&widget) else {
             return;
         };
-        let in_fixed = widget
-            .parent()
+        // Bind the parent Option first — the downcast_ref borrow must
+        // outlive the is_some_and comparison (an inline and_then would
+        // return a reference to its own parameter: E0515).
+        let parent = widget.parent();
+        let in_fixed = parent
+            .as_ref()
             .and_then(|p| p.downcast_ref::<Fixed>())
             .is_some_and(|f| f == &fixed);
         if in_fixed {
             fixed.move_(&widget, x, y);
         } else {
-            if let Some(p) = widget.parent() {
+            if let Some(p) = parent {
                 if let Ok(vbox) = p.downcast::<GtkBox>() {
                     vbox.remove(&widget);
                 }
