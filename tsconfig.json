@@ -16,8 +16,17 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  // Dual duty: base config for the agent-core/shared build tsconfigs AND the
-  // noEmit program that typechecks the entire workspace (frontend, shared,
-  // agent-core, and all test files) for the root `pnpm typecheck` script.
-  "include": ["src", "vite.config.ts", "shared/src", "agent-core/src", "agent-core/tests"]
+  // Dual duty: base config for the agent-core/shared/cli build tsconfigs AND
+  // the noEmit program that typechecks the entire workspace (frontend, shared,
+  // agent-core, the terminal client, and all test files) for the root
+  // `pnpm typecheck` script.
+  "include": [
+    "src",
+    "vite.config.ts",
+    "shared/src",
+    "agent-core/src",
+    "agent-core/tests",
+    "cli/src",
+    "cli/tests"
+  ]
 }

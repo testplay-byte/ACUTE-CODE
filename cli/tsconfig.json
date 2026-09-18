@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // Node-only package: no DOM globals (the agent-core pattern).
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  // Tests are typechecked by the root tsconfig program (the agent-core
+  // convention); the build output is library-only.
+  "include": ["src"],
+  "exclude": ["tests"]
+}

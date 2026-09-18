@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "smoke": "node scripts/smoke.mjs",
+    "cli": "node cli/bin/acute.mjs",
     "test:e2e": "vitest run --config tests/e2e/vitest.config.ts",
     "build": "pnpm --filter shared run build && pnpm --filter agent-core run build && vite build && node scripts/release/check-mermaid-chunk.mjs",
     "tauri": "tauri",

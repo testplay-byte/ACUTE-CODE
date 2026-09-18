@@ -1,8 +1,10 @@
 # The workspace root (this directory) is the frontend package itself, so only
-# the sidecar and the shared types package are listed here (brief section 5).
+# the sidecar, the shared types package, and the terminal client are listed
+# here (brief section 5).
 packages:
   - agent-core
   - shared
+  - cli
 
 # pnpm 11 blocks dependency build scripts unless explicitly allowed; esbuild
 # (used by vite/vitest), better-sqlite3 (native addon prebuild/fallback build,

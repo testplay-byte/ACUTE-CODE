@@ -1,0 +1,21 @@
+{
+  "name": "acute-cli",
+  "version": "0.101.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "description": "The `acute` terminal client — attach to a running sidecar or spawn one (CLI-DESIGN §3; zero runtime deps, Node built-ins only).",
+  "bin": {
+    "acute": "bin/acute.mjs"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit false --outDir dist",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "~5.9.0",
+    "vitest": "^3.0.0"
+  }
+}

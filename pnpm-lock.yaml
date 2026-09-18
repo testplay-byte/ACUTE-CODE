@@ -150,6 +150,18 @@ importers:
         specifier: ^3.6.4
         version: 3.6.4
 
+  cli:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ~5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@24.13.3)(happy-dom@15.11.7)(jiti@2.7.0)(lightningcss@1.32.0)
+
   shared: {}
 
 packages:
