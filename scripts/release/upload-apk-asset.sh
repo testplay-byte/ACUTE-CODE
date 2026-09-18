@@ -54,19 +54,38 @@ api() {
 # 35 minutes covers release.yml's slowest observed full chain (~30 min for
 # the four desktop jobs + the publisher's own run) with margin; each poll
 # is a bounded API call, and a miss prints where to look.
-echo "waiting for the ${TAG} draft release to exist (release.yml runs in parallel)…"
-RELEASE_ID=""
-for attempt in $(seq 1 35); do
-  RELEASE_ID=$(api "${API}/repos/${REPO}/releases" |
-    python3 - "${TAG}" <<'PY' || true
+#
+# R107 hotfix (the v0.102.0 attach failure, reproduced locally): the
+# original block piped the API response INTO `python3 -` while ALSO
+# redirecting a heredoc onto the same stdin — the heredoc wins, python
+# reads its program from it, and json.load(sys.stdin) then reads EOF (the
+# pipe's data never arrives); worse, the `|| true` parked on the
+# heredoc-operator line made bash's parser die with "command substitution:
+# syntax error near unexpected token `||'" before a single poll ran. The
+# fix is the file's own asset_lookup pattern: api → temp file, python
+# reads the FILE as an argument, the sniffer is a plain function (heredoc
+# inside a function body parses cleanly — no multi-line substitution).
+draft_id() { # $1 = tag; prints the draft release id (or nothing)
+  python3 - "$1" /tmp/apk-releases.json <<'PY'
 import json, sys
-tag = sys.argv[1]
-for rel in json.load(sys.stdin):
+tag, path = sys.argv[1], sys.argv[2]
+try:
+    releases = json.load(open(path))
+except Exception:
+    releases = []
+for rel in releases:
     if rel.get("tag_name") == tag and rel.get("draft") is True:
         print(rel["id"])
         break
 PY
-  ) || RELEASE_ID=""
+}
+
+echo "waiting for the ${TAG} draft release to exist (release.yml runs in parallel)…"
+RELEASE_ID=""
+for attempt in $(seq 1 35); do
+  if api "${API}/repos/${REPO}/releases" > /tmp/apk-releases.json 2>/dev/null; then
+    RELEASE_ID="$(draft_id "${TAG}")"
+  fi
   if [ -n "${RELEASE_ID}" ]; then
     echo "found draft release ${RELEASE_ID} for ${TAG} (attempt ${attempt})"
     break
