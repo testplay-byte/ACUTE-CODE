@@ -285,12 +285,13 @@ describe("D3: verification receipts + confidence tags + anti-question-padding", 
     expect(text).toContain("An assertion without a receipt is not verification.");
   });
 
-  it("the three confidence tags + the devil's-advocate line", () => {
+  it("the confidence line (ONE vocabulary — R107-a F6) + the devil's-advocate line", () => {
     const text = comm();
-    expect(text).toContain("End substantive replies with a confidence tag");
-    expect(text).toContain("🟢 = all claims verified by receipts");
-    expect(text).toContain("🟡 = partially verified, some claims rest on inference");
-    expect(text).toContain("🔴 = unverified");
+    expect(text).toContain("End substantive replies with a confidence line");
+    expect(text).toContain("High = all claims verified by receipts");
+    expect(text).toContain("medium = partially verified, some claims rest on inference");
+    expect(text).toContain("low = unverified");
+    expect(text).not.toContain("🟢"); // the emoji vocabulary retired (raw glyphs on CLI/phone)
     expect(text).toContain("one line of devil's advocate — the strongest counter-argument to what you just did");
   });
 
@@ -384,9 +385,9 @@ describe("PLAN mode: every discipline surface composes (read-only vocabulary)", 
     // D2 — the task→verifiable-goal transform (plan mode HAS todo_write).
     expect(composed).toContain("Transform vague tasks into verifiable goals before acting");
     expect(composed).toContain("\"fix the bug\" → \"write a test that reproduces it, then make it pass\"");
-    // D3 — receipts + tags + anti-question (COMMUNICATION is unconditional).
+    // D3 — receipts + the confidence line + anti-question (COMMUNICATION is unconditional).
     expect(composed).toContain("An assertion without a receipt is not verification.");
-    expect(composed).toContain("🟢 = all claims verified by receipts");
+    expect(composed).toContain("High = all claims verified by receipts");
     expect(composed).toContain("Do NOT end a reply with a question unless you are genuinely blocked");
     // D4 — sub-agent discipline (plan mode HAS delegate_task).
     expect(composed).toContain("delivers only its scope");

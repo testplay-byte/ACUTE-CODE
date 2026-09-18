@@ -109,8 +109,10 @@ describe("D1: the ENVIRONMENT section renders the turn's real machine state", ()
     expect(rest).toContain("- Working directory: /tmp/acute-r70c-never-exists (ALL paths must be relative to this)");
     expect(rest).toContain("- Current date: 2026-06-11 (Thursday)");
     expect(rest).toContain("- Git: branch main, dirty — uncommitted changes present (the USER's work: NEVER revert or discard them)");
-    // The path discipline lines stay.
-    expect(rest).toContain("Never use absolute paths — always relative to the project root");
+    // R107-a (F11): the duplicate relative-path line retired — the working-
+    // directory line above already carries "ALL paths must be relative to
+    // this"; the out-of-root line stays.
+    expect(rest).not.toContain("Never use absolute paths — always relative to the project root");
     expect(rest).toContain("Never access files outside the project root");
   });
 
@@ -470,7 +472,11 @@ describe("D4: the FILE EDITING rules", () => {
     const composed = buildProjectSystemPrompt(ctxFor());
     expect(composed).toContain("**Prefer editing**");
     expect(composed).toContain("ALWAYS prefer editing an existing file over creating a new one — create new files only when genuinely required");
-    expect(composed).toContain("**Smart verification**");
+    // R107-a (F8): "**Smart verification**" (old rule 6) retired — its risk
+    // list merged into rule 1; the ladder is now 6 rules.
+    expect(composed).not.toContain("**Smart verification**");
+    expect(composed).toContain("or the change is high-stakes (complex edit, critical file)");
+    expect(composed).toContain("6. **Dirty worktree discipline**");
   });
 
   it("the dirty-worktree discipline is gated on git_status/run_command", () => {
@@ -555,12 +561,15 @@ describe("D6: browser-panel + computer-use trims", () => {
       expect(bp).toContain(action); // the vocabulary summary
     }
     // R94-G: the R94-F actions are in the vocabulary AND carry the settle
-    // discipline — pinned as full phrases so a bare "wait" substring hit
-    // from wait_for_verification cannot satisfy them.
-    expect(bp).toContain("wait (settle until readyState/selector/urlContains)");
-    expect(bp).toContain("sequence (a multi-step chain in ONE call");
+    // discipline. R107-a (F9): the 818-char parameter-echo line was
+    // compressed to names + the five non-obvious roles + the schema
+    // pointer — wait/sequence keep their one-phrase roles.
+    expect(bp).toContain("wait,");
+    expect(bp).toContain("sequence (multi-step chain in ONE call)");
     expect(bp).toContain("NAVIGATION SETTLES");
     expect(bp).toContain("verify the element you need EXISTS before interacting");
+    // The schema pointer replaced the inline parameter echo.
+    expect(bp).toContain("Full parameters live in the browser_control schema.");
     // The craft pointer is the closing line.
     expect(bp.trimEnd().endsWith('Full browser craft (the core loop, forms, wait patterns, layout testing): read_skill "browser-use".')).toBe(true);
     // The retired deep-craft lines.

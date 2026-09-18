@@ -175,13 +175,17 @@ describe("R98-F2: the FILE EDITING tiered rule (the prompt re-pin)", () => {
     toolNames: ["read_file", "write_file", "edit_file", "search_code", "index_project"],
   };
 
-  it("rule 1 is the honest TIER: read before the FIRST edit; a successful edit IS the confirmation — edit the SAME file directly; re-read only on warning/failure", () => {
+  it("rule 1 is the honest TIER: read before the FIRST edit; a successful edit IS the confirmation — edit the SAME file directly; re-read only on warning/failure/high-stakes", () => {
     const prompt = buildProjectSystemPrompt(ctx);
     expect(prompt).toContain("**Read before the FIRST edit**");
     expect(prompt).toContain("the response IS the confirmation — edit the SAME file again directly");
-    expect(prompt).toContain("Re-read only when a tool warns the file changed on disk or an edit fails.");
+    // R107-a (F8): old rule 6's high-stakes risk list merged into rule 1 —
+    // the tier now names all three re-read triggers in one place.
+    expect(prompt).toContain("Re-read only when a tool warns the file changed on disk, an edit fails, or the change is high-stakes (complex edit, critical file)");
     // The retired absolutism is GONE (it taught a re-read before every edit).
     expect(prompt).not.toContain("ALWAYS use read_file before edit_file or write_file on an existing file");
+    // And old rule 6 is gone (merged, not duplicated).
+    expect(prompt).not.toContain("**Smart verification**");
   });
 
   it("the edit_file TOOL DESCRIPTION teaches the same tier (the schema is where the model actually looks)", async () => {

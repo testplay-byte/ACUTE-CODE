@@ -610,9 +610,10 @@ describe("prompt efficiency rework (ROUND-51 R51-d, consolidated ROUND-70 R70-c)
     // ACT rule: a successful write IS the confirmation.
     expect(full).toContain("A successful write_file/edit_file response is itself confirmation");
     expect(full).toContain("re-read only when something indicates a problem");
-    // FILE EDITING rule 7 carries the same semantics.
-    expect(full).toContain("**Smart verification**");
-    expect(full).toContain("only when risk exists — complex edits, high-stakes files, or surprising results");
+    // R107-a (F8): FILE EDITING rule 6 retired — its risk list merged into
+    // rule 1 (the review's "three near-copies of the verify doctrine").
+    expect(full).not.toContain("**Smart verification**");
+    expect(full).toContain("Re-read only when a tool warns the file changed on disk, an edit fails, or the change is high-stakes (complex edit, critical file)");
   });
 
   it("the budget line no longer invites step inflation (a cap, not a target — anti-lazy-stop kept, outer loops named)", () => {
@@ -656,8 +657,10 @@ describe("prompt efficiency rework (ROUND-51 R51-d, consolidated ROUND-70 R70-c)
     // The multi-turn completion directive (no stopping after one call).
     expect(full).toContain("## AGENTIC LOOP — MULTI-TURN COMPLETION");
     expect(full).toContain("DO NOT summarize and stop after one tool call");
-    // The research → save-files loop.
-    expect(full).toContain("research → save findings to a file → research the next sub-topic → append → repeat");
+    // R107-a (F16): the R28-era research special case retired from the
+    // loop (the loop's own phases + todo tracking carry the posture);
+    // pinned GONE so it cannot silently return.
+    expect(full).not.toContain("research → save findings to a file → research the next sub-topic → append → repeat");
     // The parallel delegate_task guidance.
     expect(full).toContain("call delegate_task MULTIPLE TIMES in ONE message to run sub-agents concurrently");
   });

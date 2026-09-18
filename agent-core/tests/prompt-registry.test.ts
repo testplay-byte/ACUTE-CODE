@@ -730,14 +730,20 @@ describe("ROUND-99 (R99-G): the subagent REPORT CONTRACT + confidence tags + mem
     expect(sub).toContain('A sub-agent that cannot fill a field writes "none" — never silence');
   });
 
-  it("COMMUNICATION: the confidence tag earns its keep — because + raising-it + no-tag-when-verified", () => {
+  it("COMMUNICATION: the confidence line earns its keep — because + raising-it + no-line-when-verified (R107-a F6: ONE vocabulary, the textual form)", () => {
     const comm = buildSectionText(FULL_CTX, "communication") ?? "";
-    expect(comm).toContain("When an answer rests on unverified assumptions, partial reads, or untested code");
     expect(comm).toContain("Confidence: high|medium|low — because <the specific reason>; raising it needs <the concrete next step>");
-    expect(comm).toContain("verified-working answers need no tag");
-    // The R71 tag vocabulary + devil's advocate survive inside the same line.
-    expect(comm).toContain("🟢 = all claims verified by receipts");
+    expect(comm).toContain("Verified-working answers need no line");
+    // The levels' definitions folded into the line (the emoji set retired —
+    // a second vocabulary in one line, and the glyphs landed raw on the
+    // CLI/phone channels).
+    expect(comm).toContain("High = all claims verified by receipts");
+    expect(comm).toContain("medium = partially verified, some claims rest on inference");
+    expect(comm).toContain("low = unverified");
+    expect(comm).not.toContain("🟢"); // the emoji vocabulary is GONE
     expect(comm).toContain("one line of devil's advocate — the strongest counter-argument to what you just did");
+    // R107-a (F3): the channel-honesty line (desktop/terminal/phone).
+    expect(comm).toContain("structure must survive PLAIN TEXT");
   });
 
   it("project-memory: the SAVE/RECALL/NEVER WHEN block (memory-tools-gated)", () => {
