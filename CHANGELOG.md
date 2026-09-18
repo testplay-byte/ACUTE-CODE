@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-104 -->
+<!-- last-reviewed: 2026-09-18 round-106 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -10,6 +10,30 @@ version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
 ## [Unreleased]
+
+## [0.102.0] - 2026-09-18 — the fifteenth-walkthrough round: the terminal client, the Android companion, and the link between them
+
+### The `acute` CLI, a terminal client (the round's first headline)
+- **Work with the agent from any terminal.** `acute` attaches to the desktop app's own agent server when one is running, and spawns one when it isn't — the same engine, the same sessions, no second database to think about. `acute -p "explain this repo"` runs a prompt end-to-end and exits; plain `acute` opens a REPL with slash commands (`/model`, `/agent`, `/sessions`, `/stop`, `/compact`, `/exit`).
+- **The full command surface**: `acute sessions ls|show|events|ctx|rm|rename|resume` for session management, `acute models` / `models test <id>` for the catalog and probes, `acute providers` and `acute keys status` for provider rows and key presence (flags only — never values), `acute config get/set` for the CLI's own defaults, `acute status` for the health line, and `acute raw METHOD path [json]` as the authenticated escape hatch.
+- Zero runtime dependencies (Node ≥ 20 built-ins only) — the terminal client is a single `node cli/bin/acute.mjs` invocation, and `pnpm --filter acute-cli run build` produces the `acute` bin shim.
+
+### The Android companion (the round's second headline)
+- **Pair your phone to your PC.** Settings → **Devices** gains a master "Allow device links" toggle; "Pair a device" opens a window with a **QR code, an 8-digit PIN, and a live 120-second countdown** (a manual address+PIN fallback for when the QR won't scan). The phone scans the code, confirms the certificate fingerprint shown on both screens, and the link is made — the PIN is single-use and expires with the window.
+- **The Android app is a view and a remote control, nothing more.** Every action is an API call to the desktop agent; the phone never processes anything and never touches a file. Browse projects and sessions, read full transcripts (tool calls, thinking blocks, metadata), **send messages and watch the reply stream live**, stop a running turn, or queue the next message for when the turn ends.
+- **Approvals from your pocket.** When the agent asks for permission to run a tool, the request appears on the phone — what the tool is, the risk line, which session and project — and Approve/Deny is two taps. Destructive requests are never silently approved.
+- **Reconnects by itself.** The PC going off and coming back is a normal event: the app notices the host returning (app foreground, network change, or a timed backoff) and re-establishes the link — no re-pairing, ever. The pairing's certificate fingerprint is pinned on first use (trust-on-first-use), so the same PC is recognized across reboots. Messages composed while offline wait in an outbox and send themselves when the host returns.
+- **Devices are long-lived and revocable.** A linked phone holds its token (kept in Android's secure storage) for about a month, not a session; Settings → Devices lists every linked phone with its last-seen time, and **Revoke** removes any of them in one confirmed step.
+- The APK is built by GitHub Actions on every push and attached to each release — **Settings → Devices is where the desktop side lives; the `ACUTE-CODE_<version>_android-debug.apk` on the release page is the phone side.** Install it on Android 12+ (the QR scan needs camera permission; nothing else is requested).
+
+### The link, made honest (the round's third headline)
+- **How the phone reaches the PC:** a second TLS listener on the desktop agent, bound to your LAN addresses, started only while device links are enabled — the app's loopback listener (the one the desktop UI talks to) is untouched and byte-identical when nobody is paired. Phone tokens are accepted across the same API surface the shell uses, minus the desktop-only routes (pairing itself, device management) which stay shell-only.
+- **What the phone sees is what you'd expect:** device tokens are long-lived bearer secrets stored only as SHA-256 hashes on the PC; the pairing session allows five wrong PINs before it retires itself; a plaintext probe on the TLS port can never crash the agent.
+- Remote access from anywhere (not just the same network) is designed and documented — the manual-address pairing path is already tunnel-ready — and lands in a coming round; v0.102.0 is the LAN release.
+
+### Round notes
+- The FCM push skeleton is in place (a config file away from push notifications) but not yet wired — the phone polls while it's open, which is the honest v1 behavior.
+- 119 CLI tests, 127 mobile tests, and 33 device-link tests joined the suite; the desktop suite is unchanged and green.
 
 ## [0.101.0] - 2026-09-18 — the fourteenth-walkthrough round: the update hand-shake (download, then confirm) and the Linux update that actually updates
 

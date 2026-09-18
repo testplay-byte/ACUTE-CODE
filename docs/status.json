@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.101.0",
+    "version": "0.102.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -12,7 +12,9 @@
       "React 18",
       "Node sidecar",
       "SQLite",
-      "BYO provider key"
+      "BYO provider key",
+      "Android companion (LAN)",
+      "acute CLI"
     ]
   },
   "pillars": [
@@ -350,15 +352,23 @@
     }
   ],
   "plan": {
-    "current": "R105 IN FLIGHT — the Linux browser panel made whole (the Overlay+Fixed GTK surgery) + the composer whole-section focus highlight + the planning corpus (CLI · Android R1 · oh-my-pi adoption roadmap) + the free-model benchmarks; landing on main, v0.102.0 tagging per the R104 pattern when the adoption wave lands",
+    "current": "R106 LANDED — the terminal client (acute CLI: attach-or-spawn, one-shot, REPL, the full command set) + the Android companion (pairing via QR+PIN over TLS, sessions with live streaming, approvals from the pocket, auto-reconnect, offline outbox) + the Devices tab (pairing UI + linked devices + revoke) + the debug-APK pipeline on Actions; v0.102.0 tagged per the R104 pattern",
     "upcoming": [
       {
-        "title": "The owner's v0.101.0 walkthrough",
-        "detail": "The test checklist lives in round-104.md §4: the Windows two-stage arc (Download STOPS at the staged row; only Restart-and-update-now installs), the staged download surviving the About tab + the Discard walk-back, and the Linux AppImage update end-to-end (download the ~130 MB image → confirm → the app comes back by itself on v0.101.0) — plus the .deb honest-refusal case and the badge/staleness agreement."
+        "title": "The owner's v0.102.0 walkthrough",
+        "detail": "Pair a real phone (Settings → Devices → Pair a device; the APK is on the release page), stream a session from the couch, approve/deny a tool request from the pocket, and try the CLI (acute / acute -p). The test checklist lives in round-106.md."
       },
       {
-        "title": "The owner's UI references (promised)",
-        "detail": "The owner said the next round will bring proper references/guides for the UI — the visual language work continues against them when they arrive."
+        "title": "Remote access from anywhere (the promised next round)",
+        "detail": "The Cloudflare path per docs/planning/CLOUDFLARE-REMOTE-ACCESS.md — the manual-address pairing form is already tunnel-ready; the round brings the easy-setup Cloudflare system the owner asked for."
+      },
+      {
+        "title": "The prompts/commands/logic iteration round",
+        "detail": "The owner asked for a proper pass over the agent prompts, the slash commands, and the overall logic — reviewed with subagents, iterated, and verified."
+      },
+      {
+        "title": "The UI clay/liquid-chrome round",
+        "detail": "Clay Studio aesthetic + liquid chrome mixture in the areas the owner flagged — the design-language corpus gets the new references first."
       },
       {
         "title": "Standing candidates (honest)",
