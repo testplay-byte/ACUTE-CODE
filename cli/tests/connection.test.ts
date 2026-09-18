@@ -142,10 +142,21 @@ describe("portalCandidates + appStateDir (the R98-K priority order)", () => {
   it("the repo's .dev/ file comes FIRST, the app state dir second", () => {
     const repoRoot = tempDir("candidates");
     const home = tempDir("candidates-home");
-    const candidates = portalCandidates(repoRoot, { XDG_DATA_HOME: join(home, "xdg") }, home);
+    // appStateDir is platform-split (spawn.ts): XDG_DATA_HOME on POSIX,
+    // APPDATA on win32 — the FIRST Windows CI run (run 35396963611) caught
+    // this test asserting only the POSIX branch while running on the
+    // windows-latest verify job. Branch the env AND the expectation the
+    // same way the sibling appStateDir test below does.
+    const env = IS_WINDOWS
+      ? { APPDATA: join(home, "appdata") }
+      : { XDG_DATA_HOME: join(home, "xdg") };
+    const expectedStateFile = IS_WINDOWS
+      ? join(home, "appdata", "acute-code", PORTAL_FILENAME)
+      : join(home, "xdg", "acute-code", PORTAL_FILENAME);
+    const candidates = portalCandidates(repoRoot, env, home);
     expect(candidates).toHaveLength(2);
     expect(candidates[0]).toBe(join(repoRoot, ".dev", PORTAL_FILENAME));
-    expect(candidates[1]).toBe(join(home, "xdg", "acute-code", PORTAL_FILENAME));
+    expect(candidates[1]).toBe(expectedStateFile);
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   });

@@ -232,8 +232,14 @@ describe("DevicesTab §b: the pairing dialog", () => {
     const qr = screen.getByTestId("pair-qr");
     expect(qr.getAttribute("data-payload")).toBe(JSON.stringify(payload));
     // The REAL encoder's SVG output is in the tile (module paths, light
-    // ground — scannable regardless of the app's dark mode).
-    expect(qr.querySelector("svg")).toBeTruthy();
+    // ground — scannable regardless of the app's dark mode). The encoder
+    // is ASYNC (qrcode.toString) — the PIN waitFor above can resolve
+    // before the SVG lands on the slower CI runners (the R73 lesson:
+    // windows-latest runs 3-4x slow; run 35396963611 caught exactly this
+    // race), so the SVG gets its OWN waitFor.
+    await waitFor(() => {
+      expect(qr.querySelector("svg")).toBeTruthy();
+    });
   });
 
   it("carries the manual fallback — addrs:port + PIN + the full certFP as selectable text", async () => {
