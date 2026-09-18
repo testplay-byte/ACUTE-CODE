@@ -55,11 +55,13 @@ round's four directives:
 4. **The model benchmarks** → §2 D: 8 free OpenRouter models + 2
    NVIDIA-hosted nemotrons, tool-call + streaming-speed + reliability
    tested with the 4 provided keys.
-5. **The CLI + Android planning rounds** → §2 C: two complete planning
-   documents (the `acute` CLI design — attach-or-spawn, command surface,
-   SSE→terminal rendering, M1/M2/M3; the Android Round 1 architecture —
-   stack decision, pairing/auth/linking design, feature tiers, APK CI
-   outline, and the explicit OPEN QUESTIONS list for Round 2).
+5. **The CLI + Android planning rounds** → §2 C + §2 F: the complete
+   `acute` CLI design (attach-or-spawn, command surface, SSE→terminal
+   rendering, M1/M2/M3) AND the Android program through BOTH planning
+   rounds (R1 architecture with its ten open questions; R2 decisions —
+   nine resolved, one gated on the SSE spike) plus the owner-facing
+   LINKING-PROTOCOL.md (the "document the Android application properly
+   and thoroughly" ask).
 
 ## §1 The diagnosis — both defects, root-caused before any fix
 
@@ -370,6 +372,25 @@ next round: it is the roadmap's M-L effort and "quality over speed" wins):
   the SETTINGS-driven rungs and the ladder gating — a quota body would
   now floor them into 10-minute hangs; the quota path has its own
   coverage); the storage test's migration list pin gained 0039.
+
+### F — the Android planning ROUNDS 1 + 2 + the owner-facing linking doc
+
+Per the owner's "multiple rounds of planning with your subagents before
+implementing": Round 1 (the architecture — stack, communication,
+pairing/auth, tiers, screens, CI outline, ten open questions) is
+`docs/planning/ANDROID-R1-ARCHITECTURE.md`; Round 2 (the DECISIONS —
+nine of the ten questions resolved by reasoned choice, the tenth
+assigned to a half-day SSE-on-RN spike with a pre-designed sync
+fallback) is `docs/planning/ANDROID-R2-DECISIONS.md`; and the owner's
+explicit documentation ask — "how the communication between the Android
+app and the projects will work, how the linking will work" — is
+answered in plain terms by `docs/planning/LINKING-PROTOCOL.md` (the
+pairing flow, the wire contract against the REAL /api/v1 routes, the
+tier-by-tier functionality, the trust model, and where the APK comes
+from: GitHub Actions, never the sandbox). No mobile code exists yet by
+design — the implementation gate list (the spike, the sidecar
+mobile-link round, the Actions job, the scaffold) is documented in
+ANDROID-R2 §2.
 
 ## §3 Verification
 
