@@ -1,7 +1,7 @@
 /// <reference types="vitest/config" />
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { configDefaults, defineConfig } from "vitest/config";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -46,6 +46,15 @@ export default defineConfig({
   // Vitest runs every workspace's tests from this config. Default environment is
   // "node"; DOM tests opt in per file with a `// @vitest-environment happy-dom` docblock.
   test: {
+    // ROUND-106 (the S5 hotfix, the missed-isolation lesson): mobile/ is the
+    // standalone Expo/npm workspace — its tests are JEST suites run by
+    // `npm test` inside mobile/ (and by mobile.yml's test step), NOT vitest.
+    // Vitest's default include sweeps `**/*.test.ts` across the whole tree,
+    // so mobile/src/** test files were collected by the ROOT run too — where
+    // they fail on `@jest/globals` ("Do not import outside the Jest test
+    // environment"). The exclude REPLACES the defaults, so configDefaults
+    // must be spread back in (node_modules/dist stays out, mobile/ joins).
+    exclude: [...configDefaults.exclude, "mobile/**"],
     // ROUND-73 CI-stability patch (R70's lesson, the sequel): the CI runner
     // (windows-latest) executes this suite 3-4x slower than a dev machine
     // under parallel load, and the integration files that spin a real

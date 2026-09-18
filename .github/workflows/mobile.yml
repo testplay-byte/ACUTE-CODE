@@ -74,6 +74,15 @@ jobs:
         working-directory: mobile
         run: npm ci
 
+      # R106 (the S5 hotfix's sibling): the 127 jest tests run BEFORE any
+      # prebuild/gradle minutes are spent — a red suite fails in ~1 minute
+      # instead of after the full Android build. The suite is the mobile
+      # workspace's own (vitest at the repo root excludes mobile/** — the
+      # isolation lesson: each workspace's tests run in its own runner).
+      - name: Mobile test suite (jest)
+        working-directory: mobile
+        run: npm test -- --ci
+
       # --clean regenerates the android/ tree from app.json + the local
       # modules (modules/acute-net autolinks here); the tree is untracked
       # (mobile/android/ is gitignored) so every build is deterministic.
