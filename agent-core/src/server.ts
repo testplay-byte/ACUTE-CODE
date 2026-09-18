@@ -5,7 +5,7 @@
  * later waves.
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyRequest } from "fastify";
 import { aiSdkChat, type ChatFn } from "./agents/chat.js";
 import { pickFiles, pickFolder } from "./dialogs.js";
@@ -95,7 +95,7 @@ import { resolveBrowserCheckpoint } from "./browser-checkpoint.js";
 // POST /jobs/:id/stop).
 import { getJobStatus, listJobs, stopJob } from "./lib/background-jobs.js";
 import { errorBody } from "./routes/helpers.js";
-import { DIAGNOSTICS_RING_CAP, type RouteContext, type SidecarDiagnosticError } from "./routes/context.js";
+import { DIAGNOSTICS_RING_CAP, setDeviceAuth, type RouteContext, type SidecarDiagnosticError } from "./routes/context.js";
 // ROUND-84 (R84, Wave 2-a): the domain route modules — server.ts is now
 // the assembler; each module registers its routes verbatim (registration
 // order preserved; the shared context lives in routes/context.ts).
@@ -124,32 +124,42 @@ import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 // R86: the SSE domain — the streamed turn route (final-phase extraction).
 import { registerSseRoutes } from "./routes/sse.js";
+// ROUND-106 (R106-S1, the mobile-link round): the Android companion's
+// linking surface — pair/start + pair/claim + the device list/revoke +
+// link-info (routes/mobile.ts), the TLS device-listener controller
+// (lib/device-link.ts — the dual-listener architecture), the multi-token
+// bearer wall's device-token lookup (storage/mobile-devices.ts), and the
+// FCM fan-out leg (lib/fcm-push.ts — the dormant no-op). The whole mobile
+// link is OFF by default: the loopback plaintext sidecar below stays
+// byte-identical in behavior until the owner flips deviceLink.enabled.
+import { registerMobileRoutes } from "./routes/mobile.js";
+import {
+  createDeviceLinkController,
+  deviceLinkControllerFor,
+  requestArrivedOverTls,
+} from "./lib/device-link.js";
+import {
+  findMobileDeviceByTokenHash,
+  hashDeviceToken,
+  touchMobileDeviceLastSeen,
+} from "./storage/mobile-devices.js";
+import { getDeviceLinkSettings, setDeviceLinkSettings } from "./storage/settings.js";
+import { publishFcm } from "./lib/fcm-push.js";
+// R106-S1: the app version (ROUND-63's readAppVersion) moved to
+// lib/version.ts so routes/mobile.ts can share it without an import cycle;
+// re-exported here — every existing `import { VERSION } from "../server"`
+// keeps working.
+import { VERSION } from "./lib/version.js";
+export { VERSION };
 
 /**
  * ROUND-63: the app version GET /health reports — read at BOOT from the
  * package.json that sits NEXT TO the compiled code (agent-core/package.json
  * in the dev workspace; sidecar/app/package.json inside the installed
- * desktop app, where the staging step copies the exact version). This used
- * to be a hardcoded "0.3.0" that went stale for 60+ rounds, which made
- * /health useless for exactly the thing it exists for: letting the
- * launcher PROVE the freshly installed desktop app is really running the
- * new engine (registry version + exe FileVersion + /health version must
- * all agree — see launcher `desktop_flow`'s verification chain).
+ * desktop app, where the staging step copies the exact version). ROUND-106
+ * (R106-S1): the definition moved verbatim to lib/version.ts (shared with
+ * routes/mobile.ts without an import cycle); see the re-export above.
  */
-function readAppVersion(): string {
-  try {
-    const pkg = JSON.parse(
-      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-    ) as { version?: unknown };
-    return typeof pkg.version === "string" ? pkg.version : "0.0.0";
-  } catch {
-    // A missing/corrupt manifest must never take the engine down — /health
-    // then reports 0.0.0 and the launcher's check flags it honestly.
-    return "0.0.0";
-  }
-}
-
-export const VERSION = readAppVersion();
 
 /**
  * ROUND-42 → ROUND-52 (R52-b): registry of live streamed turns, keyed by
@@ -199,6 +209,72 @@ function isHealthRequest(method: string, url: string): boolean {
   return method === "GET" && url.split("?")[0] === "/health";
 }
 
+/**
+ * ROUND-106 (R106-S1): the paths that skip the bearer wall entirely —
+ * GET /health (the shell's probe) + POST /api/v1/mobile/pair/claim (the
+ * phone's ONE unauthenticated pairing hop). The claim path is gated
+ * SEPARATELY and more strictly inside routes/mobile.ts: a claim that did
+ * not arrive over the TLS device listener dies with 403 BEFORE any session
+ * state is touched — so a device token can never be minted over (or ride)
+ * the plaintext loopback listener.
+ */
+function isUnauthenticatedRequest(method: string, url: string): boolean {
+  if (isHealthRequest(method, url)) return true;
+  return method === "POST" && url.split("?")[0] === "/api/v1/mobile/pair/claim";
+}
+
+/**
+ * ROUND-106 (R106-S1): the DEVICE-TOKEN leg of the multi-token bearer wall.
+ * A presented `Authorization: Bearer <token>` that is not the shell token
+ * is hashed (SHA-256 hex) and looked up in mobile_devices — found + not
+ * revoked (revocation is DELETE) = valid. On success the device row's id
+ * is recorded on the request (routes/context.ts's deviceAuth WeakMap) so
+ * shell-only routes can 403 device-token requests, and lastSeenAt is
+ * refreshed THROTTLED (a write only when >60s since that device's last).
+ *
+ * WHY LOOKUP-BY-HASH IS NOT A TIMING ORACLE (the documented rationale):
+ * the attacker-controlled input is the TOKEN STRING, but the lookup key is
+ * its SHA-256 digest — avalanche makes the digest uniformly distributed
+ * over the table REGARDLESS of attacker input, so unlike a prefix/timing
+ * comparison there is no way to steer probes toward early-vs-late B-tree
+ * positions or adaptively refine a guess (the hash destroys all structure
+ * of the guess). The tokens themselves are 32 random bytes — nothing
+ * enumerable. The SHELL-token leg above stays constant-time
+ * (timingSafeEqual) because THAT comparison touches the secret directly;
+ * this leg's discipline is "hash, then O(log n) on an unsteerable key".
+ */
+function authorizeDeviceToken(
+  db: SqliteDatabase,
+  header: unknown,
+): { deviceId: string } | null {
+  if (typeof header !== "string") return null;
+  const match = /^Bearer\s+([A-Za-z0-9._~+/=-]+)$/.exec(header);
+  if (match === null) return null;
+  const row = findMobileDeviceByTokenHash(db, hashDeviceToken(match[1]));
+  if (row === undefined) return null;
+  try {
+    touchMobileDeviceLastSeen(db, row.id);
+  } catch {
+    // A lastSeen hiccup must never reject an otherwise-valid request.
+  }
+  return { deviceId: row.id };
+}
+
+/** The full multi-token wall check (shell token OR device token). */
+function isRequestAuthorized(
+  db: SqliteDatabase,
+  request: FastifyRequest,
+  token: string,
+): boolean {
+  if (isAuthorized(request.headers.authorization, token)) return true;
+  const device = authorizeDeviceToken(db, request.headers.authorization);
+  if (device !== null) {
+    setDeviceAuth(request, device);
+    return true;
+  }
+  return false;
+}
+
 export interface ServerOptions {
   token: string;
   db: SqliteDatabase;
@@ -222,15 +298,22 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // ROUND-42: Web Push init. The VAPID keypair is generated ONCE and
   // persisted at <dataDir>/vapid.json. Every published notification is
   // fanned out to every subscribed browser (fire-and-forget — a push
-  // failure can never break a turn).
+  // failure can never break a turn). ROUND-106 (R106-S1): the fan-out gains
+  // ONE more destination — publishFcm, the FCM publisher skeleton (a
+  // graceful no-op until the owner's Firebase credentials arrive with the
+  // remote-access round; it resolves immediately and NEVER throws, so the
+  // fan-out shape is unchanged).
   if (options.dataDir !== undefined) {
-    ensureVapidKeys(options.dataDir);
+    const dataDir = options.dataDir;
+    ensureVapidKeys(dataDir);
     getNotificationBus().subscribe((n) => {
       try {
         sendPushToAll(db, n);
       } catch (err) {
         console.error("[web-push] fanout threw:", err);
       }
+      // R106-S1: the FCM leg — ping-only payloads someday, a no-op today.
+      void publishFcm(dataDir, n);
     });
   }
 
@@ -294,10 +377,17 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     }
   });
 
-  // ARCHITECTURE §2.3/§7: every route except GET /health requires the bearer token.
+  // ARCHITECTURE §2.3/§7: every route except GET /health requires the bearer
+  // token. ROUND-106 (R106-S1): the token may now be the SHELL token (the
+  // constant-time compare, unchanged) OR a paired DEVICE token (the
+  // hash-lookup leg — see authorizeDeviceToken). With device links OFF
+  // (nobody paired) the device leg finds nothing and every response stays
+  // byte-identical to the pre-R106 wall. The claim exemption
+  // (isUnauthenticatedRequest) is the phone's ONE unauthenticated hop; the
+  // TLS-socket gate inside routes/mobile.ts keeps it off plaintext forever.
   app.addHook("preHandler", async (request, reply) => {
-    if (isHealthRequest(request.method, request.url)) return;
-    if (!isAuthorized(request.headers.authorization, token)) {
+    if (isUnauthenticatedRequest(request.method, request.url)) return;
+    if (!isRequestAuthorized(db, request, token)) {
       return reply
         .code(401)
         .send(errorBody("UNAUTHORIZED", "missing or invalid bearer token"));
@@ -306,7 +396,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   // Unknown paths keep the token wall too; known+authed misses get the envelope.
   app.setNotFoundHandler((request, reply) => {
-    if (!isHealthRequest(request.method, request.url) && !isAuthorized(request.headers.authorization, token)) {
+    if (!isUnauthenticatedRequest(request.method, request.url) && !isRequestAuthorized(db, request, token)) {
       return reply
         .code(401)
         .send(errorBody("UNAUTHORIZED", "missing or invalid bearer token"));
@@ -386,7 +476,22 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   });
   // R84 (Wave 2-a): the shared per-server context handed to every domain
   // route module below (routes/context.ts). Each register function
-  // destructures only what its domain uses.
+  // destructures only what its domain uses. R106-S1: + mobileLink — the
+  // device-link controller, built ONLY when a machine data dir exists
+  // (loopback-only/hermetic builds stay link-free by construction).
+  const mobileLink =
+    options.dataDir !== undefined
+      ? createDeviceLinkController({ dataDir: options.dataDir, app })
+      : undefined;
+  // R106-S1: the TLS listener is OURS (not fastify's), so ITS teardown is
+  // registered right where it is created — every app.close() (tests,
+  // startServer's failure path, the shell's graceful teardown) stops the
+  // device listener too; a leaked 0.0.0.0 socket must never outlive its app.
+  if (mobileLink !== undefined) {
+    app.addHook("onClose", async () => {
+      await mobileLink.stop();
+    });
+  }
   const ctx: RouteContext = {
     token,
     db,
@@ -395,14 +500,33 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     corsHeadersFor,
     diagnosticsRing,
     ...(options.dataDir !== undefined ? { dataDir: options.dataDir } : {}),
+    ...(mobileLink !== undefined ? { mobileLink } : {}),
   };
 
 
-  app.get("/health", async () => ({
-    status: "ok",
-    app: "acute-code",
-    version: VERSION,
-  }));
+  // GET /health — TWO honest shapes, ONE route (R106-S1). The loopback
+  // listener's shape is BYTE-IDENTICAL to the pre-R106 contract (the shell
+  // and every existing test pin it). A request that rode the TLS device
+  // listener (requestArrivedOverTls — Node's TLSSocket flag, the same one
+  // fastify's own protocol getter reads) is the phone's unauthenticated
+  // reachability probe and gets the richer linkMode shape:
+  // {ok, version, machineId, linkMode} — NOTHING sensitive (no addresses,
+  // no ports, no pairing state; the phone pairs by QR, never by discovery).
+  app.get("/health", async (request) => {
+    if (requestArrivedOverTls(request)) {
+      return {
+        ok: true,
+        version: VERSION,
+        machineId: mobileLink?.identity()?.machineId ?? null,
+        linkMode: true,
+      };
+    }
+    return {
+      status: "ok",
+      app: "acute-code",
+      version: VERSION,
+    };
+  });
 
   // Internal key handoff (API.md §2.3): ONLY the Tauri shell calls this —
   // same bearer wall as everything else — to rotate a provider key inside
@@ -1322,8 +1446,14 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
       // R84 (Wave 2-a): the settings domain (R36 orchestration + R49 memory
       // + R65 debug + R78/R80 retry) — extracted verbatim to
-      // routes/settings.ts; registration order preserved.
+      // routes/settings.ts; registration order preserved. R106-S1: the
+      // domain also carries GET/PUT /settings/device-link (the Devices tab's
+      // allow-links switch, which drives the ctx.mobileLink listener).
       registerSettingsRoutes(scope, ctx);
+
+      // R106-S1: the mobile-link domain — pair/start, pair/claim, the
+      // device list + revoke, link-info (routes/mobile.ts).
+      registerMobileRoutes(scope, ctx);
 
       // R86: the SSE domain — the streamed turn route (the final-phase
       // extraction of the R84 server.ts split) — extracted verbatim to
@@ -1984,6 +2114,24 @@ function removePortalDiscoveryFile(file: string): void {
   }
 }
 
+/**
+ * ROUND-106 (R106-S1): the ACUTE_HOST boot override. ACUTE_HOST names the
+ * address family the sidecar should serve (the CLI/planning references) —
+ * a NON-LOOPBACK value at boot means "this machine wants LAN exposure" and
+ * force-enables the device link (persisted, so it survives later boots and
+ * the Devices tab shows the honest state). Loopback values (127.0.0.1,
+ * ::1, localhost, blank, unset) mean nothing — the persisted setting alone
+ * decides.
+ */
+function isNonLoopbackAcuteHost(raw: string | undefined): boolean {
+  if (raw === undefined) return false;
+  const value = raw.trim().toLowerCase();
+  if (value === "" || value === "localhost" || value === "127.0.0.1" || value === "::1") {
+    return false;
+  }
+  return true;
+}
+
 /** Opens the database, binds 127.0.0.1 (loopback only), prints the ready line. */
 export async function startServer(options: StartServerOptions): Promise<RunningSidecar> {
   const db = openDatabase(options.dbPath);
@@ -2026,6 +2174,40 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   // port-only — the token reaches the shell through env injection and the
   // CLI through the discovery file, never through stdout.
   console.log(`ACUTE_READY ${JSON.stringify({ port: address.port })}`);
+  // R106-S1: the DEVICE-LINK boot (post-ready — the shell's parse is done;
+  // post-ready stdout lines are drained into sidecar.log by design, and
+  // these are structured JSON either way). The PERSISTED setting is the
+  // truth: a machine that had links enabled gets its TLS listener back on
+  // every boot — the auto-reconnect ruling's substrate (stable cert file +
+  // stable token rows → the phone reconnects with zero re-setup). ACUTE_HOST
+  // non-loopback force-enables (and persists) for THIS boot. A failed start
+  // is logged and NEVER fatal: the loopback sidecar is the product; the
+  // link is the accessory.
+  if (deviceLinkControllerFor(app) !== null) {
+    const link = deviceLinkControllerFor(app);
+    if (link !== null) {
+      const forced = isNonLoopbackAcuteHost(process.env.ACUTE_HOST);
+      try {
+        if (forced && !getDeviceLinkSettings(db).enabled) {
+          setDeviceLinkSettings(db, { enabled: true });
+        }
+        if (forced || getDeviceLinkSettings(db).enabled) {
+          const status = await link.start();
+          log("info", "boot.device_link", {
+            port: status.port,
+            addrs: status.addrs,
+            certFP: status.certFP,
+            forcedByEnv: forced,
+          });
+        }
+      } catch (err) {
+        log("warn", "boot.device_link_failed", {
+          message: err instanceof Error ? err.message : String(err),
+          forcedByEnv: forced,
+        });
+      }
+    }
+  }
   return { server: app, port: address.port, discoveryFile: discovery.file };
 }
 

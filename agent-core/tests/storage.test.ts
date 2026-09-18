@@ -218,6 +218,10 @@ describe("openDatabase", () => {
       // ROUND-105 (R105-C): the provider lessons table — the rate-limit
       // REASON telemetry (write-only this round; the R106 surfacing reads it).
       { version: 39, name: "0039_provider_lessons.sql" },
+      // ROUND-106 (R106-S1): the mobile devices table — the paired-phone
+      // registry the multi-token bearer wall authenticates against (device
+      // tokens are stored as SHA-256 hashes; revocation is DELETE).
+      { version: 40, name: "0040_mobile_devices.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

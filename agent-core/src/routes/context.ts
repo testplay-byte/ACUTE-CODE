@@ -10,6 +10,7 @@
 import type { SqliteDatabase } from "../storage/db.js";
 import type { ProviderKeyring } from "../providers/registry.js";
 import type { ChatFn } from "../agents/chat.js";
+import type { DeviceLinkController } from "../lib/device-link.js";
 
 /** One ring row — deliberately the fields the console renders, nothing else. */
 export interface SidecarDiagnosticError {
@@ -63,4 +64,32 @@ export interface RouteContext {
    * stay hermetic; routes/system.ts uses it for the reset's file purge.
    */
   dataDir?: string;
+  /**
+   * ROUND-106 (R106-S1, the mobile-link round): the DEVICE-LINK controller
+   * (the TLS listener + pairing sessions; lib/device-link.ts). Present when
+   * dataDir is defined; routes/settings.ts's device-link PUT and
+   * routes/mobile.ts's whole surface drive it. Undefined = hermetic tests /
+   * no machine identity — mobile routes answer their honest off states.
+   */
+  mobileLink?: DeviceLinkController;
+}
+
+/* ── ROUND-106 (R106-S1): the wall's per-request auth KIND ──────────────────
+ * The multi-token bearer wall accepts the SHELL token or a DEVICE token.
+ * Routes that are shell-only (pair/start, the device list, link-info) must
+ * reject device-token requests with 403, so the wall records WHICH kind
+ * authenticated. A WeakMap (not a property) keeps fastify's request object
+ * clean without module augmentation, and gives the mobile routes a typed
+ * read (`deviceAuthOf`). */
+const deviceAuthByRequest = new WeakMap<object, { deviceId: string }>();
+
+/** The wall's write — called exactly once per authenticated request. */
+export function setDeviceAuth(request: object, info: { deviceId: string }): void {
+  deviceAuthByRequest.set(request, info);
+}
+
+/** The routes' read — null when the request authenticated with the SHELL
+ * token (or not at all). */
+export function deviceAuthOf(request: object): { deviceId: string } | null {
+  return deviceAuthByRequest.get(request) ?? null;
 }

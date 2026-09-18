@@ -791,3 +791,41 @@ export function setDesktopNotificationsSettings(
   }
   return getDesktopNotificationsSettings(db);
 }
+
+// ── ROUND-106 (R106-S1, the mobile-link round): the DEVICE-LINK switch —
+//    gates the sidecar's SECOND listener (the TLS device listener the
+//    Android companion pairs over; lib/device-link.ts). DEFAULT OFF: the
+//    loopback-only plaintext sidecar is the untouched default and the LAN
+//    listener only ever exists after the owner flips "Allow device links"
+//    (Settings → Devices) or boots with a non-loopback ACUTE_HOST. The
+//    setDesktopNotificationsSettings pattern exactly — one boolean row;
+//    the routes translate a flip into listener start/stop at runtime. ────
+
+export interface DeviceLinkSettings {
+  enabled: boolean;
+}
+
+export const DEVICE_LINK_DEFAULTS: DeviceLinkSettings = {
+  enabled: false,
+};
+
+const DEVICE_LINK_ENABLED_KEY = "deviceLink.enabled";
+
+export function getDeviceLinkSettings(db: SqliteDatabase): DeviceLinkSettings {
+  return { enabled: readBoolean(db, DEVICE_LINK_ENABLED_KEY, DEVICE_LINK_DEFAULTS.enabled) };
+}
+
+export function setDeviceLinkSettings(
+  db: SqliteDatabase,
+  patch: Partial<DeviceLinkSettings>,
+): DeviceLinkSettings {
+  if (patch.enabled !== undefined) {
+    if (typeof patch.enabled !== "boolean") {
+      throw new Error("enabled must be a boolean");
+    }
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(DEVICE_LINK_ENABLED_KEY, String(patch.enabled));
+  }
+  return getDeviceLinkSettings(db);
+}

@@ -6,7 +6,7 @@ Policy (SPEC section 6): allowed - MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, 
 Forbidden - GPL, AGPL, LGPL and any license that cannot be classified (closed-source distribution).
 Every license exception must be recorded as an ADR under `docs/decisions/`.
 
-Audited production dependencies: 247. Verdict: CLEAN.
+Audited production dependencies: 267. Verdict: CLEAN.
 
 | Package | Version | License | Verdict |
 |---|---|---|---|
@@ -30,6 +30,19 @@ Audited production dependencies: 247. Verdict: CLEAN.
 | @iconify/types | 2.0.0 | MIT | OK |
 | @iconify/utils | 3.1.7 | MIT | OK |
 | @mermaid-js/parser | 1.2.1 | MIT | OK |
+| @noble/hashes | 1.4.0 | MIT | OK |
+| @peculiar/asn1-cms | 2.9.4 | MIT | OK |
+| @peculiar/asn1-csr | 2.9.4 | MIT | OK |
+| @peculiar/asn1-ecc | 2.9.4 | MIT | OK |
+| @peculiar/asn1-pfx | 2.9.4 | MIT | OK |
+| @peculiar/asn1-pkcs8 | 2.9.4 | MIT | OK |
+| @peculiar/asn1-pkcs9 | 2.9.4 | MIT | OK |
+| @peculiar/asn1-rsa | 2.9.4 | MIT | OK |
+| @peculiar/asn1-schema | 2.9.4 | MIT | OK |
+| @peculiar/asn1-x509 | 2.9.4 | MIT | OK |
+| @peculiar/asn1-x509-attr | 2.9.4 | MIT | OK |
+| @peculiar/utils | 2.0.3 | MIT | OK |
+| @peculiar/x509 | 1.14.3 | MIT | OK |
 | @pinojs/redact | 0.4.0 | MIT | OK |
 | @radix-ui/primitive | 1.1.7 | MIT | OK |
 | @radix-ui/react-compose-refs | 1.1.5 | MIT | OK |
@@ -96,11 +109,13 @@ Audited production dependencies: 247. Verdict: CLEAN.
 | ajv-formats | 3.0.1 | MIT | OK |
 | aria-hidden | 1.2.6 | MIT | OK |
 | asn1.js | 5.4.1 | MIT | OK |
+| asn1js | 3.0.10 | BSD-3-Clause | OK |
 | atomic-sleep | 1.0.0 | MIT | OK |
 | avvio | 9.3.0 | MIT | OK |
 | better-sqlite3 | 13.0.3 | MIT | OK |
 | bn.js | 4.12.5 | MIT | OK |
 | buffer-equal-constant-time | 1.0.1 | BSD-3-Clause | OK |
+| bytestreamjs | 2.0.1 | BSD-3-Clause | OK |
 | clsx | 2.1.1 | MIT | OK |
 | commander | 7.2.0 | MIT | OK |
 | commander | 8.3.0 | MIT | OK |
@@ -169,7 +184,6 @@ Audited production dependencies: 247. Verdict: CLEAN.
 | framer-motion | 13.1.1 | MIT | OK |
 | get-nonce | 1.0.1 | MIT | OK |
 | hachure-fill | 0.5.2 | MIT | OK |
-| has-flag | 4.0.0 | MIT | OK |
 | http_ece | 1.2.0 | MIT | OK |
 | https-proxy-agent | 7.0.6 | MIT | OK |
 | iconv-lite | 0.6.3 | MIT | OK |
@@ -208,12 +222,15 @@ Audited production dependencies: 247. Verdict: CLEAN.
 | pino | 10.3.1 | MIT | OK |
 | pino-abstract-transport | 3.0.0 | MIT | OK |
 | pino-std-serializers | 7.1.0 | MIT | OK |
+| pkijs | 3.4.0 | BSD-3-Clause | OK |
 | pngjs | 7.0.0 | MIT | OK |
 | points-on-curve | 0.2.0 | MIT | OK |
 | points-on-path | 0.2.1 | MIT | OK |
 | prismjs | 1.30.0 | MIT | OK |
 | process-warning | 4.0.1 | MIT | OK |
 | process-warning | 5.1.0 | MIT | OK |
+| pvtsutils | 1.3.6 | MIT | OK |
+| pvutils | 1.2.0 | MIT | OK |
 | quick-format-unescaped | 4.0.4 | MIT | OK |
 | react | 18.3.1 | MIT | OK |
 | react-dom | 18.3.1 | MIT | OK |
@@ -223,6 +240,7 @@ Audited production dependencies: 247. Verdict: CLEAN.
 | react-style-singleton | 2.2.3 | MIT | OK |
 | real-require | 0.2.0 | MIT | OK |
 | real-require | 1.0.0 | MIT | OK |
+| reflect-metadata | 0.2.2 | Apache-2.0 | OK |
 | require-from-string | 2.0.2 | MIT | OK |
 | ret | 0.5.0 | MIT | OK |
 | reusify | 1.1.0 | MIT | OK |
@@ -236,19 +254,21 @@ Audited production dependencies: 247. Verdict: CLEAN.
 | safer-buffer | 2.1.2 | MIT | OK |
 | scheduler | 0.23.2 | MIT | OK |
 | secure-json-parse | 4.1.0 | BSD-3-Clause | OK |
+| selfsigned | 5.5.0 | MIT | OK |
 | semver | 7.8.5 | ISC | OK |
 | set-cookie-parser | 2.7.2 | MIT | OK |
 | sonic-boom | 4.2.1 | MIT | OK |
 | split2 | 4.2.0 | ISC | OK |
 | strictdom | 1.0.1 | MIT | OK |
 | stylis | 4.4.0 | MIT | OK |
-| supports-color | 7.2.0 | MIT | OK |
 | tailwind-merge | 3.6.0 | MIT | OK |
 | thread-stream | 4.2.0 | MIT | OK |
 | tinyexec | 1.3.1 | MIT | OK |
 | toad-cache | 3.7.4 | MIT | OK |
 | ts-dedent | 2.3.0 | MIT | OK |
+| tslib | 1.14.1 | 0BSD | OK |
 | tslib | 2.8.1 | 0BSD | OK |
+| tsyringe | 4.10.0 | MIT | OK |
 | undici | 6.28.0 | MIT | OK |
 | undici | 7.29.0 | MIT | OK |
 | use-callback-ref | 1.3.3 | MIT | OK |

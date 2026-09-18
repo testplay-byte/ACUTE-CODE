@@ -25,6 +25,7 @@ import {
   getBrowserSettings,
   getDebugSettings,
   getDesktopNotificationsSettings,
+  getDeviceLinkSettings,
   getMemorySettings,
   getOrchestrationSettings,
   getRetrySettings,
@@ -32,6 +33,7 @@ import {
   setBrowserSettings,
   setDebugSettings,
   setDesktopNotificationsSettings,
+  setDeviceLinkSettings,
   setMemorySettings,
   setOrchestrationSettings,
   setRetrySettings,
@@ -409,6 +411,71 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
       });
     } catch (error) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
+          field: "body",
+        }),
+      );
+    }
+  });
+
+  // ── ROUND-106 (R106-S1, the mobile-link round): the DEVICE-LINK switch —
+  // "Allow device links" in the Settings → Devices tab. Same one-boolean
+  // GET/PUT shape as /settings/desktop-notifications, PLUS the runtime
+  // listener effect: a flip to true STARTS the TLS device listener (0.0.0.0,
+  // own ephemeral port, the per-machine cert); a flip to false STOPS it —
+  // no process restart either way (the dual-listener contract). The start
+  // is attempted BEFORE the setting persists, so a failed start (cert
+  // generation error, port bind error) leaves the link honestly OFF with
+  // the cause in the 400. The frontend's full status read (port, addresses,
+  // fingerprint, pairing window) is GET /api/v1/mobile/link-info.
+
+  scope.get("/settings/device-link", async () => {
+    return getDeviceLinkSettings(db);
+  });
+
+  scope.put("/settings/device-link", async (request, reply) => {
+    const body: unknown = request.body;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+    }
+    const raw = body as Record<string, unknown>;
+    if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body.enabled must be a boolean", { field: "body.enabled" }));
+    }
+    const enabled = typeof raw.enabled === "boolean" ? raw.enabled : getDeviceLinkSettings(db).enabled;
+    if (ctx.mobileLink === undefined) {
+      if (!enabled) return getDeviceLinkSettings(db);
+      // The listener can't exist without a machine data dir (the cert's
+      // home). Hermetic test builds hit this; the real sidecar always has
+      // one (the SQLite file's directory).
+      return reply.code(503).send(
+        errorBody("UNAVAILABLE", "device links are unavailable on this sidecar (no machine data dir)"),
+      );
+    }
+    if (enabled) {
+      try {
+        await ctx.mobileLink.start();
+      } catch (error) {
+        return reply.code(400).send(
+          errorBody("VALIDATION", error instanceof Error ? error.message : "the device listener failed to start", {
+            hint: "the device link stays disabled",
+          }),
+        );
+      }
+    } else {
+      await ctx.mobileLink.stop();
+    }
+    try {
+      return setDeviceLinkSettings(db, { enabled });
+    } catch (error) {
+      // The listener moved but the row refused (corrupt settings write) —
+      // reconcile by stopping again so state and setting agree.
+      await ctx.mobileLink.stop();
       return reply.code(400).send(
         errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
           field: "body",

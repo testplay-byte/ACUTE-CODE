@@ -7,6 +7,12 @@
  * ACUTE_PORT (optional): bind a fixed port instead of an ephemeral one —
  * used only by the dev workflow (scripts/dev.mjs) so the browser UI can
  * expect a deterministic address; the shell always uses the ready-line port.
+ *
+ * ACUTE_HOST (optional, ROUND-106 R106-S1): set to a NON-LOOPBACK value at
+ * boot to force-enable the DEVICE LINK (the TLS LAN listener the Android
+ * companion pairs over — startServer persists deviceLink.enabled and boots
+ * the listener; see server.ts's boot block). Loopback values mean nothing;
+ * the persisted setting alone decides.
  */
 import { startServer } from "./server.js";
 // ROUND-45 (R45-b): SIGTERM/SIGINT must kill live terminal-session shells.
