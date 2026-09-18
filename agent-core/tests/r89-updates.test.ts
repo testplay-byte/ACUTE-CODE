@@ -47,6 +47,10 @@ import type { FastifyInstance } from "fastify";
 import { ProviderKeyring } from "../src/providers/registry";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { buildServer } from "../src/server";
+// R104: the platform-aware asset pick's pure matrix half — unit-testable on
+// any runner (the route reads process.platform/arch at request time; the
+// route-level matrix below stubs those per case).
+import { updaterAssetSuffixForPlatform } from "../src/routes/system";
 
 const TOKEN = "test-token-r89-updates";
 
@@ -111,6 +115,10 @@ afterEach(async () => {
   // the env var must never leak it into the next one).
   delete process.env.ACUTE_GITHUB_PAT;
   fakeHome.dir = tmpdir();
+  // R104: restore the REAL platform/arch (a test that stubbed the
+  // platform-aware asset pick must never leak its machine into the next).
+  Object.defineProperty(process, "platform", { value: REAL_PLATFORM, configurable: true });
+  Object.defineProperty(process, "arch", { value: REAL_ARCH, configurable: true });
   await app.close();
   db.close();
 });
@@ -121,6 +129,31 @@ afterAll(() => {
 
 function authed(): { headers: Record<string, string> } {
   return { headers: { authorization: `Bearer ${TOKEN}` } };
+}
+
+// ── R104: the platform-stub helper ───────────────────────────────────────
+// The sidecar's platform IS the app's platform (it ships inside the app),
+// and the route reads process.platform/process.arch AT REQUEST TIME — so a
+// test can pin exactly which machine it simulates. The real values are
+// captured once and restored in afterEach (the env-var hermeticity rule).
+const REAL_PLATFORM = process.platform;
+const REAL_ARCH = process.arch;
+function stubPlatform(platform: string, arch: string): void {
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  Object.defineProperty(process, "arch", { value: arch, configurable: true });
+}
+
+/** The full six-asset release shape every real release ships (v0.100.0's
+ * actual asset list, names + digests synthetic). */
+function sixAssetRelease(): Array<Record<string, unknown>> {
+  return [
+    { name: `ACUTE-CODE_${NEWER_VERSION}_x64-setup.exe`, url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/101", browser_download_url: `https://github.com/testplay-byte/ACUTE-CODE/releases/download/v${NEWER_VERSION}/ACUTE-CODE_${NEWER_VERSION}_x64-setup.exe`, size: 38_746_943, digest: `sha256:${"01".repeat(32)}` },
+    { name: `ACUTE-CODE_${NEWER_VERSION}_amd64.AppImage`, url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/102", browser_download_url: `https://github.com/testplay-byte/ACUTE-CODE/releases/download/v${NEWER_VERSION}/ACUTE-CODE_${NEWER_VERSION}_amd64.AppImage`, size: 134_990_328, digest: `sha256:${"02".repeat(32)}` },
+    { name: `ACUTE-CODE_${NEWER_VERSION}_aarch64.AppImage`, url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/103", browser_download_url: `https://github.com/testplay-byte/ACUTE-CODE/releases/download/v${NEWER_VERSION}/ACUTE-CODE_${NEWER_VERSION}_aarch64.AppImage`, size: 132_729_352, digest: `sha256:${"03".repeat(32)}` },
+    { name: `ACUTE-CODE_${NEWER_VERSION}_amd64.deb`, url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/104", browser_download_url: "https://github.com/testplay-byte/ACUTE-CODE/releases/download/x/x.deb", size: 67_291_130, digest: `sha256:${"04".repeat(32)}` },
+    { name: `ACUTE-CODE_${NEWER_VERSION}_arm64.deb`, url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/105", browser_download_url: "https://github.com/testplay-byte/ACUTE-CODE/releases/download/x/x.deb", size: 67_240_846, digest: `sha256:${"05".repeat(32)}` },
+    { name: `acute-launcher-kit-v${NEWER_VERSION}.zip`, url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/106", browser_download_url: "https://github.com/testplay-byte/ACUTE-CODE/releases/download/x/kit.zip", size: 125_148, digest: `sha256:${"06".repeat(32)}` },
+  ];
 }
 
 describe("GET /system/updates (R89-A2)", () => {
@@ -263,6 +296,10 @@ describe("GET /system/updates (R89-A2)", () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
     plantPat(home, "github_pat_test");
+    // R104: the asset pick is PLATFORM-AWARE — this test pins the WINDOWS
+    // machine's pick (the _x64-setup.exe asset); the matrix below covers
+    // the other platforms.
+    stubPlatform("win32", "x64");
     // The real GitHub asset shape: BOTH url forms per asset.
     const asset = {
       name: `ACUTE-CODE_${NEWER_VERSION}_x64-setup.exe`,
@@ -473,11 +510,15 @@ describe("R91-E: the in-app update download", () => {
       method: "POST",
       url: "/api/v1/system/updates/download",
       payload: {
-        // The browser_download_url shape findInstallerAsset hands the UI —
+        // The browser_download_url shape findUpdaterAsset hands the UI —
         // the host the pre-R94 allowlist rejected (the owner's exact bug).
         url: "https://github.com/testplay-byte/ACUTE-CODE/releases/download/v9.9.9/ACUTE-CODE_9.9.9_x64-setup.exe",
         digest,
         version: "v9.9.9",
+        // R104: the REAL asset filename (the About tab posts asset.name) —
+        // the staged file keeps GitHub's extension so the Rust shell
+        // dispatches on what GitHub named.
+        name: "ACUTE-CODE_9.9.9_x64-setup.exe",
       },
       ...authed(),
     });
@@ -497,7 +538,9 @@ describe("R91-E: the in-app update download", () => {
     expect(settled).not.toBeNull();
     expect(settled!.status).toBe("ready");
     expect(settled!.path).not.toBeNull();
-    expect(settled!.path!.endsWith("ACUTE-CODE-9.9.9-x64-setup.exe")).toBe(true);
+    // R104: the staged name derives from the REAL asset filename (the
+    // pre-R104 hardcoded "ACUTE-CODE-<v>-x64-setup.exe" is gone).
+    expect(settled!.path!.endsWith("ACUTE-CODE_9.9.9_x64-setup.exe")).toBe(true);
     expect(settled!.version).toBe("9.9.9");
 
     // ANONYMOUS means anonymous: no Authorization header crossed the wire
@@ -573,6 +616,8 @@ describe("R91-E: the in-app update download", () => {
         url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/42",
         digest,
         version: "v9.9.9",
+        // R104: the REAL asset filename (the About tab posts asset.name).
+        name: "ACUTE-CODE_9.9.9_x64-setup.exe",
       },
       ...authed(),
     });
@@ -590,7 +635,8 @@ describe("R91-E: the in-app update download", () => {
     expect(settled).not.toBeNull();
     expect(settled!.status).toBe("ready");
     expect(settled!.path).not.toBeNull();
-    expect(settled!.path!.endsWith("ACUTE-CODE-9.9.9-x64-setup.exe")).toBe(true);
+    // R104: the staged name derives from the REAL asset filename.
+    expect(settled!.path!.endsWith("ACUTE-CODE_9.9.9_x64-setup.exe")).toBe(true);
     expect(settled!.version).toBe("9.9.9");
 
     // The Authorization header carried the PAT (the private-repo asset).
@@ -645,5 +691,290 @@ describe("R91-E: the in-app update download", () => {
     expect(settled!.status).toBe("error");
     expect(settled!.error).toContain("sha256");
     vi.unstubAllGlobals();
+  });
+});
+
+// ── R104: the platform-aware updater asset + the two-stage hand-shake's
+// sidecar half. The v0.100.0 report's Linux root cause: findInstallerAsset
+// ALWAYS answered the WINDOWS setup.exe, so a Linux "Update now" downloaded
+// a .exe the Rust shell could only reject. The pick is now keyed off the
+// sidecar's own platform/arch, the response carries {kind, name} for the
+// frontend's honest copy, the staged file keeps the REAL asset filename,
+// and DELETE /system/updates/download walks a staged download back.
+describe("R104: the platform-aware updater asset", () => {
+  it("the pure matrix: win32→setup.exe, linux+arm64→aarch64.AppImage, linux+x64→amd64.AppImage, darwin→null", () => {
+    expect(updaterAssetSuffixForPlatform("win32", "x64")).toEqual({
+      suffix: "_x64-setup.exe",
+      kind: "windows-setup",
+    });
+    expect(updaterAssetSuffixForPlatform("win32", "arm64")).toEqual({
+      suffix: "_x64-setup.exe",
+      kind: "windows-setup",
+    });
+    // The R101 naming asymmetry: the deb carries dpkg's `arm64`, the
+    // AppImage carries the Rust triple's `aarch64` — the updater wants the
+    // AppImage, so aarch64 it is.
+    expect(updaterAssetSuffixForPlatform("linux", "arm64")).toEqual({
+      suffix: "_aarch64.AppImage",
+      kind: "linux-appimage",
+    });
+    // tauri-bundler names BOTH x86_64 Linux bundles `amd64`.
+    expect(updaterAssetSuffixForPlatform("linux", "x64")).toEqual({
+      suffix: "_amd64.AppImage",
+      kind: "linux-appimage",
+    });
+    // macOS is not shipped — no in-app updater asset at all.
+    expect(updaterAssetSuffixForPlatform("darwin", "arm64")).toBeNull();
+  });
+
+  it("the route picks THIS machine's asset from a real six-asset release (windows / linux-arm64 / linux-x64 / darwin)", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, null);
+    const assets = sixAssetRelease();
+    // A FRESH Response per call — a Response body is single-use, and this
+    // test drives four checks through the one mock.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}`, assets }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      ),
+    );
+
+    type Pick = { asset?: { url: string; name: string; kind: string } };
+    const pickFor = async (platform: string, arch: string): Promise<Pick> => {
+      stubPlatform(platform, arch);
+      const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
+      return res.json() as Pick;
+    };
+
+    // Windows → the NSIS setup.exe, kind windows-setup, the API url form.
+    const win = await pickFor("win32", "x64");
+    expect(win.asset?.name).toBe(`ACUTE-CODE_${NEWER_VERSION}_x64-setup.exe`);
+    expect(win.asset?.kind).toBe("windows-setup");
+    expect(win.asset?.url).toBe("https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/101");
+
+    // Linux ARM64 (the owner's machine) → the aarch64 AppImage.
+    const arm = await pickFor("linux", "arm64");
+    expect(arm.asset?.name).toBe(`ACUTE-CODE_${NEWER_VERSION}_aarch64.AppImage`);
+    expect(arm.asset?.kind).toBe("linux-appimage");
+
+    // Linux x64 → the amd64 AppImage.
+    const x64 = await pickFor("linux", "x64");
+    expect(x64.asset?.name).toBe(`ACUTE-CODE_${NEWER_VERSION}_amd64.AppImage`);
+    expect(x64.asset?.kind).toBe("linux-appimage");
+
+    // macOS → no in-app updater asset at all (the Releases page remains).
+    const mac = await pickFor("darwin", "arm64");
+    expect(mac.asset).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("R104: the staged download — the name derivation + the discard", () => {
+  /** The 11MiB + valid-digest happy stream (the shared harness shape). */
+  async function happyStream(): Promise<{ digest: string }> {
+    const chunk = new Uint8Array(1024 * 1024).fill(0x71);
+    const parts: Uint8Array[] = [];
+    for (let i = 0; i < 11; i += 1) parts.push(chunk);
+    const bytes = Buffer.concat(parts.map((p) => Buffer.from(p)));
+    const { createHash } = await import("node:crypto");
+    const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (const part of parts) controller.enqueue(part);
+              controller.close();
+            },
+          }),
+          { status: 200, headers: { "content-length": String(bytes.byteLength) } },
+        ),
+      ),
+    );
+    return { digest };
+  }
+
+  /** Poll until the single-flight state settles (ready | error). */
+  async function settle(): Promise<{ status: string; path: string | null; error: string | null; version: string | null }> {
+    for (let i = 0; i < 50; i += 1) {
+      await new Promise((r) => setTimeout(r, 100));
+      const res = await app.inject({ method: "GET", url: "/api/v1/system/updates/download/progress", ...authed() });
+      const body = res.json() as { status: string; path: string | null; error: string | null; version: string | null };
+      if (body.status === "ready" || body.status === "error") return body;
+    }
+    throw new Error("the download never settled");
+  }
+
+  it("the posted name is BASENAME-ONLY: a path-bearing name stages in the tmpdir root, never a subdirectory", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, null);
+    const { digest } = await happyStream();
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/updates/download",
+      payload: {
+        url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/42",
+        digest,
+        version: "v9.9.9",
+        // A hostile/accidental path-bearing name — the staged file must be
+        // the BASENAME in tmpdir (no traversal, no subdirectories).
+        name: "../../evil/ACUTE-CODE_9.9.9_x64-setup.exe",
+      },
+      ...authed(),
+    });
+    expect(start.statusCode).toBe(200);
+
+    const settled = await settle();
+    expect(settled.status).toBe("ready");
+    expect(settled.path).not.toBeNull();
+    // The staged file sits in tmpdir's ROOT under the basename (the
+    // sanitization stripped every separator + the ../ run).
+    expect(settled.path!.endsWith("ACUTE-CODE_9.9.9_x64-setup.exe")).toBe(true);
+    expect(settled.path!.startsWith(tmpdir())).toBe(true);
+    expect(settled.path!.includes("evil")).toBe(false);
+    rmSync(settled.path!, { force: true });
+    vi.unstubAllGlobals();
+  });
+
+  it("an AppImage-named download under 50MB refuses honestly (the extension-aware floor)", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, null);
+    // 11MiB with a VALID digest — the digest check passes; the
+    // extension-aware floor (50MB for an AppImage, 10MB for a setup.exe)
+    // is what fires: a real AppImage is ~130MB.
+    const { digest } = await happyStream();
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/updates/download",
+      payload: {
+        url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/42",
+        digest,
+        version: "v9.9.9",
+        name: "ACUTE-CODE_9.9.9_aarch64.AppImage",
+      },
+      ...authed(),
+    });
+    expect(start.statusCode).toBe(200);
+
+    const settled = await settle();
+    expect(settled.status).toBe("error");
+    expect(settled.error).toContain("not a real AppImage");
+    vi.unstubAllGlobals();
+  });
+
+  it("DELETE discards a STAGED download: the file is unlinked, the state returns to idle", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, null);
+    const { digest } = await happyStream();
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/updates/download",
+      payload: {
+        url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/42",
+        digest,
+        version: "v9.9.9",
+        name: "ACUTE-CODE_9.9.9_x64-setup.exe",
+      },
+      ...authed(),
+    });
+    expect(start.statusCode).toBe(200);
+    const settled = await settle();
+    expect(settled.status).toBe("ready");
+    expect(settled.path).not.toBeNull();
+    expect(existsSync(settled.path!)).toBe(true);
+
+    // The walk-back: the staged file is deleted and the single-flight
+    // state returns to idle (a later download starts clean).
+    const del = await app.inject({ method: "DELETE", url: "/api/v1/system/updates/download", ...authed() });
+    expect(del.statusCode).toBe(200);
+    expect(del.json()).toMatchObject({ ok: true, status: "idle" });
+    expect(existsSync(settled.path!)).toBe(false);
+
+    const progress = await app.inject({ method: "GET", url: "/api/v1/system/updates/download/progress", ...authed() });
+    expect(progress.json()).toMatchObject({ status: "idle", path: null, version: null });
+    vi.unstubAllGlobals();
+  });
+
+  it("DELETE refuses honestly (409) while a download is IN FLIGHT — then the state is resettable once it settles", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, null);
+
+    // A stream that emits ONE chunk and then HOLDS OPEN — the route stays
+    // "downloading" until the controller is closed below.
+    let release: ((close: boolean) => void) | null = null;
+    const opened = new Promise<void>((resolve) => {
+      const chunk = new Uint8Array(1024 * 1024).fill(0x72);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(chunk);
+                resolve();
+                release = (close) => {
+                  if (close) controller.close();
+                };
+              },
+            }),
+            { status: 200, headers: { "content-length": String(11 * 1024 * 1024) } },
+          ),
+        ),
+      );
+    });
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/updates/download",
+      payload: {
+        url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/42",
+        version: "v9.9.9",
+        name: "ACUTE-CODE_9.9.9_x64-setup.exe",
+      },
+      ...authed(),
+    });
+    expect(start.statusCode).toBe(200);
+    await opened;
+
+    // IN FLIGHT: the discard is refused honestly — the single-flight state
+    // is the live download's, not the caller's, to cancel out from under.
+    const mid = await app.inject({ method: "DELETE", url: "/api/v1/system/updates/download", ...authed() });
+    expect(mid.statusCode).toBe(409);
+    expect(mid.json().error.code).toBe("CONFLICT");
+
+    // Settle the held stream (a truncation error — 1MB of the promised
+    // 11MB), then the discard works again (the error state is walkable).
+    release!(true);
+    const settled = await settle();
+    expect(settled.status).toBe("error");
+    const del = await app.inject({ method: "DELETE", url: "/api/v1/system/updates/download", ...authed() });
+    expect(del.statusCode).toBe(200);
+    expect(del.json()).toMatchObject({ ok: true, status: "idle" });
+    vi.unstubAllGlobals();
+  });
+
+  it("DELETE from idle is the idempotent reset (200, nothing staged)", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, null);
+
+    const del = await app.inject({ method: "DELETE", url: "/api/v1/system/updates/download", ...authed() });
+    expect(del.statusCode).toBe(200);
+    expect(del.json()).toMatchObject({ ok: true, status: "idle" });
   });
 });

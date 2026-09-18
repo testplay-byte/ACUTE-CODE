@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-100 -->
+<!-- last-reviewed: 2026-09-18 round-104 -->
 <!-- round: 100 -->
 
 # ROUND-100 MASTER PLAN — the honest browser + the UI that stops looking generated

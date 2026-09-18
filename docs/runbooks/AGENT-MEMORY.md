@@ -1298,3 +1298,43 @@ stayed loud, bounded, and non-destructive: banked assets were never
 deleted by re-runs (the incident's most expensive defect), so finishing
 by hand cost minutes instead of another hour of gambling. Design every
 pipeline so the operator can finish it by hand.
+
+#105 (2026-09-18, round 104 — the update hand-shake + the Linux AppImage
+updater):
+(a) A UX DIRECTIVE CAN EXPIRE — PREPARE-THEN-CONFIRM IS THE DURABLE SHAPE
+OVER DESTRUCTIVE ACTS. R99-C's "everything happens automatically
+afterwards by itself" and R104's "download it then confirm to update it"
+are contradictory owner asks five weeks apart — BOTH were right for
+their moment; what aged badly was one-click automation over a RESTART
+(a destructive-feeling act on the user's working session). The two-stage
+shape (prepare → a persisted staged state → an explicit confirm) is the
+contract that survives: the staged state is also the seam any future
+mechanism (delta patches, background pre-download) plugs into without
+re-shaping the UX again.
+(b) THE SPLASH IS NOT THE TRUTH — WHEN A CALM SURFACE MASKS A FAILURE,
+THE FAILURE MUST SURFACE IN THE SAME SURFACE. The v0.100.0 Linux report
+read "Restarting into 0.100.0 → Connecting to Agent Core" as an update
+that tried and failed quietly; both screens were honest UI, but the
+REJECTED invoke between them looked like progress. The R101-B recovery
+was doing its job — the missing piece was that the Linux leg had no job
+to do. Lesson generalized: a state machine that renders "restarting"
+must have an install that actually exists on the platform it renders it
+on; the platform gate belongs at the ENTRY (the asset pick), not the
+EXIT (a launch stub that errors).
+(c) TEST THE STATE THAT SURVIVES THE SCREEN — PERSISTENCE SURFACES NEED
+COLD-ENTRY TESTS. The mount-resume test caught a real render bug the
+happy-path tests could never see: the install-phase states (installing /
+launched / error) lived inside the available-update card, so a resumed
+confirm (no check run, no card) would have shown NOTHING between the
+click and the Restarting splash. Any state that outlives its originating
+screen needs a test that enters from COLD: no prior click, just the
+adopted state — that test will find the render paths that assume the
+originating screen still exists.
+(d) THE SANDBOX RESETS TAKE THE TOOLCHAIN WITH THEM — PLAN FOR THE
+CI-ONLY COMPILE GATE AS A FIRST-CLASS MODE. /home/z/repos was wiped
+again (the R102 rustup gone with it); the Rust AppImage leg shipped with
+no local compile. The compensations that held: the cfg-attribute balance
+sweep + a brace-balance check on the rewritten file + writing every
+failure path as a named mapped case BEFORE the happy path (the failure
+map is the design review). CI's cargo check on both platforms is the
+gate — write for the reviewer who cannot run the code.

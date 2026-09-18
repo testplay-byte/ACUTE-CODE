@@ -2813,3 +2813,21 @@ Work Log:
 
 Stage Summary:
 - v0.99.0 tagged and released; the round's contract was the owner's v0.98.0 report answered item by item — every item either fixed at the root or honestly documented.
+
+---
+Task ID: R104
+Agent: main-orchestrator (Z.ai Code)
+Task: Round-104 — the update hand-shake (download, then confirm) + the Linux AppImage updater made real (v0.100.0 → v0.101.0)
+
+Work Log:
+- Sandbox check first (the standing directive): /home/z/my-project INTACT but /home/z/repos WIPED — ACUTE-CODE re-cloned from origin (PAT) at main @ 4052137 (the R103 close-out), tag v0.100.0 verified, tree clean. pnpm@9 re-installed via bun (the R102 rustup is gone — no local Rust compile this round; CI cargo check is the gate).
+- Root-caused the owner's v0.100.0 report BEFORE writing any fix: (1) Windows auto-install = the R99-C one-click directive faithfully implemented (a UX contract that expired); (2) Linux = findInstallerAsset ALWAYS answered the Windows setup.exe AND run_update_installer had NO Linux leg (the .exe launch rejected at the non-Windows stub → the R101-B recovery → the literal "Connecting to Agent Core" → the app lived on un-updated).
+- Sidecar (agent-core/src/routes/system.ts): updaterAssetSuffixForPlatform (win32→_x64-setup.exe; linux+arm64→_aarch64.AppImage; linux+x64→_amd64.AppImage; darwin→null) + findUpdaterAsset with {kind,name} in the answer + the staged name derived from the REAL asset filename (basename-sanitized) + the extension-aware floor (10MB exe / 50MB AppImage) + DELETE /system/updates/download (the staged walk-back; 409 while in flight).
+- Rust (src-tauri/src/update.rs): platform-coherent extension dispatch (.exe@Windows only, .AppImage@Linux only) + the AppImage replace leg (APPIMAGE env → same-dir stage copy → chmod 755 → fsync → the shared shutdown_before_install kill → the atomic rename → the delayed detached relaunch via sh -c 'sleep 3; exec <path>' → the shared schedule_exit), every failure leg mapped; the cfg-balance + brace sweeps run in-sandbox (the R100 lesson).
+- Frontend (AboutTab.tsx + api.ts): the two-stage hand-shake (Download update STOPS at the staged row; Restart-and-update-now is the only install path; Discard walks it back), the mount-resume adoption (the sidecar's ready state outlives the tab), the re-check staleness sweep, the install-phase states moved to a SHARED render block (a mount-resume-test-caught render bug), the wizard escape hatch kind-gated to .exe paths.
+- Tests: AboutTab 13→19 (the stop-at-ready pin with the invoke asserted ABSENT, the Linux leg with the no-wizard pin, the mount-resume, the stale self-heal, the discard, the sweep); r89-updates 14→22 (the pure platform matrix, the six-asset route pick, the basename derivation, the extension-aware floor, the DELETE trio); the mock-path spellings unified to the REAL asset-name form.
+- Gates: eslint clean, both typechecks clean, root 3,823/12-skipped, agent-core 2,392/2,392, license-audit clean (247), design-audit at baseline, docs:check 224/0/0 (after the round-100 stamp-cohort refresh ×12), version ×4 at 0.101.0 with the update suites re-run green AFTER the bump (the R102-addendum discipline).
+- Docs: round-104.md (§0 the report itemized → §4 the TEST CHECKLIST → §5 AGENT-MEMORY #105), CHANGELOG 0.101.0, status.json (round 104, PENDING, the milestone, the suites), HANDOFF header, AGENT-MEMORY #105, docs/README.md index entry.
+
+Stage Summary:
+- v0.101.0 code-complete and gated; the owner's both-halves report answered at the root: the download now STOPS for the confirmation, and the Linux update actually updates (the arch-matched AppImage pick + the atomic replace + the automatic relaunch).

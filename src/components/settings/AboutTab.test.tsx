@@ -19,6 +19,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
+  discardUpdateDownload,
   fetchSystemUpdates,
   fetchUpdateDownloadProgress,
   resetApplication,
@@ -40,6 +41,7 @@ import { AboutTab } from "./AboutTab";
 vi.mock("../../lib/api", () => ({
   fetchSystemUpdates: vi.fn(),
   fetchUpdateDownloadProgress: vi.fn(),
+  discardUpdateDownload: vi.fn(),
   resetApplication: vi.fn(),
   startUpdateDownload: vi.fn(),
   // R99-A: open-link.ts imports this from the same module — present in
@@ -74,6 +76,7 @@ beforeEach(() => {
   vi.mocked(resetApplication).mockReset();
   vi.mocked(startUpdateDownload).mockReset();
   vi.mocked(fetchUpdateDownloadProgress).mockReset();
+  vi.mocked(discardUpdateDownload).mockReset().mockResolvedValue({ ok: true, status: "idle" });
   sidecarConnectionMock.retryConnection.mockClear();
 });
 
@@ -245,40 +248,58 @@ describe("AboutTab (ROUND-89 R89-A)", () => {
   });
 });
 
-// ── R99-C: THE ONE-CLICK SILENT UPDATE. The owner's directive: "I click
-// the update button in the application and everything else happens
-// automatically afterwards by itself without me having to make any
-// changes." The available-update card becomes a real card (version line +
-// collapsible "What's new" + the ONE button), the flow is honest at every
-// step (byte-true MB + %, the checksum verify, the silent launch), and a
-// REJECTED silent launch keeps the legacy interactive wizard one click
-// away — reusing the already-verified installer, never re-downloading.
-describe("AboutTab R99-C: the one-click silent update", () => {
-  /** The full happy-path progress sequence updateNow walks: the reuse
-   * check (idle) → download poll (partial bytes) → verify poll → ready.
-   * The sticky DEFAULT is "ready": the sidecar's single-flight state stays
-   * ready once an installer is verified, so the fallback's reuse check (a
-   * 5th call) still finds it — that reuse IS the no-re-download contract. */
+// ── R99-C + R104: THE UPDATE HAND-SHAKE. R99-C's directive ("I click the
+// update button… everything else happens automatically") became the
+// v0.100.0 report's retirement of the auto-install ("I want the ability
+// to download it then confirm to update it, or click the update button in
+// the About section to update it"): the flow is now TWO stages — Download
+// (byte-true progress + the checksum verify) STOPS at a verified staged
+// file, and ONLY the explicit "Restart and update now" confirmation
+// launches the install. The staged row also SURVIVES the About tab (the
+// mount-resume adoption) so the owner can confirm any time, and a
+// REJECTED launch keeps the legacy interactive wizard one click away on
+// WINDOWS setups only (an AppImage has no wizard) — reusing the
+// already-verified installer, never re-downloading.
+describe("AboutTab R99-C/R104: the two-stage update hand-shake", () => {
+  /** A staged/progress state factory (the sidecar's single-flight shape). */
+  const dlState = (patch: Partial<SystemUpdateDownload>): SystemUpdateDownload => ({
+    status: "idle",
+    received: 0,
+    total: 0,
+    path: null,
+    version: null,
+    error: null,
+    ...patch,
+  });
+
+  /** A version strictly NEWER than the engine's — the mount-resume
+   * adoption + the stale self-heal compare against the LIVE APP_VERSION
+   * (the R101-hotfix pin-rot lesson: a hardcoded future version ages out
+   * the moment the engine reaches it). */
+  const NEWER_VERSION: string = (() => {
+    const [maj, min, patch] = APP_VERSION.split(".").map((n) => Number.parseInt(n, 10));
+    return `${maj}.${min}.${patch + 1}`;
+  })();
+
+  /** The full happy-path progress sequence the two-stage flow walks:
+   * the MOUNT-resume probe (idle — nothing in flight) → downloadUpdate's
+   * reuse check (idle) → download poll (partial bytes) → verify poll →
+   * ready. The sticky DEFAULT is "ready": the sidecar's single-flight
+   * state stays ready once the file is verified, so the wizard fallback's
+   * belt re-read (any later call) still finds it — that reuse IS the
+   * no-re-download contract. */
   function mockDownloadSequence(): void {
-    const state = (patch: Partial<SystemUpdateDownload>): SystemUpdateDownload => ({
-      status: "idle",
-      received: 0,
-      total: 0,
-      path: null,
-      version: null,
-      error: null,
-      ...patch,
-    });
-    const ready = state({
+    const ready = dlState({
       status: "ready",
-      path: "C:\\Temp\\ACUTE-CODE-0.87.0-x64-setup.exe",
+      path: "C:\\Temp\\ACUTE-CODE_0.87.0_x64-setup.exe",
       version: "0.87.0",
     });
     vi.mocked(fetchUpdateDownloadProgress)
       .mockResolvedValue(ready)
-      .mockResolvedValueOnce(state({})) // the reuse check (nothing ready yet)
-      .mockResolvedValueOnce(state({ status: "downloading", received: 13_000_000, total: 38_700_000 }))
-      .mockResolvedValueOnce(state({ status: "verifying" }))
+      .mockResolvedValueOnce(dlState({})) // the MOUNT-resume probe (nothing in flight)
+      .mockResolvedValueOnce(dlState({})) // downloadUpdate's reuse check (nothing ready yet)
+      .mockResolvedValueOnce(dlState({ status: "downloading", received: 13_000_000, total: 38_700_000 }))
+      .mockResolvedValueOnce(dlState({ status: "verifying" }))
       .mockResolvedValueOnce(ready);
     vi.mocked(startUpdateDownload).mockResolvedValue({ ok: true, status: "downloading" });
   }
@@ -291,18 +312,22 @@ describe("AboutTab R99-C: the one-click silent update", () => {
       latest: "0.87.0",
       updateAvailable: true,
       releaseUrl: "https://github.com/testplay-byte/ACUTE-CODE/releases/tag/v0.87.0",
-      body: "## What's new\n\n- the one-click silent update\n- the startup auto-check",
+      body: "## What's new\n\n- the two-stage update hand-shake\n- the startup auto-check",
+      // R104: the platform-aware asset carries the kind + the REAL asset
+      // filename (the staged file keeps GitHub's extension).
       asset: {
         url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/42",
         size: 38_700_000,
         digest: `sha256:${"ab".repeat(32)}`,
+        kind: "windows-setup",
+        name: "ACUTE-CODE_0.87.0_x64-setup.exe",
       },
     });
   }
 
-  it("renders the one-click card — the version line, the What's-new block, the Update now button, the auto-check toggle — and SYNCs the badge", async () => {
+  it("renders the available-update card — the version line, the What's-new block, the Download button, the auto-check toggle — and SYNCs the badge", async () => {
     mockAvailableRelease();
-    // The Update now button is desktop-only (a browser has no installer) —
+    // The Download button is desktop-only (a browser has no updater) —
     // the __TAURI__ global is the whole shell mock.
     (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
       core: { invoke: vi.fn().mockResolvedValue(undefined) },
@@ -317,9 +342,9 @@ describe("AboutTab R99-C: the one-click silent update", () => {
     // The current → new version line (tabular-nums mono).
     expect(screen.getByTestId("update-state").textContent).toContain(`v${APP_VERSION} → v0.87.0`);
     // The release notes block (collapsible; the route's body passthrough).
-    expect(screen.getByTestId("update-notes-body").textContent).toContain("the one-click silent update");
-    // The ONE button + the persisted auto-check toggle.
-    expect(screen.getByTestId("update-now-button")).toBeTruthy();
+    expect(screen.getByTestId("update-notes-body").textContent).toContain("the two-stage update hand-shake");
+    // The STAGE-1 button + the persisted auto-check toggle.
+    expect(screen.getByTestId("update-download-button")).toBeTruthy();
     expect(screen.getByRole("switch", { name: "Check for updates automatically" })).toBeTruthy();
     // The manual check refreshes the sidebar's pending-update dot (the
     // R99-C badge-sync contract: one sync, two callers).
@@ -370,7 +395,7 @@ describe("AboutTab R99-C: the one-click silent update", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("Update now runs the automatic sequence — byte-true progress (MB + %), then the SILENT invoke, then the restarting line", async () => {
+  it("R104: the two-stage hand-shake — Download stops at the STAGED row (no install), the confirm invokes the silent install, then the restarting line", async () => {
     mockAvailableRelease();
     mockDownloadSequence();
     const invoke = vi.fn().mockResolvedValue(undefined);
@@ -379,9 +404,10 @@ describe("AboutTab R99-C: the one-click silent update", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
     await waitFor(() => {
-      expect(screen.getByTestId("update-now-button")).toBeTruthy();
+      expect(screen.getByTestId("update-download-button")).toBeTruthy();
     });
-    fireEvent.click(screen.getByTestId("update-now-button"));
+    // STAGE 1 — the download (and nothing else).
+    fireEvent.click(screen.getByTestId("update-download-button"));
 
     // Step 1 — DOWNLOADING with the byte-true readout: 13,000,000 B =
     // 12.4 MB of the 38,700,000 B total = 36.9 MB · 33% (real chunk data
@@ -401,18 +427,36 @@ describe("AboutTab R99-C: the one-click silent update", () => {
       },
       { timeout: 6_000 },
     );
-    // Step 3 — the SILENT INSTALL invoke: the exact IPC arg the Rust
-    // command's NSIS "/S /R" leg keys on.
+    // Step 3 — READY: the flow STOPS. The staged row renders with the
+    // confirmation button + the walk-back — and the install invoke has
+    // NOT fired (the v0.100.0 report's core ask: nothing auto-installs
+    // after a download).
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-staged").textContent).toContain(
+          "Downloaded and verified — v0.87.0 is ready to install",
+        );
+      },
+      { timeout: 6_000 },
+    );
+    expect(screen.getByTestId("update-install-button").textContent).toContain("Restart and update now");
+    expect(screen.getByTestId("update-discard-button").textContent).toBe("Discard download");
+    expect(invoke).not.toHaveBeenCalled();
+
+    // STAGE 2 — the explicit confirmation.
+    fireEvent.click(screen.getByTestId("update-install-button"));
+    // The SILENT INSTALL invoke: the exact IPC arg the Rust command's
+    // NSIS "/S /R" leg keys on.
     await waitFor(
       () => {
         expect(invoke).toHaveBeenCalledWith("run_update_installer", {
-          path: "C:\\Temp\\ACUTE-CODE-0.87.0-x64-setup.exe",
+          path: "C:\\Temp\\ACUTE-CODE_0.87.0_x64-setup.exe",
           silent: true,
         });
       },
       { timeout: 6_000 },
     );
-    // Step 4 — the terminal line for the 1.5s the window survives.
+    // The terminal line for the 1.5s the window survives.
     await waitFor(
       () => {
         expect(screen.getByTestId("update-launched").textContent).toContain("Restarting into v0.87.0");
@@ -424,6 +468,238 @@ describe("AboutTab R99-C: the one-click silent update", () => {
     // shows the Restarting splash from the moment the kill starts) — and it
     // STAYS armed: the app is exiting, nothing clears it on the success leg.
     expect(useConfigStore.getState().updateInFlight).toEqual({ version: "0.87.0" });
+    // One download for the whole journey — the confirm reuses the staged
+    // file, never re-streaming it.
+    expect(vi.mocked(startUpdateDownload)).toHaveBeenCalledTimes(1);
+  });
+
+  it("R104: the Linux AppImage leg — the staged aarch64.AppImage invokes the same command, and a REJECTED replace shows the honest error with NO wizard fallback", async () => {
+    // The check answers THIS machine's asset: the arch-matched AppImage.
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: APP_VERSION,
+      releasesUrl: "x",
+      ok: true,
+      latest: "0.87.0",
+      updateAvailable: true,
+      body: "",
+      asset: {
+        url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/43",
+        size: 132_729_352,
+        digest: `sha256:${"cd".repeat(32)}`,
+        kind: "linux-appimage",
+        name: "ACUTE-CODE_0.87.0_aarch64.AppImage",
+      },
+    });
+    const ready = dlState({
+      status: "ready",
+      path: "/tmp/ACUTE-CODE_0.87.0_aarch64.AppImage",
+      version: "0.87.0",
+    });
+    vi.mocked(fetchUpdateDownloadProgress)
+      .mockResolvedValue(ready)
+      .mockResolvedValueOnce(dlState({})) // the mount-resume probe
+      .mockResolvedValueOnce(dlState({})) // the reuse check
+      .mockResolvedValueOnce(ready); // the poll settles immediately
+    vi.mocked(startUpdateDownload).mockResolvedValue({ ok: true, status: "downloading" });
+    // The Rust AppImage replace leg rejects (the honest read-only-dir case).
+    const invoke = vi.fn().mockRejectedValue(
+      "staging the new AppImage beside the current one failed: Permission denied (os error 13) — is the AppImage's directory writable by this user?",
+    );
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = { core: { invoke } };
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-download-button")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("update-download-button"));
+
+    // The staged row (the AppImage this time).
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-staged").textContent).toContain(
+          "Downloaded and verified — v0.87.0 is ready to install",
+        );
+      },
+      { timeout: 6_000 },
+    );
+    fireEvent.click(screen.getByTestId("update-install-button"));
+
+    // The same command, the same silent flag — the Rust side dispatches on
+    // the .AppImage extension to the replace leg.
+    await waitFor(
+      () => {
+        expect(invoke).toHaveBeenCalledWith("run_update_installer", {
+          path: "/tmp/ACUTE-CODE_0.87.0_aarch64.AppImage",
+          silent: true,
+        });
+      },
+      { timeout: 6_000 },
+    );
+    // The honest error (role=alert, the Rust string verbatim) — and NO
+    // wizard escape hatch: there is no interactive wizard for an AppImage.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-flow-error").textContent).toContain("Permission denied");
+      },
+      { timeout: 6_000 },
+    );
+    expect(screen.queryByTestId("update-wizard-fallback")).toBeNull();
+    // R101-B: the recovery still ran (the engine restarts — the "Connecting
+    // to Agent Core" the v0.100.0 report saw, but now with an honest error
+    // instead of a silent nothing-updated).
+    expect(useConfigStore.getState().updateInFlight).toBeNull();
+    expect(sidecarConnectionMock.retryConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it("R104: the mount-resume — a staged download renders WITHOUT a check, and the confirm installs it straight from the sidecar's state", async () => {
+    // The sidecar already holds a verified download for a NEWER version
+    // (downloaded in an earlier About visit — the single-flight state
+    // outlives the tab). No fetchSystemUpdates mock: the flow must not
+    // need a check at all.
+    vi.mocked(fetchUpdateDownloadProgress).mockResolvedValue(
+      dlState({
+        status: "ready",
+        path: "/tmp/ACUTE-CODE_" + NEWER_VERSION + "_x64-setup.exe",
+        version: NEWER_VERSION,
+      }),
+    );
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = { core: { invoke } };
+    renderWithProviders(<AboutTab />);
+
+    // The STANDALONE staged row renders on mount (no available-update card,
+    // no check) — the owner's "click the update button in the About section
+    // to update it", days later, zero clicks spent on finding the update.
+    await waitFor(() => {
+      expect(screen.getByTestId("update-staged").textContent).toContain(
+        `Downloaded and verified — v${NEWER_VERSION} is ready to install`,
+      );
+    });
+    expect(vi.mocked(fetchSystemUpdates)).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("update-install-button"));
+    await waitFor(
+      () => {
+        expect(invoke).toHaveBeenCalledWith("run_update_installer", {
+          path: "/tmp/ACUTE-CODE_" + NEWER_VERSION + "_x64-setup.exe",
+          silent: true,
+        });
+      },
+      { timeout: 6_000 },
+    );
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-launched").textContent).toContain(
+          `Restarting into v${NEWER_VERSION}`,
+        );
+      },
+      { timeout: 6_000 },
+    );
+  });
+
+  it("R104: the stale self-heal — a staged download the app already moved past is DISCARDED on mount (never offered)", async () => {
+    // The sidecar holds a ready download for the CURRENT version — the app
+    // reached it through another path; the staged file's purpose is gone.
+    vi.mocked(fetchUpdateDownloadProgress).mockResolvedValue(
+      dlState({
+        status: "ready",
+        path: "/tmp/ACUTE-CODE_" + APP_VERSION + "_x64-setup.exe",
+        version: APP_VERSION,
+      }),
+    );
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+      core: { invoke: vi.fn().mockResolvedValue(undefined) },
+    };
+    renderWithProviders(<AboutTab />);
+
+    // The discard fires (the pendingVersion self-heal pattern) and the
+    // staged row never renders.
+    await waitFor(() => {
+      expect(vi.mocked(discardUpdateDownload)).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByTestId("update-staged")).toBeNull();
+  });
+
+  it("R104: Discard walks the staged download back — the file is unlinked and the card returns to the Download button", async () => {
+    vi.mocked(fetchUpdateDownloadProgress).mockResolvedValue(
+      dlState({
+        status: "ready",
+        path: "/tmp/ACUTE-CODE_" + NEWER_VERSION + "_x64-setup.exe",
+        version: NEWER_VERSION,
+      }),
+    );
+    vi.mocked(discardUpdateDownload).mockResolvedValue({ ok: true, status: "idle" });
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+      core: { invoke: vi.fn().mockResolvedValue(undefined) },
+    };
+    renderWithProviders(<AboutTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("update-staged")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("update-discard-button"));
+
+    await waitFor(() => {
+      expect(vi.mocked(discardUpdateDownload)).toHaveBeenCalledTimes(1);
+    });
+    // The staged row is gone — the idle surface again (the Download button
+    // only renders inside an available-update card; without a check the
+    // card is simply empty, which is the truth: nothing is staged).
+    await waitFor(() => {
+      expect(screen.queryByTestId("update-staged")).toBeNull();
+    });
+  });
+
+  it("R104: the re-check staleness sweep — a check that announces a DIFFERENT version retires the staged download", async () => {
+    // A staged download for NEWER_VERSION, adopted on mount.
+    vi.mocked(fetchUpdateDownloadProgress).mockResolvedValue(
+      dlState({
+        status: "ready",
+        path: "/tmp/ACUTE-CODE_" + NEWER_VERSION + "_x64-setup.exe",
+        version: NEWER_VERSION,
+      }),
+    );
+    // The check answers an EVEN NEWER release — the staged file is stale.
+    const superseding = (() => {
+      const [maj, min, patch] = NEWER_VERSION.split(".").map((n) => Number.parseInt(n, 10));
+      return `${maj}.${min}.${patch + 1}`;
+    })();
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: APP_VERSION,
+      releasesUrl: "x",
+      ok: true,
+      latest: superseding,
+      updateAvailable: true,
+      body: "",
+      asset: {
+        url: "https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/44",
+        size: 38_700_000,
+        digest: null,
+        kind: "windows-setup",
+        name: `ACUTE-CODE_${superseding}_x64-setup.exe`,
+      },
+    });
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+      core: { invoke: vi.fn().mockResolvedValue(undefined) },
+    };
+    renderWithProviders(<AboutTab />);
+    await waitFor(() => {
+      expect(screen.getByTestId("update-staged")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+
+    // The sweep: the staged 0.x.(n) download is discarded, the card offers
+    // the NEW version's Download button fresh.
+    await waitFor(() => {
+      expect(vi.mocked(discardUpdateDownload)).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("update-staged")).toBeNull();
+    });
+    expect(screen.getByTestId("update-download-button")).toBeTruthy();
+    expect(screen.getByTestId("update-state").textContent).toContain(`v${superseding}`);
   });
 
   it("a REJECTED silent invoke shows the honest error + the wizard escape hatch — which reuses the verified installer (no re-download)", async () => {
@@ -439,9 +715,18 @@ describe("AboutTab R99-C: the one-click silent update", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
     await waitFor(() => {
-      expect(screen.getByTestId("update-now-button")).toBeTruthy();
+      expect(screen.getByTestId("update-download-button")).toBeTruthy();
     });
-    fireEvent.click(screen.getByTestId("update-now-button"));
+    fireEvent.click(screen.getByTestId("update-download-button"));
+
+    // The download lands at the staged row; the confirm launches.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-staged")).toBeTruthy();
+      },
+      { timeout: 6_000 },
+    );
+    fireEvent.click(screen.getByTestId("update-install-button"));
 
     // The honest error (role=alert, the Rust string verbatim) + the button.
     await waitFor(
@@ -466,7 +751,7 @@ describe("AboutTab R99-C: the one-click silent update", () => {
     await waitFor(
       () => {
         expect(invoke).toHaveBeenCalledWith("run_update_installer", {
-          path: "C:\\Temp\\ACUTE-CODE-0.87.0-x64-setup.exe",
+          path: "C:\\Temp\\ACUTE-CODE_0.87.0_x64-setup.exe",
           silent: false,
         });
       },

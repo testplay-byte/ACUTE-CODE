@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-18 round-104 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -10,6 +10,18 @@ version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
 ## [Unreleased]
+
+## [0.101.0] - 2026-09-18 — the fourteenth-walkthrough round: the update hand-shake (download, then confirm) and the Linux update that actually updates
+
+### The update flow, a two-step hand-shake (the round's headline)
+- **Downloading an update no longer installs it.** The old "Update now" button ran the whole journey in one click — download, verify, silently install, restart. It is now two explicit stages: **Download update** streams the file with the byte-true progress bar and verifies its checksum, then **stops**. A **"Downloaded and verified — vX is ready to install"** row appears with the **"Restart and update now"** button — the install happens only when you click it (nothing auto-installs after a download), and a quiet **Discard download** walks the staged file back if you change your mind.
+- **The About tab remembers a staged update.** A verified download survives leaving the page (and relaunching the app's engine): reopening Settings → About shows the ready-to-install row with the update button immediately — no re-check, no re-download. A staged version the app has already moved past cleans itself up.
+- A re-check that announces a **different** release retires the older staged file automatically — the button always installs what the badge announced.
+
+### The Linux update, made real (the round's second headline)
+- **The v0.100.0 Linux failure, fixed at the root.** The check used to offer the *Windows* `setup.exe` on every platform; the Linux "update" then died inside a Windows-only launch path — you saw "Restarting into 0.100.0", then "Connecting to Agent Core", and the About page still said 0.99.0. The check now offers **this machine's own asset**: the arch-matched AppImage on Linux (`_aarch64` on ARM64, `_amd64` on x64) and the setup.exe on Windows.
+- **The AppImage update actually installs.** Confirming "Restart and update now" on Linux now replaces the AppImage file itself — the new image is staged beside the current one (so a failure never touches the running app), made executable, checksum-verified, swapped in atomically, and the new version relaunches automatically a moment after the old window closes. A read-only location or a .deb install answers with an honest error and the Releases-page pointer instead of a silent nothing.
+- The interactive setup-wizard escape hatch is now offered only where one exists (a Windows setup); an AppImage rejection shows the real error (and the engine recovers by itself, as since v0.99.0).
 
 ## [0.100.0] - 2026-09-17 — the thirteenth-walkthrough round: keys that actually save on Linux, the settings sidebar back where it belongs, the diagram viewer, and the quiet composer
 

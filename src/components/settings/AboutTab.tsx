@@ -33,11 +33,32 @@
  *    /R": no wizard pages, and the installer template's own post-success
  *    hook relaunches the app) → the window's terminal line
  *    "Restarting into vX…" for the 1.5s the Rust exit timer allows.
- *  · THE HONEST FALLBACK: if the silent launch invoke REJECTS, the error
- *    renders with a secondary "Run the setup wizard manually" button that
- *    re-runs the flow with silent:false — the legacy interactive wizard,
- *    kept for pathological machines. It reuses the already-verified
- *    installer when one sits ready (no redundant re-download).
+ *
+ * ROUND-104 (R104): THE TWO-STAGE HAND-SHAKE (owner: "I want the ability
+ * to download it then confirm to update it, or click the update button in
+ * the About section to update it" — the v0.100.0 report retired the
+ * one-click auto-install):
+ *  · STAGE 1 — "Download update" streams the release's updater asset (the
+ *    sidecar picks THIS machine's own — the setup.exe on Windows, the
+ *    arch-matched AppImage on Linux, with the asset's kind + real
+ *    filename riding the check) with byte-true progress + the sha256
+ *    verify, then STOPS at "ready". Nothing installs after a download.
+ *  · STAGE 2 — the STAGED row ("Downloaded and verified — vX is ready to
+ *    install" + "Restart and update now") is the explicit confirmation:
+ *    only that button launches the install (the R99-C silent flow —
+ *    NSIS /S /R on Windows, the AppImage replace on Linux). A quiet
+ *    "Discard download" walks the staged file back (sidecar DELETE).
+ *  · MOUNT-RESUME: the sidecar's single-flight ready state outlives the
+ *    About tab — on mount the card re-adopts a staged (or in-flight)
+ *    download, so "come back later and click the update button" works
+ *    without a fresh check. A staged version the app already moved past
+ *    self-heals away (discarded silently, the pendingVersion pattern).
+ *  · THE HONEST FALLBACK: if the silent launch REJECTS, the error renders
+ *    with a secondary "Run the setup wizard manually" button ONLY when
+ *    the staged asset is a Windows setup (there is no wizard for an
+ *    AppImage) — it re-runs the flow with silent:false, the legacy
+ *    interactive wizard kept for pathological Windows machines, and it
+ *    REUSES the already-verified installer (no redundant re-download).
  *  · RELEASE NOTES: the release body (GET /system/updates `body`, capped
  *    at 8,000 chars by the route) renders as a collapsible "What's new"
  *    block — plain text, mono 12px, collapsed to ~4 lines, max-h + scroll
@@ -48,7 +69,7 @@
  *    the sidebar's pending-update dot from every answer (both paths ride
  *    syncPendingVersionFromResult).
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
@@ -68,6 +89,7 @@ import { retryConnection } from "../../lib/sidecar-connection";
 // the deliberate escape hatch to the device's browser.
 import { openLink } from "../../lib/open-link";
 import {
+  discardUpdateDownload,
   fetchSystemUpdates,
   fetchUpdateDownloadProgress,
   resetApplication,
@@ -75,7 +97,13 @@ import {
   type SystemUpdateCheck,
 } from "../../lib/api";
 // R99-C: the auto-check toggle + the badge sync (one store, two surfaces).
-import { syncPendingVersionFromResult, useUpdateCheckerStore } from "../../lib/update-checker";
+// R104: isNewerVersion also gates the mount-resume adoption + the stale
+// staged-download self-heal below.
+import {
+  isNewerVersion,
+  syncPendingVersionFromResult,
+  useUpdateCheckerStore,
+} from "../../lib/update-checker";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { ToggleSwitch } from "../ui/toggle-switch";
@@ -146,20 +174,41 @@ type UpdateState =
   | { kind: "available"; latest: string; body: string; asset?: SystemUpdateCheck["asset"] }
   | { kind: "error"; message: string };
 
-/** R91-E + R99-C: the IN-APP UPDATE flow's UI state (on top of UpdateState's
- * check results). downloading → byte-true progress; verifying → the sha256
- * check; installing → the silent (or wizard) launch invoke is in flight
- * (the Rust pre-install kill can hold this state for seconds — honest);
- * launched → the installer took over and the Rust exit timer owns the rest.
- * error carries offerWizard when the SILENT launch leg rejected — the
- * legacy interactive wizard stays one click away (the escape hatch). */
+/** R91-E + R99-C + R104: the IN-APP UPDATE flow's UI state (on top of
+ * UpdateState's check results). R104 split the old one-click sequence at
+ * the owner's directive ("the ability to download it then confirm to
+ * update it"): downloading → byte-true progress; verifying → the sha256
+ * check; READY → the download is verified and STAGED — the flow STOPS
+ * here and waits for the owner's explicit confirmation (the "Restart and
+ * update now" button, or a later visit: the mount-resume poll below
+ * re-adopts a staged download); installing → the (silent or wizard)
+ * launch invoke is in flight (the Rust pre-install kill can hold this
+ * state for seconds — honest); launched → the installer took over and the
+ * Rust exit timer owns the rest. error carries offerWizard when the
+ * SILENT launch leg rejected AND the staged asset is a Windows setup
+ * (R104: there is no interactive wizard for an AppImage — the Linux
+ * replace leg IS the install) — the legacy interactive wizard stays one
+ * click away on Windows (the escape hatch). */
 type InstallState =
   | { kind: "idle" }
   | { kind: "downloading"; received: number; total: number }
   | { kind: "verifying" }
+  | { kind: "ready"; path: string; version: string }
   | { kind: "installing"; version: string; silent: boolean }
   | { kind: "launched"; version: string; silent: boolean }
   | { kind: "error"; message: string; offerWizard: boolean };
+
+/** R104: which updater asset a STAGED file is, from its extension — the
+ * same thing the Rust side dispatches on (run_update_installer: .exe →
+ * the Windows NSIS legs, .AppImage → the Linux replace). The frontend
+ * uses it to offer the interactive-wizard escape hatch ONLY where one
+ * exists. */
+function stagedAssetKind(path: string): "windows-setup" | "linux-appimage" | null {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".exe")) return "windows-setup";
+  if (lower.endsWith(".appimage")) return "linux-appimage";
+  return null;
+}
 
 /** R91-E: human byte count for the download readout ("35.4 MB"). */
 function fmtMB(bytes: number): string {
@@ -184,6 +233,61 @@ function tauriInvoke(): ((command: string, args?: Record<string, unknown>) => Pr
   return tauri === undefined ? null : tauri.core.invoke;
 }
 
+/** R104: the STAGED-DOWNLOAD row — the second half of the update
+ * hand-shake. Rendered inside the available-update card AND standalone
+ * (a staged download outlives the check that announced it — the
+ * mount-resume poll adopts it, so the owner can confirm the install any
+ * time from the About section). The install happens ONLY through the
+ * button: nothing auto-installs after a download. */
+function StagedDownloadRow({
+  version,
+  onInstall,
+  onDiscard,
+}: {
+  version: string;
+  onInstall: () => void;
+  onDiscard: () => void;
+}) {
+  const styles = useThemeStyles();
+  return (
+    <div className="flex flex-col gap-2" data-testid="update-staged">
+      <span
+        className="text-[11px] font-medium flex items-center gap-1.5"
+        style={{ color: SEMANTIC_COLORS.success }}
+      >
+        <CheckCircle2 size={13} /> Downloaded and verified — v{version} is ready to install
+      </span>
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={onInstall}
+          title="Installs the verified update and restarts the app — your data is kept; nothing happens until you click this"
+          className="h-9 px-4 rounded-full text-[11px] font-semibold transition-all active:scale-95 inline-flex items-center gap-1.5 self-start"
+          style={{ background: styles.accent, color: styles.accentText }}
+          data-testid="update-install-button"
+        >
+          <PackageOpen size={13} /> Restart and update now
+        </button>
+        {/* The walk-back: the staged file is unlinked and the card returns
+            to idle — a later Download starts clean. */}
+        <button
+          type="button"
+          onClick={onDiscard}
+          title="Deletes the downloaded update file and returns to idle — nothing is installed"
+          className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 self-start"
+          style={{ borderColor: bdr("1.5px", styles.border), color: styles.textSecondary }}
+          data-testid="update-discard-button"
+        >
+          Discard download
+        </button>
+      </div>
+      <span className="text-[11px]" style={{ color: styles.textTertiary }}>
+        The update installs only when you confirm it — nothing happens until then. Your data is kept.
+      </span>
+    </div>
+  );
+}
+
 function VersionCard() {
   const styles = useThemeStyles();
   const [update, setUpdate] = useState<UpdateState>({ kind: "idle" });
@@ -198,6 +302,60 @@ function VersionCard() {
   const autoCheck = useUpdateCheckerStore((s) => s.autoCheck);
   const setAutoCheck = useUpdateCheckerStore((s) => s.setAutoCheck);
 
+  // R104: THE MOUNT-RESUME — a staged download outlives the About tab (and
+  // the check that announced it): the sidecar's single-flight state keeps
+  // the verified file + its version until it is installed, discarded, or
+  // the engine restarts. On mount (desktop only) the card re-adopts it so
+  // the owner's "click the update button in the About section to update
+  // it" works days later without a fresh check:
+  //  · ready + NEWER than APP_VERSION → the staged row renders (install
+  //    button + discard);
+  //  · ready + NOT newer (the app moved past it through any path) → the
+  //    staged file is DISCARDED silently (the same self-heal the
+  //    pendingVersion badge rides — a download's purpose must not outlive
+  //    its release);
+  //  · downloading/verifying (a download another surface started this
+  //    engine session) → the card re-attaches to the live progress.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    const adopt = async () => {
+      try {
+        for (;;) {
+          const state = await fetchUpdateDownloadProgress();
+          if (cancelled) return;
+          if (state.status === "idle" || state.status === "error") return;
+          if (state.status === "downloading") {
+            setInstall({ kind: "downloading", received: state.received, total: state.total });
+            await new Promise((r) => setTimeout(r, 700));
+            continue;
+          }
+          if (state.status === "verifying") {
+            setInstall({ kind: "verifying" });
+            await new Promise((r) => setTimeout(r, 700));
+            continue;
+          }
+          if (state.status === "ready" && state.path !== null && state.version !== null) {
+            if (isNewerVersion(state.version, APP_VERSION)) {
+              setInstall({ kind: "ready", path: state.path, version: state.version });
+            } else {
+              void discardUpdateDownload().catch(() => {});
+            }
+            return;
+          }
+          return;
+        }
+      } catch {
+        // The sidecar is not reachable (yet) — the manual Check button
+        // still works; adopting is a convenience, never a gate.
+      }
+    };
+    void adopt();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // R89-A2: the check runs SERVER-SIDE (GET /system/updates — the sidecar
   // reads the launcher's ~/.acute/github.pat; the repo is PRIVATE so the
   // old anonymous webview fetch to api.github.com answered 404, the owner's
@@ -205,9 +363,14 @@ function VersionCard() {
   // R99-C: every manual answer ALSO refreshes the sidebar's pending-update
   // dot (syncPendingVersionFromResult — the same sync the scheduled
   // startup check rides, so the badge can never disagree with the button).
+  // R104: a STAGED download survives a re-check when it is for the same
+  // version (the download-then-come-back flow); an answer that moved past
+  // it retires the staged file honestly (the staleness sweep below).
   const checkForUpdates = async () => {
     setUpdate({ kind: "checking" });
-    setInstall({ kind: "idle" });
+    // A staged download is KEEPABLE — only the non-ready states reset here;
+    // the answer below decides whether the staged version went stale.
+    if (install.kind !== "ready") setInstall({ kind: "idle" });
     try {
       const result: SystemUpdateCheck = await fetchSystemUpdates();
       syncPendingVersionFromResult(result);
@@ -226,6 +389,18 @@ function VersionCard() {
             }
           : { kind: "current", latest },
       );
+      // R104: the staleness sweep — an answer that says "no update" (the
+      // app is at/after the latest) or announces a DIFFERENT version than
+      // the staged one retires the staged file: its release either never
+      // mattered or was superseded. Discarded best-effort (a dead sidecar
+      // owns no staged file anyway).
+      if (install.kind === "ready") {
+        const stale = result.updateAvailable !== true || result.latest !== install.version;
+        if (stale) {
+          setInstall({ kind: "idle" });
+          void discardUpdateDownload().catch(() => {});
+        }
+      }
     } catch (err) {
       setUpdate({
         kind: "error",
@@ -234,12 +409,16 @@ function VersionCard() {
     }
   };
 
-  // R99-C: the LAUNCH leg — shared by the one-click silent flow and the
-  // wizard fallback. The invoke reply lands before the Rust exit timer
-  // closes the window, so "Restarting into vX…" shows for the ~1.5s the
-  // window survives. A REJECTED silent launch surfaces the wizard escape
-  // hatch (offerWizard); a rejected wizard launch keeps the plain error
-  // (the fallback itself failed — ACUTE.bat + the Releases page remain).
+  // R99-C: the LAUNCH leg — reached ONLY through the owner's explicit
+  // confirmation now (the "Restart and update now" button; the wizard
+  // fallback reuses it with silent:false on Windows). The invoke reply
+  // lands before the Rust exit timer closes the window, so "Restarting
+  // into vX…" shows for the ~1.5s the window survives. A REJECTED launch
+  // surfaces the wizard escape hatch ONLY when the staged asset is a
+  // Windows setup (R104: an AppImage has no interactive wizard to fall
+  // back to — the replace leg IS the install); a rejected wizard launch
+  // keeps the plain error (the fallback itself failed — ACUTE.bat + the
+  // Releases page remain).
   //
   // ROUND-101 (R101-B): the flag + the recovery. `updateInFlight` is set
   // BEFORE the invoke — the Rust side kills the sidecar tree inside that
@@ -271,51 +450,55 @@ function VersionCard() {
       setInstall({
         kind: "error",
         message: err instanceof Error ? err.message : String(err),
-        offerWizard: silent,
+        offerWizard: silent && stagedAssetKind(path) === "windows-setup",
       });
     }
   };
 
-  // R91-E + R99-C: THE ONE-CLICK UPDATE — "Update now" downloads the
-  // verified installer (the sidecar streams it + sha256-checks it), then
-  // hands the path to the Rust shell's run_update_installer with
-  // silent:true (NSIS "/S /R": the install runs with no wizard and the
-  // installer template relaunches the app when it lands). Only offered
-  // inside the desktop shell (a browser has no installer to run) and only
-  // when the release carried a setup.exe asset. `silent:false` is the
-  // legacy interactive-wizard leg the fallback button reaches — and it
-  // REUSES an already-verified installer when one sits ready (the retry
-  // never re-downloads 38 MB to show the same wizard).
-  const updateNow = async (silent: boolean) => {
+  // R104: STAGE 1 — THE DOWNLOAD. Streams the release's updater asset
+  // (the sidecar picks the platform's own — setup.exe on Windows, the
+  // arch-matched AppImage on Linux) with byte-true progress and the sha256
+  // verify, then STOPS at "ready": the install waits for the owner's
+  // explicit confirmation. The reuse check adopts an already-verified
+  // download for the same version (no re-download); any settled-but-stale
+  // state is discarded first so the new download starts clean.
+  const downloadUpdate = async () => {
     if (update.kind !== "available") return;
     if (update.asset === undefined) {
       setInstall({
         kind: "error",
-        message: "this release has no downloadable installer asset — use the Releases page",
+        message: "this release has no downloadable updater asset for this platform — use the Releases page",
         offerWizard: false,
       });
       return;
     }
     try {
-      // The fallback-leg reuse check: a verified installer from the failed
-      // silent attempt still sits at its temp path (single-flight state
-      // "ready") — launch it directly instead of re-streaming it.
       const existing = await fetchUpdateDownloadProgress();
       if (
         existing.status === "ready" &&
         existing.path !== null &&
         existing.version === update.latest
       ) {
-        await launchInstaller(existing.path, silent, update.latest);
+        setInstall({ kind: "ready", path: existing.path, version: existing.version });
         return;
+      }
+      if (existing.status === "ready" || existing.status === "error") {
+        // A staged download for a DIFFERENT version (or a dead error state)
+        // — clear it so this download starts clean.
+        await discardUpdateDownload();
       }
       await startUpdateDownload({
         url: update.asset.url,
         digest: update.asset.digest,
         version: update.latest,
+        // R104: the REAL asset filename — the staged file keeps GitHub's
+        // extension (setup.exe / AppImage) so the install leg dispatches
+        // on what GitHub named.
+        name: update.asset.name,
       });
       setInstall({ kind: "downloading", received: 0, total: update.asset.size });
-      // Poll the live state until it settles (ready | error).
+      // Poll the live state until it settles. R104: "ready" STOPS the flow
+      // — the confirmation button owns the install from here.
       for (;;) {
         await new Promise((r) => setTimeout(r, 700));
         const state = await fetchUpdateDownloadProgress();
@@ -328,10 +511,11 @@ function VersionCard() {
           continue;
         }
         if (state.status === "ready" && state.path !== null) {
-          // The shell half: validate + kill the sidecar tree + launch —
-          // the app closes 1.5s later (the reply lands first so the
-          // terminal line below shows).
-          await launchInstaller(state.path, silent, update.latest);
+          setInstall({
+            kind: "ready",
+            path: state.path,
+            version: state.version ?? update.latest,
+          });
           return;
         }
         if (state.status === "error") {
@@ -346,6 +530,57 @@ function VersionCard() {
     } catch (err) {
       setInstall({ kind: "error", message: err instanceof Error ? err.message : String(err), offerWizard: false });
     }
+  };
+
+  // R104: STAGE 2 — THE CONFIRMED INSTALL. Requires a VERIFIED staged
+  // download (from this card's state, or re-read from the sidecar when the
+  // confirm outlived a remount), then hands the path to the Rust shell's
+  // run_update_installer (silent:true — NSIS "/S /R" on Windows, the
+  // AppImage replace on Linux; the wizard fallback reaches this same leg
+  // with silent:false on Windows only).
+  const installUpdate = async (silent: boolean) => {
+    let path: string | null = null;
+    let version: string | null = null;
+    if (install.kind === "ready") {
+      path = install.path;
+      version = install.version;
+    } else {
+      // The belt: re-read the live state (the mounted staged row may have
+      // come from the mount-resume adoption, whose state lives in the
+      // sidecar, not this closure).
+      try {
+        const state = await fetchUpdateDownloadProgress();
+        if (state.status === "ready" && state.path !== null && state.version !== null) {
+          path = state.path;
+          version = state.version;
+        }
+      } catch {
+        // fall through to the honest error below
+      }
+    }
+    if (path === null || version === null) {
+      setInstall({
+        kind: "error",
+        message: "no verified download is staged — download the update first",
+        offerWizard: false,
+      });
+      return;
+    }
+    await launchInstaller(path, silent, version);
+  };
+
+  // R104: the staged download's walk-back — Discard unlinks the verified
+  // file (sidecar DELETE) and returns the card to idle. The button only
+  // renders in the ready state, so the route's in-flight refusal (409)
+  // cannot fire from here; a dead-sidecar failure still resets the card
+  // truthfully (a restarted engine owns no staged file).
+  const discardStagedDownload = async () => {
+    try {
+      await discardUpdateDownload();
+    } catch {
+      // honest no-op — the state reset below is the truthful UI answer
+    }
+    setInstall({ kind: "idle" });
   };
 
   // R99-C: the byte-true percent — only when the total is known (the real
@@ -471,25 +706,30 @@ function VersionCard() {
                 </div>
               </div>
             )}
-            {/* R91-E + R99-C: the in-app action — the ONE-CLICK silent flow
-                (the desktop shell only; web dev shows the Releases line
-                instead). */}
+            {/* R91-E + R99-C + R104: the in-app action — the TWO-STAGE
+                hand-shake (the desktop shell only; web dev shows the
+                Releases line instead). Stage 1 downloads + verifies and
+                STOPS; stage 2 (the ready row) installs ONLY on the owner's
+                confirmation. The INSTALL-phase states (installing /
+                launched / error) render in the SHARED block below the
+                update-state line — a mount-resumed confirm has no
+                available-update card to render inside. */}
             {isTauri() ? (
               install.kind === "idle" ? (
                 <button
                   type="button"
-                  onClick={() => void updateNow(true)}
+                  onClick={() => void downloadUpdate()}
                   disabled={update.asset === undefined}
                   title={
                     update.asset === undefined
-                      ? "This release has no installer asset — use the Releases page"
-                      : "Downloads the verified installer and installs it silently — the app restarts itself when it's ready"
+                      ? "This release has no updater asset for this platform — use the Releases page"
+                      : "Downloads the update and verifies its checksum — installing waits for your confirmation"
                   }
                   className="h-9 px-4 rounded-full text-[11px] font-semibold transition-all active:scale-95 disabled:opacity-50 inline-flex items-center gap-1.5 self-start"
                   style={{ background: styles.accent, color: styles.accentText }}
-                  data-testid="update-now-button"
+                  data-testid="update-download-button"
                 >
-                  <PackageOpen size={13} /> Update now
+                  <Download size={13} /> Download update
                 </button>
               ) : install.kind === "downloading" ? (
                 <div className="flex items-center gap-3 max-w-[420px]" data-testid="update-progress">
@@ -520,56 +760,23 @@ function VersionCard() {
                 </div>
               ) : install.kind === "verifying" ? (
                 <span className="text-[11px] font-medium" style={{ color: styles.textSecondary }} data-testid="update-verifying">
-                  Verifying the installer's checksum…
+                  Verifying the update's checksum…
                 </span>
-              ) : install.kind === "installing" ? (
-                <span className="text-[11px] font-medium" style={{ color: styles.textSecondary }} data-testid="update-installing">
-                  {install.silent
-                    ? "Installing — the app restarts itself when ready"
-                    : "Launching the setup wizard — it closes this app and takes over"}
-                </span>
-              ) : install.kind === "launched" ? (
-                <span
-                  className="text-[11px] font-semibold"
-                  style={{ color: SEMANTIC_COLORS.success }}
-                  data-testid="update-launched"
-                >
-                  {install.silent
-                    ? `Restarting into v${install.version} — your data is kept.`
-                    : `Installer launched — the setup wizard will close this app and install v${install.version}. Your data is kept.`}
-                </span>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  <span
-                    className="text-[11px]"
-                    style={{ color: SEMANTIC_COLORS.danger }}
-                    role="alert"
-                    data-testid="update-flow-error"
-                  >
-                    The in-app update failed ({install.message}). The launcher's ACUTE.bat update still works, and the
-                    Releases page always has the latest.
-                  </span>
-                  {/* R99-C: THE ESCAPE HATCH — the silent launch rejected, so
-                      the legacy INTERACTIVE wizard stays one click away
-                      (it reuses the already-verified installer when one
-                      sits ready — no redundant re-download). */}
-                  {install.offerWizard && (
-                    <button
-                      type="button"
-                      onClick={() => void updateNow(false)}
-                      title="Runs the downloaded installer with the interactive setup wizard — the pre-R99 flow, for machines where the silent install refuses"
-                      className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 self-start"
-                      style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
-                      data-testid="update-wizard-fallback"
-                    >
-                      Run the setup wizard manually
-                    </button>
-                  )}
-                </div>
-              )
+              ) : install.kind === "ready" ? (
+                /* R104: STAGE 2 — the verified download sits staged and the
+                   flow STOPS here: the install happens ONLY when the owner
+                   clicks "Restart and update now" (the confirmation the
+                   v0.100.0 report asked for). Shared with the standalone
+                   staged row below. */
+                <StagedDownloadRow
+                  version={install.version}
+                  onInstall={() => void installUpdate(true)}
+                  onDiscard={() => void discardStagedDownload()}
+                />
+              ) : null
             ) : (
               <span className="text-[11px]" style={{ color: styles.textSecondary }}>
-                Web mode — use ACUTE.bat or the Releases page to install v{update.latest}.
+                Web mode — use the Releases page to install v{update.latest}.
               </span>
             )}
           </div>
@@ -577,6 +784,77 @@ function VersionCard() {
           <span className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} data-testid="update-state">
             Could not check for updates ({update.message}) — the Releases page always has the latest.
           </span>
+        ) : null}
+        {/* R104: the INSTALL-PHASE states, SHARED by both entry paths — the
+            available-update card's own confirm AND the mount-resumed
+            standalone staged row (which has no available card to render
+            inside; without this block a mount-resumed install would show
+            NOTHING between the click and the Restarting splash). */}
+        {isTauri() &&
+        (install.kind === "installing" || install.kind === "launched" || install.kind === "error") ? (
+          <div className={update.kind === "available" ? "" : "mt-2.5"}>
+            {install.kind === "installing" ? (
+              <span className="text-[11px] font-medium" style={{ color: styles.textSecondary }} data-testid="update-installing">
+                {install.silent
+                  ? "Installing — the app restarts itself when ready"
+                  : "Launching the setup wizard — it closes this app and takes over"}
+              </span>
+            ) : install.kind === "launched" ? (
+              <span
+                className="text-[11px] font-semibold"
+                style={{ color: SEMANTIC_COLORS.success }}
+                data-testid="update-launched"
+              >
+                {install.silent
+                  ? `Restarting into v${install.version} — your data is kept.`
+                  : `Installer launched — the setup wizard will close this app and install v${install.version}. Your data is kept.`}
+              </span>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <span
+                  className="text-[11px]"
+                  style={{ color: SEMANTIC_COLORS.danger }}
+                  role="alert"
+                  data-testid="update-flow-error"
+                >
+                  The in-app update failed ({install.message}). The
+                  Releases page always has the latest.
+                </span>
+                {/* R99-C: THE ESCAPE HATCH — the silent launch rejected on a
+                    WINDOWS setup, so the legacy INTERACTIVE wizard stays one
+                    click away (R104: installUpdate re-reads the staged
+                    download — it reuses the already-verified installer, no
+                    redundant re-download; an AppImage rejection offers no
+                    wizard because there is none). */}
+                {install.offerWizard && (
+                  <button
+                    type="button"
+                    onClick={() => void installUpdate(false)}
+                    title="Runs the downloaded installer with the interactive setup wizard — the pre-R99 flow, for machines where the silent install refuses"
+                    className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 self-start"
+                    style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
+                    data-testid="update-wizard-fallback"
+                  >
+                    Run the setup wizard manually
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ) : null}
+        {/* R104: the STAGED DOWNLOAD outlives the check that announced it —
+            the mount-resume poll adopts the sidecar's verified ready state,
+            so the owner can come back to the About section ANY time and
+            click the update button without checking first. Rendered
+            standalone whenever no available-update card owns the surface. */}
+        {update.kind !== "available" && isTauri() && install.kind === "ready" ? (
+          <div className="mt-2.5">
+            <StagedDownloadRow
+              version={install.version}
+              onInstall={() => void installUpdate(true)}
+              onDiscard={() => void discardStagedDownload()}
+            />
+          </div>
         ) : null}
       </div>
       {/* R99-C: the auto-check toggle — the startup check's persisted gate

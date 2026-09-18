@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-100 -->
+<!-- last-reviewed: 2026-09-18 round-104 -->
 # Tokens — the color, type, and spacing language
 
 Serves DESIGN-SYSTEM §1 (source of truth), §2 (spacing), §3 (typography).

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-100 -->
+<!-- last-reviewed: 2026-09-18 round-104 -->
 # Components — the primitive catalog and composition rules
 
 Serves DESIGN-SYSTEM §5 (anatomy inventory). The inventory there names the

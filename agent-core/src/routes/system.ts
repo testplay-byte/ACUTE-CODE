@@ -133,26 +133,68 @@ interface GithubRelease {
   }>;
 }
 
-/** Finds the x64 setup.exe asset of a release (the NSIS installer the
- * launcher-kit job uploads — `ACUTE-CODE_<v>_x64-setup.exe`).
- *
- * R94-B: the owner's "Update now" died with "body.url must be a GitHub
- * release asset of this repository" because the pre-R94 code returned ONLY
- * `browser_download_url` (host github.com) while the download route's
- * allowlist accepted ONLY api.github.com / objects.githubusercontent.com —
- * every real download was rejected by construction. Each GitHub asset
- * carries BOTH URL forms; we now prefer the API `url` (the token-friendly
- * api.github.com surface) and fall back to `browser_download_url` (the
- * github.com /releases/download permalink, which the allowlist accepts too).
- * Both empty → null (no usable asset). */
-function findInstallerAsset(release: GithubRelease): {
+// ── R104: the PLATFORM-AWARE updater asset ──────────────────────────────────
+// The v0.100.0 report's Linux root cause, half 1: findInstallerAsset ALWAYS
+// returned the `_x64-setup.exe` (the WINDOWS NSIS installer) on every
+// platform — so a Linux "Update now" downloaded a Windows .exe, handed it
+// to run_update_installer, and the Rust side rejected it (there is no
+// silent .exe launch on Linux) leaving the app un-updated after the calm
+// "Restarting into…" splash. The asset the check reports must match the
+// machine it is reported TO:
+//   · win32            → ACUTE-CODE_<v>_x64-setup.exe   (kind windows-setup)
+//   · linux  + arm64   → ACUTE-CODE_<v>_aarch64.AppImage (kind linux-appimage —
+//                        the Rust triple's arch name; the deb carries dpkg's
+//                        `_arm64`, the AppImage carries `aarch64` — the R101
+//                        naming asymmetry, pinned by the release pipeline)
+//   · linux  + x64/…   → ACUTE-CODE_<v>_amd64.AppImage  (kind linux-appimage;
+//                        tauri-bundler names BOTH x86_64 bundles `amd64`)
+//   · anything else    → null (no in-app updater asset — the Releases page
+//                        remains the answer; macOS is not shipped)
+// The `kind` rides the response so the frontend can speak honestly (the
+// interactive-wizard escape hatch is a windows-setup concern ONLY — there
+// is no wizard for an AppImage) and `name` so the download route can derive
+// the staged file's name from the REAL asset filename.
+type UpdaterAssetKind = "windows-setup" | "linux-appimage";
+
+interface UpdaterAsset {
   url: string;
   size: number;
   digest: string | null;
+  kind: UpdaterAssetKind;
+  name: string;
+}
+
+/** The asset filename suffix this machine's in-app updater needs, keyed off
+ * the SIDECAR's own platform (process.platform/arch — the sidecar ships with
+ * the app, so its platform IS the app's platform). Exported for the route
+ * tests' platform matrix. */
+export function updaterAssetSuffixForPlatform(platform: string, arch: string): {
+  suffix: string;
+  kind: UpdaterAssetKind;
 } | null {
+  if (platform === "win32") return { suffix: "_x64-setup.exe", kind: "windows-setup" };
+  if (platform === "linux") {
+    return arch === "arm64"
+      ? { suffix: "_aarch64.AppImage", kind: "linux-appimage" }
+      : { suffix: "_amd64.AppImage", kind: "linux-appimage" };
+  }
+  return null;
+}
+
+/** Finds THIS machine's updater asset in a release's asset list (see
+ * updaterAssetSuffixForPlatform for the matrix).
+ *
+ * R94-B (kept): each GitHub asset carries BOTH URL forms — we prefer the
+ * API `url` (the token-friendly api.github.com surface) and fall back to
+ * `browser_download_url` (the github.com /releases/download permalink,
+ * which the download route's allowlist accepts too). Both empty → null (no
+ * usable asset). */
+function findUpdaterAsset(release: GithubRelease): UpdaterAsset | null {
+  const target = updaterAssetSuffixForPlatform(process.platform, process.arch);
+  if (target === null) return null;
   for (const asset of release.assets ?? []) {
     const name = typeof asset.name === "string" ? asset.name : "";
-    if (name.endsWith("_x64-setup.exe")) {
+    if (name.endsWith(target.suffix)) {
       const apiUrl = typeof asset.url === "string" ? asset.url : "";
       const browserUrl =
         typeof asset.browser_download_url === "string" ? asset.browser_download_url : "";
@@ -164,6 +206,8 @@ function findInstallerAsset(release: GithubRelease): {
         url,
         size: typeof asset.size === "number" ? asset.size : 0,
         digest: typeof asset.digest === "string" ? asset.digest : null,
+        kind: target.kind,
+        name,
       };
     }
   }
@@ -353,11 +397,15 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
         const newest = versionTuple(latest);
         const updateAvailable =
           newest.length > 0 && now.some((part, i) => part < (newest[i] ?? 0));
-        // R91-E: the INSTALLER ASSET — the About tab's in-app "Update now"
-        // hands this URL + digest to POST /system/updates/download below.
-        // (The digest is GitHub's own server-side sha256 of the uploaded
-        // asset — the same value the launcher verifies against.)
-        const asset = findInstallerAsset(release);
+        // R91-E + R104: THIS MACHINE'S updater asset — the About tab's
+        // in-app "Download update" hands this URL + digest to POST
+        // /system/updates/download below. (The digest is GitHub's own
+        // server-side sha256 of the uploaded asset — the same value the
+        // launcher verifies against.) R104: the pick is platform-aware
+        // (setup.exe on Windows, the arch-matched AppImage on Linux) and
+        // carries {kind, name} for the frontend's honest copy + the staged
+        // file's name.
+        const asset = findUpdaterAsset(release);
         // R99-C: the release NOTES passthrough — the About tab's one-click
         // card renders the body ("What's new"); the route's own cap + honest
         // truncation marker keep a changelog-sized body from bloating the
@@ -372,7 +420,18 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
           releaseUrl:
             typeof release.html_url === "string" ? release.html_url : GITHUB_RELEASES_PAGE,
           ...(asset !== null
-            ? { asset: { url: asset.url, size: asset.size, digest: asset.digest } }
+            ? {
+                asset: {
+                  url: asset.url,
+                  size: asset.size,
+                  digest: asset.digest,
+                  // R104: the platform truth + the real asset filename — the
+                  // frontend gates its wizard escape hatch on the kind and
+                  // the download route derives the staged file's name.
+                  kind: asset.kind,
+                  name: asset.name,
+                },
+              }
             : {}),
         };
       } finally {
@@ -389,22 +448,24 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
   });
 
   // ── R91-E: the in-app update DOWNLOAD ──────────────────────────────────────
-  // POST /system/updates/download {url, digest?} — stream the setup.exe to a
-  // temp file, then sha256-verify it against the release's digest. The
-  // caller polls GET /system/updates/download/progress for the live byte
-  // count; status "ready" carries the absolute path that the Rust shell's
-  // run_update_installer command executes. The URL must belong to THIS
-  // repo's release assets (the PAT-bearing fetch would otherwise be an
-  // open proxy) — enforced below.
+  // POST /system/updates/download {url, digest?, version?, name?} — stream the
+  // platform's updater asset (setup.exe on Windows, the arch-matched AppImage
+  // on Linux — R104) to a temp file, then sha256-verify it against the
+  // release's digest. The caller polls GET /system/updates/download/progress
+  // for the live byte count; status "ready" carries the absolute path that
+  // the Rust shell's run_update_installer command executes. The URL must
+  // belong to THIS repo's release assets (the PAT-bearing fetch would
+  // otherwise be an open proxy) — enforced below.
   scope.post("/system/updates/download", async (request, reply) => {
     // R94-B: PAT-optional — the repo is public, so anonymous downloads work;
     // the launcher's token, when present, only raises the rate limit (it is
     // attached below). No 409 no-token wall anymore.
     const pat = readLauncherGithubPat();
-    const body = request.body as { url?: unknown; digest?: unknown; version?: unknown } | null;
+    const body = request.body as { url?: unknown; digest?: unknown; version?: unknown; name?: unknown } | null;
     const url = typeof body?.url === "string" ? body.url : "";
     const digest = typeof body?.digest === "string" && body.digest.startsWith("sha256:") ? body.digest : null;
     const version = typeof body?.version === "string" ? body.version.replace(/^v/, "") : "";
+    const assetName = typeof body?.name === "string" ? body.name : "";
     if (url === "") {
       return reply.code(400).send(errorBody("VALIDATION", "body.url must be the release asset URL", { field: "body.url" }));
     }
@@ -442,10 +503,30 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
       // Already in flight — not an error; the UI keeps polling the live one.
       return reply.code(200).send({ ok: true, status: updateDownload.status, alreadyRunning: true });
     }
+    // R104: the staged file's name derives from the REAL asset filename the
+    // check reported (ACUTE-CODE_<v>_x64-setup.exe / …_aarch64.AppImage) so
+    // the extension the Rust side dispatches on is the extension GitHub
+    // named. Sanitized hard: basename only (no separators, no '..'), and the
+    // extension must be one of the updater's two real kinds — anything else
+    // falls back to the platform's own conventional name (the pre-R104
+    // spelling on Windows, the arch-matched AppImage name on Linux).
+    const stagedDownloadName = (rawName: string): string => {
+      const base = rawName.split(/[\\/]/).pop() ?? "";
+      if (
+        base !== "" &&
+        !base.startsWith(".") &&
+        (base.toLowerCase().endsWith(".exe") || base.toLowerCase().endsWith(".appimage"))
+      ) {
+        return base;
+      }
+      const target = updaterAssetSuffixForPlatform(process.platform, process.arch);
+      const suffix = target?.suffix ?? "-update.bin";
+      return `ACUTE-CODE-${version || "update"}${suffix}`;
+    };
     // Fire-and-forget: the POST answers immediately; the progress route
     // carries the live state (the About tab's progress bar).
     void (async () => {
-      const dest = join(tmpdir(), `ACUTE-CODE-${version || "update"}-x64-setup.exe`);
+      const dest = join(tmpdir(), stagedDownloadName(assetName));
       try {
         // R94-B: the PAT is optional — anonymous downloads work on the
         // public repo; the Authorization header rides along only when a
@@ -492,8 +573,14 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
           }
         }
         const size = statSync(dest).size;
-        if (size < 10 * 1024 * 1024) {
-          throw new Error(`the downloaded file is only ${size} bytes — not a real installer`);
+        // R104: the plausibility floor is EXTENSION-AWARE — the real setup.exe
+        // is ~37 MB (floor 10 MB as since R91-E), the real AppImage is ~130 MB
+        // (floor 50 MB). Both floors exist to refuse a saved error page / JSON
+        // body; the sha256 digest check above is the real integrity gate.
+        const isAppImage = dest.toLowerCase().endsWith(".appimage");
+        const floorBytes = isAppImage ? 50 * 1024 * 1024 : 10 * 1024 * 1024;
+        if (size < floorBytes) {
+          throw new Error(`the downloaded file is only ${size} bytes — not a real ${isAppImage ? "AppImage" : "installer"}`);
         }
         updateDownload.path = dest;
         updateDownload.version = version || null;
@@ -517,6 +604,39 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
   scope.get("/system/updates/download/progress", async () => ({
     ...updateDownload,
   }));
+
+  // ── R104: the staged-download DISCARD ──────────────────────────────────────
+  // DELETE /system/updates/download — the other half of the two-stage update
+  // hand-shake: a verified download may sit "ready" (the owner confirmed the
+  // DOWNLOAD but not the INSTALL — the v0.100.0 report's core ask). This route
+  // lets them walk it back: the staged file is unlinked and the single-flight
+  // state returns to idle (a later Download starts clean). A download IN
+  // FLIGHT is refused honestly (409) — the single-flight state is the live
+  // download's, not the caller's, to cancel out from under.
+  scope.delete("/system/updates/download", async (_request, reply) => {
+    if (updateDownload.status === "downloading" || updateDownload.status === "verifying") {
+      return reply.code(409).send(
+        errorBody("CONFLICT", "a download is in flight — wait for it to finish before discarding", {
+          status: updateDownload.status,
+        }),
+      );
+    }
+    if (updateDownload.status === "ready" && updateDownload.path !== null) {
+      try {
+        if (existsSync(updateDownload.path)) unlinkSync(updateDownload.path);
+      } catch {
+        // best-effort: a locked/already-gone staged file never blocks the
+        // state reset (the OS temp sweeper owns orphans either way)
+      }
+    }
+    updateDownload.status = "idle";
+    updateDownload.received = 0;
+    updateDownload.total = 0;
+    updateDownload.path = null;
+    updateDownload.version = null;
+    updateDownload.error = null;
+    return reply.code(200).send({ ok: true, status: "idle" });
+  });
 
   scope.post("/system/reset", async () => {
     // 1. Abort every live turn (main sessions + sub-agent children) so no

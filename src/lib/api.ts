@@ -4371,9 +4371,19 @@ export interface SystemUpdateCheck {
    * an honest truncation marker by the route; "" for a tag-only release) —
    * feeds the About tab's "What's new" block. */
   body?: string;
-  /** R91-E: the release's x64 setup.exe asset (present when the release has
-   * one) — feeds the in-app "Update now" download. */
-  asset?: { url: string; size: number; digest: string | null };
+  /** R91-E + R104: THIS MACHINE'S updater asset (present when the release
+   * has one for this platform) — feeds the in-app "Download update" flow.
+   * R104: the pick is platform-aware (the setup.exe on Windows, the
+   * arch-matched AppImage on Linux) and carries the kind (the frontend
+   * gates its interactive-wizard escape hatch on it — there is no wizard
+   * for an AppImage) + the REAL asset filename (the staged file's name). */
+  asset?: {
+    url: string;
+    size: number;
+    digest: string | null;
+    kind: "windows-setup" | "linux-appimage";
+    name: string;
+  };
   /** Only meaningful when ok === false: */
   reason?: string;
   error?: string;
@@ -4395,11 +4405,15 @@ export interface SystemUpdateDownload {
 
 /** R91-E: start streaming the update installer to the sidecar's temp dir
  * (sha256-verified against the release digest when present). Poll
- * fetchUpdateDownloadProgress for the live state. */
+ * fetchUpdateDownloadProgress for the live state. R104: `name` is the
+ * release's REAL asset filename — the staged file keeps GitHub's extension
+ * (setup.exe / AppImage) so the install step dispatches on what GitHub
+ * named. */
 export async function startUpdateDownload(body: {
   url: string;
   digest?: string | null;
   version?: string;
+  name?: string;
 }): Promise<{ ok: boolean; status: string; alreadyRunning?: boolean }> {
   return request("/system/updates/download", { method: "POST", json: body });
 }
@@ -4407,6 +4421,15 @@ export async function startUpdateDownload(body: {
 /** R91-E: the live update-download state (the About tab's progress bar). */
 export async function fetchUpdateDownloadProgress(): Promise<SystemUpdateDownload> {
   return request<SystemUpdateDownload>("/system/updates/download/progress");
+}
+
+/** R104: discard a STAGED (status "ready") update download — the walk-back
+ * half of the two-stage update hand-shake. The sidecar unlinks the staged
+ * file and returns the single-flight state to idle; a download IN FLIGHT is
+ * refused honestly by the route (409) and surfaces here as a thrown
+ * ApiError, exactly like every other route refusal. */
+export async function discardUpdateDownload(): Promise<{ ok: boolean; status: string }> {
+  return request("/system/updates/download", { method: "DELETE" });
 }
 
 /* ── ROUND-66 (R66, B3/B5): the DEDICATED image-analysis (vision) settings ── */

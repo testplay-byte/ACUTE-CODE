@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-103 -->
+<!-- last-reviewed: 2026-09-18 round-104 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` +
@@ -2393,21 +2393,65 @@ the per-model test button, the model edit dialog). Spec:
 
 ## R89 additions (2026-09-11) — the owner's hands-on verdict round
 
-### GET /api/v1/system/updates — the server-side update check (NEW, `routes/system.ts`)
+### GET /api/v1/system/updates — the server-side update check (`routes/system.ts`)
 
-- The repo is PRIVATE: the About tab's old anonymous webview fetch to
-  `api.github.com` answered HTTP 404 (the owner's verdict). The check runs
-  in the SIDECAR now — it reads the launcher's saved
-  `~/.acute/github.pat` (written by `acute_launcher.py`'s first-run
-  prompt; never returned over REST) and queries
-  `repos/testplay-byte/ACUTE-CODE/releases/latest` with it (8s abort
+- The check runs in the SIDECAR (the repo is public since R94-B — the
+  old anonymous webview fetch died on the private repo's 404; the
+  launcher's PAT, when saved, rides the Authorization header as an
+  optional rate-limit accelerator, never a gate; sources: the
+  `ACUTE_GITHUB_PAT` env var first, then `~/.acute/github.pat`).
+  Queries `repos/testplay-byte/ACUTE-CODE/releases/latest` (8s abort
   budget, `X-GitHub-Api-Version: 2022-11-28`). 200 `{current (the
   engine's own package.json version), releasesUrl, ok:true, latest,
-  updateAvailable, releaseUrl}` — or `ok:false` with a `reason`
-  (`no-token` — the launcher never saved a PAT; `no-release` — GitHub's
-  404; `github` — other HTTP status; `network`) and an `error` string the
-  About tab renders honestly. The version walk is the tuple compare
-  (`0.86.0` vs `0.87.0` → per-segment), computed where the check runs.
+  updateAvailable, releaseUrl, body (the release notes, capped at 8,000
+  chars + an honest truncation marker), asset}` — or `ok:false` with a
+  `reason` (`no-release` — GitHub's 404; `github` — other HTTP status;
+  `network`) and an `error` string the About tab renders honestly. The
+  version walk is the tuple compare (`0.86.0` vs `0.87.0` →
+  per-segment), computed where the check runs.
+- **R104: the `asset` is THIS machine's updater asset**
+  (`updaterAssetSuffixForPlatform` keys off the sidecar's own
+  platform/arch, which ships with the app): the `_x64-setup.exe`
+  (`kind: "windows-setup"`) on Windows; the `_aarch64.AppImage`
+  (`kind: "linux-appimage"`, the Rust triple's arch name — the R101
+  deb=`_arm64`/AppImage=`_aarch64` asymmetry) on linux/arm64; the
+  `_amd64.AppImage` on linux/x64; `null` (no `asset` field) on anything
+  else. Each asset carries `{url (the API form preferred, the
+  browser_download_url fallback), size, digest (GitHub's server-side
+  sha256), kind, name (the REAL asset filename)}`.
+
+### POST /api/v1/system/updates/download — the in-app update download (`routes/system.ts`)
+
+- Streams the release's updater asset to a temp file with live byte
+  counts, then sha256-verifies it against the release digest. The URL
+  must be THIS repo's release asset (the allowlist covers the
+  api.github.com asset endpoint, the github.com /releases/download
+  permalink, and the objects/release-assets.githubusercontent.com hosts
+  — never an open proxy for the PAT). Body `{url, digest?, version?,
+  name?}` — R104: `name` is the check's REAL asset filename and the
+  staged file keeps it (basename-sanitized: separators stripped, no
+  `..`, the extension must be `.exe`/`.AppImage`, else the platform's
+  conventional fallback name). Single-flight: one download at a time
+  (module state; a second POST while one runs answers 200
+  `{ok:true, alreadyRunning:true}`). The plausibility floor is
+  extension-aware (R104): 10 MB for a setup.exe, 50 MB for an AppImage.
+  200 `{ok:true, status:"downloading"}` — poll the progress route.
+
+### GET /api/v1/system/updates/download/progress — the live download state
+
+- `200 {status: idle|downloading|verifying|ready|error, received,
+  total, path (the absolute staged path when ready), version, error}`.
+  `ready` is the two-stage hand-shake's STAGED state (R104): the file is
+  verified and waits for the owner's explicit install confirmation —
+  nothing auto-installs.
+
+### DELETE /api/v1/system/updates/download — the staged walk-back (R104)
+
+- Discards a STAGED download: the verified file is unlinked and the
+  single-flight state returns to idle (`200 {ok:true, status:"idle"}`).
+- 409 `CONFLICT` while a download is in flight (the live download's
+  state is not the caller's to cancel out from under); from idle it is
+  the idempotent reset.
 
 ### POST /api/v1/providers — the R89 identity rules (BREAKING behavior change)
 

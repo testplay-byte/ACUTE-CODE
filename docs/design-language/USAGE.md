@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-100 -->
+<!-- last-reviewed: 2026-09-18 round-104 -->
 # Usage — how to speak the language when editing UI
 
 Owner direction (round-98): "whenever we try to make edits in our UI, the

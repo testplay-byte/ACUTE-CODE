@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.100.0",
+    "version": "0.101.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -309,6 +309,10 @@
     {
       "date": "2026-09-17",
       "label": "R102 — the thirteenth-walkthrough round (v0.100.0): Linux keys that actually save (async + bounded + the disclosed key-file fallback), the settings sidebar restored to the left panel, the Mermaid viewer (zoom/pan/source), the roomy minimized rail, and the quiet composer"
+    },
+    {
+      "date": "2026-09-18",
+      "label": "R104 — the fourteenth-walkthrough round (v0.101.0): the update hand-shake (Download → the staged row → Restart-and-update-now confirmation, Discard, the About-tab mount-resume) + the Linux AppImage update made real (the arch-matched asset pick + the atomic same-dir replace + the automatic relaunch — the v0.100.0 'Restarting into 0.100.0 → Connecting to Agent Core → still 0.99.0' arc answered at both roots)"
     }
   ],
   "quality": {
@@ -316,13 +320,13 @@
     "suites": [
       {
         "name": "frontend",
-        "tests": 3818,
-        "detail": "3,818 passed / 12 env-skipped (root vitest, R101 close: 207 files) — +20 R101 pins (the update hand-off, the timeline rail, the rail label chips, the mermaid retries)"
+        "tests": 3823,
+        "detail": "3,823 passed / 12 env-skipped (root vitest, R104 close) — +6 R104 pins (the two-stage stop-at-ready, the Linux AppImage leg with the no-wizard pin, the mount-resume, the stale self-heal, the discard, the staleness sweep) and the reworked rejected-invoke journey"
       },
       {
         "name": "agent-core",
-        "tests": 2370,
-        "detail": "2,385+ passed (unchanged this round — R101 touched no agent-core behavior)"
+        "tests": 2392,
+        "detail": "2,392/2,392 (R104: r89-updates 14 → 22 — the platform matrix, the six-asset route pick, the basename-only name derivation, the extension-aware floor, the DELETE discard trio)"
       },
       {
         "name": "sidecar e2e",
@@ -346,11 +350,11 @@
     }
   ],
   "plan": {
-    "current": "R103 DELIVERED — the release pipeline made bounded/retrying/resumable + the stealth/union-alpha evaluation; v0.100.0 PUBLISHED (content unchanged from R102)",
+    "current": "R104 DELIVERED — the update hand-shake (download, then confirm) + the Linux AppImage updater made real; v0.101.0 tagging next",
     "upcoming": [
       {
-        "title": "The owner's v0.100.0 walkthrough",
-        "detail": "The test checklist lives in round-102.md §5 (the content shipped unchanged; only the delivery pipeline was hardened in R103): the Linux key-save arc (incl. the amber key-file fallback note), the single settings sidebar, the Mermaid viewer (zoom/pan/source), the quiet composer, the roomy minimized rail — plus the new release delivery itself (v0.100.0 published with all six assets)."
+        "title": "The owner's v0.101.0 walkthrough",
+        "detail": "The test checklist lives in round-104.md §4: the Windows two-stage arc (Download STOPS at the staged row; only Restart-and-update-now installs), the staged download surviving the About tab + the Discard walk-back, and the Linux AppImage update end-to-end (download the ~130 MB image → confirm → the app comes back by itself on v0.101.0) — plus the .deb honest-refusal case and the badge/staleness agreement."
       },
       {
         "title": "The owner's UI references (promised)",
@@ -367,6 +371,6 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 103,
-  "ci": "GREEN — round 103 (the release-pipeline hardening + the stealth/union-alpha evaluation) delivered: CI 35258001371 and Release 35258020425 both SUCCESS (Release on attempt 4 — the resumable contract: the operator banked the last two AppImages through uploads.github.com's degraded 500 window, and the re-run verified 6/6 assets byte-exact in 9 s of script time; the earlier CI 35256890313 also green on the first fix commit). v0.100.0 PUBLISHED (release 390953974, latest) with six assets: setup.exe 38,746,943 B + amd64.deb 67,291,130 B + amd64.AppImage 134,990,328 B + arm64.deb 67,240,846 B + aarch64.AppImage 132,729,352 B + the kit 125,148 B. The round's own incident, fixed at the root: the first v0.100.0 tag run hung 27+ min in softprops' no-timeout uploader with delete-then-re-upload re-runs; softprops is REPLACED by scripts/release/publish-github-release.sh (bounded, retrying, resumable, one-draft-per-tag, byte-verified; 500-window defenses: the landed-check, the 30/60/120 s backoff ladder, failure-body logging, state-aware asset rows) + timeout-minutes on EVERY job in both workflows. No application code changed — v0.100.0's content is exactly round 102's. The union-alpha verdict (23 live calls): tools/JSON/vision/streaming work, the 'two thinking modes' do NOT exist at the API level, latency varies 1.4–40 s — free fallback-tier, not primary; evidence in docs/research/model-eval-union-alpha-round-103.md."
+  "round": 104,
+  "ci": "PENDING — round 104 (the update hand-shake + the Linux AppImage updater) pushed; awaiting the CI and Release runs on the v0.101.0 tag. In-sandbox gates all green before the push: eslint clean, both typechecks clean, root suite 3,823 passed / 12 skipped, agent-core 2,392/2,392, license-audit clean (247), design-audit at baseline, docs:check 223/0/0, version ×4 at 0.101.0, and the update suites re-run green AFTER the bump (the R102-addendum discipline). The Rust AppImage leg rides CI cargo check (no local toolchain in the reset sandbox — the R100 pattern; the cfg-balance + brace sweeps ran in-sandbox)."
 }
