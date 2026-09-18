@@ -13,9 +13,14 @@
  */
 import { apiFetch } from "./api.js";
 import type { CliContext } from "./context.js";
-import type { TurnFrame } from "./frames.js";
+import type { AgentAnswerSource, TurnFrame } from "./frames.js";
 import { streamTurn } from "./stream.js";
-import { createTurnRenderer, type ApprovalAsk } from "./render/turn.js";
+import {
+  createTurnRenderer,
+  type ApprovalAsk,
+  type QuestionAnswer,
+  type QuestionAsk,
+} from "./render/turn.js";
 import { createJsonRenderer } from "./render/json.js";
 
 export interface TurnRunOptions {
@@ -24,6 +29,8 @@ export interface TurnRunOptions {
   model?: string;
   /** REPL's y/n ask (text mode only). */
   promptApproval?: (ask: ApprovalAsk) => Promise<"approved" | "denied" | null>;
+  /** ROUND-107 (F2): the numbered agent-question ask (text mode only). */
+  promptQuestion?: (ask: QuestionAsk) => Promise<QuestionAnswer | null>;
   /** REPL signal routing (see header); absent → process SIGINT is used. */
   sigintRouter?: (route: (() => void) | null) => void;
   /** json mode: lifecycle events ride this (cli.* lines). */
@@ -46,8 +53,11 @@ export async function runStreamedTurn(ctx: CliContext, options: TurnRunOptions):
         stderrTty: process.stderr.isTTY === true,
         autoApprove: ctx.autoApprove,
         ...(options.promptApproval !== undefined ? { promptApproval: options.promptApproval } : {}),
+        ...(options.promptQuestion !== undefined ? { promptQuestion: options.promptQuestion } : {}),
         decideApproval: (approvalId, decision) =>
           apiFetch(ctx.conn, "POST", `/approvals/${approvalId}/decision`, { decision }),
+        decideQuestion: (questionId: string, answers: string[], sources: AgentAnswerSource[]) =>
+          apiFetch(ctx.conn, "POST", `/agent-questions/${questionId}/resolve`, { answers, sources }),
       })
     : null;
 

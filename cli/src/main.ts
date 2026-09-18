@@ -5,6 +5,11 @@
  * truth). NO_COLOR + non-TTY auto-disable everything (color.ts); exit codes
  * are 0 (ok) / 1 (error) / 130 (double Ctrl-C).
  *
+ * ROUND-107 (R107-c-impl): every argument error now fires BEFORE
+ * resolveConnection (unknown command/flag, bare value flags) — a typo never
+ * spawns a sidecar — with a did-you-mean over the name tables, plus
+ * `--version` and the per-command flag re-parse (flags.ts COMMAND_FLAGS).
+ *
  * Lifecycle in --mode json: main emits `cli.attach` once the connection
  * resolves (baseUrl/source/port — NEVER the token) and `cli.exit` with the
  * final code; the turn streams emit `cli.session` + the verbatim frames.
@@ -20,19 +25,32 @@ import {
   type Connection,
 } from "./connection.js";
 import type { CliContext, UiContext } from "./context.js";
-import { flagBool, flagString, parseArgv, renderFlagHelp, GLOBAL_FLAGS } from "./flags.js";
+import {
+  commandFlagSpecs,
+  flagBool,
+  flagString,
+  parseArgv,
+  renderFlagHelp,
+  GLOBAL_FLAGS,
+} from "./flags.js";
+import { didYouMean } from "./suggest.js";
 import { ApiError, UnreachableError } from "./api.js";
 
-/** The command surface (CLI-DESIGN §2) — drives --help's command table. */
+/** The command surface (CLI-DESIGN §2) — drives --help's command table
+ * AND the validate-before-connect gate (R107-c F3: a typo'd command name
+ * must error BEFORE any dialing or spawning). */
 const COMMANDS: readonly { name: string; summary: string }[] = [
   { name: "sessions", summary: "ls|show|events|ctx|rm|rename|resume — session management" },
   { name: "models", summary: "[provider] · test <id> — catalog, configured rows, probes" },
   { name: "providers", summary: "provider rows (hasKey flags, never values)" },
   { name: "keys", summary: "status — per-provider key presence (flags only)" },
+  { name: "approvals", summary: "ls|<id> approve|deny — the human permission queue" },
   { name: "config", summary: "get|set — ~/.acute/cli.json (default agent/model/db)" },
   { name: "status", summary: "portal file + /health + both versions (never spawns)" },
   { name: "raw", summary: "<METHOD> <path> [json] — the authenticated escape hatch" },
 ];
+
+const COMMAND_NAMES: readonly string[] = COMMANDS.map((c) => c.name);
 
 /** `--help` — generated from the flags table + command table (no drift). */
 export function renderHelp(): string {
@@ -68,17 +86,57 @@ interface RunOptions {
 export async function run(argv: readonly string[], options: RunOptions = {}): Promise<number> {
   const stdout = options.stdout ?? ((s: string) => process.stdout.write(s));
   const stderr = options.stderr ?? ((s: string) => process.stderr.write(s));
-  const parsed = parseArgv(argv);
+  const first = parseArgv(argv);
 
   // --help always wins (even over unknown flags) — the flags table IS the help.
-  if (flagBool(parsed.flags, "help")) {
+  if (flagBool(first.flags, "help")) {
     stdout(renderHelp());
     return 0;
   }
 
-  if (parsed.unknown.length > 0) {
-    stderr(`unknown flag(s): ${parsed.unknown.join(", ")} — see: acute --help\n`);
+  // --version (R107-c F4): the same pre-connect short-circuit.
+  if (flagBool(first.flags, "version")) {
+    const { cliVersion } = await import("./commands/status.js");
+    stdout(`acute-cli ${cliVersion()}\n`);
+    return 0;
+  }
+
+  // F1 (two-pass parse): pass 1 finds the command name; when that command
+  // has its own flag rows (`sessions ls --limit N`), pass 2 re-parses argv
+  // with them spliced in so documented per-command flags stop landing in
+  // `unknown`.
+  const command = first.positionals[0];
+  const extras = commandFlagSpecs(command);
+  const parsed = extras.length > 0 ? parseArgv(argv, [...GLOBAL_FLAGS, ...extras]) : first;
+
+  // F3: validate the command BEFORE resolveConnection — `acute badcmd`
+  // used to boot a full sidecar (and write state files) just to print an
+  // error. Only known commands + the bare `-p`/REPL forms may dial/spawn.
+  if (command !== undefined && !COMMAND_NAMES.includes(command)) {
+    stderr(
+      `unknown command '${command}'${didYouMean(command, COMMAND_NAMES)} — see: acute --help\n`,
+    );
     return 1;
+  }
+
+  if (parsed.unknown.length > 0) {
+    // F4: did-you-mean over the global + this command's flag tables.
+    const flagNames = [...GLOBAL_FLAGS, ...extras].map((spec) => spec.name);
+    const listed = parsed.unknown.map((token) => {
+      const hint = didYouMean(token.replace(/^-+/, ""), flagNames, (name) => `'--${name}'`);
+      return hint === "" ? token : `${token}${hint}`;
+    });
+    stderr(`unknown flag(s): ${listed.join(", ")} — see: acute --help\n`);
+    return 1;
+  }
+
+  // F7: a value flag with NO value is an honest error — `-p` used to
+  // degrade to bare `true` and silently open the REPL instead.
+  for (const spec of [...GLOBAL_FLAGS, ...extras]) {
+    if (spec.value === true && parsed.flags[spec.name] === true) {
+      stderr(`flag '--${spec.name}' needs a value — see: acute --help\n`);
+      return 1;
+    }
   }
 
   const mode = flagString(parsed.flags, "mode");
@@ -94,7 +152,7 @@ export async function run(argv: readonly string[], options: RunOptions = {}): Pr
   const kit = colorKitFor(process.stdout.isTTY === true && !noColor, process.env);
   const config = readCliConfig();
   const repoRoot = defaultRepoRoot();
-  const [command, ...rest] = parsed.positionals;
+  const rest = parsed.positionals.slice(1);
 
   const ui: UiContext = {
     stdout,
@@ -202,6 +260,11 @@ export async function run(argv: readonly string[], options: RunOptions = {}): Pr
         case "raw": {
           const { runRawCommand } = await import("./commands/raw.js");
           code = await runRawCommand(ctx, rest);
+          break;
+        }
+        case "approvals": {
+          const { runApprovalsCommand } = await import("./commands/approvals.js");
+          code = await runApprovalsCommand(ctx, rest);
           break;
         }
         default:

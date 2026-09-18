@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-106 -->
+<!-- last-reviewed: 2026-09-18 round-107 -->
 <!-- status: APPROVED FOR IMPLEMENTATION (the owner's R106 review of the
      R105 planning corpus was positive on the CLI design — "the planning
      of the Android application, the linking protocol, and everything
@@ -69,12 +69,16 @@ writes it only when it spawns.
 | `acute sessions ls/resume/rm/show/ctx/events` | `GET/PATCH/DELETE /sessions…`, `/sessions/:id/context` |
 | `acute models [provider]` · `models test <id>` | `/models/catalog`, `/models/configured`, `/models/:id/test` |
 | `acute providers` · `acute keys status` | `GET /providers` (hasKey flags, never values) |
+| `acute approvals ls` · `approvals <id> approve/deny` | `GET /approvals`, `POST /approvals/:id/decision` (R107) |
 | `acute config get/set` | `~/.acute/cli.json` (default agent/model/db) |
 | `acute status` | portal file + `/health` + version |
 | `acute raw <METHOD> <path> [json]` | authenticated escape hatch (inherited from acute.mjs) |
 
 Global flags: `-p/--print`, `--mode text|json`, `--agent`, `--model`,
-`--session`, `--db`, `--quiet`, `--no-color`, `--auto-approve`.
+`--session`, `--db`, `--quiet`, `--no-color`, `--auto-approve`,
+`--version` (R107). Command-scoped flags (`sessions ls --limit`,
+`approvals ls --status`) ride a per-command re-parse; argument errors
+fire before any connection resolution, with did-you-mean hints.
 **`--mode json`** = NDJSON: sidecar frames pass through verbatim, one per
 line, wrapped with `cli.session`/`cli.attach`/`cli.exit` lifecycle
 events; exit code from the terminal frame (done/stopped → 0, error → 1).

@@ -89,6 +89,15 @@ export interface ChatTurnInput {
    * effort ladder + a per-level reasoning.max_tokens budget (see
    * buildThinkingFetch). */
   reasoningSupport?: ModelReasoningSupport | null;
+  /** R107-b (F4): the CALLER's abort signal — the turn's stop surface
+   * (the route's AbortController, the orchestrator's child supervision, the
+   * parent's cascade). The SYNC adapter previously wired ONLY its timeout
+   * signal, so a Stop on a sync child waited out the FULL in-flight call
+   * (600 s default); now aiSdkChat combines this with the timeout via
+   * AbortSignal.any (the streamed twin's pattern — whichever fires first).
+   * Absent → the timeout-only signal, byte-identical to the pre-R107
+   * behavior. */
+  signal?: AbortSignal;
   /** ROUND-94 (R94-D1): mid-turn QUEUED-MESSAGE injection. When set, the
    * adapter wires a prepareStep into the SDK call; at every STEP boundary
    * where the PRIOR step completed a tool call (the owner's contract: after
@@ -648,6 +657,14 @@ export type ChatFn = (input: ChatTurnInput) => Promise<ChatTurnOutput>;
 
 /** The production ChatFn: format-branched via the AI SDK, agentic tools when given. */
 export const aiSdkChat: ChatFn = async (input) => {
+  // R107-b (F4): the caller's abort (owner Stop / parent cascade / child
+  // supervision) combines with the timeout — whichever fires first aborts
+  // the call. The STREAMED twin below has done exactly this since R46; the
+  // sync path's omission meant a Stop on a sync child waited out the full
+  // in-flight call (600 s default) before the between-iterations check.
+  const timeoutSignal = AbortSignal.timeout(input.timeoutMs ?? PROVIDER_CALL_TIMEOUT_MS);
+  const callSignal =
+    input.signal !== undefined ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal;
   const result = await generateText({
     model: buildModel(input),
     // ROUND-50 (owner's third Windows test: a rate-limited sub-agent run
@@ -663,7 +680,7 @@ export const aiSdkChat: ChatFn = async (input) => {
     stopWhen: stepCountIs(Math.max(1, input.maxTurns)),
     // ROUND-46: bounded — a stalled connection aborts into the turn-error
     // path instead of hanging the session at "running" forever.
-    abortSignal: AbortSignal.timeout(input.timeoutMs ?? PROVIDER_CALL_TIMEOUT_MS),
+    abortSignal: callSignal,
     ...(input.tools !== undefined ? { tools: input.tools } : {}),
     // ROUND-48 (R48-e1, stretch): per-step live notification passthrough —
     // generateText calls it once per finished step (tool round-trip). The
@@ -852,9 +869,13 @@ export type StreamChatEvent =
       cachedInputTokens?: number;
     };
 
-export interface StreamChatInput extends ChatTurnInput {
-  signal?: AbortSignal;
-}
+// R107-b (F4): `signal` moved DOWN into ChatTurnInput — the sync adapter
+// honors it too now (AbortSignal.any with the timeout, the streamed
+// twin's pattern). StreamChatInput is now a type ALIAS of ChatTurnInput
+// (nothing extends it — debug-analyst.test.ts and orchestrator.test.ts
+// only use it as the input type), which keeps the name without the
+// empty-interface lint the `extends` form trips.
+export type StreamChatInput = ChatTurnInput;
 
 export type StreamChatFn = (input: StreamChatInput) => AsyncGenerator<StreamChatEvent>;
 

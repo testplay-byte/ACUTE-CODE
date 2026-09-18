@@ -15,6 +15,7 @@ import {
   ERROR_TURN,
   META_TURN,
   PLAIN_KIT,
+  QUESTION_TURN,
   SIMPLE_TURN,
   SUBAGENT_TURN,
   TOOL_FAIL_TURN,
@@ -196,6 +197,54 @@ describe("the approval card (§4)", () => {
   });
 });
 
+describe("the agent-question card (ROUND-107 F2 — ask_user stops hanging)", () => {
+  it("without a prompt: the yellow card + the raw escape-hatch hint (piped contract)", () => {
+    const { captured, codes } = renderFrames(QUESTION_TURN);
+    expect(codes[codes.length - 1]).toBe(0);
+    expect(captured.err).toContain("── agent question ──");
+    expect(captured.err).toContain("1/2: Deploy to which environment?");
+    expect(captured.err).toContain("  1) staging");
+    expect(captured.err).toContain("  2) production");
+    expect(captured.err).toContain("2/2: What should the release tag be?");
+    expect(captured.err).toContain("(free text)");
+    expect(captured.err).toContain("question id ask_1");
+    expect(captured.err).toContain(
+      "acute raw POST /agent-questions/ask_1/resolve '{\"answers\":[\"…\"]}'",
+    );
+    expect(captured.err).toContain("— question ask_1 answered · staging, v2.0");
+  });
+
+  it("a promptQuestion ask resolves through the resolve POST with sources", async () => {
+    const decide = vi.fn().mockResolvedValue(undefined);
+    const { captured } = renderFrames([QUESTION_TURN[0]], {
+      decideQuestion: decide,
+      promptQuestion: async () => ({ answers: ["staging", "v2.0"], sources: ["option", "custom"] }),
+    });
+    expect(captured.err).toContain("── agent question ──");
+    await vi.waitFor(() =>
+      expect(decide).toHaveBeenCalledWith("ask_1", ["staging", "v2.0"], ["option", "custom"]),
+    );
+    await vi.waitFor(() => expect(captured.err).toContain("question ask_1 answered"));
+  });
+
+  it("a NULL prompt answer leaves the ask open (no resolve POST)", async () => {
+    const decide = vi.fn();
+    const { captured } = renderFrames([QUESTION_TURN[0]], {
+      decideQuestion: decide,
+      promptQuestion: async () => null,
+    });
+    await vi.waitFor(() => expect(captured.err).toContain("no answer — the question stays open"));
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it("the resolved line is quiet-gated; the card renders yellow under a color kit", () => {
+    const quiet = renderFrames([QUESTION_TURN[1]], { quiet: true });
+    expect(quiet.captured.err).toBe("");
+    const color = renderFrames([QUESTION_TURN[0]], { kit: COLOR_KIT, plain: false });
+    expect(color.captured.err).toContain("\x1b[33m\x1b[1m── agent question ──\x1b[22m\x1b[39m");
+  });
+});
+
 describe("quiet mode (§4: assistant text + terminal errors only)", () => {
   it("drops every meta/card/status line, keeps the text + exit semantics", () => {
     const { captured, codes } = renderFrames([...META_TURN.slice(0, -1), TOOL_TURN[2]], { quiet: true });
@@ -226,6 +275,19 @@ describe("the NDJSON renderer (§2 --mode json)", () => {
       expect(lines).toContain(JSON.stringify(frame));
     }
     expect(lines[lines.length - 1]).toBe(JSON.stringify({ type: "cli.exit", code: 0 }));
+  });
+
+  it("agent-question frames pass through verbatim too (the NDJSON consumer's channel)", () => {
+    const lines: string[] = [];
+    const renderer = createJsonRenderer({
+      stdout: (s) => {
+        lines.push(s.trimEnd());
+      },
+    });
+    const codes = QUESTION_TURN.map((f) => renderer.handle(f));
+    expect(codes).toEqual([undefined, undefined, 0]);
+    expect(lines[0]).toBe(JSON.stringify(QUESTION_TURN[0]));
+    expect(lines[1]).toBe(JSON.stringify(QUESTION_TURN[1]));
   });
 
   it("error frames → exit 1; lifecycle events emit verbatim", () => {

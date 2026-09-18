@@ -47,7 +47,9 @@ const turns = new Map<string, RegisteredTurn>();
 
 /** Register the live turn for a session (main or child). One live turn per
  * session — a second registration for the same id replaces the first (the
- * runtime refuses concurrent turns anyway).
+ * R107-b F1 gates at both send routes refuse a second turn while one is
+ * live, so a replacement now only ever happens after a leaked/stale entry,
+ * never mid-flight).
  * ROUND-78 (R78): optional `notify` — the route passes its SSE send so
  * notifyTurn can push user.queued frames onto the still-open stream. */
 export function registerTurn(sessionId: string, controller: AbortController, notify?: (event: unknown) => void): void {

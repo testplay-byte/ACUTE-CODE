@@ -2,13 +2,36 @@
  * ROUND-106 (R106-S3, CLI-DESIGN §2/§6): the ONE-SHOT — `acute -p "prompt"`:
  * create session (or continue --session) → stream → exit code from the
  * terminal frame. The M1 smallest-useful-thing, now over attach-or-spawn.
+ *
+ * ROUND-107 (R107-c-impl, F6): with a TTY stdin the one-shot now prompts
+ * for approvals (y/N) and agent questions (numbered) instead of stalling
+ * on the "decide in another terminal" hint; piped stdin keeps the hint
+ * (the CI/script contract — nothing may block on a dead stdin).
  */
 import { apiFetch } from "../api.js";
 import { createSession, resolveAgentId, type CliContext, type SessionRow } from "../context.js";
 import { runStreamedTurn } from "../turn.js";
 import { flagString } from "../flags.js";
+import { askAgentQuestion, askApproval, type ApprovalAsk, type QuestionAnswer, type QuestionAsk } from "../prompts.js";
 
-export async function runOneShot(ctx: CliContext): Promise<number> {
+/** The interactive asks the one-shot installs (F6) — injectable for tests;
+ * the defaults are the shared terminal prompts (prompts.ts). */
+export interface OneShotPrompts {
+  approval: (ask: ApprovalAsk) => Promise<"approved" | "denied" | null>;
+  question: (ask: QuestionAsk) => Promise<QuestionAnswer | null>;
+}
+
+export interface OneShotOptions {
+  /** Interactive asks present? Default: `process.stdin.isTTY` (F6). */
+  interactive?: boolean;
+  /** Test injection for the two ask implementations. */
+  prompts?: OneShotPrompts;
+}
+
+export async function runOneShot(
+  ctx: CliContext,
+  options: OneShotOptions = {},
+): Promise<number> {
   const prompt = flagString(ctx.flags, "print");
   if (prompt === undefined) {
     ctx.stderr('one-shot needs a prompt: acute -p "say hi"\n');
@@ -44,9 +67,19 @@ export async function runOneShot(ctx: CliContext): Promise<number> {
       `${JSON.stringify({ type: "cli.session", sessionId, ...(model !== undefined ? { model } : {}) })}\n`,
     );
   }
+
+  // F6: prompt for approvals/questions when stdin can actually answer.
+  const interactive = options.interactive ?? process.stdin.isTTY === true;
+  const prompts: OneShotPrompts = options.prompts ?? {
+    approval: askApproval,
+    question: askAgentQuestion,
+  };
   return runStreamedTurn(ctx, {
     sessionId,
     content: prompt,
     ...(model !== undefined ? { model } : {}),
+    ...(interactive
+      ? { promptApproval: prompts.approval, promptQuestion: prompts.question }
+      : {}),
   });
 }

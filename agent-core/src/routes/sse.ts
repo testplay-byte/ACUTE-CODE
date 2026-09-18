@@ -58,7 +58,14 @@ import { describeRetrySchedule, resolveRetrySchedule } from "../lib/retry.js";
 // /sessions/:id/stop (the UI Stop button); the route's `send` registers as
 // the turn's notifier so the queue route's user.queued frames land on this
 // still-open stream.
+// R107-b (F1): the CONCURRENT-TURN GATE reads it too — a second send while
+// a turn is live 409s instead of REPLACING the live entry (the
+// "registerTurn replaces a live entry" hazard the R107-b review pinned:
+// with three consumers on one session — desktop, CLI, mobile — a second
+// send used to interleave event writes and orphan the first turn's
+// AbortController, making Stop miss it).
 import {
+  getTurnController,
   registerTurn,
   unregisterTurn,
 } from "../lib/turn-registry.js";
@@ -129,6 +136,32 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
     const composer = readComposerSendFields(raw, reply);
     if (!composer.ok) return reply;
 
+    // ── R107-b (F1): the CONCURRENT-TURN GATE. A second send while a turn
+    // is LIVE on this session (registered in the shared turn registry by
+    // this route, the sync route, or an orchestrated child turn) is a 409,
+    // not a parallel turn. Pre-gate, registerTurn below REPLACED the live
+    // entry: both turns then interleaved writes into ONE event log and the
+    // FIRST turn's AbortController was dropped — POST /stop could never
+    // reach it (prepareTurn only refuses TERMINAL statuses, so a `running`
+    // session happily started the parallel turn). The designed mid-turn
+    // path is the QUEUE: POST /sessions/:id/queue rides the live stream
+    // (loop-top + turn-end delivery own it).
+    // Placement: after body validation (an invalid body still gets its
+    // honest 400) and BEFORE reply.hijack()/registerTurn — everything from
+    // here to registerTurn is synchronous on the single Node thread, so no
+    // second request can interleave the check-and-register pair. The
+    // route's OWN queue-continuation loop never re-enters here (one
+    // registration spans the whole loop), so continuations are unaffected.
+    if (getTurnController(id) !== undefined) {
+      return reply.code(409).send(
+        errorBody(
+          "CONFLICT",
+          `a turn is already in flight for session ${id} — queue the message instead (POST /sessions/${id}/queue), or stop the running turn first (POST /sessions/${id}/stop)`,
+          { field: "session" },
+        ),
+      );
+    }
+
     reply.hijack();
     const res = reply.raw;
     // ROUND-30 FIX (owner Windows bug "Failed to fetch" after every
@@ -163,9 +196,11 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
     };
     const abort = new AbortController();
     // ROUND-42 → R52-b: registry for POST /sessions/:id/stop (SHARED with
-    // the orchestrator's child turns). One live turn per session — a
-    // second turn on the same session replaces the entry (the runtime
-    // refuses concurrent turns anyway).
+    // the orchestrator's child turns). One live turn per session — the
+    // R107-b (F1) gate above guarantees this registration never REPLACES a
+    // live entry (the pre-R107 "the runtime refuses concurrent turns
+    // anyway" comment was false: prepareTurn only refuses TERMINAL
+    // statuses, so a `running` session could start a parallel turn).
     // ROUND-78 (R78): `send` registers as the turn's NOTIFIER — the queue
     // route (POST /sessions/:id/queue) rides notifyTurn so its
     // user.queued frames land on this still-open stream. The single

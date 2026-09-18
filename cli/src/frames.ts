@@ -9,6 +9,23 @@
  * 2).
  */
 
+/** ROUND-107 (R107-c-impl, F2): one question the agent asks the owner
+ * (agent-core AgentQuestion, mirrored — 2-8 preset options, optional custom
+ * free text). */
+export interface AgentQuestionItem {
+  /** The question itself, ≤ 500 chars. */
+  question: string;
+  /** Preset answers the owner can pick by number. */
+  options?: string[];
+  /** May the owner type a free-text answer (default true)? */
+  allowCustom?: boolean;
+  /** Placeholder for the custom input (the CLI ignores it — no TTY affordance). */
+  placeholder?: string;
+}
+
+/** Where an answer came from (agent-core AgentAnswerSource). */
+export type AgentAnswerSource = "option" | "custom";
+
 /** The frames a turn stream carries that the CLI renders or acts on. */
 export type TurnFrame =
   | { type: "text-delta"; delta: string; text?: string }
@@ -82,6 +99,20 @@ export type TurnFrame =
       approvalId: string;
       decision: "approved" | "denied" | "expired";
       remember?: "once" | "always";
+    }
+  | {
+      type: "agent-question";
+      sessionId: string;
+      questionId: string;
+      questions: AgentQuestionItem[];
+    }
+  | {
+      type: "agent-question.resolved";
+      sessionId: string;
+      questionId: string;
+      resolution: "answered" | "timeout" | "cancelled";
+      answers?: string[];
+      sources?: AgentAnswerSource[];
     }
   | { type: "error"; status?: number; code?: string; message: string }
   | { type: "stopped" }

@@ -265,14 +265,24 @@ export function sampleChildWatch(
   // ts is an ISO string (SessionEvent.ts) — parse for the age math.
   const lastTs = last !== undefined ? Date.parse(last.ts) : Date.now();
   const lastEventAgeMs = Math.max(0, Date.now() - (Number.isNaN(lastTs) ? Date.now() : lastTs));
+  const elapsedMs = Date.now() - startedAt;
   return {
     lastEventAgeMs,
     lastActivity,
     toolCount: events.filter((e) => e.type === "tool.use").length,
     todosDone,
     todosTotal,
-    elapsedMs: Date.now() - startedAt,
-    stalled: lastEventAgeMs > stallTimeoutMs,
+    elapsedMs,
+    // R107-b (F2): the stall signal is RETRY-RELATIVE — the effective age of
+    // the last event is capped at the time since THIS run started
+    // (min(lastEventAgeMs, elapsedMs)). A retried child's event log carries
+    // the FAILED attempt's old events; pre-R107 the raw age would have
+    // insta-stall-killed a healthy retry whose first provider call simply
+    // took longer than the threshold to produce a new event. For a fresh
+    // child (every event post-dates startedAt) the min() is a no-op —
+    // lastEventAgeMs ≤ elapsedMs always — so the R52-b semantics are
+    // byte-identical where they already held.
+    stalled: Math.min(lastEventAgeMs, elapsedMs) > stallTimeoutMs,
   };
 }
 
@@ -346,19 +356,41 @@ class Orchestrator {
    * perKeyLimit reached) keeps polling — that is legitimate queueing and
    * resolves on its own as children finish. Returns the reserved slot, or
    * the "EMPTY_POOL" marker the caller turns into an honest failure.
+   *
+   * R107-b (F4): the poll is ABORT-AWARE. Pre-R107 a child queued behind a
+   * full semaphore kept polling forever even after its parent turn was
+   * stopped — the queued child was structurally unstoppable (nothing
+   * consulted the signal between ticks). Now every tick (and the loop
+   * entry, BEFORE the first reservation — an already-stopped parent must
+   * not even reserve) checks the caller's signal and returns the honest
+   * "ABORTED_WHILE_QUEUED" marker for the caller to report: the child
+   * never started, no slot was taken, the stop is honored within one tick
+   * (~100 ms) instead of never.
    */
   private async acquireSlot(
     db: SqliteDatabase,
     keyring: ProviderKeyring,
     providerId: string,
     childId: string,
-  ): Promise<number | "EMPTY_POOL"> {
+    signal?: AbortSignal,
+  ): Promise<number | "EMPTY_POOL" | "ABORTED_AT_ENTRY" | "ABORTED_WHILE_QUEUED"> {
+    // `waited`: slept at least one tick → the child GENUINELY sat in the
+    // queue. The distinction matters for the honest failure line: an
+    // already-stopped parent (entry abort) never waited for anything —
+    // saying it did would be a lie the R48-e1 pins would have caught.
+    let waited = false;
     for (;;) {
       // R93-B4: the empty-pool gate FIRST — a pool with zero keys can never
       // free up on its own (the owner must add a key in Settings).
       if (resolveKeyPool(keyring, providerId).length === 0) return "EMPTY_POOL";
+      // R107-b (F4): the stop check — BEFORE the reservation attempt at
+      // loop entry (an already-aborted parent never takes a slot) and on
+      // every subsequent tick (a stop landing mid-queue releases the poll
+      // within one 100 ms cadence).
+      if (signal?.aborted === true) return waited ? "ABORTED_WHILE_QUEUED" : "ABORTED_AT_ENTRY";
       const slot = this.tryReserveSlot(db, keyring, providerId, childId);
       if (slot !== null) return slot;
+      waited = true;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
@@ -708,7 +740,11 @@ class Orchestrator {
       return collectOutcome(db, child);
     }
     // failed | cancelled → the retryChild continuation path, awaited.
-    const retry = await this.retryChild(deps, parentSessionId, child.id, emit);
+    // R107-b (F2): the parent turn's signal rides along — a stop landing on
+    // the parent while the RETRY runs cascades into it (the supervision
+    // parity fix; previously a stop mid-retry was invisible to the retried
+    // child).
+    const retry = await this.retryChild(deps, parentSessionId, child.id, emit, signal);
     if (!retry.ok) {
       return {
         ok: false,
@@ -1017,7 +1053,7 @@ class Orchestrator {
     // reservation and the release below key on it, so the load-spreading
     // counts against the provider that actually serves the child turns.
     const effectiveProviderId = overrideProviderId(ctx.modelOverride) ?? providerId;
-    const slot = await this.acquireSlot(db, keyring, effectiveProviderId, child.id);
+    const slot = await this.acquireSlot(db, keyring, effectiveProviderId, child.id, signal);
     // R93-B4: an EMPTY key pool fails FAST and HONESTLY (see acquireSlot) —
     // the child is marked failed with the actionable message, the parent's
     // delegate_task returns it as the tool result, and the owner is
@@ -1038,6 +1074,49 @@ class Orchestrator {
       return {
         ok: false,
         output: `[subagent session: ${child.id} | role: ${role}]\n${emptyPoolLine}`,
+        sessionId: child.id,
+      };
+    }
+    // R107-b (F4): the parent turn was STOPPED while this child sat queued
+    // behind the full semaphore — the abort-aware poll (acquireSlot) refused
+    // to keep waiting. Honest terminal state: the child NEVER started (no
+    // provider call, no slot taken), the status frame + notification say
+    // why, and the parent's tool result carries the actionable line (the
+    // pre-R107 poll ignored the stop and the queued child started anyway
+    // the moment a slot freed — spending on a task the owner cancelled).
+    if (slot === "ABORTED_AT_ENTRY" || slot === "ABORTED_WHILE_QUEUED") {
+      const why =
+        slot === "ABORTED_WHILE_QUEUED"
+          ? "the parent turn was stopped while this child waited for a concurrency slot"
+          : "the parent turn was already stopped when the delegation began";
+      const detail =
+        slot === "ABORTED_WHILE_QUEUED"
+          ? "stopped before it started (parent turn stopped while queued)"
+          : "stopped before it started (parent turn already stopped)";
+      const abortedLine =
+        `Sub-agent was stopped before it started: ${why}. ` +
+        "Its session is preserved with no work performed — re-delegate the task if it is still wanted.";
+      // The task message still lands in the child's log — the runner would
+      // have persisted it at turn start, and the R48-e1 pin holds the honest
+      // shape: what was asked, a failed status, and NO turn.error (a stop is
+      // not an error — the R42/R43 rule).
+      appendSessionEvent(db, child.id, {
+        type: "message.user",
+        agentId: child.agentId,
+        payload: { role: "user", content: `${ROLE_FRAMING[role]}\n${renderTaskPrompt(task)}` },
+      });
+      setSessionStatus(db, child.id, "failed");
+      status("failed", { detail });
+      getNotificationBus().publish(db, {
+        kind: "subagent_failed",
+        title: `Sub-agent (${role}) stopped before it started`,
+        body: why,
+        sessionId: child.id,
+        projectId: ctx.parent.projectId ?? undefined,
+      });
+      return {
+        ok: false,
+        output: `[subagent session: ${child.id} | role: ${role}]\n${abortedLine}`,
         sessionId: child.id,
       };
     }
@@ -1292,6 +1371,12 @@ class Orchestrator {
     childId: string,
     /** ROUND-40: widened to (unknown) => void (see delegateTask). */
     emit?: (event: unknown) => void,
+    /** R107-b (F2): the caller's abort signal — resumeTask forwards the
+     * parent turn's signal (a retried child whose parent was stopped now
+     * cascades exactly like a fresh delegation); the HTTP retry route
+     * passes none (no parent turn is live — the child's own registration
+     * is the stop surface, as it already is for fresh children). */
+    signal?: AbortSignal,
   ): Promise<{ ok: boolean; message: string }> {
     const { db, keyring, chat, chatStream } = deps;
     const child = getSession(db, childId);
@@ -1326,7 +1411,7 @@ class Orchestrator {
             : undefined;
     const effectiveModel = subagentModel?.modelId ?? agent?.model ?? deps.mainModel?.modelId ?? "unknown";
 
-    const status = (s: SubAgentEventPayload["status"]) => {
+    const status = (s: SubAgentEventPayload["status"], extra?: Partial<SubAgentEventPayload>) => {
       emit?.({
         type: "subagent-status",
         sessionId: childId,
@@ -1337,6 +1422,7 @@ class Orchestrator {
         code: subAgentCode(childId),
         // ROUND-50 (R50-b): the stats footer's model line.
         model: effectiveModel,
+        ...extra,
       });
     };
 
@@ -1358,7 +1444,7 @@ class Orchestrator {
     // the override's provider when the owner set a provider-scoped
     // subagentModel ref between attempts (the R82-TESTS retry pin).
     const effectiveProviderId = overrideProviderId(modelOverride) ?? providerId;
-    const slot = await this.acquireSlot(db, keyring, effectiveProviderId, childId);
+    const slot = await this.acquireSlot(db, keyring, effectiveProviderId, childId, signal);
     // R93-B4: the retry path gets the same honest EMPTY_POOL failure (see
     // runChildTurn) — a retried child whose provider lost its keys fails
     // fast with the actionable message instead of hanging forever.
@@ -1377,6 +1463,33 @@ class Orchestrator {
       });
       return { ok: false, message: emptyPoolLine };
     }
+    // R107-b (F4): the retry twin of runChildTurn's aborted-while-queued
+    // branch — the caller's turn was stopped while the RETRY waited for a
+    // concurrency slot. No retry ran, no slot was taken, the honest line
+    // says so (the pre-R107 poll would have kept waiting and started the
+    // retry anyway once a slot freed).
+    if (slot === "ABORTED_AT_ENTRY" || slot === "ABORTED_WHILE_QUEUED") {
+      const why =
+        slot === "ABORTED_WHILE_QUEUED"
+          ? "the parent turn was stopped while the retry waited for a concurrency slot"
+          : "the parent turn was already stopped when the retry began";
+      const detail =
+        slot === "ABORTED_WHILE_QUEUED"
+          ? "stopped before it started (parent turn stopped while queued)"
+          : "stopped before it started (parent turn already stopped)";
+      const abortedLine = `Retry stopped before it started: ${why}. ` +
+        "No work was performed — resume the sub-agent again later if it is still wanted.";
+      setSessionStatus(db, childId, "failed");
+      status("failed", { detail });
+      getNotificationBus().publish(db, {
+        kind: "subagent_failed",
+        title: `Sub-agent (${role}) retry stopped before it started`,
+        body: why,
+        sessionId: childId,
+        projectId: child.projectId ?? undefined,
+      });
+      return { ok: false, message: abortedLine };
+    }
     this.runs = this.runs.map((r) =>
       r.childId === childId ? { ...r, parentSessionId } : r,
     );
@@ -1385,8 +1498,76 @@ class Orchestrator {
     // its starting key + usage attribution, and the runner juggles the pool
     // on key-attributable failures.
 
+    // ── R107-b (F2): SUPERVISION PARITY — the retried child now runs under
+    // the SAME supervisor a fresh delegation gets (runChildTurn's block,
+    // replicated because the two return shapes differ): its own
+    // AbortController REGISTERED in the shared turn registry (POST
+    // /sessions/:id/stop finds the retried child — pre-R107 it was
+    // UNSTOPPABLE: no registration, no signal, so an owner-Stopped or hung
+    // retried child ran to completion while the parent polled forever), a
+    // parent-abort cascade (resumeTask now forwards its signal), and the
+    // stall watchdog (a hung retried child is stall-killed and reported
+    // honestly instead of hanging resumeTask's poll forever). Registered
+    // BEFORE the first `running` frame so a stop aimed at that frame's
+    // session id always lands. ──
+    const orchestration = getOrchestrationSettings(db);
+    const childAbort = new AbortController();
+    registerTurn(childId, childAbort);
+    let stallReport: string | null = null;
+    const onParentAbort = (): void => {
+      // Parent stop cascades to the retried child (R48-e1 semantics — the
+      // same choice a fresh delegation makes).
+      if (!childAbort.signal.aborted) childAbort.abort();
+    };
+    if (signal !== undefined) {
+      // An ALREADY-aborted parent aborts the retry NOW; a live parent
+      // aborts it later via the listener.
+      if (signal.aborted) childAbort.abort();
+      else signal.addEventListener("abort", onParentAbort, { once: true });
+    }
+
     status("running");
     setSessionStatus(db, childId, "running");
+
+    const runStartedAt = Date.now();
+    const watchdog = setInterval(() => {
+      if (childAbort.signal.aborted) return;
+      const progress = this.progressOf(db, childId);
+      const watch = sampleChildWatch(
+        db,
+        childId,
+        runStartedAt,
+        orchestration.childStallTimeoutMs,
+        progress.todosDone,
+        progress.todosTotal,
+      );
+      // ROUND-75 (R75): a retried child in a TRANSIENT-API retry wait is
+      // ALIVE by construction — never stall-kill it; surface the wait (the
+      // same consult runChildTurn's watchdog makes).
+      const retryWait = getActiveRetryWait(childId);
+      if (retryWait !== undefined) {
+        const remaining = Math.max(0, retryWait.until - Date.now());
+        status("running", {
+          watch: {
+            ...watch,
+            stalled: false,
+            lastActivity:
+              `waiting to retry the provider (attempt ${retryWait.attempt}/${retryWait.totalAttempts}, ` +
+              `${Math.ceil(remaining / 1000)}s remaining — transient failure)`,
+          },
+        });
+        return;
+      }
+      if (watch.stalled) {
+        stallReport =
+          `stalled — no activity for ${Math.round(watch.lastEventAgeMs / 1000)}s ` +
+          `(last: ${watch.lastActivity}); the supervisor stopped it`;
+        abortTurn(childId, "stall");
+        return;
+      }
+      status("running", { watch });
+    }, orchestration.childWatchdogMs);
+
     try {
       // ROUND-40: same live-forwarding as delegateTask — wrap the parent's
       // emit so the retried child's tool/text events ride the SSE channel.
@@ -1407,6 +1588,9 @@ class Orchestrator {
       // ROUND-64 (R64-e) → ROUND-92 (R92-D): keySlot = the re-acquired slot —
       // the retried child's starting key + usage attribution; the keyring is
       // the PARENT'S (full pool, juggling on failure).
+      // R107-b (F2): the retried child's OWN signal threads into BOTH
+      // runners — owner Stop (registry), parent stop (cascade), and the
+      // supervisor's stall abort all reach the running turn now.
       const childDeps: TurnDeps = { db, keyring, chat, keySlot: slot };
       const outcome =
         chatStream !== undefined && wrappedEmit !== undefined
@@ -1418,8 +1602,9 @@ class Orchestrator {
               // R43-5: retries honor the same sub-agent model override as
               // fresh delegations (null = inherit the agent's model).
               modelOverride,
+              childAbort.signal,
             )
-          : await runSingleAgentTurn(childDeps, childId, content, modelOverride, wrappedEmit);
+          : await runSingleAgentTurn(childDeps, childId, content, modelOverride, wrappedEmit, childAbort.signal);
       if (outcome.ok) {
         setSessionStatus(db, childId, "completed");
         status("completed");
@@ -1433,17 +1618,47 @@ class Orchestrator {
         });
         return { ok: true, message: "sub-agent completed" };
       }
+      // R107-b (F2): the same honest WHY a fresh delegation reports —
+      // stopped by the owner, stalled (supervisor), aborted with the
+      // parent, or a real error. The pre-R107 retry path could only ever
+      // say "failed: <provider message>" because nothing supervised it.
+      const stopReason = getTurnStopReason(childId);
+      const detail =
+        stallReport !== null
+          ? stallReport
+          : stopReason === "owner"
+            ? "stopped by the owner"
+            : outcome.code === "ABORTED"
+              ? "aborted (parent turn stopped)"
+              : undefined;
       setSessionStatus(db, childId, "failed");
-      status("failed");
+      status("failed", detail !== undefined ? { detail } : undefined);
       getNotificationBus().publish(db, {
         kind: "subagent_failed",
-        title: `Sub-agent (${role}) failed`,
-        body: outcome.message.slice(0, 160),
+        title:
+          stopReason === "owner"
+            ? `Sub-agent (${role}) stopped by the owner`
+            : stallReport !== null
+              ? `Sub-agent (${role}) stalled — supervisor stopped it`
+              : `Sub-agent (${role}) failed`,
+        body: (stallReport ?? outcome.message).slice(0, 160),
         sessionId: childId,
         projectId: child.projectId ?? undefined,
       });
-      return { ok: false, message: outcome.message };
+      const failureLine =
+        stallReport !== null
+          ? `Sub-agent STALLED and was stopped by the supervisor: ${stallReport}. Decide deliberately: re-delegate the task (delegate_task), investigate what it was doing, or report the situation to the user — do not silently retry.`
+          : stopReason === "owner"
+            ? `Sub-agent was STOPPED BY THE OWNER mid-task. Its partial progress is preserved in its session (${childId}). Do NOT re-delegate or continue the stopped work unless the user asks.`
+            : `Sub-agent failed: ${outcome.message}`;
+      return { ok: false, message: failureLine };
     } finally {
+      // R107-b (F2): the full teardown a fresh delegation gets — watchdog
+      // cleared, parent listener removed, registry entry unregistered (then
+      // the slot released, as before).
+      clearInterval(watchdog);
+      if (signal !== undefined) signal.removeEventListener("abort", onParentAbort);
+      unregisterTurn(childId, childAbort);
       // ROUND-82: release under the EFFECTIVE provider (see runChildTurn).
       this.releaseSlot(effectiveProviderId, slot, childId);
     }

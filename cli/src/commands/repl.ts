@@ -4,6 +4,11 @@
  * /sessions /stop /compact /exit (+ /help). Ctrl-C discipline: during a
  * turn → stop + wait for the stopped frame; idle → clear the line;
  * double-press → exit 130. EOF (Ctrl-D) exits like /exit.
+ *
+ * ROUND-107 (R107-c-impl, F5): every COMPLETED slash command re-prompts
+ * (success AND error paths — success used to leave the user typing blind).
+ * The y/n approval + numbered question asks live in prompts.ts (shared
+ * with the one-shot); the readline streams are injectable for tests.
  */
 import * as readline from "node:readline";
 import { apiFetch } from "../api.js";
@@ -16,6 +21,7 @@ import {
 } from "../context.js";
 import { runStreamedTurn } from "../turn.js";
 import { flagString } from "../flags.js";
+import { askAgentQuestion, askApproval } from "../prompts.js";
 import { trunc } from "../render/tools.js";
 
 interface ModelCatalog {
@@ -31,7 +37,14 @@ interface ConfiguredModel {
   displayName: string | null;
 }
 
-export async function runRepl(ctx: CliContext): Promise<number> {
+/** Test injection for the readline streams (default: the real stdin + the
+ * stderr/stdout pick below). */
+export interface ReplOptions {
+  input?: NodeJS.ReadableStream;
+  output?: NodeJS.WritableStream;
+}
+
+export async function runRepl(ctx: CliContext, options: ReplOptions = {}): Promise<number> {
   const resumeId = flagString(ctx.flags, "session");
   let sessionId: string;
   let modelOverride: string | undefined = flagString(ctx.flags, "model") ?? ctx.config.model;
@@ -53,8 +66,10 @@ export async function runRepl(ctx: CliContext): Promise<number> {
   }
 
   const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stderr.isTTY === true ? process.stderr : process.stdout,
+    input: options.input ?? process.stdin,
+    output:
+      options.output ??
+      (process.stderr.isTTY === true ? process.stderr : process.stdout),
     prompt: ctx.plain ? "acute> " : ctx.kit.accent("acute> "),
   });
 
@@ -215,19 +230,6 @@ export async function runRepl(ctx: CliContext): Promise<number> {
     return session?.agentId ?? null;
   };
 
-  const promptApproval = async (
-    ask: { approvalId: string; toolName: string; argsSummary: string; category: string },
-  ): Promise<"approved" | "denied" | null> => {
-    return await new Promise((resolve) => {
-      const inner = readline.createInterface({ input: process.stdin, output: process.stderr });
-      inner.question(`  approve ${ask.toolName}? [y/N] `, (answerText: string) => {
-        inner.close();
-        const answer = answerText.trim().toLowerCase();
-        resolve(answer === "y" || answer === "yes" ? "approved" : "denied");
-      });
-    });
-  };
-
   const onLine = (line: string): void => {
     const trimmed = line.trim();
     if (trimmed === "") {
@@ -235,10 +237,16 @@ export async function runRepl(ctx: CliContext): Promise<number> {
       return;
     }
     if (trimmed.startsWith("/")) {
-      void handleSlash(trimmed).catch((err: unknown) => {
-        ctx.stderr(ctx.kit.red(`${err instanceof Error ? err.message : String(err)}\n`));
-        if (!closed) rl.prompt();
-      });
+      // F5: the re-prompt rides the COMPLETION (then AND catch) — a
+      // successful slash command used to leave the terminal without one.
+      void handleSlash(trimmed)
+        .then(() => {
+          if (!closed) rl.prompt();
+        })
+        .catch((err: unknown) => {
+          ctx.stderr(ctx.kit.red(`${err instanceof Error ? err.message : String(err)}\n`));
+          if (!closed) rl.prompt();
+        });
       return;
     }
     if (inTurn) {
@@ -252,7 +260,7 @@ export async function runRepl(ctx: CliContext): Promise<number> {
         sessionId,
         content: trimmed,
         ...(modelOverride !== undefined ? { model: modelOverride } : {}),
-        ...(ctx.plain ? {} : { promptApproval }),
+        ...(ctx.plain ? {} : { promptApproval: askApproval, promptQuestion: askAgentQuestion }),
         sigintRouter: (route) => {
           turnSigint = route;
         },

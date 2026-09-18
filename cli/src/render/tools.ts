@@ -5,6 +5,7 @@
  * recorded frame fixtures in, exact strings out).
  */
 import type { ColorKit } from "../color.js";
+import type { AgentQuestionItem } from "../frames.js";
 
 /** One-line truncation with the repo's ellipsis form. */
 export function trunc(value: unknown, max: number): string {
@@ -39,6 +40,33 @@ export function approvalCard(
     kit.yellow(`${frame.toolName}(${trunc(frame.argsSummary, 100)})`),
     `  category ${frame.category} · approval id ${kit.bold(frame.approvalId)}`,
   ];
+}
+
+/** ROUND-107 (R107-c-impl, F2): the agent-question card — the approvalCard
+ * pattern applied to ask_user: yellow header, one block per question
+ * (question + numbered options + the custom-text hint), question id last. */
+export function questionCard(
+  kit: ColorKit,
+  frame: { questionId: string; questions: AgentQuestionItem[] },
+): string[] {
+  const lines: string[] = [kit.yellow(kit.bold("── agent question ──"))];
+  const total = frame.questions.length;
+  frame.questions.forEach((question, i) => {
+    lines.push(kit.yellow(`${i + 1}/${total}: ${trunc(question.question, 100)}`));
+    const options = Array.isArray(question.options) ? question.options : [];
+    options.forEach((option, j) => {
+      lines.push(`  ${j + 1}) ${trunc(option, 100)}`);
+    });
+    if (options.length === 0) {
+      lines.push("  (free text)");
+    } else if (question.allowCustom === false) {
+      lines.push(`  (pick 1-${options.length})`);
+    } else {
+      lines.push(`  (1-${options.length}, or type your own answer)`);
+    }
+  });
+  lines.push(`  question id ${kit.bold(frame.questionId)}`);
+  return lines;
 }
 
 /** `— done · model · N in · N out · $cost` (§4 terminal frame). */

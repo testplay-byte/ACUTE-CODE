@@ -76,6 +76,36 @@ function stubSse(chunks: readonly string[]): void {
   );
 }
 
+/** Install a fetch stub that serves the SSE stream AND records the
+ * non-stream POSTs (the approval-decision + question-resolve calls). */
+function stubSseWithPosts(
+  chunks: readonly string[],
+): Array<{ url: string; method: string; body: unknown }> {
+  const posts: Array<{ url: string; method: string; body: unknown }> = [];
+  const encoder = new TextEncoder();
+  vi.stubGlobal(
+    "fetch",
+    async (url: string, init?: RequestInit): Promise<Response> => {
+      if (!String(url).includes("/messages/stream")) {
+        posts.push({
+          url: String(url),
+          method: String(init?.method ?? "GET"),
+          body: init?.body !== undefined ? JSON.parse(String(init.body)) : undefined,
+        });
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200 });
+    },
+  );
+  return posts;
+}
+
 describe("runStreamedTurn exit codes (the terminal-frame contract)", () => {
   it("a done turn → exit 0, the text flows, the usage line rides stdout", async () => {
     stubSse([
@@ -166,5 +196,56 @@ describe("runStreamedTurn in --mode json (NDJSON passthrough)", () => {
       code: "STREAM_DISCONNECTED",
       message: "The stream from the agent ended unexpectedly (connection interrupted).",
     });
+  });
+});
+
+describe("runStreamedTurn + the ask_user frames (ROUND-107 F2)", () => {
+  it("an agent-question frame prompts → POST /agent-questions/:id/resolve {answers, sources}", async () => {
+    const posts = stubSseWithPosts([
+      'data: {"type":"agent-question","sessionId":"s1","questionId":"ask_9","questions":[{"question":"Deploy?","options":["staging","production"]}]}\n\n',
+      'data: {"type":"agent-question.resolved","sessionId":"s1","questionId":"ask_9","resolution":"answered","answers":["staging"],"sources":["option"]}\n\n',
+      'data: {"type":"done","usage":{"model":"m1","inputTokens":1,"outputTokens":1,"costUsd":0}}\n\n',
+    ]);
+    const h = makeCtx();
+    const code = await runStreamedTurn(h.ctx, {
+      sessionId: "s1",
+      content: "hi",
+      promptQuestion: async () => ({ answers: ["staging"], sources: ["option"] }),
+    });
+    expect(code).toBe(0);
+    expect(h.err).toContain("── agent question ──");
+    expect(h.err).toContain("— question ask_9 answered · staging");
+    await vi.waitFor(() => expect(posts.length).toBe(1));
+    expect(posts[0]).toEqual({
+      url: "http://127.0.0.1:4601/api/v1/agent-questions/ask_9/resolve",
+      method: "POST",
+      body: { answers: ["staging"], sources: ["option"] },
+    });
+  });
+
+  it("without a prompt the card + hint render and NOTHING is POSTed (the piped contract)", async () => {
+    const posts = stubSseWithPosts([
+      'data: {"type":"agent-question","sessionId":"s1","questionId":"ask_9","questions":[{"question":"Deploy?","options":["staging"]}]}\n\n',
+      'data: {"type":"done"}\n\n',
+    ]);
+    const h = makeCtx();
+    const code = await runStreamedTurn(h.ctx, { sessionId: "s1", content: "hi" });
+    expect(code).toBe(0);
+    expect(h.err).toContain("resolve in another terminal");
+    expect(h.err).toContain("acute raw POST /agent-questions/ask_9/resolve");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(posts).toHaveLength(0);
+  });
+
+  it("--auto-approve does NOT auto-answer questions (unlike approvals)", async () => {
+    const posts = stubSseWithPosts([
+      'data: {"type":"agent-question","sessionId":"s1","questionId":"ask_9","questions":[{"question":"Deploy?"}]}\n\n',
+      'data: {"type":"done"}\n\n',
+    ]);
+    const h = makeCtx({ autoApprove: true });
+    const code = await runStreamedTurn(h.ctx, { sessionId: "s1", content: "hi" });
+    expect(code).toBe(0);
+    expect(h.err).toContain("resolve in another terminal");
+    expect(posts).toHaveLength(0);
   });
 });

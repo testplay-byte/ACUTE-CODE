@@ -1752,6 +1752,15 @@ async function prepareTurn(
   };
 }
 
+/** R107-b (F4 parity): fresh read of a possibly-narrowed signal's abort
+ * state. The sync loop's loop-top guard narrows `signal.aborted` to false
+ * for TS's static flow, but the abort lands DURING the awaited chat call —
+ * the catch must observe the LIVE value (a plain function boundary is where
+ * the narrowing honestly resets). */
+function isSignalAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
 export async function runSingleAgentTurn(
   deps: TurnDeps,
   sessionId: string,
@@ -1916,6 +1925,19 @@ export async function runSingleAgentTurn(
         details: { providerError: string; errorClass?: ProviderErrorClass; classMessage?: string; attempts?: number };
       }
     | null = null;
+  // R107-b (F5): the R80 CONTEXT/REQUEST guard stop, mirrored onto the sync
+  // path (sub-agent children + the sync HTTP route) — pre-R107 these guards
+  // existed ONLY in runStreamedAgentTurn, so a sync sub-agent could burn
+  // unbounded provider calls with no 200-request stop and an over-budget
+  // context with no honest CONTEXT_LIMIT exit. Same contract as the streamed
+  // twin: the guards break the loop with this stop set, and the post-loop
+  // exit persists the honest turn.error + usage + the 502 — never a silent
+  // ok:true stop mid-task.
+  let guardStop: { code: "CONTEXT_LIMIT" | "REQUEST_LIMIT"; message: string } | null = null;
+  // R107-b (F5): the R77 blank-output guard's TURN-level tool-call count —
+  // "did ANY tool run this turn" (the per-iteration result.toolCalls.length
+  // the conversational-break rule reads is not that signal).
+  let turnToolCalls = 0;
   // ROUND-48 (R48-e1): set when the loop exits via the between-iterations
   // abort check (a deliberate parent stop) — distinct from a provider error.
   let stoppedBySignal = false;
@@ -2046,6 +2068,39 @@ export async function runSingleAgentTurn(
       messages.push({ role: "user", content: ASSISTANT_LAST_SHAPE_NUDGE });
     }
 
+    // ── R107-b (F5): the R80 guard stops, MIRRORED from the streamed runner
+    // (verbatim contract — model-relative budget, 200-request ceiling, the
+    // honest guardStop exit instead of a silent ok:true). The sync path
+    // serves EVERY sub-agent child and the sync HTTP route; pre-R107 a sync
+    // sub-agent could burn unbounded calls with no request stop at all. ──
+    const usedTokens = estimateMessageTokens(messages);
+    // Context guard (6-f R-F5 → ROUND-83 → R107-b sync parity): abort if the
+    // assembled context exceeds the model's OWN budget line (window − output
+    // reserve − margin — the same `available` the compaction trigger and the
+    // donut's budget marker use; ONE truth).
+    if (usedTokens > budget.available) {
+      emit?.({ type: "meta.context_limit", sessionId: session.id, tokens: usedTokens, limit: budget.available });
+      guardStop = {
+        code: "CONTEXT_LIMIT",
+        message:
+          `the turn's assembled context exceeded the model's budget for session ${session.id} ` +
+          `(${usedTokens} tokens > ${budget.available} available of a ${budget.contextWindow}-token window) — ` +
+          "start a new session, or compact the older context (POST /sessions/:id/compact)",
+      };
+      break;
+    }
+    // Request guard (6-f R-F6 → R107-b sync parity): abort if > 200 total
+    // requests (OpenRouter rate limits apply even on 0-cost models). The
+    // follow-up message continues from the event log.
+    if (totalRequests > 200) {
+      emit?.({ type: "meta.request_limit", sessionId: session.id, requests: totalRequests, limit: 200 });
+      guardStop = {
+        code: "REQUEST_LIMIT",
+        message: `the turn exceeded 200 provider requests (${totalRequests}) for session ${session.id} — send a follow-up message to continue from where it stopped`,
+      };
+      break;
+    }
+
     const startedAt = Date.now();
     let result: ChatTurnOutput;
     try {
@@ -2063,6 +2118,12 @@ export async function runSingleAgentTurn(
         // ROUND-80 (R80): the CUSTOMIZABLE provider-call ceiling (Settings
         // → General → retry config; 600 s = the old hardcoded default).
         timeoutMs: retrySchedule.timeoutMs,
+        // R107-b (F4): the turn's stop surface threads into the SYNC adapter
+        // too — aiSdkChat combines it with the timeout signal (the streamed
+        // twin's pattern), so an owner Stop / parent cascade / supervisor
+        // stall abort reaches the IN-FLIGHT call instead of waiting out the
+        // full ceiling. Absent (plain callers) → byte-identical behavior.
+        ...(signal !== undefined ? { signal } : {}),
         ...(tools !== undefined ? { tools } : {}),
         // ROUND-50 (R50-c1): the per-send thinking level (chat-completions
         // reasoning.effort injection — see chat.ts buildThinkingFetch).
@@ -2106,6 +2167,19 @@ export async function runSingleAgentTurn(
           : {}),
       });
     } catch (error) {
+      // R107-b (F4 parity): a deliberate stop surfacing as the SDK's abort
+      // throw (the signal now reaches generateText) is NOT a provider
+      // failure — mirror the streamed catch's early signal check so an
+      // owner-stop mid-call routes straight to the loop-top ABORTED path,
+      // never through the ladder's phantom "retrying" frame (an AbortError
+      // would otherwise classify as `timeout` — transient — and burn a rung
+      // before the abort-aware wait releases). The helper reads the LIVE
+      // state: TS narrows `signal.aborted` to false after the loop-top
+      // guard, but the abort lands DURING the awaited call.
+      if (isSignalAborted(signal)) {
+        stoppedBySignal = true;
+        break;
+      }
       const normalized = error instanceof Error ? error : new Error(String(error));
       // ROUND-71 (R71-e2, D5): context-window OVERFLOW RECOVERY — classify
       // the failure; when the provider itself rejected the request as too
@@ -2477,6 +2551,8 @@ export async function runSingleAgentTurn(
 
     // Audit trail: one event per executed tool call, in order (ADR-0010 log).
     for (const call of result.toolCalls) {
+      // R107-b (F5): the TURN-level count for the blank-output guard below.
+      turnToolCalls += 1;
       appendSessionEvent(db, session.id, {
         type: "tool.use",
         agentId: agent.id,
@@ -2704,6 +2780,66 @@ export async function runSingleAgentTurn(
   // user and it will pass the generation"). No-progress loops end through the
   // turn's own caps (maxTurns × maxOuterLoops) with the warnings persisted.
 
+  // ── R107-b (F5): the R80 CONTEXT/REQUEST guard stop, mirrored from the
+  // streamed runner's post-loop exit (the LOOP_GUARD pattern — the
+  // silent-stop fix): persist the honest turn.error (the error card's Retry
+  // re-sends the message; persistTurnError resets the session to `queued` so
+  // it stays retryable), record the real token spend of the completed
+  // iterations, and return the 502 — never the pre-R107 ok:true fallthrough
+  // that ended a sync sub-agent mid-task with no error, no card, and no
+  // retry affordance. Checked BEFORE the no-assistant-event block below: a
+  // guard firing on iteration 0 (the giant-context shape) leaves
+  // lastAssistantEvent null, and that block's generic PROVIDER_ERROR
+  // fallback would misreport the honest code. ──
+  if (guardStop !== null) {
+    persistTurnError(db, {
+      sessionId: session.id,
+      agentId: agent.id,
+      userSeq: userEvent.seq,
+      code: guardStop.code,
+      message: guardStop.message,
+      model,
+      providerId: provider.id,
+      providerError: guardStop.message,
+      keySecrets,
+    });
+    if (lastAssistantEvent !== null && (totalInputTokens > 0 || totalOutputTokens > 0)) {
+      recordUsage(
+        db,
+        {
+          agentId: agent.id,
+          sessionId: session.id,
+          provider: provider.id,
+          model,
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
+          costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+          ts: lastAssistantEvent.ts,
+        },
+        // R92-D: the LAST attempted key (the swap kept it current).
+        activeKeySlot,
+        // ROUND-83 (R83): the turn's real SDK-call count rides the row.
+        { providerCalls: totalRequests, origin: "turn" },
+      );
+    }
+    touchSession(db, session.id);
+    logTurnEnd(session.id, false, Date.now() - syncStartedAt, totalInputTokens, totalOutputTokens);
+    log("warn", "turn.guard_stop", {
+      sessionId: session.id,
+      agentId: agent.id,
+      code: guardStop.code,
+      model,
+      providerId: provider.id,
+    });
+    return {
+      ok: false,
+      status: 502,
+      code: guardStop.code,
+      message: guardStop.message,
+    };
+  }
+
   if (lastAssistantEvent === null) {
     // No iteration produced an assistant event — provider errored on iter 0.
     // ROUND-43: persist the failure into the session timeline (the owner's
@@ -2800,6 +2936,67 @@ export async function runSingleAgentTurn(
         classMessage: lastError.details.classMessage,
         attempts: lastError.details.attempts,
       },
+    };
+  }
+
+  // ── R107-b (F5): the R77 blank-output guard, mirrored from the streamed
+  // runner — a turn whose ENTIRE output is blank (no visible text AND zero
+  // tool calls across the WHOLE turn) is the free-models' whitespace-reply
+  // flake the R107-b review found still live on EVERY sub-agent child: the
+  // sync path returned ok:true with a whitespace assistant message while the
+  // requested work silently never happened. A tool-using turn with no final
+  // text stays legitimate (the tools did the work — the R35 empty-marker
+  // path), and a user STOP can never reach here (aborts exit through the
+  // stoppedBySignal return above). Mirror the loop-guard exit: persist the
+  // honest turn.error (the error card's Retry re-sends the message), record
+  // the real token spend, and return the 502 — never a fake "completed"
+  // empty reply. lastAssistantEvent is non-null here (the null case returned
+  // above) — its content is the LAST iteration's text, and turnToolCalls
+  // counts the whole turn: zero-tool turns break after ONE iteration, so
+  // `turnToolCalls === 0 && lastAssistantEvent.content.trim() === ""` is
+  // exactly the streamed twin's `turnToolCalls === 0 && lastText.trim() === ""`. ──
+  if (turnToolCalls === 0 && lastAssistantEvent.content.trim() === "") {
+    const blankMessage =
+      `the model returned an empty response (no text, no tool calls) for session ${session.id} — resend the message`;
+    const blankProviderError =
+      "empty response — the model produced only whitespace (a free-model flake); the requested work did not happen";
+    persistTurnError(db, {
+      sessionId: session.id,
+      agentId: agent.id,
+      userSeq: userEvent.seq,
+      code: "NO_OUTPUT",
+      message: blankMessage,
+      model,
+      providerId: provider.id,
+      providerError: blankProviderError,
+      keySecrets,
+    });
+    const blankUsage: UsageRecord = {
+      agentId: agent.id,
+      sessionId: session.id,
+      provider: provider.id,
+      model,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
+      costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+      ts: lastAssistantEvent.ts,
+    };
+    recordUsage(db, blankUsage, activeKeySlot, { providerCalls: totalRequests, origin: "turn" });
+    touchSession(db, session.id);
+    logTurnEnd(session.id, false, Date.now() - syncStartedAt, totalInputTokens, totalOutputTokens);
+    log("warn", "turn.blank_output", {
+      sessionId: session.id,
+      agentId: agent.id,
+      model,
+      providerId: provider.id,
+    });
+    return {
+      ok: false,
+      status: 502,
+      code: "NO_OUTPUT",
+      message: blankMessage,
+      details: { providerError: blankProviderError, model, userSeq: userEvent.seq },
     };
   }
 

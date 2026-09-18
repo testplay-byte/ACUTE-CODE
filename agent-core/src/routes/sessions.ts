@@ -88,6 +88,8 @@ import {
   getTurnController,
   notifyTurn,
   abortTurn,
+  registerTurn,
+  unregisterTurn,
 } from "../lib/turn-registry.js";
 import { errorBody } from "./helpers.js";
 
@@ -1134,25 +1136,61 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
     const composer = readComposerSendFields(raw, reply);
     if (!composer.ok) return reply;
 
-    const outcome = await runSingleAgentTurn(
-      { db, keyring, chat },
-      id,
-      content,
-      turnModelOverride,
-      undefined,
-      undefined,
-      composer.value.thinkingLevel,
-      composer.value.attachments,
-    );
-    if (outcome.ok) {
-      return reply.code(200).send({
-        assistantMessage: outcome.assistantMessage,
-        usage: outcome.usage,
-      });
+    // ── R107-b (F1): the CONCURRENT-TURN GATE — the sync twin of the
+    // streamed route's gate. A second send while a turn is LIVE on this
+    // session (registered by the streamed route, this route, or an
+    // orchestrated child turn) is a 409, never a parallel turn: the sync
+    // turn below now REGISTERS itself too (pre-R107 it was invisible to
+    // the registry — ungate-able AND unstoppable), so both send routes and
+    // every child share ONE live-turn truth. The designed mid-turn path is
+    // the QUEUE (loop-top delivery + the pre-flip on the next sync send).
+    if (getTurnController(id) !== undefined) {
+      return reply.code(409).send(
+        errorBody(
+          "CONFLICT",
+          `a turn is already in flight for session ${id} — queue the message instead (POST /sessions/${id}/queue), or stop the running turn first (POST /sessions/${id}/stop)`,
+          { field: "session" },
+        ),
+      );
     }
-    return reply
-      .code(outcome.status)
-      .send(errorBody(outcome.code, outcome.message, outcome.details));
+
+    // R107-b (F1): the sync turn's own REGISTRATION — the route-scoped
+    // AbortController that POST /sessions/:id/stop aborts (the R52-b
+    // shared registry, finally covering the sync path too: a stop aimed at
+    // a sync turn used to be a no-op — abortTurn found no entry). The
+    // signal threads into runSingleAgentTurn: pending approvals deny on
+    // abort (fail-closed) and the outer loop stops BETWEEN iterations with
+    // the honest ABORTED 499 (the R48-e1 semantics the streamed route
+    // always had). No notify — a sync turn has no SSE listener; the queue
+    // route's notifyTurn reports false and the event-log chip owns the
+    // render on the next fold. unregisterTurn is identity-guarded (the
+    // SAME controller), so a stale later registration can never be
+    // silently deleted by an overlapping route finally-block.
+    const abort = new AbortController();
+    registerTurn(id, abort);
+    try {
+      const outcome = await runSingleAgentTurn(
+        { db, keyring, chat },
+        id,
+        content,
+        turnModelOverride,
+        undefined,
+        abort.signal,
+        composer.value.thinkingLevel,
+        composer.value.attachments,
+      );
+      if (outcome.ok) {
+        return reply.code(200).send({
+          assistantMessage: outcome.assistantMessage,
+          usage: outcome.usage,
+        });
+      }
+      return reply
+        .code(outcome.status)
+        .send(errorBody(outcome.code, outcome.message, outcome.details));
+    } finally {
+      unregisterTurn(id, abort);
+    }
   });
   // ROUND-42 → R52-b: explicit stop. The UI's Stop button aborts its local
   // fetch AND calls this — the server-side turn aborts, pending approvals

@@ -8,6 +8,7 @@
 import { apiFetch } from "../api.js";
 import type { CliContext, SessionRow } from "../context.js";
 import { flagString } from "../flags.js";
+import { didYouMean } from "../suggest.js";
 import { trunc } from "../render/tools.js";
 
 /** GET /sessions/:id's enriched row ({...session, events, lastSeq}). */
@@ -50,6 +51,9 @@ const USAGE = `usage:
   acute sessions rm <id>              DELETE the session (204)
   acute sessions rename <id> <title>  PATCH the session title
   acute sessions resume <id>          continue the session in the REPL`;
+
+/** The subcommand list — the did-you-mean pool (R107-c F4). */
+const SUBCOMMANDS: readonly string[] = ["ls", "show", "events", "ctx", "rm", "rename", "resume"];
 
 function limitFlag(ctx: CliContext, fallback: number): number {
   const raw = Number(flagString(ctx.flags, "limit") ?? fallback);
@@ -211,7 +215,9 @@ export async function runSessionsCommand(ctx: CliContext, rest: readonly string[
       return runRepl(ctx);
     }
     default:
-      ctx.stderr(`unknown sessions subcommand: ${sub}\n${USAGE}\n`);
+      ctx.stderr(
+        `unknown sessions subcommand: ${sub}${didYouMean(sub ?? "", SUBCOMMANDS)}\n${USAGE}\n`,
+      );
       return 1;
   }
 }

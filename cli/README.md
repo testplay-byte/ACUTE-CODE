@@ -21,18 +21,22 @@ Build from source once (the bin shim imports `dist/`):
 
 | Command | What |
 |---|---|
-| `acute` | the REPL — slash commands, one status line, approval y/n prompts |
+| `acute` | the REPL — slash commands, one status line, approval y/n + agent-question prompts |
 | `acute -p "prompt"` | one-shot: create a session, stream the reply, exit with the turn's code |
-| `acute sessions ls/show/events/ctx/rm/rename/resume` | session management |
+| `acute sessions ls/show/events/ctx/rm/rename/resume` | session management (`ls`/`events` take `--limit N`) |
 | `acute models [provider]` · `acute models test <id>` | catalog, configured rows, probes |
 | `acute providers` · `acute keys status` | provider rows (hasKey flags — never values) |
+| `acute approvals ls [--status pending]` | the human permission queue (GET /approvals) |
+| `acute approvals <id> approve|deny` | POST the decision (`--remember once\|always`) |
 | `acute config get/set` | `~/.acute/cli.json` — default agent/model/db |
 | `acute status` | portal file + `/health` + both versions |
 | `acute raw <METHOD> <path> [json]` | the authenticated escape hatch |
 
 Global flags: `-p/--print`, `--mode text|json` (NDJSON frame passthrough
 with `cli.session`/`cli.attach`/`cli.exit` lifecycle), `--agent`,
-`--model`, `--session`, `--db`, `--quiet`, `--no-color`, `--auto-approve`.
+`--model`, `--session`, `--db`, `--quiet`, `--no-color`, `--auto-approve`,
+`--version`. Unknown commands/flags get a did-you-mean hint; every
+argument error fires before any sidecar spawn.
 
 ## How it connects (attach-or-spawn)
 
@@ -61,6 +65,16 @@ ACUTE_PROVIDER_OPENROUTER=sk-or-v1-… node cli/bin/acute.mjs -p "hello"
 First press during a running turn: sends `POST /sessions/:id/stop` and
 keeps reading until the `stopped` frame (10s give-up). Second press:
 exit 130. Idle in the REPL: clears the line; double-press exits.
+
+## Approvals & agent questions mid-turn
+
+When the agent asks permission (`approval.requested` frames) or asks you a
+question (`agent-question` frames from the `ask_user` tool), a terminal
+session prompts inline — y/N for approvals, numbered options (or free
+text) for questions — and POSTs the decision. Piped stdin gets the card
+plus the `acute raw POST …` hint instead (nothing blocks on a dead stdin).
+`acute approvals ls` / `acute approvals <id> approve|deny` settle pending
+approvals from any terminal.
 
 ## Tests
 

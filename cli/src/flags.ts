@@ -4,7 +4,16 @@
  * oh-my-pi blueprint: one table, no duplicated usage strings).
  *
  * Global flags (from the design's table): -p/--print, --mode text|json,
- * --agent, --model, --session, --db, --quiet, --no-color, --auto-approve.
+ * --agent, --model, --session, --db, --quiet, --no-color, --auto-approve
+ * (ROUND-107 adds --version).
+ *
+ * ROUND-107 (R107-c-impl, F1): COMMAND_FLAGS — the per-command flag rows.
+ * `parseArgv` alone knows only the GLOBAL table, so a documented flag like
+ * `sessions ls --limit N` used to land in `unknown` → hard error before the
+ * command ever ran. main.ts now re-parses argv with the command's own rows
+ * spliced in (the two-pass parse); the flags stay "validated per command"
+ * (context.ts) — the command module decides which of them its subcommands
+ * actually honor.
  */
 
 /** One row of the flag table. */
@@ -21,6 +30,7 @@ export interface FlagSpec {
 
 export const GLOBAL_FLAGS: readonly FlagSpec[] = [
   { name: "help", short: "h", description: "show this help and exit" },
+  { name: "version", description: "print the CLI version and exit" },
   {
     name: "print",
     short: "p",
@@ -40,6 +50,25 @@ export const GLOBAL_FLAGS: readonly FlagSpec[] = [
   { name: "no-color", description: "disable ANSI colors (also: NO_COLOR env, non-TTY)" },
   { name: "auto-approve", description: "decide approval.requested frames as approved (no prompt)" },
 ] as const;
+
+/** ROUND-107 (F1): extra flag rows a COMMAND accepts beyond the globals —
+ * keyed by command name, spliced into the re-parse in main.ts. Each row is
+ * documented in its command's own usage block (the sessions precedent). */
+export const COMMAND_FLAGS: Readonly<Record<string, readonly FlagSpec[]>> = {
+  sessions: [
+    { name: "limit", value: true, description: "row cap (sessions ls / sessions events)" },
+  ],
+  approvals: [
+    { name: "status", value: true, description: "status filter: pending|approved|denied|expired (approvals ls)" },
+    { name: "remember", value: true, description: "decision memory: once|always (approvals <id> approve)" },
+  ],
+};
+
+/** The extra flag rows for one command ("" table → no extras → no re-parse). */
+export function commandFlagSpecs(command: string | undefined): readonly FlagSpec[] {
+  if (command === undefined) return [];
+  return COMMAND_FLAGS[command] ?? [];
+}
 
 /** The parsed argv: known flags (string | true), unknown flags (for the
  * honest error), and positionals after `--` handling. */

@@ -664,8 +664,14 @@ describe("ROUND-48 (R48-e1): sub-agent codes, signal forwarding, honest aborts",
     );
 
     // The child stopped BETWEEN iterations (i.e., before iteration 0's call).
+    // R107-b (F4) contract update: an already-aborted parent signal is now
+    // caught at acquireSlot's ENTRY check — the child never reserves a slot,
+    // never registers a turn, never calls the provider. The honest line says
+    // "stopped before it started" (the pre-R107 path ran the child turn and
+    // reported a runner-level "aborted" — same essence, this is the cheaper,
+    // more honest shape).
     expect(result.ok).toBe(false);
-    expect(result.output).toContain("aborted");
+    expect(result.output).toContain("stopped before it started");
     expect(models).toEqual([]); // no provider call at all
     expect(getSession(db, result.sessionId!)?.status).toBe("failed");
     // Honest log: the task message landed, and a STOP is not an error —
@@ -738,10 +744,12 @@ describe("ROUND-48 (R48-e1): sub-agent codes, signal forwarding, honest aborts",
     expect(tools.delegate_task).toBeDefined();
 
     // With the signal already aborted, the spawned child must stop before its
-    // first provider call — proof the tool passed toolDeps.signal through.
+    // first provider call — proof the tool passed toolDeps.signal through
+    // (R107-b F4: the acquireSlot entry check catches it — no slot, no turn,
+    // no call).
     const res = await tools.delegate_task.execute({ task: "signal forwarding check" });
     expect(res.ok).toBe(false);
-    expect(res.output).toContain("aborted");
+    expect(res.output).toContain("stopped before it started");
     expect(models).toEqual([]);
   });
 

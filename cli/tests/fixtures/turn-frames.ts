@@ -132,6 +132,29 @@ export const APPROVAL_TURN: readonly TurnFrame[] = [
   { type: "done", usage: { model: "m", inputTokens: 5, outputTokens: 5, costUsd: 0 } },
 ];
 
+/** ROUND-107 (R107-c-impl, F2): an ask_user turn — the agent-question frame
+ * (two questions: numbered options + free text) and its resolution. */
+export const QUESTION_TURN: readonly TurnFrame[] = [
+  {
+    type: "agent-question",
+    sessionId: "s1",
+    questionId: "ask_1",
+    questions: [
+      { question: "Deploy to which environment?", options: ["staging", "production"] },
+      { question: "What should the release tag be?" },
+    ],
+  },
+  {
+    type: "agent-question.resolved",
+    sessionId: "s1",
+    questionId: "ask_1",
+    resolution: "answered",
+    answers: ["staging", "v2.0"],
+    sources: ["option", "custom"],
+  },
+  { type: "done", usage: { model: "m", inputTokens: 5, outputTokens: 5, costUsd: 0 } },
+];
+
 /** The terminal error frame (exit 1). */
 export const ERROR_TURN: readonly TurnFrame[] = [
   { type: "text-delta", delta: "Trying.\n" },

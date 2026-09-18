@@ -9,19 +9,22 @@
  *                  dim 140-char summary;
  *   meta.*       → dim status lines; subagent-status → `[A1] running · …`;
  *   approval     → yellow card (+ y/n in REPL / --auto-approve);
+ *   agent        → yellow question card (+ numbered answers in REPL /
+ *     question     one-shot; the ask_user tool's 10-minute wait);
  *   terminal     → done/stopped/error with the exit-code semantics.
  *
  * Incremental only — nothing is ever re-rendered. `--quiet` keeps the
  * assistant text + terminal errors and drops every meta/card/status line.
  */
 import type { ColorKit } from "../color.js";
-import type { TurnFrame } from "../frames.js";
+import type { AgentAnswerSource, AgentQuestionItem, TurnFrame } from "../frames.js";
 import { createMarkdownRenderer } from "./text.js";
 import { StatusLine } from "./status.js";
 import {
   approvalCard,
   doneLine,
   errorLine,
+  questionCard,
   subagentLine,
   toolCallLine,
   toolResultSummary,
@@ -34,6 +37,19 @@ export interface ApprovalAsk {
   toolName: string;
   argsSummary: string;
   category: string;
+}
+
+/** ROUND-107 (F2): the ask_user ask — the agent-question frame's payload. */
+export interface QuestionAsk {
+  questionId: string;
+  questions: AgentQuestionItem[];
+}
+
+/** ROUND-107 (F2): one answer per question, in order (the resolve route
+ * requires answers.length === questions.length), each tagged option|custom. */
+export interface QuestionAnswer {
+  answers: string[];
+  sources: AgentAnswerSource[];
 }
 
 export interface TurnRendererOptions {
@@ -50,6 +66,10 @@ export interface TurnRendererOptions {
   decideApproval?: (approvalId: string, decision: "approved" | "denied") => Promise<void>;
   /** REPL's y/n ask; absent → the one-shot hint path. */
   promptApproval?: (ask: ApprovalAsk) => Promise<"approved" | "denied" | null>;
+  /** ROUND-107 (F2): POST /agent-questions/:id/resolve (fire-and-forget). */
+  decideQuestion?: (questionId: string, answers: string[], sources: AgentAnswerSource[]) => Promise<void>;
+  /** ROUND-107 (F2): the numbered ask; absent → the one-shot hint path. */
+  promptQuestion?: (ask: QuestionAsk) => Promise<QuestionAnswer | null>;
 }
 
 export interface TurnRenderer {
@@ -116,6 +136,23 @@ export function createTurnRenderer(options: TurnRendererOptions): TurnRenderer {
       });
   };
 
+  /** ROUND-107 (F2): the question twin of `decide`. */
+  const decideQuestion = (questionId: string, answer: QuestionAnswer): void => {
+    const post = options.decideQuestion?.(questionId, answer.answers, answer.sources);
+    if (post === undefined) return;
+    post
+      .then(() => {
+        stderr(kit.dim(`  question ${questionId} answered\n`));
+      })
+      .catch((err: unknown) => {
+        stderr(
+          kit.red(
+            `  question resolve failed: ${err instanceof Error ? err.message : String(err)}\n`,
+          ),
+        );
+      });
+  };
+
   const handleApproval = (frame: ApprovalAsk): void => {
     startLine();
     for (const line of approvalCard(kit, frame)) stderr(`${line}\n`);
@@ -142,6 +179,33 @@ export function createTurnRenderer(options: TurnRendererOptions): TurnRenderer {
       )}\n`,
     );
     stderr(kit.dim("  (or rerun with --auto-approve; the stream stays open until it resolves)\n"));
+  };
+
+  /** ROUND-107 (F2): the agent-question card + the numbered ask (or the
+   * piped hint) — the approval flow's exact shape over the question routes. */
+  const handleQuestion = (frame: QuestionAsk): void => {
+    startLine();
+    for (const line of questionCard(kit, frame)) stderr(`${line}\n`);
+    if (options.promptQuestion !== undefined) {
+      const asked = options.promptQuestion(frame);
+      asked
+        .then((answer) => {
+          if (answer !== null) decideQuestion(frame.questionId, answer);
+          else stderr(kit.dim("  (no answer — the question stays open)\n"));
+        })
+        .catch(() => {
+          stderr(kit.dim("  (prompt failed — the question stays open)\n"));
+        });
+      return;
+    }
+    stderr(
+      `  resolve in another terminal: ${kit.bold(
+        `acute raw POST /agent-questions/${frame.questionId}/resolve '{"answers":["…"]}'`,
+      )}\n`,
+    );
+    stderr(
+      kit.dim("  (the stream stays open until it resolves — 10-minute timeout on the ask)\n"),
+    );
   };
 
   const handle = (frame: TurnFrame): number | undefined => {
@@ -301,6 +365,20 @@ export function createTurnRenderer(options: TurnRendererOptions): TurnRenderer {
       }
       case "approval.requested": {
         handleApproval(frame as unknown as ApprovalAsk);
+        return undefined;
+      }
+      case "agent-question": {
+        handleQuestion(frame as unknown as QuestionAsk);
+        return undefined;
+      }
+      case "agent-question.resolved": {
+        const f = frame as { questionId?: unknown; resolution?: unknown; answers?: unknown };
+        if (!quiet) {
+          startLine();
+          const answers = Array.isArray(f.answers) ? f.answers.map((a) => String(a)).join(", ") : "";
+          const tail = answers !== "" ? ` · ${trunc(answers, 80)}` : "";
+          stderr(kit.dim(`— question ${f.questionId ?? "?"} ${f.resolution ?? "?"}${tail}\n`));
+        }
         return undefined;
       }
       case "approval.resolved": {

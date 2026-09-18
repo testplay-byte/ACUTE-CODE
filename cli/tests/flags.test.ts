@@ -3,11 +3,18 @@
  * (long/short/=/joined forms, `--`, unknown detection) and the --help
  * generation (the single-source-of-truth contract: every flag row MUST
  * appear in the rendered help).
+ *
+ * ROUND-107 (R107-c-impl, F1/F7): the per-command flag rows (COMMAND_FLAGS)
+ * splice into the parse — `sessions ls --limit 5` is now passable — and a
+ * bare value flag stays `true` at the PARSE level but errors in run()
+ * ("flag '--print' needs a value" — main.test.ts covers the run() leg).
  */
 import { describe, expect, it } from "vitest";
 import { renderHelp } from "../src/main.js";
 import {
+  COMMAND_FLAGS,
   GLOBAL_FLAGS,
+  commandFlagSpecs,
   flagBool,
   flagString,
   parseArgv,
@@ -29,7 +36,7 @@ describe("parseArgv (the flags table parser)", () => {
     expect(parseArgv(["--print=hello"]).flags).toEqual({ print: "hello" });
   });
 
-  it("a value flag with NO value degrades to bare true (validated downstream)", () => {
+  it("a value flag with NO value still parses to bare true — run() errors on it (F7)", () => {
     expect(parseArgv(["-p"]).flags).toEqual({ print: true });
     expect(parseArgv(["--model", "--quiet"]).flags).toEqual({ model: true, quiet: true });
   });
@@ -50,6 +57,46 @@ describe("parseArgv (the flags table parser)", () => {
 
   it("a lone `-` is a positional, not a flag", () => {
     expect(parseArgv(["-"]).positionals).toEqual(["-"]);
+  });
+});
+
+describe("the per-command flag rows (F1: COMMAND_FLAGS)", () => {
+  it("commandFlagSpecs resolves a command's extras; unknowns/undefined → none", () => {
+    expect(commandFlagSpecs("sessions").map((s) => s.name)).toEqual(["limit"]);
+    expect(commandFlagSpecs("approvals").map((s) => s.name)).toEqual(["status", "remember"]);
+    expect(commandFlagSpecs("models")).toEqual([]);
+    expect(commandFlagSpecs(undefined)).toEqual([]);
+  });
+
+  it("`sessions ls --limit 5` parses with the spliced-in rows — no unknown, value consumed", () => {
+    const merged = [...GLOBAL_FLAGS, ...commandFlagSpecs("sessions")];
+    const parsed = parseArgv(["sessions", "ls", "--limit", "5"], merged);
+    expect(parsed.flags).toEqual({ limit: "5" });
+    expect(parsed.positionals).toEqual(["sessions", "ls"]);
+    expect(parsed.unknown).toEqual([]);
+  });
+
+  it("the --limit value never displaces a positional; --limit=5 works too", () => {
+    const merged = [...GLOBAL_FLAGS, ...commandFlagSpecs("sessions")];
+    expect(parseArgv(["sessions", "events", "--limit=3"], merged).flags).toEqual({ limit: "3" });
+    expect(parseArgv(["sessions", "events", "--limit", "3", "extra"], merged).positionals).toEqual([
+      "sessions",
+      "events",
+      "extra",
+    ]);
+  });
+
+  it("a TYPO'd command flag stays an honest unknown (the did-you-mean pool)", () => {
+    const merged = [...GLOBAL_FLAGS, ...commandFlagSpecs("sessions")];
+    const parsed = parseArgv(["sessions", "ls", "--limt", "5"], merged);
+    expect(parsed.unknown).toEqual(["--limt"]);
+    expect(parsed.positionals).toEqual(["sessions", "ls", "5"]);
+  });
+
+  it("command flags stay command-scoped: --limit is NOT global", () => {
+    expect(parseArgv(["models", "--limit", "5"]).unknown).toEqual(["--limit"]);
+    expect(GLOBAL_FLAGS.some((s) => s.name === "limit")).toBe(false);
+    expect(Object.keys(COMMAND_FLAGS).includes("sessions")).toBe(true);
   });
 });
 
@@ -81,9 +128,15 @@ describe("--help generation (the single source of truth)", () => {
 
   it("the command table rides the help", () => {
     const help = renderHelp();
-    for (const name of ["sessions", "models", "providers", "keys", "config", "status", "raw"]) {
+    for (const name of ["sessions", "models", "providers", "keys", "approvals", "config", "status", "raw"]) {
       expect(help).toContain(name);
     }
+  });
+
+  it("--version renders its row (the F4 flag)", () => {
+    const help = renderHelp();
+    expect(help).toContain("--version");
+    expect(help).toContain("print the CLI version and exit");
   });
 
   it("renderFlagHelp marks value flags with <value> and aligns short aliases", () => {

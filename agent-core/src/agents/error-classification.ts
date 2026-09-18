@@ -97,6 +97,14 @@ export type RateLimitReason = "quota" | "rate" | "capacity";
 const AUTH_STATUSES = new Set([401, 403]);
 /** Rate-limit status. */
 const RATE_LIMIT_STATUSES = new Set([429]);
+/** R107-b (F9): PAYMENT-REQUIRED statuses — billing exhaustion BY STATUS. A
+ * 402 is what OpenRouter and friends answer when the account's credits are
+ * spent; its bodies ("insufficient credits", "Payment Required") match none
+ * of the class-level patterns below, so pre-R107 they fell to `unknown` →
+ * fail-fast at attempts:1 — exactly the dead end the R105-C quota floor was
+ * built to prevent. Status-only mapping (the AUTH_STATUSES rule): a 402 is
+ * billing regardless of body wording. */
+const PAYMENT_REQUIRED_STATUSES = new Set([402]);
 /** Statuses that unambiguously mean "the request payload is too large".
  * (A bare 400/422 is deliberately NOT overflow-classified: providers use
  * them for schema errors too — the message patterns carry the detection.) */
@@ -462,6 +470,19 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
       class: "rate_limit",
       userMessage: honestUserMessage(message, "rate_limit"),
       rateLimitReason: classifyRateLimitReason(message, status),
+    };
+  }
+  // 2.5. R107-b (F9): payment-required — a 402 maps to rate_limit with the
+  // reason defaulting to "quota" (the allocation/credits are spent BY
+  // STATUS — the body patterns get first say when they name something
+  // finer, but a bare "Payment Required" body is still billing). The quota
+  // reason then rides the R105-C 10-minute floor in the ladder instead of
+  // the pre-R107 `unknown` dead end at attempts:1.
+  if (status !== null && PAYMENT_REQUIRED_STATUSES.has(status)) {
+    return {
+      class: "rate_limit",
+      userMessage: honestUserMessage(message, "rate_limit"),
+      rateLimitReason: classifyRateLimitReason(message, status) ?? "quota",
     };
   }
   // 3. Rate-limit patterns (the deliberate VETO before overflow matching).

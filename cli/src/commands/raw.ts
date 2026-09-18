@@ -4,6 +4,12 @@
  * acute.mjs harness: pipe-safe (HTTP status + target → STDERR, the JSON
  * body → STDOUT) so `acute raw GET /sessions | jq` works with no
  * post-processing. Authenticated by the same Bearer wall as everything else.
+ *
+ * ROUND-107 (R107-c-impl, F10): under --mode json the body prints as ONE
+ * compact line — the data-on-stdout NDJSON contract (it rides the same
+ * stream as the cli.attach/cli.exit lifecycle lines, so a pretty-printed
+ * body used to break every line-oriented consumer). Text mode keeps the
+ * indented, human-friendly form.
  */
 import { apiFetch } from "../api.js";
 import type { CliContext } from "../context.js";
@@ -32,8 +38,12 @@ export async function runRawCommand(ctx: CliContext, rest: readonly string[]): P
     }
   }
   const json = await apiFetch<unknown>(ctx.conn, normalized, path, body);
-  // Pipe-safe: status + target on stderr, pure JSON on stdout.
+  // Pipe-safe: status + target on stderr, pure JSON on stdout. In --mode
+  // json the body is a single compact NDJSON line (F10); in text mode it
+  // stays indented for the human eye.
   ctx.stderr(`${normalized} ${ctx.conn.baseUrl}/api/v1${path} → 2xx\n`);
-  ctx.stdout(`${JSON.stringify(json ?? null, null, 1)}\n`);
+  ctx.stdout(
+    `${ctx.json ? JSON.stringify(json ?? null) : JSON.stringify(json ?? null, null, 1)}\n`,
+  );
   return 0;
 }
