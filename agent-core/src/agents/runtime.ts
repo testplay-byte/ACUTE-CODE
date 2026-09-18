@@ -92,6 +92,8 @@ import { getIndexSummary } from "../storage/index.js";
 import { maybeAutoIndexProject } from "../storage/auto-index.js";
 // ROUND-44 (R44-a): the project memory digest for prompt injection.
 import { memoryDigest } from "../storage/memory.js";
+// R105-C: the provider lessons write (rate-limit reason telemetry).
+import { recordProviderLesson } from "../storage/provider-lessons.js";
 // ROUND-49: the memory master switch (Settings → Advanced).
 import { getMemorySettings, getDebugSettings, getRetrySettings, getThinkingLoopSettings } from "../storage/settings.js";
 import { getCatalogModel, lookupPricing, resolveModelReasoningSupport } from "../storage/models.js";
@@ -959,6 +961,7 @@ import {
 import { isTransientApiFailure } from "./error-classification.js";
 import {
   clearActiveRetryWait,
+  effectiveRungWaitMs,
   formatRetryWaitMs,
   registerActiveRetryWait,
   resolveRetrySchedule,
@@ -2116,6 +2119,14 @@ export async function runSingleAgentTurn(
       // line (the same rule providerError already follows; a raw provider
       // body quoting the key must never reach a frame or an envelope).
       const classMessage = scrubSecrets(classified.userMessage, keySecrets);
+      // R105-C: the LESSON write — every rate_limit whose body/status says
+      // WHY (quota | rate | capacity) upserts the (provider, model, reason)
+      // row (migration 0039). Placed BEFORE the key-swap branch so a lesson
+      // lands even when a pool juggle handles the failure; write-only
+      // telemetry (recordProviderLesson never throws), no UI this round.
+      if (classified.class === "rate_limit" && classified.rateLimitReason !== undefined) {
+        recordProviderLesson(db, provider.id, model, classified.rateLimitReason);
+      }
       // ── ROUND-96 (R96-B): a POST-COMPLETION failure must not fail the
       // turn. The owner's exact report: "The agent completed its task
       // properly and finished the chat properly but after it completed it,
@@ -2278,7 +2289,12 @@ export async function runSingleAgentTurn(
         // is the COMPOSED system's property.
         const scheduleMs = retrySchedule.ladderMs[providerRetries - 1];
         const retryAfterMs = classified.class === "rate_limit" ? extractRetryAfterMs(normalized) : null;
-        const waitMs = retryAfterMs ?? scheduleMs;
+        // R105-C: the reason-aware rung — a QUOTA rate limit (daily caps,
+        // free-models-per-day, credits) floors the wait at 10 minutes
+        // (retrying in 90 s against a daily cap just re-burns the attempt);
+        // every other reason keeps the pre-R105 semantics byte-identical
+        // (Retry-After replaces the rung when present, else the schedule).
+        const waitMs = effectiveRungWaitMs(scheduleMs, retryAfterMs, classified.rateLimitReason);
         const attempt = providerRetries + 1;
         const emitRetry = (remainingMs: number): void => {
           emit?.({
@@ -2290,6 +2306,10 @@ export async function runSingleAgentTurn(
             remainingMs,
             retryAt: Date.now() + remainingMs,
             errorClass: classified.class,
+            // R105-C: the additive reason field (quota | rate | capacity —
+            // present only on rate_limit) so the retry card / future
+            // ModelsProviders surfacing can say WHY, not just that.
+            rateLimitReason: classified.rateLimitReason,
             // R78: the scrubbed real text (see the catch's classMessage const).
             classMessage,
             // R78: the provider's REAL scrubbed error text (unwrapped from
@@ -2317,6 +2337,10 @@ export async function runSingleAgentTurn(
           totalAttempts: retrySchedule.totalAttempts,
           waitMs,
           errorClass: classified.class,
+          // R105-C: the reason rides the structured log (and the lessons
+          // row) so post-hoc analysis can separate quota burn from
+          // throttling without re-reading provider bodies.
+          rateLimitReason: classified.rateLimitReason,
         });
         registerActiveRetryWait({
           sessionId: session.id,
@@ -3622,6 +3646,14 @@ export async function runStreamedAgentTurn(
       // line (the same rule providerError already follows; a raw provider
       // body quoting the key must never reach a frame or an envelope).
       const classMessage = scrubSecrets(classified.userMessage, keySecrets);
+      // R105-C: the LESSON write — every rate_limit whose body/status says
+      // WHY (quota | rate | capacity) upserts the (provider, model, reason)
+      // row (migration 0039). Placed BEFORE the key-swap branch so a lesson
+      // lands even when a pool juggle handles the failure; write-only
+      // telemetry (recordProviderLesson never throws), no UI this round.
+      if (classified.class === "rate_limit" && classified.rateLimitReason !== undefined) {
+        recordProviderLesson(db, provider.id, model, classified.rateLimitReason);
+      }
       // ── ROUND-96 (R96-B): a POST-COMPLETION failure must not fail the
       // turn (the streamed twin of the sync runner's branch). The owner's
       // exact report: "The agent completed its task properly and finished
@@ -3879,7 +3911,10 @@ export async function runStreamedAgentTurn(
         // is the COMPOSED system's property.
         const scheduleMs = retrySchedule.ladderMs[providerRetries - 1];
         const retryAfterMs = classified.class === "rate_limit" ? extractRetryAfterMs(normalized) : null;
-        const waitMs = retryAfterMs ?? scheduleMs;
+        // R105-C: the reason-aware rung (see the streamed catch's identical
+        // block for the full rationale) — quota floors at 10 minutes; every
+        // other reason is byte-identical pre-R105 behavior.
+        const waitMs = effectiveRungWaitMs(scheduleMs, retryAfterMs, classified.rateLimitReason);
         const attempt = providerRetries + 1;
         const emitRetry = (remainingMs: number): void => {
           emit({
@@ -3891,6 +3926,9 @@ export async function runStreamedAgentTurn(
             remainingMs,
             retryAt: Date.now() + remainingMs,
             errorClass: classified.class,
+            // R105-C: the additive reason field (quota | rate | capacity —
+            // present only on rate_limit).
+            rateLimitReason: classified.rateLimitReason,
             // R78: the scrubbed real text (see the catch's classMessage const).
             classMessage,
             // R78: the provider's REAL scrubbed error text (unwrapped from
@@ -3918,6 +3956,10 @@ export async function runStreamedAgentTurn(
           totalAttempts: retrySchedule.totalAttempts,
           waitMs,
           errorClass: classified.class,
+          // R105-C: the reason rides the structured log (and the lessons
+          // row) so post-hoc analysis can separate quota burn from
+          // throttling without re-reading provider bodies.
+          rateLimitReason: classified.rateLimitReason,
         });
         registerActiveRetryWait({
           sessionId: session.id,

@@ -3424,6 +3424,13 @@ export type StreamTurnEvent =
       remainingMs: number;
       retryAt: number;
       errorClass: string;
+      /** R105-C: WHY a rate_limit fired (quota | rate | capacity) — present
+       * only when errorClass === "rate_limit" AND the provider's own
+       * body/status said which. Additive optional: older frames simply lack
+       * it (and non-rate failures always will). Surfacing in the retry card
+       * is R106 work; the field rides the wire now so the reason is never
+       * lost between the classifier and any future consumer. */
+      rateLimitReason?: "quota" | "rate" | "capacity";
       classMessage: string;
       message: string;
       providerError?: string;

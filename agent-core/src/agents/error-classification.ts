@@ -67,7 +67,28 @@ export interface ProviderErrorClassification {
   /** Class-specific honest one-liner (the "classified line" threaded into
    * the PROVIDER_ERROR detail — never a raw provider dump). */
   userMessage: string;
+  /** ROUND-105 (R105-C): WHY a rate_limit fired — the REASON taxonomy
+   * (quota | rate | capacity), present ONLY on class === "rate_limit" and
+   * ONLY when the provider's own body/status says which (undefined = the
+   * honest "it's a rate limit but the body doesn't say why" — the ladder
+   * then keeps the default schedule unchanged). The reason feeds the
+   * reason-aware rung floor (lib/retry.ts effectiveRungWaitMs: a QUOTA
+   * cannot be retried in 90 s — the floor jumps the short rungs to 10 min),
+   * the provider lessons table (migration 0039), and the meta.retry frame's
+   * additive field. Modeled on the oh-my-pi rate-limit taxonomy study
+   * (MIT; docs/planning/OMP-ADOPTION-ROADMAP.md #3). */
+  rateLimitReason?: RateLimitReason;
 }
+
+/** ROUND-105 (R105-C): the rate-limit REASON — the taxonomy the retry
+ * ladder and the lessons table key on. "quota" = the ACCOUNT/model's
+ * allocation is spent (daily/monthly caps, credits, free-tier-per-day);
+ * waiting seconds cannot heal it, only the long rungs (or a key swap) can.
+ * "rate" = classic RPM/TPM/per-second throttling (waiting heals it, the
+ * default schedule is right, a provider Retry-After is honored).
+ * "capacity" = the model/provider is overloaded/at capacity right now
+ * (medium waits; Retry-After honored). */
+export type RateLimitReason = "quota" | "rate" | "capacity";
 
 /** Auth statuses — BY STATUS ONLY (cline's rule: matching message text for
  * 401/403 would misfire on provider bodies that merely quote such words).
@@ -102,6 +123,56 @@ const RATE_LIMIT_PATTERNS: readonly RegExp[] = [
   /\btoo\s+many\s+requests\b/i,
   /\b(?:requests|tokens|TPM|RPM|quota)[ _-]?(?:limit|exceeded|exhausted)\b/i,
 ];
+
+/** ROUND-105 (R105-C): message shapes that mean the rate limit is a QUOTA
+ * (the allocation itself is spent — the R105 free-model benchmark's core
+ * hazard: OpenRouter's "Rate limit exceeded: free-models-per-day. Add
+ * $credits…" arrives as a 429 whose Retry-After-less body would otherwise
+ * ride the default 90-second rung four times before reaching a rung that
+ * can actually outlast a daily cap). Checked FIRST — the specific shapes
+ * must beat RATE_LIMIT_PATTERNS' generic "rate limit". */
+const RATE_LIMIT_QUOTA_PATTERNS: readonly RegExp[] = [
+  // OpenRouter's literal free-tier daily cap (the owner's free-model path).
+  /\bfree[- ]models[- ]per[- ]day\b/i,
+  // "daily request limit", "daily usage cap", "your daily limit"…
+  /\bdaily\s+(?:request\s+|usage\s+|rate[ _-]?limit[ _-]?)?(?:limit|quota|cap)s?\b/i,
+  /\b(?:monthly|per[- ]month)\s+(?:request\s+|usage\s+)?(?:limit|quota|cap)s?\b/i,
+  /\bexceeded\s+your\s+(?:daily|monthly)\b/i,
+  /\bquota[ _-]?(?:exceeded|exhausted|reached|spent)\b/i,
+  // The credits family (Anthropic/OpenRouter billing exhaustion shapes).
+  /\b(?:insufficient|out\s+of)\s+(?:credits?|balance|funds)\b/i,
+  /\bcredits?[ _-]?(?:balance|allowance)[ _-]?(?:is[ _-]?)?(?:too\s+low|exhausted|insufficient|depleted)\b/i,
+];
+
+/** ROUND-105 (R105-C): message shapes that mean the failure is CAPACITY
+ * (the model/provider is overloaded right now — not the account's fault,
+ * not a per-second throttle). Checked between quota and the generic rate
+ * shapes. */
+const RATE_LIMIT_CAPACITY_PATTERNS: readonly RegExp[] = [
+  /\bat\s+capacity\b/i,
+  /\b(?:provider|model|server|service)[ _-]?is[ _-]?overloaded\b/i,
+  /\boverloaded\b/i,
+  /\bcapacity[ _-]?(?:exceeded|exhausted|reached)\b/i,
+];
+
+/** ROUND-105 (R105-C): WHY did a rate_limit fire? Pure pattern match over
+ * the (already-unwrapped) provider body + status — quota first (the
+ * specific allocation shapes), then capacity (overload shapes), then the
+ * generic rate shapes (RPM/TPM/per-second/too-many-requests/"rate limit").
+ * undefined when nothing matches: the body said "rate limit" but not WHY —
+ * the honest answer, and the ladder keeps the default schedule for it.
+ * NOTE the deliberate scope: this only ever REFINES a classification that
+ * already landed on class === "rate_limit" (429 or a rate-limit pattern);
+ * a 503-overloaded stays class "network" exactly as today — no existing
+ * class ever changes because of the reason. */
+export function classifyRateLimitReason(message: string, status: number | null): RateLimitReason | undefined {
+  if (RATE_LIMIT_QUOTA_PATTERNS.some((re) => re.test(message))) return "quota";
+  if (RATE_LIMIT_CAPACITY_PATTERNS.some((re) => re.test(message))) return "capacity";
+  // The generic rate shapes — including the bare "rate limit" wording the
+  // classifier itself matched on, and 429s whose bodies say nothing more.
+  if (RATE_LIMIT_PATTERNS.some((re) => re.test(message)) || status === 429) return "rate";
+  return undefined;
+}
 
 /** ROUND-96 (R96-B, the owner's report: "The agent completed its task
  * properly and finished the chat properly but after it completed it, it said
@@ -387,11 +458,19 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
     return { class: "auth", userMessage: honestUserMessage(message, "auth") };
   }
   if (status !== null && RATE_LIMIT_STATUSES.has(status)) {
-    return { class: "rate_limit", userMessage: honestUserMessage(message, "rate_limit") };
+    return {
+      class: "rate_limit",
+      userMessage: honestUserMessage(message, "rate_limit"),
+      rateLimitReason: classifyRateLimitReason(message, status),
+    };
   }
   // 3. Rate-limit patterns (the deliberate VETO before overflow matching).
   if (RATE_LIMIT_PATTERNS.some((re) => re.test(message))) {
-    return { class: "rate_limit", userMessage: honestUserMessage(message, "rate_limit") };
+    return {
+      class: "rate_limit",
+      userMessage: honestUserMessage(message, "rate_limit"),
+      rateLimitReason: classifyRateLimitReason(message, status),
+    };
   }
   // 4. Context-window overflow (message patterns or the 413 payload-too-large
   //    status — a bare 400/422 is deliberately not overflow-classified).

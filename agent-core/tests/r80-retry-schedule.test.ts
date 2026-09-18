@@ -253,7 +253,12 @@ const summarizerChat: ChatFn = async () => ({
 });
 
 function rateLimitError(): Error {
-  const err = new Error("429 Too Many Requests: rate limit exceeded (free-models-per-day)");
+  // R105-C note: deliberately a NON-quota rate body ("rate limit exceeded",
+  // no allocation wording) — this fixture's job is to pin the SETTINGS-
+  // driven rungs (0 ms / 0.01 min), and a quota-shaped body would floor
+  // both rungs at the 10-minute R105-C quota floor (see
+  // tests/r105-rate-limit-reason.test.ts for that path's coverage).
+  const err = new Error("429 Too Many Requests: rate limit exceeded");
   (err as Error & { statusCode?: number }).statusCode = 429;
   return err;
 }

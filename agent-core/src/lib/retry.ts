@@ -230,6 +230,46 @@ export function describeRetrySchedule(schedule: ResolvedRetrySchedule): string {
   return schedule.ladderMs.map((ms) => formatRetryWaitMs(ms)).join(", ");
 }
 
+/* ── ROUND-105 (R105-C): the rate-limit REASON-aware rung floor ──────────── */
+
+/** The QUOTA floor: a rate-limit whose REASON is "quota" (daily caps,
+ * free-models-per-day, credits exhausted — see error-classification.ts)
+ * cannot be healed by the default schedule's short rungs (the R105
+ * free-model benchmark: OpenRouter's daily-cap 429 would ride 90 s → 5 min
+ * rungs that re-burn attempts against a cap that resets at MIDNIGHT). The
+ * floor jumps every quota rung to AT LEAST 10 minutes — the owner's ladder
+ * itself says 10 min is the first "patient" rung — while rate/capacity/
+ * unknown reasons keep the exact R75/R80 behavior (additive-only: the
+ * default path is byte-identical when the reason is undefined). */
+export const RATE_LIMIT_QUOTA_FLOOR_MS = 600_000;
+
+/** The reason hint effectiveRungWaitMs takes — the classification's
+ * `rateLimitReason` ("quota" | "rate" | "capacity") or undefined. */
+export type RetryReasonHint = "quota" | "rate" | "capacity" | undefined;
+
+/**
+ * The reason-aware rung wait (R105-C). Pure; the runtime's two catch
+ * blocks call this where they used to write `retryAfterMs ?? scheduleMs`
+ * directly:
+ *   · reason === "quota" → max(schedule, Retry-After, the 10-min floor) —
+ *     a spent allocation is never retried early, even when the provider
+ *     optimistically says "Retry-After: 5" (a daily cap has no meaningful
+ *     per-request Retry-After); a LONGER provider Retry-After still wins.
+ *   · any other reason (rate / capacity / undefined) → the pre-R105
+ *     behavior, byte-identical: the provider's Retry-After replaces the
+ *     schedule rung when present, else the schedule rung stands.
+ */
+export function effectiveRungWaitMs(
+  scheduleMs: number,
+  retryAfterMs: number | null,
+  reason: RetryReasonHint,
+): number {
+  if (reason === "quota") {
+    return Math.max(scheduleMs, retryAfterMs ?? 0, RATE_LIMIT_QUOTA_FLOOR_MS);
+  }
+  return retryAfterMs ?? scheduleMs;
+}
+
 /* ── The active-wait registry (supervisor interplay) ───────────────────────── */
 
 export interface ActiveRetryWait {

@@ -215,6 +215,9 @@ describe("openDatabase", () => {
       // ROUND-98 (R98-F3): search_symbols joins the allowlist vocabulary
       // (the search_code companion rule — the symbol-index query leg).
       { version: 38, name: "0038_search_symbols_tool.sql" },
+      // ROUND-105 (R105-C): the provider lessons table — the rate-limit
+      // REASON telemetry (write-only this round; the R106 surfacing reads it).
+      { version: 39, name: "0039_provider_lessons.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

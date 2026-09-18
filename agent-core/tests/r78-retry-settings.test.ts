@@ -228,8 +228,14 @@ const summarizerChat: ChatFn = async () => ({
   toolCalls: [],
 });
 
-/** A 429 with the REAL OpenRouter body the round was designed around. */
-const rateLimitError = (): Error => new Error("Rate limit exceeded: free-models-per-day. Add 10 credits to get more");
+/** A 429 with a REAL rate-shaped body. R105-C note: the original fixture
+ * ("free-models-per-day. Add 10 credits…") was a QUOTA body — exactly the
+ * shape the R105-C reason taxonomy floors at 10 minutes — and these
+ * ladder-gating tests ride rung 1 (0 ms) to recover immediately, so the
+ * floor would turn them into 10-minute hangs. The quota-floor path has its
+ * own coverage in tests/r105-rate-limit-reason.test.ts (including the
+ * run-level integration leg). */
+const rateLimitError = (): Error => new Error("Rate limit exceeded: 20 requests per minute. Slow down to get more");
 
 function setup(name: string): { sessionId: string; keyring: ProviderKeyring } {
   const project = createProject(db, { name, rootPath: join(tempDir, name) });
@@ -267,15 +273,15 @@ describe("R78: the ladder gating in runStreamedAgentTurn", () => {
       expect(outcome.code).toBe("PROVIDER_ERROR");
       expect(outcome.details?.attempts).toBe(1);
       expect(outcome.details?.errorClass).toBe("rate_limit");
-      expect(String(outcome.details?.classMessage)).toContain("free-models-per-day");
-      expect(String(outcome.details?.providerError)).toContain("free-models-per-day");
+      expect(String(outcome.details?.classMessage)).toContain("20 requests per minute");
+      expect(String(outcome.details?.providerError)).toContain("20 requests per minute");
       expect(String(outcome.message)).not.toContain("auto-retry ladder exhausted");
     }
     // The persisted turn.error carries the same honest payload.
     const error = listSessionEvents(db, sessionId).find((e) => e.type === "turn.error");
     expect(error).toBeDefined();
     expect((error!.payload as Record<string, unknown>).attempts).toBe(1);
-    expect(String((error!.payload as Record<string, unknown>).providerError)).toContain("free-models-per-day");
+    expect(String((error!.payload as Record<string, unknown>).providerError)).toContain("20 requests per minute");
   });
 
   it("autoRetryRateLimit=true (the default) → the meta.retry frame IS present and carries providerError with the REAL text", async () => {
@@ -303,8 +309,8 @@ describe("R78: the ladder gating in runStreamedAgentTurn", () => {
     expect(retryFrames[0]?.errorClass).toBe("rate_limit");
     // R78: the frame carries the REAL scrubbed provider text — the live
     // retry card shows what the API actually said.
-    expect(String(retryFrames[0]?.providerError)).toContain("free-models-per-day");
-    expect(String(retryFrames[0]?.classMessage)).toContain("free-models-per-day");
+    expect(String(retryFrames[0]?.providerError)).toContain("20 requests per minute");
+    expect(String(retryFrames[0]?.classMessage)).toContain("20 requests per minute");
     // No error persisted — the immediate rung recovered.
     expect(listSessionEvents(db, sessionId).some((e) => e.type === "turn.error")).toBe(false);
   });

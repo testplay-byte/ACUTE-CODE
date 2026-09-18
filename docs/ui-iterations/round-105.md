@@ -316,6 +316,61 @@ The findings feed directly into the adoption roadmap (the dialect work
 converts tool-call-failing free models into working ones; the taxonomy
 work routes the rate-limit failures honestly).
 
+### E — the first oh-my-pi adoption: the rate-limit REASON taxonomy (R105-C)
+
+The adoption roadmap's R105-B item, implemented this round (the other
+R105 item — the tool-call DIALECTS — is deliberately deferred to a focused
+next round: it is the roadmap's M-L effort and "quality over speed" wins):
+
+- **`agents/error-classification.ts`**: the new `RateLimitReason` taxonomy
+  (`quota` | `rate` | `capacity`) + the pure
+  `classifyRateLimitReason(message, status)` — quota shapes first
+  (OpenRouter's literal `free-models-per-day`, daily/monthly caps, quota
+  exhausted, the credits family), then capacity (at capacity / overloaded
+  / capacity exceeded), then the generic rate shapes (RPM/TPM,
+  too-many-requests, bare 429). `ProviderErrorClassification` gains the
+  additive `rateLimitReason?` field, threaded at both rate_limit return
+  sites — and ONLY there: no existing class ever changes (a 503-overloaded
+  stays `network` exactly as before — the reason only ever REFINES an
+  existing rate_limit classification).
+- **`lib/retry.ts`**: `effectiveRungWaitMs(scheduleMs, retryAfterMs,
+  reason)` — a QUOTA floors the wait at the new
+  `RATE_LIMIT_QUOTA_FLOOR_MS` (10 minutes — the owner's own ladder's
+  first "patient" rung): the free-model benchmark's core hazard
+  (OpenRouter's daily-cap 429 riding 90-second rungs that re-burn attempts
+  against a cap that resets at midnight) can no longer happen. A LONGER
+  provider Retry-After still wins; rate/capacity/undefined keep the
+  pre-R105 semantics byte-identically.
+- **`runtime.ts`** (both catch blocks — the streamed turn AND the child
+  runner): the ladder's `retryAfterMs ?? scheduleMs` becomes
+  `effectiveRungWaitMs(...)`; the `meta.retry` frame gains the additive
+  `rateLimitReason` field (typed in `src/lib/api.ts`; the retry card's
+  reason surfacing is R106 work — the field rides the wire now so the
+  reason is never lost); the `provider.retry_ladder` log line carries it.
+- **Migration `0039_provider_lessons.sql`** + `storage/provider-lessons.ts`
+  (the oh-my-pi "lessons learned" pattern): every rate-limit-with-reason
+  upserts `(provider, model, reason) → count + first/last ts` — the
+  honest, queryable memory of what actually fails on the owner's machine,
+  ready for the R106 ModelsProvidersTab surfacing and the roles/fallback
+  chain seeding. Write-only this round (no UI, no routes — the
+  design-audit ratchet untouched); `recordProviderLesson` never throws
+  (the telemetry rule: a failed lesson write must never take a turn down).
+- **Tests** (`tests/r105-rate-limit-reason.test.ts`, 16 cases): the
+  taxonomy's pattern table (quota/capacity/rate/undefined + the
+  specific-first ordering), the classification threading (including the
+  "non-rate classes never carry a reason" pin), the floor's unit table,
+  the storage upsert + never-throws, and the RUN-LEVEL integration leg —
+  a real streamed turn whose chat throws the owner's literal
+  `free-models-per-day` body sees its meta.retry frame floored at 10
+  minutes EVEN with a customized 0-ms rung (an AbortSignal escapes the
+  wait; the documented abort self-correction — the next call routes to
+  the honest ABORTED outcome — is pinned as 2 calls, not a hang).
+- **The honest re-pins**: the R80/R78 fixtures that rode rung 1 (0 ms)
+  with quota-shaped bodies moved to rate-shaped bodies (their purpose is
+  the SETTINGS-driven rungs and the ladder gating — a quota body would
+  now floor them into 10-minute hangs; the quota path has its own
+  coverage); the storage test's migration list pin gained 0039.
+
 ## §3 Verification
 
 - **In-sandbox (true exit codes, no pipes — the R104 lesson)**: lint 0,
