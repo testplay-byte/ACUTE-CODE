@@ -231,10 +231,22 @@ All run in-sandbox on the restored workspace, before any commit:
   discard, the staleness sweep, and the re-pinned two-stage
   rejected-invoke journey). `tsc --noEmit` clean.
 - **eslint .** clean; **license-audit** clean (247 production
-  dependencies); **design-audit** at baseline; **docs:check** 223 docs,
-  0 failures, 0 warnings; **version ×4** at 0.101.0
-  (`version.mjs check` green); the update suites re-run GREEN after the
-  version bump (the R102-addendum discipline — a bump is a code change).
+  dependencies); **design-audit** re-pinned R2 1522→1526 — four
+  documented ladder steps (the StagedDownloadRow's four text elements,
+  each the About card's established 11px chrome step every sibling line
+  uses); **docs:check** 223 docs, 0 failures, 0 warnings; **version ×4**
+  at 0.101.0 (`version.mjs check` green); the update suites re-run GREEN
+  after the version bump (the R102-addendum discipline — a bump is a code
+  change).
+- **CI-caught hotfix #1 (the R100 pattern, live again):** the first
+  push's `verify` job failed on exactly the design-audit ratchet — R2
+  +4 — because the in-sandbox gate had been checked through a pipe
+  (`node scripts/design-audit.mjs | tail -3; echo $?`) whose `$?`
+  captured TAIL's exit code, not the audit's (the audit had been failing
+  red the whole time). Fixed by the honest re-pin above + the lesson
+  below; the tag was then moved to the fixed commit and both workflows
+  re-dispatched (the R101 hotfix re-tag pattern; the resumable publisher
+  skips the byte-identical assets it already banked).
 - **The Rust leg**: no local toolchain survives the sandbox reset (the
   R102 rustup was lost with `/home/z/repos`), so CI's cargo check is the
   compile gate — the R100 pattern. The round's discipline applied: the
@@ -299,7 +311,17 @@ All run in-sandbox on the restored workspace, before any commit:
 - **The sandbox reset lost the R102 rustup install** — the Rust leg rode
   CI's cargo check again (the R100 pattern). The compensations that held
   the line: the cfg-paren sweep, the brace-balance check, and writing
-  every failure path as a named, mapped case before the happy path.
+  every failure path as a named, mapped case before the happy path. Both
+  rust jobs (x64 + arm64) were green on the FIRST push — the compile
+  gamble paid off.
+- **`cmd | tail; echo $?` reports TAIL's exit code** — the round's own
+  CI-caught miss: the design-audit gate "passed" in-sandbox because the
+  pipe swallowed the audit's exit 1 (the audit's failure text was
+  printed, read as informational, and the `EXIT:0` came from `tail`).
+  Every gate check that matters must read the command's own exit code —
+  `set -o pipefail`, a temp variable, or no pipe at all. The audit
+  ratchet also proved (again) its worth as the ratchet: +4 px-literal
+  steps cannot slip through CI even when the human review did.
 
 ## §6 What ships to the owner
 

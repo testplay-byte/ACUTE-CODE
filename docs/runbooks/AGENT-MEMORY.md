@@ -1338,3 +1338,12 @@ sweep + a brace-balance check on the rewritten file + writing every
 failure path as a named mapped case BEFORE the happy path (the failure
 map is the design review). CI's cargo check on both platforms is the
 gate — write for the reviewer who cannot run the code.
+(e) `cmd | tail; echo $?` REPORTS TAIL'S EXIT CODE — READ THE COMMAND'S OWN
+EXIT FOR EVERY GATE. The R104 design-audit gate "passed" in-sandbox while
+failing red: the pipe's `$?` captured tail's zero, and the audit's failure
+TEXT was skimmed as informational. CI caught it in minutes (the ratchet
+doing exactly its job — +4 px-literal steps cannot pass even when the
+human review did). The fix discipline: gates are checked with their OWN
+exit code (no pipe, a temp variable, or pipefail) — and when a gate's
+output prints a failure table, the table is a failure regardless of what
+the echo beside it claims.
