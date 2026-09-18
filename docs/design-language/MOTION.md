@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-103 -->
+<!-- last-reviewed: 2026-09-18 round-107 -->
 # Motion — the animation grammar
 
 Serves DESIGN-SYSTEM §4 (motion). Owner direction (round-98): "animations
@@ -32,7 +32,7 @@ animations documented for everything."
 | quick | 150–200ms | dropdowns (scale-0.97 origin), collapsible height, popover sections, window-control responses |
 | base | 250–350ms | panel width, message enter (y+12, 350ms), wizard step transitions (320ms) |
 | deliberate | 400–500ms | ambient glows, step-indicator morphs |
-| continuous | ∞ | thinking dots, streaming caret, working timer (the only loops) |
+| continuous | ∞ | thinking dots, streaming caret, working timer, the wizard's ambient float set (4.5–5.5s) — and the chrome sheen pass below (the only loops) |
 
 ## 3. The keyframe registry (src/index.css)
 
@@ -42,6 +42,7 @@ animations documented for everything."
 | `auto-scroll` | continuous | scrollbars appear only while scrolling (`useScrollFade`) |
 | wizard step/fade set | base/deliberate | see WIZARD-DNA §3 |
 | `ac-caret` / `ac-ellipsis` | continuous | stream caret, retry "…" — R99-B: the chat answer's caret is `ac-caret-pulse` (2px bar, 1s ease opacity 1↔0.4); the hard `ac-caret-blink` stays for SubAgentPanel's terminal-style rows |
+| `ac-chrome-pass` | continuous (9s ambient) | R107-g: the liquid-chrome sheen — a soft diagonal highlight band sweeps across a signature surface once per 9s cycle (38% sweep, then rest), transform-only, prefers-reduced-motion collapses to clean static metal (the band hides). Signature surfaces ONLY: the wizard's primary CTA + hero metal block. Never working-UI buttons (rule 3). |
 | line-reveal | base | streamed line entrance |
 | pixel-stream | quick | raster/image chunk reveal |
 | Radix dialog set | quick | overlays (base transform = end-state — lesson #30) |
@@ -64,6 +65,7 @@ animations documented for everything."
 | Tool-line expand | height 200ms + icon chevron rotate 90°, 150ms |
 | Toggle switch | track fill 150ms, thumb translate 150ms, both `ease` |
 | Window controls (round-98 C1) | see WINDOW-CONTROLS.md — tint shift + scale 0.96 press + icon nudge |
+| Composer chrome glint (R107-g) | the `.composer-shell::before` reflective hairline rests at 35% glint and brightens to full on `:focus-within` — opacity-only, 200ms. The R105-B accent edge + halo stay; the chrome is the jewelry on top. |
 | Toast enter/exit | y-slide 200ms, exit fade |
 | Jump-to-latest pill | frosted pill, opacity 150ms on scroll-need |
 

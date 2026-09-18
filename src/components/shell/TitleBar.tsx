@@ -237,7 +237,12 @@ export function TitleBar() {
       // R100-F: the bar's radius snaps 14→16px (rounded-2xl — the panel tier
       // the sidebar + top-level cards ride); the identity button's chip
       // snaps 10→8px (rounded-lg, the buttons tier).
-      className="flex h-10 w-full shrink-0 select-none items-center justify-between rounded-2xl border-[1.5px] backdrop-blur"
+      // R107-g (the clay/chrome round): `relative` + `ac-chrome-edge` — the
+      // liquid-chrome reflective hairline along the bar's top edge (the
+      // light-catching glint on the app's literal chrome; index.css pattern
+      // class over the --ac-chrome-* vars — the hairline is pointer-events:
+      // none, so the drag region keeps working through it).
+      className="relative flex h-10 w-full shrink-0 select-none items-center justify-between rounded-2xl border-[1.5px] backdrop-blur ac-chrome-edge"
       style={{
         // Translucent frosted chrome over the app's ambient background (the
         // color-mix idiom from index.css/ActionButton) — never a hard edge.

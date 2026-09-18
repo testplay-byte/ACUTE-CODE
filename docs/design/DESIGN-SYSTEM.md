@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-101 -->
+<!-- last-reviewed: 2026-09-18 round-107 -->
 # ACUTE-CODE Design System
 
 **Why this document exists (owner direction, round-16/2026-08-23):** "the UI
@@ -18,9 +18,12 @@ in the same round that changes the UI.
   refers to it there first (owner round-98 directive).
 - **Colors**: NEVER hard-coded in components. Everything flows from
   `src/lib/themes.ts` (`THEMES` table) through `useThemeStyles()` /
-  `deriveThemeStyles()` and the `--ac-*` CSS variables it bridges. Five
-  themes (Nova Cream, Bento Blue, Midnight Lab, Sunset Pop, Mono Stone) ×
-  light/dark; optional per-theme `accentDark`.
+  `deriveThemeStyles()` and the `--ac-*` CSS variables it bridges. Six
+  themes (Nova Cream, Bento Blue, Midnight Lab, Sunset Pop, Mono Stone,
+  Clay Studio — R107-g, the owner's clay substrate) × light/dark; optional
+  per-theme `accentDark`. The liquid-chrome ramp (`--ac-chrome-hi/mid/lo/`
+  `sheen`) is theme-independent + mode-aware — set by the same bridge,
+  documented in `docs/design-language/TOKENS.md` §8.
 - **Documented exceptions only**: `SEMANTIC_COLORS` (success `#22c55e`,
   danger `#ef4444`, warning `#f59e0b` — R97-I: the amber for wait/attention
   states — retry waits, queued messages, thinking-loop stops) in

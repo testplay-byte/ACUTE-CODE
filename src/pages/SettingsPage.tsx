@@ -271,8 +271,12 @@ function AppearanceTab() {
                 aria-pressed={selected}
                 aria-label={`Theme ${t.name}`}
                 className={cn(
-                  "flex cursor-pointer items-center gap-3 rounded-2xl border-[1.5px] bg-card px-4 py-3 text-left transition-colors hover:bg-hover",
-                  selected ? "border-accent" : "border-line",
+                  "relative flex cursor-pointer items-center gap-3 rounded-2xl border-[1.5px] bg-card px-4 py-3 text-left transition-colors hover:bg-hover",
+                  // R107-g: the selected card carries the chrome hairline —
+                  // the reflective top-edge glint on the chosen theme (the
+                  // liquid-chrome jewelry; COMPONENTS §8). Unselected cards
+                  // stay quiet.
+                  selected ? "border-accent ac-chrome-edge" : "border-line",
                 )}
                 style={
                   selected

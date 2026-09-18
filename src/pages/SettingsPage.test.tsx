@@ -145,8 +145,9 @@ describe("Appearance tab simplification (R62-2a)", () => {
       (segmented.compareDocumentPosition(firstCard) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
     ).toBe(true);
 
-    // All 5 theme cards still render (the grid itself was NOT redesigned).
-    for (const name of ["Nova Cream", "Bento Blue", "Midnight Lab", "Sunset Pop", "Mono Stone"]) {
+    // All 6 theme cards still render (the grid itself was NOT redesigned;
+    // R107-g appended Clay Studio to the catalog).
+    for (const name of ["Nova Cream", "Bento Blue", "Midnight Lab", "Sunset Pop", "Mono Stone", "Clay Studio"]) {
       expect(screen.getByRole("button", { name: `Theme ${name}` })).toBeTruthy();
     }
   });

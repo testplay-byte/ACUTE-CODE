@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-104 -->
+<!-- last-reviewed: 2026-09-18 round-107 -->
 # Components — the primitive catalog and composition rules
 
 Serves DESIGN-SYSTEM §5 (anatomy inventory). The inventory there names the
@@ -174,3 +174,37 @@ compressed-vs-full directive):
   12px radius, icon + label) with the hover on the CSS-var leg
   (`hover:border-accent` + `hover:bg-accent-soft`) — real buttons, click
   fills the composer.
+
+## 8. The clay/chrome surface patterns — ROUND-107 (R107-g)
+
+The owner's round-107 direction ("Clay Studio aesthetic… a mixture of
+liquid chrome") added a second cross-cutting pattern family alongside the
+primitives above. They live in `src/index.css` as classes (so they compose
+with inline `backgroundColor`/`boxShadow` — background-IMAGE layers and
+pseudo-elements never fight the JS style leg), and every color they use
+comes from the `--ac-chrome-*` vars (TOKENS §8). One spelling each:
+
+| Pattern | Class | What it paints | Where it's allowed |
+|---|---|---|---|
+| Clay top-light | `.ac-clay-light` | a soft top-light wash (the "gentle top-light" of hand-thrown clay), fading out by 40% height | any card surface wanting warmth; used on StatCard |
+| Reflective hairline | `.ac-chrome-edge` | a 1px top-edge glint (light catching polished metal) — static, costless | resting working UI: cards, the title bar, selected theme cards |
+| Platinum ramp | `.ac-chrome-metal` | the full metal surface fill (160° hi→mid→lo ramp) | signature surfaces only — the wizard's hero block |
+| Liquid sheen | `.ac-chrome-sheen` | the ambient 9s highlight pass (MOTION §3 `ac-chrome-pass`); sets `position:relative; overflow:hidden` itself | signature surfaces only — the wizard's CTAs + hero block; NEVER working-UI buttons |
+| Composer glint | `.composer-shell::before` | the focus jewelry: the hairline rests at 35% glint, brightens to 100% on `:focus-within` (the R105-B accent edge + halo stay) | the composer, exclusively (it IS the class) |
+
+Composition rules:
+
+1. **Clay = substrate, chrome = jewelry.** A surface may carry BOTH
+   `.ac-clay-light` + `.ac-chrome-edge` (soft wash under a crisp glint —
+   the beveled-edge read); the ANIMATED sheen is rationed to signature
+   surfaces (MOTION rule 3: resting UI never fidgets).
+2. **Host contract**: the host needs `position:relative` for
+   `.ac-chrome-edge` (the pseudo-element positions against it);
+   `.ac-chrome-sheen` brings its own relative + overflow:hidden — never
+   apply it where children must escape (popovers, popups).
+3. **Ink on `.ac-chrome-metal` is `--ac-text`** (TOKENS §8 rule 4).
+4. On warm themes (Clay Studio) the family reads as glazed ceramic; on
+   cool ones as quietly lit studio material — the patterns are
+   theme-independent BY DESIGN and must stay that way.
+5. A new consumer documents itself here in the same round (the §1 rule,
+   applied to this family).

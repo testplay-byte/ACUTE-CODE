@@ -59,9 +59,15 @@ export function SetupWizard() {
         className="absolute -bottom-32 -left-32 w-[520px] h-[520px] rounded-full blur-[90px] opacity-[0.08] pointer-events-none"
         style={{ background: s.accent }}
       />
+      {/* R107-g (the clay/chrome round): the third ambient glow is the
+          liquid-chrome wash — a platinum light (the --ac-chrome-hi glint
+          color) instead of the accent, so the stage carries BOTH halves of
+          the round's direction: warm clay/accents below, one cool metal
+          light above-right. WIZARD-DNA §1 documents the two-accent + one
+          chrome recipe. */}
       <div
-        className="absolute top-[35%] right-[10%] w-[220px] h-[220px] rounded-full blur-[70px] opacity-[0.06] pointer-events-none"
-        style={{ background: s.theme.accent2 }}
+        className="absolute top-[35%] right-[10%] w-[220px] h-[220px] rounded-full blur-[70px] opacity-[0.18] pointer-events-none"
+        style={{ background: "var(--ac-chrome-hi)" }}
       />
 
       <Header />

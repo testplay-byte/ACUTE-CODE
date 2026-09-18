@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-104 -->
+<!-- last-reviewed: 2026-09-18 round-107 -->
 # Tokens — the color, type, and spacing language
 
 Serves DESIGN-SYSTEM §1 (source of truth), §2 (spacing), §3 (typography).
@@ -12,7 +12,7 @@ below is marked **ROUND-100 (R100-C)** and is enforced by
 ## 1. The color pipeline (how a color reaches a pixel)
 
 ```
-src/lib/themes.ts            THEMES (5 themes × light/dark)
+src/lib/themes.ts            THEMES (6 themes × light/dark)
       │  ThemeColors (~20 raw fields)
       ▼
 deriveThemeStyles()           ThemeStyles (~35 derived keys:
@@ -74,7 +74,21 @@ Accent discipline (ROUND-100, research §C1.3): the accent marks
 **selection + the one primary action**; nothing else in working UI is
 accent-colored at rest.
 
-### The `--ac-*` var families (summary)
+### 1b. The theme catalog — ROUND-107 (R107-g) adds Clay Studio
+
+Six themes: Nova Cream (the default), Bento Blue, Midnight Lab, Sunset
+Pop, Mono Stone, and **Clay Studio** (round-107 — the owner's "go with the
+Clay Studio aesthetic" direction). Clay Studio is the clay SUBSTRATE: warm
+sand neutrals (`#F4EEE5` bg / `#FDFBF7` card light; brown-tinted charcoal
+`#26211C` / `#2F2924` dark — never a blue-black), warm ink
+(`#2A2018` / `#F2EBE1`), and a muted terracotta accent
+(`#C4653F` light / `#D98A63` dark) — the warm family the owner asked for
+(indigo/blue accents remain banned as defaults house-wide). Measured
+contrast sits inside the envelope the other five themes already tolerate:
+accent-on-bg 3.45:1 light (nova: 2.75), accentDark-on-bgDark 5.90:1 (over
+the ~4.5:1 accent-dark bar), ink 13–15:1 both modes.
+
+### 1c. The `--ac-*` var families (summary)
 
 | Family | Vars | Used for |
 |---|---|---|
@@ -85,6 +99,7 @@ accent-colored at rest.
 | Subtle | `--ac-subtle`, `--ac-subtle-hover` | quiet fills, hover washes |
 | Inputs | `--ac-input-bg`, `--ac-input-border`, `--ac-input-focus-border` | fields, steppers |
 | Shadows | `--ac-soft-shadow`, `--ac-bento-shadow` | depth (see MOTION.md for entry motion) |
+| Chrome (R107-g) | `--ac-chrome-hi/mid/lo`, `--ac-chrome-sheen` | the liquid-chrome ramp — §8 below |
 
 ## 2. The type scale (the canonical ladder) — ROUND-100 (R100-C, research §C1.1)
 
@@ -223,3 +238,41 @@ Warning and danger are NEVER interchangeable (round-97 D: a thinking-loop
 stop is amber `role="status"`, never red "Generation failed"). Danger tints
 via `withAlpha(danger, 0.08–0.1)` for washes; success tints 0.08 for
 confirmation glows.
+
+## 8. The liquid-chrome ramp — ROUND-107 (R107-g)
+
+Owner direction (round-107): "go with the Clay Studio aesthetic and also a
+mixture of liquid chrome… the overall UI looks much better, much more
+proper, and much more well-handled." The mixture's division of labor:
+**clay is the substrate** (backgrounds, cards, chrome surfaces — delivered
+by the Clay Studio theme, §1b), **liquid chrome is the jewelry** (the one
+primary action's sheen, focus glints, hero moments — delivered by this var
+family + the `.ac-chrome-*` / `.ac-clay-light` pattern classes in
+`src/index.css`, composition rules in COMPONENTS §8).
+
+| Var | Light mode | Dark mode | Role |
+|---|---|---|---|
+| `--ac-chrome-hi` | `#FFFFFF` | `rgba(255,255,255,0.55)` | the glint: hairlines, top-lights, sheen edges |
+| `--ac-chrome-mid` | `#EDE8E0` | `rgba(255,255,255,0.08)` | the platinum body of the metal ramp |
+| `--ac-chrome-lo` | `#D8D1C6` | `rgba(255,255,255,0.03)` | the metal's shaded edge |
+| `--ac-chrome-sheen` | `rgba(255,255,255,0.55)` | `rgba(255,255,255,0.16)` | the moving highlight band |
+
+Rules:
+
+1. **Theme-independent, mode-aware.** The ramp is set by
+   `syncThemeCssVars()` from `isDark` alone — liquid chrome reads as the
+   same platinum on every palette (jewelry, not cloth). It is NOT a
+   ThemeColors field and must never become one.
+2. **Warm platinum on purpose.** The light-mode stops are a hair warm
+   (`#EDE8E0`, not `#E8E8E8`) so chrome harmonizes with the clay substrate
+   instead of reading cold against it.
+3. **Values live in the pipeline only** — `themes.ts` (the bridge) +
+   the `:root` pre-paint fallbacks in `src/index.css` (the same sanctioned
+   pattern as the nova literals). A component writing a metal hex itself
+   is an audit R1 violation like any other.
+4. **Ink on full-metal surfaces is `--ac-text`** (dark-on-platinum in
+   light mode, light-on-dark-metal in dark mode — contrast holds by
+   construction). Never `--ac-accent-text`.
+5. The sheen MOTION contract (ambient 9s pass, transform-only,
+   reduced-motion collapse) is documented in MOTION §3 — the animation
+   grammar owns the movement, this file owns the color.

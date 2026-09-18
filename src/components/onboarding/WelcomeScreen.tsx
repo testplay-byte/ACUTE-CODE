@@ -204,10 +204,16 @@ export function WelcomeScreen() {
             ACUTE
           </span>
           <span
-            className="inline-block px-3 md:px-4 -ml-1 md:-ml-2 rounded-[18px] md:rounded-[24px] text-[56px] md:text-[86px] short:text-[42px] 2xl:text-[104px] font-black leading-none border-[2.5px] rotate-[-1deg]"
+            className="ac-chrome-metal ac-chrome-sheen inline-block px-3 md:px-4 -ml-1 md:-ml-2 rounded-[18px] md:rounded-[24px] text-[56px] md:text-[86px] short:text-[42px] 2xl:text-[104px] font-black leading-none border-[2.5px] rotate-[-1deg]"
             style={{
-              background: s.accent,
-              color: s.accentText,
+              // R107-g (the clay/chrome round): the hero block is LIQUID
+              // CHROME — the platinum ramp (.ac-chrome-metal) + the ambient
+              // sheen pass (.ac-chrome-sheen), ink in the theme's text color
+              // (dark-on-platinum in light mode, light-on-dark-metal in
+              // dark mode — both contrast-checked by construction). The
+              // accent stays the badge's + CTA's job; the brand block is
+              // the one metal jewel of the composition (WIZARD-DNA §2).
+              color: s.text,
               borderColor: s.borderStrong,
               boxShadow: s.bentoShadow,
             }}
@@ -247,7 +253,7 @@ export function WelcomeScreen() {
           </div>
           <button
             onClick={handleGetStarted}
-            className="group h-12 px-8 rounded-full text-[16px] font-bold tracking-[-0.01em] flex items-center gap-3 border-[1.5px] transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shrink-0"
+            className="ac-chrome-sheen group h-12 px-8 rounded-full text-[16px] font-bold tracking-[-0.01em] flex items-center gap-3 border-[1.5px] transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shrink-0"
             style={{
               background: s.accent,
               color: s.accentText,

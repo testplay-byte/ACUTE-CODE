@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-18 round-107 -->
 # Window controls — the app-frame spec
 
 Owner direction (round-98): "One thing which I do like about our design
@@ -17,6 +17,11 @@ little bit and maybe some animations will play too."
 - The title bar: `h-10`, frosted (`color-mix(var(--ac-bg) 72%, transparent)`
   + backdrop blur), `data-tauri-drag-region`, the identity button
   (logo + name, doubles as the sidebar toggle) on the left.
+- **R107-g**: the bar carries the liquid-chrome reflective hairline —
+  `ac-chrome-edge` on the header (a 1px `--ac-chrome-hi` glint along the
+  top edge; `pointer-events: none`, so the drag region works through it).
+  The frosted surface, the border, and the §2 button grammar are otherwise
+  unchanged — the hairline is the jewelry, not a redesign.
 
 ## 2. The three buttons (round-98 C1 spec)
 

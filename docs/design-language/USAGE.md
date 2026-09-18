@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-104 -->
+<!-- last-reviewed: 2026-09-18 round-107 -->
 # Usage — how to speak the language when editing UI
 
 Owner direction (round-98): "whenever we try to make edits in our UI, the
@@ -131,7 +131,13 @@ contracts:
   deliberate stop (round-97 D contract).
 - A hardcoded duration/curve that isn't in MOTION §2.
 - Avatars, name headers, or Sparkles on chat turns (owner R37 verdict).
-- Wallpapering working surfaces with wizard glows (WIZARD-DNA §8).
+- Wallpapering working surfaces with wizard glows (WIZARD-DNA §8) — and,
+  same law, wallpapering working surfaces with the chrome sheen: the
+  animated `.ac-chrome-sheen` is signature-surface-only (COMPONENTS §8);
+  resting UI gets at most the static hairline + clay top-light.
+- A metal hex written into a component instead of the `--ac-chrome-*`
+  vars (TOKENS §8 rule 3) — chrome flows from the pipeline like every
+  other color.
 
 ## 6. Amendment protocol
 

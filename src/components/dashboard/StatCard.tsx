@@ -16,6 +16,15 @@ import { scaleIn } from "../../lib/motion";
  * UI never fidgets). `highlight` fills the whole card with accent (the one
  * bold moment).
  *
+ * R107-g (the clay/chrome round): the card surface gains the two
+ * cross-theme surface patterns — `ac-clay-light` (the soft top-light
+ * diffusion; hand-thrown warmth) + `ac-chrome-edge` (the 1px reflective
+ * hairline; the light-catching edge of polished metal). Both are
+ * background-image/pseudo-element treatments, so they compose with the
+ * inline backgroundColor + softShadow untouched, and both ride the
+ * --ac-chrome-* vars — on the Clay Studio theme the card reads as glazed
+ * ceramic, on every other theme as quietly lit studio material.
+ *
  * R99-E (the usage anti-jitter kit, research §3.2): the card is pinned at
  * h-[92px] — the height every StatCard-shaped skeleton across the app
  * already reserves (dashboard, usage screen, the DataStatsPanel) — and the
@@ -42,7 +51,7 @@ export function StatCard({
   return (
     <motion.div
       variants={scaleIn}
-      className="relative flex h-[92px] cursor-default flex-col justify-center overflow-hidden rounded-2xl border-[1.5px] border-line p-4 transition-colors duration-150 hover:border-line-strong"
+      className="relative flex h-[92px] cursor-default flex-col justify-center overflow-hidden rounded-2xl border-[1.5px] border-line p-4 transition-colors duration-150 hover:border-line-strong ac-clay-light ac-chrome-edge"
       style={{
         backgroundColor: highlight ? accent : card,
         borderColor: highlight ? accent : undefined,

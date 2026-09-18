@@ -168,6 +168,41 @@ export const THEMES: ThemeColors[] = [
     sidebarBg: "#F0F0EB",
     sidebarBorder: "#DDDDE0",
   },
+  {
+    // R107-g (owner: "go with the Clay Studio aesthetic… a mixture of liquid
+    // chrome"): the clay substrate theme — hand-thrown-ceramics warmth for the
+    // whole app. Muted terracotta accent (the warm family the owner asked for;
+    // indigo/blue defaults are banned house-wide), sand neutrals with a
+    // brown-tinted charcoal for dark mode (never a blue-black), all inside the
+    // contrast envelope the existing five themes already tolerate (measured:
+    // accent/bgLight 3.45:1 — above nova 2.75; accentDark/bgDark 5.90:1 — over
+    // the ~4.5:1 accent-dark bar; text 12–15:1 both modes). The liquid-chrome
+    // counterpoint lives in the --ac-chrome-* ramp (TOKENS §8) — theme-
+    // independent jewelry, not part of this table.
+    id: "clay",
+    name: "Clay Studio",
+    accent: "#C4653F",
+    accentDark: "#D98A63",
+    accent2: "#E3A67F",
+    bgLight: "#F4EEE5",
+    bgDark: "#26211C",
+    cardLight: "#FDFBF7",
+    cardDark: "#2F2924",
+    textLight: "#2A2018",
+    textDark: "#F2EBE1",
+    dot: "#C4653F",
+    dotDark: "#D98A63",
+    paletteLight: ["#C4653F", "#E3A67F", "#F4EEE5", "#FDFBF7", "#2A2018"],
+    paletteDark: ["#D98A63", "#C4653F", "#26211C", "#2F2924", "#F2EBE1"],
+    selectedBg: "#C4653F",
+    selectedText: "#FFFFFF",
+    unselectedBg: "#EFE6DA",
+    unselectedBorder: "#D9C7B2",
+    blockBg: "#FBF8F2",
+    blockBorder: "#E6DACA",
+    sidebarBg: "#F0E9DE",
+    sidebarBorder: "#DFD2C0",
+  },
 ];
 
 /** Placeholder card at the end of the picker ("new themes coming soon"). */
@@ -469,6 +504,19 @@ export function syncThemeCssVars(styles: ThemeStyles): void {
     // join the CSS-var leg — one spelling, hover-capable, theme-aware.
     "--ac-running": "#3b82f6",
     "--ac-frosted": styles.isDark ? "rgba(44,44,46,0.72)" : "rgba(255,255,255,0.72)",
+    // R107-g (owner: "a mixture of liquid chrome"): the CHROME ramp — the
+    // metallic counterpoint to the clay substrate (TOKENS §8). Deliberately
+    // theme-INDEPENDENT (liquid chrome reads as the same platinum on every
+    // palette — the jewelry, not the cloth) but mode-aware: light mode gets
+    // warm-platinum opaque stops (the full-metal surface + hairline glints),
+    // dark mode gets white-alpha stops that layer over whatever surface
+    // carries them. Values live HERE (the token pipeline), never in a
+    // component — the patterns that consume them (.ac-chrome-* in
+    // index.css) are documented in COMPONENTS §8.
+    "--ac-chrome-hi": styles.isDark ? "rgba(255,255,255,0.55)" : "#FFFFFF",
+    "--ac-chrome-mid": styles.isDark ? "rgba(255,255,255,0.08)" : "#EDE8E0",
+    "--ac-chrome-lo": styles.isDark ? "rgba(255,255,255,0.03)" : "#D8D1C6",
+    "--ac-chrome-sheen": styles.isDark ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.55)",
   };
   for (const [name, value] of Object.entries(vars)) {
     root.setProperty(name, value);
