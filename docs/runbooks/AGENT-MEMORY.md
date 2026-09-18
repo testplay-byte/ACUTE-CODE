@@ -1347,3 +1347,52 @@ human review did). The fix discipline: gates are checked with their OWN
 exit code (no pipe, a temp variable, or pipefail) — and when a gate's
 output prints a failure table, the table is a failure regardless of what
 the echo beside it claims.
+
+#106 (2026-09-18, round 105 — the Linux browser panel made whole + the
+composer's whole-section focus + the planning corpus):
+(a) CASCADE LAYERS OUTRANK SPECIFICITY — A "OVERRIDES BY CLASS
+SPECIFICITY" COMMENT MUST ALSO SAY WHICH LAYER THE RULE LIVES IN. The
+composer ring survived two rounds of fixes (R101-D softened it, R102-E
+deleted the wrong leg) because the mental model was specificity while
+the mechanism was layers: an UNLAYERED rule beats every layered utility
+regardless of specificity — and the :where() zero-specificity trick was
+beside the point (the outer :focus-visible pseudo-class contributes its
+own (0,1,0), exactly tying .outline-none, so even without layers the
+comment was wrong). The fix was moving the global rule INTO @layer base
+— one line, and the documented architecture became true. Every future
+global CSS rule gets a layer decision AT THE RULE.
+(b) TEXT-ENTRY ELEMENTS ALWAYS MATCH :focus-visible — INCLUDING ON
+MOUSE CLICK — AND A CLICK ON A NON-FOCUSABLE ELEMENT NEVER MOVES FOCUS.
+The two facts compose into the exact report shape "I clicked a message
+and a border appeared around the input": the ring had been painted since
+the textarea was focused, and the message click was innocent. When a
+focus-ring report blames an element, first check whether focus EVER LEFT
+the input.
+(c) THE LINUX CHILD-WEBVIEW CONTRACT IS WRY'S FINE PRINT: bounds are
+honored ONLY for GtkFixed children, and tauri's add_child packs webviews
+into tao's VERTICAL GtkBox — the window split IS the default behavior,
+not a bug in the panel's geometry code (which was firing correctly the
+whole time, into a no-op). The reusable surgery: re-parent each hidden
+child webview into a gtk::Fixed floating as an Overlay's pass-through
+overlay child over the chrome webview; position with fixed.move_ +
+set_size_request (durable across resizes) + a direct size_allocate when
+visible (immediate). The borrow lesson inside it:
+opt.and_then(|p| p.downcast_ref::<T>()) borrows the closure's own
+parameter (E0515) — bind the Option first, .as_ref(), then downcast.
+(d) NO LOCAL RUST TOOLCHAIN MEANS THE GTK 0.18 API SURFACE MUST BE
+SOURCE-VERIFIED BEFORE WRITING — and the payoff is measurable. Every
+method signature, the prelude exports, the glib PartialEq story, and the
+GTK 3.24 C source of the four behaviors the surgery depends on were read
+from the actual crates/sources first; the first CI compile then had
+exactly SIX errors, all borrow/import mechanics, ZERO API misuse, and
+the hotfix was one push. The dev-harness alternative (a local rustup)
+dies with every sandbox reset — budget the source-verification pass
+instead.
+(e) PLANNING AGENTS GROUND BETTER WITH A BUDGETED OUTPUT. The three
+R105 planning agents (CLI, Android R1, adoption roadmap) each burned
+most of their budget reading the real code and produced grounded
+designs — but the first CLI dispatch ran out mid-flight and returned
+only its grounding summary; the resume prompt ("write the document NOW,
+no more research") recovered it in one turn. Give planning agents an
+explicit output-budget reminder: the document IS the deliverable, and
+research must stop at ~70%.

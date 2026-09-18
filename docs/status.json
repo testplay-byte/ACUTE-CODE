@@ -350,7 +350,7 @@
     }
   ],
   "plan": {
-    "current": "R104 DELIVERED — the update hand-shake (download, then confirm) + the Linux AppImage updater made real; v0.101.0 tagging next",
+    "current": "R105 IN FLIGHT — the Linux browser panel made whole (the Overlay+Fixed GTK surgery) + the composer whole-section focus highlight + the planning corpus (CLI · Android R1 · oh-my-pi adoption roadmap) + the free-model benchmarks; landing on main, v0.102.0 tagging per the R104 pattern when the adoption wave lands",
     "upcoming": [
       {
         "title": "The owner's v0.101.0 walkthrough",
