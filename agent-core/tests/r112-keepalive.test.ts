@@ -166,7 +166,7 @@ function gatedStream(gate: Promise<void>) {
  * client parsers in src/lib/api.ts + the mobile stream reader). */
 class LiveBody {
   private text = "";
-  private ended = false;
+  private streamEnded = false;
   private endWaiters: Array<() => void> = [];
 
   constructor(stream: NodeJS.ReadableStream) {
@@ -174,7 +174,7 @@ class LiveBody {
       this.text += chunk.toString("utf8");
     });
     stream.on("end", () => {
-      this.ended = true;
+      this.streamEnded = true;
       for (const waiter of this.endWaiters.splice(0)) waiter();
     });
   }
@@ -198,12 +198,12 @@ class LiveBody {
   }
 
   get isEnded(): boolean {
-    return this.ended;
+    return this.streamEnded;
   }
 
   /** Resolves when the underlying stream ends (the route's res.end()). */
   ended(): Promise<void> {
-    if (this.ended) return Promise.resolve();
+    if (this.streamEnded) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.endWaiters.push(resolve);
     });

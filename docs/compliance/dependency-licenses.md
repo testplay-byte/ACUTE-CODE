@@ -6,7 +6,7 @@ Policy (SPEC section 6): allowed - MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, 
 Forbidden - GPL, AGPL, LGPL and any license that cannot be classified (closed-source distribution).
 Every license exception must be recorded as an ADR under `docs/decisions/`.
 
-Audited production dependencies: 296. Verdict: CLEAN.
+Audited production dependencies: 299. Verdict: CLEAN.
 
 | Package | Version | License | Verdict |
 |---|---|---|---|
@@ -195,6 +195,7 @@ Audited production dependencies: 296. Verdict: CLEAN.
 | get-caller-file | 2.0.5 | ISC | OK |
 | get-nonce | 1.0.1 | MIT | OK |
 | hachure-fill | 0.5.2 | MIT | OK |
+| has-flag | 4.0.0 | MIT | OK |
 | http_ece | 1.2.0 | MIT | OK |
 | https-proxy-agent | 7.0.6 | MIT | OK |
 | iconv-lite | 0.6.3 | MIT | OK |
@@ -285,6 +286,7 @@ Audited production dependencies: 296. Verdict: CLEAN.
 | string-width | 4.2.3 | MIT | OK |
 | strip-ansi | 6.0.1 | MIT | OK |
 | stylis | 4.4.0 | MIT | OK |
+| supports-color | 7.2.0 | MIT | OK |
 | tailwind-merge | 3.6.0 | MIT | OK |
 | thread-stream | 4.2.0 | MIT | OK |
 | tinyexec | 1.3.1 | MIT | OK |
@@ -301,6 +303,7 @@ Audited production dependencies: 296. Verdict: CLEAN.
 | web-push | 3.6.7 | MPL-2.0 | OK |
 | which-module | 2.0.1 | ISC | OK |
 | wrap-ansi | 6.2.0 | MIT | OK |
+| ws | 8.21.3 | MIT | OK |
 | y18n | 4.0.3 | ISC | OK |
 | yargs | 15.4.1 | MIT | OK |
 | yargs-parser | 18.1.3 | ISC | OK |

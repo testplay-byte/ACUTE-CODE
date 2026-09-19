@@ -145,9 +145,16 @@ function tlsRequest(
 class MockSocket implements TunnelSocket {
   private listeners = new Map<string, Array<(...args: unknown[]) => void>>();
 
-  on(event: string, listener: (...args: unknown[]) => void): unknown {
+  // The interface's exact overload set (see r112-cloud-connector.test.ts).
+  on(event: "open", listener: () => void): unknown;
+  on(event: "close", listener: (code: number, reason: Buffer) => void): unknown;
+  on(event: "error", listener: (error: Error) => void): unknown;
+  on(event: "message", listener: (data: unknown) => void): unknown;
+  on(event: string, listener: (...args: never[]) => void): unknown {
     const list = this.listeners.get(event) ?? [];
-    list.push(listener);
+    // never[] accepts every overload's listener; the map stores the loose
+    // call shape emit() uses (the assertion is direction-legal).
+    list.push(listener as (...args: unknown[]) => void);
     this.listeners.set(event, list);
     return this;
   }

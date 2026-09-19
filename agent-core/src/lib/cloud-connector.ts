@@ -761,8 +761,10 @@ const DISABLED_STATUS: CloudConnectorStatus = {
 };
 
 /** Start (or REPLACE — a new config wins) the singleton connector. Never
- * throws: any failure is logged and reflected in the returned status. */
-export function startCloudConnector(config: CloudConnectorConfig): CloudConnectorStatus {
+ * throws: any failure is logged and reflected in the returned status.
+ * Takes the full options set (the timing knobs + injectable seams) because
+ * the spread below has always carried them through — the type now says so. */
+export function startCloudConnector(options: CloudConnectorOptions): CloudConnectorStatus {
   const previous = activeConnector;
   if (previous !== null) {
     // Graceful replace: bye + close(1000) ride out in the background while
@@ -771,7 +773,7 @@ export function startCloudConnector(config: CloudConnectorConfig): CloudConnecto
   }
   try {
     const connector = createCloudConnector({
-      ...config,
+      ...options,
       ...(testFactories?.createTunnelSocket !== undefined
         ? { createTunnelSocket: testFactories.createTunnelSocket }
         : {}),
@@ -785,7 +787,7 @@ export function startCloudConnector(config: CloudConnectorConfig): CloudConnecto
   } catch (err) {
     activeConnector = null;
     log("warn", "cloud.start_failed", { message: messageOf(err) });
-    return { state: "error", relayUrl: normalizeRelayUrl(config.relayUrl), lastConnectedAt: null, lastError: messageOf(err) };
+    return { state: "error", relayUrl: normalizeRelayUrl(options.relayUrl), lastConnectedAt: null, lastError: messageOf(err) };
   }
 }
 
@@ -805,9 +807,11 @@ export async function stopCloudConnector(): Promise<CloudConnectorStatus> {
 
 /** The settings route's apply path: a clean stop → a fresh start with the
  * new config (no two tunnels racing into one Room). Never throws. */
-export async function reconfigureCloudConnector(config: CloudConnectorConfig): Promise<CloudConnectorStatus> {
+export async function reconfigureCloudConnector(
+  options: CloudConnectorOptions,
+): Promise<CloudConnectorStatus> {
   await stopCloudConnector();
-  return startCloudConnector(config);
+  return startCloudConnector(options);
 }
 
 /** The singleton's live status (the idle shape when nothing runs). */

@@ -154,6 +154,30 @@ never-fatal-boot pattern:
 | Typecheck ×3 + lint | clean / clean / clean / clean (agent-core, mobile, root; eslint) |
 | The relay, production | 12/12 (health, admin ±key, live WSS tunnel, guest round-trips, SSE through the edge, list/evict/prune, allowlist) |
 
+### §6.1 The release round's catch: CI was red under the ROOT typecheck
+
+The R112-c gates ran agent-core's own `tsc` (which covers `src/` only) — but
+CI's verify job runs the ROOT `tsc -p tsconfig.json`, whose program includes
+`agent-core/tests/`. The finisher's four test files were runtime-green
+(2525/2525) but had never been root-typechecked: the three `MockSocket`s'
+loose `on(event: string, …)` couldn't satisfy `TunnelSocket`'s overload set
+(strict contravariance on the listener), three singleton-test call sites
+passed `createTunnelSocket`/`bridgeRequest` to `startCloudConnector` whose
+declared `CloudConnectorConfig` type didn't list them (the spread carried
+them at runtime — the type was lying, not the code), and `LiveBody` had a
+field and a method both named `ended`. Fixes (zero runtime change): the mocks
+now declare the interface's four overloads over a `never[]` implementation
+signature; `startCloudConnector`/`reconfigureCloudConnector` take
+`CloudConnectorOptions` (what the spread always forwarded); the field is
+`streamEnded`. Root typecheck green, then lint + 4153/0 re-run at the fix
+tree.
+
+Also: the design-audit ratchet caught the Remote access card — R2 +18
+(10× `text-[11px]`, 4× `text-[10px]`, singles at 12/13px, two width
+literals), every one inside the Devices tab's established 10–13px chrome
+idiom (37 pre-existing `text-[11px]` since R106-c). Honestly re-pinned
+1573→1591 per the R104-hotfix-1 precedent; audit clean at the fix tree.
+
 ## §7 Deferred (with reasons, not excuses)
 
 - **Appearance → PC sync (#2)**: needs a scope decision (which phone
