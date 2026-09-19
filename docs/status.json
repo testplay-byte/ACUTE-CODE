@@ -324,10 +324,14 @@
     {
       "date": "2026-09-19",
       "label": "R109 — the eighteenth round (v0.105.0): the companion REBUILT in clay (the design system v2, the floating bar, the setup wizard, the connect flow with pinch-zoom scanning, the markdown transcript with live caret, the keyboard fix) + the live link (notifications stream, the always-visible status pill, the flaky-TLS reliability fix) + the phone configures the desktop (providers/models/agents/prompts/preferences + the usage dashboard) with the desktop-side device-token blocklist + ARM64-only APK"
+    },
+    {
+      "date": "2026-09-19",
+      "label": "R112 — the nineteenth round: remote access over the cloud relay (the one-time Cloudflare Worker at acute-relay.anikuta.workers.dev, the desktop connector's outbound tunnel, the phone's LAN-first/relay-last ladder) + the R110 #1 disconnect-loop root fixes on both sides of the wire + pairing-screen items #4/#5/#6 — suites 2525/4153/210 all green"
     }
   ],
   "quality": {
-    "ci": "GREEN — CI 35217892441 and Release 35217892393 both SUCCESS on 7c34293 (the hotfix re-tag; lint, both typechecks, the root suite 3,818/3,818, agent-core 2,385/2,385, design:audit at baseline, docs:check 220/0/0, version ×4 at 0.99.0, cargo check green on BOTH platforms + the NEW rust-linux-arm64 job — live on its very first push). v0.99.0 PUBLISHED (release 390674532, latest): setup.exe 38,723,545 B (36.9 MB) + amd64 deb 67,234,322 B / AppImage 134,941,176 B + THE FIRST ARM64 BUNDLES: arm64.deb 67,180,798 B + aarch64.AppImage 132,663,816 B + the kit 124,080 B. Two CI-caught hotfixes on the first tag run (the R100 pattern, cheaper each time): the ARM64 naming asymmetry (deb=_arm64 per dpkg, AppImage=_aarch64 per the Rust triple — both bundles BUILT and the boot gate PASSED; the expectations were corrected to the proven names) and the r89 version-pin rot (a hardcoded 'future' tag aged out the moment the engine reached 0.99.0 — now derived live from the manifest).",
+    "ci": "LOCAL GATES GREEN on 86ac572 (the integration commit): agent-core 2525/2525 (131 files, +53 over v0.105.0 — the four r112 test files), root 4153 passed / 0 failed (15 skipped, +58 — the DevicesTab remote-access tests), mobile 210/210 (+46), typecheck clean ×3 (agent-core, mobile, root), eslint clean, docs:check 240/0. Secret scan of the full diff + untracked files: clean. The relay: production-verified 12/12 at acute-relay.anikuta.workers.dev. Remote CI on the push was in flight at write time — this field is re-stamped by the release round as usual.",
     "suites": [
       {
         "name": "frontend",
@@ -361,19 +365,31 @@
     }
   ],
   "plan": {
-    "current": "R109 LANDED — the Android companion rebuilt in clay: the full design system v2 (Clay Studio + liquid chrome, Manrope, the floating bar with badges, the always-visible connection pill), the setup wizard + the connect hub/scanner (pinch zoom + torch)/manual-entry/confirm flow, the formatted markdown transcript with live streaming caret + expandable tool cards + the real Android keyboard handling, the live notifications stream (bell + approvals badge), the reliability fix (flaky TLS handshakes no longer masquerade as pin mismatches — the 'host offline until rescan' trap is dead), the phone-side management surface (providers/models/agents/prompts/preferences + the usage dashboard + projects with session creation) guarded by the NEW desktop device-token blocklist (no key reveals, no reset, no terminals, no computer-use for a phone), and the ARM64-only APK per the owner's ruling; v0.105.0 tagged",
+    "current": "R112 LANDED — remote access over the cloud relay: the one-time Cloudflare Worker (acute-relay.anikuta.workers.dev — production-verified 12/12 end-to-end, free plan, no domain, self-updating via its own git repo) + the desktop cloud-connector (agent-core/src/lib/cloud-connector.ts: the outbound WSS tunnel with 25s ping / 10s watchdog, 1s→60s jittered backoff, SSE frame bridging, never-fatal boot; GET/PUT /api/v1/settings/cloud-connector shell-token-only; the QR/claim/link-info carry relay=<base>/m/<machineId> while connected) + the phone's LAN-first/relay-last ladder (relay 503 host_offline = retryable, never an unpair; manual entry accepts room URLs) + THE R110 #1 DISCONNECT-LOOP ROOT FIXES ON BOTH SIDES (10s ': ping' heartbeats on the notifications + turn SSE streams; keepAliveTimeout 65s / headersTimeout 66s on both servers; mobile 5s probes, two-cycle hysteresis, transition-gated 5s-debounced NetInfo wakes, non-overlapping rounds) + the pairing-screen items #4/#5/#6 (root-aware back arrow, one-line hero copy, the PIN shown after scan). Verification at 86ac572: agent-core 2525/2525, root 4153/0 (+58), mobile 210/210 (+46), typecheck ×3 + lint + docs:check clean. Deferred with reasons: appearance→PC sync (#2), providers only-added + add-new (#3), projects/sessions specifics (#7 — owner detail needed), Firebase (owner deferred), GitHub Actions release speed (its own round).",
     "upcoming": [
       {
-        "title": "The owner's v0.105.0 walkthrough (the clay companion)",
-        "detail": "Install ACUTE-CODE_0.105.0_android-arm64.apk over v0.104.0 (in place, same key — uninstall nothing). First startup runs the wizard; pair by QR (pinch to zoom) or manual entry; watch the floating bar, the status pill, the markdown transcript, the dashboard tab, and Settings → Providers/Agents/Prompts/Preferences from the phone. The [ACUTE-MOB] logcat tag joins [ACUTE-BOOT]. Then: the Cloudflare anywhere-access round (the setup guide ships in docs/guides/ this release) + the Firebase push round."
+        "title": "The v0.106.0 release + the owner's off-LAN walkthrough",
+        "detail": "Version bump (7-file single-source) + tag + the 6 desktop assets + the ARM64 APK; the CHANGELOG Unreleased section becomes 0.106.0. Then the owner's walkthrough: enable Remote access on the PC (Settings → Devices → paste the Relay URL + Host key), pair once, leave Wi-Fi range, and verify the companion stays connected through the relay — the [ACUTE-MOB] logcat tag and the relay's Workers metrics diagnose anything that flakes."
       },
       {
-        "title": "Remote access from anywhere (the promised next round)",
-        "detail": "The Cloudflare path per docs/planning/CLOUDFLARE-REMOTE-ACCESS.md — the manual-address pairing form is already tunnel-ready; the round brings the easy-setup Cloudflare system the owner asked for."
+        "title": "R110 #2 — appearance syncs to the PC",
+        "detail": "Scope decision first (which phone settings propagate — theme at minimum), then a phone-side write path over the existing settings PUT surface, guarded by the device-token blocklist."
       },
       {
-        "title": "The standing candidates (honest)",
-        "detail": "The budget-aware turn margin (R107-b F3 — the runner still counts messages only), the command palette's command layer + the CLI gap list's second wave (agents/projects/usage/notifications/queue/devices), the browser_control schema split (F19), the O(events) assembly memo (F7), spread of the clay/chrome patterns to the remaining bento cards, the modularity roadmap, ratings-driven prompt tuning, and the standing items (edit-linting, installer code-signing, the Files-tab polish, the CDP-level trusted-input tier, the COM IUIAutomation bridge)."
+        "title": "R110 #3 — providers: only the added ones, plus add-new from the phone",
+        "detail": "Filter the phone's provider list to configured/hasKey; add a provider-create client (name, kind, baseUrl, apiFormat, key) riding the existing desktop POST /providers surface."
+      },
+      {
+        "title": "R110 #7 — projects/sessions specifics",
+        "detail": "Needs the owner's walkthrough detail first (what exactly failed — opening sessions, navigation, the disconnected screen); vague fixes hide bugs."
+      },
+      {
+        "title": "Firebase (FCM v1) — the guided one-time setup",
+        "detail": "Deferred by the owner's explicit choice this round; the guide (docs/guides/FIREBASE-SETUP.md) and the ping-only fcm-push skeleton are ready when wanted."
+      },
+      {
+        "title": "GitHub Actions — the release pipeline under 20 minutes",
+        "detail": "Candidates measured: per-push Mobile APK builds (move to tag + dispatch), Gradle/pnpm cache keys, reusing the tag-run's APK in Release, path filters for docs-only pushes."
       }
     ],
     "principles": [

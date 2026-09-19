@@ -10,6 +10,28 @@ version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
 ## [Unreleased]
+<!-- targets 0.106.0 — the release round renames this section when it tags -->
+
+### Remote access — the companion reaches the desktop from anywhere (the headline)
+- **The cloud relay is live.** A one-time Cloudflare Worker (deployed once from the browser, free plan, no domain) gives every desktop program a permanent public endpoint: `acute-relay.anikuta.workers.dev`. The relay's code lives in its own repo and auto-redeploys on every push — you never deploy anything again. The full setup story: `docs/guides/CLOUDFLARE-SETUP.md` (rewritten — it's one paste now).
+- **Enabling it per program takes a minute**: Settings → Devices → the new **Remote access (internet)** card — toggle, paste the Relay URL + Host key, Save, watch the status line say Connected. It sits **independently** beside the local "Device link" card: LAN and internet work at the same time, or either alone.
+- **The phone needs zero new setup.** The pairing QR automatically carries the relay address while remote access is connected; the companion probes its address ladder **local network first, relay last** — at home it's fast, away from home it just works. Manual pairing accepts cloud-relay URLs too, and a relay that reports "desktop not connected" is a retryable state, never a re-pair trigger.
+- **Everything security-wise carries over unchanged**: the relay is a blind pipe — device tokens are still validated by your own desktop, pairing still rides the TLS listener with its PIN flow, and the R109 device-token blocklist (no key reveals, no resets, no terminals) applies over the internet exactly as on LAN.
+
+### The disconnect loop, killed at the root (the R110 top complaint)
+- **The silent-stream bug is dead**: the notifications stream and the turn stream now send `: ping` heartbeats every 10 s (the terminal stream always did) — idle connections no longer get murdered by NATs and Wi-Fi power-save.
+- **The 5-second ambush is dead**: both servers (loopback + the TLS device listener) now hold keep-alive for 65 s — the phone's 5-minute connection pool no longer trips over sockets the server closed underneath it.
+- **The phone stopped flapping**: one transient failure no longer flips the status to offline (two consecutive failed cycles do), network-change wakes are debounced and transition-gated instead of firing probe storms, probe rounds never overlap, and probes get 5 s instead of 3 (a busy desktop deserves the benefit of the doubt).
+
+### The pairing screen, polished per the walkthrough
+- The Connect hub no longer shows a back arrow when there's nothing to go back to (root screen after onboarding).
+- "Add a Connection" says it in one line instead of a paragraph.
+- **The pairing code is shown after scanning** — 4+4 digits, visible through the countdown and the pairing spinner.
+
+### For the builders
+- Desktop: `agent-core/src/lib/cloud-connector.ts` (the outbound tunnel — handshake, 25 s ping/10 s watchdog, 1 s→60 s jittered backoff, SSE frame bridging, never-fatal boot) + `GET/PUT /api/v1/settings/cloud-connector` (shell-token only).
+- Mobile: the relay rung in the ladder (`mobile/src/link/connection.ts`), relay capture in pairing (`mobile/src/link/pairing.ts`, `pair-flow.ts`, `host-store.ts`), the hysteresis/debounce fixes (`triggers.ts`), aligned SSE teardown (`activity.ts`).
+- The relay protocol spec (all frames, close codes, caps): the `acute-relay` repository's README.
 
 ## [0.105.0] - 2026-09-19 — the companion, rebuilt in clay (the Android app's UI round + the live link)
 
