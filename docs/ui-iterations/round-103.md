@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-103 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Round 103 — the release pipeline made bounded, retrying, and resumable + the stealth/union-alpha evaluation (v0.100.0's delivery unblocked)
 
 The round the owner's report opened with a delivery failure, not a product

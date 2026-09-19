@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Round 04 — PickFlavor rebuilt to demo anatomy; NeedBrain padding (2026-08-22)
 
 ## PickFlavor rebuild (APPROVED)

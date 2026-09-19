@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Goose — Architecture
 
 Verified against `block/goose` `main` branch, 2026-08-21. Sources listed at end.

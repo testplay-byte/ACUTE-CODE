@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-101 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Round 101 — the update hand-off calm + the chat timeline + Mermaid honesty + Linux ARM64 (v0.98.0 → v0.99.0)
 
 The twelfth-walkthrough round. The owner installed v0.98.0 on Windows, lived

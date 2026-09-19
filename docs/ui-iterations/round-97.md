@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-101 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 <!-- round: 97 -->
 # Round 97 — the context-popup + thinking-freedom + UI-quality round (v0.94.0 → v0.95.0)
 

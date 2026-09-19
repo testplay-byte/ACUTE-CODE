@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-103 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 <!-- round: 99 -->
 # Round 99 — the research-driven UI redo + the self-contained app (v0.96.0 → v0.97.0)
 

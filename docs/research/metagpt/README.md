@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # MetaGPT — Research Summary
 
 > Target: <https://github.com/FoundationAgents/MetaGPT> (org: FoundationAgents; default branch `main`; README still carries old `geekan/MetaGPT` links). Package `metagpt 1.0.0`.

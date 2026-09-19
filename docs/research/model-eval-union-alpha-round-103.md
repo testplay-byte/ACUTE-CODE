@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-103 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Model evaluation — `stealth/union-alpha` on OpenRouter (round 103)
 
 The owner's directive: "I would prefer for you to check out this new model,

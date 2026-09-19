@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-101 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # ACUTE-CODE
 
 Local-first, closed-source multi-agent engineering workbench for Windows

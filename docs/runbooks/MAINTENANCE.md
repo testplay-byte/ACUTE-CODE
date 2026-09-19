@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # MAINTENANCE — how to find things and change things safely
 
 **Status:** normative · **Established:** round-44 (owner directive: "complete the

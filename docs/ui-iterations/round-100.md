@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-104 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 <!-- round: 100 -->
 # Round 100 — the honest browser + the UI that stops looking generated + the Linux release (v0.97.0 → v0.98.0)
 

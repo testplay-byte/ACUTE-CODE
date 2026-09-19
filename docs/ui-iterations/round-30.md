@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 
 # Round 30 — Windows Bug Fixes + Session Management + Sidebar/Chat Redesign
 

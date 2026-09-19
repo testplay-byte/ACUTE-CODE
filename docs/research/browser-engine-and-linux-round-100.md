@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-104 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Browser engine + Linux release — the R100 research memo
 
 **Why this exists (owner directives, round-100):** the owner's verdict on the

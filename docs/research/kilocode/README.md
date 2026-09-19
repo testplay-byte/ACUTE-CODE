@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Kilo Code — Research Summary (for ACUTE-CODE)
 
 Researched: 2026-08-21. Primary source: https://github.com/Kilo-Org/kilocode (verified via direct fetches of README, LICENSE, package manifests, source tree, and the official docs at kilo.ai).

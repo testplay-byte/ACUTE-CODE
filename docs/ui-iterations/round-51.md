@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Round 51 — The desktop shell finally ships to the owner (CI-built Windows installer with the bundled sidecar) · the composer/detail polish round (icon-only Add Context, model-id-only button, viewport-aware flyouts, the donut without the inline % + hover bridge + main/sub-agent/combined stats) · the sub-agent panel de-sloped (no left rail, FULL todo list, centered stats) · main-agent efficiency (the EFFICIENCY prompt + the loop-hygiene guard) · the DASHBOARD Usage page
 
 **Date:** 2026-08-30 · **Branch:** `main` · **Version:** 0.51.0 · **Owner directives:** every workstream in this round traces to the owner's fourth Windows test session after R50.

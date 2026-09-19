@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.103.0",
+    "version": "0.104.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -316,6 +316,10 @@
     {
       "date": "2026-09-18",
       "label": "R104 — the fourteenth-walkthrough round (v0.101.0): the update hand-shake (Download → the staged row → Restart-and-update-now confirmation, Discard, the About-tab mount-resume) + the Linux AppImage update made real (the arch-matched asset pick + the atomic same-dir replace + the automatic relaunch — the v0.100.0 'Restarting into 0.100.0 → Connecting to Agent Core → still 0.99.0' arc answered at both roots)"
+    },
+    {
+      "date": "2026-09-19",
+      "label": "R108 — the seventeenth-walkthrough round (v0.104.0): the companion actually runs (the embedded-bundle release build + the hard CI gate, arm64/universal splits, the stable signing key, the boot trail + on-device crash screen + logcat filters) and the Clay rework (glow-fades deleted, clay as shadow+form, chrome quieter)"
     }
   ],
   "quality": {
@@ -353,11 +357,11 @@
     }
   ],
   "plan": {
-    "current": "R107 LANDED — the improvement round: the prompts made honest (chain-vs-approvals, the report contract on the producer side, channel honesty, the hardened injection guard, ~1K chars of measured cuts), the turn engine made safe for three clients (the concurrent-turn gate, retryChild supervision parity, abort-aware queue+sync path, sync-path loop guards, 402 quota classification), the CLI made a real client (approvals, agent-question rendering, --version/did-you-mean, no-spawn-on-typo, the REPL fixes), and the Clay + liquid-chrome design pass (a new theme, chrome tokens + patterns, the composer glint, the wizard refresh); v0.103.0 tagged per the R104 pattern",
+    "current": "R108 LANDED — the mobile artifact made real: the splash-forever root cause fixed (the debug APK never embedded the JS bundle — proven entry-by-entry from the shipped v0.103.0 APK; the CI now builds the RELEASE variant with a hard no-bundle-no-ship gate), the APK cut from 302 MB to the arm64 + universal release pair, the stable repo signing key (updates install in place from v0.104.0 on), the [ACUTE-BOOT] startup trail + on-device crash screen + the Android Studio logcat filters (mobile/README.md); and the Clay wardrobe reworked per the owner's v1.0.3 verdict — the glow-fades/hairlines deleted, clay rebuilt as shadow+form on the --ac-clay-shadow pipeline, chrome quieter; v0.104.0 tagged",
     "upcoming": [
       {
-        "title": "The owner's v0.102.0/v0.103.0 walkthrough",
-        "detail": "Two releases to test: v0.102.0 (pair the phone, stream from the couch, approve from the pocket, try the CLI) and v0.103.0 (the same + the improved prompts/logic/commands + the Clay theme in the picker). The APK is on each release page."
+        "title": "The owner's v0.104.0 walkthrough",
+        "detail": "UNINSTALL the old companion once (the debug-key signature of v0.102/v0.103 cannot update to the new key), then install ACUTE-CODE_0.104.0_android-arm64.apk from the Release. Watch the boot trail under package:com.acutecode.companion in Android Studio Logcat; pair via QR; every future release should update in place. Desktop: the clay rework read — matte cards, no top glows, the chrome jewelry quiet."
       },
       {
         "title": "Remote access from anywhere (the promised next round)",
@@ -374,6 +378,6 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 104,
+  "round": 108,
   "ci": "GREEN — round 104 (the update hand-shake + the Linux AppImage updater) delivered: CI 35301463893 and Release 35301467330 both SUCCESS on 71826cd (the CI-caught hotfix re-tag — the first push's verify job failed on the design-audit ratchet R2 +4, caught in two minutes because an in-sandbox pipe had hidden the audit's true exit code; the baseline was honestly re-pinned 1522→1526 for the StagedDownloadRow's four documented 11px ladder steps). v0.101.0 PUBLISHED (release 391182273, latest) with six assets: setup.exe 38,756,767 B + amd64.deb 67,302,862 B + amd64.AppImage 134,990,328 B + arm64.deb 67,248,818 B + aarch64.AppImage 132,745,736 B + the kit 125,957 B. Both rust jobs (x64 + arm64) were GREEN on the very first push — the AppImage replace leg compiled clean with no local toolchain (the R100 pattern). In-sandbox gates (re-read with true exit codes after the pipe lesson): lint clean, both typechecks clean, root 3,823/12-skipped, agent-core 2,392/2,392, license-audit clean (247), design-audit at the re-pinned baseline, docs:check 224/0/0, version ×4 at 0.101.0."
 }

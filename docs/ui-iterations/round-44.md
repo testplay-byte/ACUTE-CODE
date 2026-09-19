@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Round 44 — Completing the agentic coding environment: agent memory · REAL web search · session search/fork/revert · sub-agent keys from credentials.txt · streaming terminal · VLM-verified UI · MAINTENANCE.md
 
 **Date:** 2026-08-27 · **Branch:** `main` · **Owner directives:** "continue

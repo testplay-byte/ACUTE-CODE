@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # ADR-0014: SSE streaming for chat turns (no WS gateway in v1)
 
 - **Status:** ACCEPTED (backfilled round-17; decided in round-16)

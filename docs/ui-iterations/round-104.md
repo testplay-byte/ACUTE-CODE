@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-104 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Round 104 — the update hand-shake (download, then confirm) + the Linux AppImage updater made real (v0.100.0 → v0.101.0)
 
 The fourteenth-walkthrough round. The owner ran v0.100.0 on Windows AND

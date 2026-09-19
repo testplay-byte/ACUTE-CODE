@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Round 84 — the modularity round (Wave 2: the SCC break + the server.ts route split)
 
 > **Backfilled in round-85.** The R84 session delivered code + CHANGELOG + status.json

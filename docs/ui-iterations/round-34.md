@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 
 # Round 34 — Multi-Step Reliability (Cline Parity) + Settings Redesign
 

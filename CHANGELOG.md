@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-107 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -10,6 +10,20 @@ version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
 ## [Unreleased]
+
+## [0.104.0] - 2026-09-19 — the mobile artifact, made real (the companion actually runs)
+
+### The Android companion starts, updates, and fits (the round's headline)
+- **The splash-screen bug is fixed at the root.** v0.103.0's APK never embedded the JavaScript bundle — debug builds skip bundling by design and expect a Metro dev server on `localhost:8081`, so on a real phone the app sat on its logo forever. The shipped APK was read entry-by-entry to prove it (zero `assets/index.android.bundle`); the CI now builds the **release variant** (Hermes bundle embedded, R8-minified, resources shrunk, native libs stripped) and a hard gate REFUSES to ship any APK without the bundle — the lesson is an assertion now, not a memory.
+- **The APK is a fraction of the size.** The debug artifact was 302 MB (four ABI families × 25 unstripped debug native libraries + 23 unminimized dex files). The release build ships **two APKs per release**: `_android-arm64.apk` — the one to install on any Android 10+ phone — and `_android-universal.apk` (the fallback for emulators and 32-bit stragglers). Both land on the GitHub Release automatically.
+- **Updates install in place.** Every CI runner mints its own debug keystore, so no two builds ever shared a signature — each new version required an uninstall first (and the v0.103.0 install only "worked" because it was first). The companion now signs with one stable repo key, so v0.104.0 is the LAST version you uninstall for (uninstall the old app once, then every release updates over it).
+- **A stuck boot now tells you why.** Every startup stage is a breadcrumb (`[ACUTE-BOOT]` lines in logcat), fatal errors log with their full stack, and a crash renders its own on-device screen — the error, the startup trail, and the Android Studio filter that shows the rest. The splash also releases after a hard 4-second fallback no matter what.
+- **Debugging from Android Studio** is documented in `mobile/README.md` — paste `package:com.acutecode.companion` into Logcat's query box and you see the app's console, boot trail, and crashes, nothing else.
+
+### The Clay wardrobe, reworked (the owner's verdict on v1.0.3)
+- **The glow-fades are gone.** The gradient top-lights on the stat cards, the reflective hairlines on the title bar and theme pickers, and the composer's chrome focus glint read as a tacked-on glow, not as a material — all deleted.
+- **Clay is now built with shadow and form**: a matte theme fill, the hairline border, and a layered soft shadow (a tight directional contact shadow under a larger, very soft ambient one, warm clay-ink tinted) — the classic soft-tactile clay read, riding the documented `--ac-clay-shadow` token pipeline.
+- **Liquid chrome stays, quieter**: the metal plate on the wizard's CODE. hero remains, and the ambient sheen is halved in width and strength — a glint that catches the light, not a shine sweep. Chrome is the jewelry; clay is the material.
 
 ## [0.103.0] - 2026-09-19 — the sixteenth-walkthrough round: the agent's brain, tongue, and hands (prompts, logic, commands — and a Clay wardrobe)
 

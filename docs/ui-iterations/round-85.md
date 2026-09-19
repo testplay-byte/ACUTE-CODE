@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Round 85 — the structure re-assessment (the post-R84 audit + documentation truth round)
 
 ## 1. Owner direction (verbatim intent)

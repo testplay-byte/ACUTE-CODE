@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-101 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # ADR-0030: Mermaid diagram rendering in the chat (mermaid v11 + two ADR-classified license pins)
 
 - **Status:** ACCEPTED

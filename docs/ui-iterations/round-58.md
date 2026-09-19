@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Round 58 — The desktop-polish round: the first fully-working Windows session, and every UX bug it surfaced, fixed
 
 **Date:** 2026-08-31 · **Branch:** `main` · **Version:** 0.58.0 · **Owner directives:** the eleventh Windows test session — the first COMPLETE success on the desktop path (the R57 engine-bundling fix held): *"This time the application works properly. The app opens up without any errors or any issues at all. Everything is proper and I am quite satisfied with it."* — followed by a dense, precise defect list: the native title bar, the browser panel's five failures, the stop-flow's error spam, the missing live write preview, the post-task session regurgitation, the thinking block's "AI glow," the context popover's instant hover, the Models & Providers presentation, the Sub-agents/Advanced duplication, the hidden keys, and the need for a **terminal testing harness** so long sessions can be driven without the UI.

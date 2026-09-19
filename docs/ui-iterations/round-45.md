@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Round 45 — Finishing the agentic environment: security round (audit P0-3/P0-4/P0-5 CLOSED) · PTY terminal sessions · packaging v1 · TOOL_CATALOG drift guard · VLM pass (session manager un-orphaned + mobile drawer)
 
 **Date:** 2026-08-28 · **Branch:** `main` · **Owner directives:** the continuing

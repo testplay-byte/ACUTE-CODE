@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Phase 2 Plan — Core Skeleton
 
 Owner: Orchestrator · Planner artifact · 2026-08-22 · Prerequisite: Phase 1 APPROVED 2026-08-22 (cargo check green; CI live on GitHub Actions)

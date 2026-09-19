@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Round 102 — the Linux key store made real + the settings sidebar restored + the Mermaid viewer + the quiet composer (v0.99.0 → v0.100.0)
 
 The thirteenth-walkthrough round. The owner ran v0.99.0 on Windows AND

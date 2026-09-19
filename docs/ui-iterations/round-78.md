@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 <!-- the two server.ts location references below are the R78-era locations: GET/PUT /settings/retry moved to routes/settings.ts in R84, the queue-continuation loop to routes/sse.ts in R86 -->
 # Round 78 — The Honest-Errors + Queue Round (Retry Honesty, Composer Anchor, Retry Config, Message Queue)
 

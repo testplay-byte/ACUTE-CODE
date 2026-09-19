@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # PROJECT MEMORY — the agent memory system (implemented R44)
 
 **Status:** reference (implemented) · **Established:** round-44 · **Audience:**

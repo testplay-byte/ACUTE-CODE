@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-104 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # UI design language — the round-100 research memo (why it still reads "AI-generated", and the spec that fixes it)
 
 Task R100-2. Scope: research only — no code changed by this memo. This file is

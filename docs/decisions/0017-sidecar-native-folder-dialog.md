@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # ADR-0017: Sidecar-native OS folder dialog
 
 - **Status:** ACCEPTED (backfilled round-17; decided rounds 14–16)

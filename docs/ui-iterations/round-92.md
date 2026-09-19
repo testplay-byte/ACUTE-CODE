@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-104 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 <!-- stamp refresh 2026-09-14 round-96: paths + links re-verified by docs:check; content unchanged — the R92 record is historical -->
 # Round 92 — the fourth-walkthrough round (v0.90.0)
 

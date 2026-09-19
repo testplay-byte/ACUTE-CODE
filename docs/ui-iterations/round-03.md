@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-17 round-102 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Round 03 — Owner verdict: mixed (2026-08-22)
 
 Owner reviewed round-2+3 changes in the running app. Verdicts:
