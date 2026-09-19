@@ -22,6 +22,11 @@
  *      (The v0.103.0 debug APK shipped FOUR ABIs × 25 unstripped .so —
  *      224 of its 302 MiB. R8 + strip + arm64 lands the split at a fraction.)
  *
+ *   3. THE GRADLE JVM — the template's -XX:MaxMetaspaceSize=512m died
+ *      live on the first CI dress rehearsal (OutOfMemoryError: Metaspace
+ *      during packageRelease, then a hung daemon until the job timeout);
+ *      gradle.properties gets -Xmx4096m + 1g metaspace.
+ *
  * LOCAL DEV IS UNAFFECTED in spirit: `expo run:android` still assembles the
  * debug variant (Metro serves JS, debug.keystore signs) — splits produce a
  * per-ABI debug APK too, so run-android installs whichever output it finds
@@ -131,6 +136,22 @@ module.exports = function withAndroidReleaseSigning(config) {
       throw new Error(
         `with-android-release-signing: keystore missing at ${KEYSTORE_PATH} — see mobile/android-signing/README.md (rotation included).`,
       );
+    }
+
+    // 5. The gradle JVM must survive the release pipeline (the R108 dress
+    //    rehearsal's live failure): the template's -XX:MaxMetaspaceSize=512m
+    //    dies with OutOfMemoryError: Metaspace during packageRelease once
+    //    R8 + AGP + the splits packaging share one JVM — and the dying
+    //    daemon then hung for 24 minutes until the job timeout. 1g of
+    //    metaspace + a 4g heap (runners carry 16g) is the honest floor.
+    const gradlePropsPath = path.join(mod.modRequest.projectRoot, "android", "gradle.properties");
+    let props = fs.readFileSync(gradlePropsPath, "utf8");
+    if (!props.includes("-XX:MaxMetaspaceSize=1024m")) {
+      props = props.replace(
+        /^org\.gradle\.jvmargs=.*$/m,
+        "org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError",
+      );
+      fs.writeFileSync(gradlePropsPath, props);
     }
 
     fs.writeFileSync(gradlePath, gradle);
