@@ -21,8 +21,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { FastifyInstance } from "fastify";
-import type { LightMyRequestResponse } from "fastify/lib/lightMyRequest.js";
+import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { buildServer } from "../src/server";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 

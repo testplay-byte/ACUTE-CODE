@@ -8,9 +8,10 @@ the pinned-TLS fetch + SSE stream in OkHttp.
 - Package: `com.acutecode.companion` · minSdk 29 (Android 10+)
 - Built ONLY by GitHub Actions (`.github/workflows/mobile.yml`) — the owner's
   rule: APKs are never built on a local machine.
-- Two release APKs per tag: `_android-arm64.apk` (THE artifact — every
-  Android 10+ phone) and `_android-universal.apk` (fallback for emulators
-  and 32-bit stragglers).
+- ONE release APK per tag (ROUND-109, the owner's ruling): 
+  `_android-arm64.apk` — THE artifact (every Android 10+ phone; the
+  universal build is gone by ruling, and the workflow REFUSES a universal
+  output).
 - Signing: the stable repo key in `android-signing/` (its README has the
   facts + the rotation procedure) — updates install in place.
 
@@ -18,7 +19,11 @@ the pinned-TLS fetch + SSE stream in OkHttp.
 
 The app prints its whole startup trail as `[ACUTE-BOOT] …` lines under the
 `ReactNativeJS` tag, fatal errors included (`[ACUTE-BOOT] ERROR …` + stack),
-and a crash also renders its own on-device screen (error + trail + retry).
+and — since ROUND-109 — every subsystem logs its runtime story under the
+`[ACUTE-MOB]` tag (link state transitions + probe results, the pairing
+ladder, the SSE stream's open/terminal/error events, the outbox flushes,
+the activity stream, every config load/save). A crash also renders its own
+on-device screen (error + trail + retry).
 
 **The filter to paste into Android Studio's Logcat query box:**
 
@@ -35,8 +40,9 @@ Variants worth knowing:
 | Goal                                   | Filter                                                            |
 | -------------------------------------- | ----------------------------------------------------------------- |
 | Everything from the app (the default) | `package:com.acutecode.companion`                                 |
-| Only JS console + boot trail           | `tag:ReactNativeJS`                                               |
+| Only JS console + both trails          | `tag:ReactNativeJS`                                               |
 | Only the boot trail                    | `tag:ReactNativeJS message~:\[ACUTE-BOOT\]`                       |
+| The runtime story (link/stream/config) | `tag:ReactNativeJS message~:\[ACUTE-MOB\]`                        |
 | Only errors, any tag                  | `package:com.acutecode.companion level:ERROR`                     |
 | Crash + JS + Expo natives              | `package:com.acutecode.companion tag~:AndroidRuntime\|ExpoModules\|ReactNativeJS` |
 
@@ -45,7 +51,7 @@ Variants worth knowing:
 Command-line equivalent (adb):
 
 ```bash
-adb logcat --pid=$(adb shell pidof -s com.acutecode.companion) | grep ACUTE-BOOT
+adb logcat --pid=$(adb shell pidof -s com.acutecode.companion) | grep -E "ACUTE-BOOT|ACUTE-MOB"
 ```
 
 ## Reading a stuck boot
