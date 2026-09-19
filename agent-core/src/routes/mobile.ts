@@ -32,6 +32,7 @@ import { deviceAuthOf } from "./context.js";
 import { errorBody } from "./helpers.js";
 import { VERSION } from "../lib/version.js";
 import { PAIRING_MAX_ATTEMPTS, PAIRING_TTL_MS, requestArrivedOverTls } from "../lib/device-link.js";
+import { getCloudConnectorStatus, normalizeRelayUrl } from "../lib/cloud-connector.js";
 import {
   createMobileDevice,
   deleteMobileDevice,
@@ -70,6 +71,23 @@ function isOverTls(request: FastifyRequest): boolean {
   return requestArrivedOverTls(request);
 }
 
+/**
+ * ROUND-112 (R112-a): the phone's cloud reachability address —
+ * `<relayBase>/m/<machineId>` — carried by the QR payload, the claim
+ * response, and link-info ONLY while the cloud connector's tunnel is
+ * CONNECTED. The field is strictly ADDITIVE (v stays 1; old 0.105.0 phones
+ * ignore unknown fields), and the relayUrl is slash-normalized before
+ * composing so a trailing slash can never produce `//m/…`.
+ */
+function relayAddressOf(machineId: string | null): string | null {
+  if (machineId === null) return null;
+  const status = getCloudConnectorStatus();
+  if (status.state !== "connected") return null;
+  const base = normalizeRelayUrl(status.relayUrl);
+  if (base === "") return null;
+  return `${base}/m/${machineId}`;
+}
+
 export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext): void {
   const { db, mobileLink } = ctx;
 
@@ -101,6 +119,10 @@ export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext):
     // ordered ARRAY (LAN IPv4s today, a tunnel URL joins later — R3 §4's
     // tunnel-ready rule: never a single host field). certFP is the
     // TOFU-pinned SHA-256; machineId is the stable per-machine id.
+    // ROUND-112: `relay` joins ADDITIVELY — the cloud connector's guest
+    // address, present only while the tunnel is live (0.105.0 phones
+    // ignore it; 0.106.0 phones put it after the LAN ladder).
+    const relay = relayAddressOf(status.machineId);
     return {
       v: QR_PAYLOAD_VERSION,
       addrs: status.addrs,
@@ -110,6 +132,7 @@ export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext):
       pin: pairing.pin,
       ttl: PAIRING_TTL_MS,
       expiresAt: pairing.expiresAt,
+      ...(relay !== null ? { relay } : {}),
     };
   });
 
@@ -178,7 +201,9 @@ export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext):
     createMobileDevice(db, { id: deviceId, label, tokenHash: hashDeviceToken(deviceToken) });
     const status = mobileLink.status();
     // What the phone persists (Keystore + its link record — LINKING-PROTOCOL
-    // §2: token + certFP + addresses, nothing more).
+    // §2: token + certFP + addresses, nothing more). ROUND-112: `relay` is
+    // the additive cloud address, present only while the tunnel is live.
+    const relay = relayAddressOf(status.machineId);
     return {
       deviceToken,
       deviceId,
@@ -189,6 +214,7 @@ export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext):
       certFP: status.certFP,
       addrs: status.addrs,
       port: status.port,
+      ...(relay !== null ? { relay } : {}),
     };
   });
 
@@ -219,6 +245,9 @@ export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext):
     }
     const status = mobileLink.status();
     const active = mobileLink.activePairing();
+    // ROUND-112: the additive cloud address while the tunnel is live (the
+    // Devices tab's "Reachable over the internet" hint reads this).
+    const relay = relayAddressOf(status.machineId);
     return {
       enabled: status.enabled,
       port: status.port,
@@ -226,6 +255,7 @@ export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext):
       certFP: status.certFP,
       machineId: status.machineId,
       activePairing: active === null ? null : { pin: active.pin, expiresAt: active.expiresAt },
+      ...(relay !== null ? { relay } : {}),
     };
   });
 }

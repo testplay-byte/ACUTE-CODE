@@ -173,6 +173,9 @@ export default function HostSettingsScreen() {
                 `port ${host.port}`,
               ]}
             />
+            {host.relay !== null ? (
+              <IdentityMono label="CLOUD RELAY (PROBED LAST)" lines={[host.relay]} />
+            ) : null}
             <View style={styles.identityRow}>
               <TypeMicro>PAIRED</TypeMicro>
               <TypeCaption>{timeAgo(host.pairedAt)} ago</TypeCaption>

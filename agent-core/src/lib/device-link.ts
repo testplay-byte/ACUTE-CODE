@@ -57,6 +57,19 @@ export const PAIRING_TTL_MS = 120_000;
 /** The documented brute-force ceiling — the 5th wrong PIN kills the session. */
 export const PAIRING_MAX_ATTEMPTS = 5;
 
+/* ── ROUND-112 (R112-a, the R110 disconnect-loop fix #2): the keep-alive
+ * tuning BOTH listeners boot with. Node's DEFAULT keepAliveTimeout is 5 s,
+ * which collides head-on with the phone's 5-minute OkHttp connection pool:
+ * the pool hands OkHttp a socket the server has just reclaimed, every
+ * retryOnConnectionFailure is disabled, and the phone reads a dead socket
+ * as "disconnected" — the reconnect loop's root cause #2. 65 s keeps the
+ * server's idle sockets open LONGER than any pooled client would ever
+ * reuse them; headersTimeout must EXCEED keepAliveTimeout (Node's own
+ * invariant — the request-header deadline has to outlive the idle window)
+ * and 66 s does. */
+export const DEVICE_LISTENER_KEEP_ALIVE_TIMEOUT_MS = 65_000;
+export const DEVICE_LISTENER_HEADERS_TIMEOUT_MS = 66_000;
+
 /** PIN length — 8 numeric digits (LINKING-PROTOCOL §2). */
 const PIN_DIGITS = 8;
 
@@ -97,6 +110,10 @@ export interface DeviceLinkController {
   stop(): Promise<DeviceLinkStatus>;
   /** Current status snapshot (addrs recomputed fresh). */
   status(): DeviceLinkStatus;
+  /** R110/R112-a: the HTTP keep-alive tuning this listener booted with
+   * (null while stopped) — published so tests and the diagnostics surface
+   * can assert the disconnect-loop fix is actually applied to the socket. */
+  transportTuning(): { keepAliveTimeout: number; headersTimeout: number } | null;
   /** The active cert/machineId when the cert was ever loaded (boot-loaded so
    * link-info can report identity even while the listener is OFF). */
   identity(): { certFP: string; machineId: string } | null;
@@ -204,6 +221,10 @@ export function createDeviceLinkController(options: DeviceLinkOptions): DeviceLi
           app.routing(req, res);
         },
       );
+      // R112-a (the R110 disconnect-loop fix): keep idle keep-alive sockets
+      // open for 65 s — see the DEVICE_LISTENER_* constants above.
+      tls.keepAliveTimeout = DEVICE_LISTENER_KEEP_ALIVE_TIMEOUT_MS;
+      tls.headersTimeout = DEVICE_LISTENER_HEADERS_TIMEOUT_MS;
       // A plaintext probe against the TLS port (or a broken handshake) must
       // never crash the sidecar — log at debug level and drop the socket.
       tls.on("tlsClientError", (err) => {
@@ -250,6 +271,12 @@ export function createDeviceLinkController(options: DeviceLinkOptions): DeviceLi
 
     status(): DeviceLinkStatus {
       return currentStatus();
+    },
+
+    transportTuning(): { keepAliveTimeout: number; headersTimeout: number } | null {
+      return server === null
+        ? null
+        : { keepAliveTimeout: server.keepAliveTimeout, headersTimeout: server.headersTimeout };
     },
 
     identity(): { certFP: string; machineId: string } | null {

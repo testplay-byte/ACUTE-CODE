@@ -4,7 +4,12 @@
  *
  *   SecureStore   { deviceToken }                 — the Keystore-backed secret
  *   AsyncStorage  { machineId, certFP, hostLabel,
- *                   addrs, port, pairedAt }       — the non-secret host facts
+ *                   addrs, port, relay, pairedAt } — the non-secret host facts
+ *
+ * v0.106.0 (R112): `relay` joins the record — the cloud relay base URL
+ * (`https://<relay-host>/m/<machineId>`) or null (absent cell / "" on disk
+ * = no relay, exactly the certFP convention). Records written by pre-v0.106
+ * builds simply lack the cell — they read as relay-less, never as corrupt.
  *
  * NOTHING ELSE may pass through here (pinned by the key-set test): theme
  * prefs live in src/design/theme.tsx under their own acute.prefs.* keys and
@@ -27,13 +32,14 @@ export const HOST_STORE_KEYS = {
     `${HOST_PREFIX}hostLabel`,
     `${HOST_PREFIX}addrs`,
     `${HOST_PREFIX}port`,
+    `${HOST_PREFIX}relay`,
     `${HOST_PREFIX}pairedAt`,
   ] as const,
 };
 
 // ── the stored shapes ───────────────────────────────────────────────────────
 
-/** The host facts — the exact six non-secret fields the contract allows. */
+/** The host facts — the exact non-secret fields the contract allows. */
 export interface StoredHost {
   /** Colon-free lowercase 64-hex — the desktop's stable machine identity. */
   machineId: string;
@@ -45,6 +51,10 @@ export interface StoredHost {
   addrs: string[];
   /** The device listener's port (bare-host entries). */
   port: number;
+  /** The cloud relay base URL (`https://<relay-host>/m/<machineId>`) or null
+   *  — one more address for the SAME machineId, probed AFTER the LAN ladder
+   *  (v0.106.0). Full URL: standard CA, never the TOFU pin. */
+  relay: string | null;
   /** Epoch ms of the successful claim. */
   pairedAt: number;
 }
@@ -97,12 +107,13 @@ function parseNumber(raw: string | null): number | null {
 export const hostStore: HostStore = {
   async readHost() {
     try {
-      const [machineId, certFP, hostLabel, addrs, port, pairedAt] = await Promise.all([
+      const [machineId, certFP, hostLabel, addrs, port, relay, pairedAt] = await Promise.all([
         AsyncStorage.getItem(`${HOST_PREFIX}machineId`),
         AsyncStorage.getItem(`${HOST_PREFIX}certFP`),
         AsyncStorage.getItem(`${HOST_PREFIX}hostLabel`),
         AsyncStorage.getItem(`${HOST_PREFIX}addrs`),
         AsyncStorage.getItem(`${HOST_PREFIX}port`),
+        AsyncStorage.getItem(`${HOST_PREFIX}relay`),
         AsyncStorage.getItem(`${HOST_PREFIX}pairedAt`),
       ]);
       const parsedPort = parseNumber(port);
@@ -125,6 +136,9 @@ export const hostStore: HostStore = {
         hostLabel: parseString(hostLabel) ?? "ACUTE host",
         addrs: parsedAddrs,
         port: parsedPort,
+        // Absent cell (a pre-v0.106 record) and "" both mean "no relay" —
+        // the field is optional, its absence is NOT corruption.
+        relay: relay === null || relay === "" ? null : relay,
         pairedAt: parsedPairedAt,
       };
     } catch {
@@ -147,6 +161,7 @@ export const hostStore: HostStore = {
       [`${HOST_PREFIX}hostLabel`, pairing.host.hostLabel],
       [`${HOST_PREFIX}addrs`, JSON.stringify(pairing.host.addrs)],
       [`${HOST_PREFIX}port`, String(pairing.host.port)],
+      [`${HOST_PREFIX}relay`, pairing.host.relay ?? ""],
       [`${HOST_PREFIX}pairedAt`, String(pairing.host.pairedAt)],
     ]);
     // The token is the crown jewel — write it LAST so a crash mid-save can

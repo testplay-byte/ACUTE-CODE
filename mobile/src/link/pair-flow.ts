@@ -4,7 +4,9 @@
  * Every failure is a TYPED, honestly-messaged value (never a thrown string):
  *
  *   unreachable     every address failed at the network layer (host off /
- *                   wrong LAN) — "retry", never "re-pair"
+ *                   wrong LAN — or the relay answered 503 host_offline, the
+ *                   clean "the desktop is offline at the cloud" verdict) —
+ *                   "retry", never "re-pair"
  *   tls             the pinned fingerprint did not match — re-pair territory
  *   wrong-pin       401 from claim (+ attemptsRemaining when the host says so)
  *   window-closed   410 — the 120s PIN window expired or was consumed
@@ -15,11 +17,18 @@
  * (expo-device at the screen layer — pure function here). On success the
  * pairing is PERSISTED via the host store (the single source of truth) and
  * returned for the connection manager to adopt.
+ *
+ * v0.106.0 (R112): the ladder is LAN-first, relay-last — the optional relay
+ * base URL (from the QR or the claim response) is one more rung for the SAME
+ * machineId, probed AFTER every stored address (the owner's "local OR
+ * internet, automatic" ruling). The claim response's relay, when it carries
+ * one, WINS over the QR's (the desktop is the authority on its own relay).
  */
 
 import { baseUrlFor, pinFor, type HttpResponse, type NetTransport } from "./net";
 import type { HostStore, StoredHost } from "./host-store";
 import { parseHealthBody, type LiveInfo } from "./connection";
+import { parseRelayUrl } from "./pairing";
 import type { ManualTarget, PairingPayload } from "./pairing";
 
 // ── inputs + results ────────────────────────────────────────────────────────
@@ -36,6 +45,9 @@ export interface PairCandidate {
   /** Known when the QR carried it; null ⇒ captured from /health. */
   machineId: string | null;
   pin: string;
+  /** OPTIONAL cloud relay base URL (v0.106.0): probed AFTER every addr —
+   *  full URL, standard CA, same machineId identity check. Null = none. */
+  relay: string | null;
 }
 
 export interface PairSuccess {
@@ -80,6 +92,9 @@ interface ClaimResponseBody {
   certFP: string;
   addrs: string[];
   port: number;
+  /** OPTIONAL (v0.106.0): the relay base URL — the claim response wins over
+   *  the QR's when both carry one (the desktop is the authority). */
+  relay?: string;
 }
 
 const CLAIM_PATH = "/api/v1/mobile/pair/claim";
@@ -99,6 +114,7 @@ export function candidateFromQr(payload: PairingPayload): PairCandidate {
     certFP: payload.certFP,
     machineId: payload.machineId,
     pin: payload.pin,
+    relay: payload.relay,
   };
 }
 
@@ -113,6 +129,7 @@ export function candidateFromManual(target: ManualTarget): PairCandidate {
         certFP: null, // standard CA — the tunnel path never pins (R3 §4)
         machineId: null,
         pin: target.pin,
+        relay: null,
       };
     case "lan":
       return {
@@ -122,11 +139,12 @@ export function candidateFromManual(target: ManualTarget): PairCandidate {
         certFP: target.certFP,
         machineId: null,
         pin: target.pin,
+        relay: null,
       };
     case "pin-only":
       // pin-only resolves against the STORED host inside pairWithHost — the
       // candidate carries an empty ladder; the stored host fills it in.
-      return { kind: "pin-only", addrs: [], port: 0, certFP: null, machineId: null, pin: target.pin };
+      return { kind: "pin-only", addrs: [], port: 0, certFP: null, machineId: null, pin: target.pin, relay: null };
   }
 }
 
@@ -139,7 +157,8 @@ export async function pairWithHost(
   deps: PairFlowDeps,
 ): Promise<PairResult> {
   const now = deps.now ?? Date.now;
-  const probeTimeoutMs = deps.probeTimeoutMs ?? 3_000;
+  // R112: 5s per rung (was 3s) — a busy desktop mid-turn can miss a 3s probe.
+  const probeTimeoutMs = deps.probeTimeoutMs ?? 5_000;
 
   let input = candidate;
 
@@ -163,16 +182,24 @@ export async function pairWithHost(
       certFP: stored.certFP,
       machineId: stored.machineId,
       pin: input.pin,
+      relay: stored.relay,
     };
   }
 
-  // ── step 1: probe the address ladder in order (LAN first) ────────────────
+  // ── step 1: probe the address ladder in order (LAN first, relay last) ───
+  // The relay is one more rung for the SAME machineId: a full https URL, so
+  // baseUrlFor/pinFor already give it standard-CA treatment (never the TOFU
+  // pin), and /health is proxied to the desktop while its tunnel is up. When
+  // the desktop is offline the relay answers a clean 503 {error:{code:
+  // "host_offline"}} — that is "address not usable now" (the ladder continues
+  // / the round fails retryably), NEVER an auth failure.
+  const ladder = ladderFor(input);
   let workingAddr: string | null = null;
   let live: LiveInfo | null = null;
   let tlsFailure: { message: string } | null = null;
   let sawWrongHost = false;
 
-  for (const addr of input.addrs) {
+  for (const addr of ladder) {
     try {
       const res = await deps.net.request({
         url: `${baseUrlFor(addr, input.port)}/health`,
@@ -351,10 +378,20 @@ export async function pairWithHost(
   const machineId =
     input.machineId ?? live.machineId ?? (certFP !== null ? certFP : (responseFP ?? ""));
 
+  // The relay: the claim response's wins (the desktop is the authority on
+  // its own relay); an invalid/absent response field falls back to the QR's;
+  // neither ⇒ null. parseRelayUrl keeps the exact wire spelling (https, ≤200
+  // chars, whitespace-free — invalid values are ignored, not fatal, here).
+  const relay = parseRelayUrl(body.relay) ?? input.relay ?? null;
+
   // The stored ladder: the working address FIRST (it demonstrably works),
   // then the desktop's own LAN list (from the claim) for future reconnects —
-  // deduplicated, order preserved (tunnel-ready, R3 §4).
-  const addrs = dedupe([workingAddr, ...body.addrs]);
+  // deduplicated, order preserved (tunnel-ready, R3 §4). The relay lives in
+  // its OWN field (probed last by the connection ladder), so a stored addr
+  // that happens to equal it is filtered out — never probed twice.
+  const addrs = dedupe([workingAddr, ...body.addrs]).filter(
+    (a) => relay === null || a.toLowerCase() !== relay.toLowerCase(),
+  );
 
   const host: StoredHost = {
     machineId,
@@ -362,6 +399,7 @@ export async function pairWithHost(
     hostLabel: body.machine.name !== "" ? body.machine.name : "ACUTE host",
     addrs,
     port: body.port,
+    relay,
     pairedAt: now(),
   };
 
@@ -392,4 +430,13 @@ function dedupe(addrs: string[]): string[] {
     out.push(a);
   }
   return out;
+}
+
+/** The probe ladder for a pairing candidate: every stored address in order,
+ * then the relay rung LAST (LAN first, internet fallback — R112). */
+export function ladderFor(candidate: PairCandidate): string[] {
+  if (candidate.relay === null) return candidate.addrs;
+  const relayKey = candidate.relay.toLowerCase();
+  const addrs = candidate.addrs.filter((a) => a.toLowerCase() !== relayKey);
+  return [...addrs, candidate.relay];
 }

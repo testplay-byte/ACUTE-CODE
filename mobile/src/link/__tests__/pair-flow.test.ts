@@ -1,12 +1,20 @@
 /**
  * pair-flow.test.ts — the pairing ladder against a mocked transport + store:
  * the happy QR path, every honest error mapping (401 + attemptsRemaining,
- * 410, unreachable, tls, wrong-host), the tunnel/TOFU paths, and pin-only.
+ * 410, unreachable, tls, wrong-host), the tunnel/TOFU paths, pin-only, and
+ * the v0.106.0 relay rung (LAN-first relay-last order, the claim-response
+ * capture, the relay's 503 host_offline verdict).
  */
 
 import { describe, expect, it } from "@jest/globals";
 
-import { candidateFromManual, candidateFromQr, pairWithHost, type PairCandidate } from "../pair-flow";
+import {
+  candidateFromManual,
+  candidateFromQr,
+  ladderFor,
+  pairWithHost,
+  type PairCandidate,
+} from "../pair-flow";
 import type { HostStore, StoredHost, StoredPairing } from "../host-store";
 import type { HttpRequestOptions, HttpResponse, NetTransport } from "../net";
 
@@ -15,6 +23,9 @@ const CERT_FP = "bb".repeat(32);
 const RESPONSE_FP = "11".repeat(32);
 const DEVICE_TOKEN = "ff".repeat(32);
 const NOW = 1_750_000_000_000;
+/** The relay base URL exactly as the desktop builds it (v0.106.0 QR field). */
+const RELAY = `https://acute-relay.anikuta.workers.dev/m/${MACHINE_ID}`;
+const RELAY_B = `https://acute-relay-2.anikuta.workers.dev/m/${MACHINE_ID}`;
 
 function netError(kind: string, message: string): { kind: string; message: string } {
   return { kind, message };
@@ -109,6 +120,7 @@ function qrCandidate(): PairCandidate {
     certFP: CERT_FP,
     machineId: MACHINE_ID,
     pin: "12345678",
+    relay: null,
   };
 }
 
@@ -150,6 +162,7 @@ describe("pairWithHost — the QR happy path", () => {
       hostLabel: "OWNER-PC",
       addrs: ["192.168.1.5", "192.168.1.4"], // working addr first, deduped
       port: 53411,
+      relay: null, // no relay anywhere ⇒ null
       pairedAt: NOW,
     });
     expect(store.saved?.deviceToken).toBe(DEVICE_TOKEN);
@@ -164,6 +177,14 @@ describe("pairWithHost — the QR happy path", () => {
     expect(claim?.method).toBe("POST");
     expect(claim?.headers?.["content-type"]).toBe("application/json");
     expect(JSON.parse(claim?.bodyText ?? "{}")).toEqual({ pin: "12345678", label: "Pixel 9" });
+  });
+
+  it("probes with the R112 5s rung timeout (claim gets 2×)", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    await pairWithHost(qrCandidate(), deps(net, store));
+    expect(net.requests[0]?.timeoutMs).toBe(5_000);
+    expect(net.requests.at(-1)?.timeoutMs).toBe(10_000);
   });
 });
 
@@ -358,6 +379,7 @@ describe("pairWithHost — manual + tunnel forms", () => {
       hostLabel: "OWNER-PC",
       addrs: ["192.168.1.7"],
       port: 53411,
+      relay: null,
       pairedAt: 999,
     };
     const store = makeStore({ deviceToken: "ee".repeat(32), host: stored });
@@ -369,6 +391,36 @@ describe("pairWithHost — manual + tunnel forms", () => {
     if (!result.ok) return;
     // The working (stored) address first, then the desktop's fresh LAN list.
     expect(result.value.host.addrs).toEqual(["192.168.1.7", "192.168.1.4"]);
+  });
+
+  it("pin-only re-pairs through the STORED relay when the stored LAN is gone", async () => {
+    const net = makeNet();
+    const stored: StoredHost = {
+      machineId: MACHINE_ID,
+      certFP: CERT_FP,
+      hostLabel: "OWNER-PC",
+      addrs: ["192.168.1.7"],
+      port: 53411,
+      relay: RELAY,
+      pairedAt: 999,
+    };
+    const store = makeStore({ deviceToken: "ee".repeat(32), host: stored });
+    const candidate = candidateFromManual({ kind: "pin-only", pin: "11223344" });
+    net.setHealth((o) =>
+      o.url.startsWith("https://192.168.1.7:")
+        ? ((): HttpResponse => { throw netError("network", "down"); })()
+        : ok(healthBody()),
+    );
+    const result = await pairWithHost(candidate, deps(net, store));
+    expect(result.ok).toBe(true);
+    expect(net.requests.map((r) => r.url)).toEqual([
+      "https://192.168.1.7:53411/health",
+      `${RELAY}/health`,
+      `${RELAY}/api/v1/mobile/pair/claim`,
+    ]);
+    expect(net.requests[1]?.pinSha256).toBeNull(); // the relay rung — standard CA
+    if (!result.ok) return;
+    expect(result.value.host.relay).toBe(RELAY); // preserved through the re-pair
   });
 
   it("pin-only without a stored host fails honestly", async () => {
@@ -384,10 +436,155 @@ describe("pairWithHost — manual + tunnel forms", () => {
   });
 });
 
+// ── the relay rung (v0.106.0, R112) ──────────────────────────────────────────
+
+describe("pairWithHost — the relay rung", () => {
+  it("ladderFor: LAN addresses first, the relay LAST, never duplicated", () => {
+    expect(ladderFor({ ...qrCandidate(), relay: null })).toEqual(["192.168.1.4", "192.168.1.5"]);
+    expect(ladderFor({ ...qrCandidate(), relay: RELAY })).toEqual([
+      "192.168.1.4",
+      "192.168.1.5",
+      RELAY,
+    ]);
+    // A stored addr equal to the relay (case-insensitive) is not probed twice.
+    expect(
+      ladderFor({ ...qrCandidate(), addrs: [RELAY.toUpperCase(), "192.168.1.4"], relay: RELAY }),
+    ).toEqual(["192.168.1.4", RELAY]);
+    expect(ladderFor({ ...qrCandidate(), addrs: [], relay: RELAY })).toEqual([RELAY]);
+  });
+
+  it("probes LAN first then the relay; the relay rung rides standard CA (no pin)", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    const candidate = { ...qrCandidate(), relay: RELAY };
+    // LAN dead, relay live — the phone off the desktop's network pairs anyway.
+    net.setHealth((o) =>
+      o.url.startsWith("https://192.168.1.")
+        ? ((): HttpResponse => { throw netError("network", "down"); })()
+        : ok(healthBody()),
+    );
+    const result = await pairWithHost(candidate, deps(net, store));
+    expect(result.ok).toBe(true);
+    expect(net.requests.map((r) => r.url)).toEqual([
+      "https://192.168.1.4:53411/health",
+      "https://192.168.1.5:53411/health",
+      `${RELAY}/health`,
+      `${RELAY}/api/v1/mobile/pair/claim`,
+    ]);
+    // LAN rungs pin (TOFU); the relay rung never does (standard CA).
+    expect(net.requests[0]?.pinSha256).toBe(CERT_FP);
+    expect(net.requests[2]?.pinSha256).toBeNull();
+    expect(net.requests[3]?.pinSha256).toBeNull();
+    if (!result.ok) return;
+    expect(result.value.activeAddr).toBe(RELAY);
+    // The relay lives in its OWN field; the stored addrs are the LAN list.
+    expect(result.value.host.relay).toBe(RELAY);
+    expect(result.value.host.addrs).toEqual(["192.168.1.4"]);
+    expect(store.saved?.host.relay).toBe(RELAY);
+  });
+
+  it("the claim response's relay WINS over the QR's (the desktop is the authority)", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    const candidate = { ...qrCandidate(), relay: RELAY };
+    net.setClaim(() => ok(claimBody({ relay: RELAY_B })));
+    const result = await pairWithHost(candidate, deps(net, store));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.host.relay).toBe(RELAY_B);
+  });
+
+  it("an invalid claim-response relay falls back to the QR's (never fatal)", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    const candidate = { ...qrCandidate(), relay: RELAY };
+    net.setClaim(() => ok(claimBody({ relay: "http://not-tls.example.com/m/x" })));
+    const result = await pairWithHost(candidate, deps(net, store));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.host.relay).toBe(RELAY);
+  });
+
+  it("an absent claim-response relay keeps the QR's", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    const candidate = { ...qrCandidate(), relay: RELAY };
+    const result = await pairWithHost(candidate, deps(net, store));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.host.relay).toBe(RELAY);
+  });
+
+  it("manual entry of the relay's room URL pairs THROUGH the relay and stores the claim's relay (v0.106.0)", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    // The owner types the full relay address by hand (camera denied, off-LAN):
+    // https://<relay>/m/<machineId> — parseManualEntry preserves the room path.
+    // The tunnel is up (we pair through it), so the claim carries the relay.
+    net.setClaim(() => ok(claimBody({ relay: RELAY })));
+    const candidate = candidateFromManual({
+      kind: "tunnel",
+      url: RELAY,
+      pin: "87654321",
+    });
+    const result = await pairWithHost(candidate, deps(net, store));
+    expect(result.ok).toBe(true);
+    // The ladder is exactly the relay room rung — no pin (standard CA).
+    expect(net.requests.map((r) => r.url)).toEqual([
+      `${RELAY}/health`,
+      `${RELAY}/api/v1/mobile/pair/claim`,
+    ]);
+    expect(net.requests[0]?.pinSha256).toBeNull();
+    if (!result.ok) return;
+    expect(result.value.activeAddr).toBe(RELAY);
+    // The stored host: the claim's relay (the desktop is the authority), the
+    // LAN list from the claim, and the relay-equal working addr filtered out
+    // of addrs (the relay lives in its OWN field, probed last).
+    expect(result.value.host.relay).toBe(RELAY);
+    expect(result.value.host.addrs).toEqual(["192.168.1.4"]);
+    expect(result.value.host.machineId).toBe(MACHINE_ID);
+  });
+
+  it("the relay's 503 host_offline is UNREACHABLE (retryable) — never wrong-pin/tls", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    const candidate = { ...qrCandidate(), relay: RELAY };
+    // LAN dead + the desktop's tunnel down: the relay answers its clean 503.
+    net.setHealth((o) =>
+      o.url.startsWith("https://192.168.1.")
+        ? ((): HttpResponse => { throw netError("network", "down"); })()
+        : {
+            status: 503,
+            headers: {},
+            bodyText: JSON.stringify({ error: { code: "host_offline", message: "the desktop is offline" } }),
+          },
+    );
+    const result = await pairWithHost(candidate, deps(net, store));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe("unreachable");
+    expect(result.error.message).toContain("could not reach");
+    expect(store.calls).not.toContain("savePairing");
+    expect(net.requests).toHaveLength(3); // both LAN rungs + the relay rung
+  });
+
+  it("a relay /health with the WRONG machineId is skipped (identity check holds)", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    const candidate = { ...qrCandidate(), relay: RELAY, addrs: [] };
+    net.setHealth(() => ok(healthBody("dd".repeat(32))));
+    const result = await pairWithHost(candidate, deps(net, store));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe("wrong-host");
+    expect(net.requests.map((r) => r.url)).toEqual([`${RELAY}/health`]);
+  });
+});
+
 // ── candidate builders ──────────────────────────────────────────────────────
 
 describe("candidate builders", () => {
-  it("candidateFromQr carries every QR field", () => {
+  it("candidateFromQr carries every QR field — relay included", () => {
     expect(candidateFromQr({
       v: 1,
       addrs: ["h"],
@@ -397,6 +594,7 @@ describe("candidate builders", () => {
       pin: "p",
       ttl: 1000,
       expiresAt: 2,
+      relay: RELAY,
     })).toEqual({
       kind: "qr",
       addrs: ["h"],
@@ -404,6 +602,21 @@ describe("candidate builders", () => {
       certFP: "c",
       machineId: "m",
       pin: "p",
+      relay: RELAY,
     });
+    // No relay in the QR ⇒ null on the candidate.
+    expect(
+      candidateFromQr({
+        v: 1,
+        addrs: ["h"],
+        port: 1,
+        certFP: "c",
+        machineId: "m",
+        pin: "p",
+        ttl: 1000,
+        expiresAt: 2,
+        relay: null,
+      }).relay,
+    ).toBeNull();
   });
 });

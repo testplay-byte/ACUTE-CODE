@@ -4788,7 +4788,8 @@ export interface ActivePairing {
 
 /** GET /mobile/link-info — the Devices tab's one-shot status: the live
  * listener state (port + LAN addresses the phone can reach) + the active
- * pairing window, if any. */
+ * pairing window, if any. ROUND-112: `relay` joins ADDITIVELY — the cloud
+ * connector's guest address, present only while the tunnel is connected. */
 export interface MobileLinkInfo {
   enabled: boolean;
   port: number | null;
@@ -4796,6 +4797,9 @@ export interface MobileLinkInfo {
   certFP: string | null;
   machineId: string | null;
   activePairing: ActivePairing | null;
+  /** `<relayBase>/m/<machineId>` — present only while remote access is
+   * connected (0.105.0-era payloads simply omit it). */
+  relay?: string;
 }
 
 export async function fetchMobileLinkInfo(): Promise<MobileLinkInfo> {
@@ -4817,6 +4821,10 @@ export interface MobilePairingPayload {
   pin: string;
   ttl: number;
   expiresAt: number;
+  /** ROUND-112: the relay's guest address, present only while the cloud
+   * connector is connected (strictly additive — v stays 1 and old phones
+   * ignore unknown fields). */
+  relay?: string;
 }
 
 export async function startMobilePairing(): Promise<MobilePairingPayload> {
@@ -4844,5 +4852,54 @@ export async function fetchMobileDevices(): Promise<MobileDeviceInfo[]> {
 export async function revokeMobileDevice(id: string): Promise<{ ok: boolean; revoked: string }> {
   return request<{ ok: boolean; revoked: string }>(`/mobile/devices/${encodeURIComponent(id)}`, {
     method: "DELETE",
+  });
+}
+
+/* ── Remote access / cloud connector (ROUND-112 R112-a — the Devices tab's
+ * "Remote access (internet)" card) ──────────────────────────────────────────
+ * The sidecar surface lib/cloud-connector.ts + routes/settings.ts pinned:
+ * GET/PUT /settings/cloud-connector. The card is INDEPENDENT of the local
+ * Device-link card — both can be ON at once (the owner's explicit ruling:
+ * LAN and cloud simultaneously; the phone tries LAN first and falls back
+ * to the relay). The hostKey never echoes back — hostKeyPresent only. */
+
+/** The connector's live status (polled ~5 s while the card is open). */
+export interface CloudConnectorStatus {
+  state: "disabled" | "connecting" | "connected" | "error";
+  /** The active tunnel's relay base URL ("" when nothing runs). */
+  relayUrl: string;
+  /** Epoch ms of the last successful welcome/handshake. */
+  lastConnectedAt: number | null;
+  lastError: string | null;
+}
+
+/** GET /settings/cloud-connector — the saved config + the live status. */
+export interface CloudConnectorSettingsView {
+  enabled: boolean;
+  relayUrl: string;
+  /** True when a host key is saved (the value itself never echoes). */
+  hostKeyPresent: boolean;
+  status: CloudConnectorStatus;
+}
+
+export async function fetchCloudConnectorSettings(): Promise<CloudConnectorSettingsView> {
+  return request<CloudConnectorSettingsView>("/settings/cloud-connector");
+}
+
+/** PUT /settings/cloud-connector — the card's Save. hostKey omitted = keep
+ * the saved key (the card only sends it when the owner types one); "" =
+ * clear. The response is the GET shape (saved state + live status). */
+export interface CloudConnectorUpdate {
+  enabled: boolean;
+  relayUrl: string;
+  hostKey?: string;
+}
+
+export async function updateCloudConnectorSettings(
+  patch: CloudConnectorUpdate,
+): Promise<CloudConnectorSettingsView> {
+  return request<CloudConnectorSettingsView>("/settings/cloud-connector", {
+    method: "PUT",
+    json: patch,
   });
 }

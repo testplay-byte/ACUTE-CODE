@@ -19,10 +19,12 @@
 // stay in server.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { RouteContext } from "./context.js";
+import { deviceAuthOf } from "./context.js";
 import {
   getBrowserSettings,
+  getCloudConnectorSettings,
   getDebugSettings,
   getDesktopNotificationsSettings,
   getDeviceLinkSettings,
@@ -31,6 +33,7 @@ import {
   getRetrySettings,
   getThinkingLoopSettings,
   setBrowserSettings,
+  setCloudConnectorSettings,
   setDebugSettings,
   setDesktopNotificationsSettings,
   setDeviceLinkSettings,
@@ -40,6 +43,12 @@ import {
   setThinkingLoopSettings,
 } from "../storage/settings.js";
 import { errorBody } from "./helpers.js";
+import {
+  getCloudConnectorStatus,
+  normalizeRelayUrl,
+  reconfigureCloudConnector,
+  stopCloudConnector,
+} from "../lib/cloud-connector.js";
 
 /**
  * ROUND-82 (R82, §2.4.5): shape check for the orchestration PATCH's
@@ -63,6 +72,25 @@ function normalizeSubagentModelRef(
     providerId: typeof value.providerId === "string" ? value.providerId.trim() : "",
     modelId: typeof value.modelId === "string" ? value.modelId.trim() : "",
   };
+}
+
+/**
+ * ROUND-112 (R112-a): shell-only rejection for the cloud-connector routes —
+ * remote access is a MANAGEMENT-surface setting (the desktop window's
+ * Devices tab), so a paired device token must never read or flip it. The
+ * app-level bearer wall's device-token BLOCKLIST already covers this path
+ * (server.ts's DEVICE_BLOCKED_EXACT — defense in depth); this route-local
+ * guard is the mobile.ts rejectDeviceTokens pattern, kept so the intent is
+ * legible where the route lives. True = rejected (reply already sent).
+ */
+function rejectDeviceTokens(request: FastifyRequest, reply: FastifyReply): boolean {
+  if (deviceAuthOf(request) === null) return false;
+  reply.code(403).send(
+    errorBody("FORBIDDEN", "this route requires the shell token (device tokens are not allowed here)", {
+      hint: "remote access is a desktop-side setting",
+    }),
+  );
+  return true;
 }
 
 export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext): void {
@@ -482,5 +510,125 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         }),
       );
     }
+  });
+
+  // ── ROUND-112 (R112-a, the remote-access round): the CLOUD-CONNECTOR
+  // settings — "Remote access (internet)" in the Settings → Devices tab.
+  // GET answers the saved config (the hostKey NEVER echoes — presence
+  // only) plus the connector's live status; PUT accepts
+  // {enabled, relayUrl, hostKey?} where hostKey omitted = keep the saved
+  // key and "" = clear it, then applies at runtime (stop or
+  // stop→reconfigure). The connector's own failures are NEVER fatal — its
+  // status carries them (the boot-time rule carried into the route).
+
+  scope.get("/settings/cloud-connector", async (request, reply) => {
+    if (rejectDeviceTokens(request, reply)) return reply;
+    const settings = getCloudConnectorSettings(db);
+    return {
+      enabled: settings.enabled,
+      relayUrl: settings.relayUrl,
+      hostKeyPresent: settings.hostKey !== "",
+      status: getCloudConnectorStatus(),
+    };
+  });
+
+  scope.put("/settings/cloud-connector", async (request, reply) => {
+    if (rejectDeviceTokens(request, reply)) return reply;
+    const body: unknown = request.body;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+    }
+    const raw = body as Record<string, unknown>;
+    if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body.enabled must be a boolean", { field: "body.enabled" }));
+    }
+    if (raw.relayUrl !== undefined && (typeof raw.relayUrl !== "string" || raw.relayUrl.length > 500)) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "body.relayUrl must be a string of at most 500 characters", {
+          field: "body.relayUrl",
+        }),
+      );
+    }
+    if (raw.hostKey !== undefined && (typeof raw.hostKey !== "string" || raw.hostKey.length > 500)) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "body.hostKey must be a string of at most 500 characters", {
+          field: "body.hostKey",
+        }),
+      );
+    }
+
+    const current = getCloudConnectorSettings(db);
+    const enabled = typeof raw.enabled === "boolean" ? raw.enabled : current.enabled;
+    // relayUrl: absent = keep; present = replace (trimmed + slash-normalized
+    // via the connector module's own normalizer — the saved row is the
+    // boot block's truth).
+    const relayUrl =
+      raw.relayUrl !== undefined ? normalizeRelayUrl(raw.relayUrl) : normalizeRelayUrl(current.relayUrl);
+    // hostKey: undefined = keep the saved key; "" = clear it.
+    const hostKey = raw.hostKey !== undefined ? raw.hostKey : current.hostKey;
+
+    // Enabling requires the full config — an honest 400 up front (the
+    // device-link PUT's failed-start pattern: the setting stays as-is).
+    if (enabled && relayUrl === "") {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "enabling remote access requires a relay URL", {
+          field: "body.relayUrl",
+        }),
+      );
+    }
+    if (enabled && hostKey === "") {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "enabling remote access requires a host key", {
+          field: "body.hostKey",
+        }),
+      );
+    }
+    // The tunnel's Room address IS the machine identity — the device link
+    // must have produced its certificate at least once.
+    const identity = ctx.mobileLink?.identity() ?? null;
+    if (enabled && identity === null) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "device links are unavailable on this sidecar (no machine identity)", {
+          hint: "enable device links once first — the relay address is derived from the link's certificate",
+        }),
+      );
+    }
+
+    // Save FIRST (the persisted row is what the next boot reads), then
+    // apply at runtime — the apply is never fatal.
+    try {
+      setCloudConnectorSettings(db, { enabled, relayUrl, hostKey });
+    } catch (error) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
+          field: "body",
+        }),
+      );
+    }
+    if (!enabled) {
+      await stopCloudConnector();
+    } else if (identity !== null) {
+      try {
+        await reconfigureCloudConnector({
+          relayUrl,
+          hostKey,
+          machineId: identity.machineId,
+          tlsPort: () => ctx.mobileLink?.status().port ?? null,
+        });
+      } catch {
+        // Never fatal — the status snapshot below carries the honest state.
+      }
+    }
+    const saved = getCloudConnectorSettings(db);
+    return {
+      enabled: saved.enabled,
+      relayUrl: saved.relayUrl,
+      hostKeyPresent: saved.hostKey !== "",
+      status: getCloudConnectorStatus(),
+    };
   });
 }

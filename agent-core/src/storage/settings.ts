@@ -829,3 +829,80 @@ export function setDeviceLinkSettings(
   }
   return getDeviceLinkSettings(db);
 }
+
+// ── ROUND-112 (R112-a, the remote-access round): the CLOUD-CONNECTOR
+//    settings — gates the sidecar's outbound tunnel to the acute-relay
+//    Cloudflare Worker (lib/cloud-connector.ts, the same controller shape
+//    deviceLink.enabled gates the TLS listener). DEFAULT OFF: nothing
+//    internet-facing exists until the owner flips "Enable remote access"
+//    (Settings → Devices → Remote access) with a relay URL + host key.
+//
+//    KNOWN V1 TRADE-OFF (documented in the guide): the hostKey is stored
+//    PLAINTEXT in the app's own SQLite. The DB lives under the owner's
+//    profile with the OS's per-user protections and is never synced; the
+//    settings GET therefore NEVER echoes it back (hostKeyPresent only). ────
+
+export interface CloudConnectorSettings {
+  enabled: boolean;
+  /** The relay's base URL, saved normalized (no trailing slash). */
+  relayUrl: string;
+  /** The relay's HOST_KEY (plaintext in the app's own SQLite — see above). */
+  hostKey: string;
+}
+
+export const CLOUD_CONNECTOR_DEFAULTS: CloudConnectorSettings = {
+  enabled: false,
+  relayUrl: "",
+  hostKey: "",
+};
+
+const CLOUD_CONNECTOR_ENABLED_KEY = "cloudConnector.enabled";
+const CLOUD_CONNECTOR_RELAY_URL_KEY = "cloudConnector.relayUrl";
+const CLOUD_CONNECTOR_HOST_KEY_KEY = "cloudConnector.hostKey";
+
+/** Max length of the URL/key rows (the relay URL is a workers.dev origin;
+ * the host key is a 64-hex secret — 500 chars is generous headroom). */
+const CLOUD_CONNECTOR_MAX_STRING_LENGTH = 500;
+
+function readStringSetting(db: SqliteDatabase, key: string, fallback: string): string {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
+    | { value: string }
+    | undefined;
+  return row === undefined ? fallback : row.value;
+}
+
+export function getCloudConnectorSettings(db: SqliteDatabase): CloudConnectorSettings {
+  return {
+    enabled: readBoolean(db, CLOUD_CONNECTOR_ENABLED_KEY, CLOUD_CONNECTOR_DEFAULTS.enabled),
+    relayUrl: readStringSetting(db, CLOUD_CONNECTOR_RELAY_URL_KEY, CLOUD_CONNECTOR_DEFAULTS.relayUrl),
+    hostKey: readStringSetting(db, CLOUD_CONNECTOR_HOST_KEY_KEY, CLOUD_CONNECTOR_DEFAULTS.hostKey),
+  };
+}
+
+export function setCloudConnectorSettings(
+  db: SqliteDatabase,
+  patch: Partial<CloudConnectorSettings>,
+): CloudConnectorSettings {
+  const upsert = db.prepare(
+    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  );
+  if (patch.enabled !== undefined) {
+    if (typeof patch.enabled !== "boolean") {
+      throw new Error("enabled must be a boolean");
+    }
+    upsert.run(CLOUD_CONNECTOR_ENABLED_KEY, String(patch.enabled));
+  }
+  if (patch.relayUrl !== undefined) {
+    if (typeof patch.relayUrl !== "string" || patch.relayUrl.length > CLOUD_CONNECTOR_MAX_STRING_LENGTH) {
+      throw new Error(`relayUrl must be a string of at most ${CLOUD_CONNECTOR_MAX_STRING_LENGTH} characters`);
+    }
+    upsert.run(CLOUD_CONNECTOR_RELAY_URL_KEY, patch.relayUrl.trim());
+  }
+  if (patch.hostKey !== undefined) {
+    if (typeof patch.hostKey !== "string" || patch.hostKey.length > CLOUD_CONNECTOR_MAX_STRING_LENGTH) {
+      throw new Error(`hostKey must be a string of at most ${CLOUD_CONNECTOR_MAX_STRING_LENGTH} characters`);
+    }
+    upsert.run(CLOUD_CONNECTOR_HOST_KEY_KEY, patch.hostKey);
+  }
+  return getCloudConnectorSettings(db);
+}

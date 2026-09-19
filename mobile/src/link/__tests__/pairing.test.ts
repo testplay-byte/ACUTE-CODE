@@ -7,9 +7,11 @@ import { describe, expect, it } from "@jest/globals";
 
 import {
   formatCertFP,
+  formatPin,
   normalizeCertFP,
   parseManualEntry,
   parsePairingPayload,
+  parseRelayUrl,
   shortCertFP,
   shortMachineId,
 } from "../pairing";
@@ -157,6 +159,105 @@ describe("parsePairingPayload", () => {
   });
 });
 
+// ── the optional relay field (v0.106.0, R112) ──────────────────────────────
+
+describe("parsePairingPayload — the optional relay", () => {
+  const RELAY = `https://acute-relay.anikuta.workers.dev/m/${"aa".repeat(32)}`;
+
+  it("accepts a valid relay base URL and stores it verbatim", () => {
+    const result = parsePairingPayload(validQr({ relay: RELAY }), NOW);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.relay).toBe(RELAY);
+    // The core fields are untouched by the relay's presence.
+    expect(result.value.addrs).toEqual(["192.168.1.4", "192.168.1.5"]);
+    expect(result.value.pin).toBe("12345678");
+  });
+
+  it("absent relay = null (every pre-v0.106 QR parses unchanged)", () => {
+    const result = parsePairingPayload(validQr(), NOW);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.relay).toBeNull();
+  });
+
+  it("an explicit relay:null is also fine", () => {
+    const result = parsePairingPayload(validQr({ relay: null }), NOW);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.relay).toBeNull();
+  });
+
+  it("rejects an http:// relay (TLS is mandatory)", () => {
+    expect(parsePairingPayload(validQr({ relay: "http://relay.example.com/m/x" }), NOW)).toEqual({
+      ok: false,
+      error: { kind: "bad-relay" },
+    });
+  });
+
+  it("rejects a relay longer than 200 chars", () => {
+    const long = `https://${"h".repeat(200)}.workers.dev/m/${"aa".repeat(32)}`;
+    expect(long.length).toBeGreaterThan(200);
+    expect(parsePairingPayload(validQr({ relay: long }), NOW)).toEqual({
+      ok: false,
+      error: { kind: "bad-relay" },
+    });
+  });
+
+  it("rejects a relay containing whitespace (inner and trailing)", () => {
+    expect(
+      parsePairingPayload(validQr({ relay: "https://relay.example .com/m/x" }), NOW),
+    ).toEqual({ ok: false, error: { kind: "bad-relay" } });
+    expect(
+      parsePairingPayload(validQr({ relay: `${RELAY} ` }), NOW),
+    ).toEqual({ ok: false, error: { kind: "bad-relay" } });
+  });
+
+  it("rejects a non-string relay", () => {
+    expect(parsePairingPayload(validQr({ relay: 42 }), NOW)).toEqual({
+      ok: false,
+      error: { kind: "bad-relay" },
+    });
+  });
+
+  it("ignores unknown extra fields (forward-compat)", () => {
+    const result = parsePairingPayload(
+      validQr({ relay: RELAY, futureField: "whatever", another: { nested: true } }),
+      NOW,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.relay).toBe(RELAY);
+    expect((result.value as unknown as Record<string, unknown>).futureField).toBeUndefined();
+  });
+});
+
+describe("parseRelayUrl", () => {
+  it("null/undefined/non-string read as null (absent)", () => {
+    expect(parseRelayUrl(undefined)).toBeNull();
+    expect(parseRelayUrl(null)).toBeNull();
+    expect(parseRelayUrl(7)).toBeNull();
+  });
+
+  it("validates exactly the contract: https, ≤200 chars, whitespace-free", () => {
+    expect(parseRelayUrl("https://r.example.com/m/abc")).toBe("https://r.example.com/m/abc");
+    expect(parseRelayUrl("http://r.example.com/m/abc")).toBeNull();
+    expect(parseRelayUrl("https://" + "x".repeat(250))).toBeNull();
+    expect(parseRelayUrl("https://r.example.com/m/a bc")).toBeNull();
+  });
+});
+
+describe("formatPin", () => {
+  it("groups the 8 digits 4+4", () => {
+    expect(formatPin("12345678")).toBe("1234 5678");
+    expect(formatPin("00000000")).toBe("0000 0000");
+  });
+
+  it("passes non-8-digit strings through unchanged (honest, not fabricated)", () => {
+    expect(formatPin("1234")).toBe("1234");
+  });
+});
+
 describe("parseManualEntry", () => {
   it("parses the tunnel URL form (pin stays null on the candidate later)", () => {
     const result = parseManualEntry({ address: "https://abc-xyz.trycloudflare.com", pin: "87654321" });
@@ -171,6 +272,36 @@ describe("parseManualEntry", () => {
     expect(result).toEqual({
       ok: true,
       value: { kind: "tunnel", url: "https://host.example.com:8443", pin: "87654321" },
+    });
+  });
+
+  it("preserves the cloud relay's room path /m/<machineId> — the manual relay carrier (v0.106.0)", () => {
+    const machineId = "AABBCCDD00112233445566778899AABBCCDD00112233445566778899AABBCCDD".toLowerCase();
+    const typed = `https://acute-relay.anikuta.workers.dev/m/${machineId.toUpperCase()}`;
+    const result = parseManualEntry({ address: typed, pin: "87654321" });
+    expect(result).toEqual({
+      ok: true,
+      value: { kind: "tunnel", url: `https://acute-relay.anikuta.workers.dev/m/${machineId}`, pin: "87654321" },
+    });
+    // A trailing slash on the room path is tolerated (and stripped).
+    const slashed = parseManualEntry({
+      address: `https://relay.example.com/m/${machineId}/`,
+      pin: "87654321",
+    });
+    expect(slashed).toEqual({
+      ok: true,
+      value: { kind: "tunnel", url: `https://relay.example.com/m/${machineId}`, pin: "87654321" },
+    });
+  });
+
+  it("still strips paths that are NOT the relay room form (origin-only tunnels, /m/ with bad hex)", () => {
+    expect(parseManualEntry({ address: "https://host.example.com/m/not-hex", pin: "87654321" })).toEqual({
+      ok: true,
+      value: { kind: "tunnel", url: "https://host.example.com", pin: "87654321" },
+    });
+    expect(parseManualEntry({ address: "https://host.example.com/m/aa", pin: "87654321" })).toEqual({
+      ok: true,
+      value: { kind: "tunnel", url: "https://host.example.com", pin: "87654321" },
     });
   });
 

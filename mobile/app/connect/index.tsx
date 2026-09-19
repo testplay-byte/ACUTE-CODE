@@ -8,6 +8,12 @@
  * Host linked → the current connection (identity + live status + retry),
  * "pair a different desktop" (scan again replaces the link), and the
  * disconnect action lives in the host-management page it links to.
+ *
+ * R110 #4 (v0.106.0): the hub is a ROOT screen — after onboarding (and after
+ * every replace() landing) there is nothing behind it, so the back chevron
+ * only renders when the root stack can actually pop (e.g. pushed from the
+ * connection pill inside the tabs). R110 #5: the hero copy is one short
+ * line — the trust-fine-print row is gone.
  */
 
 import { useRouter } from "expo-router";
@@ -41,6 +47,11 @@ export default function ConnectHubScreen() {
   const { status, host, live, lastSeen } = useLink();
   const [, setTick] = useState(0);
 
+  // R110 #4: the hub is the ROOT of the connect flow — the chevron only
+  // makes sense when the ROOT stack can pop (pushed from the tabs' pill).
+  // As the post-onboarding landing screen there is nothing to go back to.
+  const canPopRoot = router.canGoBack();
+
   // The honest relative "last seen" — a 30s tick while a host exists.
   useEffect(() => {
     if (host === null) return;
@@ -51,21 +62,16 @@ export default function ConnectHubScreen() {
   const connected = status === "connected";
 
   return (
-    <ScreenScaffold title="Connect" back noPill>
+    <ScreenScaffold title="Connect" back={canPopRoot} noPill>
       {host === null ? (
-        // ── no host yet: the "add a connection" hero ──
+        // ── no host yet: the "add a connection" hero (R110 #5: one line) ──
         <>
           <ClayCard elevated>
             <View style={styles.cardPad}>
               <TypeBody style={styles.heroTitle}>Add a connection</TypeBody>
               <TypeCaption style={styles.heroBody}>
-                Link this phone to the ACUTE desktop — the link rides TLS, the phone pins the
-                desktop's certificate at pairing time, and the token lives in the Android Keystore
-                for months.
+                Scan a pairing QR from your desktop, or enter an address manually.
               </TypeCaption>
-              <View style={[styles.trustRow, { borderTopColor: tokens.borderSubtle }]}>
-                <TypeMicro>ONE LINK · ONE CERTIFICATE · NO ACCOUNT, NO CLOUD OF OURS</TypeMicro>
-              </View>
             </View>
           </ClayCard>
 
@@ -165,7 +171,6 @@ const styles = StyleSheet.create({
   cardPad: { padding: spacing.lg, gap: spacing.md },
   heroTitle: { fontSize: 17, fontFamily: fontFamily.bold },
   heroBody: { lineHeight: 19 },
-  trustRow: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: spacing.md },
   optionInner: { flexDirection: "row", gap: spacing.md, padding: spacing.lg, alignItems: "center" },
   optionIcon: {
     width: 48,

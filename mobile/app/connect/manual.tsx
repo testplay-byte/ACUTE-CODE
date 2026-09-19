@@ -44,6 +44,11 @@ export default function ManualEntryScreen() {
   // The live shape hint — what the address parses AS, as the user types.
   const shape = useMemo(() => {
     if (trimmedAddress === "") return null;
+    // The cloud relay's room form (v0.106.0): https://<relay>/m/<machineId> —
+    // the path IS the address (it routes to the desktop's room).
+    if (/^https:\/\/[^\/]+\/m\/[0-9a-fA-F]{64}\/?$/i.test(trimmedAddress)) {
+      return { kind: "tunnel" as const, label: "cloud relay — reaches the desktop from any network" };
+    }
     if (/^https:\/\//i.test(trimmedAddress)) {
       return { kind: "tunnel" as const, label: "tunnel URL — works from any network" };
     }
@@ -106,8 +111,8 @@ export default function ManualEntryScreen() {
           <TypeBody style={styles.introTitle}>Enter the connection values</TypeBody>
           <TypeCaption style={styles.introBody}>
             The desktop shows its address and the one-time PIN under Settings → Link a device. A
-            tunnel URL (https://…) reaches it from any network; a LAN address (host:port) needs
-            the same Wi-Fi.
+            tunnel or cloud-relay URL (https://…) reaches it from any network; a LAN address
+            (host:port) needs the same Wi-Fi.
           </TypeCaption>
         </View>
       </ClayCard>

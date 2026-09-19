@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
   ChevronDown,
+  Globe,
   QrCode,
   Smartphone,
   Trash2,
@@ -22,12 +23,15 @@ import { ConfirmDialog } from "./ConfirmDialog";
 // fixed dark-on-light module pair lives in src/lib, like SEMANTIC_COLORS).
 import { QR_MODULE_LIGHT, QR_TILE_INK, renderQrSvg } from "../../lib/qr";
 import {
+  fetchCloudConnectorSettings,
   fetchDeviceLinkSettings,
   fetchMobileDevices,
   fetchMobileLinkInfo,
   revokeMobileDevice,
   startMobilePairing,
+  updateCloudConnectorSettings,
   updateDeviceLinkSettings,
+  type CloudConnectorSettingsView,
   type DeviceLinkSettings,
   type MobileDeviceInfo,
   type MobilePairingPayload,
@@ -40,11 +44,18 @@ import {
  * (QR + PIN + the live 120-second countdown + the type-it-in manual
  * fallback), and (c) manages/revokes the linked devices.
  *
+ * ROUND-112 (R112-a) adds the remote-access half: §a2's "Remote access
+ * (internet)" card (the cloud connector's toggle + relay URL + host key +
+ * live status), INDEPENDENT of the local link by the owner's explicit
+ * ruling (both ON at once; the phone tries LAN first, relay fallback), and
+ * the pairing dialog's "Reachable over the internet via <relay>" hint while
+ * the tunnel is connected.
+ *
  * The wire surface is the R106-S1 sidecar contract (LINKING-PROTOCOL.md §2
- * + §5): GET/PUT /settings/device-link, GET /mobile/link-info,
- * POST /mobile/pair/start, GET /mobile/devices, DELETE /mobile/devices/:id.
- * pair/claim is deliberately NOT touched here — claiming is the PHONE's hop,
- * not the desktop window's.
+ * + §5): GET/PUT /settings/device-link, GET/PUT /settings/cloud-connector,
+ * GET /mobile/link-info, POST /mobile/pair/start, GET /mobile/devices,
+ * DELETE /mobile/devices/:id. pair/claim is deliberately NOT touched here —
+ * claiming is the PHONE's hop, not the desktop window's.
  *
  * Design mirrors the tab family (McpTab/ComputerUseTab/AboutTab): one
  * max-w-2xl column of SectionCards, useQuery/useMutation + invalidation,
@@ -231,6 +242,269 @@ function DeviceLinkCard() {
   );
 }
 
+/** "Aug 4, 14:05" style — the remote-access "connected since" line. */
+function fmtClock(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** The relay's HOST for display ("https://acute-relay.x.workers.dev/…" →
+ * "acute-relay.x.workers.dev"); the raw string is the honest fallback. */
+function hostOf(relayUrl: string): string {
+  try {
+    return new URL(relayUrl).host;
+  } catch {
+    return relayUrl;
+  }
+}
+
+/* ── §a2 The remote-access card (ROUND-112 R112-a — the cloud half) ───────── */
+
+/**
+ * RemoteAccessCard — "Remote access (internet)": the cloud connector's
+ * desktop surface. INDEPENDENT of §a's local Device-link card by the owner's
+ * explicit ruling — both can be ON at once (the phone tries LAN first and
+ * falls back to the relay). The card is a small FORM: the toggle + the two
+ * inputs edit a draft; Save PUTs {enabled, relayUrl, hostKey?} (the key only
+ * rides the PUT when typed — the saved one is never echoed back by the
+ * backend, hostKeyPresent is the truth). The status line reads the polled
+ * GET's live connector status (Connecting… / Connected to <host> since
+ * <time> / Error: <lastError>).
+ */
+function RemoteAccessCard({ settings }: { settings: CloudConnectorSettingsView | undefined }) {
+  const styles = useThemeStyles();
+  const queryClient = useQueryClient();
+  const resetAfter = useTimeoutClear();
+  const [msg, setMsg] = useState<string | null>(null);
+  const [msgIsError, setMsgIsError] = useState(false);
+  // The form draft: null = "follow the server" (not dirty yet).
+  const [enabledDraft, setEnabledDraft] = useState<boolean | null>(null);
+  const [relayUrlDraft, setRelayUrlDraft] = useState<string | null>(null);
+  // The host key is write-only: typed text replaces, empty = keep the saved
+  // key. `forgetKey` marks "clear the saved key on Save" (only offered while
+  // the draft is disabled — the backend refuses clearing while enabled).
+  const [hostKeyDraft, setHostKeyDraft] = useState("");
+  const [forgetKey, setForgetKey] = useState(false);
+
+  const note = (text: string, isError = false) => {
+    setMsg(text);
+    setMsgIsError(isError);
+    resetAfter(() => setMsg(null), 2_500);
+  };
+
+  const save = useMutation({
+    mutationFn: () =>
+      updateCloudConnectorSettings({
+        enabled: enabledDraft ?? settings?.enabled ?? false,
+        relayUrl: (relayUrlDraft ?? settings?.relayUrl ?? "").trim(),
+        // Typed text replaces; the forget flag clears; else the saved key
+        // stays (hostKey omitted = keep).
+        ...(hostKeyDraft.trim() !== ""
+          ? { hostKey: hostKeyDraft.trim() }
+          : forgetKey
+            ? { hostKey: "" }
+            : {}),
+      }),
+    onSuccess: () => {
+      note("Remote access settings saved.");
+      // Resync the draft to the server's truth (the poll refreshes the rest).
+      setEnabledDraft(null);
+      setRelayUrlDraft(null);
+      setHostKeyDraft("");
+      setForgetKey(false);
+    },
+    onError: (err: Error) => {
+      note(err.message, true);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["cloud-connector-settings"] });
+    },
+  });
+
+  if (settings === undefined) {
+    return (
+      <SectionCard className="p-4" ariaLabel="Remote access">
+        <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
+          loading remote access settings…
+        </span>
+      </SectionCard>
+    );
+  }
+
+  const inputStyle = {
+    background: styles.bg,
+    borderColor: styles.border,
+    color: styles.text,
+  };
+  const enabled = enabledDraft ?? settings.enabled;
+  const relayUrlValue = relayUrlDraft ?? settings.relayUrl;
+  const status = settings.status;
+
+  // The live status line — the polled connector truth (never the draft).
+  let statusLine: { text: string; tone: "success" | "neutral" | "danger" | "muted" } | null = null;
+  if (status.state === "connected") {
+    statusLine = {
+      text: `Connected to ${hostOf(status.relayUrl)}${
+        status.lastConnectedAt !== null ? ` since ${fmtClock(status.lastConnectedAt)}` : ""
+      }`,
+      tone: "success",
+    };
+  } else if (status.state === "connecting") {
+    statusLine = { text: "Connecting…", tone: "neutral" };
+  } else if (status.state === "error") {
+    statusLine = { text: `Error: ${status.lastError ?? "unknown error"}`, tone: "danger" };
+  } else if (settings.enabled) {
+    // Enabled but the tunnel is not running (e.g. the boot config was
+    // incomplete) — the honest fallback, not a silent blank.
+    statusLine = {
+      text: "Enabled but the tunnel is not running — save the settings again or restart the engine.",
+      tone: "muted",
+    };
+  }
+  const toneColor = (tone: "success" | "neutral" | "danger" | "muted"): string | undefined => {
+    if (tone === "success") return SEMANTIC_COLORS.success;
+    if (tone === "danger") return SEMANTIC_COLORS.danger;
+    if (tone === "muted") return styles.textTertiary;
+    return styles.textSecondary;
+  };
+
+  return (
+    <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Remote access">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Globe size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
+          Remote access (internet)
+        </span>
+        <span className="flex-1" />
+        {msg && (
+          <span
+            className="text-[11px] font-medium"
+            style={{ color: msgIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+          >
+            {msg}
+          </span>
+        )}
+        <span className="flex items-center gap-2">
+          <span className="text-[11px] font-medium" style={{ color: styles.textSecondary }}>
+            {enabled ? "Enabled" : "Disabled"}
+          </span>
+          <ToggleSwitch
+            big
+            checked={enabled}
+            onToggle={() => setEnabledDraft(!enabled)}
+            label="Toggle remote access"
+            title={
+              enabled
+                ? "Turn remote access off — the tunnel to the relay closes (LAN links are unaffected)"
+                : "Reachable from anywhere through the Cloudflare relay — independent of the LAN link"
+            }
+            disabled={save.isPending}
+            testId="remote-access-toggle"
+          />
+        </span>
+      </div>
+      <p className="text-[11px] leading-relaxed" style={{ color: styles.textSecondary }}>
+        Keep your phone working from any network (mobile data, a friend's Wi-Fi) through the
+        Cloudflare relay — no open ports, no router changes. Independent of the LAN device link
+        above: both can be on at once, and the phone always tries the LAN first.
+      </p>
+      {/* The live status line (the ~5 s poll keeps it fresh while the tab is
+          open — the connector's own truth, never the draft). */}
+      {statusLine !== null && (
+        <div
+          className="text-[11px] leading-relaxed"
+          style={{ color: toneColor(statusLine.tone) }}
+          data-testid="remote-status"
+        >
+          {statusLine.text}
+        </div>
+      )}
+      <div className="flex flex-col gap-2">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-wider mb-1" style={{ color: styles.textTertiary }}>
+            Relay URL
+          </div>
+          <input
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            value={relayUrlValue}
+            onChange={(e) => setRelayUrlDraft(e.target.value)}
+            placeholder="https://acute-relay.anikuta.workers.dev"
+            aria-label="Relay URL"
+            data-testid="remote-relay-input"
+            className="h-8 w-full rounded-lg border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
+            style={inputStyle}
+          />
+        </div>
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-wider mb-1" style={{ color: styles.textTertiary }}>
+            Host key
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              type="password"
+              autoComplete="off"
+              value={hostKeyDraft}
+              onChange={(e) => {
+                setHostKeyDraft(e.target.value);
+                if (e.target.value !== "") setForgetKey(false);
+              }}
+              placeholder={settings.hostKeyPresent ? "•••••••• saved — type to replace" : "paste the relay's host key"}
+              aria-label="Host key"
+              data-testid="remote-hostkey-input"
+              className="h-8 flex-1 min-w-[180px] rounded-lg border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
+              style={inputStyle}
+            />
+            {settings.hostKeyPresent && hostKeyDraft === "" && forgetKey === false && !enabled && (
+              <button
+                type="button"
+                onClick={() => setForgetKey(true)}
+                title="Clear the saved host key when you Save (offered only while remote access is disabled)"
+                className="h-8 px-2.5 rounded-lg text-[11px] font-medium shrink-0"
+                style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.1), color: SEMANTIC_COLORS.danger }}
+                data-testid="remote-forget-key"
+              >
+                Forget
+              </button>
+            )}
+            {settings.hostKeyPresent && forgetKey && (
+              <span
+                className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
+                style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.12), color: SEMANTIC_COLORS.danger }}
+                data-testid="remote-forget-key-pending"
+              >
+                will be cleared on Save
+              </span>
+            )}
+            {settings.hostKeyPresent && hostKeyDraft === "" && forgetKey === false && enabled && (
+              <span
+                className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
+                style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
+                data-testid="remote-key-saved"
+              >
+                Key saved
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => save.mutate()}
+            disabled={save.isPending}
+            title="Apply the relay URL, host key, and the enabled switch"
+            className="h-9 px-4 rounded-full text-[11px] font-semibold transition-all active:scale-95 disabled:opacity-50 inline-flex items-center gap-1.5 self-start"
+            style={{ background: styles.accent, color: styles.accentText }}
+            data-testid="remote-save"
+          >
+            <Globe size={13} /> {save.isPending ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
 /* ── §b The pairing card + dialog ─────────────────────────────────────────── */
 
 /** The QR tile — the EXACT pair/start payload JSON as one compact object,
@@ -289,7 +563,17 @@ type PairingState =
   | { kind: "linked" }
   | { kind: "error"; message: string };
 
-function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+function PairingDialog({
+  open,
+  onClose,
+  relayHost,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** ROUND-112: the relay's host while remote access is connected — the
+   * QR dialog's "Reachable over the internet" hint (null = LAN only). */
+  relayHost: string | null;
+}) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
   const [state, setState] = useState<PairingState>({ kind: "idle" });
@@ -465,6 +749,18 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
                   </span>
                 </>
               )}
+              {/* ROUND-112 (R112-a): the cloud hint — present only while the
+                  remote-access tunnel is connected (the QR payload carries
+                  the full relay address; this is the human-readable note). */}
+              {relayHost !== null && !expired && (
+                <p
+                  className="text-[11px] leading-relaxed max-w-[320px] text-center"
+                  style={{ color: SEMANTIC_COLORS.success }}
+                  data-testid="pair-relay-hint"
+                >
+                  Reachable over the internet via {relayHost}
+                </p>
+              )}
             </div>
             {/* The manual fallback (the AboutTab "What's new" disclosure
                 grammar): the address list + port + PIN as selectable text
@@ -567,7 +863,7 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
   );
 }
 
-function LinkDeviceCard({ linksEnabled }: { linksEnabled: boolean }) {
+function LinkDeviceCard({ linksEnabled, relayHost }: { linksEnabled: boolean; relayHost: string | null }) {
   const styles = useThemeStyles();
   const [dialogOpen, setDialogOpen] = useState(false);
   const closeDialog = useCallback(() => setDialogOpen(false), []);
@@ -606,7 +902,7 @@ function LinkDeviceCard({ linksEnabled }: { linksEnabled: boolean }) {
           Device links are off — turn them on above to pair a phone.
         </p>
       )}
-      <PairingDialog open={dialogOpen} onClose={closeDialog} />
+      <PairingDialog open={dialogOpen} onClose={closeDialog} relayHost={relayHost} />
     </SectionCard>
   );
 }
@@ -783,7 +1079,7 @@ function LinkedDevicesCard() {
 /* ── Composition ──────────────────────────────────────────────────────────── */
 
 /** The dedicated Devices settings tab (?tab=devices) — the desktop half of
- * the R106 device-linking flow. */
+ * the R106 device-linking flow + ROUND-112's remote-access card. */
 export function DevicesTab() {
   const styles = useThemeStyles();
   // §b's Pair button gates on §a's toggle — one shared read of the setting.
@@ -792,6 +1088,18 @@ export function DevicesTab() {
     queryFn: fetchDeviceLinkSettings,
   });
   const linksEnabled = settingsQuery.data?.enabled === true;
+  // ROUND-112 (R112-a): the remote-access card's shared read — the ~5 s
+  // refetchInterval is the card's status-line poll ("while the card is
+  // open" — the tab mounts/unmounts with selection, so the poll lives and
+  // dies with it) AND the pairing dialog's relay hint stays fresh off the
+  // same cache entry.
+  const cloudQuery = useQuery({
+    queryKey: ["cloud-connector-settings"],
+    queryFn: fetchCloudConnectorSettings,
+    refetchInterval: 5_000,
+  });
+  const relayHost =
+    cloudQuery.data?.status.state === "connected" ? hostOf(cloudQuery.data.status.relayUrl) : null;
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4" data-testid="devices-tab">
       <div className="pb-1">
@@ -799,12 +1107,21 @@ export function DevicesTab() {
         <Kicker className="mb-1">Integrations</Kicker>
         <h2 className="text-[13px] font-semibold text-ink">Devices</h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
-          Link your phone as a remote view + input for this machine — pairing, linked devices,
-          and revocation.
+          Link your phone as a remote view + input for this machine — pairing, remote access,
+          linked devices, and revocation.
         </p>
       </div>
+      {cloudQuery.isError ? (
+        <SectionCard className="p-4" ariaLabel="Remote access">
+          <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+            {coreUnreachableHint} to manage remote access.
+          </p>
+        </SectionCard>
+      ) : (
+        <RemoteAccessCard settings={cloudQuery.data} />
+      )}
       <DeviceLinkCard />
-      <LinkDeviceCard linksEnabled={linksEnabled} />
+      <LinkDeviceCard linksEnabled={linksEnabled} relayHost={relayHost} />
       <LinkedDevicesCard />
     </div>
   );

@@ -5,6 +5,14 @@
  * order): {"v":1,"addrs":[…],"port":…,"certFP":"AA:BB:…","machineId":"…",
  * "pin":"00000000"-style 8 digits,"ttl":120000,"expiresAt":…}.
  *
+ * v0.106.0 (R112): the payload gained an OPTIONAL `relay` field — the cloud
+ * relay's base URL (`https://<relay-host>/m/<machineId>`), so the phone can
+ * reach the desktop from any network once the desktop's cloud connector
+ * opens its tunnel. Absent = LAN/tunnel-only pairing (every pre-v0.106 QR
+ * still parses); present-but-invalid = the honest typed `bad-relay` error
+ * (never a silent drop). Unknown EXTRA fields are ignored (forward-compat:
+ * future desktops may add fields without breaking older phones).
+ *
  * Every malformed case surfaces as a TYPED error (never a thrown string), so
  * the pairing screen can render an honest, specific message. Manual entry
  * accepts the three fallback forms (R3 §4: a full URL must work TODAY so a
@@ -26,6 +34,11 @@ export interface PairingPayload {
   pin: string;
   ttl: number;
   expiresAt: number;
+  /** OPTIONAL (v0.106.0): the cloud relay base URL
+   *  (`https://<relay-host>/m/<machineId>`) — null when the QR carries none.
+   *  The phone appends `/api/v1/…` exactly like any base URL; it rides
+   *  standard CA verification (never the TOFU pin). */
+  relay: string | null;
 }
 
 export type PairingParseError =
@@ -38,6 +51,7 @@ export type PairingParseError =
   | { kind: "bad-machineid" }
   | { kind: "bad-pin" }
   | { kind: "bad-ttl" }
+  | { kind: "bad-relay" }
   | { kind: "expired" };
 
 export type PairingParseResult =
@@ -50,6 +64,10 @@ const HEX64 = /^[0-9a-fA-F]{64}$/;
 const HEX64_COLONS = /^([0-9a-fA-F]{2}:){31}[0-9a-fA-F]{2}$/;
 /** The pairing PIN — 8 digits (R106-S1's rejection-sampled form). */
 const PIN8 = /^\d{8}$/;
+/** The relay URL cap (the v0.106.0 pairing contract). */
+const RELAY_MAX_LENGTH = 200;
+/** No whitespace anywhere in a relay URL (machine-generated, zero excuses). */
+const RELAY_WHITESPACE = /\s/;
 
 /** Normalize a fingerprint: accept colon-hex or bare hex → 64 lowercase hex. */
 export function normalizeCertFP(text: string): string | null {
@@ -73,6 +91,28 @@ export function shortCertFP(certFP: string): string {
 /** The machineId's short spelling for cards: first 8 hex chars. */
 export function shortMachineId(machineId: string): string {
   return machineId.replace(/:/g, "").slice(0, 8);
+}
+
+/**
+ * Validate an optional relay base URL (the v0.106.0 field): must be a string
+ * starting with "https://", at most 200 chars, no whitespace anywhere.
+ * Returns the URL verbatim (it is stored as the base — the phone appends
+ * `/api/v1/…` paths), or null when the value is absent/invalid — the caller
+ * decides which of those two null cases it is (the QR parser rejects; the
+ * claim-response capture falls back).
+ */
+export function parseRelayUrl(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") return null;
+  if (!value.startsWith("https://")) return null;
+  if (value.length > RELAY_MAX_LENGTH) return null;
+  if (RELAY_WHITESPACE.test(value)) return null;
+  return value;
+}
+
+/** The PIN's display spelling — the 8 digits grouped 4+4 ("1234 5678"). */
+export function formatPin(pin: string): string {
+  return pin.length === 8 ? `${pin.slice(0, 4)} ${pin.slice(4)}` : pin;
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -131,6 +171,16 @@ export function parsePairingPayload(text: string, now: number = Date.now()): Pai
   }
   if (expiresAt <= now) return { ok: false, error: { kind: "expired" } };
 
+  // The optional relay (v0.106.0): absent = fine (every older QR parses);
+  // present-but-invalid = the honest typed error, never a silent drop. A
+  // non-string value counts as present-and-invalid (the contract is strict).
+  if (raw.relay !== undefined && raw.relay !== null && parseRelayUrl(raw.relay) === null) {
+    return { ok: false, error: { kind: "bad-relay" } };
+  }
+  const relay = parseRelayUrl(raw.relay);
+
+  // Unknown EXTRA fields are deliberately ignored (forward-compat: the
+  // desktop may grow fields; only the ones above are contract).
   return {
     ok: true,
     value: {
@@ -142,6 +192,7 @@ export function parsePairingPayload(text: string, now: number = Date.now()): Pai
       pin,
       ttl,
       expiresAt,
+      relay,
     },
   };
 }
@@ -209,13 +260,25 @@ export function parseManualEntry(input: ManualEntryInput): ManualParseResult {
   if (address === "") return { ok: true, value: { kind: "pin-only", pin } };
 
   if (address.toLowerCase().startsWith("https://")) {
-    // The tunnel form — normalize to origin (strip any trailing path/slash).
+    // The tunnel form — normalize to origin (strip any trailing path/slash),
+    // EXCEPT the cloud relay's room path `/m/<machineId>` (v0.106.0): that
+    // path IS the address (it routes to the desktop's room at the relay),
+    // so it is preserved with its hex normalized to the canonical lowercase
+    // (the relay README's "manual pairing URL" carrier of the relay). Every
+    // other path is still stripped — plain tunnel URLs stay origin-only.
     let rest = address.slice("https://".length);
+    let path = "";
     const slash = rest.indexOf("/");
-    if (slash >= 0) rest = rest.slice(0, slash);
+    if (slash >= 0) {
+      path = rest.slice(slash);
+      rest = rest.slice(0, slash);
+    }
     rest = rest.replace(/\/+$/, "");
     if (rest === "") return { ok: false, error: { kind: "bad-address" } };
-    return { ok: true, value: { kind: "tunnel", url: `https://${rest}`, pin } };
+    const relayRoom = /^\/m\/([0-9a-fA-F]{64})\/?$/.exec(path);
+    const url =
+      relayRoom !== null ? `https://${rest}/m/${relayRoom[1].toLowerCase()}` : `https://${rest}`;
+    return { ok: true, value: { kind: "tunnel", url, pin } };
   }
 
   if (address.toLowerCase().startsWith("http://")) {

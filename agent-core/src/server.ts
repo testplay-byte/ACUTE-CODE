@@ -134,6 +134,8 @@ import { registerSseRoutes } from "./routes/sse.js";
 // byte-identical in behavior until the owner flips deviceLink.enabled.
 import { registerMobileRoutes } from "./routes/mobile.js";
 import {
+  DEVICE_LISTENER_HEADERS_TIMEOUT_MS,
+  DEVICE_LISTENER_KEEP_ALIVE_TIMEOUT_MS,
   createDeviceLinkController,
   deviceLinkControllerFor,
   requestArrivedOverTls,
@@ -143,8 +145,23 @@ import {
   hashDeviceToken,
   touchMobileDeviceLastSeen,
 } from "./storage/mobile-devices.js";
-import { getDeviceLinkSettings, setDeviceLinkSettings } from "./storage/settings.js";
+import {
+  getCloudConnectorSettings,
+  getDeviceLinkSettings,
+  setDeviceLinkSettings,
+} from "./storage/settings.js";
 import { publishFcm } from "./lib/fcm-push.js";
+// ROUND-112 (R112-a, the remote-access round): the cloud connector — ONE
+// outbound WebSocket tunnel to the acute-relay Cloudflare Worker (the relay
+// README is the protocol contract), bridging the phone's proxied requests
+// into the TLS device listener. The whole cloud path is OFF by default
+// (cloudConnector.enabled) and every entry point below is never-fatal —
+// the loopback sidecar stays the product, the tunnel the accessory.
+import {
+  normalizeRelayUrl,
+  startCloudConnector,
+  stopCloudConnector,
+} from "./lib/cloud-connector.js";
 // R106-S1: the app version (ROUND-63's readAppVersion) moved to
 // lib/version.ts so routes/mobile.ts can share it without an import cycle;
 // re-exported here — every existing `import { VERSION } from "../server"`
@@ -272,7 +289,13 @@ function authorizeDeviceToken(
 // shell.
 
 /** Exact-path blocks. */
-const DEVICE_BLOCKED_EXACT = new Set<string>(["/api/v1/system/reset"]);
+const DEVICE_BLOCKED_EXACT = new Set<string>([
+  "/api/v1/system/reset",
+  // ROUND-112 (R112-a): the cloud-connector settings are a MANAGEMENT-surface
+  // control (which relay this machine tunnels to, and with what host key) —
+  // a paired phone must never read or flip it, exactly like pairing itself.
+  "/api/v1/settings/cloud-connector",
+]);
 /** Prefix blocks (the internal dialogs + computer control families). */
 const DEVICE_BLOCKED_PREFIXES = ["/api/v1/internal/", "/api/v1/computer-use/"];
 /** Suffix blocks (the providers' raw key reveal, any provider id). */
@@ -2011,7 +2034,25 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         const unsubscribe = getNotificationBus().subscribe((n) => {
           if (!res.writableEnded) res.write(`data: ${JSON.stringify(n)}\n\n`);
         });
-        res.on("close", () => unsubscribe());
+        // ROUND-112 (R112-a, the R110 disconnect-loop fix #1): the 10 s
+        // comment heartbeat — the terminal stream's exact pattern (server.ts
+        // ~995). An idle notifications stream previously wrote NOTHING
+        // between events, so every NAT/proxy/Wi-Fi power-save in the path
+        // reaped it as dead and the phone's next read surfaced as a
+        // "disconnected" pill — the owner's reconnect loop's root cause #1.
+        // Comment frames (`: ping`) are SSE-legal no-ops the app ignores.
+        const heartbeat = setInterval(() => {
+          if (res.writableEnded) return;
+          try {
+            res.write(": ping\n\n");
+          } catch {
+            // The socket died mid-write — the close handler cleans up.
+          }
+        }, 10_000);
+        res.on("close", () => {
+          clearInterval(heartbeat);
+          unsubscribe();
+        });
         // Hold the reply open until the client disconnects. Fastify's hijack
         // means we never call reply.send; the SSE stream lives until close.
       });
@@ -2207,12 +2248,26 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   app.addHook("onClose", async () => {
     if (discovery.file !== undefined) removePortalDiscoveryFile(discovery.file);
   });
+  // R112-a: the cloud connector's teardown rides the SAME graceful-close
+  // path (registered BEFORE listen — Fastify refuses addHook on a listening
+  // instance). A no-op when the connector never started; a graceful
+  // {"t":"bye"} + close(1000) when it did (lib/cloud-connector.ts).
+  app.addHook("onClose", async () => {
+    await stopCloudConnector();
+  });
   await app.listen({ port: options.port ?? 0, host: "127.0.0.1" });
   const address = app.server.address();
   if (address === null || typeof address === "string") {
     await app.close();
     throw new Error("sidecar failed to bind a TCP port");
   }
+  // R112-a (the R110 disconnect-loop fix #2): the LOOPBACK listener gets
+  // the same keep-alive tuning the TLS device listener boots with — Node's
+  // default 5 s keepAliveTimeout reaps idle sockets right from under
+  // long-lived pooled clients (the phone's OkHttp pool, the CLI); 65 s/66 s
+  // keeps the management plane's connections quietly reusable.
+  app.server.keepAliveTimeout = DEVICE_LISTENER_KEEP_ALIVE_TIMEOUT_MS;
+  app.server.headersTimeout = DEVICE_LISTENER_HEADERS_TIMEOUT_MS;
   // R98-K: the discovery file — written AFTER the successful bind (the port
   // is real, never a placeholder) and removed by the hook above on graceful
   // close; a hard SIGTERM/SIGINT kill can leave a stale file, which the
@@ -2258,6 +2313,44 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
         });
       }
     }
+  }
+  // R112-a: the CLOUD-CONNECTOR boot — the device-link block's never-fatal
+  // pattern exactly. The PERSISTED settings are the truth (a machine that
+  // had remote access enabled gets its tunnel back on every boot); the
+  // connector boots AFTER the device link so the TLS port exists for the
+  // bridge. An incomplete config (no relay URL / host key) or a missing
+  // machine identity logs a warning and moves on — the sidecar is the
+  // product, the tunnel the accessory.
+  try {
+    const cloudSettings = getCloudConnectorSettings(db);
+    if (cloudSettings.enabled) {
+      const link = deviceLinkControllerFor(app);
+      const identity = link?.identity() ?? null;
+      const relayUrl = normalizeRelayUrl(cloudSettings.relayUrl);
+      if (relayUrl === "" || cloudSettings.hostKey === "" || identity === null) {
+        log("warn", "boot.cloud_connector_skipped", {
+          reason:
+            identity === null
+              ? "no machine identity (enable device links once first)"
+              : "incomplete config (relayUrl/hostKey missing)",
+        });
+      } else {
+        startCloudConnector({
+          relayUrl,
+          hostKey: cloudSettings.hostKey,
+          machineId: identity.machineId,
+          tlsPort: () => deviceLinkControllerFor(app)?.status().port ?? null,
+        });
+        log("info", "boot.cloud_connector", {
+          relayUrl,
+          machineId: identity.machineId,
+        });
+      }
+    }
+  } catch (err) {
+    log("warn", "boot.cloud_connector_failed", {
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
   return { server: app, port: address.port, discoveryFile: discovery.file };
 }

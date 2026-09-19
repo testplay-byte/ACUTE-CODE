@@ -2,10 +2,13 @@
  * The confirm + pair step — the one screen that actually PAIRS. It receives
  * the candidate from the scanner (a QR payload) or the manual page (a
  * manual target) as JSON params, shows the host's identity for the final
- * look (addresses, PIN, the certificate fingerprint that will be pinned,
- * the machine id), then runs the pairing ladder:
+ * look (addresses, the certificate fingerprint that will be pinned, the
+ * machine id) and — R110 #6 (v0.106.0) — the PAIRING PIN prominently, in
+ * the grouped 4+4 mono spelling, with the QR window's live countdown: the
+ * owner cross-checks this against the desktop's Link-a-device screen while
+ * pairing runs. Then it runs the pairing ladder:
  *
- *   validate → probe the address ladder → claim the PIN → store
+ *   validate → probe the address ladder (LAN first, relay last) → claim → store
  *
  * On success: the phone adopts the host, one success haptic, straight to
  * home. On failure: the typed ladder's honest error card + retry.
@@ -13,7 +16,7 @@
 
 import * as Device from "expo-device";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { CircleAlert, FingerprintPattern, KeyRound, MonitorSmartphone } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
@@ -24,11 +27,12 @@ import {
   QuietButton,
   TypeBody,
   TypeCaption,
+  TypeMicro,
   TypeMono,
 } from "@/design/primitives";
 import { successHaptic, warningHaptic } from "@/design/haptics";
 import { useTheme } from "@/design/theme";
-import { spacing } from "@/design/tokens";
+import { fontFamily, spacing } from "@/design/tokens";
 import { acuteNetTransport } from "@/link/native-transport";
 import { hostStore } from "@/link/host-store";
 import {
@@ -38,7 +42,7 @@ import {
   type PairFailure,
 } from "@/link/pair-flow";
 import type { ManualTarget, PairingPayload } from "@/link/pairing";
-import { formatCertFP } from "@/link/pairing";
+import { formatCertFP, formatPin } from "@/link/pairing";
 import { getLinkManager } from "@/link/runtime";
 import { mobLog, mobWarn } from "@/lib/log";
 
@@ -49,24 +53,38 @@ export default function ConfirmScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ source?: string; payload?: string }>();
   const [phase, setPhase] = useState<Phase>({ kind: "confirm" });
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
-  // The candidate — parsed ONCE from the params (honest fallback: back to
-  // the hub when the params are missing or corrupt).
-  const candidate = React.useMemo(() => {
+  // R110 #6: the QR window's honest countdown — a 1s tick while the screen
+  // is mounted (the parsed expiresAt drives it; manual entries have no
+  // window — the desktop's own countdown is the truth there).
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => clearInterval(t);
+  }, []);
+
+  // The candidate + the QR's window expiry — parsed ONCE from the params
+  // (honest fallback: back to the hub when the params are missing or corrupt).
+  const parsed = React.useMemo(() => {
     const raw = typeof params.payload === "string" ? params.payload : "";
     if (raw === "") return null;
     try {
-      const parsed = JSON.parse(raw) as unknown;
+      const value = JSON.parse(raw) as unknown;
       if (params.source === "manual") {
-        return candidateFromManual(parsed as ManualTarget);
+        return {
+          candidate: candidateFromManual(value as ManualTarget),
+          expiresAt: null as number | null,
+        };
       }
-      return candidateFromQr(parsed as PairingPayload);
+      const payload = value as PairingPayload;
+      const expiresAt = typeof payload.expiresAt === "number" ? payload.expiresAt : null;
+      return { candidate: candidateFromQr(payload), expiresAt };
     } catch {
       return null;
     }
   }, [params.source, params.payload]);
 
-  if (candidate === null) {
+  if (parsed === null) {
     return (
       <ScreenScaffold title="Confirm" back noPill>
         <ClayCard bordered>
@@ -80,10 +98,14 @@ export default function ConfirmScreen() {
     );
   }
 
+  const { candidate, expiresAt } = parsed;
+  const secondsLeft =
+    expiresAt !== null ? Math.max(0, Math.ceil((expiresAt - nowMs) / 1_000)) : null;
+
   async function onPair() {
     setPhase({ kind: "pairing" });
-    mobLog("pair", "pairing started", { kind: candidate?.kind });
-    const result = await pairWithHost(candidate!, {
+    mobLog("pair", "pairing started", { kind: candidate.kind });
+    const result = await pairWithHost(candidate, {
       net: acuteNetTransport,
       store: hostStore,
       label: Device.modelName ?? Device.deviceName ?? "Android device",
@@ -117,15 +139,31 @@ export default function ConfirmScreen() {
               <TypeCaption>
                 {candidate.kind === "tunnel"
                   ? "tunnel link — reachable from any network"
-                  : `${addrs.length} address${addrs.length === 1 ? "" : "es"} · port ${candidate.port}`}
+                  : candidate.relay !== null
+                    ? `${addrs.length} address${addrs.length === 1 ? "" : "es"} · port ${candidate.port} · cloud relay fallback`
+                    : `${addrs.length} address${addrs.length === 1 ? "" : "es"} · port ${candidate.port}`}
               </TypeCaption>
             </View>
-            <Badge tone="accent">
-              <View style={styles.pinRow}>
-                <KeyRound size={11} color={tokens.accentText} strokeWidth={2.4} />
-                {pin}
-              </View>
-            </Badge>
+          </View>
+
+          {/* R110 #6: the pairing PIN, prominent — grouped 4+4 mono (the
+              desktop's value-tier spelling), visible through the countdown
+              AND the pairing spinner below. */}
+          <View style={[styles.pinBlock, { borderTopColor: tokens.borderSubtle }]}>
+            <TypeMicro>PAIRING PIN</TypeMicro>
+            <View style={styles.pinDigitsRow}>
+              <KeyRound size={20} color={tokens.accent} strokeWidth={2.2} />
+              <TypeMono style={styles.pinDigits} numberOfLines={1} testID="pair-pin">
+                {formatPin(pin)}
+              </TypeMono>
+            </View>
+            <TypeCaption style={styles.pinNote}>
+              {secondsLeft === null
+                ? "match it against the PIN on the desktop's Link-a-device screen"
+                : secondsLeft > 0
+                  ? `valid for another ${secondsLeft}s — match it against the desktop's screen`
+                  : "the window closed — generate a new PIN on the desktop and scan again"}
+            </TypeCaption>
           </View>
 
           <View style={[styles.fpRow, { borderTopColor: tokens.borderSubtle }]}>
@@ -213,7 +251,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   identityText: { flex: 1, gap: 2 },
-  pinRow: { flexDirection: "row", gap: 4, alignItems: "center" },
+  pinBlock: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: spacing.md, gap: spacing.xs },
+  pinDigitsRow: { flexDirection: "row", gap: spacing.sm, alignItems: "center" },
+  pinDigits: {
+    fontSize: 26,
+    lineHeight: 32,
+    fontFamily: fontFamily.monoMedium,
+    letterSpacing: 1.5,
+  },
+  pinNote: { lineHeight: 16 },
   fpRow: {
     flexDirection: "row",
     gap: spacing.sm,

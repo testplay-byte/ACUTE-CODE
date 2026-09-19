@@ -5,18 +5,38 @@
  *
  *   probing→connected   a /health probe answered (machine identity verified
  *                       when the health shape carries machineId)
- *   probing→offline     every stored address failed → backoff ladder
+ *   probing→offline     every rung of the ladder failed → backoff ladder
  *                       5s → 10s → 30s (cap), RESET on success
- *   connected→offline   an api()/sse() transport failure (host dropped)
- *   offline→probing     backoff timer · app foreground · network change ·
- *                       manual retry (the owner's §1.2 auto-reconnect ruling)
+ *   connected→offline   HYSTERESIS (R110 #1b, v0.106.0): TWO consecutive
+ *                       failed probe cycles — a single transient failure
+ *                       retries silently and the status holds. api()/sse()
+ *                       transport failures trigger a verification probe
+ *                       (they no longer flip the state on the spot); a TLS
+ *                       verdict is definitive and flips immediately.
+ *   offline→probing     backoff timer · app foreground · a debounced
+ *                       network-reachability transition · manual retry (the
+ *                       owner's §1.2 auto-reconnect ruling)
  *   any→unpaired        store empty at start · api() answered 401 (revoked —
  *                       LINKING-PROTOCOL §2: "the phone's next request is
  *                       rejected and it falls back to the pairing screen")
  *
+ * THE LADDER (R112, v0.106.0): stored LAN addresses first (bare host + port,
+ * TOFU pin), then the cloud relay URL LAST (full URL, standard CA — the
+ * relay is one more address for the SAME machineId; the owner's "local OR
+ * internet, automatic" ruling). The relay answers a clean 503
+ * {error:{code:"host_offline"}} when the desktop's tunnel is down — that is
+ * a CONNECTIVITY verdict (retryable, next rung / backoff), never an auth
+ * failure: ONLY a real 401 from the desktop wipes the pairing.
+ *
  * TLS discipline (per address, R3 §4): bare-host LAN addresses ride the TOFU
- * pin when certFP is stored; full-URL (tunnel) addresses always ride standard
- * CA verification — Cloudflare's leaf is not the desktop's certificate.
+ * pin when certFP is stored; full-URL (tunnel + relay) addresses always ride
+ * standard CA verification — Cloudflare's leaf is not the desktop's
+ * certificate.
+ *
+ * STORM PROOFING (R110 #1c/1d): probe rounds never overlap (the in-flight
+ * flag; wakes that arrive mid-round queue, and a FAILED round drops its
+ * queue — the backoff ladder owns the next attempt), and NetInfo wakes pass
+ * a 5s debounce + a reachability-transition gate before they may probe.
  *
  * Everything injectable (store, transport, triggers, clock) — pure TS,
  * unit-tested without React Native in sight.
@@ -78,14 +98,19 @@ export interface ConnectionManagerDeps {
   triggers: ConnectionTriggers;
   /** Injectable clock (tests); default Date.now. */
   now?(): number;
-  /** Per-address /health probe timeout; default 3000. */
+  /** Per-address /health probe timeout; default 5000 (R110 #1a). */
   probeTimeoutMs?: number;
 }
 
 // ── internals ───────────────────────────────────────────────────────────────
 
-const PROBE_TIMEOUT_MS = 3_000;
+/** R110 #1a: 5s per rung (was 3s) — a busy desktop during a running turn can
+ * miss a 3s probe; 5s rides the same OkHttp whole-exchange timeout path. */
+const PROBE_TIMEOUT_MS = 5_000;
 const BACKOFF_LADDER_MS = [5_000, 10_000, 30_000] as const;
+/** R110 #1c: NetInfo events within this window of the last processed one are
+ * noise (Wi-Fi ↔ cellular handovers emit bursts of callbacks in seconds). */
+const NETWORK_WAKE_DEBOUNCE_MS = 5_000;
 
 /** Parse a /health body — accepts BOTH listener shapes (R106-S1):
  * linkMode {ok, version, machineId} and loopback {status, app, version}. */
@@ -100,6 +125,36 @@ export function parseHealthBody(bodyText: string): LiveInfo | null {
   } catch {
     return null;
   }
+}
+
+/** Parse the app's {error:{code,message}} envelope — the relay speaks the
+ * exact same shape (acute-relay src/common.js appError). Returns the code
+ * string, or null for non-JSON/off-shape bodies. */
+export function parseAppErrorCode(bodyText: string): string | null {
+  try {
+    const raw: unknown = JSON.parse(bodyText);
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+    const err = (raw as Record<string, unknown>).error;
+    if (typeof err !== "object" || err === null || Array.isArray(err)) return null;
+    const code = (err as Record<string, unknown>).code;
+    return typeof code === "string" && code !== "" ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The relay's "the desktop is offline" verdict — 503 + this code is a
+ * CONNECTIVITY failure (retryable), never an auth failure. */
+export const HOST_OFFLINE_CODE = "host_offline";
+
+/** The probe ladder (R112): the stored addresses in their stored order, then
+ * the relay URL LAST — LAN first, internet fallback, one machineId. A stored
+ * addr that already equals the relay is not duplicated. */
+export function probeLadder(host: StoredHost): string[] {
+  if (host.relay === null) return host.addrs;
+  const relayKey = host.relay.toLowerCase();
+  const addrs = host.addrs.filter((a) => a.toLowerCase() !== relayKey);
+  return [...addrs, host.relay];
 }
 
 interface ManagerState {
@@ -145,6 +200,9 @@ export class ConnectionManager {
   /** True once start()'s store read resolved — the router gate's signal that
    * "unpaired" is a VERDICT, not a transient pre-boot state. */
   private booted = false;
+  /** R110 #1c — the NetInfo debounce bookkeeping (clock via this.now()). */
+  private lastNetworkWakeAt = Number.NEGATIVE_INFINITY;
+  private lastNetworkReachable: boolean | null = null;
 
   constructor(deps: ConnectionManagerDeps) {
     this.store = deps.store;
@@ -174,7 +232,7 @@ export class ConnectionManager {
     }
     this.unsubTriggers = [
       this.triggers.onForeground(() => this.wake("foreground")),
-      this.triggers.onNetworkChange(() => this.wake("network")),
+      this.triggers.onNetworkChange((event) => this.handleNetworkChange(event.reachable)),
     ];
     this.notify();
   }
@@ -235,14 +293,20 @@ export class ConnectionManager {
     this.wake("manual");
   }
 
-  /** A probe round: try every stored address in order; LAN-first (§1.4).
+  /** A probe round: try every rung of the ladder in order — the stored LAN
+   * addresses, then the relay (R112) — LAN first, internet fallback.
    *
    * ROUND-109 (the reliability fix): a per-address "tls" failure (a REAL
    * CertificateException after the Kotlin-side reclassification) no longer
-   * breaks the ladder on the spot — the next stored address still gets its
-   * probe (the stale-IP-now-serves-another-TLS-host case). The ladder's
-   * exhaustion + a witnessed tls failure is what makes the state FATAL
-   * (the honest re-pair signal); every other shape backs off and retries. */
+   * breaks the ladder on the spot — the next rung still gets its probe (the
+   * stale-IP-now-serves-another-TLS-host case). The ladder's exhaustion + a
+   * witnessed tls failure is what makes the state FATAL (the honest re-pair
+   * signal); every other shape backs off and retries.
+   *
+   * ROUND-112 (R110 #1b): a round that starts while CONNECTED is SILENT — no
+   * "probing" flicker, the status holds — so a verification probe after a
+   * transport blip cannot itself flap the pill. The failure path decides via
+   * hysteresis (one failed cycle holds, two consecutive flip offline). */
   private async probeRound(): Promise<void> {
     if (this.probeInFlight) {
       this.probeQueued = true;
@@ -251,10 +315,13 @@ export class ConnectionManager {
     const { host, token } = this.state;
     if (host === null || token === null) return;
     this.probeInFlight = true;
-    this.setState({ status: "probing", fatal: false, lastFailure: null });
+    if (this.state.status !== "connected") {
+      this.setState({ status: "probing", fatal: false, lastFailure: null });
+    }
 
     let tlsFailure: LinkFailure | null = null;
-    for (const addr of host.addrs) {
+    let hostOfflineAt: string | null = null;
+    for (const addr of probeLadder(host)) {
       try {
         const res = await this.net.request({
           url: `${baseUrlFor(addr, host.port)}/health`,
@@ -265,8 +332,15 @@ export class ConnectionManager {
           pinSha256: pinFor(addr, host.certFP),
         });
         if (res.status !== 200) {
-          mobLog("link", "probe answered, wrong status", { addr, status: res.status });
-          continue; // answered, wrong shape — next addr
+          // The relay's clean "desktop offline" 503 — a connectivity verdict,
+          // never an auth failure: remember it for the honest failure line.
+          if (res.status === 503 && parseAppErrorCode(res.bodyText) === HOST_OFFLINE_CODE) {
+            hostOfflineAt = hostOfflineAt ?? addr;
+            mobLog("link", "relay reports host_offline", { addr });
+          } else {
+            mobLog("link", "probe answered, wrong status", { addr, status: res.status });
+          }
+          continue; // answered, wrong shape — next rung
         }
         const health = parseHealthBody(res.bodyText);
         if (health === null) continue;
@@ -306,17 +380,16 @@ export class ConnectionManager {
           };
           continue;
         }
-        // network/unknown — this address is unreachable; try the next.
+        // network/unknown — this address is unreachable; try the next rung.
         continue;
       }
     }
 
     this.probeInFlight = false;
-    this.onProbeFailure(tlsFailure);
-    if (this.probeQueued) {
-      this.probeQueued = false;
-      void this.probeRound();
-    }
+    // A FAILED round drops any queued wake — the backoff ladder owns the
+    // next attempt (no wake path can bypass it, R110 #1c).
+    this.probeQueued = false;
+    this.onProbeFailure(tlsFailure, hostOfflineAt);
   }
 
   private onProbeSuccess(addr: string, health: LiveInfo): void {
@@ -332,16 +405,32 @@ export class ConnectionManager {
     });
   }
 
-  private onProbeFailure(tlsFailure: LinkFailure | null): void {
+  private onProbeFailure(tlsFailure: LinkFailure | null, hostOfflineAt: string | null): void {
     this.consecutiveFailures += 1;
     const failure: LinkFailure =
       tlsFailure ?? {
         kind: "network",
-        message: "the host did not answer on any stored address",
+        message:
+          hostOfflineAt !== null
+            ? "the desktop is offline at the relay — it will reconnect on its own"
+            : "the host did not answer on any stored address",
       };
     mobWarn("link", `probe round failed (${failure.kind}) — attempt ${this.consecutiveFailures}`, {
       message: failure.message,
     });
+    // R110 #1b HYSTERESIS: connected→offline needs TWO consecutive failed
+    // cycles. One transient failure while connected retries silently (the
+    // status, activeAddr and live info all hold); the backoff timer runs the
+    // verification cycle. TLS verdicts are definitive — they flip at once.
+    if (
+      this.state.status === "connected" &&
+      tlsFailure === null &&
+      this.consecutiveFailures < 2
+    ) {
+      this.setState({ lastFailure: failure });
+      this.scheduleBackoffProbe();
+      return;
+    }
     this.setState({
       status: "offline",
       activeAddr: null,
@@ -372,12 +461,41 @@ export class ConnectionManager {
     }
   }
 
-  /** Foreground / network-change / manual: probe NOW (unless mid-probe). */
+  /** Foreground / network-transition / manual: probe NOW (unless mid-probe —
+   * the in-flight flag coalesces; a failed round drops the queue so the
+   * backoff ladder always owns the cadence). */
   private wake(source: "foreground" | "network" | "manual"): void {
     if (this.state.status === "unpaired") return;
     if (this.state.status === "connected" && source !== "manual") return;
     this.clearBackoffTimer();
     void this.probeRound();
+  }
+
+  /** R110 #1c — the NetInfo discipline (replaces the wake-per-callback bug
+   * that stormed probes on every network detail change):
+   *
+   *   1. TRANSITIONS ONLY — the reachability verdict must actually flip;
+   *      same-verdict callbacks (cost/SSID detail churn) are not news.
+   *   2. Dropping offline is bookkeeping only — never a probe (the backoff
+   *      ladder keeps its cadence; transport errors verify liveness).
+   *   3. DEBOUNCE — at most one processed network event per 5s. A transition
+   *      swallowed by the window does NOT consume the memory: once the burst
+   *      settles, the standing verdict still gets its (single) wake.
+   */
+  private handleNetworkChange(reachable: boolean): void {
+    const nowMs = this.now();
+    if (this.lastNetworkReachable !== null && reachable === this.lastNetworkReachable) {
+      return; // not a transition
+    }
+    if (!reachable) {
+      this.lastNetworkReachable = false;
+      return; // bookkeeping only — never a probe
+    }
+    if (nowMs - this.lastNetworkWakeAt < NETWORK_WAKE_DEBOUNCE_MS) return;
+    this.lastNetworkReachable = true;
+    this.lastNetworkWakeAt = nowMs;
+    mobLog("link", "network reachability regained — waking the ladder");
+    this.wake("network");
   }
 
   // ── the fetch-like api ────────────────────────────────────────────────────
@@ -397,9 +515,13 @@ export class ConnectionManager {
   /**
    * The authenticated request: Bearer token, base URL, per-address pin. HTTP
    * errors are returned as values; transport failures throw NetError AND
-   * transition the link offline (a fresh probe ladder starts). A 401 means
+   * trigger a verification probe (R110 #1: the link only goes offline after
+   * the HYSTERESIS verdict, not on the first transport error). A 401 means
    * the token was revoked — the store is cleared and the link falls back to
-   * unpaired (the pairing screen), exactly per LINKING-PROTOCOL §2.
+   * unpaired (the pairing screen), exactly per LINKING-PROTOCOL §2. A 503
+   * {error:{code:"host_offline"}} from the relay is CONNECTIVITY truth (the
+   * desktop's tunnel is down): it verifies the ladder too and NEVER wipes
+   * the pairing.
    */
   async api(path: string, init: ApiCallInit = {}): Promise<ApiResult> {
     const { token, url, pin } = this.requireConnected();
@@ -417,10 +539,17 @@ export class ConnectionManager {
         timeoutMs: init.timeoutMs,
         pinSha256: pin,
       });
-      this.onHostAnswered();
+      const relayHostOffline = res.status === 503 && parseAppErrorCode(res.bodyText) === HOST_OFFLINE_CODE;
+      if (!relayHostOffline) {
+        // The relay answering "desktop offline" is NOT the host answering.
+        this.onHostAnswered();
+      }
       if (res.status === 401) {
         // Revoked (or corrupted) device token — the honest fallback.
         void this.fallBackToUnpaired();
+      } else if (relayHostOffline) {
+        mobLog("link", "api() got the relay's host_offline — verifying the ladder");
+        void this.probeRound();
       }
       return {
         ok: res.status >= 200 && res.status < 300,
@@ -438,7 +567,9 @@ export class ConnectionManager {
   /**
    * The authenticated SSE stream (the turn stream is POST + JSON bodyText).
    * Returns the EventSource-like handle; transport-level stream failures
-   * transition the link offline exactly like api() failures.
+   * (network/tls) route through the same hysteresis-verified path as api()
+   * failures — a transient blip does not flip the global status offline
+   * (R110 #1e); callers re-open on the manager's next verified state change.
    */
   sse(path: string, init: ApiCallInit = {}): SseStream {
     const { token, url, pin } = this.requireConnected();
@@ -462,24 +593,35 @@ export class ConnectionManager {
     return stream;
   }
 
-  /** The host answered — refresh lastSeen (staleness is information). */
+  /** The host answered — refresh lastSeen (staleness is information) and
+   * reset the hysteresis window: any live answer proves the host is there,
+   * so the NEXT failed cycle starts a fresh two-count. */
   private onHostAnswered(): void {
+    this.consecutiveFailures = 0;
     this.state = { ...this.state, lastSeen: this.now() };
     this.notify();
   }
 
-  /** A transport failure while connected: offline + a fresh probe ladder. */
+  /** A transport failure while connected (R110 #1): a NETWORK blip triggers a
+   * verification probe and the ladder's HYSTERESIS decides (one failed cycle
+   * holds the connected state; two consecutive flip offline) — the pill no
+   * longer flaps on transient blips. A TLS verdict is definitive (the pinned
+   * certificate no longer matches): the honest fatal flip, unchanged. */
   private onTransportFailure(err: { kind: string; message: string }): void {
     if (this.state.status !== "connected") return;
-    this.consecutiveFailures = 0; // a fresh ladder after a live connection drop
-    this.setState({
-      status: "offline",
-      activeAddr: null,
-      live: null,
-      lastFailure: { kind: err.kind === "tls" ? "tls" : "network", message: err.message },
-      fatal: err.kind === "tls",
-    });
-    if (err.kind !== "tls") this.scheduleBackoffProbe();
+    if (err.kind === "tls") {
+      this.setState({
+        status: "offline",
+        activeAddr: null,
+        live: null,
+        lastFailure: { kind: "tls", message: err.message },
+        fatal: true,
+      });
+      return; // fatal — the backoff timer stays silent until re-pairing
+    }
+    mobLog("link", "transport failure — verifying with a probe round", { message: err.message });
+    this.setState({ lastFailure: { kind: "network", message: err.message } });
+    void this.probeRound();
   }
 
   // ── pairing-side write paths ──────────────────────────────────────────────

@@ -57,8 +57,9 @@ jest.mock("@react-native-async-storage/async-storage", () => ({
 }));
 
 const FP = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
+const RELAY = `https://acute-relay.anikuta.workers.dev/m/${FP}`;
 
-function samplePairing(certFP: string | null): StoredPairing {
+function samplePairing(certFP: string | null, relay: string | null = null): StoredPairing {
   return {
     deviceToken: "f".repeat(64),
     host: {
@@ -67,6 +68,7 @@ function samplePairing(certFP: string | null): StoredPairing {
       hostLabel: "OWNER-PC",
       addrs: ["192.168.1.4", "https://abc.trycloudflare.com"],
       port: 53411,
+      relay,
       pairedAt: 1_750_000_000_000,
     },
   };
@@ -103,6 +105,25 @@ describe("hostStore", () => {
     expect(host?.certFP).toBeNull();
     expect(host?.machineId).toBe(FP);
     expect(host?.addrs).toEqual(["192.168.1.4", "https://abc.trycloudflare.com"]);
+    expect(host?.relay).toBeNull(); // no relay in the pairing ⇒ null, not ""
+  });
+
+  it("round-trips the relay (v0.106.0) — stored, read back verbatim", async () => {
+    await hostStore.savePairing(samplePairing(FP, RELAY));
+    const host = await hostStore.readHost();
+    expect(host).not.toBeNull();
+    expect(host?.relay).toBe(RELAY);
+    expect(host?.addrs).toEqual(["192.168.1.4", "https://abc.trycloudflare.com"]);
+  });
+
+  it("a pre-v0.106 record (no relay cell on disk) reads as relay-less, NOT corrupt", async () => {
+    await hostStore.savePairing(samplePairing(FP, RELAY));
+    // Simulate the old record: the relay cell simply never existed.
+    mockAsync.delete("acute.host.relay");
+    const host = await hostStore.readHost();
+    expect(host).not.toBeNull();
+    expect(host?.relay).toBeNull();
+    expect(host?.machineId).toBe(FP);
   });
 
   it("reads as unpaired when the addrs cell is corrupt JSON", async () => {
@@ -117,13 +138,14 @@ describe("hostStore", () => {
     expect(await hostStore.readHost()).toBeNull();
   });
 
-  it("clear() wipes both backends completely", async () => {
-    await hostStore.savePairing(samplePairing(FP));
+  it("clear() wipes both backends completely — the relay included", async () => {
+    await hostStore.savePairing(samplePairing(FP, RELAY));
     await hostStore.clear();
     expect(await hostStore.readHost()).toBeNull();
     expect(await hostStore.readDeviceToken()).toBeNull();
     expect(mockAsync.size).toBe(0);
     expect(mockSecure.size).toBe(0);
+    expect(mockAsync.has("acute.host.relay")).toBe(false);
   });
 
   it("NEVER touches a key outside the contract — and touches every allowed one", async () => {

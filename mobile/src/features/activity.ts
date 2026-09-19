@@ -14,6 +14,17 @@
  *   useUnread()         — the badge hook (the bell + the tab bar)
  *   useActivityFeed()   — the activity screen's data hook
  *
+ * R110 #1e (v0.106.0): a stream transport error no longer assumes the LINK
+ * is down — the connection manager verifies with its probe ladder and its
+ * HYSTERESIS owns the global status. The controller just drops the dead
+ * handle (setStreamLive(false), this.stream = null) and lets the manager's
+ * next verified state change re-open the stream: a transient blip heals
+ * silently (probe succeeds → notify → re-open), a real outage flips offline
+ * (notify → close) and the eventual reconnect refreshes + re-opens. With the
+ * desktop's 10s SSE heartbeats (v0.106.0 server side) idle-time disconnects
+ * disappear on their own; this side must simply not tear the state down on
+ * blips.
+ *
  * Pure TS at the core (unit-testable without React Native); the controller
  * takes its environment injected the same way the link manager does.
  */
@@ -245,9 +256,13 @@ export class ActivityController {
         }
       });
       stream.addEventListener("error", (err) => {
-        // The link manager itself transitions offline on transport errors;
-        // this listener only logs the honest detail.
+        // R110 #1e: the handle is dead but the LINK verdict is NOT ours to
+        // flip — the manager's hysteresis-verified probe owns the global
+        // status. Drop the handle so the manager's next verified state
+        // change re-opens cleanly; the honest detail lands in the log.
         mobWarn("activity", "stream error", { kind: err.kind, message: err.message });
+        this.stream = null;
+        this.store.setStreamLive(false);
       });
       stream.addEventListener("close", () => {
         mobLog("activity", "stream closed by host");

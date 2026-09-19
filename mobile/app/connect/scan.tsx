@@ -113,7 +113,9 @@ export default function ScanScreen() {
         ? "that code expired — generate a fresh one on the desktop"
         : result.error.kind === "bad-version"
           ? "that code is from a different protocol version — update the desktop"
-          : "that is not an ACUTE pairing code";
+          : result.error.kind === "bad-relay"
+            ? "that code carries an invalid relay address — update the desktop and scan again"
+            : "that is not an ACUTE pairing code";
     setParseError(reason);
     mobWarn("pair", "QR parse failed", { kind: result.error.kind });
     setTimeout(() => {

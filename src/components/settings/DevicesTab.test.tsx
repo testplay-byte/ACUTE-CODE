@@ -8,6 +8,12 @@
  *       to bind) rolls the switch back to OFF with the honest error note.
  *       While ON, the live listener state line reads link-info (port + LAN
  *       addresses).
+ *  §a2 · (ROUND-112 R112-a) the remote-access card — INDEPENDENT of §a:
+ *       the toggle + relay URL + write-only host key; Save PUTs
+ *       {enabled, relayUrl, hostKey?} (untouched key input = hostKey
+ *       OMITTED = keep); the live status line reads the polled connector
+ *       status (Connected to <host> / Connecting… / Error: …); the pairing
+ *       dialog's "Reachable over the internet" hint rides the same cache.
  *  §b · the pairing flow — "Pair a device" (gated on links being ON) calls
  *       POST /mobile/pair/start and opens the dialog: the QR encodes the
  *       EXACT response JSON (one compact object, fields untouched), the
@@ -25,12 +31,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
+  fetchCloudConnectorSettings,
   fetchDeviceLinkSettings,
   fetchMobileDevices,
   fetchMobileLinkInfo,
   revokeMobileDevice,
   startMobilePairing,
+  updateCloudConnectorSettings,
   updateDeviceLinkSettings,
+  type CloudConnectorSettingsView,
   type DeviceLinkSettings,
   type MobileDeviceInfo,
   type MobileLinkInfo,
@@ -49,6 +58,10 @@ vi.mock("../../lib/api", () => ({
   startMobilePairing: vi.fn(),
   fetchMobileDevices: vi.fn(),
   revokeMobileDevice: vi.fn(),
+  // ROUND-112 (R112-a): §a2's remote-access surface (GET/PUT
+  // /settings/cloud-connector — the same manual-fetcher mocking).
+  fetchCloudConnectorSettings: vi.fn(),
+  updateCloudConnectorSettings: vi.fn(),
 }));
 
 afterEach(() => {
@@ -64,6 +77,10 @@ beforeEach(() => {
   vi.mocked(startMobilePairing).mockReset();
   vi.mocked(fetchMobileDevices).mockReset().mockResolvedValue([]);
   vi.mocked(revokeMobileDevice).mockReset().mockResolvedValue({ ok: true, revoked: "dev_1" });
+  // R112-a: the disabled default — remote access is OFF until the owner
+  // flips it (the whole cloud path ships dark by default).
+  vi.mocked(fetchCloudConnectorSettings).mockReset().mockResolvedValue(cloudSettingsFactory());
+  vi.mocked(updateCloudConnectorSettings).mockReset().mockResolvedValue(cloudSettingsFactory());
 });
 
 /* ── Fixtures (the backend's exact wire shapes) ───────────────────────────── */
@@ -106,6 +123,20 @@ function deviceFactory(m: Partial<MobileDeviceInfo> & { id: string }): MobileDev
     createdAt: Date.now() - 3_600_000,
     lastSeenAt: Date.now() - 120_000,
     ...m,
+  };
+}
+
+/** The cloud-connector settings view exactly as GET /settings/cloud-connector
+ * serves it (the hostKey itself NEVER rides this shape — presence only). */
+function cloudSettingsFactory(
+  patch: Partial<CloudConnectorSettingsView> = {},
+): CloudConnectorSettingsView {
+  return {
+    enabled: false,
+    relayUrl: "",
+    hostKeyPresent: false,
+    status: { state: "disabled", relayUrl: "", lastConnectedAt: null, lastError: null },
+    ...patch,
   };
 }
 
@@ -206,6 +237,167 @@ describe("DevicesTab (ROUND-106 R106-S2)", () => {
     // The optimistic flip is rolled back — the switch reads OFF again.
     await waitFor(() => {
       expect(screen.getByRole("switch", { name: "Toggle device links" }).getAttribute("aria-checked")).toBe("false");
+    });
+  });
+});
+
+// ── §a2 (ROUND-112 R112-a): the remote-access card — INDEPENDENT of the LAN
+//    link (both ON at once; the phone tries LAN first, relay fallback). ──────
+
+describe("DevicesTab §a2: the remote-access card (ROUND-112 R112-a)", () => {
+  it("renders the INDEPENDENT card beside the LAN card — off by default, empty inputs, no status line", async () => {
+    renderWithProviders(<DevicesTab />);
+
+    // The card exists alongside §a's LAN card (the independence ruling).
+    expect(await screen.findByText("Remote access (internet)")).toBeTruthy();
+    expect(screen.getByText("Device links")).toBeTruthy();
+    const toggle = screen.getByRole("switch", { name: "Toggle remote access" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    // The disabled default: no live status line, empty relay input.
+    expect(screen.queryByTestId("remote-status")).toBeNull();
+    expect((screen.getByTestId("remote-relay-input") as HTMLInputElement).value).toBe("");
+    expect(screen.queryByTestId("remote-key-saved")).toBeNull();
+  });
+
+  it("Save PUTs the typed draft {enabled, relayUrl, hostKey} and notes the save", async () => {
+    renderWithProviders(<DevicesTab />);
+    await screen.findByText("Remote access (internet)");
+
+    // Flip the toggle + type the relay URL + a host key, then Save.
+    fireEvent.click(screen.getByRole("switch", { name: "Toggle remote access" }));
+    fireEvent.change(screen.getByTestId("remote-relay-input"), {
+      target: { value: "https://acute-relay.example.workers.dev" },
+    });
+    fireEvent.change(screen.getByTestId("remote-hostkey-input"), {
+      target: { value: "host-key-r112" },
+    });
+    fireEvent.click(screen.getByTestId("remote-save"));
+
+    await waitFor(() => {
+      expect(vi.mocked(updateCloudConnectorSettings)).toHaveBeenCalledWith({
+        enabled: true,
+        relayUrl: "https://acute-relay.example.workers.dev",
+        hostKey: "host-key-r112",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Remote access settings saved.")).toBeTruthy();
+    });
+  });
+
+  it("an UNTOUCHED key input is OMITTED from the PUT (keep semantics); the 'Key saved' chip shows while enabled", async () => {
+    // Saved config: enabled + a key present + the tunnel connected.
+    vi.mocked(fetchCloudConnectorSettings).mockResolvedValue(
+      cloudSettingsFactory({
+        enabled: true,
+        relayUrl: "https://acute-relay.example.workers.dev",
+        hostKeyPresent: true,
+        status: {
+          state: "connected",
+          relayUrl: "https://acute-relay.example.workers.dev",
+          lastConnectedAt: null,
+          lastError: null,
+        },
+      }),
+    );
+    renderWithProviders(<DevicesTab />);
+
+    // The write-only placeholder + the saved-key chip (enabled + present).
+    await waitFor(() => {
+      expect(screen.getByTestId("remote-key-saved")).toBeTruthy();
+    });
+    expect(
+      (screen.getByTestId("remote-hostkey-input") as HTMLInputElement).placeholder,
+    ).toContain("saved — type to replace");
+
+    // Save with the key input untouched → hostKey rides NOWHERE (keep).
+    fireEvent.click(screen.getByTestId("remote-save"));
+    await waitFor(() => {
+      expect(vi.mocked(updateCloudConnectorSettings)).toHaveBeenCalledWith({
+        enabled: true,
+        relayUrl: "https://acute-relay.example.workers.dev",
+      });
+    });
+  });
+
+  it("the live status line reads the POLLED connector status — connected host / honest error", async () => {
+    vi.mocked(fetchCloudConnectorSettings).mockResolvedValue(
+      cloudSettingsFactory({
+        enabled: true,
+        relayUrl: "https://acute-relay.example.workers.dev",
+        status: {
+          state: "connected",
+          relayUrl: "https://acute-relay.example.workers.dev",
+          lastConnectedAt: null,
+          lastError: null,
+        },
+      }),
+    );
+    renderWithProviders(<DevicesTab />);
+    await waitFor(() => {
+      expect(screen.getByTestId("remote-status").textContent).toContain(
+        "Connected to acute-relay.example.workers.dev",
+      );
+    });
+    cleanup();
+
+    // The error state — the honest failure line, never a silent blank.
+    vi.mocked(fetchCloudConnectorSettings).mockResolvedValue(
+      cloudSettingsFactory({
+        enabled: true,
+        relayUrl: "https://acute-relay.example.workers.dev",
+        status: {
+          state: "error",
+          relayUrl: "https://acute-relay.example.workers.dev",
+          lastConnectedAt: 1,
+          lastError: "no pong within 10000 ms — treating the tunnel as dead",
+        },
+      }),
+    );
+    renderWithProviders(<DevicesTab />);
+    await waitFor(() => {
+      expect(screen.getByTestId("remote-status").textContent).toContain("Error: no pong within");
+    });
+  });
+
+  it("the pairing dialog carries the relay hint ONLY while the tunnel is connected", async () => {
+    enableLinks();
+    const payload = pairingPayload(Date.now() + 120_000);
+    vi.mocked(startMobilePairing).mockResolvedValue(payload);
+
+    // Disabled → no hint in the dialog.
+    renderWithProviders(<DevicesTab />);
+    await screen.findByTestId("link-status");
+    fireEvent.click(screen.getByTestId("pair-start-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("pair-pin").textContent).toBe("49301182");
+    });
+    expect(screen.queryByTestId("pair-relay-hint")).toBeNull();
+    cleanup();
+
+    // Connected → the human-readable host hint rides the same cache entry.
+    vi.mocked(fetchCloudConnectorSettings).mockResolvedValue(
+      cloudSettingsFactory({
+        enabled: true,
+        relayUrl: "https://acute-relay.example.workers.dev",
+        status: {
+          state: "connected",
+          relayUrl: "https://acute-relay.example.workers.dev",
+          lastConnectedAt: null,
+          lastError: null,
+        },
+      }),
+    );
+    renderWithProviders(<DevicesTab />);
+    await screen.findByTestId("link-status");
+    fireEvent.click(screen.getByTestId("pair-start-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("pair-pin").textContent).toBe("49301182");
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("pair-relay-hint").textContent).toContain(
+        "Reachable over the internet via acute-relay.example.workers.dev",
+      );
     });
   });
 });

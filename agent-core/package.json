@@ -19,12 +19,14 @@
     "pngjs": "^7.0.0",
     "selfsigned": "^5.5.0",
     "shared": "workspace:*",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/pngjs": "^6.0.5",
-    "@types/web-push": "^3.6.4"
+    "@types/web-push": "^3.6.4",
+    "@types/ws": "^8.18.1"
   },
   "main": "dist/main.js",
   "optionalDependencies": {

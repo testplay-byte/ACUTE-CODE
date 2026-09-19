@@ -178,12 +178,36 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
       ...corsHeadersFor(request.headers.origin),
     });
     let clientGone = false;
+    // ROUND-112 (R112-a, the R110 disconnect-loop fix #1): the terminal
+    // stream's LIVE-BATTERY flush + 10 s comment heartbeat, verbatim (the
+    // terminal route's own pattern — server.ts ~985/995). Pre-fix, a turn
+    // whose model was slow to first token wrote NOTHING for seconds: every
+    // NAT/proxy/Wi-Fi power-save in the path reaped the idle stream and the
+    // phone surfaced the dead socket as "disconnected" — the owner's
+    // reconnect loop's root cause #1. The leading `: ping` makes the stream
+    // live the instant the route runs (writeHead only ASSIGNS headers —
+    // nothing reaches the socket until the first write); the interval keeps
+    // it alive between events. Comment frames are SSE-legal no-ops.
+    try {
+      res.write(": ping\n\n");
+    } catch {
+      clientGone = true;
+    }
+    const heartbeat = setInterval(() => {
+      if (clientGone || res.writableEnded) return;
+      try {
+        res.write(": ping\n\n");
+      } catch {
+        clientGone = true;
+      }
+    }, 10_000);
     res.on("close", () => {
       // ROUND-42: do NOT abort the turn — it completes in the background
       // (the owner closes the window and still expects the task to finish
       // + a desktop notification). Only mark the socket dead so send()
-      // stops writing to it.
+      // stops writing to it. R112-a: the heartbeat dies with the socket.
       clientGone = true;
+      clearInterval(heartbeat);
     });
     const send = (event: unknown) => {
       if (clientGone) return;
@@ -733,6 +757,7 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
       send({ type: "error", status: 500, code: "INTERNAL_ERROR", message });
     } finally {
       unregisterTurn(id, abort);
+      clearInterval(heartbeat);
       if (!clientGone) {
         try {
           res.end();
