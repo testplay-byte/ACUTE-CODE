@@ -1,25 +1,50 @@
 /**
- * The router gate — one decision, made once the store read resolves (and
- * re-made if the link falls back to unpaired while we sit here): a stored
- * pairing goes to the tab group's home; anything else goes to pairing.
+ * The router gate — the one redirect screen: past the wizard? host linked?
+ * → the tabs; unpaired → the connection hub; never onboarded → the wizard.
+ * Renders null (the splash covers the decision's first frame).
  */
 
-import { useEffect } from "react";
-import { useRouter } from "expo-router";
+import { router } from "expo-router";
+import { useEffect, useState } from "react";
 import { useLink } from "@/link/use-link";
+import { isOnboarded } from "@/features/onboarding";
+import { mobLog } from "@/lib/log";
 
-export default function IndexGate() {
+export default function Gate() {
   const { ready, status, host } = useLink();
-  const router = useRouter();
+  const [onboardingKnown, setOnboardingKnown] = useState(false);
+  const [onboarded, setOnboarded] = useState(true);
+
+  // The wizard gate — read once (the flag only changes through completion
+  // or the settings' replay action, both of which navigate away).
+  useEffect(() => {
+    let alive = true;
+    void isOnboarded().then((done) => {
+      if (!alive) return;
+      setOnboarded(done);
+      setOnboardingKnown(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
-    if (!ready) return; // "unpaired" is only a verdict AFTER the store read
-    if (host !== null) {
-      router.replace("/home");
-    } else {
-      router.replace("/pairing");
+    if (!onboardingKnown || !ready) return;
+    if (!onboarded) {
+      mobLog("boot", "gate → onboarding");
+      router.replace("/onboarding/welcome");
+      return;
     }
-  }, [ready, status, host, router]);
+    if (host !== null) {
+      mobLog("boot", "gate → tabs");
+      router.replace("/home");
+      return;
+    }
+    mobLog("boot", "gate → connect hub");
+    router.replace("/connect");
+    // status re-runs this when a paired token is revoked (401 fallback).
+  }, [onboardingKnown, onboarded, ready, host, status]);
 
   return null;
 }

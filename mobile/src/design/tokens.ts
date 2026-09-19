@@ -1,22 +1,22 @@
 /**
- * The design tokens — the "quiet instrument" foundation (R1 §6).
+ * The design tokens — the CLAY STUDIO + LIQUID CHROME foundation (R109).
  *
- * THE THEME TABLE is ported 1:1 from the desktop's src/lib/themes.ts
- * (verified against a19a144, R106-S4a): every hex token, all five themes,
- * light + dark variants. The desktop is the single source of truth for
- * palette identity; the phone never invents a color the desktop doesn't
- * know. ADDING A THEME = appending one object literal to THEMES below.
+ * The contract lives in mobile/DESIGN.md; this file is its implementation.
+ * Clay is the SUBSTRATE (warm sand surfaces, generous radii, two-leg warm
+ * shadows, a matte top-edge highlight); chrome is rationed JEWELRY (the
+ * floating bar's edge, primary CTAs' quiet sheen, selected markers' ring).
+ * The R108-e lesson carries over: NO painted glow, NO gradient washes on
+ * resting surfaces, NO cold blue-black shadows.
  *
- * The rest of the system: the 8-pt spacing grid, the 15/13/11pt grotesque
- * type ladder (system font stack — San Francisco / Roboto grotesques, no
- * font files to license or load), the JetBrains-Mono-class monospace for
- * commands/tool output, 12px-radius soft cards, hairline borders, and
- * NO shadows anywhere (the flat token aesthetic the desktop carries).
+ * THE THEME TABLE stays 1:1-shaped with the desktop's src/lib/themes.ts —
+ * Clay Studio is now FIRST (the mobile default, the owner's R109 direction,
+ * palette carried verbatim from the desktop's §1b so both ends read as one
+ * household). ADDING A THEME = appending one object literal to THEMES.
  */
 
 import { Platform } from "react-native";
 
-// ── the theme table (1:1 with src/lib/themes.ts) ────────────────────────────
+// ── the theme table ─────────────────────────────────────────────────────────
 
 export interface ThemeColors {
   id: string;
@@ -52,6 +52,33 @@ export interface ThemeColors {
 }
 
 export const THEMES: ThemeColors[] = [
+  {
+    // ROUND-109: the Clay Studio substrate — THE mobile default. Palette
+    // verbatim from the desktop's tokens §1b: warm sand neutrals, warm ink,
+    // a muted terracotta accent (never a blue-black, never a cold gray).
+    id: "clay",
+    name: "Clay Studio",
+    accent: "#C4653F",
+    accent2: "#8A6A55",
+    bgLight: "#F4EEE5",
+    bgDark: "#26211C",
+    cardLight: "#FDFBF7",
+    cardDark: "#2F2924",
+    textLight: "#2A2018",
+    textDark: "#F2EBE1",
+    dot: "#C4653F",
+    dotDark: "#D98A63",
+    paletteLight: ["#C4653F", "#8A6A55", "#F4EEE5", "#FDFBF7", "#2A2018"],
+    paletteDark: ["#D98A63", "#B09380", "#26211C", "#2F2924", "#F2EBE1"],
+    selectedBg: "#C4653F",
+    selectedText: "#FFFFFF",
+    unselectedBg: "#EFE7DB",
+    unselectedBorder: "#E0D3C2",
+    blockBg: "#F8F4EC",
+    blockBorder: "#E8DFD0",
+    sidebarBg: "#F1EAE0",
+    sidebarBorder: "#E3D8C8",
+  },
   {
     id: "nova",
     name: "Nova Cream",
@@ -175,11 +202,14 @@ export const THEMES: ThemeColors[] = [
   },
 ];
 
+/** The mobile default — Clay Studio (R109, the owner's direction). */
+export const DEFAULT_THEME_ID = "clay";
+
 export function getTheme(themeId: string): ThemeColors {
   return THEMES.find((t) => t.id === themeId) ?? THEMES[0];
 }
 
-// ── derived palette (the desktop's deriveThemeStyles, mobile-shaped) ─────────
+// ── derived palette ──────────────────────────────────────────────────────────
 
 /** Pure-hex parse for luminance math (tokens are always #rrggbb). */
 function hexToRgb(hex: string): [number, number, number] {
@@ -204,9 +234,8 @@ export function mixHex(a: string, b: string, t: number): string {
 }
 
 /**
- * The pressed-surface color — the "8% bg tint" of the quiet instrument's
- * press state (R1 §6): 8% toward white in dark mode, 8% toward black in
- * light mode. Flat and quiet; NO ripple, NO elevation.
+ * The pressed-surface color — 8% toward white in dark mode, 8% toward
+ * black in light mode (the quiet press state, unchanged).
  */
 export function pressTint(surface: string, isDark: boolean): string {
   return mixHex(surface, isDark ? "#FFFFFF" : "#000000", 0.08);
@@ -220,9 +249,9 @@ export function getContrastText(color: string): string {
 }
 
 /**
- * The resolved, mode-aware palette every screen consumes. Flat by decree:
- * hairlines and tints only — the shadow keys of the desktop's ThemeStyles
- * are deliberately NOT ported ("no shadows" is the phone's own language).
+ * The resolved, mode-aware palette every screen consumes — now carrying the
+ * CLAY MATERIAL (DESIGN.md §1): the two-leg warm shadows, the matte
+ * top-edge highlight, and the mono (code) surfaces.
  */
 export interface ResolvedTheme {
   /** The raw theme tokens (for palette strips, identity). */
@@ -254,6 +283,28 @@ export interface ResolvedTheme {
   selectedText: string;
   pillBg: string;
   pillText: string;
+  // The clay material (DESIGN.md §1)
+  /** Elevation-1 two-leg clay shadow (list cards). */
+  clayShadow1: string;
+  /** Elevation-2 two-leg clay shadow (the floating bar, heroes). */
+  clayShadow2: string;
+  /** The small-surface step (chips, compact tiles). */
+  clayShadowSm: string;
+  /** The tight leg alone — the pressed state's collapsed shadow. */
+  clayShadowPressed: string;
+  /** The matte 1px top-edge highlight color for cards (molded, never glow). */
+  clayTopEdge: string;
+  /** A slightly raised surface between bg and card (list wells, sheets). */
+  surfaceRaised: string;
+  // Mono / code surfaces (the machine-text family)
+  monoBg: string;
+  monoBorder: string;
+  monoText: string;
+  // Chrome jewelry colors (DESIGN.md §2) — the gradient stops
+  chromeEdgeLight: string;
+  chromeEdgeDark: string;
+  sheenTop: string;
+  sheenBottom: string;
   // The fixed semantic hues (the desktop's single documented exception set)
   danger: string;
   success: string;
@@ -264,11 +315,16 @@ export interface ResolvedTheme {
 export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
   const theme = getTheme(themeId);
   const accent = isDark ? theme.accentDark ?? theme.accent : theme.accent;
+  const card = isDark ? theme.cardDark : theme.cardLight;
+  // The clay ink family: warm in light mode (ceramics cast warm shadows —
+  // rgba(42,32,24)), deepened toward black in dark mode. Theme-independent,
+  // mode-aware — exactly the desktop's R108-e recipes.
+  const inkWarm = isDark ? "rgba(0,0,0," : "rgba(42,32,24,";
   return {
     theme,
     isDark,
     bg: isDark ? theme.bgDark : theme.bgLight,
-    card: isDark ? theme.cardDark : theme.cardLight,
+    card,
     text: isDark ? theme.textDark : theme.textLight,
     accent,
     accentText: getContrastText(accent),
@@ -281,12 +337,30 @@ export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
     inputBg: isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.02)",
     inputBorder: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)",
     inputFocusBorder: isDark ? "rgba(255,255,255,0.30)" : "rgba(0,0,0,0.90)",
-    textSecondary: isDark ? "rgba(255,255,255,0.60)" : "rgba(0,0,0,0.60)",
+    textSecondary: isDark ? "rgba(255,255,255,0.62)" : "rgba(0,0,0,0.62)",
     textTertiary: isDark ? "rgba(255,255,255,0.40)" : "rgba(0,0,0,0.40)",
     selectedBg: theme.selectedBg,
     selectedText: theme.selectedText,
     pillBg: isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.06)",
     pillText: isDark ? theme.textDark : theme.textLight,
+    // ── the clay material (two-leg: tight contact + large soft ambient) ──
+    clayShadow1: `0px 1px 3px ${inkWarm}0.08), 0px 8px 24px -6px ${inkWarm}0.10)`,
+    clayShadow2: `0px 2px 6px ${inkWarm}0.10), 0px 16px 40px -8px ${inkWarm}0.14)`,
+    clayShadowSm: `0px 1px 2px ${inkWarm}0.08), 0px 4px 12px -4px ${inkWarm}0.08)`,
+    clayShadowPressed: `0px 1px 3px ${inkWarm}0.10)`,
+    clayTopEdge: isDark
+      ? mixHex(card, "#FFFFFF", 0.06)
+      : mixHex(card, "#FFFFFF", 0.55),
+    surfaceRaised: isDark ? mixHex(card, "#FFFFFF", 0.02) : mixHex(card, "#000000", 0.02),
+    // ── mono surfaces ──
+    monoBg: isDark ? "rgba(0,0,0,0.22)" : mixHex(card, "#2A2018", 0.04),
+    monoBorder: isDark ? "rgba(255,255,255,0.08)" : "rgba(42,32,24,0.10)",
+    monoText: isDark ? "rgba(242,235,225,0.92)" : "#3A2E22",
+    // ── chrome jewelry stops (the metal ramp + the CTA sheen) ──
+    chromeEdgeLight: isDark ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.85)",
+    chromeEdgeDark: isDark ? "rgba(255,255,255,0.04)" : "rgba(42,32,24,0.10)",
+    sheenTop: isDark ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.42)",
+    sheenBottom: "rgba(255,255,255,0.00)",
     // The fixed semantic hues — 1:1 with the desktop's SEMANTIC_COLORS leg.
     danger: "#ef4444",
     success: "#22c55e",
@@ -303,18 +377,74 @@ export const spacing = {
   sm: 8,
   md: 12,
   lg: 16,
-  xl: 24,
-  xxl: 32,
-  xxxl: 48,
+  xl: 20,
+  xxl: 24,
+  xxxl: 32,
+  huge: 48,
 } as const;
 
-// ── the type ladder (grotesque system stack + mono for machine text) ────────
+// ── the house fonts — Manrope (bundled) + JetBrains Mono ───────────────────
 
 /**
- * The grotesque ladder rides the SYSTEM stack — San Francisco on iOS,
- * Roboto on Android — the same "Inter-class grotesque" reading the desktop
- * has, with zero font files to license, bundle, or load. Machine text
- * (commands, tool output, fingerprints, PINs) is the platform mono.
+ * DESIGN.md §4: Manrope is the house font — geometric, softly-rounded
+ * terminals, the typographic voice of molded clay. Weights 400–800 bundle
+ * as expo-google-fonts; JetBrains Mono carries settled code blocks. The
+ * provider loads them BEFORE first paint (theme.tsx useFonts gate).
+ */
+export const fontFamily = {
+  regular: "Manrope_400Regular",
+  medium: "Manrope_500Medium",
+  semibold: "Manrope_600SemiBold",
+  bold: "Manrope_700Bold",
+  extrabold: "Manrope_800ExtraBold",
+  mono: "JetBrainsMono_400Regular",
+  monoMedium: "JetBrainsMono_500Medium",
+  /** The platform fallbacks (used by the crash boundary, outside the provider). */
+  systemSans: Platform.select<"system-ui" | "normal">({
+    ios: "system-ui",
+    default: "normal",
+  }),
+  systemMono: Platform.select<"ui-monospace" | "monospace">({
+    ios: "ui-monospace",
+    default: "monospace",
+  }),
+} as const;
+
+// ── the type ladder (DESIGN.md §4) ──────────────────────────────────────────
+
+/** 28 / 800 — display: the large titles (home hero, wizard headlines). */
+export const TYPE_DISPLAY = 28;
+/** 20 / 700 — title: pushed screens' compact headers. */
+export const TYPE_TITLE = 20;
+/** 16 / 700 — heading: section headers on scrolling screens. */
+export const TYPE_HEADING = 16;
+/** 15 / 400 — body: list rows, paragraphs, transcript prose. */
+export const TYPE_BODY = 15;
+/** 12.5 / 500 — captions, status lines, metadata. */
+export const TYPE_CAPTION = 12.5;
+/** 11 / 600 — micro: badges, labels, uppercase kickers. */
+export const TYPE_MICRO = 11;
+/** 13 / 400 mono — commands, tool output, fingerprints, PINs. */
+export const TYPE_MONO = 13;
+
+// ── radii (DESIGN.md §1) ─────────────────────────────────────────────────────
+
+/** Cards: 20 — the generous clay radius. */
+export const RADIUS_CARD = 20;
+/** Tiles (hero blocks, stat tiles): 24. */
+export const RADIUS_TILE = 24;
+/** The floating tab bar: 28. */
+export const RADIUS_BAR = 28;
+/** Inputs: 14. */
+export const RADIUS_INPUT = 14;
+/** Small pills and badges: 8. */
+export const RADIUS_PILL = 8;
+/** Round dots + circular avatars/CTAs. */
+export const RADIUS_ROUND = 999;
+
+/**
+ * COMPAT alias (pre-R109 components still reference fontStack while they're
+ * migrated to the Manrope ladder — removed once the last consumer is gone).
  */
 export const fontStack = {
   sans: Platform.select<"system-ui" | "normal">({
@@ -327,18 +457,11 @@ export const fontStack = {
   }),
 };
 
-/** 15pt / 600 — titles and the host card's machine name. */
-export const TYPE_TITLE = 15;
-/** 13pt / 400 — body and list rows. */
-export const TYPE_BODY = 13;
-/** 11pt / 400 — captions, status lines, metadata. */
-export const TYPE_CAPTION = 11;
+// ── touch + layout constants (DESIGN.md §5) ────────────────────────────────
 
-// ── radii + hairlines ────────────────────────────────────────────────────────
-
-/** Soft cards: 12 (the desktop's 12px-radius soft-card language). */
-export const RADIUS_CARD = 12;
-/** Small pills and badges: 8. */
-export const RADIUS_PILL = 8;
-/** Round dots + the scan overlay's corner brackets. */
-export const RADIUS_ROUND = 999;
+/** Every interactive element's minimum hit target. */
+export const TOUCH_TARGET = 44;
+/** The floating tab bar's side margins (DESIGN.md §5). */
+export const BAR_MARGIN = 12;
+/** The floating tab bar's height (content row, excluding insets). */
+export const BAR_HEIGHT = 60;
