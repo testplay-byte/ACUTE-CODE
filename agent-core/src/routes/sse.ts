@@ -51,6 +51,10 @@ import {
 } from "../storage/settings.js";
 import { lookupPricing } from "../storage/models.js";
 import { getNotificationBus } from "../lib/notification-bus.js";
+// R113-a: the events-bus mirror — every frame this route sends to the
+// INITIATING socket is also published to every watcher on
+// GET /api/v1/events/stream (see the send() wrapper below).
+import { getEventsBus } from "../lib/events-bus.js";
 // ROUND-80 (R80): the customizable retry schedule — resolved from the
 // settings for the task_failed notification's schedule line.
 import { describeRetrySchedule, resolveRetrySchedule } from "../lib/retry.js";
@@ -210,6 +214,18 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
       clearInterval(heartbeat);
     });
     const send = (event: unknown) => {
+      // ── R113-a (the backend event fan-out): mirror EVERY outgoing frame
+      // to the events bus BEFORE the clientGone check — deliberately first,
+      // so the mirror survives the initiator's socket dying (the R42 rule:
+      // a closed window does NOT abort the turn; the desktop UI / phone
+      // watching GET /events/stream keep the LIVE transcript, thinking
+      // indicator, tool progress — for a turn ANY device started, the CLI
+      // included). The notify callback registered below IS this closure, so
+      // queue-route user.queued chips ride the mirror automatically. The
+      // object is published PRE-serialization (each watcher serializes for
+      // itself); fire-and-forget by construction (publish wraps every
+      // subscriber in try/catch — a bus failure can never break the stream).
+      getEventsBus().publishTurnFrame(id, event);
       if (clientGone) return;
       try {
         if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);

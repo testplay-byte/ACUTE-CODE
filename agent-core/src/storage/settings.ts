@@ -906,3 +906,99 @@ export function setCloudConnectorSettings(
   }
   return getCloudConnectorSettings(db);
 }
+
+// ── ROUND-113 (R113-a, the backend event fan-out round): the APPEARANCE
+//    settings domain — the theme-sync backbone. The desktop and the phone
+//    each already have LOCAL theme state (the desktop's six flavors with a
+//    light/dark toggle; the mobile's same six flavors + a "system" mode);
+//    this domain is the SERVER-side preference that PUTs broadcast over the
+//    events bus ({type:"settings",domain:"appearance",value}) so a change
+//    made on ONE device propagates to every other watcher live.
+//
+//    Shape: { themeId, mode }.
+//      themeId — one of the SIX SHARED FLAVOR IDS ("nova" | "bento" |
+//        "midnight" | "sunset" | "mono" | "clay" — the ids both clients'
+//        theme systems already use), or null = "no server preference set"
+//        (each client falls back to its own local default — the honest
+//        pre-R113 behavior, never a forced theme).
+//      mode — "system" | "light" | "dark". The desktop currently has no
+//        "system" mode; the mobile does — the WIRE allows all three and
+//        clients map as they can (the desktop may treat "system" as its
+//        local light/dark state; that is a client-side decision).
+//
+//    The setDesktopNotificationsSettings pattern exactly: two rows
+//    (appearance.themeId, appearance.mode), typed accessors, storage-throw
+//    validation as the route's 400 backstop. ─────────────────────────────
+
+/** The six shared theme flavor ids (the ids both clients' theme systems use). */
+export const APPEARANCE_THEME_IDS = ["nova", "bento", "midnight", "sunset", "mono", "clay"] as const;
+
+export type AppearanceThemeId = (typeof APPEARANCE_THEME_IDS)[number];
+
+/** The light/dark vocabulary the wire allows (clients map as they can). */
+export const APPEARANCE_MODES = ["system", "light", "dark"] as const;
+
+export type AppearanceMode = (typeof APPEARANCE_MODES)[number];
+
+export interface AppearanceSettings {
+  /** The shared flavor id, or null = no server preference (client default). */
+  themeId: AppearanceThemeId | null;
+  mode: AppearanceMode;
+}
+
+export const APPEARANCE_DEFAULTS: AppearanceSettings = {
+  themeId: null,
+  mode: "system",
+};
+
+const APPEARANCE_THEME_ID_KEY = "appearance.themeId";
+const APPEARANCE_MODE_KEY = "appearance.mode";
+
+/** Is this value one of the six shared flavor ids? */
+export function isAppearanceThemeId(value: unknown): value is AppearanceThemeId {
+  return typeof value === "string" && (APPEARANCE_THEME_IDS as readonly string[]).includes(value);
+}
+
+export function getAppearanceSettings(db: SqliteDatabase): AppearanceSettings {
+  const storedTheme = readNullableString(db, APPEARANCE_THEME_ID_KEY);
+  const storedMode = readNullableString(db, APPEARANCE_MODE_KEY);
+  return {
+    // A stored value that is not one of the six ids (corrupt row, a flavor
+    // retired in a future round) degrades to null — never a crash, never a
+    // forced theme: the client falls back to its own default.
+    themeId: isAppearanceThemeId(storedTheme) ? storedTheme : null,
+    // Same fail-open read for the mode: anything but the two non-default
+    // literals reads as "system" (the default).
+    mode: storedMode === "light" ? "light" : storedMode === "dark" ? "dark" : APPEARANCE_DEFAULTS.mode,
+  };
+}
+
+export function setAppearanceSettings(
+  db: SqliteDatabase,
+  patch: Partial<AppearanceSettings>,
+): AppearanceSettings {
+  if (patch.themeId !== undefined) {
+    if (patch.themeId !== null && !isAppearanceThemeId(patch.themeId)) {
+      throw new Error(
+        `themeId must be one of ${APPEARANCE_THEME_IDS.join(", ")} or null (no server preference)`,
+      );
+    }
+    if (patch.themeId === null) {
+      // Clear = remove the row entirely (absent key reads back as null).
+      db.prepare("DELETE FROM settings WHERE key = ?").run(APPEARANCE_THEME_ID_KEY);
+    } else {
+      db.prepare(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      ).run(APPEARANCE_THEME_ID_KEY, patch.themeId);
+    }
+  }
+  if (patch.mode !== undefined) {
+    if (typeof patch.mode !== "string" || !(APPEARANCE_MODES as readonly string[]).includes(patch.mode)) {
+      throw new Error(`mode must be one of ${APPEARANCE_MODES.join(", ")}`);
+    }
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(APPEARANCE_MODE_KEY, patch.mode);
+  }
+  return getAppearanceSettings(db);
+}

@@ -110,7 +110,10 @@ describe("GET /api/v1/providers", () => {
       });
       expect(response.statusCode).toBe(200);
       // ROUND-92 (R92-D): keyCount joins the ProviderView — the DEDUPED pool
-      // size (0 for every unconfigured seed here).
+      // size (0 for every unconfigured seed here). ROUND-113 (R113-a):
+      // configured joins too — false for every keyless seed (the "add a
+      // key" tier); hasKey is now POOL-AWARE but stays false with no keys
+      // at all.
       expect(response.json()).toEqual({
         providers: [
           {
@@ -124,6 +127,7 @@ describe("GET /api/v1/providers", () => {
             enabled: true,
             createdAt: expect.any(String),
             hasKey: false,
+            configured: false,
             keyCount: 0,
           },
           {
@@ -135,6 +139,7 @@ describe("GET /api/v1/providers", () => {
             enabled: true,
             createdAt: expect.any(String),
             hasKey: false,
+            configured: false,
             keyCount: 0,
           },
           {
@@ -146,6 +151,7 @@ describe("GET /api/v1/providers", () => {
             enabled: true,
             createdAt: expect.any(String),
             hasKey: false,
+            configured: false,
             keyCount: 0,
           },
           {
@@ -157,6 +163,7 @@ describe("GET /api/v1/providers", () => {
             enabled: true,
             createdAt: expect.any(String),
             hasKey: false,
+            configured: false,
             keyCount: 0,
           },
           {
@@ -168,6 +175,7 @@ describe("GET /api/v1/providers", () => {
             enabled: true,
             createdAt: expect.any(String),
             hasKey: false,
+            configured: false,
             keyCount: 0,
           },
         ],
@@ -184,6 +192,13 @@ describe("GET /api/v1/providers", () => {
       (provider: { id: string }) => provider.id === "openrouter",
     );
     expect(openrouter.hasKey).toBe(true);
+    // R113-a: a keyed seed is configured (keyCount > 0); the keyless seeds
+    // in the same list are not.
+    expect(openrouter.configured).toBe(true);
+    const anthropic = response.json().providers.find(
+      (provider: { id: string }) => provider.id === "anthropic",
+    );
+    expect(anthropic.configured).toBe(false);
     expect(response.body).not.toContain(KEY);
   });
 
@@ -226,6 +241,92 @@ describe("GET /api/v1/providers", () => {
     const response = await app.inject({ method: "GET", url: "/api/v1/providers" });
     expect(response.statusCode).toBe(401);
     expect(response.json().error.code).toBe("UNAUTHORIZED");
+  });
+});
+
+/* ── R113-a: the honest `configured` flag + POOL-AWARE `hasKey` ────────────
+ *
+ * Pre-R113, hasKey read ONLY the primary env slot (keyring.has), so a
+ * provider whose keys lived solely in pool slots ≥ 1 read
+ * hasKey:false with keyCount:2 — and the desktop's client-side filter HID a
+ * perfectly configured provider. The fix: hasKey = keyCount > 0 (the same
+ * deduped pool the turn runners juggle), plus the NEW `configured` bit —
+ * true for CUSTOM rows (the user explicitly created them, keyless or not)
+ * or any held key. */
+describe("R113-a: GET /providers — pool-aware hasKey + configured", () => {
+  it("hasKey is POOL-AWARE: keys only in pool slots ≥ 1 now read hasKey:true", async () => {
+    const pooled = buildServer({
+      token: TOKEN,
+      db,
+      keyring: new ProviderKeyring({
+        // NO primary slot — exactly the owner's broken case.
+        ACUTE_PROVIDER_OPENROUTER_SLOT1: "sk-pool-only-1",
+        ACUTE_PROVIDER_OPENROUTER_SLOT2: "sk-pool-only-2",
+      }),
+    });
+    try {
+      const response = await pooled.inject({
+        method: "GET",
+        url: "/api/v1/providers",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      const openrouter = (
+        response.json().providers as Array<{ id: string; hasKey: boolean; configured: boolean; keyCount: number }>
+      ).find((p) => p.id === "openrouter");
+      // THE FIX: pre-R113 this read hasKey:false, keyCount:2.
+      expect(openrouter).toMatchObject({ hasKey: true, configured: true, keyCount: 2 });
+    } finally {
+      await pooled.close();
+    }
+  });
+
+  it("a CUSTOM row counts as configured even with NO key (the user made it)", async () => {
+    // prv_groq is custom (not in RESERVED_PROVIDER_IDS) and keyless.
+    const created = await authInject({
+      method: "POST",
+      url: "/api/v1/providers",
+      payload: { name: "Local NIM", baseUrl: "http://localhost:8000/v1" },
+    });
+    expect(created.statusCode).toBe(201);
+    const row = (created.json() as { id: string; hasKey: boolean; configured: boolean });
+    expect(row.hasKey).toBe(false);
+    expect(row.configured).toBe(true);
+  });
+
+  it("the three fields derive from ONE pool snapshot and never disagree", async () => {
+    const mixed = buildServer({
+      token: TOKEN,
+      db,
+      keyring: new ProviderKeyring({
+        ACUTE_PROVIDER_OPENROUTER: KEY, // primary + a duplicate-value slot
+        ACUTE_PROVIDER_OPENROUTER_SLOT2: KEY,
+        ACUTE_PROVIDER_OPENROUTER_SLOT3: SLOT2_KEY,
+      }),
+    });
+    try {
+      const response = await mixed.inject({
+        method: "GET",
+        url: "/api/v1/providers",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      const openrouter = (
+        response.json().providers as Array<{
+          id: string;
+          hasKey: boolean;
+          configured: boolean;
+          keyCount: number;
+        }>
+      ).find((p) => p.id === "openrouter");
+      // Deduped pool: {KEY (slots 0+2), SLOT2_KEY (slot 3)} → 2 keys.
+      expect(openrouter).toEqual(
+        expect.objectContaining({ hasKey: true, configured: true, keyCount: 2 }),
+      );
+      // Invariant: hasKey === (keyCount > 0) on EVERY row.
+      const rows = response.json().providers as Array<{ hasKey: boolean; keyCount: number }>;
+      for (const r of rows) expect(r.hasKey).toBe(r.keyCount > 0);
+    } finally {
+      await mixed.close();
+    }
   });
 });
 

@@ -26,6 +26,9 @@ import {
   projectRootPathExists,
 } from "../storage/projects.js";
 import { searchIndexSymbols } from "../storage/index.js";
+// R113-a: the events-bus publish for project creations (watchers on
+// GET /events/stream refresh their project lists).
+import { getEventsBus } from "../lib/events-bus.js";
 import { errorBody } from "./helpers.js";
 
 export function registerProjectRoutes(scope: FastifyInstance, ctx: RouteContext): void {
@@ -75,7 +78,14 @@ export function registerProjectRoutes(scope: FastifyInstance, ctx: RouteContext)
       );
     }
     const color = typeof raw.color === "string" && /^#[0-9a-fA-F]{6}$/.test(raw.color) ? raw.color : undefined;
-    return reply.code(201).send(createProject(db, { name, rootPath, ...(color !== undefined ? { color } : {}) }));
+    const project = createProject(db, { name, rootPath, ...(color !== undefined ? { color } : {}) });
+    // R113-a: announce the new project on the events bus — watchers
+    // (desktop sidebar / phone project list) refresh. No project-update
+    // route exists today (create/delete only), so "created" is the only
+    // frame this domain publishes in v1; DELETE stays unannounced (clients
+    // refetch on their next poll or reconnect hello).
+    getEventsBus().publishProjectFrame(project.id, "created");
+    return reply.code(201).send(project);
   });
 
   scope.get("/projects/:id", async (request, reply) => {

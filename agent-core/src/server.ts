@@ -68,6 +68,10 @@ import { openDatabase, type SqliteDatabase } from "./storage/db.js";
 // sub-agent transitions). The bus is the in-process pub/sub; the storage
 // module is the durable SQLite record + REST read/mark-read surface.
 import { getNotificationBus } from "./lib/notification-bus.js";
+// R113-a: the events-bus fan-out — session changes, the live turn mirror,
+// project creations, and settings PUTs all ride it
+// (lib/events-bus.ts; served by GET /api/v1/events/stream).
+import { getEventsBus } from "./lib/events-bus.js";
 import {
   countUnreadNotifications,
   listNotifications,
@@ -124,6 +128,9 @@ import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 // R86: the SSE domain — the streamed turn route (final-phase extraction).
 import { registerSseRoutes } from "./routes/sse.js";
+// R113-a: the EVENT STREAM domain — GET /events/stream, the watcher's live
+// mirror of the events bus (session changes + turn frames + settings PUTs).
+import { registerEventsRoutes } from "./routes/events.js";
 // ROUND-106 (R106-S1, the mobile-link round): the Android companion's
 // linking surface — pair/start + pair/claim + the device list/revoke +
 // link-info (routes/mobile.ts), the TLS device-listener controller
@@ -1534,6 +1541,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       // routes/sse.ts; registration order preserved.
       registerSseRoutes(scope, ctx);
 
+      // R113-a: the EVENT STREAM domain — GET /api/v1/events/stream. Same
+      // bearer-auth scope (shell + device tokens; NOT on the device
+      // blocklist — the phone's live channel through the cloud relay).
+      // Registered right after the SSE domain it mirrors.
+      registerEventsRoutes(scope, ctx);
+
       // ── ROUND-61 (R61): COMPUTER USE — the desktop-control surface ────────
       // The monitor ring (GET session), the UI kill switch (POST stop), the
       // settings (GET/PUT config — the VISION block moved OUT in R66 to
@@ -1750,7 +1763,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         }
         try {
           // Returns the new settings BARE (the api.ts contract).
-          return setVisionSettings(db, body as Parameters<typeof setVisionSettings>[1]);
+          const updated = setVisionSettings(db, body as Parameters<typeof setVisionSettings>[1]);
+          // R113-a: the vision domain joins the settings-PUT broadcast —
+          // every domain PUT fans out on the events bus so watchers on
+          // GET /events/stream stay live (the routes/settings.ts pattern).
+          getEventsBus().publishSettingsFrame("vision", updated);
+          return updated;
         } catch (err) {
           return reply
             .code(400)

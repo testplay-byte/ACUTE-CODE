@@ -20,9 +20,9 @@ import {
   ProviderTestError,
   fetchProviderModels,
   listProviderViews,
-  resolveKeyPool,
   resolveProvider,
   testProviderConnection,
+  toProviderView,
   type ProviderKeyring,
 } from "../providers/registry.js";
 import type { SqliteDatabase } from "../storage/db.js";
@@ -249,14 +249,11 @@ export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext
         baseUrl: baseUrl.toString(),
         apiFormat,
       });
-      // R92-D: keyCount rides the hand-built view too (a keyless PRIMARY can
-      // still own POOL slots — the count is honest, not assumed zero).
-      return reply.code(200).send({
-        ...adopted,
-        hasKey: false,
-        keyCount: resolveKeyPool(keyring, adopted.id).length,
-        adopted: true,
-      });
+      // R113-a: the ONE view builder (was a hand-built {hasKey:false,
+      // keyCount} — now pool-aware hasKey + configured ride it too; a
+      // keyless PRIMARY can still own POOL slots, and the count is honest,
+      // not assumed zero — the R92-D rule, kept).
+      return reply.code(200).send({ ...toProviderView(adopted, keyring), adopted: true });
     }
     if (providerRecordIdExists(db, id)) {
       // Configured row at the wanted id — derive a fresh one from the NAME
@@ -295,10 +292,10 @@ export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext
       baseUrl: baseUrl.toString(),
       apiFormat,
     });
-    // R92-D: keyCount (0 on a fresh id — the key lands after this response).
-    return reply
-      .code(201)
-      .send({ ...record, hasKey: keyring.has(record.id), keyCount: resolveKeyPool(keyring, record.id).length });
+    // R113-a: the ONE view builder (was a hand-built view with the old
+    // primary-only hasKey — keyCount is 0 on a fresh id either way: the
+    // key lands after this response).
+    return reply.code(201).send(toProviderView(record, keyring));
   });
 
   // ROUND-37 (owner: "he will be given these options to delete it, to
@@ -359,10 +356,9 @@ export function registerProviderRoutes(scope: FastifyInstance, ctx: RouteContext
         : record.apiFormat;
     const enabled = typeof raw.enabled === "boolean" ? raw.enabled : record.enabled;
     const updated = updateProviderRecord(db, { ...record, name, baseUrl, apiFormat, enabled });
-    // R92-D: keyCount on the PATCH response too (the GET list's shape).
-    return reply
-      .code(200)
-      .send({ ...updated, hasKey: keyring.has(updated.id), keyCount: resolveKeyPool(keyring, updated.id).length });
+    // R113-a: the ONE view builder (was a hand-built view with the old
+    // primary-only hasKey — the GET list's shape, now with configured).
+    return reply.code(200).send(toProviderView(updated, keyring));
   });
 
   // ROUND-37: delete ANY provider (built-ins write a tombstone so the

@@ -3,10 +3,23 @@
  * is append-only (ADR-0010): no exported function updates or deletes a
  * session_events row, and each seq is minted inside the same transaction as the
  * insert so per-session seq is strictly monotonic.
+ *
+ * ROUND-113 (R113-a): the THREE session mutation choke points below —
+ * createSession, setSessionStatus, appendSessionEvent — double as the
+ * events-bus publish points (lib/events-bus.ts). One hook each beats
+ * sprinkling publishes at the ~40 call sites: EVERY writer (the runtime's
+ * message/tool/meta events, the orchestrator's children, the queue's
+ * type flips, approvals, todo tool, compaction, forks, reverts) already
+ * funnels through these functions, so a watcher subscribed to
+ * GET /events/stream learns about every session change exactly once, at
+ * the moment the durable row lands. The publishes are fire-and-forget
+ * (the bus never throws into a caller) and need NO extra state: the row
+ * being written IS the news.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { MessageAttachment, PermissionMode, RunMode, SessionStatus, UsageRecord } from "shared";
+import { getEventsBus } from "../lib/events-bus.js";
 
 export type SqliteDatabase = Database.Database;
 
@@ -250,6 +263,13 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
     ...(hasActiveMode ? { activeMode: input.activeMode } : {}),
     ...(hasTaskId ? { taskId: input.taskId } : {}),
   });
+  // R113-a: announce the new session on the events bus — watchers
+  // (desktop sidebar / phone session list) refresh. Covers POST /sessions,
+  // delegation children, and every other creator through the one choke
+  // point. The row is already durable at this line (the INSERT ran above).
+  getEventsBus().publishSessionFrame(session.id, session.projectId, "created", {
+    status: session.status,
+  });
   return session;
 }
 
@@ -455,9 +475,24 @@ export function listSubAgents(db: SqliteDatabase, parentSessionId: string): SubA
 }
 
 export function setSessionStatus(db: SqliteDatabase, id: string, status: SessionStatus): void {
+  // R113-a: read the row FIRST so the publish can carry the project scope
+  // AND be a real FLIP (a no-op write — same status, e.g. an end-of-turn
+  // reset on an already-queued session — is not news; watchers would
+  // refetch for nothing). One PK-indexed SELECT per status write.
+  const existing = db
+    .prepare("SELECT project_id, status FROM sessions WHERE id = ?")
+    .get(id) as { project_id: string | null; status: string } | undefined;
   db.prepare(
     "UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?",
   ).run(status, new Date().toISOString(), id);
+  if (existing !== undefined && existing.status !== status) {
+    // The status-flip frame (queued→running at turn start, running→queued
+    // at turn end, →failed/completed on terminal outcomes). The UPDATE has
+    // already run on the same synchronous connection, so a watcher's
+    // refetch (a later HTTP request on this same thread) always sees the
+    // committed value.
+    getEventsBus().publishSessionFrame(id, existing.project_id, "status", { status });
+  }
 }
 
 /**
@@ -628,7 +663,10 @@ function deriveSessionTitle(raw: string): string {
   return snippet.charAt(0).toUpperCase() + snippet.slice(1);
 }
 
-/** Allocates the next seq and inserts atomically; callers never compute seq themselves. */
+/** Allocates the next seq and inserts atomically; callers never compute seq themselves.
+ * R113-a: also the events-bus publish point for EVERY log append — one
+ * {type:"session", kind:"event"} frame per row, carrying the fresh seq so
+ * remote watchers know exactly how far the log grew (refetch + fold). */
 export function appendSessionEvent(db: SqliteDatabase, sessionId: string, input: AppendEventInput): SessionEvent {
   const ts = new Date().toISOString();
   const payload = { ...input.payload, agentId: input.agentId ?? null, ts };
@@ -642,6 +680,20 @@ export function appendSessionEvent(db: SqliteDatabase, sessionId: string, input:
     return next;
   });
   const seq = append(sessionId, input, ts, JSON.stringify(payload));
+  // R113-a: the announce. The transaction above already committed (same
+  // synchronous thread), and projectId/status ride the frame when the
+  // session row is cheaply resolvable — a missing row (a foreign/corrupt
+  // id) publishes with null scope rather than throwing: the append itself
+  // succeeded, and a watcher refetching an unknown id gets an honest 404.
+  const session = db
+    .prepare("SELECT project_id, status FROM sessions WHERE id = ?")
+    .get(sessionId) as { project_id: string | null; status: string } | undefined;
+  getEventsBus().publishSessionFrame(
+    sessionId,
+    session?.project_id ?? null,
+    "event",
+    { seq, ...(session !== undefined ? { status: session.status } : {}) },
+  );
   return { seq, type: input.type, agentId: input.agentId ?? null, payload, ts };
 }
 
@@ -1113,6 +1165,13 @@ export function forkSession(db: SqliteDatabase, sessionId: string): Session | un
     ).run(fork.id, srcId);
   });
   copy(sessionId);
+  // R113-a: a fork IS a new session (its rows land through INSERT…SELECT,
+  // not appendSessionEvent — the bulk copy deliberately publishes no
+  // per-row event frames; ONE "created" frame carries the news). Watchers
+  // refresh their lists and see the fork.
+  getEventsBus().publishSessionFrame(fork.id, fork.projectId, "created", {
+    status: fork.status,
+  });
   return fork;
 }
 

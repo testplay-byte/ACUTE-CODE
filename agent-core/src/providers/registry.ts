@@ -18,6 +18,7 @@ import {
   type ReasoningEffortLevel,
 } from "shared";
 import {
+  RESERVED_PROVIDER_IDS,
   getProviderRecord,
   listProviderRecords,
   type ProviderRecord,
@@ -40,7 +41,19 @@ export interface ProviderView {
   apiFormat?: string;
   enabled: boolean;
   createdAt: string;
+  /** ROUND-113 (R113-a): POOL-AWARE — true when ANY key exists (primary OR
+   * pool slots ≥ 1). Pre-R113 this read ONLY the primary env slot
+   * (keyring.has), so a provider whose keys lived solely in pool slots
+   * read hasKey:false with keyCount:2 and the desktop's client-side
+   * filter HID a perfectly configured provider. keyCount > 0 is the same
+   * truth the turn runners juggle (resolveKeyPool). */
   hasKey: boolean;
+  /** ROUND-113 (R113-a): the honest "is this provider usable" bit — true
+   * when the row is a CUSTOM provider (id NOT in RESERVED_PROVIDER_IDS:
+   * the user explicitly created it, so it counts as configured even
+   * keyless) OR any key is held (keyCount > 0). Seeded presets with no
+   * keys read configured:false — the "add a key" tier, not the picker. */
+  configured: boolean;
   /** ROUND-92 (R92-D): the size of the provider's DEDUPED key pool — how
    * many distinct key VALUES the turn runners will juggle (same value in
    * two slots counts once). 0 = no key at all; 1 = the pre-R92 single-key
@@ -224,19 +237,31 @@ export function resolveKeyPool(keyring: ProviderKeyring, providerId: string): Re
   return pool;
 }
 
-function toView(record: ProviderRecord, keyring: ProviderKeyring): ProviderView {
+/** R113-a: the ONE view builder (was module-private toView). The
+ * POST/PATCH routes used to hand-build their response views ({...record,
+ * hasKey, keyCount}) with the OLD primary-only hasKey; routing them
+ * through the same builder keeps GET /providers, POST, and PATCH on one
+ * truth (pool-aware hasKey + configured on every provider view the API
+ * ever emits). */
+export function toProviderView(record: ProviderRecord, keyring: ProviderKeyring): ProviderView {
+  // R113-a: keyCount computed ONCE — hasKey and configured both derive
+  // from the same deduped pool (the R92-D truth: what the turn runners
+  // would actually juggle), so the three fields can never disagree.
+  const keyCount = resolveKeyPool(keyring, record.id).length;
   return {
     ...record,
-    hasKey: keyring.has(record.id),
+    // R113-a: pool-aware hasKey — see the ProviderView.configured note.
+    hasKey: keyCount > 0,
+    configured: keyCount > 0 || !RESERVED_PROVIDER_IDS.includes(record.id),
     // R92-D: the deduped pool size — the number of keys the turn runners
     // would actually juggle for this provider.
-    keyCount: resolveKeyPool(keyring, record.id).length,
+    keyCount,
   };
 }
 
 /** The openrouter row is seeded by openDatabase (storage/providers.ts), so this is a plain read. */
 export function listProviderViews(db: SqliteDatabase, keyring: ProviderKeyring): ProviderView[] {
-  return listProviderRecords(db).map((record) => toView(record, keyring));
+  return listProviderRecords(db).map((record) => toProviderView(record, keyring));
 }
 
 export function resolveProvider(db: SqliteDatabase, id: string): ProviderRecord | undefined {

@@ -8,6 +8,13 @@
 // GET/PUT /settings/retry (ROUND-78 per-class auto-retry + ROUND-80
 // schedule knobs).
 //
+// ROUND-113 (R113-a): every domain PUT now BROADCASTS on the events bus
+// ({type:"settings",domain,value}) — a settings change made on ONE device
+// (desktop, phone, CLI) propagates to every watcher on
+// GET /api/v1/events/stream live. The domain also gains APPEARANCE
+// (GET/PUT /settings/appearance — the theme-sync backbone; see the route
+// below and storage/settings.ts's AppearanceSettings).
+//
 // Provenance: extracted verbatim from server.ts in R84 (Wave 2-a) —
 // behavior-identical, test-guarded. The R82 subagentModel object-form
 // helpers (isSubagentModelRefBody + normalizeSubagentModelRef) moved with
@@ -22,7 +29,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { RouteContext } from "./context.js";
 import { deviceAuthOf } from "./context.js";
+// R113-a: the events-bus broadcast (every domain PUT fans out) — imported
+// BEFORE the storage accessors it rides beside.
+import { getEventsBus } from "../lib/events-bus.js";
 import {
+  getAppearanceSettings,
   getBrowserSettings,
   getCloudConnectorSettings,
   getDebugSettings,
@@ -32,6 +43,8 @@ import {
   getOrchestrationSettings,
   getRetrySettings,
   getThinkingLoopSettings,
+  isAppearanceThemeId,
+  setAppearanceSettings,
   setBrowserSettings,
   setCloudConnectorSettings,
   setDebugSettings,
@@ -41,6 +54,9 @@ import {
   setOrchestrationSettings,
   setRetrySettings,
   setThinkingLoopSettings,
+  type AppearanceMode,
+  type AppearanceSettings,
+  type AppearanceThemeId,
 } from "../storage/settings.js";
 import { errorBody } from "./helpers.js";
 import {
@@ -93,6 +109,20 @@ function rejectDeviceTokens(request: FastifyRequest, reply: FastifyReply): boole
   return true;
 }
 
+/**
+ * R113-a: the settings PUT broadcast — persist succeeded, so tell every
+ * watcher (desktop / phone / CLI holding GET /events/stream open) that the
+ * domain changed. `value` is the UPDATED settings object exactly as the
+ * domain's GET serves it — SECRETS NEVER RIDE THIS FRAME (the
+ * cloud-connector domain broadcasts hostKeyPresent, not the host key —
+ * see its PUT below). Fire-and-forget by construction (the bus wraps its
+ * subscribers); called only on the success path so a 400 never announces a
+ * write that did not happen.
+ */
+function broadcastSettings(domain: string, value: unknown): void {
+  getEventsBus().publishSettingsFrame(domain, value);
+}
+
 export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext): void {
   const { db } = ctx;
   // ── ROUND-36: orchestration settings ──────────────────────────────
@@ -110,7 +140,7 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
     }
     const raw = body as Record<string, unknown>;
     try {
-      return setOrchestrationSettings(db, {
+      const updated = setOrchestrationSettings(db, {
         ...(typeof raw.maxParallel === "number" ? { maxParallel: raw.maxParallel } : {}),
         ...(typeof raw.perKeyLimit === "number" ? { perKeyLimit: raw.perKeyLimit } : {}),
         // ROUND-43 (R43-5): temporary sub-agent model override — string id
@@ -131,6 +161,8 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
           ? { childStallTimeoutMs: raw.childStallTimeoutMs }
           : {}),
       });
+      broadcastSettings("orchestration", updated);
+      return updated;
     } catch (error) {
       return reply.code(400).send(
         errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
@@ -160,9 +192,11 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         .send(errorBody("VALIDATION", "body.enabled must be a boolean", { field: "body.enabled" }));
     }
     try {
-      return setMemorySettings(db, {
+      const updated = setMemorySettings(db, {
         ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
       });
+      broadcastSettings("memory", updated);
+      return updated;
     } catch (error) {
       return reply.code(400).send(
         errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
@@ -192,9 +226,11 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         .send(errorBody("VALIDATION", "body.enabled must be a boolean", { field: "body.enabled" }));
     }
     try {
-      return setDebugSettings(db, {
+      const updated = setDebugSettings(db, {
         ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
       });
+      broadcastSettings("debug", updated);
+      return updated;
     } catch (error) {
       return reply.code(400).send(
         errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
@@ -280,7 +316,7 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
       }
     }
     try {
-      return setRetrySettings(db, {
+      const updated = setRetrySettings(db, {
         ...(typeof raw.autoRetryRateLimit === "boolean" ? { autoRetryRateLimit: raw.autoRetryRateLimit } : {}),
         ...(typeof raw.autoRetryTimeout === "boolean" ? { autoRetryTimeout: raw.autoRetryTimeout } : {}),
         ...(typeof raw.autoRetryNetwork === "boolean" ? { autoRetryNetwork: raw.autoRetryNetwork } : {}),
@@ -290,6 +326,8 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
           ? { providerTimeoutSeconds: raw.providerTimeoutSeconds }
           : {}),
       });
+      broadcastSettings("retry", updated);
+      return updated;
     } catch (error) {
       return reply.code(400).send(
         errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
@@ -351,11 +389,13 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
       );
     }
     try {
-      return setThinkingLoopSettings(db, {
+      const updated = setThinkingLoopSettings(db, {
         ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
         ...(typeof raw.stallSeconds === "number" ? { stallSeconds: raw.stallSeconds } : {}),
         ...(typeof raw.reasoningBytesKB === "number" ? { reasoningBytesKB: raw.reasoningBytesKB } : {}),
       });
+      broadcastSettings("thinking-loop", updated);
+      return updated;
     } catch (error) {
       return reply.code(400).send(
         errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
@@ -388,7 +428,7 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
     }
     try {
       const raw = body as Record<string, unknown>;
-      return setBrowserSettings(db, {
+      const updated = setBrowserSettings(db, {
         ...(typeof raw.searchEngine === "string"
           ? { searchEngine: raw.searchEngine as "duckduckgo" | "google" | "bing" | "brave" }
           : {}),
@@ -401,6 +441,8 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
           ? { linkOpeningMode: raw.linkOpeningMode as "in-app" | "system" }
           : {}),
       });
+      broadcastSettings("browser", updated);
+      return updated;
     } catch (error) {
       return reply.code(400).send(
         errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
@@ -435,9 +477,11 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         .send(errorBody("VALIDATION", "body.enabled must be a boolean", { field: "body.enabled" }));
     }
     try {
-      return setDesktopNotificationsSettings(db, {
+      const updated = setDesktopNotificationsSettings(db, {
         ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
       });
+      broadcastSettings("desktop-notifications", updated);
+      return updated;
     } catch (error) {
       return reply.code(400).send(
         errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
@@ -499,7 +543,9 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
       await ctx.mobileLink.stop();
     }
     try {
-      return setDeviceLinkSettings(db, { enabled });
+      const updated = setDeviceLinkSettings(db, { enabled });
+      broadcastSettings("device-link", updated);
+      return updated;
     } catch (error) {
       // The listener moved but the row refused (corrupt settings write) —
       // reconcile by stopping again so state and setting agree.
@@ -624,11 +670,90 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
       }
     }
     const saved = getCloudConnectorSettings(db);
+    // R113-a: the broadcast — the SECRET-FREE GET shape (hostKeyPresent,
+    // never the key itself; the runtime `status` object is deliberately
+    // left out too: it is live tunnel state, not a settings value).
+    broadcastSettings("cloud-connector", {
+      enabled: saved.enabled,
+      relayUrl: saved.relayUrl,
+      hostKeyPresent: saved.hostKey !== "",
+    });
     return {
       enabled: saved.enabled,
       relayUrl: saved.relayUrl,
       hostKeyPresent: saved.hostKey !== "",
       status: getCloudConnectorStatus(),
     };
+  });
+
+  // ── ROUND-113 (R113-a, the backend event fan-out round): the APPEARANCE
+  // settings domain — the theme-sync backbone. GET answers the stored
+  // preference or the default {themeId: null, mode: "system"} (null = no
+  // server preference — each client falls back to its LOCAL default, the
+  // honest pre-R113 behavior); PUT accepts a partial {themeId?, mode?}
+  // patch, validates (the six shared flavor ids or null; the three-mode
+  // enum), persists, and BROADCASTS {type:"settings",domain:"appearance"}
+  // on the events bus so the change lands live on every other device.
+  // Device tokens are WELCOME here — the phone changing the desktop's
+  // theme is a first-class use case (the route is not on the device
+  // blocklist; only management-surface domains reject device tokens).
+
+  scope.get("/settings/appearance", async () => {
+    return getAppearanceSettings(db);
+  });
+
+  scope.put("/settings/appearance", async (request, reply) => {
+    const body: unknown = request.body;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+    }
+    const raw = body as Record<string, unknown>;
+    // themeId: one of the six shared flavor ids, or null (clear the server
+    // preference). The route names the offending field; the storage throw
+    // is the backstop.
+    if (
+      raw.themeId !== undefined &&
+      raw.themeId !== null &&
+      !isAppearanceThemeId(raw.themeId)
+    ) {
+      return reply.code(400).send(
+        errorBody(
+          "VALIDATION",
+          "body.themeId must be one of nova, bento, midnight, sunset, mono, clay — or null (no server preference)",
+          { field: "body.themeId" },
+        ),
+      );
+    }
+    // mode: the three-value enum (the desktop maps "system" as it can).
+    if (
+      raw.mode !== undefined &&
+      (typeof raw.mode !== "string" || !["system", "light", "dark"].includes(raw.mode))
+    ) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "body.mode must be one of system, light, dark", { field: "body.mode" }),
+      );
+    }
+    // The guards above returned 400 for anything else, so the casts are
+    // safe — the browser domain's `as` pattern.
+    const patch: Partial<AppearanceSettings> = {};
+    if (raw.themeId !== undefined) {
+      patch.themeId = raw.themeId === null ? null : (raw.themeId as AppearanceThemeId);
+    }
+    if (raw.mode !== undefined) {
+      patch.mode = raw.mode as AppearanceMode;
+    }
+    try {
+      const updated = setAppearanceSettings(db, patch);
+      broadcastSettings("appearance", updated);
+      return updated;
+    } catch (error) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
+          field: "body",
+        }),
+      );
+    }
   });
 }
