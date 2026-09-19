@@ -9,8 +9,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
-## [Unreleased]
-<!-- targets 0.106.0 — the release round renames this section when it tags -->
+## [0.106.0] - 2026-09-19 — remote access over the cloud relay (the anywhere-link + the disconnect loop, killed at the root)
 
 ### Remote access — the companion reaches the desktop from anywhere (the headline)
 - **The cloud relay is live.** A one-time Cloudflare Worker (deployed once from the browser, free plan, no domain) gives every desktop program a permanent public endpoint: `acute-relay.anikuta.workers.dev`. The relay's code lives in its own repo and auto-redeploys on every push — you never deploy anything again. The full setup story: `docs/guides/CLOUDFLARE-SETUP.md` (rewritten — it's one paste now).
