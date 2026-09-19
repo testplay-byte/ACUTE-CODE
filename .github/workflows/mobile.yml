@@ -1,30 +1,37 @@
 name: Mobile APK
 
-# ROUND-106 (R106-S5): the Android companion's build pipeline — the owner's
-# rule: APKs are BUILT BY GITHUB ACTIONS, never on a local machine.
+# ROUND-108 (the splash-forever lesson): the artifact is the RELEASE build.
+#
+# WHAT WAS WRONG BEFORE (v0.102.0/v0.103.0, diagnosed from the shipped APK):
+#   · `assembleDebug` embeds NO JavaScript bundle — debug variants skip
+#     bundling by design (the template's own `debuggableVariants` comment)
+#     and expect a Metro dev server on localhost:8081. On the owner's phone:
+#     splash logo forever. Verified: zero `assets/index.android.bundle`
+#     entries in the shipped 302 MiB APK.
+#   · 302 MiB for a companion app: FOUR ABIs × 25 unstripped debug .so
+#     (224 MiB) + 23 unminified dex (~65 MiB), all stored uncompressed.
+#   · Runner-minted debug keystrokes meant no build ever updated in place.
+#
+# THE FIX (all three, in one job):
+#   · assembleRelease — JS embedded (Hermes bytecode), R8 minify +
+#     shrinkResources (via app.json's expo-build-properties), stripped .so.
+#   · ABI splits (plugins/with-android-release-signing.js) — one build
+#     produces the arm64 deliverable AND the universal fallback.
+#   · The stable repo key (mobile/android-signing/) — updates land in place.
 #
 # Two dispatch modes, ONE job:
-#   · every push to main  → the debug APK as a workflow ARTIFACT only
-#     (side-by-side installable — applicationId com.acutecode.companion,
-#     so each artifact UPDATES rather than duplicating);
-#   · every v* tag        → the same debug APK artifact PLUS the attach job,
-#     which lands it on the tag's GitHub Release (the owner's R106 ruling:
-#     debug is THE artifact for now — release signing stays designed-but-
-#     dormant until asked; one release page, every platform).
+#   · every push to main  → both release APKs as a workflow ARTIFACT only;
+#   · every v* tag        → the same artifact PLUS the attach job, which
+#     lands both APKs on the tag's GitHub Release.
 #
-# The build is the standard Expo-on-Actions recipe: npm ci →
-# expo prebuild -p android --clean → gradlew assembleDebug. The mobile/
-# workspace is standalone npm (outside pnpm-workspace.yaml), so the
-# desktop pipeline's --frozen-lockfile is untouched. Version alignment is
-# asserted BEFORE the build (node scripts/release/version.mjs check now
-# covers mobile/app.json's versionName + the derived versionCode — the
-# R2 decision "asserted in the workflow, not in prose").
+# Version alignment is asserted BEFORE the build (node scripts/release/
+# version.mjs check covers mobile/app.json's versionName + versionCode).
 #
 # The attach job survives the cross-workflow race by design: release.yml
 # creates the tag's DRAFT release in its own (parallel) run — typically
 # 20–30 minutes after the tag. scripts/release/upload-apk-asset.sh polls
 # for the draft (60s × 35, bounded) and then uploads with the publisher's
-# exact bounded/retrying/resumable curl discipline.
+# exact bounded/retrying/resumable curl discipline — once per APK.
 #
 # ROUND-103 discipline: every job bounded (timeout-minutes) — a wedged
 # build fails loudly in minutes, never hangs for hours.
@@ -42,7 +49,7 @@ permissions:
 jobs:
   android-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -74,42 +81,66 @@ jobs:
         working-directory: mobile
         run: npm ci
 
-      # R106 (the S5 hotfix's sibling): the 127 jest tests run BEFORE any
-      # prebuild/gradle minutes are spent — a red suite fails in ~1 minute
-      # instead of after the full Android build. The suite is the mobile
-      # workspace's own (vitest at the repo root excludes mobile/** — the
-      # isolation lesson: each workspace's tests run in its own runner).
+      # The 127-test jest suite runs BEFORE any prebuild/gradle minutes are
+      # spent — a red suite fails in ~1 minute instead of after the full
+      # Android build (the isolation lesson: each workspace's tests run in
+      # its own runner).
       - name: Mobile test suite (jest)
         working-directory: mobile
         run: npm test -- --ci
 
       # --clean regenerates the android/ tree from app.json + the local
-      # modules (modules/acute-net autolinks here); the tree is untracked
+      # modules (modules/acute-net autolinks here; plugins/with-android-
+      # release-signing injects the key + ABI splits); the tree is untracked
       # (mobile/android/ is gitignored) so every build is deterministic.
       - name: Expo prebuild (android)
         working-directory: mobile
         run: npx expo prebuild -p android --clean
 
-      - name: Build the debug APK
+      # RELEASE, one invocation, both splits (arm64 + universal) — the JS
+      # bundle rides inside (assets/index.android.bundle, Hermes bytecode).
+      - name: Build the release APKs (arm64 + universal)
         working-directory: mobile/android
-        run: ./gradlew :app:assembleDebug --no-daemon
+        run: ./gradlew :app:assembleRelease --no-daemon
 
-      - name: Collect the APK (repo asset naming)
+      - name: Collect the APKs (repo asset naming + the bundle assertion)
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          mv mobile/android/app/build/outputs/apk/debug/app-debug.apk \
-            "ACUTE-CODE_${VERSION}_android-debug.apk"
-          ls -lh "ACUTE-CODE_${VERSION}_android-debug.apk"
+          # find over the whole outputs tree — AGP's split subdirectory naming
+          # has shifted between versions (apk/arm64 vs apk/arm64-v8a); the
+          # FILE names are stable, so resolve them by pattern.
+          ARM64="$(find mobile/android/app/build/outputs/apk -name 'app-arm64-v8a-release.apk' | head -1)"
+          UNIVERSAL="$(find mobile/android/app/build/outputs/apk -name 'app-universal-release.apk' | head -1)"
+          if [ -z "$ARM64" ] || [ -z "$UNIVERSAL" ]; then
+            echo "::error::expected split outputs missing — arm64: ${ARM64:-none}, universal: ${UNIVERSAL:-none}"
+            find mobile/android/app/build/outputs/apk -type f || true
+            exit 1
+          fi
+          mv "$ARM64" "ACUTE-CODE_${VERSION}_android-arm64.apk"
+          mv "$UNIVERSAL" "ACUTE-CODE_${VERSION}_android-universal.apk"
+          ls -lh ACUTE-CODE_${VERSION}_android-*.apk
+          # THE v0.103.0 lesson as a hard gate: an APK without the embedded
+          # JS bundle is not an APK — it is a splash screen forever. Fail
+          # the build HERE if either deliverable lost its bundle.
+          for apk in ACUTE-CODE_${VERSION}_android-arm64.apk ACUTE-CODE_${VERSION}_android-universal.apk; do
+            if ! unzip -l "$apk" | grep -q "assets/index.android.bundle"; then
+              echo "::error::${apk} has NO embedded JS bundle (the v0.103.0 splash-forever bug) — refusing to ship it"
+              exit 1
+            fi
+            echo "verified: ${apk} carries assets/index.android.bundle"
+          done
 
-      - name: Upload the debug APK artifact
+      - name: Upload the release APKs artifact
         uses: actions/upload-artifact@v4
         with:
-          name: acute-apk-android-debug
-          path: ACUTE-CODE_${{ steps.version.outputs.version }}_android-debug.apk
+          name: acute-apk-android-release
+          path: |
+            ACUTE-CODE_${{ steps.version.outputs.version }}_android-arm64.apk
+            ACUTE-CODE_${{ steps.version.outputs.version }}_android-universal.apk
           if-no-files-found: error
           retention-days: 30
 
-  # Tag dispatches only: land the APK on the release (the draft that
+  # Tag dispatches only: land BOTH APKs on the release (the draft that
   # release.yml's publisher creates in its parallel run).
   attach-apk-to-release:
     needs: android-apk
@@ -123,12 +154,17 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: acute-apk-android-debug
+          name: acute-apk-android-release
 
-      - name: Attach the debug APK to the tag's release
+      # Once per APK — the script's skip contract (same name+size = already
+      # uploaded) makes re-runs cheap and the loop order deterministic.
+      - name: Attach the release APKs to the tag's release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
-          APK: ACUTE-CODE_${{ needs.android-apk.outputs.version }}_android-debug.apk
-        run: bash scripts/release/upload-apk-asset.sh
+        run: |
+          VERSION="${{ needs.android-apk.outputs.version }}"
+          for apk in "ACUTE-CODE_${VERSION}_android-arm64.apk" "ACUTE-CODE_${VERSION}_android-universal.apk"; do
+            APK="$apk" bash scripts/release/upload-apk-asset.sh
+          done

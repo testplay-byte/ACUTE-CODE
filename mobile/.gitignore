@@ -41,3 +41,8 @@ example
 # generated native folders
 /ios
 /android
+
+# R108: the companion's stable signing key is COMMITTED on purpose (a
+# self-signed sideload key in a private repo — see android-signing/README.md
+# for the rationale + the rotation procedure). Negate the generic rule above.
+!android-signing/*.p12
