@@ -1,27 +1,34 @@
 /**
- * Transcript — the session's rendered event log: user bubbles (right),
- * assistant text (per-delta fade-in-up while streaming), tool cards (mono
- * name + compact args + ok/FAIL), the collapsible dim thinking block,
- * approval mini-cards, dim meta lines, and honest error cards. One renderer
- * for BOTH sources — the persisted fold and the live stream produce the same
- * TranscriptItem union (features/sessions.ts); the rehydrate replaces the
- * live list wholesale, so the truth always renders through here.
+ * Transcript v2 (R109) — the session's rendered event log in the clay
+ * language, with the FORMATTED prose the owner asked for:
+ *
+ *   - assistant blocks render through MarkdownText (bold is bold, code
+ *     blocks are mono tiles, lists, quotes, tables — the R109 fix), and
+ *     while LIVE the accumulated content re-parses per delta with the
+ *     pulsing clay caret at the end (results stream in, formatted)
+ *   - user bubbles: accent-tinted, right-aligned, queued variant
+ *   - tool cards: clay tiles with depth, tap-to-expand (full args/output)
+ *   - thinking: the collapsible dim block, restyled
+ *   - approval mini-cards, meta lines, honest error cards, debug blocks
+ *
+ * One renderer for BOTH sources — the persisted fold and the live stream
+ * produce the same TranscriptItem union (features/sessions.ts).
  */
 
 import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
-import { ChevronDown, ChevronUp } from "lucide-react-native";
+import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from "react-native-reanimated";
+import { ChevronDown, ChevronUp, Wrench } from "lucide-react-native";
 import { useTheme } from "@/design/theme";
 import { Badge, TypeBody, TypeCaption, TypeMono } from "@/design/primitives";
-import { ENTRANCE_DELTA, SPRING } from "@/design/motion";
+import { MarkdownText } from "@/components/markdown-text";
 import {
   RADIUS_CARD,
-  RADIUS_PILL,
+  RADIUS_INPUT,
+  fontFamily,
   spacing,
   TYPE_BODY,
   TYPE_CAPTION,
-  fontStack,
 } from "@/design/tokens";
 import type { TranscriptItem } from "@/features/sessions";
 
@@ -81,8 +88,10 @@ function UserBubble({ content, queued }: { content: string; queued: boolean }) {
         style={[
           styles.userBubble,
           {
-            backgroundColor: queued ? tokens.subtle : tokens.selectedBg,
+            backgroundColor: queued ? tokens.card : tokens.selectedBg,
+            borderTopColor: queued ? tokens.clayTopEdge : "transparent",
             borderColor: queued ? tokens.border : "transparent",
+            boxShadow: queued ? tokens.clayShadowSm : undefined,
           },
         ]}
       >
@@ -95,8 +104,8 @@ function UserBubble({ content, queued }: { content: string; queued: boolean }) {
           style={{
             color: queued ? tokens.text : tokens.selectedText,
             fontSize: TYPE_BODY,
-            fontFamily: fontStack.sans,
-            lineHeight: 19,
+            fontFamily: fontFamily.medium,
+            lineHeight: 21,
           }}
         >
           {content}
@@ -106,35 +115,31 @@ function UserBubble({ content, queued }: { content: string; queued: boolean }) {
   );
 }
 
-// ── assistant (with the live per-delta entrance) ───────────────────────────
+// ── assistant (markdown, live-formatted, the pulsing caret) ─────────────────
 
 function AssistantBlock({ item }: { item: TranscriptItem & { kind: "assistant" } }) {
   const { tokens } = useTheme();
+  const liveText =
+    item.live && item.chunks !== null ? item.chunks.join("") : null;
+  const settled = !item.live && item.content !== "" ? item.content : null;
+
   return (
     <View style={styles.block} accessibilityLabel="Assistant message">
       {item.thinking !== null && item.thinking !== "" && (
         <ThinkingBlock text={item.thinking} live={item.live} />
       )}
-      {item.live && item.chunks !== null ? (
-        <View style={styles.assistantText}>
-          {item.chunks.map((chunk, index) => (
-            <DeltaText key={index}>{chunk}</DeltaText>
-          ))}
+      {liveText !== null && liveText !== "" ? (
+        <View style={styles.assistantLive}>
+          <MarkdownText content={liveText} />
+          <Caret color={tokens.accent} />
         </View>
-      ) : item.content !== "" ? (
-        <Text
-          style={{
-            color: tokens.text,
-            fontSize: TYPE_BODY,
-            fontFamily: fontStack.sans,
-            lineHeight: 19,
-          }}
-        >
-          {item.content}
-        </Text>
+      ) : settled !== null ? (
+        <MarkdownText content={settled} />
+      ) : item.live ? (
+        <Caret color={tokens.accent} />
       ) : null}
       {item.model !== null && !item.live && (
-        <TypeMono style={{ color: tokens.textTertiary, marginTop: spacing.xs }}>
+        <TypeMono style={{ color: tokens.textTertiary, marginTop: spacing.xs, fontSize: 10.5 }}>
           {item.model}
         </TypeMono>
       )}
@@ -142,29 +147,42 @@ function AssistantBlock({ item }: { item: TranscriptItem & { kind: "assistant" }
   );
 }
 
-/** One streaming delta — its own fade-in-up entrance, the one spring. */
-function DeltaText({ children }: { children: string }) {
-  const { tokens } = useTheme();
-  const entered = useSharedValue(0);
+/** The live cursor — a calm 1.1s pulse marking the stream still flowing. */
+function Caret({ color }: { color: string }) {
+  const opacity = useSharedValue(1);
   useEffect(() => {
-    entered.value = withSpring(1, SPRING);
-  }, [entered]);
-  const animated = useAnimatedStyle(() => ({
-    opacity: entered.value,
-    transform: [{ translateY: (1 - entered.value) * ENTRANCE_DELTA }],
-  }));
+    opacity.value = withRepeat(
+      withSequence(withTiming(0.25, { duration: 550 }), withTiming(1, { duration: 550 })),
+      -1,
+      false,
+    );
+  }, [opacity]);
+  const animated = useAnimatedStyle(() => ({ opacity: opacity.value }));
   return (
-    <Animated.Text style={[styles.deltaText, animated, { color: tokens.text }]}>{children}</Animated.Text>
+    <Animated.View
+      accessibilityLabel="the agent is still writing"
+      style={[animated, { width: 8, height: 15, borderRadius: 2, backgroundColor: color, marginLeft: 2 }]}
+    />
   );
 }
 
-// ── thinking (collapsible dim block) ────────────────────────────────────────
+// ── thinking (collapsible dim block, clay-styled) ───────────────────────────
 
 function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
   const { tokens } = useTheme();
   const [open, setOpen] = useState(live);
   return (
-    <View style={[styles.thinking, { borderColor: tokens.borderSubtle }]}>
+    <View
+      style={[
+        styles.thinking,
+        {
+          borderColor: tokens.borderSubtle,
+          backgroundColor: tokens.monoBg,
+          borderTopColor: tokens.clayTopEdge,
+          boxShadow: tokens.clayShadowSm,
+        },
+      ]}
+    >
       <Pressable
         accessibilityLabel={open ? "Hide the agent's thinking" : "Show the agent's thinking"}
         accessibilityRole="button"
@@ -181,7 +199,7 @@ function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
         )}
       </Pressable>
       {open && (
-        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={live ? undefined : 12}>
+        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={live ? undefined : 14}>
           {text}
         </TypeMono>
       )}
@@ -189,44 +207,64 @@ function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
   );
 }
 
-// ── tool ────────────────────────────────────────────────────────────────────
+// ── tool (clay tile, tap to expand the full story) ──────────────────────────
 
 function ToolCard({ item }: { item: TranscriptItem & { kind: "tool" } }) {
   const { tokens } = useTheme();
+  const [expanded, setExpanded] = useState(false);
   const failed = item.ok === false;
   const running = item.ok === null;
   return (
-    <View
-      accessibilityLabel={`Tool ${item.toolName}${running ? " running" : failed ? " failed" : " succeeded"}`}
-      style={[styles.toolCard, { backgroundColor: tokens.subtle, borderColor: tokens.borderSubtle }]}
+    <Pressable
+      accessibilityLabel={`Tool ${item.toolName}${running ? " running" : failed ? " failed" : " succeeded"}${expanded ? ", expanded" : ""}`}
+      accessibilityRole="button"
+      onPress={() => setExpanded((v) => !v)}
+      style={[
+        styles.toolCard,
+        {
+          backgroundColor: tokens.card,
+          borderTopColor: tokens.clayTopEdge,
+          borderColor: failed ? tokens.danger : tokens.borderSubtle,
+          boxShadow: tokens.clayShadowSm,
+        },
+      ]}
     >
       <View style={styles.toolHead}>
-        <TypeMono style={{ color: tokens.text, fontWeight: "600" }}>{item.toolName}</TypeMono>
+        <Wrench size={13} color={tokens.textSecondary} strokeWidth={2.2} />
+        <TypeMono style={{ color: tokens.text, fontFamily: fontFamily.monoMedium }}>{item.toolName}</TypeMono>
         <View style={{ flex: 1 }} />
         {running ? (
           <Badge tone="warning">running</Badge>
         ) : failed ? (
           <Badge tone="danger">FAIL</Badge>
         ) : (
-          <Badge tone="neutral">ok</Badge>
+          <Badge tone="success">ok</Badge>
+        )}
+        {expanded ? (
+          <ChevronUp size={15} color={tokens.textTertiary} strokeWidth={2} />
+        ) : (
+          <ChevronDown size={15} color={tokens.textTertiary} strokeWidth={2} />
         )}
       </View>
       {item.argsSummary !== "" && (
-        <TypeMono style={{ color: tokens.textSecondary }} numberOfLines={3}>
+        <TypeMono
+          style={{ color: tokens.textSecondary }}
+          numberOfLines={expanded ? undefined : 3}
+        >
           {item.argsSummary}
         </TypeMono>
       )}
       {item.outputTail !== null && item.outputTail !== "" && (
-        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={8}>
+        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={expanded ? undefined : 8}>
           {item.outputTail}
         </TypeMono>
       )}
       {item.outputSummary !== null && item.outputSummary !== "" && (
-        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={6}>
+        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={expanded ? undefined : 6}>
           {item.outputSummary}
         </TypeMono>
       )}
-    </View>
+    </Pressable>
   );
 }
 
@@ -251,11 +289,19 @@ function ApprovalMini({
   const pending = decision === null;
   return (
     <View
-      style={[styles.toolCard, { backgroundColor: tokens.subtle, borderColor: tokens.borderSubtle }]}
+      style={[
+        styles.toolCard,
+        {
+          backgroundColor: tokens.card,
+          borderTopColor: tokens.clayTopEdge,
+          borderColor: pending ? tokens.warning : tokens.borderSubtle,
+          boxShadow: tokens.clayShadowSm,
+        },
+      ]}
       accessibilityLabel={`Approval ${item.toolName} ${decision ?? "waiting"}`}
     >
       <View style={styles.toolHead}>
-        <TypeMono style={{ color: tokens.text, fontWeight: "600" }}>{item.toolName}</TypeMono>
+        <TypeMono style={{ color: tokens.text, fontFamily: fontFamily.monoMedium }}>{item.toolName}</TypeMono>
         <View style={{ flex: 1 }} />
         {pending ? (
           <Badge tone="warning">waiting</Badge>
@@ -275,7 +321,7 @@ function ApprovalMini({
           onPress={() => onDecide(item.approvalId)}
           style={styles.miniLink}
         >
-          <TypeCaption style={{ color: tokens.accent, fontWeight: "600" }}>
+          <TypeCaption style={{ color: tokens.accent, fontFamily: fontFamily.bold }}>
             decide in the approvals inbox →
           </TypeCaption>
         </Pressable>
@@ -303,10 +349,13 @@ function ErrorCard({ code, message }: { code: string; message: string }) {
   return (
     <View
       accessibilityLabel={`Error: ${message}`}
-      style={[styles.toolCard, { borderColor: tokens.danger }]}
+      style={[
+        styles.toolCard,
+        { backgroundColor: tokens.card, borderTopColor: tokens.clayTopEdge, borderColor: tokens.danger, boxShadow: tokens.clayShadowSm },
+      ]}
     >
       <View style={styles.toolHead}>
-        <TypeMono style={{ color: tokens.danger, fontWeight: "600" }}>{code}</TypeMono>
+        <TypeMono style={{ color: tokens.danger, fontFamily: fontFamily.monoMedium }}>{code}</TypeMono>
       </View>
       <TypeBody style={{ color: tokens.textSecondary }}>{message}</TypeBody>
     </View>
@@ -320,7 +369,17 @@ function DebugBlock({ content, live }: { content: string; live: boolean }) {
     return <MetaLine text="the debug analyst is running…" />;
   }
   return (
-    <View style={[styles.thinking, { borderColor: tokens.borderSubtle }]}>
+    <View
+      style={[
+        styles.thinking,
+        {
+          borderColor: tokens.borderSubtle,
+          backgroundColor: tokens.monoBg,
+          borderTopColor: tokens.clayTopEdge,
+          boxShadow: tokens.clayShadowSm,
+        },
+      ]}
+    >
       <Pressable
         accessibilityLabel={open ? "Hide the debug analyst report" : "Show the debug analyst report"}
         accessibilityRole="button"
@@ -357,6 +416,7 @@ const styles = StyleSheet.create({
   userBubble: {
     maxWidth: "88%",
     borderRadius: RADIUS_CARD,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderWidth: StyleSheet.hairlineWidth,
     padding: spacing.md,
   },
@@ -364,19 +424,15 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     maxWidth: "100%",
   },
-  assistantText: {
+  assistantLive: {
     flexDirection: "row",
-    flexWrap: "wrap",
     alignItems: "flex-end",
-  },
-  deltaText: {
-    fontSize: TYPE_BODY,
-    fontFamily: fontStack.sans,
-    lineHeight: 19,
+    flexWrap: "wrap",
   },
   thinking: {
-    borderRadius: RADIUS_PILL,
+    borderRadius: RADIUS_INPUT,
     borderWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: StyleSheet.hairlineWidth,
     padding: spacing.md,
     gap: spacing.sm,
   },
@@ -387,8 +443,9 @@ const styles = StyleSheet.create({
     minHeight: 32,
   },
   toolCard: {
-    borderRadius: RADIUS_CARD,
+    borderRadius: RADIUS_INPUT,
     borderWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: StyleSheet.hairlineWidth,
     padding: spacing.md,
     gap: spacing.sm,
   },

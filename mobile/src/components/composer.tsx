@@ -1,17 +1,30 @@
 /**
- * Composer — the session screen's sticky bottom: ONE growing TextInput
- * (max ~5 lines) + Send. While a turn runs, Send becomes Stop (+ Queue);
- * while the link is offline, Send lands the message in the outbox (the dim
- * "will send when the host returns" chip shows the queue). Keyboard-aware
- * (the screen wraps it in KeyboardAvoidingView); touch targets ≥ 44px.
+ * Composer v2 (R109) — the session screen's sticky bottom in the clay
+ * language: ONE growing TextInput (max ~5 lines) + the SEND button as the
+ * sanctioned chrome CTA (accent circle with the quiet sheen). While a turn
+ * runs, Send becomes Stop (+ Queue); while the link is offline, Send lands
+ * the message in the outbox — and the outbox chip now carries its own
+ * DISMISS affordance (the owner's "manage everything" ask — a wrong
+ * queued message can be taken back). Keyboard-aware via the screen's
+ * KeyboardAvoidingView; touch targets ≥ 44px; the send haptic.
  */
 
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { ArrowUp, ListPlus, Square } from "lucide-react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { ArrowUp, ListPlus, Square, X } from "lucide-react-native";
 import { useTheme } from "@/design/theme";
 import { TypeCaption } from "@/design/primitives";
-import { pressTint, RADIUS_CARD, RADIUS_PILL, spacing, TYPE_BODY, TYPE_CAPTION, fontStack } from "@/design/tokens";
+import { successHaptic } from "@/design/haptics";
+import {
+  pressTint,
+  RADIUS_INPUT,
+  RADIUS_ROUND,
+  fontFamily,
+  spacing,
+  TYPE_BODY,
+  TYPE_CAPTION,
+} from "@/design/tokens";
 
 export type ComposerMode = "compose" | "running" | "offline";
 
@@ -22,13 +35,23 @@ export interface ComposerProps {
   onSend: (content: string) => void;
   onStop: () => void;
   onQueue: (content: string) => void;
+  /** Dismiss the queued offline messages for this session (the X on the chip). */
+  onDismissOutbox?: () => void;
 }
 
-const MAX_INPUT_HEIGHT = 5 * 20 + 16; // ~5 lines at 20pt line height + padding
+const MAX_INPUT_HEIGHT = 5 * 21 + 16; // ~5 lines at 21pt line height + padding
 
-export function Composer({ mode, outboxCount, onSend, onStop, onQueue }: ComposerProps) {
+export function Composer({
+  mode,
+  outboxCount,
+  onSend,
+  onStop,
+  onQueue,
+  onDismissOutbox,
+}: ComposerProps) {
   const { tokens } = useTheme();
   const [draft, setDraft] = useState("");
+  const [focused, setFocused] = useState(false);
   const [inputHeight, setInputHeight] = useState<number | null>(null);
 
   // The draft survives mode changes — the user's typing is theirs; only
@@ -42,6 +65,7 @@ export function Composer({ mode, outboxCount, onSend, onStop, onQueue }: Compose
     const content = draft;
     setDraft("");
     setInputHeight(null);
+    void successHaptic();
     onSend(content);
   };
 
@@ -54,7 +78,7 @@ export function Composer({ mode, outboxCount, onSend, onStop, onQueue }: Compose
   };
 
   return (
-    <View style={[styles.root, { borderColor: tokens.borderSubtle }]}>
+    <View style={[styles.root, { borderTopColor: tokens.borderSubtle }]}>
       {mode === "offline" && outboxCount === 0 && (
         <View style={styles.chipRow}>
           <TypeCaption style={{ color: tokens.textTertiary }}>
@@ -64,10 +88,26 @@ export function Composer({ mode, outboxCount, onSend, onStop, onQueue }: Compose
       )}
       {outboxCount > 0 && (
         <View style={styles.chipRow}>
-          <View style={[styles.chip, { backgroundColor: tokens.subtle, borderColor: tokens.borderSubtle }]}>
+          <View
+            style={[
+              styles.chip,
+              { backgroundColor: tokens.subtle, borderColor: tokens.borderSubtle },
+            ]}
+          >
             <TypeCaption style={{ color: tokens.textTertiary }}>
               {outboxCount} message{outboxCount === 1 ? "" : "s"} will send when the host returns
             </TypeCaption>
+            {onDismissOutbox !== undefined ? (
+              <Pressable
+                accessibilityLabel="Dismiss the queued offline messages"
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={onDismissOutbox}
+                style={styles.chipX}
+              >
+                <X size={13} color={tokens.textTertiary} strokeWidth={2.4} />
+              </Pressable>
+            ) : null}
           </View>
         </View>
       )}
@@ -84,6 +124,8 @@ export function Composer({ mode, outboxCount, onSend, onStop, onQueue }: Compose
           multiline
           value={draft}
           onChangeText={setDraft}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           onContentSizeChange={(event) => {
             const height = event.nativeEvent.contentSize.height;
             setInputHeight(Math.min(height, MAX_INPUT_HEIGHT));
@@ -93,10 +135,11 @@ export function Composer({ mode, outboxCount, onSend, onStop, onQueue }: Compose
           style={[
             styles.input,
             {
-              backgroundColor: tokens.inputBg,
-              borderColor: tokens.inputBorder,
+              backgroundColor: tokens.card,
+              borderColor: focused ? tokens.accent : tokens.inputBorder,
+              borderTopColor: tokens.clayTopEdge,
               color: tokens.text,
-              fontFamily: fontStack.sans,
+              fontFamily: fontFamily.medium,
             },
             inputHeight !== null ? { height: inputHeight + 16 } : null,
           ]}
@@ -112,8 +155,9 @@ export function Composer({ mode, outboxCount, onSend, onStop, onQueue }: Compose
               style={({ pressed }) => [
                 styles.queueButton,
                 {
-                  borderColor: tokens.borderStrong,
-                  backgroundColor: pressed ? pressTint(tokens.card, tokens.isDark) : "transparent",
+                  backgroundColor: tokens.card,
+                  borderTopColor: tokens.clayTopEdge,
+                  borderColor: pressed ? pressTint(tokens.card, tokens.isDark) : tokens.borderStrong,
                   opacity: canSend ? 1 : 0.45,
                 },
               ]}
@@ -137,6 +181,8 @@ export function Composer({ mode, outboxCount, onSend, onStop, onQueue }: Compose
             </Pressable>
           </View>
         ) : (
+          // The send CTA — the sanctioned chrome circle (§2.2): accent fill
+          // + the quiet vertical sheen, one glint, never a mirror.
           <Pressable
             accessibilityLabel={mode === "offline" ? "Save the message to send later" : "Send the message"}
             accessibilityRole="button"
@@ -146,12 +192,26 @@ export function Composer({ mode, outboxCount, onSend, onStop, onQueue }: Compose
             style={({ pressed }) => [
               styles.sendButton,
               {
-                backgroundColor: canSend ? tokens.accent : tokens.subtle,
-                borderColor: pressed && canSend ? pressTint(tokens.accent, tokens.isDark) : "transparent",
+                backgroundColor: canSend ? tokens.accent : tokens.subtleHover,
+                transform: [{ scale: pressed && canSend ? 0.96 : 1 }],
               },
             ]}
           >
-            <ArrowUp size={TYPE_BODY + 6} color={canSend ? tokens.accentText : tokens.textTertiary} strokeWidth={2.4} />
+            {canSend ? (
+              <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                <LinearGradient
+                  colors={[tokens.sheenTop, tokens.sheenBottom]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 0, y: 1 }}
+                  style={styles.sendSheen}
+                />
+              </View>
+            ) : null}
+            <ArrowUp
+              size={TYPE_BODY + 6}
+              color={canSend ? tokens.accentText : tokens.textTertiary}
+              strokeWidth={2.4}
+            />
           </Pressable>
         )}
       </View>
@@ -171,10 +231,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   chip: {
-    borderRadius: RADIUS_PILL,
+    borderRadius: RADIUS_ROUND,
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  chipX: {
+    width: 24,
+    height: 24,
+    alignItems: "center",
+    justifyContent: "center",
   },
   row: {
     flexDirection: "row",
@@ -183,21 +252,29 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    borderRadius: RADIUS_CARD,
+    borderRadius: RADIUS_INPUT,
     borderWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
     paddingBottom: spacing.sm,
     fontSize: TYPE_BODY,
-    minHeight: 48,
+    lineHeight: 21,
+    minHeight: 50,
   },
   sendButton: {
-    width: 48,
-    height: 48,
-    borderRadius: RADIUS_PILL,
+    width: 50,
+    height: 50,
+    borderRadius: RADIUS_ROUND,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
+    overflow: "hidden",
+  },
+  sendSheen: {
+    flex: 1,
+    height: "60%",
+    borderBottomLeftRadius: 40,
+    borderBottomRightRadius: 40,
   },
   runningButtons: {
     flexDirection: "row",
@@ -205,10 +282,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   queueButton: {
-    width: 48,
-    height: 48,
-    borderRadius: RADIUS_PILL,
-    borderWidth: 1,
+    width: 50,
+    height: 50,
+    borderRadius: RADIUS_ROUND,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: StyleSheet.hairlineWidth,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -216,15 +294,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.xs,
-    height: 48,
+    height: 50,
     paddingHorizontal: spacing.md,
-    borderRadius: RADIUS_PILL,
+    borderRadius: RADIUS_ROUND,
     borderWidth: 1,
     justifyContent: "center",
   },
   stopLabel: {
     fontSize: TYPE_CAPTION + 2,
-    fontFamily: fontStack.sans,
-    fontWeight: "600",
+    fontFamily: fontFamily.semibold,
   },
 });

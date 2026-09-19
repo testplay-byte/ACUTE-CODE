@@ -1,22 +1,27 @@
 /**
- * ApprovalCard — the killer feature's row (LINKING-PROTOCOL §4 / R3 §1.5):
- * the EXISTING approval shape rendered quiet — mono tool headline, category
- * badge, risk line, session/project caption, honest expiry; Approve (accent)
- * and Deny (danger) as two quiet buttons. The decision is optimistic: the
- * card plays the spring settle (fade + rise, the one spring) the moment the
- * tap lands, the POST /approvals/:id/decision rides behind it, and a failure
- * un-settles with the host's own message. Destructive rows never offer
- * "always allow" — v1 mobile sends decision only, by construction.
+ * ApprovalCard v2 (R109-c) — the killer feature's row in the CLAY language
+ * (LINKING-PROTOCOL §4 / R3 §1.5): a ClayCard shell (bordered in the danger
+ * hue ONLY for destructive categories), the category Badge + risk line, the
+ * mono tool headline (≤3 lines) + detail (≤4 lines), the session/project
+ * caption, honest expiry, and Approve (ChromeButton — the sanctioned CTA
+ * chrome, compact 44) / Deny (QuietButton, danger tone).
+ *
+ * The decision stays OPTIMISTIC: the card plays the house-spring settle
+ * (fade + rise + slight shrink) the moment the tap lands, the POST
+ * /approvals/:id/decision rides behind it, and a failure un-settles with
+ * the host's own message. Expired rows dim + disable (the route 409s dead
+ * rows — the phone never pretends otherwise). Destructive rows never offer
+ * "always allow" — v1's by-construction rule: `canAlways` stays un-rendered.
  */
 
 import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withSpring } from "react-native-reanimated";
 import { useTheme } from "@/design/theme";
-import { Badge, TypeCaption, TypeMono } from "@/design/primitives";
+import { Badge, ChromeButton, ClayCard, QuietButton, TypeCaption, TypeMono } from "@/design/primitives";
 import { ENTRANCE_DELTA, SPRING, staggerDelay } from "@/design/motion";
-import { pressTint, RADIUS_CARD, RADIUS_PILL, spacing, TYPE_BODY, fontStack } from "@/design/tokens";
 import { decisionHaptic } from "@/design/haptics";
+import { fontFamily, mixHex, spacing, TYPE_BODY } from "@/design/tokens";
 import type { ApprovalCardModel, ApprovalDecision } from "@/features/approvals";
 
 export interface ApprovalCardProps {
@@ -68,27 +73,35 @@ export function ApprovalCard({ card, enterIndex, caption, onDecide }: ApprovalCa
     });
   };
 
-  const approveColor = tokens.accent;
-  const denyColor = tokens.danger;
+  const destructive = card.tone === "danger";
+  const inert = settling !== null || card.expired;
 
   return (
-    <Animated.View style={animated}>
-      <View
-        accessibilityLabel={`Permission request: ${card.headline}`}
+    <Animated.View
+      accessibilityLabel={`Permission request: ${card.headline}`}
+      style={animated}
+    >
+      <ClayCard
+        testID="approval-card"
+        bordered={destructive}
         style={[
           styles.card,
-          {
-            backgroundColor: tokens.card,
-            borderColor: card.tone === "danger" ? tokens.danger : tokens.border,
-          },
+          destructive
+            ? {
+                // The danger edge — the border itself carries the risk tier,
+                // with the molded lighter cap grammar on top.
+                borderColor: tokens.danger,
+                borderTopColor: mixHex(tokens.danger, tokens.card, 0.45),
+              }
+            : null,
           card.expired ? styles.expired : null,
         ]}
       >
         <View style={styles.headRow}>
-          <Badge tone={card.tone === "danger" ? "danger" : card.tone === "warning" ? "accent" : "neutral"}>
+          <Badge tone={destructive ? "danger" : card.tone === "warning" ? "warning" : "neutral"}>
             {card.row.category}
           </Badge>
-          <View style={{ flex: 1 }} />
+          <View style={styles.headSpacer} />
           {card.expired ? (
             <Badge tone="danger">expired</Badge>
           ) : card.expiresInMs !== null ? (
@@ -98,46 +111,46 @@ export function ApprovalCard({ card, enterIndex, caption, onDecide }: ApprovalCa
           ) : null}
         </View>
 
-        <TypeMono
-          style={{ color: tokens.text, fontSize: TYPE_BODY, fontWeight: "600" }}
-          numberOfLines={3}
-        >
+        <TypeMono numberOfLines={3} style={styles.headline}>
           {card.headline}
         </TypeMono>
-        {card.detail !== "" && (
-          <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={4}>
+        {card.detail !== "" ? (
+          <TypeMono numberOfLines={4} style={{ color: tokens.textTertiary }}>
             {card.detail}
           </TypeMono>
-        )}
+        ) : null}
 
         <TypeCaption style={{ color: tokens.textSecondary }}>{card.riskLine}</TypeCaption>
-        <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={2}>
+        <TypeCaption numberOfLines={2} style={{ color: tokens.textTertiary }}>
           {caption}
         </TypeCaption>
 
-        {failure !== null && (
-          <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+        {failure !== null ? (
+          <TypeCaption numberOfLines={3} style={{ color: tokens.danger }}>
             {failure}
           </TypeCaption>
-        )}
+        ) : null}
 
         <View style={styles.buttonRow}>
-          <DecisionButton
-            label="Approve"
-            color={approveColor}
-            disabled={settling !== null || card.expired}
-            busy={settling === "approved"}
+          <ChromeButton
             onPress={() => decide("approved")}
-          />
-          <DecisionButton
-            label="Deny"
-            color={denyColor}
-            disabled={settling !== null || card.expired}
-            busy={settling === "denied"}
+            disabled={inert}
+            busy={settling === "approved"}
+            style={styles.approveButton}
+            accessibilityLabel="Approve this request"
+          >
+            Approve
+          </ChromeButton>
+          <QuietButton
+            tone="danger"
             onPress={() => decide("denied")}
-          />
+            disabled={inert}
+            style={styles.denyButton}
+          >
+            Deny
+          </QuietButton>
         </View>
-      </View>
+      </ClayCard>
     </Animated.View>
   );
 }
@@ -151,89 +164,35 @@ function expiryCaption(expiresInMs: number): string {
   return `expires in ${minutes}m`;
 }
 
-// ── the quiet decision button ───────────────────────────────────────────────
-
-function DecisionButton({
-  label,
-  color,
-  disabled,
-  busy,
-  onPress,
-}: {
-  label: string;
-  color: string;
-  disabled: boolean;
-  busy: boolean;
-  onPress: () => void;
-}) {
-  const { tokens } = useTheme();
-  return (
-    <Pressable
-      accessibilityLabel={label === "Approve" ? "Approve this request" : "Deny this request"}
-      accessibilityRole="button"
-      accessibilityState={disabled ? { disabled: true } : undefined}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.button,
-        {
-          borderColor: color,
-          backgroundColor: pressed ? pressTint(tokens.card, tokens.isDark) : "transparent",
-          opacity: disabled ? 0.45 : 1,
-        },
-      ]}
-    >
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
-        {busy && <View style={[styles.busyDot, { backgroundColor: color }]} />}
-        <Text
-          style={{
-            color,
-            fontSize: TYPE_BODY,
-            fontFamily: fontStack.sans,
-            fontWeight: "600",
-            textAlign: "center",
-          }}
-        >
-          {label}
-        </Text>
-      </View>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
   card: {
-    borderRadius: RADIUS_CARD,
-    borderWidth: StyleSheet.hairlineWidth,
     padding: spacing.lg,
     gap: spacing.md,
   },
   expired: {
-    opacity: 0.7,
+    opacity: 0.65,
   },
   headRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
   },
+  headSpacer: { flex: 1 },
+  headline: {
+    fontSize: TYPE_BODY,
+    fontFamily: fontFamily.monoMedium,
+    lineHeight: 21,
+  },
   buttonRow: {
     flexDirection: "row",
     gap: spacing.md,
     paddingTop: spacing.xs,
   },
-  button: {
+  approveButton: {
     flex: 1,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-    borderRadius: RADIUS_PILL,
-    borderWidth: 1,
     minHeight: 44,
-    alignItems: "center",
-    justifyContent: "center",
   },
-  busyDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+  denyButton: {
+    flex: 1,
   },
 });

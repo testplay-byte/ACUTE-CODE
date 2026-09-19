@@ -23,6 +23,7 @@
  */
 
 import type { NetError, SseStream } from "@/types/acute-net";
+import { mobLog, mobWarn } from "@/lib/log";
 import { baseUrlFor, pinFor, type HttpRequestOptions, type NetTransport } from "./net";
 import type { HostStore, StoredHost } from "./host-store";
 import type { ConnectionTriggers } from "./triggers";
@@ -234,7 +235,14 @@ export class ConnectionManager {
     this.wake("manual");
   }
 
-  /** A probe round: try every stored address in order; LAN-first (§1.4). */
+  /** A probe round: try every stored address in order; LAN-first (§1.4).
+   *
+   * ROUND-109 (the reliability fix): a per-address "tls" failure (a REAL
+   * CertificateException after the Kotlin-side reclassification) no longer
+   * breaks the ladder on the spot — the next stored address still gets its
+   * probe (the stale-IP-now-serves-another-TLS-host case). The ladder's
+   * exhaustion + a witnessed tls failure is what makes the state FATAL
+   * (the honest re-pair signal); every other shape backs off and retries. */
   private async probeRound(): Promise<void> {
     if (this.probeInFlight) {
       this.probeQueued = true;
@@ -256,7 +264,10 @@ export class ConnectionManager {
           timeoutMs: this.probeTimeoutMs,
           pinSha256: pinFor(addr, host.certFP),
         });
-        if (res.status !== 200) continue; // answered, wrong shape — next addr
+        if (res.status !== 200) {
+          mobLog("link", "probe answered, wrong status", { addr, status: res.status });
+          continue; // answered, wrong shape — next addr
+        }
         const health = parseHealthBody(res.bodyText);
         if (health === null) continue;
         // The identity check — skipped when we never learned a machineId
@@ -268,8 +279,10 @@ export class ConnectionManager {
           health.machineId !== null &&
           health.machineId !== host.machineId
         ) {
+          mobWarn("link", "probe answered with a DIFFERENT machine — skipping", { addr });
           continue;
         }
+        mobLog("link", "probe connected", { addr, version: health.version });
         this.onProbeSuccess(addr, health);
         this.probeInFlight = false;
         if (this.probeQueued) {
@@ -280,16 +293,18 @@ export class ConnectionManager {
       } catch (err) {
         const kind = (err as NetError).kind;
         if (kind === "tls") {
-          // The pinned certificate did not match — the machine changed or
-          // someone is in the middle. HARD failure: never auto-retry (the
-          // honest response is re-pairing, LINKING-PROTOCOL §2).
-          tlsFailure = {
+          // A REAL certificate mismatch on THIS address (the Kotlin side now
+          // reserves "tls" for CertificateException verdicts only). Record it
+          // and CONTINUE the ladder — another stored address may still be the
+          // pinned host. If none is, the exhaustion below sets fatal honestly.
+          mobWarn("link", "probe tls mismatch on one address — ladder continues", { addr });
+          tlsFailure = tlsFailure ?? {
             kind: "tls",
             message:
               (err as NetError).message ??
               "the host's certificate no longer matches the pinned fingerprint",
           };
-          break;
+          continue;
         }
         // network/unknown — this address is unreachable; try the next.
         continue;
@@ -324,6 +339,9 @@ export class ConnectionManager {
         kind: "network",
         message: "the host did not answer on any stored address",
       };
+    mobWarn("link", `probe round failed (${failure.kind}) — attempt ${this.consecutiveFailures}`, {
+      message: failure.message,
+    });
     this.setState({
       status: "offline",
       activeAddr: null,

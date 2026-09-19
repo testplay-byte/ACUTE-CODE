@@ -1,33 +1,31 @@
 /**
- * Session — the transcript + live stream + composer (LINKING-PROTOCOL §3):
+ * Session v2 (R109) — the transcript + live stream + composer
+ * (LINKING-PROTOCOL §3), now with the FORMATTED transcript (markdown via
+ * TranscriptItemView), the proper Android keyboard handling
+ * (react-native-keyboard-controller — the input NEVER hides under the
+ * keyboard), the outbox chip's dismiss affordance, and the [ACUTE-MOB]
+ * stream logging:
  *
  *   · the transcript: GET /sessions/:id's persisted event log, folded into
- *     the chat (user bubbles right, assistant + thinking, tool cards,
- *     approvals, dim meta) — complete even if the phone was offline all day;
- *   · the live stream: Send opens POST /sessions/:id/messages/stream (the
- *     manager's sse() — Bearer + pin) and every frame renders as it lands
- *     (features/sessions.ts's frame application; per-delta fade-in-up);
+ *     the chat — complete even if the phone was offline all day;
+ *   · the live stream: Send opens POST /sessions/:id/messages/stream and
+ *     every frame renders AS IT LANDS, formatted, with the pulsing caret
+ *     while the agent writes (tool calls, thinking, retries — all live);
  *   · the R42 guarantee: the turn SURVIVES a closed stream. Backgrounding
- *     drops the stream (AppState) and rehydrates from GET /sessions/:id on
- *     return; while a desktop-side turn runs (status "running"), a calm 3s
- *     poll keeps the transcript honest — the transcript is the truth;
+ *     drops the stream (AppState) and rehydrates on return; while a
+ *     desktop-side turn runs (status "running"), a calm 3s poll keeps the
+ *     transcript honest — the transcript is the truth;
  *   · the composer: Send / Stop / Queue (the queue route's 409
- *     NO_LIVE_TURN falls back to an ordinary send), and offline sends land
- *     in the outbox (flushed in order when the link returns).
+ *     NO_LIVE_TURN falls back to an ordinary send), offline sends land in
+ *     the outbox (flushed in order when the link returns), and the chip
+ *     can be dismissed entry-by-entry.
  *
  * The phone renders + taps. NOTHING is processed here (§4's ceiling).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AppState,
-  FlatList,
-  KeyboardAvoidingView,
-  Platform,
-  RefreshControl,
-  StyleSheet,
-  View,
-} from "react-native";
+import { AppState, FlatList, RefreshControl, StyleSheet, View } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { Composer, type ComposerMode } from "@/components/composer";
@@ -54,6 +52,7 @@ import {
   type TranscriptItem,
 } from "@/features/sessions";
 import { getOutbox, outboxForSession, type OutboxEntry } from "@/features/outbox";
+import { mobLog, mobWarn } from "@/lib/log";
 
 /** The calm poll while a desktop-side turn runs (no live stream to watch). */
 const RUNNING_POLL_MS = 3_000;
@@ -139,16 +138,18 @@ export default function SessionScreen() {
       if (!active) {
         // Drop the stream — the turn survives on the desktop; the transcript
         // is the truth and rehydrating on return never misses anything.
+        mobLog("stream", "app backgrounded — stream dropped (R42)");
         streamClosedRef.current = true;
         streamRef.current?.close();
         streamRef.current = null;
         if (liveRef.current !== null) setLiveState(abandonLiveTurn(liveRef.current));
       } else {
+        mobLog("stream", "app foregrounded — rehydrating");
         void rehydrate();
       }
     });
     return () => sub.remove();
-  }, [rehydrate]);
+  }, [rehydrate, setLiveState]);
 
   // ── the calm poll while a desktop-side turn runs ──────────────────────────
 
@@ -191,6 +192,7 @@ export default function SessionScreen() {
         void getOutbox().enqueue(sessionId, content);
         return;
       }
+      mobLog("stream", "opened", { sessionId });
       streamClosedRef.current = false;
       streamRef.current = stream;
       setLiveState(beginLiveTurn(baseItems, content, Date.now()));
@@ -203,6 +205,7 @@ export default function SessionScreen() {
         setLiveState(next);
         if (next.terminal !== null) {
           // done / stopped / error — the turn is over; the truth owns the render.
+          mobLog("stream", "terminal frame", { type: String(frame.type) });
           closeStream();
           rehydrateAfterTurn();
         }
@@ -212,12 +215,14 @@ export default function SessionScreen() {
         if (err.kind === "http") {
           // The host refused before streaming (validation / unknown session) —
           // honest error, the draft's fate is visible in the message.
+          mobWarn("stream", "http refusal", { message: err.message });
           setError(`the host refused the message: ${err.message}`);
           setLiveState(null);
           void rehydrate();
         } else {
           // Transport loss mid-turn: the turn survives (R42) — rehydrate and
           // let the calm poll keep watching it. The message is not re-sent.
+          mobWarn("stream", "transport loss mid-turn — rehydrating (R42)", { kind: err.kind });
           if (liveRef.current !== null) setLiveState(abandonLiveTurn(liveRef.current));
           void rehydrate();
         }
@@ -225,6 +230,7 @@ export default function SessionScreen() {
       stream.addEventListener("close", () => {
         if (streamClosedRef.current) return; // our own close — already handled
         // The stream ended without a terminal frame — ambiguous, the truth wins.
+        mobLog("stream", "closed without terminal — truth wins");
         streamRef.current = null;
         if (liveRef.current !== null) setLiveState(abandonLiveTurn(liveRef.current));
         void rehydrate();
@@ -287,6 +293,14 @@ export default function SessionScreen() {
     [sessionId, rehydrate, openStream],
   );
 
+  const onDismissOutbox = useCallback(async () => {
+    const outbox = getOutbox();
+    for (const entry of outboxEntries) {
+      await outbox.remove(entry.id);
+    }
+    mobLog("outbox", "entries dismissed", { count: outboxEntries.length, sessionId });
+  }, [outboxEntries, sessionId]);
+
   // ── render ─────────────────────────────────────────────────────────────────
 
   const displayItems = useMemo<TranscriptItem[]>(() => {
@@ -320,7 +334,7 @@ export default function SessionScreen() {
 
   if (sessionId === "") {
     return (
-      <ScreenScaffold title="Session">
+      <ScreenScaffold title="Session" back>
         <ErrorState title="No session id" caption="Open a session from the sessions list." />
       </ScreenScaffold>
     );
@@ -329,32 +343,42 @@ export default function SessionScreen() {
   return (
     <ScreenScaffold
       title={detail !== null ? sessionTitle(detail) : "Session"}
+      subtitle={detail !== null ? `${detail.status === "running" ? "a turn is live" : detail.status} · ${detail.mode}` : undefined}
       scroll={false}
+      back
+      bottomInset={0}
+      keyboardAware={false}
       right={
         detail !== null ? (
-          <Badge tone={detail.status === "running" ? "accent" : detail.status === "failed" ? "danger" : "neutral"}>
+          <Badge tone={detail.status === "running" ? "running" : detail.status === "failed" ? "danger" : "neutral"}>
             {detail.status === "running" ? "live" : detail.status === "queued" ? "open" : detail.status}
           </Badge>
         ) : null
       }
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={styles.body}
-        keyboardVerticalOffset={0}
-      >
+      {/* The keyboard-aware body — react-native-keyboard-controller's view
+          (the REAL Android fix: behavior padding works with edge-to-edge). */}
+      <KeyboardAvoidingView behavior="padding" style={styles.body}>
         {loading ? (
           <View style={styles.centerWrap}>
-            <LoadingState caption="Loading the transcript…" />
+            <LoadingState caption="loading the transcript…" />
           </View>
         ) : detail === null && error !== null ? (
           <View style={styles.centerWrap}>
-            <ErrorState title="Couldn't open the session" caption={error} />
+            <ErrorState
+              title="couldn't open the session"
+              caption={error}
+              retryLabel="retry now"
+              onRetry={() => {
+                void rehydrate();
+                getLinkManager().retryNow();
+              }}
+            />
           </View>
         ) : data.length === 0 ? (
           <View style={styles.centerWrap}>
             <EmptyState
-              title="An empty conversation."
+              title="an empty conversation"
               caption="send the first message — the desktop agent does all the work"
             />
           </View>
@@ -364,10 +388,7 @@ export default function SessionScreen() {
             inverted
             keyExtractor={(item) => item.key}
             renderItem={({ item }) => (
-              <TranscriptItemView
-                item={item}
-                onApprovalDecide={() => router.navigate("/approvals")}
-              />
+              <TranscriptItemView item={item} onApprovalDecide={() => router.navigate("/approvals")} />
             )}
             ItemSeparatorComponent={ItemSeparator}
             contentContainerStyle={styles.transcriptContent}
@@ -384,13 +405,16 @@ export default function SessionScreen() {
             </TypeCaption>
           </View>
         )}
-        <Composer
-          mode={composerMode}
-          outboxCount={outboxEntries.length}
-          onSend={onSend}
-          onStop={onStop}
-          onQueue={onQueue}
-        />
+        <View style={[styles.composerWrap, { backgroundColor: tokens.bg }]}>
+          <Composer
+            mode={composerMode}
+            outboxCount={outboxEntries.length}
+            onSend={onSend}
+            onStop={onStop}
+            onQueue={onQueue}
+            onDismissOutbox={() => void onDismissOutbox()}
+          />
+        </View>
       </KeyboardAvoidingView>
     </ScreenScaffold>
   );
@@ -418,5 +442,9 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xs,
+  },
+  composerWrap: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "transparent",
   },
 });

@@ -1,9 +1,9 @@
 /**
  * ThemePicker — both spellings of the theme switch:
- *   ThemeDots  — the home screen's quick-switch (five accent dots, one ring)
+ *   ThemeDots  — the home screen's quick-switch (accent dots, one ring)
  *   ThemeRows  — the settings screen's full rows (palette strip + name + check)
- * The 5-theme table ports the desktop 1:1; selection persists via the
- * ThemeProvider (theme.tsx).
+ * The 6-theme table rides tokens.THEMES (Clay Studio first — the R109
+ * default); selection persists via the ThemeProvider (theme.tsx).
  */
 
 import { Pressable, StyleSheet, View } from "react-native";

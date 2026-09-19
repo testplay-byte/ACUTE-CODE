@@ -131,8 +131,10 @@ export class ActivityStore {
 
   /** One live notification arrived off the stream. */
   applyLiveNotification(row: NotificationRow): void {
+    const seen = this.state.latest.some((n) => n.id === row.id);
     const latest = [row, ...this.state.latest.filter((n) => n.id !== row.id)].slice(0, RING_MAX);
-    const unread = row.read === 0 ? this.state.unread + 1 : this.state.unread;
+    // A re-delivered row never double-counts (the stream is at-least-once).
+    const unread = row.read === 0 && !seen ? this.state.unread + 1 : this.state.unread;
     this.state = { ...this.state, latest, unread };
     this.emit();
   }

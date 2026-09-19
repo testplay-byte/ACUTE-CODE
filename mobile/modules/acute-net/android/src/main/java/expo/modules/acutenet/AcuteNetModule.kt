@@ -380,12 +380,26 @@ class AcuteNetModule : Module() {
 
   /**
    * Map a transport failure to the coarse kind the JS layer reasons about:
-   * "tls" (certificate/pin trouble — the honest re-pair signal), "network"
-   * (unreachable/timeout — the honest retry signal), else "unknown".
+   * "tls" (a REAL certificate/pin mismatch — the honest re-pair signal),
+   * "network" (unreachable/timeout/aborted handshake — the honest retry
+   * signal), else "unknown".
+   *
+   * ROUND-109 (the reliability fix): a bare SSLException is NO LONGER
+   * "tls" — OkHttp wraps aborted/reset handshakes (flaky LAN, roaming
+   * Wi-Fi) in SSLException too, and those were being classified as
+   * fatal-never-retry "host offline until rescan". ONLY a
+   * CertificateException in the cause chain (the PinnedTrustManager's
+   * mismatch verdict, or the system trust manager's) is "tls"; every other
+   * TLS-shaped failure is retry-shaped "network".
    */
   private fun classifyNetworkError(e: Throwable?): String {
+    var c: Throwable? = e
+    while (c !== null) {
+      if (c is CertificateException) return "tls"
+      c = c.cause
+    }
     return when (e) {
-      is SSLException -> "tls"
+      is SSLException -> "network"
       is ConnectException, is NoRouteToHostException, is UnknownHostException,
       is SocketTimeoutException, is java.io.InterruptedIOException -> "network"
       else -> "unknown"

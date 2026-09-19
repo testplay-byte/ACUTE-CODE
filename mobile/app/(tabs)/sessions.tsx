@@ -6,7 +6,7 @@
  * states. Rows carry the live status badge + relative time.
  */
 
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, TextInput, View } from "react-native";
 import { Search } from "lucide-react-native";
@@ -41,9 +41,15 @@ export default function SessionsScreen() {
   const { status } = useLink();
   const connected = status === "connected";
 
+  // The projects browser pushes /sessions with a projectId param — the filter
+  // starts on it (and follows it when the screen is already mounted).
+  const params = useLocalSearchParams<{ projectId?: string }>();
+  const paramProjectId =
+    typeof params.projectId === "string" && params.projectId !== "" ? params.projectId : null;
+
   const [sessions, setSessions] = useState<SessionRow[] | null>(null);
   const [projects, setProjects] = useState<ProjectRow[]>([]);
-  const [projectFilter, setProjectFilter] = useState<string | null>(null);
+  const [projectFilter, setProjectFilter] = useState<string | null>(paramProjectId);
   const [query, setQuery] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [outbox, setOutbox] = useState<OutboxState>({ entries: [] });
@@ -82,6 +88,12 @@ export default function SessionsScreen() {
     }
   }, [connected, outbox.entries.length]);
 
+  // A projects-row tap can land here with a fresh projectId while the screen
+  // is already mounted — keep the chip selection true.
+  useEffect(() => {
+    if (paramProjectId !== null) setProjectFilter(paramProjectId);
+  }, [paramProjectId]);
+
   const visible = useMemo(() => {
     if (sessions === null) return null;
     let rows = projectFilter === null ? sessions : filterByProject(sessions, projectFilter);
@@ -98,6 +110,17 @@ export default function SessionsScreen() {
     () => [{ id: null as string | null, name: "All" }, ...projects.map((p) => ({ id: p.id, name: p.name }))],
     [projects],
   );
+
+  // The first 8 chips — plus the param-selected project's chip when it lands
+  // beyond them, so the active filter is always visible as a selected chip.
+  const visibleChips = useMemo(() => {
+    const base = projectChips.slice(0, 8);
+    if (projectFilter !== null && !base.some((chip) => chip.id === projectFilter)) {
+      const match = projectChips.find((chip) => chip.id === projectFilter);
+      if (match !== undefined) base.push(match);
+    }
+    return base;
+  }, [projectChips, projectFilter]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -132,7 +155,7 @@ export default function SessionsScreen() {
         </View>
 
         <View style={styles.chipRow}>
-          {projectChips.slice(0, 8).map((chip) => (
+          {visibleChips.map((chip) => (
             <Chip
               key={chip.id ?? "all"}
               selected={projectFilter === chip.id}
