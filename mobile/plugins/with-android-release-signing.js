@@ -13,14 +13,16 @@
  *      forced an uninstall first (INSTALL_FAILED_UPDATE_INCOMPATIBLE). One
  *      stable key = the owner's phone updates v0.104.0 → v0.105.0 in place.
  *
- *   2. ABI SPLITS — `splits { abi { include "arm64-v8a"; universalApk true } }`
- *      so ONE `assembleRelease` produces both deliverables:
- *        · app-arm64-v8a-release.apk  → THE artifact (arm64-only, small —
- *          every Android 10+ phone the owner can hold)
- *        · app-universal-release.apk  → the fallback (emulators, 32-bit
- *          stragglers) — attached to the release as the secondary asset
- *      (The v0.103.0 debug APK shipped FOUR ABIs × 25 unstripped .so —
- *      224 of its 302 MiB. R8 + strip + arm64 lands the split at a fraction.)
+ *   2. ABI SPLITS — `splits { abi { include "arm64-v8a"; universalApk false } }`
+ *      (ROUND-109: the owner's ruling — "you do not need to build the
+ *      Android universal APK at all… You just need to build the ARM64 v8
+ *      version." The universal fallback is GONE; ONE deliverable:
+ *        · app-arm64-v8a-release.apk → THE artifact (every Android 10+
+ *          phone the owner can hold; emulators/32-bit stragglers are
+ *          out of scope by the same ruling)
+ *      The v0.103.0 debug APK shipped FOUR ABIs × 25 unstripped .so —
+ *      224 of its 302 MiB. R8 + strip + arm64-only lands the split at a
+ *      fraction.)
  *
  *   3. THE GRADLE JVM — the template's -XX:MaxMetaspaceSize=512m died
  *      live on the first CI dress rehearsal (OutOfMemoryError: Metaspace
@@ -57,15 +59,15 @@ const ANCHOR_RELEASE_SIG =
   "            signingConfig signingConfigs.debug";
 
 const SPLITS_BLOCK = `
-    // R108: ABI splits — one assembleRelease yields the arm64 deliverable
-    // (app-arm64-v8a-release.apk) AND the universal fallback. The 32-bit
-    // per-ABI stragglers ride the universal APK; nobody needs x86 on a phone.
+    // R108: ABI splits. ROUND-109: universalApk is FALSE — the owner's
+    // ruling kills the universal fallback; the arm64-v8a build is THE one
+    // deliverable (smaller artifact, faster attach, nothing unused).
     splits {
         abi {
             reset()
             enable true
             include "arm64-v8a"
-            universalApk true
+            universalApk false
         }
     }
 `;

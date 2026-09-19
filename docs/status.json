@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.104.0",
+    "version": "0.105.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -13,7 +13,7 @@
       "Node sidecar",
       "SQLite",
       "BYO provider key",
-      "Android companion (LAN)",
+      "Android companion (clay UI)",
       "acute CLI",
       "Clay + liquid chrome"
     ]
@@ -320,6 +320,10 @@
     {
       "date": "2026-09-19",
       "label": "R108 — the seventeenth-walkthrough round (v0.104.0): the companion actually runs (the embedded-bundle release build + the hard CI gate, arm64/universal splits, the stable signing key, the boot trail + on-device crash screen + logcat filters) and the Clay rework (glow-fades deleted, clay as shadow+form, chrome quieter)"
+    },
+    {
+      "date": "2026-09-19",
+      "label": "R109 — the eighteenth round (v0.105.0): the companion REBUILT in clay (the design system v2, the floating bar, the setup wizard, the connect flow with pinch-zoom scanning, the markdown transcript with live caret, the keyboard fix) + the live link (notifications stream, the always-visible status pill, the flaky-TLS reliability fix) + the phone configures the desktop (providers/models/agents/prompts/preferences + the usage dashboard) with the desktop-side device-token blocklist + ARM64-only APK"
     }
   ],
   "quality": {
@@ -357,11 +361,11 @@
     }
   ],
   "plan": {
-    "current": "R108 LANDED — the mobile artifact made real: the splash-forever root cause fixed (the debug APK never embedded the JS bundle — proven entry-by-entry from the shipped v0.103.0 APK; the CI now builds the RELEASE variant with a hard no-bundle-no-ship gate), the APK cut from 302 MB to the arm64 + universal release pair, the stable repo signing key (updates install in place from v0.104.0 on), the [ACUTE-BOOT] startup trail + on-device crash screen + the Android Studio logcat filters (mobile/README.md); and the Clay wardrobe reworked per the owner's v1.0.3 verdict — the glow-fades/hairlines deleted, clay rebuilt as shadow+form on the --ac-clay-shadow pipeline, chrome quieter; v0.104.0 tagged",
+    "current": "R109 LANDED — the Android companion rebuilt in clay: the full design system v2 (Clay Studio + liquid chrome, Manrope, the floating bar with badges, the always-visible connection pill), the setup wizard + the connect hub/scanner (pinch zoom + torch)/manual-entry/confirm flow, the formatted markdown transcript with live streaming caret + expandable tool cards + the real Android keyboard handling, the live notifications stream (bell + approvals badge), the reliability fix (flaky TLS handshakes no longer masquerade as pin mismatches — the 'host offline until rescan' trap is dead), the phone-side management surface (providers/models/agents/prompts/preferences + the usage dashboard + projects with session creation) guarded by the NEW desktop device-token blocklist (no key reveals, no reset, no terminals, no computer-use for a phone), and the ARM64-only APK per the owner's ruling; v0.105.0 tagged",
     "upcoming": [
       {
-        "title": "The owner's v0.104.0 walkthrough",
-        "detail": "UNINSTALL the old companion once (the debug-key signature of v0.102/v0.103 cannot update to the new key), then install ACUTE-CODE_0.104.0_android-arm64.apk from the Release. Watch the boot trail under package:com.acutecode.companion in Android Studio Logcat; pair via QR; every future release should update in place. Desktop: the clay rework read — matte cards, no top glows, the chrome jewelry quiet."
+        "title": "The owner's v0.105.0 walkthrough (the clay companion)",
+        "detail": "Install ACUTE-CODE_0.105.0_android-arm64.apk over v0.104.0 (in place, same key — uninstall nothing). First startup runs the wizard; pair by QR (pinch to zoom) or manual entry; watch the floating bar, the status pill, the markdown transcript, the dashboard tab, and Settings → Providers/Agents/Prompts/Preferences from the phone. The [ACUTE-MOB] logcat tag joins [ACUTE-BOOT]. Then: the Cloudflare anywhere-access round (the setup guide ships in docs/guides/ this release) + the Firebase push round."
       },
       {
         "title": "Remote access from anywhere (the promised next round)",

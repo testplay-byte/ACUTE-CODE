@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-19 round-109 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -10,6 +10,30 @@ version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
 ## [Unreleased]
+
+## [0.105.0] - 2026-09-19 — the companion, rebuilt in clay (the Android app's UI round + the live link)
+
+### The Android app, redesigned end to end (the round's headline)
+- **The whole UI now speaks Clay Studio + liquid chrome.** Every screen was rebuilt on a new design system: warm sand surfaces with generous radii and two-leg clay shadows, a matte top-edge highlight on every card (form, not painted glow), rationed chrome on exactly three surfaces — the floating bar's edge, the primary button's quiet sheen, the selected markers — and the **Manrope** type family (bundled, weights 400–800) with JetBrains Mono for machine text. Clay Studio is the default theme; all six themes were re-tuned to the same grammar.
+- **The bottom navigation is a floating clay bar** — spacing on all four sides, radius 28, a sliding spring indicator, a live pending-approvals badge, and it slides away under the keyboard. The top sections were rebuilt to match: large display titles, a live connection pill that is ALWAYS on screen (connected · connecting · offline — tap it to reach the connect hub), and the activity bell with the unread count.
+- **The first startup runs a setup wizard**: the welcome, the camera permission with its rationale (honestly skippable — manual pairing never needs it), and the connect step, then the home page. Re-runnable from Settings → About.
+- **Pairing is a proper flow now**: a Connect hub with "Add a connection" — scan the desktop's QR, or a full manual-entry page (address or tunnel URL + PIN + optional certificate fingerprint, live tunnel/LAN detection, clipboard paste). The scanner has **pinch-to-zoom** (and +/− steps), a torch toggle, animated framing brackets, and honest "not an ACUTE code" feedback. The confirm step shows the host's identity before pairing; disconnecting completely and re-pairing by scan is one screen away.
+- **The keyboard never covers an input again** — the app rides react-native-keyboard-controller across every form, the composer, and the manual-entry page (the old "field disappears under the keyboard" bug is dead).
+
+### The link, made live and honest
+- **The transcript renders real markdown**: bold is bold, code blocks are mono tiles, headings, lists, quotes, tables, links — settled AND while streaming (a pulsing caret marks the live end of the agent's writing; tool cards and thinking blocks carry the same clay language and expand for the full story).
+- **The connection state is always visible and always truthful.** A status pill rides every screen; going offline shows immediately, and the auto-reconnect ladder keeps probing. The "host offline until rescan" trap was fixed at the root: flaky TLS handshakes were being classified as certificate changes (a permanent give-up state) — only REAL pin mismatches do that now, and one bad address no longer kills the probe ladder for the rest.
+- **Live notifications**: the phone holds the desktop's notification stream while connected (approvals, finished tasks, failures arrive the moment they happen — the bell and the approvals badge update live), and every subsystem logs to logcat under the `[ACUTE-MOB]` tag for Android Studio.
+- **Offline sends are manageable**: queued messages show their count, flush in order on reconnect, and can be dismissed individually.
+
+### The phone configures the desktop (the view+input ceiling, widened to config)
+- **Providers, models, agents, prompts, and preferences are editable from the phone**: the providers page (edit name/URL/format/enabled, set the API key — write-only, never a reveal —, edit model pricing/context, test the connection), the agents editor, the prompts section editor with override/revert, and the desktop preferences (orchestration, retry ladder, memory, debug, thinking-loop, notifications).
+- **A usage dashboard tab**: token/request/cost totals, a daily usage chart, the model leaderboard, and health issues — 14-day, 30-day, and 3-month windows.
+- **Projects got a browser and session creation** (new session per project, straight into the chat), and the sessions list gained project filter chips and search.
+- **The widened ceiling is enforced on the desktop side**: paired device tokens can reach the management surface but can NEVER reveal raw provider keys, reset the app, drive terminals, or control the computer — those routes answer 403 to a device token no matter what (new wall leg, tested).
+
+### The artifact
+- **The APK is ARM64-only now** (the ruling: no universal build) — one deliverable, smaller; the workflow refuses a universal output. Updates install in place over v0.104.0 (the stable signing key carries forward).
 
 ## [0.104.0] - 2026-09-19 — the mobile artifact, made real (the companion actually runs)
 

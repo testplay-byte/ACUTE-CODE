@@ -6,7 +6,7 @@
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { rmSync, writeFileSync } from "node:fs";
-import Fastify, { type FastifyError, type FastifyInstance, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { aiSdkChat, type ChatFn } from "./agents/chat.js";
 import { pickFiles, pickFolder } from "./dialogs.js";
 import { ProviderKeyring } from "./providers/registry.js";
@@ -260,19 +260,49 @@ function authorizeDeviceToken(
   return { deviceId: row.id };
 }
 
-/** The full multi-token wall check (shell token OR device token). */
-function isRequestAuthorized(
-  db: SqliteDatabase,
-  request: FastifyRequest,
-  token: string,
-): boolean {
-  if (isAuthorized(request.headers.authorization, token)) return true;
-  const device = authorizeDeviceToken(db, request.headers.authorization);
-  if (device !== null) {
-    setDeviceAuth(request, device);
-    return true;
+// ── ROUND-109: the device-token route blocklist ─────────────────────────────
+//
+// The phone's management surface (providers, models, agents, prompts,
+// settings, usage, sessions, projects — the owner's R109 ask) rides the
+// same routes the desktop window speaks, with the same device token. These
+// are the routes that stay DESKTOP-ONLY no matter what: raw provider key
+// reveals, the full app reset, terminal input, computer control, and the
+// window-only internal dialogs. A paired phone is a view+input medium with
+// config rights — never the keyring's raw contents, never the machine's
+// shell.
+
+/** Exact-path blocks. */
+const DEVICE_BLOCKED_EXACT = new Set<string>(["/api/v1/system/reset"]);
+/** Prefix blocks (the internal dialogs + computer control families). */
+const DEVICE_BLOCKED_PREFIXES = ["/api/v1/internal/", "/api/v1/computer-use/"];
+/** Suffix blocks (the providers' raw key reveal, any provider id). */
+const DEVICE_BLOCKED_SUFFIXES = ["/keys/reveal"];
+/** Infix blocks (the terminal + terminal-sessions families under /projects/:id). */
+const DEVICE_BLOCKED_INFIXES = ["/terminal"];
+
+/** True when THIS path is on the device-token blocklist (query stripped). */
+function isDeviceBlockedPath(rawUrl: string): boolean {
+  const path = rawUrl.split("?")[0] ?? rawUrl;
+  if (DEVICE_BLOCKED_EXACT.has(path)) return true;
+  for (const prefix of DEVICE_BLOCKED_PREFIXES) {
+    if (path.startsWith(prefix)) return true;
+  }
+  for (const suffix of DEVICE_BLOCKED_SUFFIXES) {
+    if (path.endsWith(suffix)) return true;
+  }
+  for (const infix of DEVICE_BLOCKED_INFIXES) {
+    if (path.includes(infix)) return true;
   }
   return false;
+}
+
+/** The R109 wall leg's 403 body (one honest message, no route enumeration). */
+function deviceBlockedReply(reply: FastifyReply): FastifyReply {
+  return reply.code(403).send(
+    errorBody("FORBIDDEN", "device tokens cannot reach this route", {
+      hint: "key reveals, system reset, terminal input, and computer control stay desktop-side",
+    }),
+  );
 }
 
 export interface ServerOptions {
@@ -380,26 +410,47 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // ARCHITECTURE §2.3/§7: every route except GET /health requires the bearer
   // token. ROUND-106 (R106-S1): the token may now be the SHELL token (the
   // constant-time compare, unchanged) OR a paired DEVICE token (the
-  // hash-lookup leg — see authorizeDeviceToken). With device links OFF
-  // (nobody paired) the device leg finds nothing and every response stays
-  // byte-identical to the pre-R106 wall. The claim exemption
-  // (isUnauthenticatedRequest) is the phone's ONE unauthenticated hop; the
-  // TLS-socket gate inside routes/mobile.ts keeps it off plaintext forever.
+  // hash-lookup leg — see authorizeDeviceToken). ROUND-109 adds the device
+  // BLOCKLIST leg: a device token authenticates but can never reach the
+  // routes above (raw key reveals, system reset, terminal input, computer
+  // control, the internal dialogs) — the shell token keeps full power.
   app.addHook("preHandler", async (request, reply) => {
     if (isUnauthenticatedRequest(request.method, request.url)) return;
-    if (!isRequestAuthorized(db, request, token)) {
+    if (isAuthorized(request.headers.authorization, token)) return; // shell — full power
+    const device = authorizeDeviceToken(db, request.headers.authorization);
+    if (device === null) {
       return reply
         .code(401)
         .send(errorBody("UNAUTHORIZED", "missing or invalid bearer token"));
     }
+    if (isDeviceBlockedPath(request.url)) {
+      return deviceBlockedReply(reply);
+    }
+    setDeviceAuth(request, device);
   });
 
   // Unknown paths keep the token wall too; known+authed misses get the envelope.
   app.setNotFoundHandler((request, reply) => {
-    if (!isUnauthenticatedRequest(request.method, request.url) && !isRequestAuthorized(db, request, token)) {
+    if (isUnauthenticatedRequest(request.method, request.url)) {
+      return reply
+        .code(404)
+        .send(errorBody("NOT_FOUND", `no route for ${request.method} ${request.url.split("?")[0]}`));
+    }
+    if (isAuthorized(request.headers.authorization, token)) {
+      return reply
+        .code(404)
+        .send(errorBody("NOT_FOUND", `no route for ${request.method} ${request.url.split("?")[0]}`));
+    }
+    const device = authorizeDeviceToken(db, request.headers.authorization);
+    if (device === null) {
       return reply
         .code(401)
         .send(errorBody("UNAUTHORIZED", "missing or invalid bearer token"));
+    }
+    // A blocked-shaped unknown path still tells the device token NO before
+    // the 404 (the same precedence the wall above enforces on known paths).
+    if (isDeviceBlockedPath(request.url)) {
+      return deviceBlockedReply(reply);
     }
     return reply
       .code(404)

@@ -15,14 +15,16 @@ name: Mobile APK
 # THE FIX (all three, in one job):
 #   · assembleRelease — JS embedded (Hermes bytecode), R8 minify +
 #     shrinkResources (via app.json's expo-build-properties), stripped .so.
-#   · ABI splits (plugins/with-android-release-signing.js) — one build
-#     produces the arm64 deliverable AND the universal fallback.
+#   · ABI splits (plugins/with-android-release-signing.js) — ROUND-109: the
+#     owner's ruling ("you do not need to build the Android universal APK
+#     at all… just the ARM64 v8 version") kills the universal fallback;
+#     ONE deliverable: app-arm64-v8a-release.apk.
 #   · The stable repo key (mobile/android-signing/) — updates land in place.
 #
 # Two dispatch modes, ONE job:
-#   · every push to main  → both release APKs as a workflow ARTIFACT only;
+#   · every push to main  → the arm64 release APK as a workflow ARTIFACT only;
 #   · every v* tag        → the same artifact PLUS the attach job, which
-#     lands both APKs on the tag's GitHub Release.
+#     lands the APK on the tag's GitHub Release.
 #
 # Version alignment is asserted BEFORE the build (node scripts/release/
 # version.mjs check covers mobile/app.json's versionName + versionCode).
@@ -97,50 +99,49 @@ jobs:
         working-directory: mobile
         run: npx expo prebuild -p android --clean
 
-      # RELEASE, one invocation, both splits (arm64 + universal) — the JS
-      # bundle rides inside (assets/index.android.bundle, Hermes bytecode).
-      - name: Build the release APKs (arm64 + universal)
+      # RELEASE, one invocation, the arm64 split (R109: universal is gone) —
+      # the JS bundle rides inside (assets/index.android.bundle, Hermes).
+      - name: Build the release APK (arm64-v8a)
         working-directory: mobile/android
         run: ./gradlew :app:assembleRelease --no-daemon
 
-      - name: Collect the APKs (repo asset naming + the bundle assertion)
+      - name: Collect the APK (repo asset naming + the bundle assertion)
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           # find over the whole outputs tree — AGP's split subdirectory naming
           # has shifted between versions (apk/arm64 vs apk/arm64-v8a); the
           # FILE names are stable, so resolve them by pattern.
           ARM64="$(find mobile/android/app/build/outputs/apk -name 'app-arm64-v8a-release.apk' | head -1)"
-          UNIVERSAL="$(find mobile/android/app/build/outputs/apk -name 'app-universal-release.apk' | head -1)"
-          if [ -z "$ARM64" ] || [ -z "$UNIVERSAL" ]; then
-            echo "::error::expected split outputs missing — arm64: ${ARM64:-none}, universal: ${UNIVERSAL:-none}"
+          if [ -z "$ARM64" ]; then
+            echo "::error::expected the arm64-v8a release APK — none found"
             find mobile/android/app/build/outputs/apk -type f || true
             exit 1
           fi
+          # R109: the universal fallback must NOT exist (the owner's ruling).
+          if find mobile/android/app/build/outputs/apk -name 'app-universal-release.apk' | grep -q .; then
+            echo "::error::a universal APK was produced — universalApk should be false (the R109 ruling)"
+            exit 1
+          fi
           mv "$ARM64" "ACUTE-CODE_${VERSION}_android-arm64.apk"
-          mv "$UNIVERSAL" "ACUTE-CODE_${VERSION}_android-universal.apk"
           ls -lh ACUTE-CODE_${VERSION}_android-*.apk
           # THE v0.103.0 lesson as a hard gate: an APK without the embedded
-          # JS bundle is not an APK — it is a splash screen forever. Fail
-          # the build HERE if either deliverable lost its bundle.
-          for apk in ACUTE-CODE_${VERSION}_android-arm64.apk ACUTE-CODE_${VERSION}_android-universal.apk; do
-            if ! unzip -l "$apk" | grep -q "assets/index.android.bundle"; then
-              echo "::error::${apk} has NO embedded JS bundle (the v0.103.0 splash-forever bug) — refusing to ship it"
-              exit 1
-            fi
-            echo "verified: ${apk} carries assets/index.android.bundle"
-          done
+          # JS bundle is not an APK — it is a splash screen forever.
+          if ! unzip -l "ACUTE-CODE_${VERSION}_android-arm64.apk" | grep -q "assets/index.android.bundle"; then
+            echo "::error::the arm64 APK has NO embedded JS bundle (the v0.103.0 splash-forever bug) — refusing to ship it"
+            exit 1
+          fi
+          echo "verified: the arm64 APK carries assets/index.android.bundle"
 
-      - name: Upload the release APKs artifact
+      - name: Upload the release APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: acute-apk-android-release
           path: |
             ACUTE-CODE_${{ steps.version.outputs.version }}_android-arm64.apk
-            ACUTE-CODE_${{ steps.version.outputs.version }}_android-universal.apk
           if-no-files-found: error
           retention-days: 30
 
-  # Tag dispatches only: land BOTH APKs on the release (the draft that
+  # Tag dispatches only: land the APK on the release (the draft that
   # release.yml's publisher creates in its parallel run).
   attach-apk-to-release:
     needs: android-apk
@@ -165,6 +166,4 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           VERSION="${{ needs.android-apk.outputs.version }}"
-          for apk in "ACUTE-CODE_${VERSION}_android-arm64.apk" "ACUTE-CODE_${VERSION}_android-universal.apk"; do
-            APK="$apk" bash scripts/release/upload-apk-asset.sh
-          done
+          APK="ACUTE-CODE_${VERSION}_android-arm64.apk" bash scripts/release/upload-apk-asset.sh
