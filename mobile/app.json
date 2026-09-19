@@ -2,14 +2,14 @@
   "expo": {
     "name": "ACUTE",
     "slug": "acute-companion",
-    "version": "0.102.0",
+    "version": "0.103.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "acute",
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.acutecode.companion",
-      "versionCode": 10200,
+      "versionCode": 10300,
       "permissions": [
         "INTERNET",
         "CAMERA"

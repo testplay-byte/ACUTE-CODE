@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.102.0",
+    "version": "0.103.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -14,7 +14,8 @@
       "SQLite",
       "BYO provider key",
       "Android companion (LAN)",
-      "acute CLI"
+      "acute CLI",
+      "Clay + liquid chrome"
     ]
   },
   "pillars": [
@@ -352,27 +353,19 @@
     }
   ],
   "plan": {
-    "current": "R106 LANDED — the terminal client (acute CLI: attach-or-spawn, one-shot, REPL, the full command set) + the Android companion (pairing via QR+PIN over TLS, sessions with live streaming, approvals from the pocket, auto-reconnect, offline outbox) + the Devices tab (pairing UI + linked devices + revoke) + the debug-APK pipeline on Actions; v0.102.0 tagged per the R104 pattern",
+    "current": "R107 LANDED — the improvement round: the prompts made honest (chain-vs-approvals, the report contract on the producer side, channel honesty, the hardened injection guard, ~1K chars of measured cuts), the turn engine made safe for three clients (the concurrent-turn gate, retryChild supervision parity, abort-aware queue+sync path, sync-path loop guards, 402 quota classification), the CLI made a real client (approvals, agent-question rendering, --version/did-you-mean, no-spawn-on-typo, the REPL fixes), and the Clay + liquid-chrome design pass (a new theme, chrome tokens + patterns, the composer glint, the wizard refresh); v0.103.0 tagged per the R104 pattern",
     "upcoming": [
       {
-        "title": "The owner's v0.102.0 walkthrough",
-        "detail": "Pair a real phone (Settings → Devices → Pair a device; the APK is on the release page), stream a session from the couch, approve/deny a tool request from the pocket, and try the CLI (acute / acute -p). The test checklist lives in round-106.md."
+        "title": "The owner's v0.102.0/v0.103.0 walkthrough",
+        "detail": "Two releases to test: v0.102.0 (pair the phone, stream from the couch, approve from the pocket, try the CLI) and v0.103.0 (the same + the improved prompts/logic/commands + the Clay theme in the picker). The APK is on each release page."
       },
       {
         "title": "Remote access from anywhere (the promised next round)",
         "detail": "The Cloudflare path per docs/planning/CLOUDFLARE-REMOTE-ACCESS.md — the manual-address pairing form is already tunnel-ready; the round brings the easy-setup Cloudflare system the owner asked for."
       },
       {
-        "title": "The prompts/commands/logic iteration round",
-        "detail": "The owner asked for a proper pass over the agent prompts, the slash commands, and the overall logic — reviewed with subagents, iterated, and verified."
-      },
-      {
-        "title": "The UI clay/liquid-chrome round",
-        "detail": "Clay Studio aesthetic + liquid chrome mixture in the areas the owner flagged — the design-language corpus gets the new references first."
-      },
-      {
-        "title": "Standing candidates (honest)",
-        "detail": "The modularity roadmap's continuation (the turn-loop harness extraction — risk #1 per the R85 audit; the remaining server.ts domains), the lessons-ledger affordance, ratings-driven prompt tuning, the standing items (edit-linting, installer code-signing, the Files-tab polish, the CDP-level trusted-input tier, the COM IUIAutomation bridge), the R99 review's NIT list, and the updater Linux wiring (AppImage = the candidate, per ADR-0031's follow-up note)."
+        "title": "The standing candidates (honest)",
+        "detail": "The budget-aware turn margin (R107-b F3 — the runner still counts messages only), the command palette's command layer + the CLI gap list's second wave (agents/projects/usage/notifications/queue/devices), the browser_control schema split (F19), the O(events) assembly memo (F7), spread of the clay/chrome patterns to the remaining bento cards, the modularity roadmap, ratings-driven prompt tuning, and the standing items (edit-linting, installer code-signing, the Files-tab polish, the CDP-level trusted-input tier, the COM IUIAutomation bridge)."
       }
     ],
     "principles": [

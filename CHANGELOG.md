@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-106 -->
+<!-- last-reviewed: 2026-09-18 round-107 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -10,6 +10,35 @@ version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
 ## [Unreleased]
+
+## [0.103.0] - 2026-09-19 — the sixteenth-walkthrough round: the agent's brain, tongue, and hands (prompts, logic, commands — and a Clay wardrobe)
+
+### The prompts, made honest (the round's first headline)
+- **Chaining shell commands no longer fights the approval gate.** The prompt taught "chain related commands into one call" while the approval engine classifies a chain as a WHOLE — two safe commands chained became an approval interrupt. The agent is now taught the truth: chains ask as a whole; in Ask mode, separate calls for safe commands; chain only when the sequence is one logical step.
+- **Sub-agent reports now come in the shape the parent was promised.** The five-field report contract (RESULT · FILES TOUCHED · FINDINGS · OPEN QUESTIONS · CONFIDENCE) was taught only to the parent — the child producing it was never told the shape. It is now part of every delegation brief, verbatim.
+- **Replies survive every screen they're read on.** Your answers may be read in the desktop chat, a terminal, or on a phone — the agent is now told to structure replies so they degrade gracefully in plain text (no tables, no column layouts; the 🟢/🟡/🔴 confidence emoji became a single textual vocabulary that renders everywhere and matches the report contract).
+- **The injection guard grew teeth.** Tool results that impersonate you, claim new rules, or tell the agent to hide actions are now named as injections — and the agent says it saw one instead of silently ignoring it.
+- ~1,000 characters of measured duplication retired from the system prompt (three near-copies of the verify doctrine, an 818-char restatement of the browser tool's own schema, a stray hard number the model treated as a target) — the additions were paid for, and the prompt's budget has real headroom again.
+
+### The turn engine, safe for three clients (the round's second headline)
+- **Two clients can no longer run turns on one session at the same time.** With the desktop, the CLI, and the phone all able to send, a second send while one streamed could interleave two conversations into one event log and make the first turn unstoppable. Both send routes now answer with a clear conflict — "a turn is already in flight" — and the designed mid-turn path (the queue) is untouched.
+- **A retried sub-agent is stoppable.** Retrying a failed sub-agent used to run it with no registration, no watchdog, and no signal — Stop couldn't reach it and a hang lasted forever. Retried children now run under the same supervision as fresh ones.
+- **Stop reaches children waiting in line.** A sub-agent queued behind a full provider lane now aborts within a moment of the parent's Stop (it used to start anyway once a slot freed, spending on work you cancelled); a Stop during a synchronous sub-agent call now interrupts the call instead of waiting out a 10-minute ceiling.
+- **Sub-agents get the same loop protections as the main agent**: the context-limit and 200-request honesty stops, and the blank-output guard that turns a whitespace-only free-model reply into an honest error instead of a fake success.
+- **A 402 "insufficient credits" reply now rides the same 10-minute cool-down as other rate limits** instead of dead-ending after one attempt.
+
+### The CLI, a real client (the round's third headline)
+- **`acute approvals ls/approve/deny`** — the approval flow the one-shot hint always pointed at (via the raw escape hatch) is now first-class: list pending asks, decide from the terminal.
+- **The agent's questions reach the terminal.** `ask_user` frames were silently dropped by the CLI — a turn could sit for ten minutes with no visible question. Questions now render as a card with numbered options, and answering posts the resolve.
+- **A typo no longer boots the agent.** An unknown command used to spawn a whole sidecar (creating state files) before erroring; validation now happens first. `--version` works, unknown commands get a did-you-mean, `sessions ls --limit 5` parses as documented, a bare `-p` errors instead of silently opening the REPL, the REPL re-prompts after every slash command, and one-shot runs ask y/N for approvals when the terminal is interactive.
+
+### The Clay wardrobe (the round's fourth headline)
+- **A new Clay theme** — warm terracotta on sand, matte and tactile, with soft top-light on cards; it appears in the theme pickers beside the existing five and follows every light/dark rule they do.
+- **Liquid chrome, as jewelry**: a reflective hairline on the dashboard stat cards and the title bar, a slow ambient sheen on the wizard's signature surfaces, and a focus glint on the composer (quiet at rest, bright when you're typing). Working surfaces — the transcript, tool rows, buttons — stay quiet by design.
+- Every new color rides the documented token pipeline (`--ac-chrome-*`); the design audit's baseline did not move.
+
+### Release tooling
+- The Android APK's attach-to-release script carried two bugs (a bash parse error and a pipe-vs-heredoc conflict that never delivered the release list to the parser) — both fixed and tested end-to-end; v0.102.0's APK was attached and verified manually in the meantime.
 
 ## [0.102.0] - 2026-09-18 — the fifteenth-walkthrough round: the terminal client, the Android companion, and the link between them
 
