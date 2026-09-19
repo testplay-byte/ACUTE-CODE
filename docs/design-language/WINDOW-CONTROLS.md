@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-107 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Window controls — the app-frame spec
 
 Owner direction (round-98): "One thing which I do like about our design
@@ -17,11 +17,15 @@ little bit and maybe some animations will play too."
 - The title bar: `h-10`, frosted (`color-mix(var(--ac-bg) 72%, transparent)`
   + backdrop blur), `data-tauri-drag-region`, the identity button
   (logo + name, doubles as the sidebar toggle) on the left.
-- **R107-g**: the bar carries the liquid-chrome reflective hairline —
-  `ac-chrome-edge` on the header (a 1px `--ac-chrome-hi` glint along the
-  top edge; `pointer-events: none`, so the drag region works through it).
-  The frosted surface, the border, and the §2 button grammar are otherwise
-  unchanged — the hairline is the jewelry, not a redesign.
+- **R108-e (the clay rework)**: the bar's depth is the CLAY material — the
+  `ac-clay` layered soft-shadow class (TOKENS §9), so the app's literal
+  top reads as a tactile slab RESTING on the frame. (R107-g had added a
+  liquid-chrome reflective hairline along the top edge; removed per the
+  owner's round-108 verdict — a gradient glint at the very top of the
+  window is exactly the "glow fade… and other stuff like that" he
+  rejected. Do not re-add it.) The frosted surface, the border, and the
+  §2 button grammar are otherwise unchanged — the shadow is form, not a
+  redesign.
 
 ## 2. The three buttons (round-98 C1 spec)
 

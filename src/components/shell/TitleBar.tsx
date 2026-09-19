@@ -232,17 +232,19 @@ export function TitleBar() {
     // four-sided padding). Rounded on all four corners, hairline border,
     // same frosted chrome; the window controls become inset rounded buttons
     // so their hover fills never break the corner radii.
+    // R100-F: the bar's radius snaps 14→16px (rounded-2xl — the panel tier
+    // the sidebar + top-level cards ride); the identity button's chip
+    // snaps 10→8px (rounded-lg, the buttons tier).
+    // R108-e (the clay rework): the bar's depth is the CLAY material —
+    // `ac-clay`, the layered soft-shadow recipe (TOKENS §9), so the app's
+    // literal top reads as a tactile slab RESTING on the frame instead of
+    // carrying a painted light. The R107-g chrome hairline along the top
+    // edge (ac-chrome-edge) was REMOVED per the owner's verdict: a gradient
+    // glint at the very top of the window is exactly the "glow fade… and
+    // other stuff like that" he rejected.
     <header
       data-tauri-drag-region
-      // R100-F: the bar's radius snaps 14→16px (rounded-2xl — the panel tier
-      // the sidebar + top-level cards ride); the identity button's chip
-      // snaps 10→8px (rounded-lg, the buttons tier).
-      // R107-g (the clay/chrome round): `relative` + `ac-chrome-edge` — the
-      // liquid-chrome reflective hairline along the bar's top edge (the
-      // light-catching glint on the app's literal chrome; index.css pattern
-      // class over the --ac-chrome-* vars — the hairline is pointer-events:
-      // none, so the drag region keeps working through it).
-      className="relative flex h-10 w-full shrink-0 select-none items-center justify-between rounded-2xl border-[1.5px] backdrop-blur ac-chrome-edge"
+      className="flex h-10 w-full shrink-0 select-none items-center justify-between rounded-2xl border-[1.5px] backdrop-blur ac-clay"
       style={{
         // Translucent frosted chrome over the app's ambient background (the
         // color-mix idiom from index.css/ActionButton) — never a hard edge.

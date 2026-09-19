@@ -339,6 +339,9 @@ export interface ThemeStyles {
   bentoShadowSm: string;
   softShadow: string;
   primaryBtnShadow: string;
+  // R108-e: the clay material's layered depth (see deriveThemeStyles).
+  clayShadow: string;
+  clayShadowSm: string;
   // Text helpers
   textSecondary: string;
   textTertiary: string;
@@ -432,6 +435,25 @@ export function deriveThemeStyles(
       ? "3px 3px 0px 0px rgba(255,255,255,0.08)"
       : "3px 3px 0px 0px black",
 
+    // R108-e (owner verdict on R107-g's execution: "You implemented clay but
+    // it was not implemented properly… at the very top you implemented some
+    // glow fade and other stuff like that"): clay depth is FORM, not paint —
+    // layered SOFT SHADOWS instead of gradient top-lights. Each recipe stacks
+    // a tight directional contact shadow (the card resting on the surface)
+    // under a larger, very soft ambient one, tinted with the clay ink family
+    // in light mode (hand-thrown ceramics cast WARM shadows, never cold
+    // black) and deepened toward black in dark mode. Mode-aware,
+    // theme-independent — same pipeline slot as softShadow above; consumed
+    // via the .ac-clay pattern class (COMPONENTS §8), TOKENS §9.
+    clayShadow: isDark
+      ? "0 2px 4px rgba(0,0,0,0.35), 0 16px 40px -8px rgba(0,0,0,0.45)"
+      : "0 2px 4px rgba(42,32,24,0.08), 0 16px 40px -8px rgba(42,32,24,0.13)",
+    // The small-surface step of the same recipe (chips, small tiles, the
+    // pickers' compact cards) — the ambient leg halves with the footprint.
+    clayShadowSm: isDark
+      ? "0 1px 2px rgba(0,0,0,0.30), 0 8px 20px -4px rgba(0,0,0,0.40)"
+      : "0 1px 2px rgba(42,32,24,0.08), 0 8px 20px -4px rgba(42,32,24,0.10)",
+
     // Text helpers
     textSecondary: isDark ? "rgba(255,255,255,0.60)" : "rgba(0,0,0,0.60)",
     textTertiary: isDark ? "rgba(255,255,255,0.40)" : "rgba(0,0,0,0.40)",
@@ -479,6 +501,8 @@ export function syncThemeCssVars(styles: ThemeStyles): void {
     "--ac-bento-shadow-sm": styles.bentoShadowSm,
     "--ac-soft-shadow": styles.softShadow,
     "--ac-primary-btn-shadow": styles.primaryBtnShadow,
+    "--ac-clay-shadow": styles.clayShadow,
+    "--ac-clay-shadow-sm": styles.clayShadowSm,
     "--ac-text-secondary": styles.textSecondary,
     "--ac-text-tertiary": styles.textTertiary,
     "--ac-pill-bg": styles.pillBg,
@@ -513,10 +537,13 @@ export function syncThemeCssVars(styles: ThemeStyles): void {
     // carries them. Values live HERE (the token pipeline), never in a
     // component — the patterns that consume them (.ac-chrome-* in
     // index.css) are documented in COMPONENTS §8.
+    // R108-e: the sheen stops were HALVED (0.55→0.30 light, 0.16→0.10 dark)
+    // — the owner's round-108 verdict demoted anything that reads as a glow;
+    // the moving band is jewelry at a whisper now, not a shine sweep.
     "--ac-chrome-hi": styles.isDark ? "rgba(255,255,255,0.55)" : "#FFFFFF",
     "--ac-chrome-mid": styles.isDark ? "rgba(255,255,255,0.08)" : "#EDE8E0",
     "--ac-chrome-lo": styles.isDark ? "rgba(255,255,255,0.03)" : "#D8D1C6",
-    "--ac-chrome-sheen": styles.isDark ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.55)",
+    "--ac-chrome-sheen": styles.isDark ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.30)",
   };
   for (const [name, value] of Object.entries(vars)) {
     root.setProperty(name, value);

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-107 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Usage — how to speak the language when editing UI
 
 Owner direction (round-98): "whenever we try to make edits in our UI, the
@@ -134,7 +134,12 @@ contracts:
 - Wallpapering working surfaces with wizard glows (WIZARD-DNA §8) — and,
   same law, wallpapering working surfaces with the chrome sheen: the
   animated `.ac-chrome-sheen` is signature-surface-only (COMPONENTS §8);
-  resting UI gets at most the static hairline + clay top-light.
+  resting UI gets the `.ac-clay` shadow form, nothing painted on top.
+- A gradient "glow/fade" wash, top-light overlay, or glint hairline on a
+  resting surface (the deleted `.ac-clay-light`/`.ac-chrome-edge` — the
+  R108-e verdict: "at the very top you implemented some glow fade and
+  other stuff like that"). Clay depth is SHADOW + FORM
+  (`.ac-clay`, TOKENS §9), never painted light.
 - A metal hex written into a component instead of the `--ac-chrome-*`
   vars (TOKENS §8 rule 3) — chrome flows from the pipeline like every
   other color.

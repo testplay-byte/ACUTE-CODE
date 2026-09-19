@@ -178,12 +178,7 @@ export function PickFlavorScreen() {
                 <button
                   key={t.id}
                   onClick={() => setTheme(t.id)}
-                  className={`group relative rounded-[20px] border-[1.5px] p-3 transition-all hover:translate-y-[-2px] text-left cursor-pointer${
-                    // R107-g: the selected flavor card carries the chrome
-                    // hairline — the reflective top-edge glint on the chosen
-                    // theme (index.css .ac-chrome-edge; COMPONENTS §8).
-                    selected ? " ac-chrome-edge" : ""
-                  }`}
+                  className="group relative rounded-[20px] border-[1.5px] p-3 transition-all hover:translate-y-[-2px] text-left cursor-pointer"
                   style={{
                     background: s.card,
                     borderColor: selected ? s.accent : s.border,

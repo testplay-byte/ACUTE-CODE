@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-107 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Tokens — the color, type, and spacing language
 
 Serves DESIGN-SYSTEM §1 (source of truth), §2 (spacing), §3 (typography).
@@ -99,6 +99,7 @@ the ~4.5:1 accent-dark bar), ink 13–15:1 both modes.
 | Subtle | `--ac-subtle`, `--ac-subtle-hover` | quiet fills, hover washes |
 | Inputs | `--ac-input-bg`, `--ac-input-border`, `--ac-input-focus-border` | fields, steppers |
 | Shadows | `--ac-soft-shadow`, `--ac-bento-shadow` | depth (see MOTION.md for entry motion) |
+| Clay depth (R108-e) | `--ac-clay-shadow`, `--ac-clay-shadow-sm` | the clay material's layered soft shadows — §9 below |
 | Chrome (R107-g) | `--ac-chrome-hi/mid/lo`, `--ac-chrome-sheen` | the liquid-chrome ramp — §8 below |
 
 ## 2. The type scale (the canonical ladder) — ROUND-100 (R100-C, research §C1.1)
@@ -239,23 +240,27 @@ stop is amber `role="status"`, never red "Generation failed"). Danger tints
 via `withAlpha(danger, 0.08–0.1)` for washes; success tints 0.08 for
 confirmation glows.
 
-## 8. The liquid-chrome ramp — ROUND-107 (R107-g)
+## 8. The liquid-chrome ramp — ROUND-107 (R107-g), quieted ROUND-108 (R108-e)
 
 Owner direction (round-107): "go with the Clay Studio aesthetic and also a
 mixture of liquid chrome… the overall UI looks much better, much more
 proper, and much more well-handled." The mixture's division of labor:
 **clay is the substrate** (backgrounds, cards, chrome surfaces — delivered
-by the Clay Studio theme, §1b), **liquid chrome is the jewelry** (the one
-primary action's sheen, focus glints, hero moments — delivered by this var
-family + the `.ac-chrome-*` / `.ac-clay-light` pattern classes in
-`src/index.css`, composition rules in COMPONENTS §8).
+by the Clay Studio theme, §1b, + the shadow material §9), **liquid chrome
+is the jewelry** (the one primary action's sheen, the hero metal block —
+delivered by this var family + the `.ac-chrome-*` pattern classes in
+`src/index.css`, composition rules in COMPONENTS §8). R108-e (owner:
+"you implemented clay but it was not implemented properly… at the very top
+you implemented some glow fade"): every chrome effect that read as a GLOW
+is gone (the `.ac-chrome-edge` hairline + `.ac-clay-light` top-light were
+deleted); what survives is the metal ramp + a much quieter sheen.
 
 | Var | Light mode | Dark mode | Role |
 |---|---|---|---|
-| `--ac-chrome-hi` | `#FFFFFF` | `rgba(255,255,255,0.55)` | the glint: hairlines, top-lights, sheen edges |
+| `--ac-chrome-hi` | `#FFFFFF` | `rgba(255,255,255,0.55)` | the metal ramp's bright stop |
 | `--ac-chrome-mid` | `#EDE8E0` | `rgba(255,255,255,0.08)` | the platinum body of the metal ramp |
 | `--ac-chrome-lo` | `#D8D1C6` | `rgba(255,255,255,0.03)` | the metal's shaded edge |
-| `--ac-chrome-sheen` | `rgba(255,255,255,0.55)` | `rgba(255,255,255,0.16)` | the moving highlight band |
+| `--ac-chrome-sheen` | `rgba(255,255,255,0.30)` | `rgba(255,255,255,0.10)` | the moving highlight band — HALVED in R108-e from 0.55/0.16 (jewelry at a whisper) |
 
 Rules:
 
@@ -275,4 +280,48 @@ Rules:
    construction). Never `--ac-accent-text`.
 5. The sheen MOTION contract (ambient 9s pass, transform-only,
    reduced-motion collapse) is documented in MOTION §3 — the animation
-   grammar owns the movement, this file owns the color.
+   grammar owns the movement, this file owns the color. R108-e: the sheen
+   is signature-surface-only and QUIET — the band is half as wide and
+   half as bright as the R107-g original; if it draws attention to
+   itself, cut it further, never louder.
+
+## 9. The clay shadow material — ROUND-108 (R108-e)
+
+Owner verdict on R107-g's execution (v1.0.3): "You implemented clay but it
+was not implemented properly. At the very top you implemented some glow
+fade and other stuff like that." The lesson, as language: **clay is a
+FORM, not a paint.** Depth comes from layered soft shadows over matte
+theme fills with the existing hairline borders — NEVER from gradient
+top-lights, washes, or light fades drawn over a card (the deleted
+`.ac-clay-light`/`.ac-chrome-edge` were exactly that mistake).
+
+| Var | Light mode | Dark mode | Role |
+|---|---|---|---|
+| `--ac-clay-shadow` | `0 2px 4px rgba(42,32,24,0.08), 0 16px 40px -8px rgba(42,32,24,0.13)` | `0 2px 4px rgba(0,0,0,0.35), 0 16px 40px -8px rgba(0,0,0,0.45)` | the clay card: tight directional contact shadow + large very soft ambient |
+| `--ac-clay-shadow-sm` | `0 1px 2px rgba(42,32,24,0.08), 0 8px 20px -4px rgba(42,32,24,0.10)` | `0 1px 2px rgba(0,0,0,0.30), 0 8px 20px -4px rgba(0,0,0,0.40)` | the small-surface step (compact tiles) |
+
+Rules:
+
+1. **Mode-aware, theme-independent** — same pipeline slot as
+   `softShadow`/`bentoShadow` (set by `deriveThemeStyles()`, bridged by
+   `syncThemeCssVars()`, pre-paint `:root` fallbacks in `src/index.css`).
+   On the Clay Studio theme the warmth reads as hand-thrown ceramics; on
+   every other theme as a tactile card — the recipe never changes per
+   theme.
+2. **Two legs, always**: a TIGHT directional contact shadow (small blur,
+   1–2px offset — the card resting on the surface) under a LARGER very
+   soft ambient one (big blur, negative spread so it feathers). A
+   one-legged shadow is not the clay material.
+3. **Warm tint in light mode** — `rgba(42,32,24,…)` (the clay ink
+   `#2A2018` family): ceramics cast warm shadows, never cold black. Dark
+   mode deepens toward black for real lift on the dark substrate.
+4. **Consumed via the `.ac-clay` / `.ac-clay-sm` pattern classes**
+   (`src/index.css`, COMPONENTS §8) — the classes paint `box-shadow` only,
+   so they compose with any inline `backgroundColor` exactly like the old
+   inline `softShadow` leg did. A component inlining these values is a
+   one-off (the §1 rule 1 discipline).
+5. **The desktop sanctions layered soft shadows** (this section +
+   `softShadow`/`bentoShadow` in COMPONENTS §3): the "flat, no shadows"
+   law is the MOBILE surface's own rule (MOBILE-ARCHITECTURE), never the
+   desktop's. The chat route keeps its borderless/no-shadow language
+   (COMPONENTS §3 species 2) — clay depth belongs to CARDED surfaces.

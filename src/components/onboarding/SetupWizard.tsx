@@ -59,15 +59,16 @@ export function SetupWizard() {
         className="absolute -bottom-32 -left-32 w-[520px] h-[520px] rounded-full blur-[90px] opacity-[0.08] pointer-events-none"
         style={{ background: s.accent }}
       />
-      {/* R107-g (the clay/chrome round): the third ambient glow is the
-          liquid-chrome wash — a platinum light (the --ac-chrome-hi glint
-          color) instead of the accent, so the stage carries BOTH halves of
-          the round's direction: warm clay/accents below, one cool metal
-          light above-right. WIZARD-DNA §1 documents the two-accent + one
-          chrome recipe. */}
+      {/* R108-e: the third ambient glow is back to the SECOND ACCENT at its
+          original 6% (the round-98 owner-approved wizard stage — three warm
+          washes; WIZARD-DNA §1). R107-g had swapped it for a platinum/chrome
+          wash (--ac-chrome-hi at 18%, a blurred WHITE light); that read as
+          the "glow fade… and other stuff like that" the owner rejected in
+          round-108, so the wizard's stage light is warm again — the chrome
+          lives in the hero block + CTA sheen, never in ambient light. */}
       <div
-        className="absolute top-[35%] right-[10%] w-[220px] h-[220px] rounded-full blur-[70px] opacity-[0.18] pointer-events-none"
-        style={{ background: "var(--ac-chrome-hi)" }}
+        className="absolute top-[35%] right-[10%] w-[220px] h-[220px] rounded-full blur-[70px] opacity-[0.06] pointer-events-none"
+        style={{ background: s.theme.accent2 }}
       />
 
       <Header />

@@ -72,6 +72,11 @@
   --ac-bento-shadow-sm: 3px 3px 0px 0px black;
   --ac-soft-shadow: 0 8px 32px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.04);
   --ac-primary-btn-shadow: 3px 3px 0px 0px black;
+  /* R108-e: the clay material's layered depth — light-mode values (the JS
+     bridge overwrites per mode; TOKENS §9). Same pre-paint role as the
+     literals above. */
+  --ac-clay-shadow: 0 2px 4px rgba(42, 32, 24, 0.08), 0 16px 40px -8px rgba(42, 32, 24, 0.13);
+  --ac-clay-shadow-sm: 0 1px 2px rgba(42, 32, 24, 0.08), 0 8px 20px -4px rgba(42, 32, 24, 0.1);
   --ac-text-secondary: rgba(0, 0, 0, 0.6);
   --ac-text-tertiary: rgba(0, 0, 0, 0.4);
   --ac-pill-bg: black;
@@ -82,11 +87,12 @@
   --ac-dot: #ff6b2c;
   /* R107-g: liquid-chrome ramp fallbacks (light-mode values — the JS bridge
      in themes.ts syncThemeCssVars overwrites them per mode; TOKENS §8).
-     Same pre-paint role as the nova literals above. */
+     Same pre-paint role as the nova literals above. R108-e: the sheen
+     fallback is the HALVED stop (jewelry at a whisper — see TOKENS §8). */
   --ac-chrome-hi: #ffffff;
   --ac-chrome-mid: #ede8e0;
   --ac-chrome-lo: #d8d1c6;
-  --ac-chrome-sheen: rgba(255, 255, 255, 0.55);
+  --ac-chrome-sheen: rgba(255, 255, 255, 0.3);
   /* R59-A: the window frame's ambient strip behind the rounded TitleBar and
      content cards (App root padding). A touch of the text color tinted into
      the bg — reads darker in light mode, lifted in dark mode, so the cards
@@ -196,59 +202,37 @@
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* ── ROUND-107 (R107-g): the liquid-chrome + clay patterns ────────────────
-   Owner direction (round-107): "In some areas I would like you to go with
-   the Clay Studio aesthetic and also a mixture of liquid chrome… to make
-   sure the overall UI looks much better, much more proper, and much more
-   well-handled." The clay SUBSTRATE is the Clay Studio theme (THEMES table
-   in themes.ts — warm sand neutrals + a muted terracotta accent); these
-   classes are the cross-theme half — the CHROME JEWELRY and the clay
-   surface polish, all riding the --ac-chrome-* vars the theme bridge owns
-   (TOKENS §8 documents the var family; COMPONENTS §8 the composition
-   rules):
-     · .ac-clay-light   — the clay diffusion: a soft top-light wash (a
-       background-IMAGE, so it composes with any inline backgroundColor +
-       boxShadow). Theme-agnostic — warm themes read it as clay warmth, cool
-       ones as studio light.
-     · .ac-chrome-edge  — the reflective hairline: a 1px top-edge glint,
-       the light-catching edge of polished metal. Static, costless, quiet
-       enough for resting working UI (cards, the title bar).
-     · .ac-chrome-metal — the platinum ramp fill (again a background-image
-       layered over the surface color). Signature surfaces only.
-     · .ac-chrome-sheen — the liquid pass: a soft diagonal highlight that
-       sweeps across the surface once every ~9s and rests between passes
-       (transform-only; MOTION §2 ambient tier; prefers-reduced-motion
-       collapses it to clean static metal — the band parks off-surface at
-       both ends of the keyframe and the explicit rule below hides it
-       outright). SIGNATURE surfaces only (the wizard's CTA + hero metal
-       block): MOTION rule 3 — resting working UI never fidgets.
-   Host contract: the host carries `position: relative` (the ::before/::after
-   overlays are absolutely positioned); .ac-chrome-sheen additionally sets
-   position:relative + overflow:hidden itself so the band clips to the
-   host's radius (never apply it to a host with escaping children — popovers,
-   popups — or they will be clipped). */
+/* ── ROUND-108 (R108-e): the clay material, reworked as FORM ────────────────
+   Owner verdict on R107-g's execution (v1.0.3): "You implemented clay but
+   it was not implemented properly. At the very top you implemented some
+   glow fade and other stuff like that." The gradient top-lights
+   (.ac-clay-light) and the reflective hairlines (.ac-chrome-edge) are
+   DELETED — painted light reads as a tacked-on glow, not as clay. Clay is
+   a material you build with SHADOW and FORM: a matte theme fill, the
+   existing hairline border, and a layered soft shadow — a tight
+   directional contact shadow under a larger, very soft ambient one —
+   riding the --ac-clay-* vars the theme bridge owns (TOKENS §9;
+   composition rules in COMPONENTS §8):
+     · .ac-clay     — the clay card: the layered warm shadow recipe
+       (--ac-clay-shadow). Top-level cards + the title bar.
+     · .ac-clay-sm  — the same recipe's small-surface step
+       (--ac-clay-shadow-sm) for compact tiles.
+   The liquid-chrome JEWELRY survives, quieter (the mixture the owner
+   asked for — chrome stays the accent, never the wash):
+     · .ac-chrome-metal — the platinum ramp fill (unchanged).
+     · .ac-chrome-sheen — the ambient pass, its band HALVED in width and
+       its --ac-chrome-sheen stop halved in alpha (MOTION §3): a glint
+       that catches the light on signature surfaces, not a shine sweep.
+   Host contract: the clay classes paint box-shadow ONLY, so they compose
+   with any inline backgroundColor exactly like the old softShadow leg
+   did — no pseudo-elements, no host positioning requirements. */
 
-.ac-clay-light {
-  background-image: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--ac-chrome-hi) 30%, transparent),
-    transparent 40%
-  );
+.ac-clay {
+  box-shadow: var(--ac-clay-shadow);
 }
 
-.ac-chrome-edge::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    var(--ac-chrome-hi) 18%,
-    var(--ac-chrome-hi) 82%,
-    transparent
-  );
-  pointer-events: none;
+.ac-clay-sm {
+  box-shadow: var(--ac-clay-shadow-sm);
 }
 
 .ac-chrome-metal {
@@ -268,13 +252,15 @@
   content: "";
   position: absolute;
   /* The band: wider than its host and parked off-left; the pass slides it
-     across. transform-only — no layout, no repaint of anything but itself. */
+     across. transform-only — no layout, no repaint of anything but itself.
+     R108-e: the visible band narrows 16%→8% of the gradient (half the
+     reach — jewelry, rationed). */
   inset: -25% -60%;
   background: linear-gradient(
     115deg,
-    transparent 42%,
+    transparent 46%,
     var(--ac-chrome-sheen) 50%,
-    transparent 58%
+    transparent 54%
   );
   transform: translateX(-75%);
   animation: ac-chrome-pass 9s ease-in-out infinite;
@@ -302,31 +288,13 @@
   }
 }
 
-/* R107-g: the composer's chrome focus — the metal glint. The R105-B accent
-   edge + halo stay exactly as specced (the accent owns selection identity);
-   the chrome adds the jewelry: a reflective hairline along the shell's top
-   edge, resting at a quiet 35% glint and brightening to full while the
-   composer holds focus — the liquid-chrome counterpoint on the app's
-   most-touched surface. The line is inset 12% per end so it never escapes
-   the 12px corner radius; opacity-only transition (200ms); the shell's
-   existing `relative` class hosts the pseudo-element. Reduced-motion safe
-   (the global neutralizer flattens the transition; a static glint reads
-   fine at either strength). */
-.composer-shell::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 12%;
-  right: 12%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--ac-chrome-hi), transparent);
-  opacity: 0.35;
-  transition: opacity 0.2s ease;
-  pointer-events: none;
-}
-.composer-shell:focus-within::before {
-  opacity: 1;
-}
+/* R107-g introduced a chrome glint hairline along the composer's top edge
+   (resting 35%, brightening on focus). R108-e REMOVED it: the owner's
+   verdict — "at the very top you implemented some glow fade and other
+   stuff like that" — demoted every gradient glint on working UI, and the
+   R105-B focus treatment below (the owner-directed accent edge + halo) is
+   the complete, honest focus story. The .composer-shell rules that remain
+   are exactly the R105-B spec. */
 
 @layer base {
   html,

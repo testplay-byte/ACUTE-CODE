@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-107 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # Wizard DNA — the owner-approved aesthetic, extracted
 
 Owner direction (round-98): "our setup page is quite good. It is proper and
@@ -18,12 +18,14 @@ direction).
 - **Full-bleed themed background** — the page IS the theme's `bg`, edge to
   edge.
 - **Dot grid**: 28px grid, theme ink at 4% — texture without noise.
-- **Three ambient glows** (R107-g refresh): two accent-colored radial
-  washes + ONE liquid-chrome wash (the `--ac-chrome-hi` glint color at 18%,
-  blurred 70px, top-right-mid) — the stage carries both halves of the
-  round-107 direction: warm clay/accents below, one cool platinum light
-  above. `blur(70–90px)`, deliberately off-center (top-left, right-mid,
-  bottom-left), opacity low enough to read as light, not decoration.
+- **Three ambient glows**: two accent-colored radial washes + one
+  second-accent wash (`accent2` at 6%) — the round-98 owner-approved warm
+  stage. (R107-g had swapped the third for a platinum/chrome wash; R108-e
+  reverted it — a blurred WHITE light read as the "glow fade" the owner
+  rejected; the wizard's chrome lives in the hero block + CTA sheen, never
+  in ambient light.) `blur(70–90px)`, deliberately off-center (top-left,
+  right-mid, bottom-left), opacity low enough to read as light, not
+  decoration.
 - **Floating decorations**: `animate-float` / `animate-float2` — slow
   vertical drifts (6–8s, ±8px), staggered phases, never more than three
   on screen.
@@ -32,9 +34,10 @@ direction).
 
 - The hero moment (`ACUTE CODE.`): 56–104px, `font-black`, tight tracking;
   the `CODE.` block is **liquid chrome** (R107-g) — the `.ac-chrome-metal`
-  platinum ramp + `.ac-chrome-sheen` ambient pass, ink in the theme's text
-  color (TOKENS §8). The accent stays the badge's + CTA's job; the brand
-  block is the one metal jewel of the composition. Supports with
+  platinum ramp + `.ac-chrome-sheen` ambient pass (halved in brightness +
+  reach by R108-e — the metal reads as material, not glow), ink in the
+  theme's text color (TOKENS §8). The accent stays the badge's + CTA's job;
+  the brand block is the one metal jewel of the composition. Supports with
   `title`-tier lines beneath.
 - **Pill badges** announce flavor (`rounded-full`, subtle bg, tracked
   label); `vX BETA` chips ride as `meta`-type mono suffixes.
@@ -81,6 +84,8 @@ decorative.
 - R107-g: the liquid-chrome sheen rides the ENABLED primary
   (`.ac-chrome-sheen`, the 9s ambient pass, MOTION §3) — the accent
   gradient keeps the action's identity; the chrome is the jewelry.
+  R108-e: the pass is half as bright + half as wide ("jewelry, rationed")
+  — a glint catching the light, not a shine sweep.
 - Hover: `scale-[1.03]` + shadow bloom (150ms). Press: `scale-[0.98]`.
 - The hint keycap rides inside-right (`Enter ↵`) when the action is the
   flow's obvious next step.

@@ -314,6 +314,13 @@ describe("TitleBar — Tauri chrome", () => {
     // The old full-bleed bottom-strip chrome is gone.
     expect(bar.className).not.toContain("border-b");
     expect(bar.className).toContain("backdrop-blur");
+    // R108-e (the clay rework): the bar's depth is the CLAY material — the
+    // `ac-clay` layered soft-shadow class (TOKENS §9) — and the R107-g chrome
+    // hairline glint along the top edge is GONE (the owner's round-108
+    // verdict: "at the very top you implemented some glow fade and other
+    // stuff like that"). Pinned dead so it cannot quietly return.
+    expect(bar.className).toContain("ac-clay");
+    expect(bar.className).not.toContain("ac-chrome-edge");
 
     // The controls carry their own rounding (inset buttons, not slabs).
     for (const name of ["Minimize window", "Maximize window", "Close window"]) {

@@ -213,6 +213,9 @@ export function WelcomeScreen() {
               // dark mode — both contrast-checked by construction). The
               // accent stays the badge's + CTA's job; the brand block is
               // the one metal jewel of the composition (WIZARD-DNA §2).
+              // R108-e: the sheen rides on at HALF brightness/reach (the
+              // --ac-chrome-sheen stop halved + the band narrowed) — the
+              // metal reads as material, not as a glow.
               color: s.text,
               borderColor: s.borderStrong,
               boxShadow: s.bentoShadow,

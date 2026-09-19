@@ -10,6 +10,12 @@ import { deriveThemeStyles, getTheme, syncThemeCssVars, THEMES } from "./themes"
  * accents are banned house-wide), and stay inside the contrast envelope the
  * other five themes already tolerate. The liquid-chrome ramp rides the
  * CSS-var leg (--ac-chrome-*) and must be mode-aware + theme-independent.
+ *
+ * R108-e (the clay rework): the clay MATERIAL is now shadow/form-based —
+ * the --ac-clay-shadow tokens must land mode-aware + theme-independent,
+ * layered (a tight directional leg + a large soft ambient leg), and the
+ * light-mode legs must carry the WARM ink tint (clay casts warm shadows,
+ * never cold black). The sheen stop is pinned at its halved quiet value.
  */
 
 /** WCAG relative luminance for a #rrggbb literal (test-local, on purpose:
@@ -98,10 +104,11 @@ describe("the liquid-chrome ramp (R107-g --ac-chrome-* vars)", () => {
     expect(dark["--ac-chrome-hi"]).toBe("rgba(255,255,255,0.55)");
     expect(dark["--ac-chrome-mid"]).toBe("rgba(255,255,255,0.08)");
     expect(dark["--ac-chrome-lo"]).toBe("rgba(255,255,255,0.03)");
-    // The full set is present in both modes.
-    for (const mode of [light, dark]) {
-      expect(mode["--ac-chrome-sheen"]).toBeTruthy();
-    }
+    // R108-e: the sheen is pinned at the HALVED quiet stops (0.30 light /
+    // 0.10 dark) — the owner's round-108 verdict demoted glow-reading
+    // passes; the band is jewelry at a whisper, never a shine sweep.
+    expect(light["--ac-chrome-sheen"]).toBe("rgba(255,255,255,0.30)");
+    expect(dark["--ac-chrome-sheen"]).toBe("rgba(255,255,255,0.10)");
   });
 
   it("is theme-independent — the same platinum on clay and nova", () => {
@@ -113,10 +120,65 @@ describe("the liquid-chrome ramp (R107-g --ac-chrome-* vars)", () => {
   });
 });
 
+describe("the clay shadow material (R108-e --ac-clay-* vars)", () => {
+  it("is mode-aware and lands on :root for both modes", () => {
+    syncThemeCssVars(deriveThemeStyles("clay", false));
+    const light = pickClayVars();
+    syncThemeCssVars(deriveThemeStyles("clay", true));
+    const dark = pickClayVars();
+
+    for (const mode of [light, dark]) {
+      for (const name of ["--ac-clay-shadow", "--ac-clay-shadow-sm"]) {
+        // The FORM contract: exactly TWO layered legs — the tight directional
+        // contact shadow + the larger very soft ambient one.
+        const legs = mode[name].split(", ");
+        expect(legs).toHaveLength(2);
+        for (const leg of legs) {
+          // every leg is a real shadow leg (offsets, blur, optional spread, color)
+          expect(leg).toMatch(/^0(?:px)? \d+px \d+px(?: -\d+px)? rgba\(/);
+        }
+      }
+    }
+    // The WARM tint: light-mode shadows carry the clay ink family
+    // rgba(42,32,24,…), never cold black — hand-thrown ceramics cast warm
+    // shadows (the R108-e rework's whole point).
+    expect(light["--ac-clay-shadow"]).toContain("rgba(42,32,24,");
+    expect(light["--ac-clay-shadow-sm"]).toContain("rgba(42,32,24,");
+    // Dark mode deepens toward black for real lift on the dark substrate.
+    expect(dark["--ac-clay-shadow"]).toContain("rgba(0,0,0,");
+    expect(dark["--ac-clay-shadow-sm"]).toContain("rgba(0,0,0,");
+  });
+
+  it("is theme-independent — the same clay form on clay and nova", () => {
+    syncThemeCssVars(deriveThemeStyles("clay", false));
+    const onClay = pickClayVars();
+    syncThemeCssVars(deriveThemeStyles("nova", false));
+    const onNova = pickClayVars();
+    expect(onClay).toEqual(onNova);
+  });
+
+  it("has a documented step-down — sm's ambient leg is softer than the full recipe", () => {
+    syncThemeCssVars(deriveThemeStyles("clay", false));
+    const full = pickClayVars()["--ac-clay-shadow"];
+    const sm = pickClayVars()["--ac-clay-shadow-sm"];
+    const ambientBlur = (s: string) => parseInt(s.split(", ")[1].split(/ +/)[1], 10);
+    expect(ambientBlur(sm)).toBeLessThan(ambientBlur(full));
+  });
+});
+
 function pickChromeVars(): Record<string, string> {
   const root = document.documentElement.style;
   const out: Record<string, string> = {};
   for (const name of ["--ac-chrome-hi", "--ac-chrome-mid", "--ac-chrome-lo", "--ac-chrome-sheen"]) {
+    out[name] = root.getPropertyValue(name);
+  }
+  return out;
+}
+
+function pickClayVars(): Record<string, string> {
+  const root = document.documentElement.style;
+  const out: Record<string, string> = {};
+  for (const name of ["--ac-clay-shadow", "--ac-clay-shadow-sm"]) {
     out[name] = root.getPropertyValue(name);
   }
   return out;

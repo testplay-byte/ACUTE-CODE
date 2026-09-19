@@ -272,11 +272,12 @@ function AppearanceTab() {
                 aria-label={`Theme ${t.name}`}
                 className={cn(
                   "relative flex cursor-pointer items-center gap-3 rounded-2xl border-[1.5px] bg-card px-4 py-3 text-left transition-colors hover:bg-hover",
-                  // R107-g: the selected card carries the chrome hairline —
-                  // the reflective top-edge glint on the chosen theme (the
-                  // liquid-chrome jewelry; COMPONENTS §8). Unselected cards
-                  // stay quiet.
-                  selected ? "border-accent ac-chrome-edge" : "border-line",
+                  // R108-e: the selected card is the accent border + ring +
+                  // bentoShadowSm — the owner-approved selection grammar.
+                  // (R107-g had added a chrome hairline glint on the chosen
+                  // card; removed per the owner's round-108 verdict — no
+                  // gradient glints on working UI.)
+                  selected ? "border-accent" : "border-line",
                 )}
                 style={
                   selected

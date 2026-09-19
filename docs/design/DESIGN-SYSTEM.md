@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-18 round-107 -->
+<!-- last-reviewed: 2026-09-19 round-108 -->
 # ACUTE-CODE Design System
 
 **Why this document exists (owner direction, round-16/2026-08-23):** "the UI
@@ -23,7 +23,10 @@ in the same round that changes the UI.
   Clay Studio — R107-g, the owner's clay substrate) × light/dark; optional
   per-theme `accentDark`. The liquid-chrome ramp (`--ac-chrome-hi/mid/lo/`
   `sheen`) is theme-independent + mode-aware — set by the same bridge,
-  documented in `docs/design-language/TOKENS.md` §8.
+  documented in `docs/design-language/TOKENS.md` §8; the CLAY material's
+  layered soft shadows (`--ac-clay-shadow`/`-sm`, the R108-e rework of
+  clay-as-form) live in TOKENS §9 — clay depth is shadow + form, never a
+  painted gradient wash.
 - **Documented exceptions only**: `SEMANTIC_COLORS` (success `#22c55e`,
   danger `#ef4444`, warning `#f59e0b` — R97-I: the amber for wait/attention
   states — retry waits, queued messages, thinking-loop stops) in

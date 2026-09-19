@@ -16,6 +16,11 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
  * reduced-motion safe — the band hides entirely under
  * prefers-reduced-motion). This is the SPARING signature use: the wizard's
  * CTAs only, never working-UI buttons (MOTION rule 3).
+ *
+ * R108-e: the sheen pass is now half as bright and half as wide a band
+ * (the --ac-chrome-sheen stop halved in themes.ts + the narrowed gradient
+ * in index.css) — "jewelry, rationed": a glint catching the light, not a
+ * shine sweep. The class grammar is unchanged.
  */
 export function ActionButton({
   variant,
