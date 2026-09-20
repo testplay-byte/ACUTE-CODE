@@ -39,6 +39,11 @@ export interface ProviderRow {
   createdAt: string;
   hasKey: boolean;
   keyCount: number;
+  /** R113-e: the SERVER's configured bit (R113-a — custom row OR any held
+   * key, pool-aware). The providers screen splits configured-first off
+   * exactly this flag (the desktop's R113-d structure); undefined = an
+   * older sidecar — treated as unconfigured (the honest pre-split read). */
+  configured?: boolean;
 }
 
 export interface ModelSummary {
@@ -167,6 +172,33 @@ export function fetchProjects(sender: ApiSender): Promise<ApiOutcome<{ projects:
   return apiJson<{ projects: ProjectRow[] }>(sender, "/projects");
 }
 
+/** GET /projects/:id — the project detail screen's own row (name + root
+ * + color, straight from the registry). */
+export function fetchProject(sender: ApiSender, id: string): Promise<ApiOutcome<ProjectRow>> {
+  return apiJson<ProjectRow>(sender, `/projects/${encodeURIComponent(id)}`);
+}
+
+/**
+ * The POST /projects body — name + an absolute root path, both trimmed;
+ * null when either is empty (the route's own validation would 400 — the
+ * new-project sheet refuses earlier, honestly). Color rides only when set
+ * (a #rrggbb string; the server picks its own otherwise). Pure.
+ */
+export function newProjectBody(
+  name: string,
+  rootPath: string,
+  color?: string,
+): { name: string; rootPath: string; color?: string } | null {
+  const trimmedName = name.trim();
+  const trimmedRoot = rootPath.trim();
+  if (trimmedName === "" || trimmedRoot === "") return null;
+  return {
+    name: trimmedName,
+    rootPath: trimmedRoot,
+    ...(color !== undefined && color !== "" ? { color } : {}),
+  };
+}
+
 export function createProject(
   sender: ApiSender,
   body: { name: string; rootPath: string; color?: string },
@@ -210,6 +242,24 @@ export function updateAgent(
 
 export function fetchProviders(sender: ApiSender): Promise<ApiOutcome<{ providers: ProviderRow[] }>> {
   return apiJson<{ providers: ProviderRow[] }>(sender, "/providers");
+}
+
+/**
+ * R113-e: the providers screen's two-tier derivation (the desktop R113-d
+ * structure, ported): the SERVER's `configured` bit (R113-a — custom row OR
+ * any held key, pool-aware) splits the rows into "Your providers" (the
+ * owner's inventory) first + the addable catalog below. `configured ===
+ * undefined` (an older sidecar predating the flag) reads UNCONFIGURED — the
+ * honest pre-split fallback, same verdict the screen renders. Order is
+ * preserved within each tier (the route's created order). Pure.
+ */
+export function splitProviders(
+  providers: ProviderRow[],
+): { configured: ProviderRow[]; addable: ProviderRow[] } {
+  return {
+    configured: providers.filter((p) => p.configured === true),
+    addable: providers.filter((p) => p.configured !== true),
+  };
 }
 
 export function updateProvider(

@@ -1,9 +1,17 @@
 /**
  * The tab group layout — FIVE tabs behind the FLOATING clay bar (R109):
- * Home · Sessions · Approvals (with the live pending badge) · Dashboard ·
+ * Home · Projects · Approvals (with the live pending badge) · Dashboard ·
  * Settings. The bar floats with margins on all four sides, radius 28, the
  * elevation-2 clay shadow and the chrome edge (DESIGN.md §2.1/§5); content
  * scrolls under it via the TabBarInsetContext every screen's scaffold reads.
+ *
+ * R113-e — the tabs merge: the standalone SESSIONS tab is DEAD (the owner:
+ * "the session screen is completely bad so completely remove it… the
+ * project screen relies on the session screen too. If I click on any one
+ * of the projects, it leads me to the sessions screen"). PROJECTS is the
+ * tab now — its rows open the per-project detail (app/project/[id].tsx,
+ * the project's own sessions) instead of pushing the old global sessions
+ * list with a filter param.
  *
  * The approvals badge: a calm 45-second poll while connected (the live
  * notification stream covers the rest — approvals are also notifications).
@@ -11,7 +19,7 @@
 
 import { Tabs } from "expo-router";
 import { useEffect, useState } from "react";
-import { Gauge, House, MessageSquareText, Settings2, ShieldCheck } from "lucide-react-native";
+import { Folders, Gauge, House, Settings2, ShieldCheck } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { FloatingTabBar, type TabDescriptor } from "@/components/tab-bar";
 import { TabBarInsetContext } from "@/components/screen-scaffold";
@@ -48,7 +56,7 @@ export default function TabsLayout() {
 
   const tabs: TabDescriptor[] = [
     { name: "home", label: "Home", icon: House },
-    { name: "sessions", label: "Sessions", icon: MessageSquareText },
+    { name: "projects", label: "Projects", icon: Folders },
     { name: "approvals", label: "Approvals", icon: ShieldCheck, badge: pendingCount },
     { name: "dashboard", label: "Dashboard", icon: Gauge },
     { name: "settings", label: "Settings", icon: Settings2 },
@@ -83,7 +91,7 @@ export default function TabsLayout() {
         )}
       >
         <Tabs.Screen name="home" />
-        <Tabs.Screen name="sessions" />
+        <Tabs.Screen name="projects" />
         <Tabs.Screen name="approvals" />
         <Tabs.Screen name="dashboard" />
         <Tabs.Screen name="settings" />

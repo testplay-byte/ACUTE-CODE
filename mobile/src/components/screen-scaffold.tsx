@@ -1,10 +1,19 @@
 /**
  * ScreenScaffold — the shared screen chrome (DESIGN.md §5/§6): edge-to-edge
- * safe areas top AND bottom, the large-title header for tab roots (compact
- * for pushed screens), the CONNECTION PILL always on screen (the owner's
- * "it would not show me that it has disconnected" fix made structural),
- * the activity bell (tab roots), and the keyboard-aware scroll body.
- * 100% custom — no native headers anywhere.
+ * safe areas top AND bottom, the ONE compact header row (R113-e: the owner's
+ * "at the very top on every single one of the screens it shows the
+ * headings… takes up way too much important space" — the large TypeDisplay
+ * header tier is DEAD; every screen, tab roots included, renders the same
+ * 56px row: back-or-bell · title · right slot · the CONNECTION PILL), and
+ * the keyboard-aware scroll body. 100% custom — no native headers anywhere.
+ *
+ * The compact idiom (R113-e):
+ *   · pushed screens — back chevron, centered title (+ optional caption),
+ *     the right slot, the pill;
+ *   · tab roots — the ACTIVITY BELL in the back slot (44px target, the
+ *     unread dot rides it), the same title row, the pill. No TypeDisplay,
+ *     no subtitles like "usage, tokens, costs, health" — the content is the
+ *     screen's top now (home's host hero, the dashboard's stat cards…).
  */
 
 import { Bell, ChevronLeft } from "lucide-react-native";
@@ -19,7 +28,7 @@ import {
 } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { ConnectionPill, TypeCaption, TypeDisplay, TypeTitle } from "@/design/primitives";
+import { ConnectionPill, TypeCaption, TypeTitle } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
 import { spacing } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
@@ -36,11 +45,12 @@ export function useTabBarInset(): number {
 
 export interface ScreenScaffoldProps {
   title: string;
-  /** The caption line under a large title (tab roots). */
+  /** The small caption under the title (pushed screens' context line — the
+   * session status, the provider kind; tab roots pass none, the content
+   * speaks). */
   subtitle?: string;
-  /** Large-title header (tab roots); default = compact when back, large when not. */
-  large?: boolean;
-  /** Renders the back chevron and pops the stack (default: false). */
+  /** Renders the back chevron and pops the stack (default: false — tab
+   * roots show the activity bell in the same slot instead). */
   back?: boolean;
   right?: React.ReactNode;
   children: React.ReactNode;
@@ -59,7 +69,6 @@ export interface ScreenScaffoldProps {
 export function ScreenScaffold({
   title,
   subtitle,
-  large,
   back = false,
   right,
   children,
@@ -76,7 +85,6 @@ export function ScreenScaffold({
   const { status } = useLink();
   const unread = useUnread();
 
-  const isLarge = large ?? !back;
   const pillVisible = !noPill;
 
   const bottomPad = tabBarInset + bottomInset + Math.max(insets.bottom - tabBarInset, 0);
@@ -84,70 +92,52 @@ export function ScreenScaffold({
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: tokens.bg }]} edges={["top", "left", "right"]}>
-      {isLarge ? (
-        // ── the large header: pill + bell row, then the display title ──
-        <View style={styles.largeHeader}>
-          <View style={styles.largeTopRow}>
-            {pillVisible ? (
-              <ConnectionPill status={status} onPress={() => router.push("/connect")} />
-            ) : (
-              <View />
-            )}
-            <Pressable
-              accessibilityLabel={`activity${unread > 0 ? `, ${unread} unread` : ""}`}
-              accessibilityRole="button"
-              hitSlop={12}
-              onPress={() => router.push("/activity")}
-              style={styles.bellTarget}
-            >
-              <Bell size={22} color={tokens.text} strokeWidth={2} />
-              {unread > 0 ? (
-                <View
-                  style={[styles.unreadDot, { backgroundColor: tokens.accent }]}
-                  accessibilityLabel={`${unread} unread notifications`}
-                />
-              ) : null}
-            </Pressable>
-          </View>
-          <TypeDisplay style={styles.largeTitle} numberOfLines={1}>
-            {title}
-          </TypeDisplay>
-          {subtitle ? (
-            <TypeCaption numberOfLines={1}>{subtitle}</TypeCaption>
-          ) : null}
-        </View>
-      ) : (
-        // ── the compact header: back | centered title | pill (+right slot) ──
-        <View style={styles.headerRow}>
-          {back ? (
-            <Pressable
-              accessibilityLabel="Go back"
-              accessibilityRole="button"
-              hitSlop={12}
-              onPress={() => router.back()}
-              style={styles.backTarget}
-            >
-              <ChevronLeft size={26} color={tokens.text} strokeWidth={2} />
-            </Pressable>
-          ) : (
-            <View style={styles.backTarget} />
-          )}
-          <View style={styles.compactTitleWrap}>
-            <TypeTitle style={styles.compactTitle} numberOfLines={1}>
-              {title}
-            </TypeTitle>
-            {subtitle ? (
-              <TypeCaption style={styles.compactSubtitle} numberOfLines={1}>
-                {subtitle}
-              </TypeCaption>
+      {/* ── the ONE compact header: back | bell · centered title · right · pill ── */}
+      <View style={styles.headerRow}>
+        {back ? (
+          <Pressable
+            accessibilityLabel="Go back"
+            accessibilityRole="button"
+            hitSlop={12}
+            onPress={() => router.back()}
+            style={styles.sideTarget}
+          >
+            <ChevronLeft size={26} color={tokens.text} strokeWidth={2} />
+          </Pressable>
+        ) : (
+          // The tab roots' bell — the notifications entry (the pushed screens
+          // reach it through their own tab root underneath).
+          <Pressable
+            accessibilityLabel={`activity${unread > 0 ? `, ${unread} unread` : ""}`}
+            accessibilityRole="button"
+            hitSlop={12}
+            onPress={() => router.push("/activity")}
+            style={styles.sideTarget}
+          >
+            <Bell size={22} color={tokens.text} strokeWidth={2} />
+            {unread > 0 ? (
+              <View
+                style={[styles.unreadDot, { backgroundColor: tokens.accent }]}
+                accessibilityLabel={`${unread} unread notifications`}
+              />
             ) : null}
-          </View>
-          {right ? <View style={styles.rightSlot}>{right}</View> : null}
-          {pillVisible ? (
-            <ConnectionPill status={status} compact onPress={() => router.push("/connect")} />
+          </Pressable>
+        )}
+        <View style={styles.titleWrap}>
+          <TypeTitle style={styles.title} numberOfLines={1}>
+            {title}
+          </TypeTitle>
+          {subtitle ? (
+            <TypeCaption style={styles.subtitle} numberOfLines={1}>
+              {subtitle}
+            </TypeCaption>
           ) : null}
         </View>
-      )}
+        {right ? <View style={styles.rightSlot}>{right}</View> : null}
+        {pillVisible ? (
+          <ConnectionPill status={status} compact onPress={() => router.push("/connect")} />
+        ) : null}
+      </View>
       <Body
         style={{ flex: 1, backgroundColor: tokens.bg }}
         {...(scroll
@@ -169,19 +159,6 @@ export function ScreenScaffold({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  largeHeader: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.md,
-    gap: spacing.xs,
-  },
-  largeTopRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    minHeight: 40,
-  },
-  largeTitle: { marginTop: spacing.xs },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -189,16 +166,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     gap: spacing.xs,
   },
-  backTarget: { width: 40, height: 44, alignItems: "center", justifyContent: "center" },
-  compactTitleWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
-  compactTitle: { textAlign: "center" },
-  compactSubtitle: { textAlign: "center" },
+  /** The 44px side target: the back chevron (pushed screens) or the bell
+   * (tab roots) — one discipline, one width. */
+  sideTarget: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  titleWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
+  title: { textAlign: "center" },
+  subtitle: { textAlign: "center" },
   rightSlot: { minWidth: 44, alignItems: "center", justifyContent: "center" },
-  bellTarget: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   unreadDot: {
     position: "absolute",
-    top: 7,
-    right: 8,
+    top: 5,
+    right: 5,
     minWidth: 16,
     height: 16,
     borderRadius: 8,

@@ -1,6 +1,6 @@
 /**
- * Dashboard v2 (R109-c) — the owner's "see the dashboard, the stats, the
- * usage" screen. Everything renders from the desktop's EXISTING /usage
+ * Dashboard v2 (R109-c; R113-e — the compact header) — the owner's "see
+ * the dashboard, the stats, the usage" screen. Everything renders from the desktop's EXISTING /usage
  * routes (features/config.ts, typed 1:1):
  *
  *   window 14d/30d → fetchUsageSummary(14|30)  — the daily chart + totals,
@@ -527,7 +527,7 @@ export default function DashboardScreen() {
   );
 
   return (
-    <ScreenScaffold title="Dashboard" subtitle="usage, tokens, costs, health" refreshControl={refreshControl}>
+    <ScreenScaffold title="Dashboard" refreshControl={refreshControl}>
       {status === "unpaired" ? (
         <ErrorState title="No host linked" caption="Pair this phone to see usage, tokens, costs, and health." />
       ) : !connected && !primaryLoaded ? (

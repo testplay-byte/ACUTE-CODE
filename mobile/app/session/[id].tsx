@@ -23,6 +23,20 @@
  *     the outbox (flushed in order when the link returns — overrides ride
  *     the flush), and the chip can be dismissed entry-by-entry.
  *
+ * ROUND-113 (R113-e — the phone GOES LIVE): the screen subscribes to the
+ * events stream (features/events.ts, the backend's GET /api/v1/events/stream):
+ *   · a turn started on the PC streams HERE through the SAME applyLiveFrame
+ *     reducer (the remote mirror — thinking, caret, tool-running, queue
+ *     chips all render; the initiator guard keeps the phone's OWN stream
+ *     authoritative so its turns never double);
+ *   · session frames for THIS id rehydrate on an 800ms debounce, and status
+ *     frames flip the header badge + the calm poll's trigger LIVE (the
+ *     stale-status bug — nothing used to tell the phone a PC turn started);
+ *   · a remote mirror ALSO engages the calm 3s poll (frames can blip while
+ *     the turn keeps running server-side — the poll is the fallback); a
+ *     rehydrate under a live mirror REBASES it (the persisted truth folds
+ *     under the streamed tail) instead of freezing the overlay.
+ *
  * The phone renders + taps. NOTHING is processed here (§4's ceiling).
  */
 
@@ -54,18 +68,27 @@ import {
   postQueue,
   postResolveQuestion,
   postStop,
+  rebaseRemoteTurn,
+  reduceRemoteTurnFrame,
+  sessionStatusFromWire,
   sessionTitle,
   type AttachmentView,
   type LiveTurn,
   type SessionDetailWire,
+  type SessionStatus,
   type SendOverrides,
   type TranscriptItem,
 } from "@/features/sessions";
+import { getEventsStore, turnFrameRecord, type EventsFrame } from "@/features/events";
 import { getOutbox, outboxForSession, type OutboxEntry } from "@/features/outbox";
 import { mobLog, mobWarn } from "@/lib/log";
 
 /** The calm poll while a desktop-side turn runs (no live stream to watch). */
 const RUNNING_POLL_MS = 3_000;
+
+/** The remote session-frame rehydrate debounce (R113-e): a streaming turn
+ * appends log rows continuously — one trailing refetch after the burst. */
+const REMOTE_REHYDRATE_MS = 800;
 
 export default function SessionScreen() {
   const { tokens } = useTheme();
@@ -88,6 +111,14 @@ export default function SessionScreen() {
   /** The live turn's ref mirror — SSE frames apply SYNCHRONOUSLY against it
    * (React updaters may defer; the terminal decision must not). */
   const liveRef = useRef<LiveTurn | null>(null);
+  /** R113-e: the base transcript's ref mirror (a fresh remote mirror opens
+   * over it synchronously — the state version renders a beat later). */
+  const baseItemsRef = useRef<TranscriptItem[]>([]);
+  /** True while the live overlay mirrors a REMOTE turn (another device's —
+   * the events stream feeds it; the rebase math reads the split point). */
+  const remoteRef = useRef(false);
+  /** The base length the remote mirror was last rebased onto. */
+  const remoteBaseCountRef = useRef(0);
 
   const setLiveState = useCallback((next: LiveTurn | null): void => {
     liveRef.current = next;
@@ -96,15 +127,49 @@ export default function SessionScreen() {
 
   // ── the truth: rehydrate from the persisted event log ─────────────────────
 
+  /**
+   * R113-e: settle the live overlay after a rehydrate fetch landed. A
+   * REMOTE mirror rebases onto the fresh truth (the persisted user card +
+   * appended rows fold UNDER the streamed tail) — or drops when the server
+   * says the turn is over (a terminal frame missed while backgrounded);
+   * an ABANDONED own overlay (its stream died mid-turn) also drops — the
+   * truth owns the render, exactly the R42 guarantee.
+   */
+  const settleLiveAfterFetch = useCallback(
+    (status: SessionStatus, items: TranscriptItem[]): void => {
+      const live = liveRef.current;
+      if (live === null) return;
+      if (remoteRef.current) {
+        if (status === "running") {
+          setLiveState(rebaseRemoteTurn(live, items, remoteBaseCountRef.current));
+          remoteBaseCountRef.current = items.length;
+        } else {
+          mobLog("events", "remote mirror settled — truth wins", { status });
+          remoteRef.current = false;
+          setLiveState(null);
+        }
+        return;
+      }
+      if (live.phase === "idle" && live.terminal === null && streamRef.current === null) {
+        // An abandoned own turn — the truth owns the render (R42).
+        setLiveState(null);
+      }
+    },
+    [setLiveState],
+  );
+
   const rehydrate = useCallback(async () => {
     if (sessionId === "") return;
     const link = getLinkManager();
     try {
       const outcome = await fetchSessionDetail(link, sessionId);
       if (outcome.ok) {
+        const items = foldSessionEvents(outcome.data.events);
         setDetail(outcome.data);
-        setBaseItems(foldSessionEvents(outcome.data.events));
+        setBaseItems(items);
+        baseItemsRef.current = items;
         setError(null);
+        settleLiveAfterFetch(outcome.data.status, items);
       } else if (outcome.error.status === 404) {
         setError("this session no longer exists on the desktop");
       } else {
@@ -116,7 +181,7 @@ export default function SessionScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [sessionId]);
+  }, [sessionId, settleLiveAfterFetch]);
 
   useEffect(() => {
     if (status === "connected") {
@@ -161,17 +226,105 @@ export default function SessionScreen() {
     return () => sub.remove();
   }, [rehydrate, setLiveState]);
 
-  // ── the calm poll while a desktop-side turn runs ──────────────────────────
+  // ── the calm poll while a turn runs somewhere ────────────────────────────
 
   useEffect(() => {
     if (!appActive) return;
     if (streamRef.current !== null) return; // we hold the live stream
-    if (detail === null || detail.status !== "running") return;
+    // R113-e: the poll engages when the session is running OR any live
+    // overlay is up — a status frame for a PC-started turn flips detail
+    // LIVE now (the stale-status bug: nothing used to tell the phone), and
+    // a remote mirror is exactly the "a turn runs server-side" truth the
+    // poll watches. The poll is the FALLBACK — frames can blip.
+    const watching = (detail !== null && detail.status === "running") || live !== null;
+    if (!watching) return;
     const timer = setInterval(() => {
       if (streamRef.current === null) void rehydrate();
     }, RUNNING_POLL_MS);
     return () => clearInterval(timer);
-  }, [appActive, detail, rehydrate]);
+  }, [appActive, detail, live, rehydrate]);
+
+  // ── the events subscription (R113-e — the phone goes live) ────────────────
+
+  /** One mirrored turn frame for THIS session (the events stream's
+   * {type:"turn"} frames — the PC's turn streams live on the phone). */
+  const onRemoteTurnFrame = useCallback(
+    (raw: unknown): void => {
+      const record = turnFrameRecord(raw);
+      if (record === null) return; // malformed mirror — never a guess
+      const result = reduceRemoteTurnFrame({
+        live: liveRef.current,
+        remote: remoteRef.current,
+        ownStream: streamRef.current !== null,
+        baseItems: baseItemsRef.current,
+        frame: record,
+        now: Date.now(),
+      });
+      if (result === null) return; // our own stream renders this frame
+      if (result.began) {
+        mobLog("events", "remote mirror opened", { sessionId });
+        remoteRef.current = true;
+        remoteBaseCountRef.current = baseItemsRef.current.length;
+        // The user card that STARTED this turn is already persisted — pull
+        // the truth in (the rebase folds it under the mirror).
+        void rehydrate();
+      }
+      setLiveState(result.turn);
+      if (result.terminal) {
+        // done / stopped / error — the turn is over; the truth owns the render.
+        mobLog("events", "remote turn terminal", { sessionId, terminal: result.turn.terminal });
+        void rehydrate().then(() => {
+          // Clear only if the overlay is STILL the terminal mirror — the
+          // desktop's retire-cancel discipline (scheduleRemoteRetire): a NEW
+          // remote turn may open while this fetch is in flight, and its
+          // frames own the overlay now (clearing them would kill a live
+          // mirror; its own terminal path will settle it).
+          if (remoteRef.current && liveRef.current !== null && liveRef.current.terminal !== null) {
+            remoteRef.current = false;
+            setLiveState(null);
+          }
+        });
+      }
+    },
+    [sessionId, rehydrate, setLiveState],
+  );
+
+  useEffect(() => {
+    if (sessionId === "") return;
+    const store = getEventsStore();
+    let rehydrateTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleRehydrate = (): void => {
+      if (rehydrateTimer !== undefined) clearTimeout(rehydrateTimer);
+      rehydrateTimer = setTimeout(() => {
+        rehydrateTimer = undefined;
+        void rehydrate();
+      }, REMOTE_REHYDRATE_MS);
+    };
+    const onFrame = (frame: EventsFrame): void => {
+      if (frame.type === "session" && frame.sessionId === sessionId) {
+        if (frame.kind === "status") {
+          // The header badge + subtitle + the poll's trigger flip LIVE (a
+          // PC-started turn now tells the phone the moment it starts).
+          const nextStatus = sessionStatusFromWire(frame.status);
+          if (nextStatus !== null) {
+            setDetail((prev) =>
+              prev !== null && prev.status !== nextStatus ? { ...prev, status: nextStatus } : prev,
+            );
+          }
+        }
+        scheduleRehydrate();
+        return;
+      }
+      if (frame.type === "turn" && frame.sessionId === sessionId) {
+        onRemoteTurnFrame(frame.frame);
+      }
+    };
+    const unsubscribe = store.subscribeFrames(onFrame);
+    return () => {
+      unsubscribe();
+      if (rehydrateTimer !== undefined) clearTimeout(rehydrateTimer);
+    };
+  }, [sessionId, rehydrate, onRemoteTurnFrame]);
 
   // ── the live stream ────────────────────────────────────────────────────────
 
@@ -183,8 +336,13 @@ export default function SessionScreen() {
 
   const rehydrateAfterTurn = useCallback(() => {
     void rehydrate().then(() => {
-      // The truth landed — drop the live overlay (one paint, no flash).
-      setLiveState(null);
+      // The truth landed — drop the live overlay (one paint, no flash),
+      // UNLESS a NEW remote mirror opened during the fetch (a queued turn
+      // starting on another device inside this window) — its frames own the
+      // overlay now and its own terminal path will settle it.
+      if (liveRef.current !== null && liveRef.current.terminal !== null && !remoteRef.current) {
+        setLiveState(null);
+      }
     });
   }, [rehydrate, setLiveState]);
 
@@ -206,6 +364,9 @@ export default function SessionScreen() {
       mobLog("stream", "opened", { sessionId });
       streamClosedRef.current = false;
       streamRef.current = stream;
+      // An own stream is now authoritative — any stale remote mirror is
+      // done (the initiator guard ignores mirrored frames while it runs).
+      remoteRef.current = false;
       setLiveState(
         beginLiveTurn(baseItems, content, Date.now(), overrideAttachmentViews(overrides)),
       );

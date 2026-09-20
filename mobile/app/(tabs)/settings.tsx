@@ -1,6 +1,6 @@
 /**
- * Settings — the management HUB (tab root, R109): every desktop-management
- * page one tap away — connection, appearance, providers, agents, prompts,
+ * Settings — the management HUB (tab root, R109; R113-e — the compact
+ * header): every desktop-management page one tap away — connection, appearance, providers, agents, prompts,
  * preferences — plus the about card (version, the view+input ceiling, the
  * wizard replay). Unpaired → the config rows carry the honest "requires a
  * linked host" caption and are disabled (the hub itself never pretends the
@@ -62,7 +62,7 @@ export default function SettingsScreen() {
   const configCaption = unpaired ? "requires a linked host" : null;
 
   return (
-    <ScreenScaffold title="Settings" subtitle="manage the desktop from your pocket">
+    <ScreenScaffold title="Settings">
       {/* ── the connection row: the live truth + the host's name ── */}
       <PressableCard
         onPress={() => router.push("/settings/host")}

@@ -2,8 +2,10 @@
  * sessions.test.ts — the transcript state machine: the persisted-event fold
  * (user/queued/assistant+thinking/tool/turn.error/approval pairing/unknown
  * types), the live-frame application (deltas, tool cards, queue chips,
- * approvals, terminal frames), the pure helpers, and the typed client paths
- * + bodies — injected fakes only, zero React Native.
+ * approvals, terminal frames), the pure helpers, the typed client paths
+ * + bodies, and the REMOTE mirror (R113-e — the events-stream frames of
+ * ANOTHER device's turn, reduced through the same applyLiveFrame) —
+ * injected fakes only, zero React Native.
  */
 
 import { describe, expect, it } from "@jest/globals";
@@ -13,6 +15,8 @@ import {
   abandonLiveTurn,
   applyLiveFrame,
   beginLiveTurn,
+  beginRemoteTurn,
+  countProjectSessions,
   fetchSessionDetail,
   fetchSessions,
   filterByProject,
@@ -27,9 +31,13 @@ import {
   postResolveQuestion,
   postStop,
   queueBody,
+  rebaseRemoteTurn,
+  reduceRemoteTurnFrame,
   sendBody,
+  sessionStatusFromWire,
   sessionStatusTone,
   sessionTitle,
+  type LiveTurn,
   type SessionEventWire,
   type SessionRow,
 } from "../sessions";
@@ -733,5 +741,176 @@ describe("sessions — the typed client", () => {
     const cleared = await patchSessionActiveMode(sender, "sess_1", null);
     expect(cleared.ok).toBe(true);
     expect(calls[2]?.init.bodyText).toBe('{"activeMode":null}');
+  });
+});
+
+// ── the REMOTE mirror (R113-e — the events stream's turn frames) ────────────
+
+describe("sessions — the remote mirror", () => {
+  /** The persisted base: two folded rows (the PC's earlier conversation). */
+  const base = foldSessionEvents([
+    event(1, "message.user", { role: "user", content: "earlier ask" }),
+    event(2, "message.assistant", { role: "assistant", content: "earlier answer", model: "z-ai/glm-5.2:free" }),
+  ]);
+
+  const remoteInput = (overrides: Partial<Parameters<typeof reduceRemoteTurnFrame>[0]> = {}) => ({
+    live: null,
+    remote: false,
+    ownStream: false,
+    baseItems: base,
+    frame: { type: "text-delta", delta: "PC says" } as Record<string, unknown>,
+    now: NOW,
+    ...overrides,
+  });
+
+  it("begins with NO optimistic user card — the remote turn's message was typed on the other device", () => {
+    const mirror = beginRemoteTurn(base);
+    expect(mirror.phase).toBe("streaming");
+    expect(mirror.terminal).toBeNull();
+    expect(mirror.items).toEqual(base); // the base only — no live user card
+    expect(mirror.sentContent).toBe("");
+  });
+
+  it("a remote frame with no overlay OPENS a mirror over the base and applies through the SAME reducer", () => {
+    const result = reduceRemoteTurnFrame(remoteInput());
+    expect(result).not.toBeNull();
+    expect(result?.began).toBe(true);
+    expect(result?.terminal).toBe(false);
+    expect(result?.turn.items).toHaveLength(base.length + 1); // base + the live assistant
+    const assistant = result?.turn.items[base.length];
+    expect(assistant?.kind === "assistant" && assistant.content).toBe("PC says");
+    expect(assistant?.kind === "assistant" && assistant.live).toBe(true);
+  });
+
+  it("the initiator's own frames are IGNORED while its stream is in flight (a mirror would double every delta)", () => {
+    const own = beginLiveTurn(base, "my message", NOW);
+    const result = reduceRemoteTurnFrame(remoteInput({ live: own, remote: false, ownStream: true }));
+    expect(result).toBeNull();
+  });
+
+  it("an own overlay still streaming (stream dropped mid-flight) is ALSO authoritative — not replaced", () => {
+    const own = beginLiveTurn(base, "my message", NOW); // phase streaming, terminal null
+    const result = reduceRemoteTurnFrame(remoteInput({ live: own, remote: false, ownStream: false }));
+    expect(result).toBeNull();
+  });
+
+  it("an ABANDONED own overlay is replaced by the mirror — the events stream carries the turn's remainder", () => {
+    const abandoned = abandonLiveTurn(beginLiveTurn(base, "my message", NOW)); // phase idle, terminal null
+    const result = reduceRemoteTurnFrame(remoteInput({ live: abandoned, remote: false, ownStream: false }));
+    expect(result).not.toBeNull();
+    expect(result?.began).toBe(true);
+    // the fresh mirror opens over the BASE — the abandoned optimistic card is
+    // gone (the next item after the base is the LIVE assistant, not a user card)
+    expect(result?.turn.items).toHaveLength(base.length + 1);
+    const tail = result?.turn.items[base.length];
+    expect(tail?.kind === "assistant" && tail.live).toBe(true);
+  });
+
+  it("an ongoing remote mirror APPENDS (began=false): deltas merge into the same live assistant", () => {
+    const first = reduceRemoteTurnFrame(remoteInput());
+    expect(first?.began).toBe(true);
+    const second = reduceRemoteTurnFrame(
+      remoteInput({
+        live: first?.turn ?? null,
+        remote: true,
+        frame: { type: "text-delta", delta: " more" },
+      }),
+    );
+    expect(second?.began).toBe(false);
+    expect(second?.turn.items).toHaveLength(base.length + 1);
+    const assistant = second?.turn.items[base.length];
+    expect(assistant?.kind === "assistant" && assistant.content).toBe("PC says more");
+  });
+
+  it("the terminal frame marks the mirror done — the screen rehydrates and the truth wins", () => {
+    const opened = reduceRemoteTurnFrame(remoteInput());
+    const terminal = reduceRemoteTurnFrame(
+      remoteInput({ live: opened?.turn ?? null, remote: true, frame: { type: "done" } }),
+    );
+    expect(terminal?.terminal).toBe(true);
+    expect(terminal?.turn.terminal).toBe("done");
+    expect(terminal?.turn.phase).toBe("idle");
+  });
+
+  it("a frame AFTER the terminal opens a FRESH mirror over the current base — two turns never share one overlay", () => {
+    const opened = reduceRemoteTurnFrame(remoteInput());
+    const terminal = reduceRemoteTurnFrame(
+      remoteInput({ live: opened?.turn ?? null, remote: true, frame: { type: "done" } }),
+    );
+    // The fresh base now includes the finished turn's persisted rows.
+    const grownBase = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "earlier ask" }),
+      event(2, "message.assistant", { role: "assistant", content: "earlier answer", model: "z-ai/glm-5.2:free" }),
+      event(3, "message.user", { role: "user", content: "the PC's next ask" }),
+    ]);
+    const next = reduceRemoteTurnFrame(
+      remoteInput({
+        live: terminal?.turn ?? null,
+        remote: true,
+        baseItems: grownBase,
+        frame: { type: "text-delta", delta: "turn two" },
+      }),
+    );
+    expect(next?.began).toBe(true);
+    expect(next?.turn.items).toHaveLength(grownBase.length + 1);
+    expect(next?.turn.terminal).toBeNull(); // the new turn streams
+  });
+
+  it("rebaseRemoteTurn folds the fresh truth UNDER the streamed tail (the persisted user card lands under it)", () => {
+    const opened = reduceRemoteTurnFrame(remoteInput());
+    const mirror = opened?.turn as LiveTurn;
+    // The rehydrate landed while the remote turn kept streaming: the base
+    // grew by the persisted user card that STARTED the remote turn.
+    const grownBase = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "earlier ask" }),
+      event(2, "message.assistant", { role: "assistant", content: "earlier answer", model: "z-ai/glm-5.2:free" }),
+      event(3, "message.user", { role: "user", content: "the PC's ask that started this turn" }),
+    ]);
+    const rebased = rebaseRemoteTurn(mirror, grownBase, base.length);
+    // base + the one live assistant, with the new persisted row UNDER the tail
+    expect(rebased.items).toHaveLength(grownBase.length + 1);
+    const persistedUser = rebased.items[grownBase.length - 1];
+    expect(persistedUser?.kind === "user" && persistedUser.content).toBe("the PC's ask that started this turn");
+    const liveTail = rebased.items[grownBase.length];
+    expect(liveTail?.kind === "assistant" && liveTail.content).toBe("PC says");
+    expect(rebased.terminal).toBeNull(); // the mirror keeps streaming
+  });
+
+  it("rebaseRemoteTurn survives a shorter fresh base (a log trim keeps the live tail, no crash, no dupes)", () => {
+    const opened = reduceRemoteTurnFrame(remoteInput());
+    const mirror = opened?.turn as LiveTurn;
+    const trimmed = foldSessionEvents([event(1, "message.user", { role: "user", content: "earlier ask" })]);
+    const rebased = rebaseRemoteTurn(mirror, trimmed, base.length);
+    // The trimmed truth + the live tail — the old base rows the mirror carried
+    // are dropped wholesale (slice past the recorded split point).
+    expect(rebased.items.map((item) => item.kind)).toEqual(["user", "assistant"]);
+    const tail = rebased.items[rebased.items.length - 1];
+    expect(tail?.kind === "assistant" && tail.content).toBe("PC says");
+  });
+
+  it("sessionStatusFromWire accepts exactly the closed union, honestly", () => {
+    expect(sessionStatusFromWire("queued")).toBe("queued");
+    expect(sessionStatusFromWire("running")).toBe("running");
+    expect(sessionStatusFromWire("completed")).toBe("completed");
+    expect(sessionStatusFromWire("failed")).toBe("failed");
+    expect(sessionStatusFromWire("cancelled")).toBe("cancelled");
+    expect(sessionStatusFromWire("Running")).toBeNull();
+    expect(sessionStatusFromWire(undefined)).toBeNull();
+    expect(sessionStatusFromWire(7)).toBeNull();
+    expect(sessionStatusFromWire(null)).toBeNull();
+  });
+
+  it("countProjectSessions folds totals + running per project (null-project rows are nobody's)", () => {
+    const rows = [
+      makeSession({ id: "a", projectId: "proj_1", status: "running" }),
+      makeSession({ id: "b", projectId: "proj_1", status: "completed" }),
+      makeSession({ id: "c", projectId: "proj_2", status: "completed" }),
+      makeSession({ id: "d", projectId: null, status: "running" }),
+    ];
+    expect(countProjectSessions(rows)).toEqual({
+      proj_1: { total: 2, running: 1 },
+      proj_2: { total: 1, running: 0 },
+    });
+    expect(countProjectSessions([])).toEqual({});
   });
 });

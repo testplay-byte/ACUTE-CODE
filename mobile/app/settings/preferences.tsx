@@ -8,9 +8,15 @@
  * be saved. The toggles are the house ClaySwitch (accent pill + sliding
  * dot, the house spring — never the react-native Switch), the steppers are
  * clay − / value / + triplets.
+ *
+ * R113-e — LIVE: every settings PUT broadcasts on the events bus, so a
+ * change made on the PC (or another phone) lands here while the screen is
+ * open: the events store's settings epoch moves → this screen reloads its
+ * domains (the owner's "the settings do not appear to be changing in live
+ * view" — the phone's half of the fix).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, RefreshControl, StyleSheet, View } from "react-native";
 import { Minus, Plus } from "lucide-react-native";
 import { useRouter } from "expo-router";
@@ -43,6 +49,7 @@ import {
   type ThinkingLoopSettings,
 } from "@/features/config";
 import type { ApiOutcome } from "@/features/api";
+import { useEventsEpoch } from "@/features/events";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import { mobLog, mobWarn } from "@/lib/log";
@@ -86,6 +93,14 @@ export default function PreferencesSettingsScreen() {
   const [debug, setDebug] = useState<DebugSettings | null>(null);
   const [thinkingLoop, setThinkingLoop] = useState<ThinkingLoopSettings | null>(null);
   const [notifications, setNotifications] = useState<DesktopNotificationsSettings | null>(null);
+
+  // R113-e: the live settings epoch — a settings frame (another device's
+  // PUT, or the hello resync) moves it while this screen is open.
+  const settingsEpoch = useEventsEpoch("settings");
+  // The MOUNT value — the refetch fires only when the epoch moves PAST it
+  // (the mount load above owns the first fetch; the finisher's fix — the
+  // epoch-0 check double-fetched whenever frames had landed pre-open).
+  const mountEpoch = useRef(settingsEpoch);
 
   // ── load: every domain in one round, connected only ──────────────────────
   const load = useCallback(async () => {
@@ -139,6 +154,16 @@ export default function PreferencesSettingsScreen() {
   useEffect(() => {
     if (connected) void load();
   }, [connected, load]);
+
+  // R113-e: the live refetch — the settings world changed under us (a PUT
+  // from the PC, a reconnect's hello). The MOUNT value is skipped — the mount
+  // load above owns the first fetch; our OWN saves also echo back as frames —
+  // a reload that re-confirms what the optimistic state already shows
+  // (harmless, honest).
+  useEffect(() => {
+    if (settingsEpoch === mountEpoch.current) return;
+    if (connected) void load();
+  }, [settingsEpoch, connected, load]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

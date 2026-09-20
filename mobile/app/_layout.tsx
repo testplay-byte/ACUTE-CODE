@@ -12,8 +12,10 @@
  *   /connect/scan        → the camera scanner (pinch zoom + torch)
  *   /connect/manual      → the manual entry page (address/URL + PIN + fingerprint)
  *   /activity            → the notifications history (pushed from the bell)
- *   /(tabs)/…            → home · sessions · approvals · dashboard · settings
- *                          (the group renders the FLOATING bottom bar)
+ *   /(tabs)/…            → home · projects · approvals · dashboard · settings
+ *                          (the group renders the FLOATING bottom bar; the
+ *                          old sessions tab merged INTO projects — R113-e)
+ *   /project/:id         → a project's sessions (pushed from the tab)
  *   /session/:id         → the pushed transcript + live stream + composer
  *   /settings/*          → the pushed management pages (host, appearance,
  *                          providers, agents, prompts, preferences)
@@ -35,6 +37,7 @@ import { StyleSheet, View } from "react-native";
 import { ThemeProvider, useTheme } from "@/design/theme";
 import { BootErrorBoundary } from "@/components/error-boundary";
 import { startActivity } from "@/features/activity";
+import { startEvents } from "@/features/events";
 import {
   bootIdentity,
   bootLog,
@@ -63,6 +66,11 @@ function RootNavigator() {
     bootLog("root-mounted");
     // The live activity controller (unread badge + the notifications stream).
     startActivity();
+    // R113-e: the events controller — the phone's LIVE VIEW (remote turns
+    // stream, lists refresh, settings/appearance sync). The same lifecycle
+    // as the activity controller: the stream lives while connected +
+    // foregrounded (the R42 discipline).
+    startEvents();
     // Prefs land inside ThemeProvider's first effect — one tick later is
     // always enough; the hold is cosmetic-only, never a gate.
     const t = setTimeout(() => {
@@ -95,6 +103,7 @@ function RootNavigator() {
         <Stack.Screen name="connect" />
         <Stack.Screen name="activity" />
         <Stack.Screen name="session/[id]" />
+        <Stack.Screen name="project/[id]" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="(tabs)" />
       </Stack>

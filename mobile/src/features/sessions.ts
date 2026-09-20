@@ -45,6 +45,15 @@
  * The screen wires this module to acute-net via the manager's api()/sse();
  * everything here is pure TypeScript over injected values — unit-tested with
  * zero React Native in sight.
+ *
+ * ROUND-113 (R113-e — the phone's live view): the REMOTE mirror machinery
+ * below (beginRemoteTurn / rebaseRemoteTurn / reduceRemoteTurnFrame) rides
+ * the events stream (features/events.ts, GET /api/v1/events/stream's
+ * {type:"turn",sessionId,frame} frames — the exact StreamTurnEvent the
+ * initiating socket received, published by R113-a's bus): a turn started on
+ * the PC streams LIVE on the phone through the SAME applyLiveFrame reducer
+ * the phone's own sends use, and the initiator guard keeps an own stream
+ * authoritative (no doubled deltas).
  */
 
 import { apiJson, type ApiOutcome, type ApiSender, type SseSender } from "./api";
@@ -1096,6 +1105,130 @@ function mergeOldestChunks(chunks: string[]): string[] {
  * and let the screen rehydrate; the transcript is the truth. */
 export function abandonLiveTurn(turn: LiveTurn): LiveTurn {
   return { ...turn, phase: "idle", terminal: null };
+}
+
+// ── the REMOTE mirror (R113-e — the phone's live view of ANOTHER device's
+// turn, fed by the events stream's {type:"turn"} frames) ──────────────────
+
+/**
+ * Begin a REMOTE turn's mirror: another device started this turn, and the
+ * events stream mirrors every frame the initiating socket receives. The
+ * overlay carries the current base + the mirrored frames — NO optimistic
+ * user card (the message that started the turn was typed on the other
+ * device; its persisted row lands through the rebase/rehydrate). No clock:
+ * the mirror has no optimistic card to key off a timestamp (the own-turn
+ * begin's only `now` consumer).
+ */
+export function beginRemoteTurn(baseItems: TranscriptItem[]): LiveTurn {
+  return {
+    phase: "streaming",
+    items: [...baseItems],
+    sentContent: "",
+    terminal: null,
+    error: null,
+  };
+}
+
+/**
+ * Fold a fresh rehydrate under a remote mirror's live tail: the persisted
+ * log (the user card that STARTED the remote turn, appended tool rows)
+ * lands under the frames streamed since the mirror opened. `baseCount` is
+ * the base length the mirror was LAST rebased onto — everything after it
+ * in the mirror's items is the live tail. Pure; a shorter fresh base (a
+ * log trim) safely drops the tail's anchor row.
+ */
+export function rebaseRemoteTurn(
+  turn: LiveTurn,
+  baseItems: TranscriptItem[],
+  baseCount: number,
+): LiveTurn {
+  return { ...turn, items: [...baseItems, ...turn.items.slice(baseCount)] };
+}
+
+/** One remote-turn decision off the events stream — the screen drives the
+ * side effects, this pure reducer owns the verdict (unit-tested). */
+export interface RemoteTurnInput {
+  /** The current overlay (null = none). */
+  live: LiveTurn | null;
+  /** The current overlay is a REMOTE mirror (the screen tracks it). */
+  remote: boolean;
+  /** This screen holds the initiating stream (its own POST is streaming). */
+  ownStream: boolean;
+  /** The current persisted base (a fresh mirror opens over it). */
+  baseItems: TranscriptItem[];
+  /** The mirrored frame, shape-checked (events.turnFrameRecord). */
+  frame: Record<string, unknown>;
+  now: number;
+}
+
+export interface RemoteTurnResult {
+  /** The next overlay (always non-null when the result exists). */
+  turn: LiveTurn;
+  /** A fresh remote mirror was opened this frame (the caller records the
+   * base split point + pulls the truth in). */
+  began: boolean;
+  /** A terminal frame landed — the caller rehydrates; the truth wins. */
+  terminal: boolean;
+}
+
+/**
+ * The remote-turn frame decision (R113-e, pure):
+ *   · null → IGNORE: this device's own turn is in flight (the initiating
+ *     POST stream renders this exact frame — the bus mirrors it back too —
+ *     and a mirror would double every delta).
+ *   · otherwise → apply the frame through the SAME applyLiveFrame reducer
+ *     the own stream uses (thinking/caret/tool-running/queue chips render
+ *     identically), opening a fresh mirror when none is active — or when
+ *     the previous mirror already went terminal (a NEW turn must never
+ *     append to a dead one), or when converting an ABANDONED own overlay
+ *     (its stream died mid-turn; the events stream carries the remainder).
+ */
+export function reduceRemoteTurnFrame(input: RemoteTurnInput): RemoteTurnResult | null {
+  const prev = input.live;
+  if (prev !== null && !input.remote) {
+    // An OWN overlay. Live (streaming/stopping, or the stream still held) →
+    // the initiator's own reader owns this frame. Abandoned (phase idle, no
+    // terminal, stream dropped) → fall through: the fresh mirror below
+    // replaces it and the events stream carries the turn's remainder.
+    const ownInFlight = input.ownStream || (prev.phase !== "idle" && prev.terminal === null);
+    if (ownInFlight) return null;
+  }
+  const began = prev === null || !input.remote || prev.terminal !== null;
+  const turn = began ? beginRemoteTurn(input.baseItems) : prev;
+  const next = applyLiveFrame(turn, input.frame, input.now);
+  return { turn: next, began, terminal: next.terminal !== null };
+}
+
+/** A session frame's `status` field → the closed union — null when it is
+ * not a known status (never a guess; the header badge keeps its truth). */
+export function sessionStatusFromWire(value: unknown): SessionStatus | null {
+  if (
+    value === "queued" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "cancelled"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+/** Per-project session stats folded client-side (the sessions route has NO
+ * server-side projectId filter): the total + how many are RUNNING right
+ * now — the projects tab's count line + live dots. */
+export function countProjectSessions(
+  sessions: SessionRow[],
+): Record<string, { total: number; running: number }> {
+  const stats: Record<string, { total: number; running: number }> = {};
+  for (const session of sessions) {
+    if (session.projectId === null) continue;
+    const cur = stats[session.projectId] ?? { total: 0, running: 0 };
+    cur.total += 1;
+    if (session.status === "running") cur.running += 1;
+    stats[session.projectId] = cur;
+  }
+  return stats;
 }
 
 // ── the client (injectable sender) ─────────────────────────────────────────

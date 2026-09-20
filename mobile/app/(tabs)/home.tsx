@@ -1,9 +1,11 @@
 /**
- * Home v2 (R109) — the dashboard-front door: the live host hero (status,
- * retry, last-seen — the clay centerpiece), the quick-action grid
- * (approvals with its live badge, projects, sessions), the recent activity
- * preview, and the theme dots. Unpaired → the honest "link a device"
- * card. Everything clay; nothing glow.
+ * Home v2 (R109; R113-e — the tabs merge + the compact header) — the
+ * dashboard-front door: the live host hero (status, retry, last-seen — the
+ * clay centerpiece, now the screen's first element), the quick-action grid
+ * (approvals with its live badge, projects — the sessions card folded into
+ * it when the sessions tab died), the recent activity preview, and the
+ * theme dots. Unpaired → the honest "link a device" card. Everything clay;
+ * nothing glow.
  */
 
 import { useRouter } from "expo-router";
@@ -12,7 +14,6 @@ import { RefreshCw } from "lucide-react-native";
 import { StyleSheet, View } from "react-native";
 import {
   FolderGit2,
-  MessageSquareText,
   MonitorSmartphone,
   ShieldCheck,
 } from "lucide-react-native";
@@ -52,6 +53,10 @@ export default function HomeScreen() {
   const connected = status === "connected";
   const offline = status === "offline";
 
+  // R113-e: the tabs merge — the Sessions card's destination became the
+  // Projects tab; folded with the old Projects card (two cards pointing at
+  // one tab is noise). Approvals keeps its badge + the hero carries the
+  // rest.
   const quickActions = [
     {
       icon: ShieldCheck,
@@ -63,21 +68,14 @@ export default function HomeScreen() {
     {
       icon: FolderGit2,
       label: "Projects",
-      caption: "browse the registry",
+      caption: "the registry & its sessions",
       route: "/projects" as const,
-      tone: "neutral" as const,
-    },
-    {
-      icon: MessageSquareText,
-      label: "Sessions",
-      caption: "live transcripts",
-      route: "/sessions" as const,
       tone: "neutral" as const,
     },
   ];
 
   return (
-    <ScreenScaffold title="ACUTE" subtitle="the desktop agent, from your pocket">
+    <ScreenScaffold title="ACUTE">
       {host === null ? (
         // ── unpaired: the honest first card ──
         <ClayCard elevated>
