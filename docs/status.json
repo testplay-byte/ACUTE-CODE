@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.107.0",
+    "version": "0.108.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -335,7 +335,7 @@
     },
     {
       "date": "2026-09-20",
-      "label": "R114 — the twenty-first round: the sync foundation (the meta frames + turn.started + the server-side selected model — mode/model/chat-prefs live sync + the instant cross-device busy state) + the honest phone shell (the systemic empty-sheet fix, chromeless roots + colder-white clay, the color-coded dashboard, the projects accordion, per-tool transcript cards with the streaming write preview) + the phone owns its inventory (custom providers, the key pool, saved-model CRUD) + vision always-on for marked models (\"off\" retired) — suites 2608/4315/431 all green — in flight, not yet released (the v0.108.0 release round re-stamps this row)"
+      "label": "R114 — the twenty-first round: the sync foundation (the meta frames + turn.started + the server-side selected model — mode/model/chat-prefs live sync + the instant cross-device busy state) + the honest phone shell (the systemic empty-sheet fix, chromeless roots + colder-white clay, the color-coded dashboard, the projects accordion, per-tool transcript cards with the streaming write preview) + the phone owns its inventory (custom providers, the key pool, saved-model CRUD) + vision always-on for marked models (\"off\" retired) — suites 2608/4315/431 all green — v0.108.0 released"
     }
   ],
   "quality": {

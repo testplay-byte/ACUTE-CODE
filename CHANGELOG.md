@@ -9,8 +9,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
-## [Unreleased]
-<!-- targets 0.108.0 — the release round renames this section when it tags -->
+## [0.108.0] — 2026-09-20 — every menu works, live sync everywhere, the honest transcript
 
 ### The empty bottom menus, fixed at the root (the phone's headline fix)
 - **Every bottom-sheet menu on the phone — the model picker, the mode sheet, all of them — rendered as a title row and an X.** The root was one layout bug, not twenty: Android's Yoga engine collapses a flex:1 scroll area inside a content-sized panel to zero height. One clamp later (the scroller is pixel-limited against the live window height), every menu works — and every menu this round built on top of it.
