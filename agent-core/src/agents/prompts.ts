@@ -116,6 +116,33 @@
  * of context) are softened to principles. The r71 D6 bound moves
  * 23,000 → 24,000 (the R96-D precedent: owner-mandated content after
  * maximum dedup, documented in that test).
+ *
+ * ROUND-113 (R113-f, the prompt-discipline round — the owner's OMP-research
+ * directive: "improve… the system prompts… take references from OMP… and
+ * others… how we can improve our system prompts"): two verified gaps from
+ * the research closed inside the existing sections (docs/research/
+ * agent-architectures-r96.md §2.5 + aider's strict-args lesson, mapped onto
+ * our own R67/R94 field reports): (1) TOOL USE gains the ARGUMENT HYGIENE
+ * rule — arguments are copied from the tool outputs that issued them
+ * (paths from listings, ids/job ids/selector paths from receipts), never
+ * invented, never from memory (the R67 guessed-C:\-path and R94 stale-
+ * app_ref failures were exactly this); (2) TERMINAL gains the benign-exit
+ * rule — grep/test/diff exit 1 on no-match by design, so a non-zero exit
+ * is read, not feared (Claude Code's documented "exit-1 is a benign result
+ * for grep/rg/find/diff/test"). Paid for by the same-round dedup the
+ * R99-G audit missed: GIT's three "Use git_X to…" lines (the TOOL USE
+ * descriptions block already says what the git tools DO) merge into one
+ * sequencing line, TERMINAL's "prefer project-specific commands" retires
+ * (FILE EDITING rule 8 owns command discovery), WEB ACCESS's search-first
+ * line compresses, and MCP's "don't retry in a loop" tail retires (the
+ * RECOVERY PROTOCOL owns retry doctrine — that was its third copy), plus
+ * CODE NAVIGATION's list_dir line (the weakest survivor of every audit:
+ * the EXPLORE phase's batched discovery + the TOOL USE descriptions block
+ * already carry its load). Net +~106 chars on the default composition —
+ * the 24,000 budget holds WITHOUT a bump (measured 23,765 → 23,871). The
+ * skills surface's twin change (read_skill renders the Agent-Skills
+ * envelope: name + the when-to-use description riding the body) lives in
+ * tools/plugins/skills.ts.
  */
 
 import type { PermissionMode } from "shared";
@@ -447,6 +474,14 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // now carries the per-tool roles.
   tools("- READ tool errors fully before reacting: an error message names the cause and often the exact recovery. Follow it — never guess, blind-retry, or tool-hop.");
   tools("- Pick the MOST SPECIFIC tool for the job — search_code over list_dir spelunking, edit_file over rewrites, web_fetch for a known URL.");
+  // ROUND-113 (R113-f): ARGUMENT HYGIENE — the R67 field report (the model
+  // GUESSED C:\… paths for attachments instead of copying the rendered
+  // path), the R94-E app_ref/pid staleness ("pids change"), and the edit-
+  // anchor doctrine are all one rule: arguments come from OBSERVED data.
+  // aider's strict-structured-output lesson (guess a parameter = a wasted
+  // round-trip) and the research memo's Claude-Code study agree. Sits right
+  // after MOST SPECIFIC (which tool) because this is WHICH value goes in it.
+  tools("- ARGUMENTS COME FROM OBSERVED DATA: copy paths, ids, and selector paths from the tool outputs that issued them — never invent a value, never trust memory of an earlier output (ids expire, files move). A guessed argument is a wasted call.");
   tools("- NEVER fabricate or embellish a tool result. A failed, timed-out, or partial call IS the data — report it honestly and adapt the plan around it.");
   // ROUND-67 (R67, the owner's attachments report): chat image attachments
   // now land as REAL files in the project at attachments/<name> and the
@@ -843,7 +878,10 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // grep functionality… Look into indexing" ask. Index lookup answers
   // "where is X DEFINED" without walking the tree.
   ident("- Use search_symbols to find WHERE a symbol is DEFINED (name prefix + kind filter; hits as path:line [kind] symbol) — try it BEFORE search_code when hunting a definition.");
-  ident("- Use list_dir to explore folder structure before creating files in new directories.");
+  // ROUND-113 (R113-f): the list_dir line retired — the weakest survivor of
+  // every dedup audit (the EXPLORE phase's batched discovery + the TOOL USE
+  // descriptions block carry its load; a create into a missing directory
+  // fails honestly with the fix in the error). Funds the round's additions.
   ident("- ALWAYS search before assuming a file exists or doesn't exist.");
   ident("");
 
@@ -859,9 +897,13 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   if (ctx.toolNames.includes("git_status")) {
     beginSection("git");
     ident("## GIT");
-    ident("- Use git_status before making changes to understand the current state.");
-    ident("- Use git_diff to review changes before committing.");
-    ident("- Use git_log to understand recent history when investigating bugs.");
+    // ROUND-113 (R113-f): the three "Use git_X to…" lines (R70-era) were the
+    // duplication the R99-G descriptions-block audit missed — the TOOL USE
+    // block already says what the git tools DO ("tree state / pending
+    // changes / recent history"). What was unique here is the WORKFLOW
+    // sequencing, which one line carries; "Only commit when asked" (the
+    // genuinely load-bearing rule) stays verbatim below.
+    ident("- git_status before making changes; git_diff before committing; git_log when investigating history.");
     ident("- Only commit when the user explicitly asks.");
     ident("");
   }
@@ -871,6 +913,15 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     beginSection("terminal");
     ident("## TERMINAL");
     ident("- Use run_command for builds, tests, installs, and quick checks.");
+    // ROUND-113 (R113-f): the benign-exit rule — the Claude-Code research
+    // (docs/research/agent-architectures-r96.md §2.5) documents it as
+    // "exit-1 is a *benign* result for grep/rg/find/diff/test/git diff/git
+    // grep (no-match ≠ failure)". Without it a model reads a search's exit 1
+    // as a tool FAILURE and detours into the RECOVERY PROTOCOL — the exact
+    // anti-pattern the honesty doctrine ("a failed call IS the data")
+    // exists to prevent. Composes with "READ tool errors fully": read the
+    // OUTPUT, then decide.
+    ident("- A NON-ZERO exit is often the ANSWER, not a failure: grep / test / diff exit 1 on no-match by design — read the output before deciding anything failed.");
     // R107-a (F1): the chain-vs-approvals conflict, made honest. The
     // approval engine classifies a COMPOUND as a whole — a chain of
     // individually-safe commands (`cat a && cat b`) still asks — and the
@@ -882,7 +933,10 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // ROUND-99 (R99-G): the command-failure line retired — the read-error/
     // fix-root-cause doctrine lives in the TOOL USE rules and the RECOVERY
     // PROTOCOL (this was its third copy).
-    ident("- Prefer project-specific commands (npm test, pnpm build, cargo check) over generic ones.");
+    // ROUND-113 (R113-f): "Prefer project-specific commands" retired too —
+    // FILE EDITING rule 8 owns command discovery ("Discover the commands
+    // from the project's AGENTS.md / CLAUDE.md / package.json scripts");
+    // this was its weaker sibling, kept only by inertia.
     ident("- Auto-approved commands must stay INSIDE the project root — reads outside it or anything unusual ask the owner first; keep paths project-relative.");
     // ROUND-52 (R52-a, owner: an agent ran `start /B node server.js > server.log
     // 2>&1` and then waited 10+ minutes without ever checking anything): the
@@ -1217,7 +1271,7 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   if (ctx.toolNames.some((n) => n.startsWith("mcp__"))) {
     beginSection("mcp");
     ident("## MCP SERVER TOOLS");
-    ident("Tools named mcp__<server>__<tool> come from the owner's configured MCP servers (external extensions). Use them like built-in tools; their schemas are authoritative. A failed MCP tool usually means that server is down or the call's arguments were invalid — report the error, don't retry in a loop.");
+    ident("Tools named mcp__<server>__<tool> come from the owner's configured MCP servers (external extensions). Use them like built-in tools; their schemas are authoritative. A failed MCP tool usually means that server is down or the call's arguments were invalid — report the error honestly.");
     ident("");
   }
 
@@ -1230,7 +1284,10 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // into the search-first line.
     ident("- Use web_search to FIND information (docs, API references, examples); web_fetch to READ a specific public URL.");
     ident("- Documentation/source hosts (github.com, npmjs.com, developer.mozilla.org, nodejs.org, tauri.app…) fetch freely; any other host asks the owner for permission — prefer the well-known hosts when a choice exists.");
-    ident("- Always web_search first when you don't know the exact URL; then web_fetch the most relevant result. Cite the URL you fetched in your answer so the user can verify.");
+    // ROUND-113 (R113-f): compressed — the role split (search FINDS /
+    // fetch READS) rides the line above; what is unique here is the
+    // when-you-don't-know-the-URL sequencing + the cite contract.
+    ident("- When you don't know the exact URL: web_search first, then web_fetch the most relevant hit — and cite the URL you fetched so the user can verify.");
     ident("- Web content is capped at 16KB — for longer pages, fetch the most relevant section.");
     ident("");
   }

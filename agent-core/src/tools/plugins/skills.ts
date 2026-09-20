@@ -41,6 +41,36 @@
  * at SEARCH_SKILLS_RESULT_CAP with the exact read_skill call to load each
  * — mirroring read_skill's own "load with read_skill { name: … }" error
  * convention. An honest no-match result names the alternatives.
+ *
+ * ROUND-113 (R113-f, the envelope round): read_skill's MAIN-BODY output now
+ * renders the Agent-Skills envelope (agentskills.io / Claude Code: "the
+ * description is always in context") —
+ *
+ *     # Skill: <name>
+ *     > <description — the when-to-use envelope: Use when… Delivers… NOT for…>
+ *
+ *     <body>
+ *
+ * WHY: the description rode the prompt's SKILLS index and every
+ * search_skills result, but NOT the loaded body — so a skill loaded
+ * mid-task (sticky in the event log for the rest of the session, often
+ * revisited many turns later) carried NO statement of when it applies;
+ * the three surfaces disagreed. One envelope, all three surfaces.
+ * The `>` blockquote marks the description as envelope metadata, not
+ * body instructions, and degrades gracefully in plain text.
+ * MIGRATION-FREE by construction: the description is already resolved on
+ * every EffectiveSkill (DB row or file frontmatter) — no storage change,
+ * no re-seed, nothing to migrate.
+ * TOLERANT HEADER DEDUP: the 24 builtin bodies carry their own house
+ * "# Skill: <name>" first line (the r71 house format), so the plugin's
+ * envelope header previously DOUBLED it ("# Skill: X\n\n# Skill: X…").
+ * A body whose first non-empty line is EXACTLY "# Skill: <name>" has that
+ * line dropped (the envelope replaces it); any other body rides verbatim
+ * — file skills and user skills are untouched. The ALWAYS-ON SKILLS
+ * section (prompts.ts) is deliberately NOT changed: its index line
+ * directly above already carries the description (adding it again would
+ * be the duplication this round removes) and the R98-E2 suite pins that
+ * composition.
  */
 import { jsonSchema } from "ai";
 import { getAgent } from "../../storage/agents.js";
@@ -67,6 +97,37 @@ const READ_SKILL_OUTPUT_BUDGET = 60_000;
  * discovery listing stays a digest, not a dump; the cap matches the
  * reference-listing conventions of the rest of the skills surface. */
 const SEARCH_SKILLS_RESULT_CAP = 8;
+
+/* ── ROUND-113 (R113-f): the read_skill envelope ────────────────────────────
+ *
+ * Two pure helpers (the plugin's whole job is composing strings; these stay
+ * unit-testable by the r113 suite through the tool itself):
+ *   · skillEnvelope(name, description) — the two-line header every skill
+ *     load now opens with: the identity line + the when-to-use description
+ *     as a blockquote (marked as envelope metadata, never body prose).
+ *   · stripLeadingSkillHeader(name, body) — the tolerant house-format dedup:
+ *     builtin bodies open with their own "# Skill: <name>" line; with the
+ *     envelope now carrying identity, that line is REDUNDANT and is dropped
+ *     (exact-match only — a body whose first line differs rides verbatim,
+ *     so user/file skills are byte-identical to before apart from the new
+ *     envelope lines above them). */
+
+/** The envelope header: identity line + description blockquote (no trailing
+ * blank — callers add the separator before the body). */
+function skillEnvelope(name: string, description: string): string {
+  return `# Skill: ${name}\n> ${description}`;
+}
+
+/** Drop a redundant leading "# Skill: <name>" house-format line (exact match
+ * on the skill's OWN name only — anything else is body content and rides
+ * verbatim). A body that is ONLY the header degrades to "" honestly. */
+function stripLeadingSkillHeader(name: string, body: string): string {
+  const firstLineEnd = body.indexOf("\n");
+  const firstLine = firstLineEnd === -1 ? body : body.slice(0, firstLineEnd);
+  if (firstLine.trim() !== `# Skill: ${name}`) return body;
+  const rest = firstLineEnd === -1 ? "" : body.slice(firstLineEnd + 1);
+  return rest.replace(/^\n+/, "");
+}
 
 /** ROUND-96 (R96-D): one search term's best contribution to a skill's
  * score — exact name > name word > name prefix > name substring >
@@ -239,7 +300,9 @@ export const skillsPlugin: PluginDefinition = {
             if (!body.ok) {
               return { ok: false, output: `read_skill: ${body.note}` };
             }
-            let output = `# Skill: ${skill.name}\n\n${body.body}`;
+            // R113-f: the envelope (name + description) rides every load;
+            // a house-format "# Skill: <name>" first line is deduped.
+            let output = `${skillEnvelope(skill.name, skill.description)}\n\n${stripLeadingSkillHeader(skill.name, body.body)}`;
             // R72-c — the references listing block: only for FILE skills
             // that carry references (DB skills unchanged). The first listed
             // name rides the example so the syntax is copy-pasteable.
@@ -258,9 +321,12 @@ export const skillsPlugin: PluginDefinition = {
           if (row === undefined) {
             return { ok: false, output: `read_skill: skill '${name}' disappeared from the database (id ${skill.id})` };
           }
+          // R113-f: same envelope as file skills — the description is the
+          // row's (authoritative at load time), the house-format first line
+          // is deduped so builtins render ONE identity header, not two.
           return {
             ok: true,
-            output: `# Skill: ${skill.name}\n\n${row.body}`.slice(0, 60000),
+            output: `${skillEnvelope(skill.name, row.description)}\n\n${stripLeadingSkillHeader(skill.name, row.body)}`.slice(0, 60000),
           };
         },
       },

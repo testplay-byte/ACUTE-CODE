@@ -163,7 +163,7 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
   },
   {
     id: "code-navigation",
-    description: "## CODE NAVIGATION — search_symbols-first definition hunting, list_dir, search-before-assume (the search_files/search_code role lines moved to the TOOL USE descriptions block by R99-G)",
+    description: "## CODE NAVIGATION — search_symbols-first definition hunting, search-before-assume (the search_files/search_code role lines moved to the TOOL USE descriptions block by R99-G; the list_dir line retired by R113-f)",
     dynamic: false,
     bucket: "identity",
   },

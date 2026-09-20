@@ -425,6 +425,23 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // descriptions block at full width + the memory WHEN block; the DEFAULT
     // full-tools budget (r71 D6) tells the honest net story: 22,962 →
     // 23,975 chars.
+    // Regenerated AGAIN in R113-f (deliberately — the prompt-discipline
+    // round from the owner's OMP-research directive; see prompts.ts's
+    // ROUND-113 header for the full rationale). The verified diff (git diff
+    // of the fixture, read before regenerating — never blind) was EXACTLY
+    // five hunks, +5/−7 lines: (1) TOOL USE gains the ARGUMENTS COME FROM
+    // OBSERVED DATA rule after MOST SPECIFIC (the R67 guessed-path / R94
+    // stale-app_ref class); (2) CODE NAVIGATION loses the list_dir line
+    // (the weakest survivor of every dedup audit); (3) GIT's three "Use
+    // git_X to…" lines merge into one sequencing line ("Only commit when
+    // asked" verbatim); (4) TERMINAL gains the benign-exit rule (grep /
+    // test / diff exit 1 on no-match — the Claude-Code research §2.5
+    // discipline) and loses "Prefer project-specific commands" (FILE
+    // EDITING rule 8 owns discovery); (5) WEB ACCESS's search-first line
+    // compresses and MCP's "don't retry in a loop" tail retires (RECOVERY
+    // owns retry doctrine). NOTHING else moved. Default-composition delta:
+    // 23,765 → 23,871 chars — the 24,000 budget holds without a bump; the
+    // skills-surface twin (the read_skill envelope) changes no prompt bytes.
     const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r61.txt"), "utf8").replace(/\r\n/g, "\n");
     const composed = buildProjectSystemPrompt(FULL_CTX).replace(/\r\n/g, "\n");
     expect(composed).toBe(golden);
