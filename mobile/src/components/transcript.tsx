@@ -1,27 +1,41 @@
 /**
- * Transcript v3 (R113-c) — the session's rendered event log in the clay
- * language, now a REAL replica of the PC chat (the owner's directive):
+ * Transcript v4 (R115-J) — the conversation's message grammar per
+ * docs/design-language/android/02-patterns/chat.md §Transcript:
  *
- *   - assistant blocks render through MarkdownText (bold is bold, code
- *     blocks are mono tiles, lists, quotes, tables — the R109 fix), and
- *     while LIVE the accumulated content re-parses per delta with the
- *     pulsing clay caret at the end (results stream in, formatted)
- *   - user bubbles: accent-tinted, right-aligned, queued variant, and the
- *     attachments a message carried render as chips under the text
- *   - tool cards: clay tiles with depth, tap-to-expand (full args/output)
- *   - thinking: the collapsible dim block
- *   - QUESTION cards (R87 ask_user): option pills + a custom-answer input +
- *     one POST resolves the whole ask; answered/timeout/cancelled states
- *   - TODO cards (todo.update): the compact progress header + checklist
- *     rows, collapsible under the house spring
- *   - SUB-AGENT cards (live subagent-status frames): role/code/status/task,
- *     tap → the child session's own transcript screen
- *   - IMAGE tiles (live screenshot frames): lazy-fetched PNG rasters, capped
- *     height, tap → the full-screen viewer
- *   - approval mini-cards, meta lines, honest error cards, debug blocks
+ *   - USER BUBBLE (right, maxWidth 88%): an accent-TINTED clay fill (the
+ *     accent mixed ~10% over the card — the PC chat's own bubble math, not a
+ *     solid accent slab), r20 with the tighter 16px bottom-right corner (the
+ *     WhatsApp tail hint), and the CLOCK INSIDE the bubble's bottom-right
+ *     corner (10px tertiary, gated by the timestampsMode pref — never
+ *     floating below). Image attachments render as proper rounded thumbnails
+ *     (r12, ~64% of the column, aspect-kept) — never tiny chips; other
+ *     attachments stay chips under the text.
+ *   - ASSISTANT = a document (full width, no bubble): the meta line (model ·
+ *     time, mono 10.5 tertiary) sits ABOVE the first content chunk and ONLY
+ *     when the turn has content; the collapsible dim thinking card rides
+ *     above it; the live caret keeps pulsing after the streaming markdown.
+ *   - TOOL CARDS: compact, ONE line per state — the write card's head carries
+ *     "Writing {file}… · {n} chars" with the live tail preview below, the
+ *     terminal card keeps command + tail + summary, the read-skill family is
+ *     ONE slim quiet chip ("Read skill · {name}" + a status check, never a
+ *     full view; args only behind manual expand), the generic card stays the
+ *     humanized fallback. toolActivity detailed/compact/hidden all still
+ *     apply (compact = one collapsed line; hidden folds into meta lines).
+ *   - IMAGES: screenshot tiles keep the lazy 240×120 geometry but render
+ *     rounded r12 with a quiet border and a SKELETON while loading (never a
+ *     spinner); expired keeps its honest line; the full-screen viewer keeps
+ *     the zoom spring and now measures the image's true aspect.
+ *   - PROCESSING: the three-dot Thinking card BREATHES (opacity 0.85↔1,
+ *     ~1.2s cycle) and enters with the house fade-in-up the moment the turn
+ *     starts; the first real delta retires it (the screen's synthetic item —
+ *     that logic is untouched). With the header's breathing accent line this
+ *     is the whole "processing" story — no spinner anywhere.
+ *   - question / todo / subagent / approval-mini / meta / error / debug
+ *     cards keep their logic, restyled to one visual idea per region.
  *
  * One renderer for BOTH sources — the persisted fold and the live stream
- * produce the same TranscriptItem union (features/sessions.ts).
+ * produce the same TranscriptItem union (features/sessions.ts — the data
+ * model is untouched this wave).
  */
 
 import { useEffect, useState } from "react";
@@ -29,19 +43,21 @@ import { ActivityIndicator, Image, Pressable, StyleSheet, Text, TextInput, View 
 import { useRouter } from "expo-router";
 import Animated, {
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withRepeat,
   withSequence,
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { BookOpenText, Check, ChevronDown, ChevronUp, CircleX, FileCode2, ImageIcon, Minus, SquareTerminal, Wrench } from "lucide-react-native";
+import { BookOpenText, Check, ChevronDown, ChevronUp, CircleX, FileCode2, ImageIcon, SquareTerminal, Wrench } from "lucide-react-native";
 import { useTheme, useChatPrefs } from "@/design/theme";
-import { Badge, TypeBody, TypeCaption, TypeMono } from "@/design/primitives";
+import { Badge, FadeInUp, Skeleton, TypeBody, TypeCaption, TypeMono } from "@/design/primitives";
 import { MarkdownText } from "@/components/markdown-text";
 import { ImageViewer } from "@/components/image-viewer";
 import { getLinkManager } from "@/link/runtime";
 import { fetchRasterFile, type RasterState } from "@/features/raster";
+import { formatAttachmentSize } from "@/features/attachments";
 import {
   densityVerticalPadding,
   messageClock,
@@ -66,13 +82,22 @@ import {
   RADIUS_PILL,
   RADIUS_ROUND,
   fontFamily,
+  mixHex,
   spacing,
   TYPE_BODY,
   TYPE_CAPTION,
-  TYPE_MICRO,
 } from "@/design/tokens";
 import { subagentStatusLabel } from "@/features/sessions";
 import type { AttachmentView, TranscriptItem } from "@/features/sessions";
+
+// ── local drawing constants (chat.md's own geometry — the file's class) ─────
+
+/** chat.md — the image radius: r12 on thumbnails + screenshot tiles. */
+const RADIUS_IMAGE = 12;
+/** chat.md — the WhatsApp tail hint: the user bubble's bottom-right corner. */
+const RADIUS_BUBBLE_TAIL = 16;
+/** One leg of the placeholder's calm ~1.2s breathe + the dots' pulse. */
+const BREATHE_LEG_MS = 600;
 
 // ── the list ────────────────────────────────────────────────────────────────
 
@@ -162,7 +187,28 @@ function Reveal({ open, children }: { open: boolean; children: React.ReactNode }
   return <Animated.View style={animated}>{children}</Animated.View>;
 }
 
-// ── user (attachments ride the bubble) ─────────────────────────────────────
+// ── user (the WhatsApp-shaped bubble — chat.md §Transcript) ─────────────────
+
+/** The image-extension test (name OR the persisted path). */
+const IMAGE_ATTACHMENT_RE = /\.(png|jpe?g|webp|gif|avif|bmp)$/i;
+
+function isImageAttachment(a: AttachmentView): boolean {
+  return IMAGE_ATTACHMENT_RE.test(a.name) || (a.path !== undefined && IMAGE_ATTACHMENT_RE.test(a.path));
+}
+
+/**
+ * The attachment's RENDERABLE image bytes, when the model carries them: a
+ * data/file/content/http URI riding `path`. The wire's MessageAttachment is
+ * name/path/size today, so this stays null for now — it is exactly the hook
+ * the frozen data model grows into (the thumbnail already knows how to draw
+ * pixels the moment one rides here). A project-relative "attachments/foo.png"
+ * path is NOT bytes and never pretends to be.
+ */
+function attachmentImageUri(a: AttachmentView): string | null {
+  const p = a.path;
+  if (p === undefined) return null;
+  return /^(data:|file:|content:|https?:)/i.test(p) ? p : null;
+}
 
 function UserBubble({
   content,
@@ -182,17 +228,27 @@ function UserBubble({
   const pad = densityVerticalPadding(prefs.chatDensity);
   const scale = textSizeScale(prefs.chatTextSize);
   const clock = timestampsVisible(prefs.timestampsMode) ? messageClock(ts) : null;
+  // chat.md — the accent-TINTED clay fill (never a solid accent slab): the
+  // accent mixed ~10% over the card, with a slightly deeper tint edge. This
+  // is the PC chat's own bubble math, ported through mixHex.
+  const tintedFill = mixHex(tokens.card, tokens.accent, 0.1);
+  const tintedEdge = mixHex(tokens.card, tokens.accent, 0.22);
+  const chipFill = mixHex(tokens.card, tokens.accent, 0.18);
+  const chipEdge = mixHex(tokens.card, tokens.accent, 0.32);
+  const images = attachments?.filter(isImageAttachment) ?? [];
+  const files = attachments?.filter((a) => !isImageAttachment(a)) ?? [];
   return (
     <View style={styles.userRow}>
       <View
         accessibilityLabel={queued ? "Queued message" : "Your message"}
+        testID="transcript-user-bubble"
         style={[
           styles.userBubble,
           {
-            backgroundColor: queued ? tokens.card : tokens.selectedBg,
-            borderTopColor: queued ? tokens.clayTopEdge : "transparent",
-            borderColor: queued ? tokens.border : "transparent",
-            boxShadow: queued ? tokens.clayShadowSm : undefined,
+            backgroundColor: queued ? tokens.card : tintedFill,
+            borderTopColor: queued ? tokens.clayTopEdge : tintedEdge,
+            borderColor: queued ? tokens.border : tintedEdge,
+            boxShadow: tokens.clayShadowSm,
             paddingVertical: pad,
           },
         ]}
@@ -204,32 +260,35 @@ function UserBubble({
         )}
         <Text
           style={{
-            color: queued ? tokens.text : tokens.selectedText,
+            color: tokens.text,
             fontSize: Math.round(TYPE_BODY * scale),
-            fontFamily: fontFamily.medium,
-            lineHeight: Math.round(21 * scale),
+            fontFamily: fontFamily.regular,
+            lineHeight: Math.round(22 * scale),
           }}
         >
           {content}
         </Text>
-        {attachments !== null && (
+        {images.map((a) => (
+          <UserImageThumb key={`img-${a.name}-${a.path ?? ""}`} attachment={a} />
+        ))}
+        {files.length > 0 && (
           <View style={styles.userAttachRow}>
-            {attachments.map((a) => (
+            {files.map((a) => (
               <View
                 key={`${a.name}-${a.path ?? ""}`}
                 accessibilityLabel={`Attachment ${a.name}`}
                 style={[
                   styles.userAttachChip,
                   {
-                    backgroundColor: queued ? tokens.subtle : "rgba(255,255,255,0.22)",
-                    borderColor: queued ? tokens.borderSubtle : "transparent",
+                    backgroundColor: queued ? tokens.subtle : chipFill,
+                    borderColor: queued ? tokens.borderSubtle : chipEdge,
                   },
                 ]}
               >
-                <ImageIcon size={11} color={queued ? tokens.textTertiary : tokens.selectedText} strokeWidth={2.2} />
+                <ImageIcon size={11} color={queued ? tokens.textTertiary : tokens.accent} strokeWidth={2.2} />
                 <Text
                   style={{
-                    color: queued ? tokens.textSecondary : tokens.selectedText,
+                    color: tokens.textSecondary,
                     fontSize: TYPE_CAPTION - 1,
                     fontFamily: fontFamily.medium,
                   }}
@@ -241,19 +300,101 @@ function UserBubble({
             ))}
           </View>
         )}
+        {/* chat.md — the clock lives INSIDE the bubble's bottom-right corner
+            (10px tertiary), never floating below it. */}
+        {clock !== null && (
+          <View style={styles.userClockRow} testID="transcript-user-clock">
+            <TypeCaption style={{ color: tokens.textTertiary, fontSize: 10 }}>{clock}</TypeCaption>
+          </View>
+        )}
       </View>
-      {clock !== null && (
-        <TypeCaption
-          style={{ color: tokens.textTertiary, fontSize: 10, marginTop: 2, alignSelf: "flex-end" }}
-        >
-          {clock}
-        </TypeCaption>
-      )}
     </View>
   );
 }
 
-// ── assistant (markdown, live-formatted, the pulsing caret) ─────────────────
+/**
+ * One image attachment — a PROPER rounded thumbnail (chat.md: r12, ~64% of
+ * the column, aspect-kept; donts #16 bans the squinted tiny tile). With
+ * pixels (a renderable URI on the model) the image draws at its measured
+ * aspect and taps into the full-screen viewer; without pixels (today's
+ * name/path/size wire) the same geometry renders the honest image frame —
+ * icon + name + size — never a fabricated photo.
+ */
+function UserImageThumb({ attachment }: { attachment: AttachmentView }) {
+  const { tokens } = useTheme();
+  const uri = attachmentImageUri(attachment);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [aspect, setAspect] = useState<number | null>(null);
+
+  // Aspect-kept: measure the image's TRUE ratio once per uri (fallback 4:3
+  // covers a failed measure — the tile never guesses wrong twice).
+  useEffect(() => {
+    if (uri === null) return;
+    let cancelled = false;
+    Image.getSize(
+      uri,
+      (w, h) => {
+        if (!cancelled && h > 0) setAspect(w / h);
+      },
+      () => {
+        // measure failed — the 4:3 fallback stands (never a crash)
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [uri]);
+  const ratio = aspect ?? 4 / 3;
+
+  const tile = (
+    <View
+      style={[
+        styles.userImageTile,
+        { borderColor: tokens.borderSubtle, backgroundColor: tokens.subtle },
+      ]}
+    >
+      {uri !== null ? (
+        <Image
+          source={{ uri }}
+          style={[styles.userImageFill, { aspectRatio: ratio }]}
+          resizeMode="cover"
+        />
+      ) : (
+        <View style={[styles.userImageFrame, { aspectRatio: ratio }]}>
+          <ImageIcon size={20} color={tokens.textTertiary} strokeWidth={1.8} />
+          <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={1}>
+            {attachment.name}
+            {attachment.size !== undefined ? ` · ${formatAttachmentSize(attachment.size)}` : ""}
+          </TypeCaption>
+        </View>
+      )}
+    </View>
+  );
+
+  if (uri === null) {
+    // No pixels on the wire — the honest frame, not tappable (nothing to show).
+    return <View accessibilityLabel={`Image attachment ${attachment.name}`}>{tile}</View>;
+  }
+  return (
+    <View>
+      <Pressable
+        accessibilityLabel={`Open the image ${attachment.name}`}
+        accessibilityRole="button"
+        onPress={() => setViewerOpen(true)}
+      >
+        {tile}
+      </Pressable>
+      <ImageViewer
+        uri={uri}
+        caption={attachment.name}
+        open={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+      />
+    </View>
+  );
+}
+
+// ── assistant (the document: meta line ABOVE, markdown, live caret) ─────────
 
 function AssistantBlock({ item }: { item: TranscriptItem & { kind: "assistant" } }) {
   const { tokens } = useTheme();
@@ -265,11 +406,24 @@ function AssistantBlock({ item }: { item: TranscriptItem & { kind: "assistant" }
   const liveText =
     item.live && item.chunks !== null ? item.chunks.join("") : null;
   const settled = !item.live && item.content !== "" ? item.content : null;
+  // chat.md — the meta line rides ABOVE the FIRST CONTENT chunk and only
+  // when the turn has content (a thinking-only turn keeps its quiet card;
+  // the placeholder owned the model naming before the first delta).
+  const hasContent = (liveText !== null && liveText !== "") || settled !== null;
 
   return (
-    <View style={styles.block} accessibilityLabel="Assistant message">
+    <View style={styles.block} accessibilityLabel="Assistant message" testID="transcript-assistant">
       {item.thinking !== null && item.thinking !== "" && (
         <ThinkingBlock text={item.thinking} live={item.live} />
+      )}
+      {hasContent && (item.model !== null || clock !== null) && (
+        <TypeMono
+          numberOfLines={1}
+          style={{ color: tokens.textTertiary, fontSize: 10.5 }}
+          testID="transcript-assistant-meta"
+        >
+          {[item.model, clock].filter((part) => part !== null).join(" · ")}
+        </TypeMono>
       )}
       {liveText !== null && liveText !== "" ? (
         <View style={styles.assistantLive}>
@@ -281,28 +435,26 @@ function AssistantBlock({ item }: { item: TranscriptItem & { kind: "assistant" }
       ) : item.live ? (
         <Caret color={tokens.accent} />
       ) : null}
-      {/* R114-d — the model line renders LIVE too (turn.started names the
-          resolved pair; the owner: "I don't see which model was being used
-          in the chat itself"); the clock rides the same quiet meta line. */}
-      {(item.model !== null || clock !== null) && (
-        <TypeMono style={{ color: tokens.textTertiary, marginTop: spacing.xs, fontSize: 10.5 }}>
-          {[item.model, clock].filter((part) => part !== null).join(" · ")}
-        </TypeMono>
-      )}
     </View>
   );
 }
 
-/** The live cursor — a calm 1.1s pulse marking the stream still flowing. */
+/** The live cursor — a calm 1.1s pulse marking the stream still flowing
+ * (motion.md §3; reduced motion snaps it solid — §5). */
 function Caret({ color }: { color: string }) {
+  const reduced = useReducedMotion();
   const opacity = useSharedValue(1);
   useEffect(() => {
+    if (reduced) {
+      opacity.value = 1;
+      return;
+    }
     opacity.value = withRepeat(
       withSequence(withTiming(0.25, { duration: 550 }), withTiming(1, { duration: 550 })),
       -1,
       false,
     );
-  }, [opacity]);
+  }, [opacity, reduced]);
   const animated = useAnimatedStyle(() => ({ opacity: opacity.value }));
   return (
     <Animated.View
@@ -312,57 +464,88 @@ function Caret({ color }: { color: string }) {
   );
 }
 
-// ── the THINKING PLACEHOLDER (R114-d — "while it is processing it does not
-// show me anything"): sits exactly where the assistant message will appear
-// while a live turn streams with NO content yet. The house StatusDot pulse
-// grammar (three staggered dots), the word "Thinking", and the turn's
-// resolved model in micro mono — calm motion, never a spinner. The first
-// real delta replaces it (the screen stops emitting the synthetic item). ──
+// ── the THINKING PLACEHOLDER (the processing story, R115-J) ─────────────────
+//
+// Sits exactly where the assistant message will appear while a live turn
+// streams with NO content yet: the three staggered StatusDot-grammar dots,
+// the word "Thinking", and the turn's resolved model in micro mono. The card
+// itself now BREATHES (opacity 0.85↔1, ~1.2s — calm, never attention-thrash)
+// and enters with the house fade-in-up the moment the turn starts; the first
+// real delta replaces it (the screen stops emitting the synthetic item —
+// that logic is untouched). With the header's breathing accent line (R115-I)
+// this card IS the processing story: no spinner anywhere.
 
 function ThinkingPlaceholder({ model }: { model: string | null }) {
   const { tokens } = useTheme();
+  const reduced = useReducedMotion();
+  const breathe = useSharedValue(1);
+  useEffect(() => {
+    if (reduced) {
+      breathe.value = 1;
+      return;
+    }
+    breathe.value = withRepeat(
+      withSequence(
+        withTiming(0.85, { duration: BREATHE_LEG_MS }),
+        withTiming(1, { duration: BREATHE_LEG_MS }),
+      ),
+      -1,
+      false,
+    );
+  }, [reduced, breathe]);
+  const breathing = useAnimatedStyle(() => ({ opacity: breathe.value }));
   return (
-    <View
-      accessibilityLabel={
-        model !== null ? `The agent is thinking with ${model}` : "The agent is thinking"
-      }
-      style={[
-        styles.thinking,
-        {
-          borderColor: tokens.borderSubtle,
-          backgroundColor: tokens.monoBg,
-          borderTopColor: tokens.clayTopEdge,
-          boxShadow: tokens.clayShadowSm,
-        },
-      ]}
-    >
-      <View style={styles.thinkingDots}>
-        {[0, 1, 2].map((i) => (
-          <View key={i} style={styles.thinkingDotSlot}>
-            <ThinkingDot color={tokens.textTertiary} delay={i * 180} />
+    <FadeInUp testID="transcript-thinking-placeholder">
+      <Animated.View style={breathing}>
+        <View
+          accessibilityLabel={
+            model !== null ? `The agent is thinking with ${model}` : "The agent is thinking"
+          }
+          style={[
+            styles.thinking,
+            {
+              borderColor: tokens.borderSubtle,
+              backgroundColor: tokens.monoBg,
+              borderTopColor: tokens.clayTopEdge,
+              boxShadow: tokens.clayShadowSm,
+            },
+          ]}
+        >
+          <View style={styles.thinkingDots}>
+            {[0, 1, 2].map((i) => (
+              <View key={i} style={styles.thinkingDotSlot}>
+                <ThinkingDot color={tokens.textTertiary} delay={i * 180} />
+              </View>
+            ))}
+            <TypeCaption style={{ color: tokens.textTertiary, marginLeft: spacing.xs }}>
+              Thinking
+            </TypeCaption>
+            {model !== null && (
+              // The spec's micro-mono model name (the calibration-mark voice the
+              // assistant cards' own meta line speaks — scaled never, tertiary
+              // always).
+              <TypeMono style={{ color: tokens.textTertiary, fontSize: 11 }}>
+                {`· ${model}`}
+              </TypeMono>
+            )}
           </View>
-        ))}
-        <TypeCaption style={{ color: tokens.textTertiary, marginLeft: spacing.xs }}>
-          Thinking
-        </TypeCaption>
-        {model !== null && (
-          // The spec's micro-mono model name (the calibration-mark voice the
-          // assistant cards' own model line speaks — scaled never, tertiary
-          // always).
-          <TypeMono style={{ color: tokens.textTertiary, fontSize: 11 }}>
-            {`· ${model}`}
-          </TypeMono>
-        )}
-      </View>
-    </View>
+        </View>
+      </Animated.View>
+    </FadeInUp>
   );
 }
 
 /** One pulsing dot of the placeholder — the StatusDot's calm 1.2s opacity
- * pulse (the house motion vocabulary), staggered per dot. */
+ * pulse (the house motion vocabulary), staggered per dot; reduced motion
+ * snaps to a steady mid read (§5). */
 function ThinkingDot({ color, delay }: { color: string; delay: number }) {
+  const reduced = useReducedMotion();
   const opacity = useSharedValue(0.35);
   useEffect(() => {
+    if (reduced) {
+      opacity.value = 0.6;
+      return;
+    }
     const total = 600 + 600;
     const sleep = delay % total;
     // Stagger via an initial offset, then the same repeat both dots run —
@@ -376,11 +559,38 @@ function ThinkingDot({ color, delay }: { color: string; delay: number }) {
         false,
       ),
     );
-  }, [opacity, delay]);
+  }, [opacity, delay, reduced]);
   const animated = useAnimatedStyle(() => ({ opacity: opacity.value }));
   return (
     <Animated.View
       style={[animated, { width: 6, height: 6, borderRadius: 3, backgroundColor: color }]}
+    />
+  );
+}
+
+/** The quiet breathing dot the question card leads with (the same calm
+ * 1.2s pulse grammar — the card asks for attention once, calmly). */
+function PulseDot({ color, size }: { color: string; size: number }) {
+  const reduced = useReducedMotion();
+  const opacity = useSharedValue(0.5);
+  useEffect(() => {
+    if (reduced) {
+      opacity.value = 0.7;
+      return;
+    }
+    opacity.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: BREATHE_LEG_MS }),
+        withTiming(0.35, { duration: BREATHE_LEG_MS }),
+      ),
+      -1,
+      false,
+    );
+  }, [opacity, reduced]);
+  const animated = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return (
+    <Animated.View
+      style={[animated, { width: size, height: size, borderRadius: size / 2, backgroundColor: color }]}
     />
   );
 }
@@ -426,25 +636,23 @@ function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
   );
 }
 
-// ── tool (the per-tool dispatcher — R114-d) ─────────────────────────────────
+// ── tool (the per-tool dispatcher — ONE line per state, R115-J) ─────────────
 //
-// The owner's reports: "'read skill' showed the full view with an ok status
-// — ugly"; "writing a file was not shown properly on mobile while PC
-// streamed it". One dispatcher, one presentation per tool family, the
-// generic card as the fallback for everything unknown:
-//   · read_skill (the compact-read family) → ONE quiet line: skill icon +
-//     "Skill · <name>" + status; the args dump renders ONLY on manual expand.
-//   · write_file / edit_file → the WRITE card: mono path, the live char
-//     counter + a quiet 2-3 line content tail WHILE the args stream (the
-//     tool-input-delta raw the reducer now accumulates), the result summary
-//     once the call settles.
+// chat.md's tool table, one presentation per family, the generic card as the
+// fallback for everything unknown:
+//   · write_file / edit_file → the WRITE card: the head line carries
+//     "Writing {file}… · {n} chars" while the args stream (the live tail
+//     preview below it — the tool-input-delta raw the reducer accumulates),
+//     "Wrote {file}" + the result summary once the call settles.
 //   · run_command / bash → the TERMINAL card: mono command line, the
 //     streamed tool-output tail as a quiet terminal block, status on result.
+//   · read_skill + the compact-read family → ONE slim quiet chip:
+//     "Read skill · {name}" + the status check — never the full view; the
+//     args dump renders ONLY on manual expand.
 // The collapsed discipline: every card renders ONE compact line when
-// collapsed (icon + humanized name + one-line summary + status); expand
-// shows the details. chatDensity shrinks the vertical padding;
-// toolActivity=compact pins every card collapsed (no expansion); hidden
-// folds the runs away entirely before the list renders (chat-prefs.ts).
+// collapsed; expand shows the details. chatDensity shrinks the vertical
+// padding; toolActivity=compact pins every card to a single collapsed line;
+// hidden folds the runs away entirely before the list renders (chat-prefs.ts).
 
 type ToolItem = TranscriptItem & { kind: "tool" };
 
@@ -496,6 +704,13 @@ function genericOneLineSummary(item: ToolItem): string {
   return item.argsSummary;
 }
 
+/** The read family's one-line target: the argsSummary's first "key: value"
+ * segment, key stripped ("path: src/a.ts" → "src/a.ts"). */
+function readTargetSegment(item: ToolItem): string {
+  const segment = item.argsSummary.split(",")[0] ?? "";
+  return segment.replace(/^[a-zA-Z_]+:\s*/, "").trim();
+}
+
 /** The shared card shell: the clay tile + the density-aware vertical padding. */
 function ToolShell({ item, children }: { item: ToolItem; children: React.ReactNode }) {
   const { tokens } = useTheme();
@@ -503,6 +718,7 @@ function ToolShell({ item, children }: { item: ToolItem; children: React.ReactNo
   const failed = item.ok === false;
   return (
     <View
+      testID="transcript-tool-card"
       style={[
         styles.toolCard,
         {
@@ -569,34 +785,34 @@ function ToolHeadRow({
   );
 }
 
-/** toolActivity=compact — the ALWAYS-collapsed single-line row (icon +
- * humanized name + one-line summary + status; no expansion, ever). */
+/** toolActivity=compact — the ALWAYS-collapsed SINGLE line: icon + humanized
+ * verb + target + status in one row (no expansion, ever). */
 function CompactToolRow({ item }: { item: ToolItem }) {
   const { tokens } = useTheme();
   const summary = WRITE_TOOLS.has(item.toolName)
     ? writePath(item)
     : genericOneLineSummary(item);
+  const label =
+    summary !== null && summary !== ""
+      ? `${humanizeToolName(item.toolName)} · ${summary}`
+      : humanizeToolName(item.toolName);
   return (
     <ToolShell item={item}>
       <ToolHeadRow
         item={item}
         icon={<Wrench size={13} color={tokens.textSecondary} strokeWidth={2.2} />}
-        title={humanizeToolName(item.toolName)}
+        title={label}
         expanded={false}
         expandable={false}
       />
-      {summary !== null && summary !== "" && (
-        <TypeMono style={{ color: tokens.textSecondary }} numberOfLines={1}>
-          {summary}
-        </TypeMono>
-      )}
     </ToolShell>
   );
 }
 
-/** read_skill + the compact-read family — the quiet ONE-line row (the owner:
- * "'read skill' showed the full view with an ok status — ugly"). The args
- * dump renders ONLY on manual expand. */
+/** read_skill + the compact-read family — the ONE slim quiet chip (chat.md:
+ * "Read skill · {name} · ✓ — one quiet chip, never a full view"; the owner's
+ * R114 report: "'read skill' showed the full view with an ok status —
+ * ugly"). The args dump renders ONLY on manual expand. */
 function SkillCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
   const { tokens } = useTheme();
   const [expanded, setExpanded] = useState(false);
@@ -609,22 +825,50 @@ function SkillCard({ item, expandable }: { item: ToolItem; expandable: boolean }
     name.found && name.value.trim() !== ""
       ? name.value.trim()
       : item.argsSummary.match(/^name:\s*([^,]+)/)?.[1] ?? "";
+  const target = readTargetSegment(item);
   const title =
     item.toolName === "read_skill"
       ? skillName !== ""
-        ? `Skill · ${skillName}`
-        : "Skill"
-      : humanizeToolName(item.toolName);
+        ? `Read skill · ${skillName}`
+        : "Read skill"
+      : target !== ""
+        ? `${humanizeToolName(item.toolName)} · ${target}`
+        : humanizeToolName(item.toolName);
+  const chip = (
+    <View
+      style={[styles.skillChip, { borderColor: tokens.borderSubtle, backgroundColor: tokens.subtle }]}
+    >
+      <BookOpenText size={13} color={tokens.accent2} strokeWidth={2.2} />
+      <TypeMono style={{ color: tokens.textSecondary, flex: 1 }} numberOfLines={1}>
+        {title}
+      </TypeMono>
+      {item.ok === true ? (
+        <Check size={13} color={tokens.success} strokeWidth={2.6} />
+      ) : item.ok === false ? (
+        <CircleX size={13} color={tokens.danger} strokeWidth={2.2} />
+      ) : null}
+      {expandable ? (
+        expanded ? (
+          <ChevronUp size={14} color={tokens.textTertiary} strokeWidth={2} />
+        ) : (
+          <ChevronDown size={14} color={tokens.textTertiary} strokeWidth={2} />
+        )
+      ) : null}
+    </View>
+  );
+  if (!expandable) {
+    return <View accessibilityLabel={`Tool ${item.toolName}`}>{chip}</View>;
+  }
   return (
-    <ToolShell item={item}>
-      <ToolHeadRow
-        item={item}
-        icon={<BookOpenText size={13} color={tokens.accent2} strokeWidth={2.2} />}
-        title={title}
-        expanded={showDetails}
-        expandable={expandable}
-        onToggle={expandable ? () => setExpanded((v) => !v) : undefined}
-      />
+    <View style={styles.skillWrap}>
+      <Pressable
+        accessibilityLabel={`Tool ${item.toolName}${item.ok === null ? " running" : item.ok === false ? " failed" : " succeeded"}${expanded ? ", expanded" : ""}`}
+        accessibilityRole="button"
+        onPress={() => setExpanded((v) => !v)}
+        style={styles.skillPress}
+      >
+        {chip}
+      </Pressable>
       {showDetails && (
         <Reveal open>
           {item.argsSummary !== "" && (
@@ -639,14 +883,15 @@ function SkillCard({ item, expandable }: { item: ToolItem; expandable: boolean }
           )}
         </Reveal>
       )}
-    </ToolShell>
+    </View>
   );
 }
 
-/** write_file / edit_file — the WRITE card: mono path, the LIVE char counter
- * + a quiet content tail while the args stream, the result summary once the
- * call settles. The preview's source is the tool-input-delta raw the
- * reducer accumulates (R114-d — the frames the phone used to ignore). */
+/** write_file / edit_file — the WRITE card. The head line IS the state:
+ * "Writing {file}… · {n} chars" while the args stream, "Wrote {file}" once
+ * settled; the live content tail (the LAST 160 chars of what has arrived)
+ * previews below the head while streaming. The preview's source is the
+ * tool-input-delta raw the reducer accumulates (R114-d). */
 function WriteCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
   const { tokens } = useTheme();
   const [expanded, setExpanded] = useState(false);
@@ -655,13 +900,17 @@ function WriteCard({ item, expandable }: { item: ToolItem; expandable: boolean }
   const streaming = running && item.inputRaw !== null;
   const preview = extractWritePreview(item.inputRaw ?? "");
   const path = writePath(item);
-  const verb = item.toolName === "write_file" ? "Writing" : "Editing";
-  const title =
-    path !== null
-      ? `${verb} ${path}`
-      : running
-        ? `${verb}…`
-        : humanizeToolName(item.toolName);
+  const verbRunning = item.toolName === "write_file" ? "Writing" : "Editing";
+  const verbDone = item.toolName === "write_file" ? "Wrote" : "Edited";
+  const title = running
+    ? path !== null
+      ? streaming
+        ? `${verbRunning} ${path}… · ${preview.chars.toLocaleString()} chars`
+        : `${verbRunning} ${path}…`
+      : `${verbRunning}…`
+    : path !== null
+      ? `${verbDone} ${path}`
+      : humanizeToolName(item.toolName);
   // The quiet content tail — the LAST 160 chars of what has arrived (the
   // head lives in the reducer's raw; the tail is what is being typed NOW).
   const tail =
@@ -680,27 +929,20 @@ function WriteCard({ item, expandable }: { item: ToolItem; expandable: boolean }
         expandable={expandable}
         onToggle={expandable ? () => setExpanded((v) => !v) : undefined}
       />
-      {streaming && (
-        <View style={{ gap: spacing.xs }}>
-          <TypeCaption style={{ color: tokens.textTertiary, fontSize: TYPE_MICRO - 0.5 }}>
-            {preview.chars.toLocaleString()} chars
-          </TypeCaption>
-          {tail !== null && (
-            <TypeMono
-              style={[
-                styles.terminalBlock,
-                {
-                  color: tokens.textTertiary,
-                  backgroundColor: tokens.monoBg,
-                  borderColor: tokens.borderSubtle,
-                },
-              ]}
-              numberOfLines={3}
-            >
-              {tail}
-            </TypeMono>
-          )}
-        </View>
+      {streaming && tail !== null && (
+        <TypeMono
+          style={[
+            styles.terminalBlock,
+            {
+              color: tokens.textTertiary,
+              backgroundColor: tokens.monoBg,
+              borderColor: tokens.borderSubtle,
+            },
+          ]}
+          numberOfLines={3}
+        >
+          {tail}
+        </TypeMono>
       )}
       {!running && item.outputSummary !== null && item.outputSummary !== "" && (
         <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={showDetails ? undefined : 3}>
@@ -775,8 +1017,8 @@ function TerminalCard({ item, expandable }: { item: ToolItem; expandable: boolea
   );
 }
 
-/** The generic fallback — the pre-R114-d card, now with the collapsed
- * discipline (ONE compact line when collapsed) + the density padding. */
+/** The generic fallback — the humanized verb + target + status in the head,
+ * ONE compact line when collapsed, expand for the details. */
 function GenericToolCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
   const { tokens } = useTheme();
   const [expanded, setExpanded] = useState(false);
@@ -939,7 +1181,7 @@ function QuestionCard({
       accessibilityLabel="The agent needs your answer"
     >
       <View style={styles.toolHead}>
-        <View style={[styles.questionPulse, { backgroundColor: tokens.accent }]} />
+        <PulseDot color={tokens.accent} size={7} />
         <TypeMono style={{ color: tokens.text, fontFamily: fontFamily.monoMedium, flex: 1 }}>
           the agent needs your answer{questions.length > 1 ? ` (${questions.length})` : ""}
         </TypeMono>
@@ -1047,6 +1289,7 @@ function QuestionCard({
 
 function TodoCard({ item }: { item: TranscriptItem & { kind: "todo" } }) {
   const { tokens } = useTheme();
+  const prefs = useChatPrefs();
   const [open, setOpen] = useState(true);
   const done = item.todos.filter((t) => t.status === "completed").length;
   const total = item.todos.length;
@@ -1061,6 +1304,7 @@ function TodoCard({ item }: { item: TranscriptItem & { kind: "todo" } }) {
           borderTopColor: tokens.clayTopEdge,
           borderColor: complete ? tokens.success : tokens.borderSubtle,
           boxShadow: tokens.clayShadowSm,
+          paddingVertical: densityVerticalPadding(prefs.chatDensity),
         },
       ]}
       accessibilityLabel={`Task list, ${done} of ${total} done`}
@@ -1071,7 +1315,9 @@ function TodoCard({ item }: { item: TranscriptItem & { kind: "todo" } }) {
         onPress={() => setOpen((v) => !v)}
         style={styles.toolHead}
       >
-        <Badge tone={complete ? "success" : "accent"}>TASK LIST</Badge>
+        <Badge tone={complete ? "success" : "accent"} textStyle={{ textTransform: "uppercase" }}>
+          Task list
+        </Badge>
         <View style={[styles.todoTrack, { backgroundColor: tokens.subtle }]}>
           <View
             style={[
@@ -1109,9 +1355,7 @@ function TodoCard({ item }: { item: TranscriptItem & { kind: "todo" } }) {
                     <Check size={10} color="#FFFFFF" strokeWidth={3.4} />
                   ) : isActive ? (
                     <View style={[styles.todoActiveDot, { backgroundColor: tokens.accent }]} />
-                  ) : (
-                    <Minus size={0} />
-                  )}
+                  ) : null}
                 </View>
                 <Text
                   style={{
@@ -1138,6 +1382,7 @@ function TodoCard({ item }: { item: TranscriptItem & { kind: "todo" } }) {
 
 function SubAgentCard({ item }: { item: TranscriptItem & { kind: "subagent" } }) {
   const { tokens } = useTheme();
+  const prefs = useChatPrefs();
   const router = useRouter();
   const running = item.status === "running" || item.status === "queued";
   const failed = item.status === "failed";
@@ -1154,6 +1399,7 @@ function SubAgentCard({ item }: { item: TranscriptItem & { kind: "subagent" } })
           borderTopColor: tokens.clayTopEdge,
           borderColor: failed ? tokens.danger : tokens.borderSubtle,
           boxShadow: tokens.clayShadowSm,
+          paddingVertical: densityVerticalPadding(prefs.chatDensity),
         },
       ]}
     >
@@ -1216,6 +1462,7 @@ function ImageTile({ item }: { item: TranscriptItem & { kind: "image" } }) {
         accessibilityRole="button"
         disabled={state.uri === null}
         onPress={() => setViewerOpen(true)}
+        testID="transcript-image-tile"
         style={[
           styles.imageTile,
           { borderColor: tokens.borderSubtle, backgroundColor: tokens.subtle },
@@ -1231,9 +1478,8 @@ function ImageTile({ item }: { item: TranscriptItem & { kind: "image" } }) {
             </TypeCaption>
           </View>
         ) : (
-          <View style={styles.imageExpired}>
-            <ActivityIndicator size="small" color={tokens.accent} />
-          </View>
+          // The quiet skeleton tile (donts #14 — skeletons, never spinners).
+          <Skeleton style={styles.imageSkeleton} />
         )}
       </Pressable>
       {state.uri !== null && (
@@ -1261,6 +1507,7 @@ function ApprovalMini({
   onDecide?: (approvalId: string) => void;
 }) {
   const { tokens } = useTheme();
+  const prefs = useChatPrefs();
   const decision =
     item.decision === "approved"
       ? "approved"
@@ -1279,6 +1526,7 @@ function ApprovalMini({
           borderTopColor: tokens.clayTopEdge,
           borderColor: pending ? tokens.warning : tokens.borderSubtle,
           boxShadow: tokens.clayShadowSm,
+          paddingVertical: densityVerticalPadding(prefs.chatDensity),
         },
       ]}
       accessibilityLabel={`Approval ${item.toolName} ${decision ?? "waiting"}`}
@@ -1329,12 +1577,19 @@ function MetaLine({ text }: { text: string }) {
 
 function ErrorCard({ code, message }: { code: string; message: string }) {
   const { tokens } = useTheme();
+  const prefs = useChatPrefs();
   return (
     <View
       accessibilityLabel={`Error: ${message}`}
       style={[
         styles.toolCard,
-        { backgroundColor: tokens.card, borderTopColor: tokens.clayTopEdge, borderColor: tokens.danger, boxShadow: tokens.clayShadowSm },
+        {
+          backgroundColor: tokens.card,
+          borderTopColor: tokens.clayTopEdge,
+          borderColor: tokens.danger,
+          boxShadow: tokens.clayShadowSm,
+          paddingVertical: densityVerticalPadding(prefs.chatDensity),
+        },
       ]}
     >
       <View style={styles.toolHead}>
@@ -1396,19 +1651,25 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "flex-end",
   },
+  /** chat.md — r20 with the tighter 16px bottom-right corner (the tail hint). */
   userBubble: {
     maxWidth: "88%",
     borderRadius: RADIUS_CARD,
+    borderBottomRightRadius: RADIUS_BUBBLE_TAIL,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderWidth: StyleSheet.hairlineWidth,
     padding: spacing.md,
     gap: spacing.xs,
   },
+  /** The clock's quiet right-aligned line INSIDE the bubble. */
+  userClockRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+  },
   userAttachRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: spacing.xs,
-    marginTop: spacing.xs,
   },
   userAttachChip: {
     flexDirection: "row",
@@ -1419,6 +1680,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
     maxWidth: 180,
+  },
+  /** chat.md — the user image thumbnail: r12, ~64% of the COLUMN (72% of the
+   * 88% bubble), aspect-kept, quiet border. */
+  userImageTile: {
+    width: "72%",
+    alignSelf: "flex-start",
+    borderRadius: RADIUS_IMAGE,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: "hidden",
+  },
+  userImageFill: {
+    width: "100%",
+    aspectRatio: 4 / 3,
+  },
+  /** The honest no-pixels frame (icon + name + size) inside the tile. */
+  userImageFrame: {
+    width: "100%",
+    aspectRatio: 4 / 3,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
   },
   block: {
     gap: spacing.sm,
@@ -1442,7 +1725,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     minHeight: 32,
   },
-  /** R114-d — the thinking placeholder's staggered dot row. */
+  /** The thinking placeholder's staggered dot row. */
   thinkingDots: {
     flexDirection: "row",
     alignItems: "center",
@@ -1455,8 +1738,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  /** R114-d — the quiet terminal block (the write preview's content tail +
-   * the command output tail): hairline-bordered, mono-backed at the call
+  /** The quiet terminal block (the write preview's content tail + the
+   * command output tail): hairline-bordered, mono-backed at the call
    * site (token-scoped), tertiary ink. */
   terminalBlock: {
     borderRadius: 10,
@@ -1477,8 +1760,26 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     minHeight: 32,
   },
+  /** The read-skill family's slim quiet chip (never a full card view). */
+  skillWrap: {
+    gap: spacing.xs,
+  },
+  skillChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    borderRadius: RADIUS_PILL,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  /** The chip's expand target — the 44px law on the ONE interactive row. */
+  skillPress: {
+    minHeight: 44,
+    justifyContent: "center",
+  },
   miniLink: {
-    minHeight: 32,
+    minHeight: 44,
     justifyContent: "center",
   },
   metaRow: {
@@ -1486,11 +1787,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     maxWidth: 320,
     alignSelf: "flex-start",
-  },
-  questionPulse: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
   },
   optionRow: {
     flexDirection: "row",
@@ -1542,7 +1838,7 @@ const styles = StyleSheet.create({
   todoRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
   todoCheckbox: {
     width: 15,
@@ -1568,10 +1864,11 @@ const styles = StyleSheet.create({
   imageWrapRow: {
     alignSelf: "flex-start",
   },
+  /** chat.md — the ephemeral screenshot's lazy tile: 240×120, r12, quiet border. */
   imageTile: {
     width: 240,
     height: 120,
-    borderRadius: RADIUS_INPUT,
+    borderRadius: RADIUS_IMAGE,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: "hidden",
     alignItems: "center",
@@ -1580,6 +1877,11 @@ const styles = StyleSheet.create({
   imageTileImage: {
     width: "100%",
     height: "100%",
+  },
+  imageSkeleton: {
+    width: "100%",
+    height: "100%",
+    borderRadius: RADIUS_IMAGE,
   },
   imageExpired: {
     alignItems: "center",

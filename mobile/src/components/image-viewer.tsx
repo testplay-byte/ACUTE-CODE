@@ -6,6 +6,12 @@
  * Android back button) dismisses, and the caption rides the bottom with the
  * safe-area inset. NO new dependency — the zoom is the entrance's own
  * spring, deliberately quiet (the transcript's honesty, not a gallery).
+ *
+ * R115-J polish (no API change): the image's TRUE aspect is measured once
+ * per uri so a tall capture is never letterboxed inside a 16:10 box (the
+ * ratio clamps near portrait so it can never overflow the viewport;
+ * resizeMode contain still guarantees no crop), and the caption bar reads
+ * ONE line.
  */
 
 import { useEffect, useState } from "react";
@@ -40,6 +46,25 @@ export function ImageViewer({ uri, caption, open, onClose, testID }: ImageViewer
   const insets = useSafeAreaInsets();
   const progress = useSharedValue(0);
   const [rendered, setRendered] = useState(open);
+  // R115-J — aspect-kept: measure the image's true ratio once per uri (a
+  // failed measure keeps the 16:10 fallback; contain still never crops).
+  const [aspect, setAspect] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Image.getSize(
+      uri,
+      (w, h) => {
+        if (!cancelled && h > 0) setAspect(w / h);
+      },
+      () => {
+        // measure failed — the 16:10 fallback stands (never a crash)
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [uri]);
 
   useEffect(() => {
     if (open) {
@@ -81,7 +106,9 @@ export function ImageViewer({ uri, caption, open, onClose, testID }: ImageViewer
           <Animated.View style={[zoom, styles.imageWrap]}>
             <Image
               source={{ uri }}
-              style={styles.image}
+              // The clamp keeps a portrait capture from overflowing the
+              // viewport height at full width (contain letterboxes the rest).
+              style={[styles.image, { aspectRatio: Math.max(aspect ?? 16 / 10, 0.62) }]}
               resizeMode="contain"
               accessibilityLabel={caption}
             />
@@ -100,7 +127,7 @@ export function ImageViewer({ uri, caption, open, onClose, testID }: ImageViewer
           <View style={{ flex: 1 }} />
         </View>
         <View style={[styles.captionBottom, { paddingBottom: insets.bottom + spacing.lg }]}>
-          <TypeCaption style={{ color: "rgba(255,251,240,0.85)", textAlign: "center" }} numberOfLines={2}>
+          <TypeCaption style={{ color: "rgba(255,251,240,0.85)", textAlign: "center" }} numberOfLines={1}>
             {caption}
           </TypeCaption>
         </View>

@@ -10,13 +10,18 @@
  * is why bold/italic/code/link mix correctly inside one paragraph.
  * Streaming-safe: the parent memoizes on the content string; a delta
  * re-parse is O(n) and cheap.
+ *
+ * R115-J — the transcript polish pass (spacing/typography only, the parser
+ * untouched): headings breathe one step more above them (sm), list rows
+ * gain 2px of rhythm, and the code tile's radius now reads the token
+ * contract (RADIUS_INPUT) instead of a bare 14.
  */
 
 import { useMemo } from "react";
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useTheme } from "@/design/theme";
 import { Hairline } from "@/design/primitives";
-import { fontFamily, spacing } from "@/design/tokens";
+import { fontFamily, RADIUS_INPUT, spacing } from "@/design/tokens";
 import { parseMarkdown, type Block, type Inline, type ListItem } from "@/features/markdown";
 import { mobWarn } from "@/lib/log";
 
@@ -255,9 +260,9 @@ function InlineToken({ tok, dense }: { tok: Inline; dense?: boolean }) {
 
 const styles = StyleSheet.create({
   root: { gap: spacing.sm },
-  heading: { marginTop: spacing.xs },
+  heading: { marginTop: spacing.sm },
   codeBlock: {
-    borderRadius: 14,
+    borderRadius: RADIUS_INPUT,
     borderWidth: StyleSheet.hairlineWidth,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
@@ -273,7 +278,7 @@ const styles = StyleSheet.create({
     paddingLeft: spacing.md,
     paddingVertical: 2,
   },
-  list: { gap: 4 },
+  list: { gap: 6 },
   listRow: {},
   listSub: { paddingLeft: spacing.md, paddingTop: 2 },
   table: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, overflow: "hidden" },
