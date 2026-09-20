@@ -1,4 +1,4 @@
-<!-- round: 115 -->
+<!-- last-reviewed: 2026-09-20 round-115 -->
 
 # Patterns — Screen Archetypes
 

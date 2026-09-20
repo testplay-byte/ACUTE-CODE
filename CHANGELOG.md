@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-20 round-114 -->
+<!-- last-reviewed: 2026-09-20 round-115 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,36 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [0.109.0] — 2026-09-20 — the design language round (first-run minimal, the WhatsApp chat, projects that actually expand)
+
+### The design language itself (the round's constitution)
+- **A modular Android design language now exists** — `docs/design-language/android/`, eleven files across foundations / patterns / rules: the token and motion contracts, the four screen archetypes, the component idioms, the copy voice ("remote" and "Auto" both retired as words), the thirty-entry slop signature, and the pre-merge checklist every screen now answers to. Future rounds build against it instead of re-deriving taste.
+
+### First-run, minimal at last
+- **The wizard's essays are gone.** The welcome screen says "The companion for your desktop agent." with one-line card descriptions, an animated floating hero, and a flat (no-glow) Get Started. The camera screen asks ONE thing — no step numbers, no instruction cards — and when you grant it, the icon springs green, the Skip slides out, and Continue enters. The link-your-desktop step shows exactly two options plus Scan / Do it later.
+- **Manual entry, rebuilt.** One line of hero, a Paste button that parses the desktop's copied pairing text straight into the fields, the PIN grouped 4+4 as you type, the certificate optional behind a collapsed disclosure, and a busy/disabled state that never lies.
+- **The scanner, squared.** A 1:1 viewfinder with a scan line that actually travels, pinch-only zoom, the flashlight deleted, and **Choose a photo instead** — pick a QR screenshot, it's downscaled, decoded, and validated through the same path as the live camera.
+- **Confirm the host, tiered.** Address, PIN, and the countdown each get their own visual tier; when the window closes the Pair button is REPLACED by "The window closed — rescan the QR code." Pairing itself is a full-screen moment — the desktop and phone chips spring together and merge as the desktop's name types in.
+
+### Pairing, grown up (the PC side)
+- **The QR fills its dialog** — and clicking it takes over the whole screen for across-the-room scanning. A **Copy pairing text** button (plus per-block copies) feeds the phone's Paste flow.
+- **Desktops have names now**: word-pair names like "Confused Coconut", minted once and stable, shown on the phone's home and the PC's pairing dialog (the machine id and certificate remain the real identity).
+- **The PC follows the phone**: create a session from your pocket and the desktop opens it — unless it's mid-turn, in which case it offers a toast with an Open action.
+
+### The phone's shell
+- **Home says what's happening**: a compact live-status row ("Live · Confused Coconut"), an "Happening now" section of running sessions with project letter avatars, and recent activity. The theme picker and quick-action grid are gone.
+- **Projects actually expand — the round's core bug.** The accordion's measurement child was clamped to zero by Android's layout engine (the arrow rotated; nothing opened). The fix is an absolutely-positioned measurement child — and the rows around it got letter avatars, smart path truncation (last segments, name-matching folder dropped, first folder shed on overflow), count badges, and a half-width New Project at the list's bottom.
+- **New Project asks one question**: which folder. The name derives from it, navigation stops at your home directory, and "Use this folder" flips to "Select another folder" with the full path shown.
+- **The chat screen speaks WhatsApp**: back chevron, the project's letter avatar with project + session names, and a kebab menu holding the operating mode / model / thinking / context — the composer is just attach + input + send. The model picker groups by provider, expanding each one inline. Task mode left the phone entirely.
+- **The transcript renders properly**: user bubbles with inline timestamps and a tail-hint corner, the assistant's model line above its content, skill reads as one quiet chip, images as real rounded thumbnails, and a breathing thinking placeholder that appears the instant your send lands.
+- **The keyboard never covers the composer — deterministically.** One mechanism replaced three competing ones: the screen pins adjust-nothing and the composer dock rides a single animated padding expression.
+- **Approvals breathe**: the tab itself pulses in accent while something waits, the empty state is a centered "Nothing needs your approval", and the cards read — headline, detail, risk, expiry chip, one-tap decisions.
+- **The dashboard got its donut**: model shares as a sweeping ring with a tappable legend, an activity table with sparkbars, and bars that grow from the baseline on load. Settings' appearance page is a theme-card grid + a segmented mode control (the useless preview deleted), providers hide their preset wall behind one "Add a provider", and the fifth tab is now a **More** hub with Settings pushed behind it.
+
+### For the builders
+- New deps (mobile): `jsqr` + `jpeg-js` + `upng-js` + `expo-image-manipulator` (the photo-QR decode pipeline). Wire additions are all additive: `machineLabel` on pair/start + link-info (claim's `machine.name` now the friendly label), `source:"device"` on device-created session frames. No migrations this round.
+- The full story with every owner verdict itemized: `docs/ui-iterations/round-115.md`.
 
 ## [0.108.0] — 2026-09-20 — every menu works, live sync everywhere, the honest transcript
 

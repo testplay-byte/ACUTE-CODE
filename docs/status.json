@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.108.0",
+    "version": "0.109.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -336,6 +336,10 @@
     {
       "date": "2026-09-20",
       "label": "R114 — the twenty-first round: the sync foundation (the meta frames + turn.started + the server-side selected model — mode/model/chat-prefs live sync + the instant cross-device busy state) + the honest phone shell (the systemic empty-sheet fix, chromeless roots + colder-white clay, the color-coded dashboard, the projects accordion, per-tool transcript cards with the streaming write preview) + the phone owns its inventory (custom providers, the key pool, saved-model CRUD) + vision always-on for marked models (\"off\" retired) — suites 2608/4315/431 all green — v0.108.0 released"
+    },
+    {
+      "date": "2026-09-20",
+      "label": "R115 — the twenty-second round: the design language round (docs/design-language/android/ — eleven modular files, the owner's verdicts made binding) + first-run minimal (one-liner descriptions, animated hero/granted/pairing moments, the squared scanner with photo-QR decode, smart-paste manual entry) + pairing grown up (the big/fullscreen QR + copy pairing text + word-pair machineLabel names + the PC following phone-created sessions) + the phone shell reborn (the Yoga accordion fix, letter avatars + smart paths, the WhatsApp chat anatomy with the kebab menu, the deterministic keyboard dock, the breathing approvals tab, the dashboard donut, the More hub) — suites 4337 root + 2618 agent-core + 500 mobile all green — v0.109.0 released"
     }
   ],
   "quality": {
@@ -419,6 +423,9 @@
       "Quality over speed — every round verified before push"
     ]
   },
-  "round": 108,
+  "round": {
+    "current": "R115 LANDED — the design-language round (the owner's full-app walkthrough, every verdict answered in seven commits): the CONSTITUTION (docs/design-language/android/ — README with the three laws + pinned decisions, 01-foundations tokens/motion/typography with the copy-length law, 02-patterns screen-archetypes/components/onboarding/chat, 03-rules copy/donts/checklist) + the systemic fixes (the Sheet ghost-panel fix — full-travel opaque entrance; the projects Yoga deadlock — absolute measurement children; the keyboard's triple-mechanism collapse — ONE dock under ADJUST_NOTHING) + the first-run minimal screens (welcome with 'The companion for your desktop agent.' + animated hero + flat CTA, camera-only permissions with the granted sequence, the two-option link step) + the connect flow (Connect-to-PC animated hub, smart-paste manual entry + parsePairingText, the squared scanner with traveling line + pinch-only + photo-QR decode via jsqr/jpeg-js/upng-js, confirm's highlight tiers + expiry rescan state + the full-screen pairing merge) + the pairing round end-to-end (big QR + fullscreen overlay + copy pairing text + per-block copies, word-pair machineLabel minted-once riding pair/start+link-info+claim+relay-hello, source:device session frames with the guarded PC auto-navigate via the session-nav inbox, downloads convention pinned) + the honest home (compact live-status with the word-pair name, Happening-now running sessions) + the shell (the More hub with settings pushed behind it, the approvals tab breathing accent while pending) + projects reborn (letter avatars, shortRootPath smart paths, count badges, half-width bottom New Project, folder-only sheet with home-capped browsing) + the chat's WhatsApp anatomy (identity-bar header + kebab session-options, composer stripped to attach+input+send, model sheet grouped-by-provider, task-mode deleted from mobile) + the transcript render layer (inline timestamps, tail-hint bubbles, meta-above-content, skill chips, image thumbnails, breathing thinking placeholder) + approvals (centered empty state, readable cards) + the dashboard (the model donut with sweep entry + legend highlight, the activity table with sparkbars, animated bar growth) + settings polish (theme grid, segmented mode control, preview deleted, the add-provider reveal, surgical model-sheet UX). FRESH MATRIX at the R115 close: ROOT tsc clean, root vitest 244 files 4337/4337 (15 pre-existing skips), agent-core 2618/2618 (137 files), mobile tsc clean + 24 suites 500/500, eslint clean, design:audit clean (101 files). The R115-P design audit: 20 patterns checked, 4 findings fixed. Deferred with reasons: the device verification pass (accordion/keyboard/photo-QR), attachment image bytes on the wire, the browser save-download affordance.",
+    "next": "The device smoke pass (the three systemic fixes on real hardware) + the standing queue: PC transcript polish, attachment bytes, provider deletion from the phone."
+  },
   "ci": "GREEN — round 104 (the update hand-shake + the Linux AppImage updater) delivered: CI 35301463893 and Release 35301467330 both SUCCESS on 71826cd (the CI-caught hotfix re-tag — the first push's verify job failed on the design-audit ratchet R2 +4, caught in two minutes because an in-sandbox pipe had hidden the audit's true exit code; the baseline was honestly re-pinned 1522→1526 for the StagedDownloadRow's four documented 11px ladder steps). v0.101.0 PUBLISHED (release 391182273, latest) with six assets: setup.exe 38,756,767 B + amd64.deb 67,302,862 B + amd64.AppImage 134,990,328 B + arm64.deb 67,248,818 B + aarch64.AppImage 132,745,736 B + the kit 125,957 B. Both rust jobs (x64 + arm64) were GREEN on the very first push — the AppImage replace leg compiled clean with no local toolchain (the R100 pattern). In-sandbox gates (re-read with true exit codes after the pipe lesson): lint clean, both typechecks clean, root 3,823/12-skipped, agent-core 2,392/2,392, license-audit clean (247), design-audit at the re-pinned baseline, docs:check 224/0/0, version ×4 at 0.101.0."
 }
