@@ -884,7 +884,7 @@ export function Composer({
             <TypeCaption style={{ color: tokens.textTertiary }}>loading the project tree…</TypeCaption>
           </View>
         ) : (
-          <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+          <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
             {filterProjectFiles(treeFiles, fileQuery, 60).map((path) => (
               <Pressable
                 key={path}

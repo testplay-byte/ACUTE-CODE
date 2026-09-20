@@ -71,6 +71,7 @@ import {
   TYPE_CAPTION,
   TYPE_MICRO,
 } from "@/design/tokens";
+import { subagentStatusLabel } from "@/features/sessions";
 import type { AttachmentView, TranscriptItem } from "@/features/sessions";
 
 // ── the list ────────────────────────────────────────────────────────────────
@@ -1168,7 +1169,7 @@ function SubAgentCard({ item }: { item: TranscriptItem & { kind: "subagent" } })
           {item.role}
           {item.code !== null ? ` ${item.code}` : ""}
         </TypeMono>
-        <Badge tone={failed ? "danger" : running ? "running" : "success"}>{item.status}</Badge>
+        <Badge tone={failed ? "danger" : running ? "running" : "success"}>{subagentStatusLabel(item.status)}</Badge>
       </View>
       <TypeBody style={{ color: tokens.textSecondary }} numberOfLines={2}>
         {item.task !== "" ? item.task : "sub-agent task"}

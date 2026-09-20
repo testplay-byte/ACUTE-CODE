@@ -40,6 +40,7 @@ import {
   sendBody,
   sessionStatusFromWire,
   sessionStatusLabel,
+  subagentStatusLabel,
   sessionStatusTone,
   sessionTitle,
   shortModelId,
@@ -157,6 +158,16 @@ describe("sessions — pure helpers", () => {
     expect(sessionStatusLabel("completed")).toBe("done");
     expect(sessionStatusLabel("failed")).toBe("failed");
     expect(sessionStatusLabel("cancelled")).toBe("stopped");
+  });
+
+  it("R114 audit: the sub-agent badge reads the same owner vocabulary (raw 'completed' never surfaces)", () => {
+    expect(subagentStatusLabel("completed")).toBe("done");
+    expect(subagentStatusLabel("cancelled")).toBe("stopped");
+    expect(subagentStatusLabel("queued")).toBe("queued");
+    expect(subagentStatusLabel("running")).toBe("running");
+    expect(subagentStatusLabel("failed")).toBe("failed");
+    // Unknown vocabulary passes through verbatim — never invents.
+    expect(subagentStatusLabel("deferred")).toBe("deferred");
   });
 
   it("knows when a turn is in flight (the R44 status contract)", () => {

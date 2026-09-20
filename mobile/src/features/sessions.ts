@@ -293,6 +293,28 @@ export function sessionStatusLabel(status: SessionStatus): string {
   }
 }
 
+/**
+ * R114 audit — the sub-agent badge reads the same owner vocabulary as the
+ * session badges (the wire's subagent-status vocabulary is machine truth:
+ * queued/completed/cancelled surface raw otherwise). Pure.
+ */
+export function subagentStatusLabel(status: string): string {
+  switch (status) {
+    case "queued":
+      return "queued";
+    case "running":
+      return "running";
+    case "completed":
+      return "done";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "stopped";
+    default:
+      return status;
+  }
+}
+
 /** A turn is in flight on the desktop (the R44 status contract). */
 export function isTurnRunning(session: Pick<SessionRow, "status">): boolean {
   return session.status === "running";

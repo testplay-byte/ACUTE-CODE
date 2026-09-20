@@ -85,14 +85,18 @@ async function storeVisionKeyDurable(
  * embedded browser's screenshots, and the general analyze_image tool all
  * read this ONE configuration.
  *
- * Stacked cards (SubAgentsTab structure, R58-d design language):
- *  (a) Mode — off / separate (recommended) / main radio → PUT /vision/settings.
- *  (b) Separate model (mode="separate") — provider select + model input
- *      (datalist = catalog models that supportVision) + the DEDICATED vision
- *      key row (masked only, Key saved chip, Replace/Clear) riding the SAVED
- *      provider.
- *  (c) Main model (mode="main") — the amber hint + the compact per-provider
- *      model rows with the eye toggle (supportsVision).
+ * R114-e (owner directive): the "off" mode is RETIRED — a model marked
+ * supportsVision can always see; the mode now only chooses WHICH model
+ * looks. Stacked cards (SubAgentsTab structure, R58-d design language):
+ *  (a) Mode — main (the model's own vision, recommended default) /
+ *      separate (a dedicated vision model) radio → PUT /vision/settings.
+ *  (b) Separate model (mode="separate") — the configured∩supportsVision
+ *      model rows (GET /models/configured, hidden excluded) with vision
+ *      badges; NO provider select, NO free-text model input (the R114-e
+ *      rework removed both) + the DEDICATED vision key row (masked only,
+ *      Key saved chip, Replace/Clear) riding the SAVED provider.
+ *  (c) Main model (mode="main") — the compact per-provider model rows
+ *      with the eye toggle (supportsVision).
  *  (d) Readiness — one honest line from the settings state (mode/provider/
  *      model/key presence). NO test button: a real end-to-end probe needs a
  *      live provider call this tab deliberately doesn't make (the R66 plan
