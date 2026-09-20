@@ -1,33 +1,44 @@
 /**
- * Composer v3 (R113-c) — the session screen's sticky bottom in the clay
- * language: ONE growing TextInput (max ~5 lines) + the SEND button as the
- * sanctioned chrome CTA, PLUS the owner's full PC-chat control surface:
+ * Composer v3 (R113-c → R115-I) — the session screen's minimal dock
+ * (chat.md §Composer): EXACTLY THREE visible controls — [+] attach (a 44px
+ * quiet circle opening the "Add context" sheet) · the ONE growing TextInput
+ * (max ~5 lines) · SEND (the sanctioned chrome circle) / Stop + Queue while
+ * a turn runs. THE CONTROL PILL ROW IS DELETED (R115-I): the operating-mode
+ * / model / thinking / context controls moved OUT of the composer into the
+ * header's kebab menu — the session screen owns the sheet open-state and
+ * renders the kebab; THIS component keeps every sheet's CONTENT and all its
+ * feature logic, controlled through the props:
  *
- *   · the CONTROL ROW under the input — [+] attach · operating mode ·
- *     context meter · model · thinking level (horizontally scrollable,
- *     44px targets, clay pills — the desktop toolbar's one-row contract);
+ *   · sheet / onSheetChange — the CONTROLLED sheet state (the kebab opens
+ *     mode/model/thinking/context; the attach circle + the attach sheet's
+ *     own transition open attach/files; every pick closes);
+ *   · onControlsSnapshot — the live control values the kebab's rows display
+ *     (the same sources the pills read today: the honest model ladder, the
+ *     model-aware thinking label, the context meter's percentage);
  *   · ATTACHMENTS: "+" opens the attach sheet (pick a file from the device
  *     through expo-document-picker, or choose from the project's own files)
  *     and typing "@" quick-picks project files exactly like the desktop;
  *     chips (name · size · X) ride the send as the wire's attachments array,
  *     with picked binaries uploaded through POST /attachments/upload at send
  *     time (the desktop's R67-A pipeline);
- *   · MODE: the desktop's exact per-session PATCH (full/ask/plan) + the
- *     task-mode picker (GET /projects/:id/modes → activeMode);
- *   · MODEL (R114-d — THE HONEST LADDER): the local per-send override →
- *     the session's server-side selectedModel → the context report's
- *     effective model → "Auto" only when NOTHING is known. A pick writes
- *     BOTH tiers: the per-send override (persisted per session, rides the
- *     send) AND PATCH /sessions/:id {model} (the server-side truth — the
- *     desktop + every other phone see the flip live through the meta
- *     frame); "Auto (session default)" clears both back to the agent
- *     default. The configured-models sheet lists the same rows;
+ *   · MODE: the desktop's exact per-session PATCH (full/ask/plan) — the
+ *     task-mode section is DELETED from mobile (the round-115 verdict: it
+ *     confused the mode model; the desktop keeps it);
+ *   · MODEL (R114-d's honest ladder, now grouped by provider per the
+ *     round-115 spec): the local per-send override → the session's
+ *     server-side selectedModel → the context report's effective model →
+ *     "Agent default" only when NOTHING is known ("Auto" never appears —
+ *     copy.md). A pick writes BOTH tiers: the per-send override (persisted
+ *     per session, rides the send) AND PATCH /sessions/:id {model} (the
+ *     server-side truth — the desktop + every other phone see the flip live
+ *     through the meta frame); "Agent default" clears both. The sheet lists
+ *     the providers as section rows (name + "{n} models" + chevron) that
+ *     expand their models INLINE (the R115-h absolute-measurement accordion);
  *   · THINKING: the desktop's exact level vocabulary + model-aware menu
  *     (detected reasoning ladders); rides the send as thinkingLevel;
- *   · CONTEXT: the meter pill (pressure-colored ring + %) fed by
- *     GET /sessions/:id/context (2.5s live cadence while a turn runs) with
- *     the full breakdown sheet (per-slice estimates, the provider's own
- *     last-request numbers, cache + lifetime totals).
+ *   · CONTEXT: the full breakdown sheet (per-slice estimates, the provider's
+ *     own last-request numbers, cache + lifetime totals) fed by
+ *     GET /sessions/:id/context (2.5s live cadence while a turn runs).
  *
  * While a turn runs, Send becomes Stop (+ Queue); while the link is offline,
  * Send lands the message in the outbox (overrides ride the flush). The
@@ -35,29 +46,50 @@
  * PASSENGER of the session screen's dock (R115-K): this root View sits
  * inside the dock's Animated.View whose ONE expression — paddingBottom =
  * max(insetsBottom, kbHeight) — lifts EVERYTHING here (offline/outbox/note
- * rows, the @-picker popup above the input, attachment chips, the input row,
- * the control row) clear of the keys; this file carries NO keyboard offset
- * logic of its own. Touch targets ≥ 44px; the send haptic.
+ * rows, the @-picker popup above the input, attachment chips, the input row
+ * with the attach circle) clear of the keys; this file carries NO keyboard
+ * offset logic of its own. Touch targets ≥ 44px; the send haptic.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type LayoutChangeEvent } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import Svg, { Circle } from "react-native-svg";
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
-import { ArrowUp, Bot, Brain, Check, ChevronDown, Cpu, FileText, ListPlus, Plus, Search, Square, X, Zap } from "lucide-react-native";
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import {
+  ArrowUp,
+  Brain,
+  Check,
+  ChevronDown,
+  Cpu,
+  FileText,
+  HelpCircle,
+  ListPlus,
+  // `Map` aliased — the bare name would shadow TS's global Map (the model
+  // grouping below news one up).
+  Map as MapIcon,
+  Plus,
+  Search,
+  Square,
+  X,
+  Zap,
+  type LucideIcon,
+} from "lucide-react-native";
 import { useTheme } from "@/design/theme";
 import { Badge, ClayCard, TypeBodyStrong, TypeCaption, TypeMono } from "@/design/primitives";
 import { successHaptic, warningHaptic } from "@/design/haptics";
 import { Sheet } from "@/components/sheet";
+import { SPRING } from "@/design/motion";
 import {
   pressTint,
+  RADIUS_CHIP,
   RADIUS_INPUT,
   RADIUS_PILL,
   RADIUS_ROUND,
   fontFamily,
   spacing,
+  TILE_OPTION,
   TOUCH_TARGET,
   TYPE_BODY,
   TYPE_CAPTION,
@@ -76,7 +108,6 @@ import {
 import {
   attachmentFromRead,
   detectAtToken,
-  fetchProjectModes,
   fetchProjectTree,
   filterProjectFiles,
   flattenTreeFiles,
@@ -88,7 +119,6 @@ import {
   toMessageAttachment,
   uploadAttachmentBytes,
   type ComposerAttachment,
-  type ProjectModeRow,
 } from "@/features/attachments";
 import {
   contextPercent,
@@ -101,11 +131,12 @@ import {
 } from "@/features/context-meter";
 import {
   MODE_OPTIONS,
-  modeOption,
   thinkingMenuSpec,
   thinkingOption,
   displayThinkingLevel,
+  type ModeOption,
   type ModelOverride,
+  type PermissionMode,
   type ThinkingLevel,
 } from "@/features/composer-state";
 import {
@@ -119,6 +150,21 @@ import {
 
 export type ComposerMode = "compose" | "running" | "offline";
 
+/** The composer's sheets — the session screen owns WHICH one is open (the
+ * kebab's rows open mode/model/thinking/context; the attach circle and the
+ * attach sheet's own transition open attach/files). null = closed. */
+export type ComposerSheet = "attach" | "files" | "mode" | "model" | "thinking" | "context";
+
+/** R115-I — the live control values the session screen's kebab sheet rows
+ * display (the same sources the deleted control pills read): the honest
+ * model ladder's short label, the model-aware thinking label, and the
+ * context meter's percentage (null = no reading yet). */
+export interface ComposerControlsSnapshot {
+  modelLabel: string;
+  thinkingLabel: string;
+  ctxPct: number | null;
+}
+
 export interface ComposerProps {
   mode: ComposerMode;
   /** The pending outbox entries for THIS session (the dim chip). */
@@ -127,16 +173,22 @@ export interface ComposerProps {
   projectId: string | null;
   /** The session row's CURRENT operating mode (full|ask|plan). */
   permissionMode: string;
-  /** The session row's CURRENT task mode id (null = none). */
-  activeMode: string | null;
   /** R114-d — the session row's SERVER-SIDE selected model (the tier between
    * the per-send override and the agent row; null = follow the agent
-   * default). The pill's honest label when no local override is set. */
+   * default). The honest ladder's middle tier. */
   selectedModel: { providerId: string; model: string } | null;
+  /** R115-I — the CONTROLLED sheet state: which of this component's sheets
+   * is open (null = none). The session screen owns the value; the kebab's
+   * rows + this component's own transitions write through onSheetChange. */
+  sheet: ComposerSheet | null;
+  /** R115-I — the controlled sheet state's write side (opens, transitions,
+   * and closes — every pick closes). */
+  onSheetChange: (sheet: ComposerSheet | null) => void;
+  /** R115-I — the live control values report (fires only when a value
+   * actually changes; the screen's referential guard keeps it calm). */
+  onControlsSnapshot?: (snapshot: ComposerControlsSnapshot) => void;
   /** PATCH /sessions/:id/permissions — the screen owns the round-trip. */
   onPermissionModeChange: (mode: "full" | "ask" | "plan") => void;
-  /** PATCH /sessions/:id {activeMode} — the screen owns the round-trip. */
-  onActiveModeChange: (modeId: string | null) => void;
   /** R114-d — PATCH /sessions/:id {model} — the session's server-side selected
    * model (the cross-device truth; the other devices see the flip live via
    * the meta frame). The screen owns the round-trip. */
@@ -158,7 +210,13 @@ const ATTACHMENT_TEXT_CAP = 131_072;
 /** The picked-binary byte ceiling (POST /attachments/upload's 8MB gate). */
 const MAX_BINARY_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
-type SheetKind = "attach" | "files" | "mode" | "model" | "thinking" | "context" | null;
+/** The big mode rows' icon per operating mode (chat.md §Mode sheet — icon +
+ * label + one-line description). */
+const MODE_ICONS: Record<PermissionMode, LucideIcon> = {
+  full: Zap,
+  ask: HelpCircle,
+  plan: MapIcon,
+};
 
 export function Composer({
   mode,
@@ -166,10 +224,11 @@ export function Composer({
   sessionId,
   projectId,
   permissionMode,
-  activeMode,
   selectedModel,
+  sheet,
+  onSheetChange,
+  onControlsSnapshot,
   onPermissionModeChange,
-  onActiveModeChange,
   onModelChange,
   onSend,
   onStop,
@@ -187,7 +246,6 @@ export function Composer({
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [atToken, setAtToken] = useState<{ at: number; end: number; query: string } | null>(null);
   const caretRef = useRef(0);
-  const [sheet, setSheet] = useState<SheetKind>(null);
   const [note, setNote] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -195,10 +253,9 @@ export function Composer({
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("default");
   const [modelOverride, setModelOverride] = useState<ModelOverride | null>(null);
 
-  // The fetched control-row data (cached per mount; honest failure captions).
+  // The fetched control data (cached per mount; honest failure captions).
   const [models, setModels] = useState<ModelRecord[] | null>(null);
   const [providers, setProviders] = useState<ProviderRow[] | null>(null);
-  const [modes, setModes] = useState<ProjectModeRow[] | null>(null);
   const [treeFiles, setTreeFiles] = useState<string[] | null>(null);
   const [fileQuery, setFileQuery] = useState("");
   const [contextReport, setContextReport] = useState<SessionContextReport | null>(null);
@@ -233,6 +290,8 @@ export function Composer({
 
   // ── the fetched data (connected-only, best-effort, honest on failure) ────
 
+  // R115-I — the model sheet's provider grouping + the kebab's model label
+  // both read these fetches (the sheet renders the busy row until they land).
   useEffect(() => {
     if (!connected) return;
     const sender = getLinkManager();
@@ -242,12 +301,7 @@ export function Composer({
     void fetchProviders(sender).then((outcome) => {
       if (outcome.ok) setProviders(outcome.data.providers);
     });
-    if (projectId !== null) {
-      void fetchProjectModes(sender, projectId).then((outcome) => {
-        if (outcome.ok) setModes(outcome.data.modes);
-      });
-    }
-  }, [connected, projectId]);
+  }, [connected]);
 
   const loadTree = useCallback(() => {
     if (treeFiles !== null || projectId === null || !connected) return;
@@ -281,6 +335,18 @@ export function Composer({
     return () => clearInterval(timer);
   }, [streaming, connected, refreshContext]);
 
+  // ── R115-I — the CONTROLLED sheets' open-time side effects ────────────────
+  // The session screen owns the open sheet; these effects re-trigger each
+  // sheet's own lazy load exactly the way the old pill handlers did (the
+  // attach/files sheets prefetch the project tree; the context sheet
+  // re-reads the meter so the breakdown is fresh on every open).
+  useEffect(() => {
+    if (sheet === "attach" || sheet === "files") loadTree();
+  }, [sheet, loadTree]);
+  useEffect(() => {
+    if (sheet === "context") refreshContext();
+  }, [sheet, refreshContext]);
+
   // ── the effective pair + the model-aware thinking spec (R95-E parity) ────
 
   const effectiveModel = modelOverride?.model ?? contextReport?.model ?? null;
@@ -299,6 +365,13 @@ export function Composer({
     (providerId: string): string =>
       providers?.find((p) => p.id === providerId)?.name ?? providerId,
     [providers],
+  );
+
+  // R115-I — the model sheet's provider grouping (chat.md §Model sheet: no
+  // flat mega-list — the providers are section rows that expand inline).
+  const modelSections = useMemo(
+    () => (models !== null ? groupModelsByProvider(models, providers) : null),
+    [models, providers],
   );
 
   // ── attachments ────────────────────────────────────────────────────────────
@@ -521,7 +594,7 @@ export function Composer({
     }
   }, [canSend, uploading, draft, attachments, uploadStaged, onQueue, overridesFor]);
 
-  // ── control-row state setters (persist per session, desktop parity) ──────
+  // ── the send-control setters (persist per session, desktop parity) ───────
 
   const pickThinking = useCallback(
     (level: ThinkingLevel): void => {
@@ -542,19 +615,19 @@ export function Composer({
       // model selected" divergence dies at the source. null = clear both
       // tiers back to the agent default.
       if (onModelChange !== undefined) onModelChange(override);
-      setSheet(null);
+      onSheetChange(null);
     },
-    [sessionId, onModelChange],
+    [sessionId, onModelChange, onSheetChange],
   );
 
   // ── render ────────────────────────────────────────────────────────────────
 
-  const modeLabel = modeOption(permissionMode).label;
   // R114-d — THE HONEST MODEL LADDER: the local per-send override → the
   // session's server-side selectedModel → the context report's effective
-  // model → only when NOTHING is known, "Auto" (the owner: "the Auto pill
-  // showed Auto while PC had a model selected"). Every tier shortens through
-  // shortModelLabel so long ids stay one pill.
+  // model → only when NOTHING is known, "Agent default" ("Auto" never
+  // appears as a model state — copy.md; the owner: "the Auto pill showed
+  // Auto while PC had a model selected"). Every tier shortens through
+  // shortModelLabel so long ids stay one label.
   const modelLabel =
     modelOverride !== null
       ? shortModelLabel(modelOverride.model, models)
@@ -562,10 +635,17 @@ export function Composer({
         ? shortModelLabel(selectedModel.model, models)
         : contextReport !== null && contextReport.model.trim() !== ""
           ? shortModelLabel(contextReport.model, models)
-          : "Auto";
+          : "Agent default";
   const thinkingLabel = thinkingSpec.unsupported ? "Off" : thinkingOption(displayedThinkingLevel).label;
   const ctxPct = contextReport !== null ? contextPercent(contextReport.usedTokens, contextReport.contextWindow) : null;
-  const ctxPressure = contextReport !== null ? contextPressure(contextReport.usedTokens, contextReport.contextWindow) : "unknown";
+
+  // R115-I — the live control-values report for the session screen's kebab
+  // sheet (its rows display these; the callback is referentially guarded on
+  // the screen's side, so this fires only when a label actually changes).
+  useEffect(() => {
+    if (onControlsSnapshot === undefined) return;
+    onControlsSnapshot({ modelLabel, thinkingLabel, ctxPct });
+  }, [onControlsSnapshot, modelLabel, thinkingLabel, ctxPct]);
 
   return (
     <View style={[styles.root, { borderTopColor: tokens.borderSubtle }]}>
@@ -679,6 +759,26 @@ export function Composer({
       )}
 
       <View style={styles.row}>
+        {/* THE ATTACH CIRCLE (R115-I) — the dock's leading control: a 44px
+            quiet circle (components.md's icon-circle idiom) opening the
+            "Add context" sheet. The old control row's [+] pill, promoted
+            into the input row — the dock carries EXACTLY THREE controls. */}
+        <Pressable
+          accessibilityLabel="Attach a file or choose one from the project"
+          accessibilityRole="button"
+          testID="composer-attach"
+          onPress={() => onSheetChange("attach")}
+          style={({ pressed }) => [
+            styles.attachButton,
+            {
+              backgroundColor: pressed ? pressTint(tokens.card, tokens.isDark) : tokens.card,
+              borderColor: pressed ? pressTint(tokens.card, tokens.isDark) : tokens.borderStrong,
+              borderTopColor: tokens.clayTopEdge,
+            },
+          ]}
+        >
+          <Plus size={TYPE_BODY + 1} color={tokens.accent} strokeWidth={2.4} />
+        </Pressable>
         <TextInput
           accessibilityLabel="Message the agent"
           accessibilityHint={
@@ -721,6 +821,7 @@ export function Composer({
               accessibilityRole="button"
               accessibilityState={canSend ? undefined : { disabled: true }}
               disabled={!canSend}
+              testID="composer-queue"
               onPress={() => void queueNow()}
               style={({ pressed }) => [
                 styles.queueButton,
@@ -741,6 +842,7 @@ export function Composer({
             <Pressable
               accessibilityLabel="Stop the running turn"
               accessibilityRole="button"
+              testID="composer-stop"
               onPress={onStop}
               style={({ pressed }) => [
                 styles.stopButton,
@@ -762,6 +864,7 @@ export function Composer({
             accessibilityRole="button"
             accessibilityState={canSend ? undefined : { disabled: true }}
             disabled={!canSend}
+            testID="composer-send"
             onPress={() => void sendNow()}
             style={({ pressed }) => [
               styles.sendButton,
@@ -790,71 +893,16 @@ export function Composer({
         )}
       </View>
 
-      {/* THE CONTROL ROW — the desktop toolbar's one-row contract, clay pills. */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.controlRow}
-        contentContainerStyle={{ gap: spacing.sm, paddingRight: spacing.md }}
-        keyboardShouldPersistTaps="handled"
-        accessibilityLabel="Composer tools"
-      >
-        <ControlPill
-          label=""
-          icon={<Plus size={14} color={tokens.accent} strokeWidth={2.4} />}
-          accessibilityLabel="Attach a file or choose one from the project"
-          onPress={() => {
-            setSheet("attach");
-            loadTree();
-          }}
-        />
-        <ControlPill
-          label={modeLabel}
-          icon={<Zap size={13} color={tokens.accent} strokeWidth={2.2} />}
-          accessibilityLabel={`Operating mode: ${modeLabel}`}
-          chevron
-          onPress={() => setSheet("mode")}
-        />
-        <ControlPill
-          label={ctxPct !== null ? `${ctxPct}%` : "ctx"}
-          icon={<ContextRing pct={ctxPct ?? 0} pressure={ctxPressure} />}
-          accessibilityLabel={
-            contextReport !== null
-              ? `Context usage ${ctxPct}% of ${formatTokens(contextReport.contextWindow)} tokens`
-              : "Context usage"
-          }
-          chevron
-          onPress={() => {
-            refreshContext();
-            setSheet("context");
-          }}
-        />
-        <ControlPill
-          label={modelLabel}
-          icon={<Cpu size={13} color={tokens.accent} strokeWidth={2.2} />}
-          accessibilityLabel={`Model: ${modelLabel}`}
-          chevron
-          onPress={() => setSheet("model")}
-        />
-        <ControlPill
-          label={thinkingLabel}
-          icon={<Brain size={13} color={thinkingSpec.unsupported ? tokens.textTertiary : tokens.accent} strokeWidth={2.2} />}
-          accessibilityLabel={`Thinking level: ${thinkingLabel}`}
-          disabled={thinkingSpec.unsupported}
-          chevron={!thinkingSpec.unsupported}
-          onPress={() => setSheet("thinking")}
-        />
-      </ScrollView>
+      {/* ── the sheets (R115-I — CONTROLLED by the session screen's sheet
+          state; every pick or cancel writes onSheetChange(null)) ─────────── */}
 
-      {/* ── the sheets ─────────────────────────────────────────────────────── */}
-
-      <Sheet open={sheet === "attach"} onClose={() => setSheet(null)} title="Add context">
+      <Sheet open={sheet === "attach"} onClose={() => onSheetChange(null)} title="Add context">
         <SheetRow
           icon={<Plus size={15} color={tokens.accent} strokeWidth={2.3} />}
           title="Attach a file"
           caption="Pick any file from this device — images ride to the agent's project"
           onPress={() => {
-            setSheet(null);
+            onSheetChange(null);
             void pickDeviceFile();
           }}
         />
@@ -865,8 +913,7 @@ export function Composer({
           disabled={projectId === null}
           onPress={() => {
             setFileQuery("");
-            setSheet("files");
-            loadTree();
+            onSheetChange("files");
           }}
         />
         <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.xs }}>
@@ -874,7 +921,7 @@ export function Composer({
         </TypeCaption>
       </Sheet>
 
-      <Sheet open={sheet === "files"} onClose={() => setSheet(null)} title="Choose from project">
+      <Sheet open={sheet === "files"} onClose={() => onSheetChange(null)} title="Choose from project">
         <View style={[styles.fileSearch, { backgroundColor: tokens.inputBg, borderColor: tokens.inputBorder }]}>
           <Search size={14} color={tokens.textTertiary} strokeWidth={2.2} />
           <TextInput
@@ -899,7 +946,7 @@ export function Composer({
                 accessibilityLabel={`Attach ${path}`}
                 accessibilityRole="button"
                 onPress={() => {
-                  setSheet(null);
+                  onSheetChange(null);
                   void attachPaths([path], "project");
                 }}
                 style={({ pressed }) => [
@@ -922,57 +969,34 @@ export function Composer({
         )}
       </Sheet>
 
-      <Sheet open={sheet === "mode"} onClose={() => setSheet(null)} title="Operating mode">
+      {/* R115-I — the mode sheet carries ONLY the three operating modes as
+          big selectable rows (chat.md §Mode sheet; the task-mode section is
+          deleted from mobile — the round-115 verdict). The PATCH permissions
+          flow rides unchanged. */}
+      <Sheet open={sheet === "mode"} onClose={() => onSheetChange(null)} title="Operating mode">
         {MODE_OPTIONS.map((option) => (
-          <SheetRow
+          <ModeOptionRow
             key={option.id}
-            icon={<Zap size={15} color={option.id === permissionMode ? tokens.accent : tokens.textSecondary} strokeWidth={2.3} />}
-            title={option.label}
-            caption={option.description}
+            option={option}
             selected={option.id === permissionMode}
             onPress={() => {
               if (option.id !== permissionMode) onPermissionModeChange(option.id);
-              setSheet(null);
+              onSheetChange(null);
             }}
           />
         ))}
-        {projectId !== null && modes !== null && modes.length > 0 && (
-          <>
-            <View style={{ height: spacing.sm }} />
-            <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.xs }}>
-              task mode — the agent's working posture
-            </TypeCaption>
-            <SheetRow
-              icon={<Bot size={15} color={activeMode === null ? tokens.accent : tokens.textSecondary} strokeWidth={2.3} />}
-              title="None"
-              caption="no task mode pinned — the agent picks its own posture"
-              selected={activeMode === null}
-              onPress={() => {
-                if (activeMode !== null) onActiveModeChange(null);
-                setSheet(null);
-              }}
-            />
-            {modes.map((m) => (
-              <SheetRow
-                key={m.id}
-                icon={<Bot size={15} color={activeMode === m.id ? tokens.accent : tokens.textSecondary} strokeWidth={2.3} />}
-                title={m.name}
-                caption={m.description}
-                selected={activeMode === m.id}
-                onPress={() => {
-                  if (activeMode !== m.id) onActiveModeChange(m.id);
-                  setSheet(null);
-                }}
-              />
-            ))}
-          </>
-        )}
       </Sheet>
 
-      <Sheet open={sheet === "model"} onClose={() => setSheet(null)} title="Model">
+      {/* R115-I — the model sheet, GROUPED BY PROVIDER (chat.md §Model
+          sheet): "Agent default" on top (clears both tiers + PATCHes null),
+          then the providers as section rows (name + "{n} models" + chevron)
+          that expand their models INLINE — no flat mega-list. The two-tier
+          pick logic (override + PATCH) is byte-identical to R114-d's. */}
+      <Sheet open={sheet === "model"} onClose={() => onSheetChange(null)} title="Model" testID="model-sheet">
         <SheetRow
+          testID="model-row-agent-default"
           icon={<Cpu size={15} color={modelOverride === null && selectedModel === null ? tokens.accent : tokens.textSecondary} strokeWidth={2.3} />}
-          title="Auto (session default)"
+          title="Agent default"
           caption={
             selectedModel === null
               ? "the session agent's own model"
@@ -981,30 +1005,29 @@ export function Composer({
           selected={modelOverride === null && selectedModel === null}
           onPress={() => pickModel(null)}
         />
-        {models === null ? (
+        {modelSections === null ? (
           <View style={styles.sheetBusy}>
             <ActivityIndicator size="small" color={tokens.accent} />
             <TypeCaption style={{ color: tokens.textTertiary }}>
               {connected ? "loading the configured models…" : "the host is offline"}
             </TypeCaption>
           </View>
+        ) : modelSections.length === 0 ? (
+          <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.xs }}>
+            no models configured on the host
+          </TypeCaption>
         ) : (
-          models
-            .filter((m) => !m.hidden)
-            .map((m) => (
-              <SheetRow
-                key={m.id}
-                icon={<Cpu size={15} color={isModelInPlay(modelOverride, selectedModel, m) ? tokens.accent : tokens.textSecondary} strokeWidth={2.3} />}
-                title={m.displayName ?? m.modelId}
-                caption={`${providerName(m.providerId)}${m.contextWindow !== null ? ` · ${formatTokens(m.contextWindow)} ctx` : ""}`}
-                selected={isModelInPlay(modelOverride, selectedModel, m)}
-                onPress={() => pickModel({ model: m.modelId, providerId: m.providerId })}
-              />
-            ))
+          <ModelGroupedList
+            sections={modelSections}
+            override={modelOverride}
+            selectedModel={selectedModel}
+            providerDisplayName={providerName}
+            onPick={pickModel}
+          />
         )}
       </Sheet>
 
-      <Sheet open={sheet === "thinking"} onClose={() => setSheet(null)} title="Thinking level">
+      <Sheet open={sheet === "thinking"} onClose={() => onSheetChange(null)} title="Thinking level">
         {thinkingSpec.unsupported ? (
           <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.xs }}>
             this model does not support reasoning
@@ -1025,7 +1048,7 @@ export function Composer({
                 selected={option.id === displayedThinkingLevel}
                 onPress={() => {
                   pickThinking(option.id);
-                  setSheet(null);
+                  onSheetChange(null);
                 }}
               />
             ))}
@@ -1038,7 +1061,7 @@ export function Composer({
         )}
       </Sheet>
 
-      <Sheet open={sheet === "context"} onClose={() => setSheet(null)} title="Context usage">
+      <Sheet open={sheet === "context"} onClose={() => onSheetChange(null)} title="Context usage">
         {contextReport === null ? (
           <View style={styles.sheetBusy}>
             <ActivityIndicator size="small" color={tokens.accent} />
@@ -1054,85 +1077,285 @@ export function Composer({
   );
 }
 
-// ── the control pill + the context ring ─────────────────────────────────────
+// ── the mode sheet's big rows (R115-I — chat.md §Mode sheet) ───────────────
 
-function ControlPill({
-  label,
-  icon,
-  accessibilityLabel,
+/** One BIG selectable operating-mode row: icon chip + label + ONE-line
+ * description; selected = accent border + check (the round-115 spec). */
+function ModeOptionRow({
+  option,
+  selected,
   onPress,
-  disabled = false,
-  chevron = false,
 }: {
-  label: string;
-  icon: React.ReactNode;
-  accessibilityLabel: string;
+  option: ModeOption;
+  selected: boolean;
   onPress: () => void;
-  disabled?: boolean;
-  chevron?: boolean;
 }) {
   const { tokens } = useTheme();
+  const Icon = MODE_ICONS[option.id];
   return (
     <Pressable
-      accessibilityLabel={accessibilityLabel}
+      testID={`mode-row-${option.id}`}
+      accessibilityLabel={`${option.label} — ${option.description}`}
       accessibilityRole="button"
-      accessibilityState={disabled ? { disabled: true } : undefined}
-      disabled={disabled}
+      accessibilityState={{ selected }}
       onPress={onPress}
       style={({ pressed }) => [
-        styles.controlPill,
+        styles.modeRow,
         {
-          backgroundColor: pressed ? tokens.subtleHover : tokens.pillBg,
-          borderColor: tokens.border,
-          opacity: disabled ? 0.55 : 1,
+          backgroundColor: pressed ? tokens.subtleHover : tokens.card,
+          borderColor: selected ? tokens.accent : tokens.borderSubtle,
+          borderTopColor: tokens.clayTopEdge,
         },
       ]}
     >
-      {icon}
-      {label !== "" && (
-        <Text style={{ color: tokens.textSecondary, fontSize: TYPE_CAPTION, fontFamily: fontFamily.semibold }} numberOfLines={1}>
-          {label}
+      <View style={[styles.modeIconChip, { backgroundColor: tokens.subtle }]}>
+        <Icon size={18} color={selected ? tokens.accent : tokens.textSecondary} strokeWidth={2.2} />
+      </View>
+      <View style={{ flex: 1, gap: 1 }}>
+        <Text style={{ color: tokens.text, fontSize: TYPE_BODY, fontFamily: fontFamily.semibold }} numberOfLines={1}>
+          {option.label}
         </Text>
-      )}
-      {chevron ? <ChevronDown size={11} color={tokens.textTertiary} strokeWidth={2.2} /> : null}
+        <Text
+          style={{ color: tokens.textTertiary, fontSize: TYPE_CAPTION - 1, fontFamily: fontFamily.regular }}
+          numberOfLines={1}
+        >
+          {option.description}
+        </Text>
+      </View>
+      {selected ? <Check size={16} color={tokens.accent} strokeWidth={2.6} /> : null}
     </Pressable>
   );
 }
 
-/** The meter's tiny ring — a 20px SVG donut, pressure-colored like the
- * desktop's (accent → amber at 60% → danger past 85%). */
-function ContextRing({ pct, pressure }: { pct: number; pressure: string }) {
-  const { tokens } = useTheme();
-  const color =
-    pressure === "danger"
-      ? tokens.danger
-      : pressure === "filling"
-        ? tokens.warning
-        : pressure === "comfortable"
-          ? tokens.accent
-          : tokens.borderStrong;
-  const size = 16;
-  const stroke = 2.4;
-  const radius = (size - stroke) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const filled = (Math.min(100, Math.max(0, pct)) / 100) * circumference;
+// ── the model sheet's provider grouping (R115-I — chat.md §Model sheet) ────
+
+/** One provider's slice of the configured models (its display label — the
+ * registry row's name, falling back to the provider id — plus its rows). */
+export interface ModelProviderSection {
+  providerId: string;
+  label: string;
+  rows: ModelRecord[];
+}
+
+/** The visible models bucketed by provider: sections ordered by the
+ * PROVIDERS registry first, then any provider the registry didn't list in
+ * first-appearance order (named by its id — honest while the provider list
+ * hasn't loaded). Hidden models never appear. Pure. */
+export function groupModelsByProvider(
+  models: ModelRecord[],
+  providers: ProviderRow[] | null,
+): ModelProviderSection[] {
+  const groups = new Map<string, ModelRecord[]>();
+  for (const m of models) {
+    if (m.hidden) continue;
+    const list = groups.get(m.providerId);
+    if (list !== undefined) list.push(m);
+    else groups.set(m.providerId, [m]);
+  }
+  const sections: ModelProviderSection[] = [];
+  const seen = new Set<string>();
+  for (const p of providers ?? []) {
+    const rows = groups.get(p.id);
+    if (rows === undefined) continue;
+    seen.add(p.id);
+    sections.push({ providerId: p.id, label: p.name, rows });
+  }
+  for (const [providerId, rows] of groups) {
+    if (seen.has(providerId)) continue;
+    sections.push({ providerId, label: providerId, rows });
+  }
+  return sections;
+}
+
+/** The section holding the model that's actually IN PLAY (override → session
+ * truth), so the grouped list opens on it. */
+function inPlayProviderId(
+  sections: ModelProviderSection[],
+  override: ModelOverride | null,
+  selectedModel: { providerId: string; model: string } | null,
+): string | null {
+  for (const section of sections) {
+    if (section.rows.some((m) => isModelInPlay(override, selectedModel, m))) {
+      return section.providerId;
+    }
+  }
+  return null;
+}
+
+/** The grouped list itself: the providers as section rows that expand their
+ * models INLINE (one open at a time, house spring). Mounts with the in-play
+ * provider expanded — the sheet's Modal unmounts its content between opens,
+ * so the initial state re-derives every time the sheet reopens. */
+function ModelGroupedList({
+  sections,
+  override,
+  selectedModel,
+  providerDisplayName,
+  onPick,
+}: {
+  sections: ModelProviderSection[];
+  override: ModelOverride | null;
+  selectedModel: { providerId: string; model: string } | null;
+  providerDisplayName: (providerId: string) => string;
+  onPick: (override: ModelOverride) => void;
+}) {
+  const [expandedId, setExpandedId] = useState<string | null>(() =>
+    inPlayProviderId(sections, override, selectedModel),
+  );
   return (
-    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
-      <Svg width={size} height={size}>
-        <Circle cx={size / 2} cy={size / 2} r={radius} stroke={tokens.border} strokeWidth={stroke} fill="none" />
-        <Circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          stroke={color}
-          strokeWidth={stroke}
-          fill="none"
-          strokeDasharray={`${filled} ${circumference - filled}`}
-          strokeLinecap="round"
-          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+    <View style={{ gap: spacing.sm }}>
+      {sections.map((section) => (
+        <ProviderSection
+          key={section.providerId}
+          section={section}
+          expanded={expandedId === section.providerId}
+          onToggle={() =>
+            setExpandedId((prev) => (prev === section.providerId ? null : section.providerId))
+          }
+          override={override}
+          selectedModel={selectedModel}
+          providerDisplayName={providerDisplayName}
+          onPick={onPick}
         />
-      </Svg>
+      ))}
     </View>
+  );
+}
+
+/** One provider's section row (display name + "{n} models" caption + the
+ * rotating chevron) with its models inside the inline Accordion — the same
+ * row grammar the flat list used: label + "{provider} · {N} ctx" caption +
+ * the selected check (the two-tier "in play" truth). */
+function ProviderSection({
+  section,
+  expanded,
+  onToggle,
+  override,
+  selectedModel,
+  providerDisplayName,
+  onPick,
+}: {
+  section: ModelProviderSection;
+  expanded: boolean;
+  onToggle: () => void;
+  override: ModelOverride | null;
+  selectedModel: { providerId: string; model: string } | null;
+  providerDisplayName: (providerId: string) => string;
+  onPick: (override: ModelOverride) => void;
+}) {
+  const { tokens } = useTheme();
+  const chevron = useSharedValue(0);
+
+  useEffect(() => {
+    chevron.value = withSpring(expanded ? 1 : 0, SPRING);
+  }, [expanded, chevron]);
+
+  const chevronStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${chevron.value * 180}deg` }],
+  }));
+
+  return (
+    <View>
+      <Pressable
+        testID={`provider-row-${section.providerId}`}
+        accessibilityLabel={`${section.label} — ${section.rows.length} model${section.rows.length === 1 ? "" : "s"}`}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        onPress={onToggle}
+        style={({ pressed }) => [
+          styles.providerRow,
+          {
+            backgroundColor: pressed ? tokens.subtleHover : "transparent",
+            borderColor: tokens.borderSubtle,
+          },
+        ]}
+      >
+        <View style={{ flex: 1, gap: 1 }}>
+          <Text style={{ color: tokens.text, fontSize: TYPE_BODY, fontFamily: fontFamily.semibold }} numberOfLines={1}>
+            {section.label}
+          </Text>
+          <Text
+            style={{ color: tokens.textTertiary, fontSize: TYPE_CAPTION - 1, fontFamily: fontFamily.regular }}
+            numberOfLines={1}
+          >
+            {section.rows.length} model{section.rows.length === 1 ? "" : "s"}
+          </Text>
+        </View>
+        <Animated.View style={chevronStyle}>
+          <ChevronDown size={16} color={tokens.textTertiary} strokeWidth={2.2} />
+        </Animated.View>
+      </Pressable>
+      <Accordion open={expanded}>
+        <View style={styles.modelRows}>
+          {section.rows.map((m) => (
+            <SheetRow
+              key={m.id}
+              testID={`model-row-${m.id}`}
+              icon={
+                <Cpu
+                  size={15}
+                  color={isModelInPlay(override, selectedModel, m) ? tokens.accent : tokens.textSecondary}
+                  strokeWidth={2.3}
+                />
+              }
+              title={m.displayName ?? m.modelId}
+              caption={`${providerDisplayName(m.providerId)}${
+                m.contextWindow !== null ? ` · ${formatTokens(m.contextWindow)} ctx` : ""
+              }`}
+              selected={isModelInPlay(override, selectedModel, m)}
+              onPress={() => onPick({ model: m.modelId, providerId: m.providerId })}
+            />
+          ))}
+        </View>
+      </Accordion>
+    </View>
+  );
+}
+
+// ── the inline accordion (the R115-h absolute-measurement pattern) ─────────
+
+/**
+ * The inline expansion — height + opacity under the ONE spring. The R115-h
+ * Yoga fix (donts #10), the same shape projects.tsx/disclosure.tsx carry:
+ * the clip View carries overflow:hidden ONLY, and the measurement child is
+ * ABSOLUTE (top/left/right 0) so it lays out at its NATURAL height even
+ * while the parent clips at 0 — the measured height is always real, and an
+ * open panel re-springs when its content re-measures.
+ */
+function Accordion({ open, children }: { open: boolean; children: React.ReactNode }) {
+  const height = useSharedValue(0);
+  const opacity = useSharedValue(0);
+  // The measured natural height — a SHARED VALUE so the toggle effect
+  // reads the FRESH number whenever it fires.
+  const contentHeight = useSharedValue(0);
+
+  useEffect(() => {
+    height.value = withSpring(open ? contentHeight.value : 0, SPRING);
+    opacity.value = withSpring(open ? 1 : 0, SPRING);
+  }, [open, height, opacity, contentHeight]);
+
+  const style = useAnimatedStyle(() => ({
+    height: Math.max(0, height.value),
+    opacity: Math.max(0, opacity.value),
+  }));
+
+  const onLayout = (event: LayoutChangeEvent): void => {
+    const measured = event.nativeEvent.layout.height;
+    if (measured <= 0) return;
+    contentHeight.value = measured;
+    // An OPEN panel whose content re-measured springs to the new height;
+    // a CLOSED one just records it for the next toggle.
+    if (open) height.value = withSpring(measured, SPRING);
+  };
+
+  return (
+    <Animated.View style={[styles.accordionClip, style]}>
+      {/* The ABSOLUTE measurement child — auto height at any clip height
+          (collapsable={false} keeps RN from folding it out of the tree). */}
+      <View collapsable={false} onLayout={onLayout} style={styles.accordionMeasure}>
+        {children}
+      </View>
+    </Animated.View>
   );
 }
 
@@ -1145,6 +1368,7 @@ function SheetRow({
   selected = false,
   disabled = false,
   onPress,
+  testID,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -1152,10 +1376,12 @@ function SheetRow({
   selected?: boolean;
   disabled?: boolean;
   onPress: () => void;
+  testID?: string;
 }) {
   const { tokens } = useTheme();
   return (
     <Pressable
+      testID={testID}
       accessibilityLabel={caption !== undefined ? `${title} — ${caption}` : title}
       accessibilityRole="button"
       accessibilityState={{
@@ -1435,18 +1661,63 @@ const styles = StyleSheet.create({
     fontSize: TYPE_CAPTION + 2,
     fontFamily: fontFamily.semibold,
   },
-  controlRow: {
-    flexGrow: 0,
+  /** The attach circle — the dock's 44px quiet circle (components.md's
+   * icon-circle idiom; the send keeps the 50px primary circle). */
+  attachButton: {
+    width: TOUCH_TARGET,
+    height: TOUCH_TARGET,
+    borderRadius: RADIUS_ROUND,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  controlPill: {
+  /** The mode sheet's big selectable rows (chat.md §Mode sheet). */
+  modeRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.xs + 1,
-    minHeight: TOUCH_TARGET,
-    borderRadius: RADIUS_PILL,
+    gap: spacing.md,
+    minHeight: 64,
     borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: RADIUS_INPUT,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
+    paddingVertical: spacing.sm,
+  },
+  modeIconChip: {
+    width: TILE_OPTION - 4,
+    height: TILE_OPTION - 4,
+    borderRadius: RADIUS_CHIP,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  /** The model sheet's provider section row. */
+  providerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    minHeight: TOUCH_TARGET + 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: RADIUS_INPUT,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
+  },
+  /** The models under an expanded provider — indented under the section's
+   * label, one 4px beat apart (the sheet's own gap owns the section rhythm). */
+  modelRows: {
+    paddingLeft: spacing.md,
+    gap: spacing.xs,
+  },
+  /** The accordion clip — overflow:hidden ONLY (the R115-h Yoga fix: a
+   * static height would clamp the relative child's measurement to 0). */
+  accordionClip: {
+    overflow: "hidden",
+  },
+  /** The ABSOLUTE measurement child — natural height at any clip height. */
+  accordionMeasure: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
   },
   sheetRow: {
     flexDirection: "row",

@@ -1,28 +1,38 @@
 /**
- * Approvals v2 (R109-c; R113-e — the compact header; R114-c — the
- * header-free root) — THE killer feature
- * (ANDROID-R1 §4), a tab root in the clay language (the header row died
- * with R114-c — the rows are the screen's top).
- * Every permission gate the desktop agent hits lands here as the EXISTING
- * approval row (toolCall, category, risk line, session/project, expiry) —
- * one tap wakes the waiting tool call on the desktop. The phone renders +
- * taps; NOTHING is processed here (LINKING-PROTOCOL §4's ceiling).
+ * Approvals v3 (R109-c; R113-e — the compact header; R114-c — the header-free
+ * root; R115-M — the minimal-center empty state) — THE killer feature
+ * (ANDROID-R1 §4), a tab root in the clay language (the rows are the
+ * screen's top). Every permission gate the desktop agent hits lands here as
+ * the EXISTING approval row (toolCall, category, risk line, session/project,
+ * expiry) — one tap wakes the waiting tool call on the desktop. The phone
+ * renders + taps; NOTHING is processed here (LINKING-PROTOCOL §4's ceiling).
  *
  * Cadence: load on mount + every (re)connect, a calm 20-second poll while
  * connected (the live notification stream covers the rest — approvals are
  * also notifications), and pull-to-refresh. The expiry clock ticks every
- * 10s so "expires in Ns" stays true without per-frame renders. The empty
- * state is the honest "Nothing is waiting on you."
+ * 10s so "expires in Ns" stays true without per-frame renders.
+ *
+ * R115-M — the states' honest grammar (screen-archetypes §2): loading and
+ * probing render skeleton cards (donts #14 — never a spinner on a list
+ * screen), offline keeps the one-line retry card, and the EMPTY state is
+ * the Archetype-1-style centered message: the ShieldCheck chip in quiet
+ * clay, the PINNED copy (copy.md: "Nothing needs your approval") + the
+ * one-line caption, vertically centered in the available space with the
+ * fade-in-up entrance. A refresh that fails while the list is empty keeps
+ * the honest warning strip above the centered message — the pinned copy
+ * never swallows the failure.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshControl, View } from "react-native";
+import { RefreshControl, StyleSheet, View, useWindowDimensions } from "react-native";
 import { ShieldCheck } from "lucide-react-native";
-import { ScreenScaffold } from "@/components/screen-scaffold";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ScreenScaffold, useTabBarInset } from "@/components/screen-scaffold";
 import { ApprovalCard } from "@/components/approval-card";
-import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
-import { TypeCaption } from "@/design/primitives";
+import { ErrorState, SkeletonList } from "@/components/list-state";
+import { FadeInUp, TypeBodyStrong, TypeCaption } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
+import { RADIUS_CHIP, TILE_OPTION, spacing } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { getLinkManager } from "@/link/runtime";
 import {
@@ -163,13 +173,25 @@ export default function ApprovalsScreen() {
     />
   );
 
+  // The minimal-center fill — the chromeless scaffold's OWN arithmetic
+  // (ScreenScaffold: the scroll viewport is the window minus the top inset;
+  // the content pads spacing.xxl above and max(tabBarInset, insets.bottom) +
+  // spacing.lg below), so the empty cluster centers in exactly the space the
+  // rows would occupy. Pull-to-refresh stays live (the fill lives inside the
+  // scroll body).
+  const { height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const tabBarInset = useTabBarInset();
+  const emptyFill =
+    windowHeight - insets.top - spacing.xxl - Math.max(tabBarInset, insets.bottom) - spacing.lg;
+
   return (
     <ScreenScaffold title="Approvals" refreshControl={refreshControl} chrome={false}>
       {status === "unpaired" ? (
         <ErrorState title="No host linked" caption="Pair this phone to see approvals." />
       ) : rows === null && !connected ? (
         status === "probing" ? (
-          <LoadingState caption="connecting to the host…" />
+          <SkeletonList rows={3} rowHeight={132} />
         ) : (
           <ErrorState
             title="host offline"
@@ -179,7 +201,7 @@ export default function ApprovalsScreen() {
           />
         )
       ) : loading ? (
-        <LoadingState caption="loading pending approvals…" />
+        <SkeletonList rows={3} rowHeight={132} />
       ) : error !== null && rows === null ? (
         <ErrorState
           title="Couldn't load approvals"
@@ -188,21 +210,41 @@ export default function ApprovalsScreen() {
           onRetry={() => void load()}
         />
       ) : cards.length === 0 ? (
-        <EmptyState
-          Icon={ShieldCheck}
-          title="Nothing is waiting on you."
-          caption={
-            error !== null
-              ? `${error} — pull to retry`
-              : "permission requests the agent raises will appear here"
-          }
-        />
+        <View style={{ minHeight: emptyFill }}>
+          {error !== null ? (
+            <TypeCaption numberOfLines={1} style={{ color: tokens.warning }}>
+              {`last update failed — ${error}`}
+            </TypeCaption>
+          ) : null}
+          <View style={styles.emptyCenter}>
+            {/* The minimal-center message (Archetype-1 DNA): chip + the
+                pinned title + one caption line, slightly above the middle. */}
+            <FadeInUp index={0} style={styles.emptyCluster}>
+              <View
+                style={[
+                  styles.emptyChip,
+                  {
+                    backgroundColor: tokens.card,
+                    borderTopColor: tokens.clayTopEdge,
+                    boxShadow: tokens.clayShadowSm,
+                  },
+                ]}
+              >
+                <ShieldCheck size={24} color={tokens.textSecondary} strokeWidth={1.8} />
+              </View>
+              <TypeBodyStrong style={styles.emptyTitle}>Nothing needs your approval</TypeBodyStrong>
+              <TypeCaption style={{ color: tokens.textTertiary, textAlign: "center" }}>
+                Permission requests the agent raises appear here.
+              </TypeCaption>
+            </FadeInUp>
+          </View>
+        </View>
       ) : (
         <>
           {error !== null ? (
-            <View>
-              <TypeCaption style={{ color: tokens.warning }}>{`last update failed — ${error}`}</TypeCaption>
-            </View>
+            <TypeCaption numberOfLines={1} style={{ color: tokens.warning }}>
+              {`last update failed — ${error}`}
+            </TypeCaption>
           ) : null}
           {cards.map((card, index) => (
             <ApprovalCard
@@ -218,3 +260,27 @@ export default function ApprovalsScreen() {
     </ScreenScaffold>
   );
 }
+
+const styles = StyleSheet.create({
+  emptyCenter: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    // Archetype-1 DNA — the cluster rides slightly ABOVE the vertical middle.
+    paddingBottom: spacing.huge,
+  },
+  emptyCluster: {
+    alignItems: "center",
+    gap: spacing.md,
+  },
+  emptyChip: {
+    width: TILE_OPTION,
+    height: TILE_OPTION,
+    borderRadius: RADIUS_CHIP,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.xs,
+  },
+  emptyTitle: { textAlign: "center" },
+});

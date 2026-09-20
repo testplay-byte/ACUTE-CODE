@@ -63,3 +63,14 @@ export const PAIRING_MERGE_MS = 1400;
 
 /** The pairing content crossfade (motion.md §4.4 — the whole screen swaps, 150ms). */
 export const PAIRING_FADE_MS = 150;
+
+// ── the R115-N chart entries (motion.md §4.6 — once per data load) ──────────
+
+/** The daily bars' baseline grow (motion.md §4.6: withTiming 350ms, staggered). */
+export const CHART_BAR_GROW_MS = 350;
+
+/** The per-bar entry stagger (motion.md §4.6: 12ms between columns). */
+export const CHART_BAR_STAGGER_MS = 12;
+
+/** The donut's arc sweep (motion.md §4.6 + §7's "deliberate" tier: 500ms). */
+export const DONUT_SWEEP_MS = 500;

@@ -1,15 +1,15 @@
 /**
- * Dashboard v3 (R109-c; R113-e — the compact header; R114-c — the
- * color-coded, complete-info redesign + the header-free root) — the
- * owner's "see the dashboard, the stats, the usage" screen. Everything
- * renders from the desktop's EXISTING /usage routes (features/config.ts,
- * typed 1:1):
+ * Dashboard v4 (R109-c; R113-e — the compact header; R114-c — the
+ * color-coded, complete-info redesign + the header-free root; R115-N — the
+ * donut + activity round) — the owner's "see the dashboard, the stats, the
+ * usage" screen. Everything renders from the desktop's EXISTING /usage
+ * routes (features/config.ts, typed 1:1):
  *
  *   window 14d/30d → fetchUsageSummary(14|30)  — the daily chart + totals,
  *                     PLUS fetchUsageStats(1) alongside (always) for the
- *                     model leaderboard + the health block
+ *                     model ring + the health block
  *   window 3mo     → fetchUsageStats(3)         — its series is daily, so it
- *                     carries the chart AND the leaderboard AND the health
+ *                     carries the chart AND the ring AND the health
  *
  * Layout (top → bottom): the window chips, the totals hero (4 ClayCards in
  * a 2×2 grid, each with its TONED ICON CHIP — accent tokens, green
@@ -19,21 +19,53 @@
  * terracotta accent, output tokens stacked above in the sage second hue,
  * 3 quiet dashed gridlines + the max-value scale label, the peak day
  * highlighted, first/last date axis labels, tap a bar for that day's
- * inline detail — the model leaderboard (top 6, each model in its OWN
- * rank hue: dot + name + mono count + share track + cost·calls caption,
- * with a tiny legend when two+ render), and the health block (turn errors
- * + tool failures, each with the total-count chip). Pull-to-refresh +
- * honest loading skeletons/offline/error/empty states, gated on connected.
+ * inline detail — TOP MODELS as the DONUT + LEGEND (R115-N: the PC's
+ * ModelDonut port, src/components/chart-donut.tsx — the ring carries every
+ * model's token share, the leaderboard rows fold INTO the legend rows, the
+ * center hole carries the top model + its share, tapping a legend row
+ * spotlights its segment with the mutual 1-vs-0.55 highlight), the ACTIVITY
+ * table (R115-N: requests, turn errors, tool failures, the peak day — one
+ * compact row per metric with a proportional sparkbar in the metric's hue,
+ * mono values right-aligned), and the health block (turn errors + tool
+ * failures, each with the total-count chip). Pull-to-refresh + honest
+ * loading skeletons/offline/error/empty states, gated on connected.
+ *
+ * MOTION (motion.md §4.6, R115-N): the bars GROW from the baseline on every
+ * data load — each column withTiming 350ms, staggered 12ms, keyed on the
+ * dataset's identity so window switches re-trigger it — and the donut SWEEPS
+ * its arcs in (withTiming 500ms). Both run once per load and never loop.
  *
  * formatTokens + formatUsd are the pure number helpers, EXPORTED from this
  * file for tests later.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RefreshControl, StyleSheet, View, useWindowDimensions } from "react-native";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ReactElement } from "react";
+import {
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import Svg, { G, Line, Rect } from "react-native-svg";
+import Animated, {
+  Easing,
+  useAnimatedProps,
+  useReducedMotion,
+  useSharedValue,
+  withDelay,
+  withTiming,
+} from "react-native-reanimated";
 import { Coins, DollarSign, TrendingUp, Zap } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
+import {
+  DONUT_DIM_OPACITY,
+  DonutChart,
+  donutShares,
+  shortModelName,
+  type DonutSegment,
+} from "@/components/chart-donut";
 import { ErrorState, LoadingState, SkeletonList } from "@/components/list-state";
 import {
   Badge,
@@ -47,6 +79,7 @@ import {
   TypeTitle,
 } from "@/design/primitives";
 import { selectionHaptic } from "@/design/haptics";
+import { CHART_BAR_GROW_MS, CHART_BAR_STAGGER_MS } from "@/design/motion";
 import { useTheme } from "@/design/theme";
 import {
   CHART_HUES,
@@ -54,6 +87,7 @@ import {
   mixHex,
   modelHue,
   RADIUS_CARD,
+  RADIUS_INPUT,
   spacing,
 } from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
@@ -155,17 +189,241 @@ interface DayBucket {
 
 const CHART_HEIGHT = 168;
 const CHART_CAP = 2;
+/**
+ * motion.md §2's stagger cap, applied to the chart's own 12ms ladder: the
+ * entry wave spans at most 30 column-beats (the 30-day window's full length
+ * — a 360ms wave) so the ~90-column 3-month series rides the SAME wave
+ * instead of a 1.1-second crawl.
+ */
+const CHART_STAGGER_CAP = 30;
+
+const AnimatedRect = Animated.createAnimatedComponent(Rect);
+
+/**
+ * One column's §4.6 entry: 0 → 1 on its own beat (withTiming 350ms, 12ms
+ * stagger), re-keyed on the dataset's identity so window switches and
+ * reloads re-trigger it. Reduced motion snaps to full height.
+ */
+function useColumnEntry(dataKey: string, index: number) {
+  const reduced = useReducedMotion();
+  const progress = useSharedValue(0);
+  // Layout effect: the reset-to-0 lands BEFORE the next paint, so a reloaded
+  // dataset (pull-to-refresh with new numbers) can never flash its static
+  // (full-height) hedge for a frame before the grow restarts.
+  useLayoutEffect(() => {
+    if (reduced) {
+      progress.value = 1;
+      return;
+    }
+    progress.value = 0;
+    progress.value = withDelay(
+      Math.min(index, CHART_STAGGER_CAP) * CHART_BAR_STAGGER_MS,
+      withTiming(1, {
+        duration: CHART_BAR_GROW_MS,
+        easing: Easing.out(Easing.quad),
+      }),
+    );
+  }, [dataKey, index, reduced, progress]);
+  return progress;
+}
+
+/** An empty day — the faint ghost bar (never zero-height noise; nothing to grow). */
+function GhostBar({
+  x,
+  barWidth,
+  baselineY,
+  hue,
+  tapTarget,
+}: {
+  x: number;
+  barWidth: number;
+  baselineY: number;
+  hue: string;
+  tapTarget: ReactElement;
+}) {
+  return (
+    <G>
+      <Rect x={x} y={baselineY - 1.5} width={barWidth} height={1.5} fill={hue} fillOpacity={0.16} />
+      {tapTarget}
+    </G>
+  );
+}
+
+/**
+ * A totals-only (the 3-month series) or one-sided day: one bar in the blend
+ * (totals) or the side that exists — never a fake split. Grows from the
+ * baseline on entry; the static props are the FAIL-STATIC hedge (the resting
+ * bar) — reanimated's animatedProps override them while the entry runs, and
+ * if they ever fail to apply on a device the chart renders complete anyway.
+ */
+function SingleBar({
+  x,
+  barWidth,
+  baselineY,
+  totalHeight,
+  fill,
+  capFill,
+  emphasis,
+  isSelected,
+  tapTarget,
+  dataKey,
+  index,
+}: {
+  x: number;
+  barWidth: number;
+  baselineY: number;
+  totalHeight: number;
+  fill: string;
+  capFill: string;
+  emphasis: number;
+  isSelected: boolean;
+  tapTarget: ReactElement;
+  dataKey: string;
+  index: number;
+}) {
+  const progress = useColumnEntry(dataKey, index);
+  const barProps = useAnimatedProps(() => ({
+    y: baselineY - totalHeight * progress.value,
+    height: totalHeight * progress.value,
+  }));
+  const capProps = useAnimatedProps(() => ({
+    y: baselineY - totalHeight * progress.value - CHART_CAP,
+  }));
+  return (
+    <G>
+      <AnimatedRect
+        x={x}
+        y={baselineY - totalHeight}
+        width={barWidth}
+        height={totalHeight}
+        rx={Math.min(2.5, barWidth / 2)}
+        fill={fill}
+        fillOpacity={emphasis}
+        animatedProps={barProps}
+      />
+      {totalHeight > 5 ? (
+        <AnimatedRect
+          x={x}
+          y={baselineY - totalHeight - CHART_CAP}
+          width={barWidth}
+          height={CHART_CAP}
+          rx={1}
+          fill={capFill}
+          animatedProps={capProps}
+        />
+      ) : null}
+      {isSelected ? (
+        <Rect x={x} y={baselineY} width={barWidth} height={CHART_HEIGHT - baselineY} fill={fill} />
+      ) : null}
+      {tapTarget}
+    </G>
+  );
+}
+
+/**
+ * The stacked day — input below (terracotta), output above (sage), both
+ * scaled by the SAME peak denominator so the stack is the day; the whole
+ * stack grows out of the baseline on entry (the cap rides the rising top).
+ */
+function SplitBar({
+  x,
+  barWidth,
+  baselineY,
+  inputHeight,
+  outputHeight,
+  totalHeight,
+  inHue,
+  outHue,
+  capFillOut,
+  emphasis,
+  isSelected,
+  tapTarget,
+  dataKey,
+  index,
+}: {
+  x: number;
+  barWidth: number;
+  baselineY: number;
+  inputHeight: number;
+  outputHeight: number;
+  totalHeight: number;
+  inHue: string;
+  outHue: string;
+  capFillOut: string;
+  emphasis: number;
+  isSelected: boolean;
+  tapTarget: ReactElement;
+  dataKey: string;
+  index: number;
+}) {
+  const progress = useColumnEntry(dataKey, index);
+  const inputProps = useAnimatedProps(() => ({
+    y: baselineY - inputHeight * progress.value,
+    height: inputHeight * progress.value,
+  }));
+  const outputProps = useAnimatedProps(() => ({
+    y: baselineY - (inputHeight + outputHeight) * progress.value,
+    height: outputHeight * progress.value,
+  }));
+  const capProps = useAnimatedProps(() => ({
+    y: baselineY - totalHeight * progress.value - CHART_CAP,
+  }));
+  return (
+    <G>
+      <AnimatedRect
+        x={x}
+        y={baselineY - inputHeight}
+        width={barWidth}
+        height={inputHeight}
+        rx={Math.min(2.5, barWidth / 2)}
+        fill={inHue}
+        fillOpacity={emphasis}
+        animatedProps={inputProps}
+      />
+      {outputHeight > 0 ? (
+        <AnimatedRect
+          x={x}
+          y={baselineY - totalHeight}
+          width={barWidth}
+          height={outputHeight}
+          rx={Math.min(2.5, barWidth / 2)}
+          fill={outHue}
+          fillOpacity={emphasis}
+          animatedProps={outputProps}
+        />
+      ) : null}
+      {totalHeight > 5 ? (
+        <AnimatedRect
+          x={x}
+          y={baselineY - totalHeight - CHART_CAP}
+          width={barWidth}
+          height={CHART_CAP}
+          rx={1}
+          fill={capFillOut}
+          animatedProps={capProps}
+        />
+      ) : null}
+      {isSelected ? (
+        <Rect x={x} y={baselineY} width={barWidth} height={CHART_HEIGHT - baselineY} fill={inHue} />
+      ) : null}
+      {tapTarget}
+    </G>
+  );
+}
 
 function UsageChart({
   days,
   width,
   selected,
   onSelect,
+  dataKey,
 }: {
   days: DayBucket[];
   width: number;
   selected: number | null;
   onSelect: (index: number | null) => void;
+  /** The dataset's identity — the bars' grow re-triggers whenever it changes. */
+  dataKey: string;
 }) {
   const { tokens } = useTheme();
   const n = days.length;
@@ -243,19 +501,15 @@ function UsageChart({
             />
           );
           if (day.tokens === 0) {
-            // An empty day — the faint ghost bar (never zero-height noise).
             return (
-              <G key={`${day.date}-${index}`}>
-                <Rect
-                  x={x}
-                  y={baselineY - 1.5}
-                  width={barWidth}
-                  height={1.5}
-                  fill={inHue}
-                  fillOpacity={0.16}
-                />
-                {tapTarget}
-              </G>
+              <GhostBar
+                key={`${day.date}-${index}`}
+                x={x}
+                barWidth={barWidth}
+                baselineY={baselineY}
+                hue={inHue}
+                tapTarget={tapTarget}
+              />
             );
           }
           const totalHeight = Math.max(
@@ -270,8 +524,7 @@ function UsageChart({
             inputTokens > 0 &&
             outputTokens > 0;
           if (!split) {
-            // Totals-only (the 3-month series) or a one-sided day: one bar in
-            // the blend (totals) or the side that exists — never a fake split.
+            // Totals-only (the 3-month series) or a one-sided day.
             const fill =
               day.inputTokens !== null && inputTokens > 0
                 ? inHue
@@ -279,74 +532,46 @@ function UsageChart({
                   ? outHue
                   : blendHue;
             const capFill = mixHex(fill, tokens.card, 0.45);
-            const y = baselineY - totalHeight;
             return (
-              <G key={`${day.date}-${index}`}>
-                <Rect
-                  x={x}
-                  y={y}
-                  width={barWidth}
-                  height={totalHeight}
-                  rx={Math.min(2.5, barWidth / 2)}
-                  fill={fill}
-                  fillOpacity={emphasis}
-                />
-                {totalHeight > 5 ? (
-                  <Rect x={x} y={y - CHART_CAP} width={barWidth} height={CHART_CAP} rx={1} fill={capFill} />
-                ) : null}
-                {isSelected ? (
-                  <Rect x={x} y={baselineY} width={barWidth} height={CHART_HEIGHT - baselineY} fill={fill} />
-                ) : null}
-                {tapTarget}
-              </G>
+              <SingleBar
+                key={`${day.date}-${index}`}
+                x={x}
+                barWidth={barWidth}
+                baselineY={baselineY}
+                totalHeight={totalHeight}
+                fill={fill}
+                capFill={capFill}
+                emphasis={emphasis}
+                isSelected={isSelected}
+                tapTarget={tapTarget}
+                dataKey={dataKey}
+                index={index}
+              />
             );
           }
-          // The stacked day — input below (terracotta), output above (sage),
-          // both scaled by the SAME peak denominator so the stack is the day.
           const inputHeight = Math.max(
             1,
             (inputTokens / Math.max(peakTokens, 1)) * plotHeight,
           );
           const outputHeight = Math.max(totalHeight - inputHeight, 0);
-          const yOut = baselineY - totalHeight;
-          const yIn = baselineY - inputHeight;
           return (
-            <G key={`${day.date}-${index}`}>
-              <Rect
-                x={x}
-                y={yIn}
-                width={barWidth}
-                height={inputHeight}
-                rx={Math.min(2.5, barWidth / 2)}
-                fill={inHue}
-                fillOpacity={emphasis}
-              />
-              {outputHeight > 0 ? (
-                <Rect
-                  x={x}
-                  y={yOut}
-                  width={barWidth}
-                  height={outputHeight}
-                  rx={Math.min(2.5, barWidth / 2)}
-                  fill={outHue}
-                  fillOpacity={emphasis}
-                />
-              ) : null}
-              {totalHeight > 5 ? (
-                <Rect
-                  x={x}
-                  y={yOut - CHART_CAP}
-                  width={barWidth}
-                  height={CHART_CAP}
-                  rx={1}
-                  fill={capFillOut}
-                />
-              ) : null}
-              {isSelected ? (
-                <Rect x={x} y={baselineY} width={barWidth} height={CHART_HEIGHT - baselineY} fill={inHue} />
-              ) : null}
-              {tapTarget}
-            </G>
+            <SplitBar
+              key={`${day.date}-${index}`}
+              x={x}
+              barWidth={barWidth}
+              baselineY={baselineY}
+              inputHeight={inputHeight}
+              outputHeight={outputHeight}
+              totalHeight={totalHeight}
+              inHue={inHue}
+              outHue={outHue}
+              capFillOut={capFillOut}
+              emphasis={emphasis}
+              isSelected={isSelected}
+              tapTarget={tapTarget}
+              dataKey={dataKey}
+              index={index}
+            />
           );
         })}
         <Line x1={0} y1={baselineY} x2={width} y2={baselineY} stroke={tokens.borderSubtle} strokeWidth={1} />
@@ -409,44 +634,63 @@ function StatTile({
   );
 }
 
-// ── the model leaderboard ───────────────────────────────────────────────────
+// ── the model legend (the leaderboard folded into the donut card) ───────────
 
-/** One model row — the RANK hue carries the whole row (dot, count, track);
- * the caption keeps the cost·calls truth. */
-function ModelRow({
+/**
+ * One legend row — the R115-N fold of the old ModelRow: the RANK hue carries
+ * the row (dot + the donut's own segment), the head line reads model · share
+ * · tokens (mono, right-aligned tabular columns), and the cost·calls caption
+ * keeps the leaderboard's truth. Tapping spotlights that model's segment on
+ * the ring (the PC's MUTUAL highlight: this row + its arc at 1, everything
+ * else dimmed to DONUT_DIM_OPACITY); tapping it again clears.
+ */
+function ModelLegendRow({
   model,
   share,
   rank,
+  highlighted,
+  dimmed,
+  onToggle,
 }: {
   model: UsageStatsModel;
   share: number;
   rank: number;
+  highlighted: boolean;
+  dimmed: boolean;
+  onToggle: () => void;
 }) {
   const { tokens } = useTheme();
   const hue = modelHue(rank, tokens.isDark);
+  const pct = Math.round(share * 100);
   return (
-    <View style={styles.modelRow}>
+    <Pressable
+      testID={`dashboard-legend-${rank}`}
+      onPress={onToggle}
+      accessibilityRole="button"
+      accessibilityState={{ selected: highlighted }}
+      accessibilityLabel={`${model.model}: ${pct}% of tokens, ${formatTokens(model.tokens)} tokens, ${formatUsd(model.costUsd)}, ${formatCount(model.calls)} calls`}
+      style={({ pressed }) => [
+        styles.modelLegendRow,
+        {
+          backgroundColor: pressed ? tokens.subtleHover : "transparent",
+          opacity: dimmed ? DONUT_DIM_OPACITY : 1,
+        },
+      ]}
+    >
       <View style={styles.modelHead}>
         <View style={[styles.modelDot, { backgroundColor: hue }]} />
         <TypeMono numberOfLines={1} style={styles.modelName}>
           {model.model}
         </TypeMono>
-        <TypeMono numberOfLines={1} style={styles.modelCount}>
+        <TypeMono numberOfLines={1} style={styles.legendPct}>{`${pct}%`}</TypeMono>
+        <TypeMono numberOfLines={1} style={styles.legendTokens}>
           {formatTokens(model.tokens)}
         </TypeMono>
       </View>
-      <View style={[styles.modelTrack, { backgroundColor: tokens.borderSubtle }]}>
-        <View
-          style={[
-            styles.modelTrackFill,
-            { width: `${Math.round(Math.max(share, 0.05) * 100)}%`, backgroundColor: hue },
-          ]}
-        />
-      </View>
-      <TypeMicro style={{ color: tokens.textTertiary }}>
+      <TypeMicro numberOfLines={1} style={[styles.legendCaption, { color: tokens.textTertiary }]}>
         {`${formatUsd(model.costUsd)} · ${formatCount(model.calls)} calls`}
       </TypeMicro>
-    </View>
+    </Pressable>
   );
 }
 
@@ -528,6 +772,8 @@ export default function DashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  /** The donut/legend's spotlight — a legend row's rank, or null for none. */
+  const [highlightedModel, setHighlightedModel] = useState<number | null>(null);
   /** Guards against a stale window's load landing after a newer one started. */
   const loadSeq = useRef(0);
 
@@ -611,6 +857,7 @@ export default function DashboardScreen() {
       setStatsMissing(false);
       setError(null);
       setSelectedDay(null);
+      setHighlightedModel(null);
       setLoading(true);
     },
     [windowKey],
@@ -670,10 +917,83 @@ export default function DashboardScreen() {
     };
   }, [windowKey, summary, stats]);
 
+  // The FULL model ranking — the donut's honest denominator is every model
+  // the stats carry (the PC passes them all too), so a share is of the
+  // window's tokens; the legend below folds the old top-6 leaderboard.
   const models = useMemo(() => {
     if (stats === null) return [];
-    return [...stats.models].sort((a, b) => b.tokens - a.tokens).slice(0, 6);
+    return [...stats.models].sort((a, b) => b.tokens - a.tokens);
   }, [stats]);
+  const topModels = useMemo(() => models.slice(0, 6), [models]);
+  const modelShares = useMemo(() => donutShares(models.map((m) => m.tokens)), [models]);
+  const totalModelTokens = models.reduce((sum, model) => sum + model.tokens, 0);
+  const donutSegmentsInput = useMemo<DonutSegment[]>(
+    () =>
+      models.map((model, index) => ({
+        label: model.model,
+        value: model.tokens,
+        hue: modelHue(index, tokens.isDark),
+      })),
+    [models, tokens.isDark],
+  );
+  // The two §4.6 entry identities — the data's own fingerprint, so the bars'
+  // grow and the donut's sweep re-trigger exactly once per data load (a
+  // window switch always changes it; an identical refresh doesn't).
+  const chartKey = useMemo(() => {
+    if (days.length === 0) return "none";
+    const generated =
+      windowKey === "3mo" ? stats?.generatedAt : (summary?.generatedAt ?? "");
+    return `${windowKey}:${generated ?? ""}:${days.length}:${days[0].date}:${days[days.length - 1].date}:${totals.totalTokens}`;
+  }, [windowKey, days, summary, stats, totals]);
+  const donutKey = useMemo(() => {
+    if (stats === null) return "none";
+    return `${windowKey}:${stats.generatedAt}:${models.map((m) => `${m.model}=${m.tokens}`).join("|")}`;
+  }, [windowKey, stats, models]);
+  // A fresh dataset clears the spotlight — a stale rank would light the
+  // wrong model on the new ring.
+  useEffect(() => {
+    setHighlightedModel(null);
+  }, [donutKey]);
+  const toggleHighlight = useCallback((index: number) => {
+    void selectionHaptic();
+    setHighlightedModel((current) => (current === index ? null : index));
+  }, []);
+
+  // The Activity table — one row per metric the loaded data honestly
+  // carries (nothing fabricated): requests + the peak day ride the SELECTED
+  // window's totals (summary for 14d/30d, stats for 3mo); turn errors + tool
+  // failures ride the stats response's health block (stats(1)'s month for
+  // the 14d/30d windows — the same R109-c contract the ring + Health use —
+  // and stats(3) for 3mo), so those two rows simply don't render when the
+  // stats fetch degraded (the Health section below says why).
+  const activityRows = useMemo(() => {
+    const rows: { label: string; display: string; value: number; hue: string }[] = [
+      { label: "Requests", display: formatCount(totals.requests), value: totals.requests, hue: tokens.success },
+    ];
+    if (stats !== null) {
+      const turnErrors = stats.health.turnErrors.reduce((sum, item) => sum + item.count, 0);
+      const toolFailures = stats.health.toolFailures.reduce((sum, item) => sum + item.count, 0);
+      rows.push(
+        { label: "Turn errors", display: formatCount(turnErrors), value: turnErrors, hue: tokens.danger },
+        { label: "Tool failures", display: formatCount(toolFailures), value: toolFailures, hue: tokens.warning },
+      );
+    }
+    if (totals.peak.date !== null) {
+      rows.push({
+        label: `Peak day ${shortDate(totals.peak.date)}`,
+        display: formatTokens(totals.peak.tokens),
+        value: totals.peak.tokens,
+        hue: chartHue(CHART_HUES.peak, tokens.isDark),
+      });
+    }
+    // The sparkbars scale to the table's own max — a proportional read of
+    // the metrics against each other (the ring's track discipline).
+    const max = rows.reduce((m, row) => Math.max(m, row.value), 0);
+    return rows.map((row) => ({
+      ...row,
+      fraction: max > 0 ? Math.min(100, Math.round((row.value / max) * 100)) : 0,
+    }));
+  }, [totals, stats, tokens]);
 
   const health = stats?.health ?? { turnErrors: [], toolFailures: [] };
   const primaryLoaded = windowKey === "3mo" ? stats !== null : summary !== null;
@@ -809,7 +1129,13 @@ export default function DashboardScreen() {
               ) : (
                 <ClayCard>
                   <View style={styles.chartPad}>
-                    <UsageChart days={days} width={chartWidth} selected={selectedDay} onSelect={setSelectedDay} />
+                    <UsageChart
+                      days={days}
+                      width={chartWidth}
+                      selected={selectedDay}
+                      onSelect={setSelectedDay}
+                      dataKey={chartKey}
+                    />
                     <View style={styles.dayDetailWrap}>
                       {selectedDay !== null && selectedDay < days.length ? (
                         <DayDetailLine day={days[selectedDay]} />
@@ -821,7 +1147,10 @@ export default function DashboardScreen() {
                 </ClayCard>
               )}
 
-              {/* ── the model leaderboard — per-model rank hues ── */}
+              {/* ── top models — the DONUT + LEGEND (R115-N: the leaderboard
+                  rows fold into the legend; the ring carries the shares, so
+                  the old 3px per-row track is gone — it would duplicate the
+                  ring) ── */}
               <SectionHeader>Top models</SectionHeader>
               {stats === null ? (
                 <ClayCard>
@@ -833,7 +1162,7 @@ export default function DashboardScreen() {
                     </TypeCaption>
                   </View>
                 </ClayCard>
-              ) : models.length === 0 ? (
+              ) : totalModelTokens === 0 ? (
                 <ClayCard>
                   <View style={styles.quietPad}>
                     <TypeCaption style={{ color: tokens.textTertiary }}>no model usage in this window yet</TypeCaption>
@@ -841,21 +1170,75 @@ export default function DashboardScreen() {
                 </ClayCard>
               ) : (
                 <ClayCard>
-                  <View style={styles.modelsPad}>
-                    {models.map((model, index) => (
-                      <ModelRow
-                        key={model.model}
-                        model={model}
-                        rank={index}
-                        share={model.tokens / Math.max(models[0].tokens, 1)}
+                  <View style={styles.donutPad}>
+                    <View style={styles.donutRow}>
+                      <DonutChart
+                        testID="dashboard-donut"
+                        segments={donutSegmentsInput}
+                        dataKey={donutKey}
+                        highlighted={highlightedModel}
+                        trackColor={tokens.borderSubtle}
+                        accessibilityLabel={`model usage donut — top model ${shortModelName(models[0].model)} at ${Math.round((modelShares[0] ?? 0) * 100)}% of tokens`}
+                        center={
+                          <View style={styles.donutCenterWrap}>
+                            <TypeMono numberOfLines={1} style={styles.donutCenterName}>
+                              {shortModelName(models[0].model)}
+                            </TypeMono>
+                            <TypeTitle numberOfLines={1} style={styles.donutCenterPct}>
+                              {`${Math.round((modelShares[0] ?? 0) * 100)}%`}
+                            </TypeTitle>
+                          </View>
+                        }
                       />
+                    </View>
+                    <View style={styles.legendList}>
+                      {topModels.map((model, index) => (
+                        <ModelLegendRow
+                          key={model.model}
+                          model={model}
+                          share={modelShares[index] ?? 0}
+                          rank={index}
+                          highlighted={highlightedModel === index}
+                          dimmed={highlightedModel !== null && highlightedModel !== index}
+                          onToggle={() => toggleHighlight(index)}
+                        />
+                      ))}
+                    </View>
+                  </View>
+                </ClayCard>
+              )}
+
+              {/* ── activity — the window's counts at a glance (R115-N) ── */}
+              <SectionHeader>Activity</SectionHeader>
+              {activityRows.length === 0 ? (
+                <ClayCard>
+                  <View style={styles.quietPad}>
+                    <TypeCaption style={{ color: tokens.textTertiary }}>no usage in this window yet</TypeCaption>
+                  </View>
+                </ClayCard>
+              ) : (
+                <ClayCard testID="dashboard-activity">
+                  <View style={styles.activityPad}>
+                    {activityRows.map((row) => (
+                      <View key={row.label} style={styles.activityRow}>
+                        <TypeCaption numberOfLines={1} style={styles.activityLabel}>
+                          {row.label}
+                        </TypeCaption>
+                        {/* The sparkbar is decorative — the row's label + mono
+                            value already carry the reading. */}
+                        <View
+                          style={[styles.activityTrack, { backgroundColor: tokens.borderSubtle }]}
+                          accessibilityElementsHidden
+                        >
+                          <View
+                            style={[styles.activityFill, { width: `${row.fraction}%`, backgroundColor: row.hue }]}
+                          />
+                        </View>
+                        <TypeMono numberOfLines={1} style={styles.activityValue}>
+                          {row.display}
+                        </TypeMono>
+                      </View>
                     ))}
-                    {models.length >= 2 ? (
-                      // The tiny legend — what the hues and the track mean.
-                      <TypeMicro style={[styles.modelLegend, { color: tokens.textTertiary }]}>
-                        each model keeps its hue · the track scales to the top model
-                      </TypeMicro>
-                    ) : null}
                   </View>
                 </ClayCard>
               )}
@@ -922,15 +1305,35 @@ const styles = StyleSheet.create({
   axisRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: spacing.xs },
   dayDetailWrap: { paddingHorizontal: spacing.xs },
   quietPad: { padding: spacing.lg },
-  modelsPad: { padding: spacing.md, gap: spacing.lg },
-  modelRow: { gap: spacing.xs },
+  // The donut + legend card (R115-N — the leaderboard folded in).
   modelHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
   modelDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
   modelName: { flex: 1 },
-  modelCount: { flexShrink: 0 },
-  modelLegend: { textAlign: "center", paddingTop: spacing.xs },
-  modelTrack: { height: 3, borderRadius: 2, overflow: "hidden" },
-  modelTrackFill: { height: 3, borderRadius: 2 },
+  donutPad: { padding: spacing.md, gap: spacing.md },
+  donutRow: { alignItems: "center" },
+  donutCenterWrap: { alignItems: "center", maxWidth: 84 },
+  donutCenterName: { textAlign: "center" },
+  donutCenterPct: { textAlign: "center" },
+  legendList: { gap: spacing.xs },
+  modelLegendRow: {
+    minHeight: 44,
+    borderRadius: RADIUS_INPUT,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    gap: 2,
+    justifyContent: "center",
+  },
+  legendPct: { flexShrink: 0, minWidth: 44, textAlign: "right" },
+  legendTokens: { flexShrink: 0, minWidth: 56, textAlign: "right" },
+  // The caption aligns under the model NAME: dot width (10) + head gap (sm).
+  legendCaption: { paddingLeft: 10 + spacing.sm },
+  // The activity table (R115-N — metric + sparkbar + mono value).
+  activityPad: { padding: spacing.md, gap: spacing.sm },
+  activityRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 32 },
+  activityLabel: { width: 116, flexShrink: 0 },
+  activityTrack: { flex: 1, height: 4, borderRadius: 2, overflow: "hidden" },
+  activityFill: { height: 4, borderRadius: 2 },
+  activityValue: { flexShrink: 0, minWidth: 56, textAlign: "right" },
   healthPad: { padding: spacing.md, gap: spacing.sm },
   healthHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   healthRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 28 },

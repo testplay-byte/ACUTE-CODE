@@ -10,17 +10,35 @@
  * thinking/hidden) and a tap → the model actions sheet (test / edit / hide /
  * delete), plus the add-model flow (from the live catalog with static-catalog
  * prefill, or custom). Server validation surfaces inline everywhere.
+ *
+ * R115-O — the surgical UX pass: the model actions sheet reads as ONE
+ * hierarchy (Test primary → Edit / Hide-Show quiet with icons → Delete last
+ * in danger), the edit-model sheet breathes (fields spacing.lg apart, Save
+ * busy, Cancel quiet), and the header's Rename / Test actions carry icons on
+ * 46px targets (the shared ActionRow). Feature logic + sheets + testIDs are
+ * untouched.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, RefreshControl, StyleSheet, View } from "react-native";
+import {
+  ActivityIndicator,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   Brain,
   Eye,
+  EyeOff,
   FlaskConical,
   KeyRound,
+  PencilLine,
   Plus,
+  Trash2,
+  Zap,
 } from "lucide-react-native";
 import Animated, {
   interpolateColor,
@@ -46,7 +64,13 @@ import {
   TypeMono,
 } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
-import { spacing } from "@/design/tokens";
+import {
+  fontFamily,
+  RADIUS_INPUT,
+  spacing,
+  TOUCH_TARGET,
+  TYPE_BODY,
+} from "@/design/tokens";
 import { SPRING } from "@/design/motion";
 import { selectionHaptic, successHaptic, warningHaptic } from "@/design/haptics";
 import {
@@ -429,20 +453,23 @@ export default function ProviderDetailScreen() {
               </View>
               {enabledNote !== null ? <NoteLine note={enabledNote} /> : null}
               <View style={styles.identityActions}>
+                {/* R115-O — the header actions carry icons on 46px targets
+                    (the ActionRow grammar; a busy spinner rides the test). */}
                 <View style={styles.identityButtons}>
-                  <QuietButton
+                  <ActionRow
+                    icon={PencilLine}
+                    label="Rename"
                     onPress={() => setRenameOpen(true)}
-                    textStyle={styles.actionButtonText}
-                  >
-                    Rename
-                  </QuietButton>
-                  <QuietButton
-                    onPress={() => void runTest()}
+                    accessibilityLabel="Rename the provider"
+                  />
+                  <ActionRow
+                    icon={Zap}
+                    label={testing ? "testing…" : "Test connection"}
+                    busy={testing}
                     disabled={testing}
-                    textStyle={styles.actionButtonText}
-                  >
-                    {testing ? "testing…" : "Test connection"}
-                  </QuietButton>
+                    onPress={() => void runTest()}
+                    accessibilityLabel="Test the connection"
+                  />
                 </View>
                 {testNote !== null ? <NoteLine note={testNote} /> : null}
               </View>
@@ -1164,7 +1191,8 @@ function ModelActionsSheet({
             <TypeMicro style={{ color: tokens.textTertiary }}>{providerId}</TypeMicro>
           </View>
 
-          {/* Test — the real completion probe (busy → ok+latency / fail). */}
+          {/* 1 — Test, the ONE primary: the real completion probe
+              (busy → ok+latency / fail). */}
           <ChromeButton
             onPress={() => void runTest()}
             disabled={testing}
@@ -1174,22 +1202,30 @@ function ModelActionsSheet({
           </ChromeButton>
           {testNote !== null ? <NoteLine note={testNote} /> : null}
 
-          {/* Hide/Show — one tap, the sheet stays open (the chips update). */}
-          <QuietButton
-            onPress={() => void toggleHidden()}
+          {/* 2 — the quiet pair: edit (hands off to the edit sheet), then
+              visibility (one tap, the sheet stays open — the chips update). */}
+          <ActionRow
+            icon={PencilLine}
+            label="Edit model"
+            onPress={() => onEdit(shown)}
+            accessibilityLabel="Edit the model"
+          />
+          <ActionRow
+            icon={shown.hidden ? Eye : EyeOff}
+            label={
+              hiding ? "saving…" : shown.hidden ? "Show in the chat picker" : "Hide from the chat picker"
+            }
+            busy={hiding}
             disabled={hiding}
-            textStyle={styles.actionButtonText}
-          >
-            {hiding ? "saving…" : shown.hidden ? "Show in the chat picker" : "Hide from the chat picker"}
-          </QuietButton>
+            onPress={() => void toggleHidden()}
+            accessibilityLabel={
+              shown.hidden ? "Show the model in the chat picker" : "Hide the model from the chat picker"
+            }
+          />
           {hideNote !== null ? <NoteLine note={hideNote} /> : null}
 
-          {/* Edit — hands off to the edit sheet. */}
-          <QuietButton onPress={() => onEdit(shown)} textStyle={styles.actionButtonText}>
-            Edit name, context, pricing, capabilities
-          </QuietButton>
-
-          {/* Delete — the confirm step lives inline (never a one-tap loss). */}
+          {/* 3 — Delete, LAST and danger — the confirm step lives inline
+              (never a one-tap loss). */}
           {confirmingDelete ? (
             <View style={[styles.confirmBox, { borderColor: tokens.danger }]}>
               <TypeBodyStrong>{`Delete ${label}?`}</TypeBodyStrong>
@@ -1220,13 +1256,13 @@ function ModelActionsSheet({
               </View>
             </View>
           ) : (
-            <QuietButton
+            <ActionRow
               tone="danger"
+              icon={Trash2}
+              label="Delete model"
               onPress={() => setConfirmingDelete(true)}
-              textStyle={styles.actionButtonText}
-            >
-              Delete model
-            </QuietButton>
+              accessibilityLabel="Delete the model"
+            />
           )}
         </View>
       ) : null}
@@ -1328,7 +1364,9 @@ function EditModelSheet({
   return (
     <Sheet open={open} onClose={onClose} title="Edit model" testID="edit-model-sheet" maxHeightFraction={0.86}>
       {shown !== null ? (
-        <View style={styles.fieldGap}>
+        /* R115-O — the form's generous rhythm: fields spacing.lg apart
+           (the cluttered-form donts), Save busy, Cancel quiet beneath. */
+        <View style={styles.editFormGap}>
         {/* modelId is IDENTITY on PATCH — read-only, shown as the mono truth. */}
         <View style={styles.fieldWrap}>
           <TypeCaption style={styles.fieldLabel}>Model id (read-only)</TypeCaption>
@@ -1429,6 +1467,9 @@ function EditModelSheet({
         >
           {busy ? "saving…" : "Save model"}
         </ChromeButton>
+        <QuietButton onPress={onClose} disabled={busy}>
+          Cancel
+        </QuietButton>
         </View>
       ) : null}
     </Sheet>
@@ -1862,6 +1903,63 @@ function ModeChip({
 
 // ── small shared pieces ─────────────────────────────────────────────────────
 
+// ── ActionRow — the icon action button (R115-O) ─────────────────────────────
+//
+// The QuietButton's exact geometry (hairline outline, radius 14, 46px) with
+// an ICON slot where the quiet button has text only — the header's
+// Rename/Test pair and the model-actions sheet's quiet/danger pair share it.
+// `busy` swaps the icon for the spinner (the label-swap idiom stays the
+// caller's); tone="danger" is the destructive hue. The primary action keeps
+// the house ChromeButton (text-only by design) — this row owns quiet.
+
+function ActionRow({
+  icon: Icon,
+  label,
+  onPress,
+  disabled = false,
+  busy = false,
+  tone = "neutral",
+  accessibilityLabel,
+}: {
+  icon: React.ComponentType<{ size?: number; color?: string; strokeWidth?: number }>;
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  busy?: boolean;
+  tone?: "neutral" | "danger";
+  accessibilityLabel?: string;
+}) {
+  const { tokens } = useTheme();
+  const fg = tone === "danger" ? tokens.danger : tokens.textSecondary;
+  const border = tone === "danger" ? tokens.danger : tokens.borderStrong;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={{ disabled: disabled || busy, busy }}
+      disabled={disabled || busy || !onPress}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.actionRow,
+        {
+          borderColor: border,
+          backgroundColor: pressed ? tokens.subtle : "transparent",
+          opacity: disabled ? 0.6 : 1,
+        },
+      ]}
+    >
+      {busy ? (
+        <ActivityIndicator size="small" color={fg} />
+      ) : (
+        <Icon size={17} color={fg} strokeWidth={2.2} />
+      )}
+      <Text style={{ color: fg, fontSize: TYPE_BODY, fontFamily: fontFamily.semibold }}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 function NoteLine({ note }: { note: ActionNote }) {
   const { tokens } = useTheme();
   const isError = note.kind === "error";
@@ -2039,7 +2137,18 @@ const styles = StyleSheet.create({
   emptyPad: { padding: spacing.lg },
   noteRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   noteText: { flex: 1 },
+  actionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    borderRadius: RADIUS_INPUT,
+    minHeight: TOUCH_TARGET + 2,
+    paddingHorizontal: spacing.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   fieldGap: { gap: spacing.md },
+  editFormGap: { gap: spacing.lg },
   fieldWrap: { gap: spacing.xs },
   fieldLabel: { textTransform: "uppercase", letterSpacing: 0.8 },
   formatRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },

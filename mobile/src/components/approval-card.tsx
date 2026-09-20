@@ -1,27 +1,38 @@
 /**
- * ApprovalCard v2 (R109-c) — the killer feature's row in the CLAY language
- * (LINKING-PROTOCOL §4 / R3 §1.5): a ClayCard shell (bordered in the danger
- * hue ONLY for destructive categories), the category Badge + risk line, the
- * mono tool headline (≤3 lines) + detail (≤4 lines), the session/project
- * caption, honest expiry, and Approve (ChromeButton — the sanctioned CTA
- * chrome, compact 44) / Deny (QuietButton, danger tone).
+ * ApprovalCard v3 (R109-c; R115-M — the round-115 rebuild) — the killer
+ * feature's row in the CLAY language (LINKING-PROTOCOL §4 / R3 §1.5), one
+ * visual idea per region:
+ *
+ *   meta row     [category Badge — danger ONLY for destructive, warning for
+ *                 confirm] + [the expiry CHIP, right-aligned: "expires in
+ *                 {n}s"/"{n}m", warning tint under 30s, dim "expired"]
+ *   content      the toolCall's first line as TypeBodyStrong (≤2 lines — the
+ *                 mono headline retired: it was cramped) + the remaining
+ *                 lines as a TERTIARY caption (≤3, only when they exist)
+ *   captions     the honest risk line (warning-tinted icon + caption, one
+ *                 line) + the session/project context line (one line)
+ *   actions      Approve (ChromeButton — the sanctioned CTA chrome) / Deny
+ *                 (QuietButton, danger tone), 50px, side by side, full width
  *
  * The decision stays OPTIMISTIC: the card plays the house-spring settle
  * (fade + rise + slight shrink) the moment the tap lands, the POST
- * /approvals/:id/decision rides behind it, and a failure un-settles with
- * the host's own message. Expired rows dim + disable (the route 409s dead
- * rows — the phone never pretends otherwise). Destructive rows never offer
- * "always allow" — v1's by-construction rule: `canAlways` stays un-rendered.
+ * /approvals/:id/decision rides behind it, and a failure un-settles with the
+ * host's own message (the 409 race resolves through the screen's refresh).
+ * Expired rows dim + disable (the route 409s dead rows — the phone never
+ * pretends otherwise). Destructive rows keep the danger hairline border and
+ * never offer "always allow" — v1's by-construction rule: `canAlways` stays
+ * un-rendered.
  */
 
 import { useEffect, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withSpring } from "react-native-reanimated";
+import { CircleAlert } from "lucide-react-native";
 import { useTheme } from "@/design/theme";
-import { Badge, ChromeButton, ClayCard, QuietButton, TypeCaption, TypeMono } from "@/design/primitives";
+import { Badge, ChromeButton, ClayCard, QuietButton, TypeBodyStrong, TypeCaption } from "@/design/primitives";
 import { ENTRANCE_DELTA, SPRING, staggerDelay } from "@/design/motion";
 import { decisionHaptic } from "@/design/haptics";
-import { fontFamily, mixHex, spacing, TYPE_BODY } from "@/design/tokens";
+import { RADIUS_PILL, TYPE_MICRO, fontFamily, mixHex, spacing } from "@/design/tokens";
 import type { ApprovalCardModel, ApprovalDecision } from "@/features/approvals";
 
 export interface ApprovalCardProps {
@@ -32,6 +43,33 @@ export interface ApprovalCardProps {
   caption: string;
   /** POST the decision; resolves null on success, the failure line otherwise. */
   onDecide: (id: string, decision: ApprovalDecision) => Promise<string | null>;
+}
+
+/** The countdown's pressure threshold — components.md's countdown chip tints
+ *  warning under 30s (motion.md §3: gentle pressure, never a seizure). */
+const EXPIRY_URGENT_MS = 30_000;
+
+/** "expires in 45s" — honest seconds, numerals never prose (copy.md). */
+function expiryCaption(expiresInMs: number): string {
+  const seconds = Math.max(0, Math.round(expiresInMs / 1000));
+  if (seconds <= 1) return "expiring…";
+  if (seconds < 90) return `expires in ${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  return `expires in ${minutes}m`;
+}
+
+/** The expiry chip's honest read — the label (null = no chip) + tint tier:
+ *  "dead" dims (expired), "urgent" warns (<30s), "calm" stays neutral. */
+function expiryChip(
+  expiresInMs: number | null,
+  expired: boolean,
+): { label: string | null; tier: "calm" | "urgent" | "dead" } {
+  if (expired) return { label: "expired", tier: "dead" };
+  if (expiresInMs === null) return { label: null, tier: "calm" };
+  return {
+    label: expiryCaption(expiresInMs),
+    tier: expiresInMs < EXPIRY_URGENT_MS ? "urgent" : "calm",
+  };
 }
 
 export function ApprovalCard({ card, enterIndex, caption, onDecide }: ApprovalCardProps) {
@@ -75,6 +113,7 @@ export function ApprovalCard({ card, enterIndex, caption, onDecide }: ApprovalCa
 
   const destructive = card.tone === "danger";
   const inert = settling !== null || card.expired;
+  const expiry = expiryChip(card.expiresInMs, card.expired);
 
   return (
     <Animated.View
@@ -97,47 +136,81 @@ export function ApprovalCard({ card, enterIndex, caption, onDecide }: ApprovalCa
           card.expired ? styles.expired : null,
         ]}
       >
+        {/* The meta row — what kind of ask this is + how long it lives. */}
         <View style={styles.headRow}>
           <Badge tone={destructive ? "danger" : card.tone === "warning" ? "warning" : "neutral"}>
             {card.row.category}
           </Badge>
           <View style={styles.headSpacer} />
-          {card.expired ? (
-            <Badge tone="danger">expired</Badge>
-          ) : card.expiresInMs !== null ? (
-            <TypeCaption style={{ color: tokens.textTertiary }}>
-              {expiryCaption(card.expiresInMs)}
+          {expiry.label !== null ? (
+            <View
+              style={[
+                styles.expiryChip,
+                {
+                  backgroundColor:
+                    expiry.tier === "urgent"
+                      ? mixHex(tokens.warning, tokens.card, 0.86)
+                      : tokens.pillBg,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.expiryText,
+                  {
+                    color:
+                      expiry.tier === "urgent"
+                        ? tokens.warning
+                        : expiry.tier === "dead"
+                          ? tokens.textTertiary
+                          : tokens.textSecondary,
+                  },
+                ]}
+              >
+                {expiry.label}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* The content block — the ask itself. */}
+        <View style={styles.contentBlock}>
+          <TypeBodyStrong numberOfLines={2}>{card.headline}</TypeBodyStrong>
+          {card.detail !== "" ? (
+            <TypeCaption numberOfLines={3} style={{ color: tokens.textTertiary }}>
+              {card.detail}
             </TypeCaption>
           ) : null}
         </View>
 
-        <TypeMono numberOfLines={3} style={styles.headline}>
-          {card.headline}
-        </TypeMono>
-        {card.detail !== "" ? (
-          <TypeMono numberOfLines={4} style={{ color: tokens.textTertiary }}>
-            {card.detail}
-          </TypeMono>
-        ) : null}
-
-        <TypeCaption style={{ color: tokens.textSecondary }}>{card.riskLine}</TypeCaption>
-        <TypeCaption numberOfLines={2} style={{ color: tokens.textTertiary }}>
-          {caption}
-        </TypeCaption>
+        {/* The caption block — the honest risk line + where it came from. */}
+        <View style={styles.captionBlock}>
+          <View style={styles.riskRow}>
+            <CircleAlert size={13} color={tokens.warning} strokeWidth={2} />
+            <TypeCaption numberOfLines={1} style={{ flex: 1, color: tokens.textSecondary }}>
+              {card.riskLine}
+            </TypeCaption>
+          </View>
+          <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary }}>
+            {caption}
+          </TypeCaption>
+        </View>
 
         {failure !== null ? (
-          <TypeCaption numberOfLines={3} style={{ color: tokens.danger }}>
+          <TypeCaption numberOfLines={2} style={{ color: tokens.danger }}>
             {failure}
           </TypeCaption>
         ) : null}
 
+        {/* The action row — 50px, side by side, full width. */}
         <View style={styles.buttonRow}>
           <ChromeButton
             onPress={() => decide("approved")}
             disabled={inert}
             busy={settling === "approved"}
             style={styles.approveButton}
-            accessibilityLabel="Approve this request"
+            accessibilityLabel={`Approve ${card.headline}`}
+            testID="approve"
           >
             Approve
           </ChromeButton>
@@ -146,6 +219,7 @@ export function ApprovalCard({ card, enterIndex, caption, onDecide }: ApprovalCa
             onPress={() => decide("denied")}
             disabled={inert}
             style={styles.denyButton}
+            testID="deny"
           >
             Deny
           </QuietButton>
@@ -153,15 +227,6 @@ export function ApprovalCard({ card, enterIndex, caption, onDecide }: ApprovalCa
       </ClayCard>
     </Animated.View>
   );
-}
-
-/** "expires in 45s" — honest seconds; dims into the tertiary tone. */
-function expiryCaption(expiresInMs: number): string {
-  const seconds = Math.max(0, Math.round(expiresInMs / 1000));
-  if (seconds <= 1) return "expiring…";
-  if (seconds < 90) return `expires in ${seconds}s`;
-  const minutes = Math.round(seconds / 60);
-  return `expires in ${minutes}m`;
 }
 
 const styles = StyleSheet.create({
@@ -178,10 +243,26 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   headSpacer: { flex: 1 },
-  headline: {
-    fontSize: TYPE_BODY,
-    fontFamily: fontFamily.monoMedium,
-    lineHeight: 21,
+  expiryChip: {
+    borderRadius: RADIUS_PILL,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+  },
+  expiryText: {
+    fontSize: TYPE_MICRO,
+    fontFamily: fontFamily.mono,
+    letterSpacing: 0.2,
+  },
+  contentBlock: {
+    gap: spacing.xs,
+  },
+  captionBlock: {
+    gap: spacing.xs,
+  },
+  riskRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
   },
   buttonRow: {
     flexDirection: "row",
@@ -190,9 +271,9 @@ const styles = StyleSheet.create({
   },
   approveButton: {
     flex: 1,
-    minHeight: 44,
   },
   denyButton: {
     flex: 1,
+    minHeight: 50,
   },
 });

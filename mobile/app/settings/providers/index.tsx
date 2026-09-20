@@ -2,20 +2,25 @@
  * Providers — the configured-first inventory (R114-f rework): "Your
  * providers" (the SERVER's `configured` bit — custom row OR any held key,
  * pool-aware) as full rows (name, kind badge, the honest key-count chip,
- * enabled state) pushing to the detail page; "Add a provider" below the
- * divider — the unconfigured seeded presets as compact add-rows (tap → the
- * detail page, where the key lands) plus the CUSTOM PROVIDER row opening
- * the create sheet (name + base URL + api format + the first key). Server
- * validation surfaces inline exactly like the New Project sheet. Live: the
- * settings epoch reloads the tiers while the screen is open (another
- * device's key save flips a row's tier the moment the server does).
+ * enabled state) pushing to the detail page; "Add a provider" COLLAPSED
+ * behind ONE prominent half-width action (R115-O — the owner: "by default
+ * shows all options — instead ONE option to click then the others
+ * appear"): tapping it reveals the unconfigured seeded presets as compact
+ * add-rows + the CUSTOM PROVIDER row (the house 30ms stagger ≈ the ~200ms
+ * reveal) — tapping it again collapses. The custom row opens the create
+ * sheet (name + base URL + api format + the first key); server validation
+ * surfaces inline exactly like the New Project sheet. Live: the settings
+ * epoch reloads the tiers while the screen is open (another device's key
+ * save flips a row's tier the moment the server does).
  *
  * R113-e — the events-bus live reload; R114-f — the phone OWNS its
- * inventory (create included), the tiers re-derived off the fresh rows.
+ * inventory (create included), the tiers re-derived off the fresh rows;
+ * R115-O — the add-list collapse + the row polish (one meta line per
+ * row, the two-line discipline).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RefreshControl, StyleSheet, View } from "react-native";
+import { Pressable, RefreshControl, StyleSheet, View } from "react-native";
 import { ChevronRight, KeyRound, Plus } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { ScreenScaffold } from "@/components/screen-scaffold";
@@ -34,8 +39,8 @@ import {
   TypeMono,
 } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
-import { spacing } from "@/design/tokens";
-import { successHaptic, warningHaptic } from "@/design/haptics";
+import { RADIUS_INPUT, spacing, TOUCH_TARGET } from "@/design/tokens";
+import { selectionHaptic, successHaptic, warningHaptic } from "@/design/haptics";
 import {
   createCustomProvider,
   customProviderBody,
@@ -67,6 +72,10 @@ export default function ProvidersScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [customSheetOpen, setCustomSheetOpen] = useState(false);
+  // R115-O: the add-list reveal — collapsed by default (ONE prominent
+  // action instead of the always-on preset wall); toggling re-mounts the
+  // rows so the stagger entrance replays on every reveal.
+  const [addOpen, setAddOpen] = useState(false);
 
   // R113-e: the live settings epoch — a settings frame (another device's
   // key save / toggle, or the hello resync) moves it while this screen is
@@ -167,18 +176,30 @@ export default function ProvidersScreen() {
             ))
           )}
 
-          {/* ── GROUP 2 — "Add a provider": the unconfigured presets as
-              compact add-rows + the custom-create sheet row (the custom row
+          {/* ── GROUP 2 — "Add a provider" COLLAPSED behind ONE prominent
+              half-width action (R115-O): the presets + the custom row
+              reveal below it on the house stagger (~200ms for the preset
+              wall); tapping the action again collapses. The custom row
               stays reachable even with every preset configured — the owner
-              can always add another endpoint). Tapping a preset pushes to
+              can always add another endpoint. Tapping a preset pushes to
               its page — the key pool there is where the key lands (the
               desktop's R113-d rule, kept). */}
           <View style={[styles.tierDivider, { borderBottomColor: tokens.borderSubtle }]} />
-          <SectionHeader>Add a provider</SectionHeader>
-          {tiers.addable.map((provider) => (
-            <AddableRowCard key={provider.id} provider={provider} />
-          ))}
-          <CustomProviderRow onPress={() => setCustomSheetOpen(true)} />
+          <AddProviderAction
+            open={addOpen}
+            onPress={() => {
+              void selectionHaptic();
+              setAddOpen((v) => !v);
+            }}
+          />
+          {addOpen ? (
+            <>
+              {tiers.addable.map((provider, index) => (
+                <AddableRowCard key={provider.id} provider={provider} index={index} />
+              ))}
+              <CustomProviderRow onPress={() => setCustomSheetOpen(true)} index={tiers.addable.length} />
+            </>
+          ) : null}
         </>
       )}
 
@@ -216,10 +237,12 @@ function ProviderRowCard({ provider, index }: { provider: ProviderRow; index: nu
             </Badge>
             {provider.enabled ? null : <Badge tone="neutral">off</Badge>}
           </View>
+          {/* ONE meta line (the two-line discipline — the archetype's row
+              law): the machine truth, the kind riding its tail so the row
+              never stacks a third line. */}
           <TypeMono numberOfLines={1} style={styles.rowBaseUrl}>
-            {provider.baseUrl}
+            {`${provider.baseUrl} · ${provider.kind}`}
           </TypeMono>
-          <TypeMicro>{provider.kind}</TypeMicro>
         </View>
         <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
       </View>
@@ -227,13 +250,14 @@ function ProviderRowCard({ provider, index }: { provider: ProviderRow; index: nu
   );
 }
 
-// ── the addable preset row — compact, quiet ─────────────────────────────────
+// ── the addable preset row — compact, quiet, staggered on reveal ───────────
 
-function AddableRowCard({ provider }: { provider: ProviderRow }) {
+function AddableRowCard({ provider, index }: { provider: ProviderRow; index: number }) {
   const { tokens } = useTheme();
   const router = useRouter();
   return (
     <PressableCard
+      enterIndex={Math.min(index, 12)}
       onPress={() => router.push(`/settings/providers/${encodeURIComponent(provider.id)}`)}
       accessibilityLabel={`Add provider ${provider.name}`}
     >
@@ -255,10 +279,14 @@ function AddableRowCard({ provider }: { provider: ProviderRow }) {
 
 // ── the custom-provider row ─────────────────────────────────────────────────
 
-function CustomProviderRow({ onPress }: { onPress: () => void }) {
+function CustomProviderRow({ onPress, index }: { onPress: () => void; index: number }) {
   const { tokens } = useTheme();
   return (
-    <PressableCard onPress={onPress} accessibilityLabel="Add a custom provider">
+    <PressableCard
+      enterIndex={Math.min(index, 12)}
+      onPress={onPress}
+      accessibilityLabel="Add a custom provider"
+    >
       <View style={styles.addRowInner}>
         <View style={[styles.addRowIcon, { backgroundColor: tokens.subtleHover }]}>
           <Plus size={16} color={tokens.accent} strokeWidth={2.2} />
@@ -272,6 +300,37 @@ function CustomProviderRow({ onPress }: { onPress: () => void }) {
         <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
       </View>
     </PressableCard>
+  );
+}
+
+// ── the add-provider action — ONE prominent row, half width ─────────────────
+
+/** The section's single resting affordance (the projects list's "New
+ *  project" spelling: half width, icon + label, quiet outline — no
+ *  description, no chevron). Collapsed it is the ONLY add affordance on
+ *  screen; tapping reveals the presets + the custom row below it (the
+ *  accordion grammar — children expand under the tapped row); tapping it
+ *  again collapses them. */
+function AddProviderAction({ open, onPress }: { open: boolean; onPress: () => void }) {
+  const { tokens } = useTheme();
+  return (
+    <Pressable
+      testID="providers-add-toggle"
+      accessibilityRole="button"
+      accessibilityLabel="Add a provider"
+      accessibilityState={{ expanded: open }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.addAction,
+        {
+          borderColor: pressed ? tokens.borderStrong : tokens.border,
+          backgroundColor: pressed ? tokens.subtle : "transparent",
+        },
+      ]}
+    >
+      <Plus size={20} color={tokens.accent} strokeWidth={2.2} />
+      <TypeBodyStrong style={{ color: tokens.textSecondary }}>Add a provider</TypeBodyStrong>
+    </Pressable>
   );
 }
 
@@ -506,6 +565,18 @@ const styles = StyleSheet.create({
   addRowText: { flex: 1, gap: 2 },
   tierEmpty: { paddingHorizontal: spacing.xs, paddingVertical: spacing.sm },
   tierDivider: { borderBottomWidth: StyleSheet.hairlineWidth, marginVertical: spacing.md },
+  addAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    width: "48%",
+    alignSelf: "flex-start",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: RADIUS_INPUT,
+    minHeight: TOUCH_TARGET + 2,
+    paddingHorizontal: spacing.lg,
+  },
   fieldGap: { gap: spacing.md },
   fieldWrap: { gap: spacing.xs },
   fieldLabel: { textTransform: "uppercase", letterSpacing: 0.8 },

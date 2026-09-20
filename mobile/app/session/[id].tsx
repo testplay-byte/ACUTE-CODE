@@ -80,10 +80,35 @@
  * KeyboardEvents listener synced ONLY on the animation end states
  * (didShow/didHide — the worklet path's own final values), so it can never
  * jump the dock ahead of the worklet's rising frames.
+ *
+ * ROUND-115 (R115-I — the WhatsApp header + the composer declutter): the
+ * header is now the IDENTITY BAR (chat.md §Header) — [back chevron 44px] ·
+ * [the project's LetterAvatar 36px] · [project name (TypeBodyStrong) over
+ * the session's own name (TypeCaption, tertiary)] · [the kebab ⋮ menu]. It
+ * renders INSIDE the body with the scaffold's chrome BYPASSED
+ * (chrome={false}) — the identity bar is not the scaffold's centered-title
+ * shape, and bypassing keeps every other screen's chrome byte-identical
+ * (zero shared-file changes; the documented scaffold choice). The project
+ * row comes from fetchProjects (cached per mount); a session with no
+ * project / a project the registry no longer lists degrades honestly to a
+ * neutral avatar + the session's own title with its status label as the
+ * subtitle. STATUS WORDS ARE OUT OF THE HEADER — a running turn shows as
+ * the thin 2px accent line BREATHING under the bar (reanimated opacity
+ * pulse, the live caret's rhythm).
+ *
+ * The kebab opens the "Session options" sheet — the session's controls,
+ * one row each with its CURRENT value (Operating mode · Model · Thinking ·
+ * Context, + "Stop this turn" while a turn is live). THE SHEET STATE IS
+ * LIFTED HERE (R115-I): this screen owns the open sheet ("kebab" or one of
+ * the composer's sheets), the composer renders every sheet's CONTENT
+ * controlled through sheet/onSheetChange and reports its live control
+ * values through onControlsSnapshot — the composer's control pill row is
+ * deleted (chat.md §Composer: exactly three controls — attach, input,
+ * send/stop). The task-mode picker is GONE from mobile (round-115 verdict).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, FlatList, RefreshControl, StyleSheet, View } from "react-native";
+import { AppState, FlatList, Pressable, RefreshControl, StyleSheet, View } from "react-native";
 import {
   AndroidSoftInputModes,
   KeyboardController,
@@ -91,18 +116,32 @@ import {
   useGenericKeyboardHandler,
 } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
+import Animated, {
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { ChevronLeft, ChevronRight, Ellipsis, Square } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
-import { Composer, type ComposerMode } from "@/components/composer";
+import { Composer, type ComposerControlsSnapshot, type ComposerMode, type ComposerSheet } from "@/components/composer";
+import { LetterAvatar } from "@/components/letter-avatar";
+import { Sheet } from "@/components/sheet";
 import { TranscriptItemView } from "@/components/transcript";
 import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
-import { Badge, TypeCaption } from "@/design/primitives";
+import { FadeInUp, TypeBodyStrong, TypeCaption } from "@/design/primitives";
 import { useChatPrefs, useTheme } from "@/design/theme";
-import { spacing } from "@/design/tokens";
+import { SPRING } from "@/design/motion";
+import { RADIUS_INPUT, spacing, TOUCH_TARGET } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { getLinkManager } from "@/link/runtime";
 import type { SseStream } from "@/link/connection";
+import { fetchProjects, type ProjectRow } from "@/features/config";
+import { modeOption } from "@/features/composer-state";
 import {
   abandonLiveTurn,
   applyLiveFrame,
@@ -112,7 +151,6 @@ import {
   fetchSessionDetail,
   openTurnStream,
   parseStreamFrame,
-  patchSessionActiveMode,
   patchSessionPermissions,
   patchSessionSelectedModel,
   postQueue,
@@ -123,7 +161,6 @@ import {
   sessionStatusFromWire,
   sessionStatusLabel,
   sessionTitle,
-  shortModelId,
   thinkingPlaceholderVisible,
   type AttachmentView,
   type LiveTurn,
@@ -144,6 +181,16 @@ const RUNNING_POLL_MS = 3_000;
  * appends log rows continuously — one trailing refetch after the burst. */
 const REMOTE_REHYDRATE_MS = 800;
 
+/** The breathing live line's one leg (ms) — the live caret's own rhythm
+ * (motion.md §3: opacity 0.25↔1, 550ms each way). Local to this file, the
+ * tab-bar's breathe-constants precedent. */
+const LIVE_LINE_LEG_MS = 550;
+
+/** R115-I — the session screen's open sheet: the kebab menu OR one of the
+ * composer's sheets (the screen owns the state; the composer renders the
+ * content). null = closed. */
+type SessionSheet = "kebab" | ComposerSheet | null;
+
 export default function SessionScreen() {
   const { tokens } = useTheme();
   const router = useRouter();
@@ -159,6 +206,21 @@ export default function SessionScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [outboxEntries, setOutboxEntries] = useState<OutboxEntry[]>([]);
   const [appActive, setAppActive] = useState(AppState.currentState === "active");
+
+  // ── R115-I — the identity bar + the kebab sheet's state ──────────────────
+
+  /** The registry's projects, fetched once per mount (cached like every
+   * other screen) — the identity bar's project row. */
+  const [projects, setProjects] = useState<ProjectRow[] | null>(null);
+  /** The open sheet (the kebab menu or one of the composer's). */
+  const [sheet, setSheet] = useState<SessionSheet>(null);
+  /** The composer's live control values (the kebab's Model/Thinking/Context
+   * rows); the honest pre-report defaults show until the first snapshot. */
+  const [controls, setControls] = useState<ComposerControlsSnapshot>({
+    modelLabel: "Agent default",
+    thinkingLabel: "Default",
+    ctxPct: null,
+  });
 
   const streamRef = useRef<SseStream | null>(null);
   const streamClosedRef = useRef(false);
@@ -248,6 +310,17 @@ export default function SessionScreen() {
         .catch(() => {});
     }
   }, [status, rehydrate]);
+
+  // R115-I — the identity bar's project row: fetchProjects once per mount
+  // while the link is up (cached like every other screen). A miss (offline,
+  // or a project the registry no longer lists) degrades honestly to the
+  // neutral avatar + the session's own title — never a fabricated identity.
+  useEffect(() => {
+    if (status !== "connected") return;
+    void fetchProjects(getLinkManager()).then((outcome) => {
+      if (outcome.ok) setProjects(outcome.data.projects);
+    });
+  }, [status]);
 
   // Outbox chips: the entries queued for THIS session.
   useEffect(() => {
@@ -360,7 +433,7 @@ export default function SessionScreen() {
     const onFrame = (frame: EventsFrame): void => {
       if (frame.type === "session" && frame.sessionId === sessionId) {
         if (frame.kind === "status") {
-          // The header badge + subtitle + the poll's trigger flip LIVE (a
+          // The breathing live line + the poll's trigger flip LIVE (a
           // PC-started turn now tells the phone the moment it starts).
           const nextStatus = sessionStatusFromWire(frame.status);
           if (nextStatus !== null) {
@@ -372,9 +445,10 @@ export default function SessionScreen() {
         if (frame.kind === "meta") {
           // R114-d — a PREFERENCE flip (mode / task posture / selected model)
           // applies IN PLACE, instant, no debounce: the frame IS the new
-          // truth (the composer pill, the mode chips, the header subtitle
-          // all read the detail row). The debounced rehydrate below stays
-          // the truth-backstop, exactly like every other session frame.
+          // truth (the kebab's rows + the composer's sheets read the detail
+          // row; the honest fallback identity also reads its status). The
+          // debounced rehydrate below stays the truth-backstop, exactly like
+          // every other session frame.
           setDetail((prev) =>
             prev !== null
               ? applySessionMetaPatch(prev, {
@@ -588,24 +662,10 @@ export default function SessionScreen() {
     [sessionId],
   );
 
-  /** PATCH /sessions/:id {activeMode} — the task-mode picker (validated
-   * against the same resolver GET /projects/:id/modes serves). */
-  const onActiveModeChange = useCallback(
-    (activeMode: string | null) => {
-      void patchSessionActiveMode(getLinkManager(), sessionId, activeMode)
-        .then((outcome) => {
-          if (outcome.ok) {
-            setDetail((prev) => (prev === null ? prev : { ...prev, ...outcome.data }));
-          } else {
-            setError(`couldn't set the task mode: ${outcome.error.message}`);
-          }
-        })
-        .catch(() => {
-          setError("couldn't set the task mode — the host is offline");
-        });
-    },
-    [sessionId],
-  );
+  // R115-I — the task-mode PATCH round-trip is gone WITH the task-mode
+  // picker (the round-115 verdict: mobile shows only the three operating
+  // modes). The meta frame still applies the row's activeMode in place —
+  // the desktop keeps its picker; the phone just doesn't render one.
 
   /** PATCH /sessions/:id {model} — R114-d: the composer's model pick is ALSO
    * the session's server-side selected model (the cross-device truth — the
@@ -666,6 +726,53 @@ export default function SessionScreen() {
 
   const composerMode: ComposerMode =
     status !== "connected" ? "offline" : liveRunning || remoteRunning ? "running" : "compose";
+
+  // ── R115-I — the identity bar's honest identity ladder ────────────────────
+
+  // The project row (fetchProjects cached per mount): the session's
+  // projectId against the registry — null while loading / offline / no
+  // project / a project the registry no longer lists, each honest.
+  const project =
+    detail !== null && detail.projectId !== null && projects !== null
+      ? (projects.find((p) => p.id === detail.projectId) ?? null)
+      : null;
+  // The bar's title/subtitle ladder: WITH a project → project name over
+  // the session's own name (the project is the identity, the session is
+  // the context — chat.md); WITHOUT → the session title over its status
+  // label; not loaded yet → "Session" with no subtitle.
+  const headerTitle = project !== null ? project.name : detail !== null ? sessionTitle(detail) : "Session";
+  const headerSubtitle =
+    detail === null
+      ? undefined
+      : project !== null
+        ? sessionTitle(detail)
+        : sessionStatusLabel(detail.status);
+  const headerFallbackLetter =
+    detail !== null ? sessionTitle(detail).trim().charAt(0).toUpperCase() : "A";
+  // The kebab's Operating-mode row reads the same source the old pill did.
+  const kebabModeLabel = modeOption(detail?.permissionMode ?? "ask").label;
+
+  // A turn runs somewhere (own stream, own overlay, or the row's running
+  // status) — the breathing line + the kebab's Stop row + the composer's
+  // running mode all read this one truth.
+  const turnLive = liveRunning || remoteRunning;
+
+  // The composer's slice of the sheet state (the kebab is THIS screen's;
+  // the six composer sheets pass straight through), and the referentially
+  // guarded snapshot receiver (a value-identical report re-renders nothing).
+  const composerSheet = sheet === "kebab" ? null : sheet;
+  const setComposerSheet = useCallback((next: ComposerSheet | null): void => {
+    setSheet(next);
+  }, []);
+  const onControlsSnapshot = useCallback((next: ComposerControlsSnapshot): void => {
+    setControls((prev) =>
+      prev.modelLabel === next.modelLabel &&
+      prev.thinkingLabel === next.thinkingLabel &&
+      prev.ctxPct === next.ctxPct
+        ? prev
+        : next,
+    );
+  }, []);
 
   // ── R115-K — the keyboard architecture: ONE dock, ONE expression ─────────
   // (the header comment above carries the full contract). The dock's kbHeight
@@ -758,48 +865,69 @@ export default function SessionScreen() {
   }
 
   return (
-    <ScreenScaffold
-      title={detail !== null ? sessionTitle(detail) : "Session"}
-      subtitle={
-        detail !== null
-          ? // R114-d — status · mode · model (the owner: "I don't see which
-            // model was being used in the chat itself" — the header names
-            // the effective pair: the session's selectedModel, else the live
-            // turn's resolved model, else nothing). Long ids shorten through
-            // shortModelId so the one-line subtitle never wraps.
-            [
-              detail.status === "running" ? "a turn is live" : sessionStatusLabel(detail.status),
-              detail.mode,
-              ...(detail.selectedModel !== null
-                ? [shortModelId(detail.selectedModel.model)]
-                : live !== null && live.model !== null
-                  ? [shortModelId(live.model)]
-                  : []),
-            ].join(" · ")
-          : undefined
-      }
-      scroll={false}
-      back
-      bottomInset={0}
-      keyboardAware={false}
-      right={
-        detail !== null ? (
-          <Badge tone={detail.status === "running" ? "running" : detail.status === "failed" ? "danger" : "neutral"}>
-            {/* R114-c — the HUMAN label (queued reads "open", completed
-                "done", cancelled "stopped"); running keeps its live word. */}
-            {detail.status === "running" ? "live" : sessionStatusLabel(detail.status)}
-          </Badge>
-        ) : null
-      }
-    >
+    // R115-I — the scaffold's chrome is BYPASSED (chrome={false}): the
+    // identity bar is not the scaffold's centered-title shape, and rendering
+    // it here in the body keeps every other screen's chrome byte-identical
+    // (zero shared-file changes). scroll={false} makes the scaffold's body a
+    // plain flex:1 View — the identity bar stacks above the transcript +
+    // dock exactly where the header row used to sit, inside the top
+    // safe-area inset the SafeAreaView already owns.
+    <ScreenScaffold title="Session" scroll={false} chrome={false}>
+      {/* ── THE IDENTITY BAR (R115-I — chat.md §Header): [back chevron 44px]
+          · [the project's LetterAvatar 36px] · [project name over the
+          session's own name] · [the kebab ⋮ 44px]. Status words are OUT — a
+          running turn shows as the breathing accent line under the bar. */}
+      <View style={styles.headerRow}>
+        <Pressable
+          accessibilityLabel="Go back"
+          accessibilityRole="button"
+          hitSlop={12}
+          onPress={() => router.back()}
+          style={styles.headerTarget}
+        >
+          <ChevronLeft size={26} color={tokens.text} strokeWidth={2} />
+        </Pressable>
+        {project !== null ? (
+          <LetterAvatar label={project.name} color={project.color} size={36} testID="session-header-avatar" />
+        ) : (
+          <NeutralAvatar label={headerFallbackLetter} />
+        )}
+        <View style={styles.headerIdentity}>
+          <TypeBodyStrong numberOfLines={1} testID="session-header-title">
+            {headerTitle}
+          </TypeBodyStrong>
+          {headerSubtitle !== undefined ? (
+            <TypeCaption
+              style={{ color: tokens.textTertiary }}
+              numberOfLines={1}
+              testID="session-header-subtitle"
+            >
+              {headerSubtitle}
+            </TypeCaption>
+          ) : null}
+        </View>
+        <Pressable
+          accessibilityLabel="Session options"
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={() => setSheet("kebab")}
+          style={styles.headerTarget}
+          testID="session-kebab"
+        >
+          <Ellipsis size={24} color={tokens.text} strokeWidth={2.4} />
+        </Pressable>
+      </View>
+      {/* The live-turn indicator — the "live" badge's replacement. */}
+      <LiveHeaderLine live={liveRunning || remoteRunning} />
+
       {/* R115-K — the dock owns the keyboard: NO KeyboardAvoidingView, NO
           offsets, NO window resize (the window is ADJUST_NOTHING while this
           screen lives). The only thing that moves is the dock's own animated
           paddingBottom (dockStyle — max(insetsBottom, kbHeight)); the whole
-          composer — offline/outbox/note rows, the @-picker popup, chips,
-          input, control row — rides INSIDE it, and the inverted FlatList
-          above (flex:1) reflows on its own. The list keeps
-          keyboardShouldPersistTaps="handled" so a control-pill tap while the
+          composer — offline/outbox/note rows, the @-picker popup, chips, the
+          input row with its attach circle — rides INSIDE it, and the inverted
+          FlatList above (flex:1) reflows on its own. The list keeps
+          keyboardShouldPersistTaps="handled" so a transcript tap while the
           keys are up never dismiss-focus-then-refocus jarringly. */}
       <View style={styles.body}>
         {loading ? (
@@ -864,10 +992,11 @@ export default function SessionScreen() {
             sessionId={sessionId}
             projectId={detail?.projectId ?? null}
             permissionMode={detail?.permissionMode ?? "ask"}
-            activeMode={detail?.activeMode ?? null}
             selectedModel={detail?.selectedModel ?? null}
+            sheet={composerSheet}
+            onSheetChange={setComposerSheet}
+            onControlsSnapshot={onControlsSnapshot}
             onPermissionModeChange={onPermissionModeChange}
-            onActiveModeChange={onActiveModeChange}
             onModelChange={onModelChange}
             onSend={onSend}
             onStop={onStop}
@@ -877,12 +1006,178 @@ export default function SessionScreen() {
           />
         </Animated.View>
       </View>
+
+      {/* ── THE KEBAB SHEET (R115-I — chat.md §Header): the session's
+          controls, one row each with its CURRENT value right-aligned + a
+          chevron; tapping a row closes this sheet and opens the composer's
+          matching sub-sheet — the simplest honest handoff (both ride the
+          fixed Sheet primitive, so the swap reads as one sheet trading for
+          the next, the kebab's exit playing under the sub-sheet's rise).
+          The rows stagger in on the house entrance grammar. */}
+      <Sheet
+        open={sheet === "kebab"}
+        onClose={() => setSheet(null)}
+        title="Session options"
+        testID="session-options-sheet"
+      >
+        <FadeInUp index={0}>
+          <KebabRow label="Operating mode" value={kebabModeLabel} onPress={() => setSheet("mode")} />
+        </FadeInUp>
+        <FadeInUp index={1}>
+          <KebabRow label="Model" value={controls.modelLabel} onPress={() => setSheet("model")} />
+        </FadeInUp>
+        <FadeInUp index={2}>
+          <KebabRow
+            label="Thinking"
+            value={controls.thinkingLabel}
+            onPress={() => setSheet("thinking")}
+          />
+        </FadeInUp>
+        <FadeInUp index={3}>
+          <KebabRow
+            label="Context"
+            value={controls.ctxPct !== null ? `${controls.ctxPct}%` : "—"}
+            onPress={() => setSheet("context")}
+          />
+        </FadeInUp>
+        {turnLive ? (
+          <FadeInUp index={4}>
+            <KebabRow
+              label="Stop this turn"
+              danger
+              onPress={() => {
+                setSheet(null);
+                onStop();
+              }}
+            />
+          </FadeInUp>
+        ) : null}
+      </Sheet>
     </ScreenScaffold>
   );
 }
 
 function ItemSeparator() {
   return <View style={{ height: spacing.md }} />;
+}
+
+// ── R115-I — the identity bar's pieces ─────────────────────────────────────
+
+/** The honest fallback identity tile — a NEUTRAL avatar (subtle bg + the
+ * session title's first letter, "A" when nothing reads) for a session with
+ * no project or one the registry no longer lists. Same geometry as the
+ * LetterAvatar it stands in for (36px circle, TypeBodyStrong auto-scaled)
+ * but on the neutral surface — never a fabricated project color. */
+function NeutralAvatar({ label }: { label: string }) {
+  const { tokens } = useTheme();
+  const size = 36;
+  return (
+    <View
+      testID="session-header-avatar"
+      // The row's own accessibility label names the session — the bare
+      // letter must not double-read (the LetterAvatar's discipline).
+      accessibilityElementsHidden
+      style={[
+        styles.neutralAvatar,
+        {
+          backgroundColor: tokens.subtle,
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+        },
+      ]}
+    >
+      <TypeBodyStrong style={{ color: tokens.textSecondary, fontSize: Math.round(size * 0.375) }}>
+        {label === "" ? "A" : label}
+      </TypeBodyStrong>
+    </View>
+  );
+}
+
+/** The live-turn indicator — the "live" Badge's replacement (R115-I): a
+ * thin 2px accent line under the identity bar, BREATHING while a turn runs
+ * (motion.md §3's live-caret rhythm: opacity 0.25↔1, 550ms each way;
+ * reduced motion snaps it solid — motion.md §5 — and it springs out when
+ * the turn settles). The 2px height is constant so nothing below ever
+ * shifts when the state flips. */
+function LiveHeaderLine({ live }: { live: boolean }) {
+  const { tokens } = useTheme();
+  const reduced = useReducedMotion();
+  const opacity = useSharedValue(0);
+
+  useEffect(() => {
+    if (!live) {
+      opacity.value = withSpring(0, SPRING);
+      return;
+    }
+    if (reduced) {
+      opacity.value = 1;
+      return;
+    }
+    opacity.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: LIVE_LINE_LEG_MS }),
+        withTiming(0.25, { duration: LIVE_LINE_LEG_MS }),
+      ),
+      -1,
+      false,
+    );
+  }, [live, reduced, opacity]);
+
+  const style = useAnimatedStyle(() => ({
+    opacity: Math.min(1, Math.max(0, opacity.value)),
+  }));
+
+  return <Animated.View style={[styles.liveLine, style, { backgroundColor: tokens.accent }]} />;
+}
+
+/** One kebab-sheet row — label + CURRENT value right-aligned + chevron (the
+ * danger arm carries the stop affordance instead). The SheetRow geometry
+ * (44px+ target, hairline border, quiet press) restated for the screen's
+ * own sheet. */
+function KebabRow({
+  label,
+  value,
+  onPress,
+  danger = false,
+}: {
+  label: string;
+  value?: string;
+  onPress: () => void;
+  danger?: boolean;
+}) {
+  const { tokens } = useTheme();
+  return (
+    <Pressable
+      accessibilityLabel={value !== undefined ? `${label} — ${value}` : label}
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.kebabRow,
+        {
+          backgroundColor: pressed ? tokens.subtleHover : "transparent",
+          borderColor: danger ? tokens.danger : tokens.borderSubtle,
+        },
+      ]}
+    >
+      <TypeBodyStrong
+        style={{ flex: 1, color: danger ? tokens.danger : tokens.text }}
+        numberOfLines={1}
+      >
+        {label}
+      </TypeBodyStrong>
+      {value !== undefined ? (
+        <TypeCaption style={{ color: tokens.textSecondary }} numberOfLines={1}>
+          {value}
+        </TypeCaption>
+      ) : null}
+      {danger ? (
+        <Square size={13} color={tokens.danger} strokeWidth={2.4} fill={tokens.danger} />
+      ) : (
+        <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
+      )}
+    </Pressable>
+  );
 }
 
 /** The display chips for a send's overrides (the optimistic user card + the
@@ -901,6 +1196,44 @@ function overrideAttachmentViews(overrides: SendOverrides): AttachmentView[] | n
 const styles = StyleSheet.create({
   body: {
     flex: 1,
+  },
+  // ── R115-I — the identity bar (the scaffold's own 56px header-row
+  // geometry, restated for the bypassed chrome: 44px side targets, the
+  // left-aligned two-line identity, the breathing live line under it).
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    height: 56,
+    paddingHorizontal: spacing.sm,
+    gap: spacing.xs,
+  },
+  headerTarget: {
+    width: TOUCH_TARGET,
+    height: TOUCH_TARGET,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerIdentity: {
+    flex: 1,
+    gap: 1,
+  },
+  liveLine: {
+    height: 2,
+  },
+  neutralAvatar: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  // ── R115-I — the kebab sheet's rows (the composer SheetRow geometry).
+  kebabRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    minHeight: TOUCH_TARGET + 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: RADIUS_INPUT,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
   },
   centerWrap: {
     flex: 1,
