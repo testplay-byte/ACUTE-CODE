@@ -21,6 +21,7 @@ import {
   fetchSessions,
   filterByProject,
   foldSessionEvents,
+  groupProjectSessions,
   isTerminalFrameType,
   isTurnRunning,
   openTurnStream,
@@ -35,6 +36,7 @@ import {
   reduceRemoteTurnFrame,
   sendBody,
   sessionStatusFromWire,
+  sessionStatusLabel,
   sessionStatusTone,
   sessionTitle,
   type LiveTurn,
@@ -136,6 +138,17 @@ describe("sessions — pure helpers", () => {
     expect(sessionStatusTone("failed")).toBe("danger");
     expect(sessionStatusTone("cancelled")).toBe("danger");
     expect(sessionStatusTone("queued")).toBe("neutral");
+  });
+
+  it("R114-c: labels the status HONESTLY — the wire's words are machine truth, the badge speaks owner", () => {
+    // The owner: "every session shows 'queued' — not good". A queued
+    // session is OPEN (nothing is queued behind anything); completed is
+    // DONE; cancelled is STOPPED. running/failed already read honestly.
+    expect(sessionStatusLabel("queued")).toBe("open");
+    expect(sessionStatusLabel("running")).toBe("running");
+    expect(sessionStatusLabel("completed")).toBe("done");
+    expect(sessionStatusLabel("failed")).toBe("failed");
+    expect(sessionStatusLabel("cancelled")).toBe("stopped");
   });
 
   it("knows when a turn is in flight (the R44 status contract)", () => {
@@ -912,5 +925,22 @@ describe("sessions — the remote mirror", () => {
       proj_2: { total: 1, running: 0 },
     });
     expect(countProjectSessions([])).toEqual({});
+  });
+
+  it("R114-c: groupProjectSessions groups for the accordion, order preserved (most-recent-first off the route)", () => {
+    const rows = [
+      makeSession({ id: "newest_1", projectId: "proj_1" }),
+      makeSession({ id: "newest_2", projectId: "proj_2" }),
+      makeSession({ id: "older_1", projectId: "proj_1" }),
+      makeSession({ id: "no_project", projectId: null }),
+      makeSession({ id: "older_2", projectId: "proj_1" }),
+    ];
+    const groups = groupProjectSessions(rows);
+    expect(Object.keys(groups).sort()).toEqual(["proj_1", "proj_2"]);
+    expect(groups.proj_1?.map((s) => s.id)).toEqual(["newest_1", "older_1", "older_2"]);
+    expect(groups.proj_2?.map((s) => s.id)).toEqual(["newest_2"]);
+    // null-project rows are nobody's (the accordion renders project rows only)
+    expect(Object.values(groups).flat()).toHaveLength(4);
+    expect(groupProjectSessions([])).toEqual({});
   });
 });

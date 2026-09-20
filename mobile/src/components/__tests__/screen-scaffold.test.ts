@@ -21,7 +21,9 @@ const headerTier: LargeIsGone = "compact-only";
 
 // The compact row's own vocabulary stays: title (required), the optional
 // context caption, the right slot, back — and nothing else beyond the body
-// plumbing.
+// plumbing. R114-c added `chrome` (the header-free tab roots — the owner:
+// "the live status and the notification at the top are unnecessary") — the
+// one deliberate addition to the header surface since R113-e.
 type ExpectedKeys =
   | "title"
   | "subtitle"
@@ -33,6 +35,7 @@ type ExpectedKeys =
   | "bottomInset"
   | "keyboardAware"
   | "noPill"
+  | "chrome"
   | "tabBarAware";
 type PropKeys = keyof ScreenScaffoldProps;
 type NoNewHeaderVocabulary = Exclude<PropKeys, ExpectedKeys> extends never ? true : never;

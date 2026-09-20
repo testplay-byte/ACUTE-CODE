@@ -27,6 +27,7 @@
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useCallback, useEffect } from "react";
 import {
+  AccessibilityState,
   ActivityIndicator,
   Pressable,
   PressableStateCallbackType,
@@ -130,6 +131,9 @@ export interface PressableCardProps {
   elevated?: boolean;
   /** Accessibility label (required when the card carries only non-text content). */
   accessibilityLabel?: string;
+  /** R114-c: the caller's accessibility state (the projects accordion's
+   * expanded flag) — merged with the disabled truth. */
+  accessibilityState?: AccessibilityState;
   testID?: string;
 }
 
@@ -147,6 +151,7 @@ export function PressableCard({
   disabled = false,
   elevated = false,
   accessibilityLabel,
+  accessibilityState,
   testID,
 }: PressableCardProps) {
   const { tokens } = useTheme();
@@ -189,7 +194,7 @@ export function PressableCard({
       testID={testID}
       accessibilityLabel={accessibilityLabel}
       accessibilityRole={onPress ? "button" : undefined}
-      accessibilityState={disabled ? { disabled: true } : undefined}
+      accessibilityState={disabled ? { disabled: true, ...accessibilityState } : accessibilityState}
       disabled={disabled || !onPress}
       onPress={onPress}
       onLongPress={onLongPress}

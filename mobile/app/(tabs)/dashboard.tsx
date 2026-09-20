@@ -1,7 +1,9 @@
 /**
- * Dashboard v2 (R109-c; R113-e — the compact header) — the owner's "see
- * the dashboard, the stats, the usage" screen. Everything renders from the desktop's EXISTING /usage
- * routes (features/config.ts, typed 1:1):
+ * Dashboard v3 (R109-c; R113-e — the compact header; R114-c — the
+ * color-coded, complete-info redesign + the header-free root) — the
+ * owner's "see the dashboard, the stats, the usage" screen. Everything
+ * renders from the desktop's EXISTING /usage routes (features/config.ts,
+ * typed 1:1):
  *
  *   window 14d/30d → fetchUsageSummary(14|30)  — the daily chart + totals,
  *                     PLUS fetchUsageStats(1) alongside (always) for the
@@ -10,13 +12,18 @@
  *                     carries the chart AND the leaderboard AND the health
  *
  * Layout (top → bottom): the window chips, the totals hero (4 ClayCards in
- * a 2×2 grid), THE CHART — a hand-built react-native-svg bar chart (the
- * ONLY chart surface; no external chart libraries): clay bars in the accent
- * color with the molded 2px lighter top-edge cap, the tallest bar
- * highlighted, first/last date axis labels, tap a bar for that day's inline
- * detail — the model leaderboard (top 6), and the health block (turn
- * errors + tool failures). Pull-to-refresh + honest loading/offline/error
- * states, gated on connected (the pill carries the link truth).
+ * a 2×2 grid, each with its TONED ICON CHIP — accent tokens, green
+ * requests, amber cost, violet peak — color rides on the chip, never the
+ * card), THE CHART — a hand-built react-native-svg STACKED bar chart (the
+ * ONLY chart surface; no external chart libraries): input tokens in the
+ * terracotta accent, output tokens stacked above in the sage second hue,
+ * 3 quiet dashed gridlines + the max-value scale label, the peak day
+ * highlighted, first/last date axis labels, tap a bar for that day's
+ * inline detail — the model leaderboard (top 6, each model in its OWN
+ * rank hue: dot + name + mono count + share track + cost·calls caption,
+ * with a tiny legend when two+ render), and the health block (turn errors
+ * + tool failures, each with the total-count chip). Pull-to-refresh +
+ * honest loading skeletons/offline/error/empty states, gated on connected.
  *
  * formatTokens + formatUsd are the pure number helpers, EXPORTED from this
  * file for tests later.
@@ -25,6 +32,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshControl, StyleSheet, View, useWindowDimensions } from "react-native";
 import Svg, { G, Line, Rect } from "react-native-svg";
+import { Coins, DollarSign, TrendingUp, Zap } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { ErrorState, LoadingState, SkeletonList } from "@/components/list-state";
 import {
@@ -33,7 +41,6 @@ import {
   ClayCard,
   SectionHeader,
   Skeleton,
-  TypeBodyStrong,
   TypeCaption,
   TypeMicro,
   TypeMono,
@@ -41,7 +48,14 @@ import {
 } from "@/design/primitives";
 import { selectionHaptic } from "@/design/haptics";
 import { useTheme } from "@/design/theme";
-import { mixHex, RADIUS_CARD, spacing } from "@/design/tokens";
+import {
+  CHART_HUES,
+  chartHue,
+  mixHex,
+  modelHue,
+  RADIUS_CARD,
+  spacing,
+} from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import {
@@ -139,7 +153,7 @@ interface DayBucket {
 
 // ── the chart (react-native-svg, the only chart surface) ────────────────────
 
-const CHART_HEIGHT = 160;
+const CHART_HEIGHT = 168;
 const CHART_CAP = 2;
 
 function UsageChart({
@@ -158,50 +172,180 @@ function UsageChart({
   const peakTokens = days.reduce((max, day) => Math.max(max, day.tokens), 0);
   const baselineY = CHART_HEIGHT - 1;
   const plotHeight = baselineY - CHART_CAP - 3;
-  // The molded clay cap — the accent lightened toward the card surface.
-  const capFill = mixHex(tokens.accent, tokens.card, 0.45);
+  // R114-c — the two token hues: input = the terracotta accent (the dominant
+  // mass), output = the cool sage second hue (tokens.ts's chart palette,
+  // dark-mode variants included). The totals-only 3-month series blends the
+  // two (an honest "combined" read, never a wrong single-side claim).
+  const inHue = chartHue(CHART_HUES.input, tokens.isDark);
+  const outHue = chartHue(CHART_HUES.output, tokens.isDark);
+  const blendHue = mixHex(inHue, outHue, 0.5);
+  // The molded clay cap — the TOP segment's hue lightened toward the card.
+  const capFillOut = mixHex(outHue, tokens.card, 0.45);
   const columnWidth = n > 0 ? width / n : width;
   const gap = columnWidth > 12 ? 3 : columnWidth > 6 ? 2 : columnWidth > 3.5 ? 1 : 0;
+  const hasSplit = days.some((day) => day.inputTokens !== null && day.outputTokens !== null);
+  // 3 quiet dashed gridlines (quarter marks) — the y-axis's honest scale.
+  const gridFractions = [0.25, 0.5, 0.75];
 
   return (
-    <View accessibilityLabel="daily token totals bar chart" accessibilityRole="image">
+    <View accessibilityLabel="daily token totals stacked bar chart" accessibilityRole="image">
+      {/* The scale row — the max-value label + the in/out legend (the
+          split windows only; the totals-only 3-month series claims no side). */}
+      <View style={styles.scaleRow}>
+        <TypeMicro style={[styles.scaleLabel, { color: tokens.textTertiary }]}>
+          {peakTokens > 0 ? `peak ${formatTokens(peakTokens)}` : ""}
+        </TypeMicro>
+        {hasSplit ? (
+          <View style={styles.legendRow}>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: inHue }]} />
+              <TypeMicro style={{ color: tokens.textTertiary }}>in</TypeMicro>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: outHue }]} />
+              <TypeMicro style={{ color: tokens.textTertiary }}>out</TypeMicro>
+            </View>
+          </View>
+        ) : null}
+      </View>
       <Svg width={width} height={CHART_HEIGHT}>
+        {/* The quiet dashed gridlines (DESIGN.md's calm — borderSubtle). */}
+        {gridFractions.map((fraction) => {
+          const y = baselineY - fraction * plotHeight;
+          return (
+            <Line
+              key={`grid-${fraction}`}
+              x1={0}
+              y1={y}
+              x2={width}
+              y2={y}
+              stroke={tokens.borderSubtle}
+              strokeWidth={1}
+              strokeDasharray="4 4"
+            />
+          );
+        })}
         {days.map((day, index) => {
           const barWidth = Math.max(columnWidth - gap, 0.5);
           const x = index * columnWidth + gap / 2;
-          const barHeight = Math.max(
-            day.tokens > 0 ? 2 : 1.5,
-            (day.tokens / Math.max(peakTokens, 1)) * plotHeight,
-          );
-          const y = baselineY - barHeight;
           const isPeak = day.tokens === peakTokens && day.tokens > 0;
           const isSelected = selected === index;
+          const emphasis = isPeak || isSelected ? 1 : 0.72;
+          // The tap target — the full column, so thin bars stay tappable.
+          const tapTarget = (
+            <Rect
+              x={index * columnWidth}
+              y={0}
+              width={columnWidth}
+              height={CHART_HEIGHT}
+              fill="transparent"
+              onPress={() => onSelect(isSelected ? null : index)}
+            />
+          );
+          if (day.tokens === 0) {
+            // An empty day — the faint ghost bar (never zero-height noise).
+            return (
+              <G key={`${day.date}-${index}`}>
+                <Rect
+                  x={x}
+                  y={baselineY - 1.5}
+                  width={barWidth}
+                  height={1.5}
+                  fill={inHue}
+                  fillOpacity={0.16}
+                />
+                {tapTarget}
+              </G>
+            );
+          }
+          const totalHeight = Math.max(
+            2,
+            (day.tokens / Math.max(peakTokens, 1)) * plotHeight,
+          );
+          const inputTokens = day.inputTokens ?? day.tokens;
+          const outputTokens = day.outputTokens ?? 0;
+          const split =
+            day.inputTokens !== null &&
+            day.outputTokens !== null &&
+            inputTokens > 0 &&
+            outputTokens > 0;
+          if (!split) {
+            // Totals-only (the 3-month series) or a one-sided day: one bar in
+            // the blend (totals) or the side that exists — never a fake split.
+            const fill =
+              day.inputTokens !== null && inputTokens > 0
+                ? inHue
+                : day.outputTokens !== null && outputTokens > 0
+                  ? outHue
+                  : blendHue;
+            const capFill = mixHex(fill, tokens.card, 0.45);
+            const y = baselineY - totalHeight;
+            return (
+              <G key={`${day.date}-${index}`}>
+                <Rect
+                  x={x}
+                  y={y}
+                  width={barWidth}
+                  height={totalHeight}
+                  rx={Math.min(2.5, barWidth / 2)}
+                  fill={fill}
+                  fillOpacity={emphasis}
+                />
+                {totalHeight > 5 ? (
+                  <Rect x={x} y={y - CHART_CAP} width={barWidth} height={CHART_CAP} rx={1} fill={capFill} />
+                ) : null}
+                {isSelected ? (
+                  <Rect x={x} y={baselineY} width={barWidth} height={CHART_HEIGHT - baselineY} fill={fill} />
+                ) : null}
+                {tapTarget}
+              </G>
+            );
+          }
+          // The stacked day — input below (terracotta), output above (sage),
+          // both scaled by the SAME peak denominator so the stack is the day.
+          const inputHeight = Math.max(
+            1,
+            (inputTokens / Math.max(peakTokens, 1)) * plotHeight,
+          );
+          const outputHeight = Math.max(totalHeight - inputHeight, 0);
+          const yOut = baselineY - totalHeight;
+          const yIn = baselineY - inputHeight;
           return (
             <G key={`${day.date}-${index}`}>
               <Rect
                 x={x}
-                y={y}
+                y={yIn}
                 width={barWidth}
-                height={barHeight}
+                height={inputHeight}
                 rx={Math.min(2.5, barWidth / 2)}
-                fill={tokens.accent}
-                fillOpacity={day.tokens === 0 ? 0.18 : isPeak || isSelected ? 1 : 0.5}
+                fill={inHue}
+                fillOpacity={emphasis}
               />
-              {barHeight > 5 ? (
-                <Rect x={x} y={y - CHART_CAP} width={barWidth} height={CHART_CAP} rx={1} fill={capFill} />
+              {outputHeight > 0 ? (
+                <Rect
+                  x={x}
+                  y={yOut}
+                  width={barWidth}
+                  height={outputHeight}
+                  rx={Math.min(2.5, barWidth / 2)}
+                  fill={outHue}
+                  fillOpacity={emphasis}
+                />
+              ) : null}
+              {totalHeight > 5 ? (
+                <Rect
+                  x={x}
+                  y={yOut - CHART_CAP}
+                  width={barWidth}
+                  height={CHART_CAP}
+                  rx={1}
+                  fill={capFillOut}
+                />
               ) : null}
               {isSelected ? (
-                <Rect x={x} y={baselineY} width={barWidth} height={CHART_HEIGHT - baselineY} fill={tokens.accent} />
+                <Rect x={x} y={baselineY} width={barWidth} height={CHART_HEIGHT - baselineY} fill={inHue} />
               ) : null}
-              {/* The tap target — the full column, so thin bars stay tappable. */}
-              <Rect
-                x={index * columnWidth}
-                y={0}
-                width={columnWidth}
-                height={CHART_HEIGHT}
-                fill="transparent"
-                onPress={() => onSelect(isSelected ? null : index)}
-              />
+              {tapTarget}
             </G>
           );
         })}
@@ -230,12 +374,34 @@ function DayDetailLine({ day }: { day: DayBucket }) {
 
 // ── the totals hero tiles ───────────────────────────────────────────────────
 
-function StatTile({ label, value, caption }: { label: string; value: string; caption?: string }) {
+/** The tile's colored icon chip — DESIGN.md's law: color rides on the
+ * ICON (and its quiet tinted chip), NEVER on the resting card itself. */
+function StatTile({
+  label,
+  value,
+  caption,
+  icon: Icon,
+  hue,
+}: {
+  label: string;
+  value: string;
+  caption?: string;
+  icon: typeof Coins;
+  hue: string;
+}) {
   const { tokens } = useTheme();
   return (
     <ClayCard style={styles.statTile}>
       <View style={styles.statPad}>
-        <TypeMicro style={[styles.statLabel, { color: tokens.textTertiary }]}>{label}</TypeMicro>
+        <View style={styles.statHead}>
+          <View
+            style={[styles.statChip, { backgroundColor: mixHex(tokens.card, hue, 0.14) }]}
+            accessibilityLabel={`${label} indicator`}
+          >
+            <Icon size={15} color={hue} strokeWidth={2.2} />
+          </View>
+          <TypeMicro style={[styles.statLabel, { color: tokens.textTertiary }]}>{label}</TypeMicro>
+        </View>
         <TypeTitle numberOfLines={1}>{value}</TypeTitle>
         {caption !== undefined ? <TypeMicro style={{ color: tokens.textTertiary }}>{caption}</TypeMicro> : null}
       </View>
@@ -245,21 +411,35 @@ function StatTile({ label, value, caption }: { label: string; value: string; cap
 
 // ── the model leaderboard ───────────────────────────────────────────────────
 
-function ModelRow({ model, share }: { model: UsageStatsModel; share: number }) {
+/** One model row — the RANK hue carries the whole row (dot, count, track);
+ * the caption keeps the cost·calls truth. */
+function ModelRow({
+  model,
+  share,
+  rank,
+}: {
+  model: UsageStatsModel;
+  share: number;
+  rank: number;
+}) {
   const { tokens } = useTheme();
+  const hue = modelHue(rank, tokens.isDark);
   return (
     <View style={styles.modelRow}>
       <View style={styles.modelHead}>
+        <View style={[styles.modelDot, { backgroundColor: hue }]} />
         <TypeMono numberOfLines={1} style={styles.modelName}>
           {model.model}
         </TypeMono>
-        <TypeBodyStrong numberOfLines={1}>{formatTokens(model.tokens)}</TypeBodyStrong>
+        <TypeMono numberOfLines={1} style={styles.modelCount}>
+          {formatTokens(model.tokens)}
+        </TypeMono>
       </View>
       <View style={[styles.modelTrack, { backgroundColor: tokens.borderSubtle }]}>
         <View
           style={[
             styles.modelTrackFill,
-            { width: `${Math.round(Math.max(share, 0.05) * 100)}%`, backgroundColor: tokens.accent, opacity: 0.55 },
+            { width: `${Math.round(Math.max(share, 0.05) * 100)}%`, backgroundColor: hue },
           ]}
         />
       </View>
@@ -283,10 +463,16 @@ function HealthCard({
 }) {
   const { tokens } = useTheme();
   const top = items.slice(0, 5);
+  // R114-c — the total-count mini stat chip: the block's headline number
+  // (trivially the sum of the per-name counts), next to the title.
+  const total = items.reduce((sum, item) => sum + item.count, 0);
   return (
     <ClayCard>
       <View style={styles.healthPad}>
-        <TypeMicro style={[styles.statLabel, { color: tokens.textTertiary }]}>{title}</TypeMicro>
+        <View style={styles.healthHead}>
+          <TypeMicro style={[styles.statLabel, { color: tokens.textTertiary, flex: 1 }]}>{title}</TypeMicro>
+          {total > 0 ? <Badge tone={tone}>{formatCount(total)}</Badge> : null}
+        </View>
         {top.length === 0 ? (
           <TypeCaption style={{ color: tokens.textTertiary }}>
             {`no ${title.toLowerCase()} in the window`}
@@ -527,7 +713,7 @@ export default function DashboardScreen() {
   );
 
   return (
-    <ScreenScaffold title="Dashboard" refreshControl={refreshControl}>
+    <ScreenScaffold title="Dashboard" refreshControl={refreshControl} chrome={false}>
       {status === "unpaired" ? (
         <ErrorState title="No host linked" caption="Pair this phone to see usage, tokens, costs, and health." />
       ) : !connected && !primaryLoaded ? (
@@ -578,17 +764,35 @@ export default function DashboardScreen() {
                 </TypeCaption>
               ) : null}
 
-              {/* ── the totals hero ── */}
+              {/* ── the totals hero — toned icon chips: accent tokens, green
+                  requests, amber cost, violet peak (color on the chip only) ── */}
               <View style={styles.gridRow}>
-                <StatTile label="Total tokens" value={formatTokens(totals.totalTokens)} />
-                <StatTile label="Requests" value={formatCount(totals.requests)} />
+                <StatTile
+                  label="Total tokens"
+                  value={formatTokens(totals.totalTokens)}
+                  icon={Coins}
+                  hue={chartHue(CHART_HUES.input, tokens.isDark)}
+                />
+                <StatTile
+                  label="Requests"
+                  value={formatCount(totals.requests)}
+                  icon={Zap}
+                  hue={tokens.success}
+                />
               </View>
               <View style={styles.gridRow}>
-                <StatTile label="Cost" value={formatUsd(totals.costUsd)} />
+                <StatTile
+                  label="Cost"
+                  value={formatUsd(totals.costUsd)}
+                  icon={DollarSign}
+                  hue={tokens.warning}
+                />
                 <StatTile
                   label="Peak day"
                   value={totals.peak.date !== null ? shortDate(totals.peak.date) : "—"}
                   caption={totals.peak.tokens > 0 ? `${formatTokens(totals.peak.tokens)} tokens` : "no usage yet"}
+                  icon={TrendingUp}
+                  hue={chartHue(CHART_HUES.peak, tokens.isDark)}
                 />
               </View>
 
@@ -617,7 +821,7 @@ export default function DashboardScreen() {
                 </ClayCard>
               )}
 
-              {/* ── the model leaderboard ── */}
+              {/* ── the model leaderboard — per-model rank hues ── */}
               <SectionHeader>Top models</SectionHeader>
               {stats === null ? (
                 <ClayCard>
@@ -638,13 +842,20 @@ export default function DashboardScreen() {
               ) : (
                 <ClayCard>
                   <View style={styles.modelsPad}>
-                    {models.map((model) => (
+                    {models.map((model, index) => (
                       <ModelRow
                         key={model.model}
                         model={model}
+                        rank={index}
                         share={model.tokens / Math.max(models[0].tokens, 1)}
                       />
                     ))}
+                    {models.length >= 2 ? (
+                      // The tiny legend — what the hues and the track mean.
+                      <TypeMicro style={[styles.modelLegend, { color: tokens.textTertiary }]}>
+                        each model keeps its hue · the track scales to the top model
+                      </TypeMicro>
+                    ) : null}
                   </View>
                 </ClayCard>
               )}
@@ -685,24 +896,47 @@ const styles = StyleSheet.create({
   windowRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   softNotice: { paddingHorizontal: spacing.xs },
   gridRow: { flexDirection: "row", gap: spacing.md },
-  statTile: { flex: 1, minHeight: 92 },
+  statTile: { flex: 1, minHeight: 104 },
   statPad: { padding: spacing.md, gap: spacing.xs },
+  statHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  statChip: {
+    width: 26,
+    height: 26,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   statLabel: { textTransform: "uppercase", letterSpacing: 0.8 },
+  scaleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.xs,
+    paddingBottom: spacing.xs,
+  },
+  scaleLabel: { letterSpacing: 0.3 },
+  legendRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
+  legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
   chartPad: { padding: spacing.md, gap: spacing.sm },
   axisRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: spacing.xs },
   dayDetailWrap: { paddingHorizontal: spacing.xs },
   quietPad: { padding: spacing.lg },
   modelsPad: { padding: spacing.md, gap: spacing.lg },
   modelRow: { gap: spacing.xs },
-  modelHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.md },
+  modelHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
+  modelDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
   modelName: { flex: 1 },
+  modelCount: { flexShrink: 0 },
+  modelLegend: { textAlign: "center", paddingTop: spacing.xs },
   modelTrack: { height: 3, borderRadius: 2, overflow: "hidden" },
   modelTrackFill: { height: 3, borderRadius: 2 },
   healthPad: { padding: spacing.md, gap: spacing.sm },
+  healthHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   healthRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 28 },
   healthName: { flex: 1 },
   footer: { textAlign: "center" },
   skeletonWrap: { gap: spacing.lg },
-  statSkeleton: { flex: 1, height: 92, borderRadius: RADIUS_CARD },
-  chartSkeleton: { height: CHART_HEIGHT + 72, borderRadius: RADIUS_CARD },
+  statSkeleton: { flex: 1, height: 104, borderRadius: RADIUS_CARD },
+  chartSkeleton: { height: CHART_HEIGHT + 96, borderRadius: RADIUS_CARD },
 });

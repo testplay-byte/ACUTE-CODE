@@ -48,21 +48,57 @@ import { DEFAULT_THEME_ID, ResolvedTheme, getTheme, resolveTheme } from "./token
 
 export type ThemeMode = "system" | "light" | "dark";
 
-// ── R113-e: the appearance domain's wire value (the server pair lives in
-// features/appearance-sync.ts; the parser stays HERE — the theme module owns
-// the vocabulary) ─────────────────────────────────────────────────────────
+// ── R113-e/R114-c: the appearance domain's wire value (the server pair lives
+// in features/appearance-sync.ts; the parser stays HERE — the theme module
+// owns the vocabulary) ─────────────────────────────────────────────────
 
-/** GET/PUT /settings/appearance's value: the six shared flavor ids or null
- * (null = "no server preference" — the local flavor stands), plus the
- * three-mode enum. */
+/** Chat density — the transcript's message spacing (R114-b domain field). */
+export type ChatDensity = "comfortable" | "compact";
+/** Transcript text size. */
+export type ChatTextSize = "small" | "medium" | "large";
+/** When message timestamps show. */
+export type TimestampsMode = "hidden" | "hover";
+/** How tool activity renders in the transcript. */
+export type ToolActivity = "detailed" | "compact" | "hidden";
+
+/**
+ * GET/PUT /settings/appearance's value: the six shared flavor ids or null
+ * (null = "no server preference" — the local flavor stands), the
+ * three-mode enum, PLUS the four chat-pref fields the R114-b domain added
+ * (chatDensity / chatTextSize / timestampsMode / toolActivity — same
+ * defaults as the server: comfortable / medium / hover / detailed).
+ */
 export interface AppearanceValue {
   themeId: string | null;
   mode: ThemeMode;
+  chatDensity: ChatDensity;
+  chatTextSize: ChatTextSize;
+  timestampsMode: TimestampsMode;
+  toolActivity: ToolActivity;
 }
 
-/** Shape-check a server appearance value — null when malformed (a
- * non-object, a non-string/non-null themeId, or a mode outside the enum —
- * never a guess, never a crash). Pure. */
+/** The four chat prefs' server defaults (one source of truth for parse +
+ * the offline fallback + the Wave-3 transcript hook). */
+export const CHAT_PREF_DEFAULTS: Readonly<{
+  chatDensity: ChatDensity;
+  chatTextSize: ChatTextSize;
+  timestampsMode: TimestampsMode;
+  toolActivity: ToolActivity;
+}> = {
+  chatDensity: "comfortable",
+  chatTextSize: "medium",
+  timestampsMode: "hover",
+  toolActivity: "detailed",
+};
+
+/**
+ * Shape-check a server appearance value — null when malformed (a
+ * non-object, a non-string/non-null themeId, a mode outside the enum —
+ * never a guess, never a crash). The four chat-pref keys are OPTIONAL on
+ * the wire (a pre-R114 value or a partial cached GET): a missing key reads
+ * as its server default; a PRESENT key outside its enum rejects the whole
+ * value (malformed is malformed — never a silent default). Pure.
+ */
 export function parseAppearanceValue(value: unknown): AppearanceValue | null {
   if (typeof value !== "object" || value === null) return null;
   const raw = value as Record<string, unknown>;
@@ -70,11 +106,48 @@ export function parseAppearanceValue(value: unknown): AppearanceValue | null {
   if (themeId !== null && typeof themeId !== "string") return null;
   const mode = raw.mode;
   if (mode !== "system" && mode !== "light" && mode !== "dark") return null;
-  return { themeId: themeId as string | null, mode };
+  const chatDensity = raw.chatDensity;
+  if (chatDensity !== undefined && chatDensity !== "comfortable" && chatDensity !== "compact") {
+    return null;
+  }
+  const chatTextSize = raw.chatTextSize;
+  if (
+    chatTextSize !== undefined &&
+    chatTextSize !== "small" &&
+    chatTextSize !== "medium" &&
+    chatTextSize !== "large"
+  ) {
+    return null;
+  }
+  const timestampsMode = raw.timestampsMode;
+  if (timestampsMode !== undefined && timestampsMode !== "hidden" && timestampsMode !== "hover") {
+    return null;
+  }
+  const toolActivity = raw.toolActivity;
+  if (
+    toolActivity !== undefined &&
+    toolActivity !== "detailed" &&
+    toolActivity !== "compact" &&
+    toolActivity !== "hidden"
+  ) {
+    return null;
+  }
+  return {
+    themeId: themeId as string | null,
+    mode,
+    chatDensity: chatDensity ?? CHAT_PREF_DEFAULTS.chatDensity,
+    chatTextSize: chatTextSize ?? CHAT_PREF_DEFAULTS.chatTextSize,
+    timestampsMode: timestampsMode ?? CHAT_PREF_DEFAULTS.timestampsMode,
+    toolActivity: toolActivity ?? CHAT_PREF_DEFAULTS.toolActivity,
+  };
 }
 
 const PREFS_KEY_THEME = "acute.prefs.themeId";
 const PREFS_KEY_MODE = "acute.prefs.mode";
+const PREFS_KEY_CHAT_DENSITY = "acute.prefs.chatDensity";
+const PREFS_KEY_CHAT_TEXT_SIZE = "acute.prefs.chatTextSize";
+const PREFS_KEY_TIMESTAMPS = "acute.prefs.timestampsMode";
+const PREFS_KEY_TOOL_ACTIVITY = "acute.prefs.toolActivity";
 
 export interface ThemeContextValue {
   /** The resolved, mode-aware palette — what screens actually consume. */
@@ -87,6 +160,16 @@ export interface ThemeContextValue {
   systemIsDark: boolean;
   setTheme: (themeId: string) => void;
   setMode: (mode: ThemeMode) => void;
+  /** R114-c — the four synced chat prefs (the domain's full five-field
+   * shape; the transcript consumes them in Wave 3 via useChatPrefs). */
+  chatDensity: ChatDensity;
+  chatTextSize: ChatTextSize;
+  timestampsMode: TimestampsMode;
+  toolActivity: ToolActivity;
+  setChatDensity: (density: ChatDensity) => void;
+  setChatTextSize: (size: ChatTextSize) => void;
+  setTimestampsMode: (mode: TimestampsMode) => void;
+  setToolActivity: (activity: ToolActivity) => void;
   /** R113-e: apply a SERVER-pushed appearance value (the sync leg calls
    * this — hydrations and live frames both land here; the echo guard in
    * appearance-sync suppresses the write-through PUT). Returns whether a
@@ -100,6 +183,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const systemScheme = useColorScheme();
   const [themeId, setThemeIdState] = useState<string>(DEFAULT_THEME_ID);
   const [mode, setModeState] = useState<ThemeMode>("system");
+  // R114-c — the four synced chat prefs: local state + AsyncStorage offline
+  // fallback, server-backed exactly like theme/mode (the domain's five
+  // fields, defaults = the server's).
+  const [chatDensity, setChatDensityState] = useState<ChatDensity>(CHAT_PREF_DEFAULTS.chatDensity);
+  const [chatTextSize, setChatTextSizeState] = useState<ChatTextSize>(CHAT_PREF_DEFAULTS.chatTextSize);
+  const [timestampsMode, setTimestampsModeState] = useState<TimestampsMode>(CHAT_PREF_DEFAULTS.timestampsMode);
+  const [toolActivity, setToolActivityState] = useState<ToolActivity>(CHAT_PREF_DEFAULTS.toolActivity);
 
   // The house fonts (DESIGN.md §4). Cosmetic-fail-open: if a weight fails to
   // load the platform stack still renders — but in practice useFonts resolves
@@ -120,16 +210,37 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     let alive = true;
     (async () => {
       try {
-        const [storedTheme, storedMode] = await Promise.all([
-          AsyncStorage.getItem(PREFS_KEY_THEME),
-          AsyncStorage.getItem(PREFS_KEY_MODE),
-        ]);
+        const [storedTheme, storedMode, storedDensity, storedTextSize, storedTimestamps, storedToolActivity] =
+          await Promise.all([
+            AsyncStorage.getItem(PREFS_KEY_THEME),
+            AsyncStorage.getItem(PREFS_KEY_MODE),
+            AsyncStorage.getItem(PREFS_KEY_CHAT_DENSITY),
+            AsyncStorage.getItem(PREFS_KEY_CHAT_TEXT_SIZE),
+            AsyncStorage.getItem(PREFS_KEY_TIMESTAMPS),
+            AsyncStorage.getItem(PREFS_KEY_TOOL_ACTIVITY),
+          ]);
         if (!alive) return;
         if (storedTheme !== null && getTheme(storedTheme).id === storedTheme) {
           setThemeIdState(storedTheme);
         }
         if (storedMode === "system" || storedMode === "light" || storedMode === "dark") {
           setModeState(storedMode);
+        }
+        if (storedDensity === "comfortable" || storedDensity === "compact") {
+          setChatDensityState(storedDensity);
+        }
+        if (storedTextSize === "small" || storedTextSize === "medium" || storedTextSize === "large") {
+          setChatTextSizeState(storedTextSize);
+        }
+        if (storedTimestamps === "hidden" || storedTimestamps === "hover") {
+          setTimestampsModeState(storedTimestamps);
+        }
+        if (
+          storedToolActivity === "detailed" ||
+          storedToolActivity === "compact" ||
+          storedToolActivity === "hidden"
+        ) {
+          setToolActivityState(storedToolActivity);
         }
       } catch {
         // Prefs are cosmetic — a failed read keeps the defaults, honestly.
@@ -147,16 +258,26 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
    * is fire-and-forget, connection-gated, and echo-guarded inside
    * appearance-sync (applying a remote value suppresses the PUT-back).
    */
-  const pushAppearance = useCallback((patch: { themeId?: string; mode?: ThemeMode }) => {
-    try {
-      const { getLinkManager } = require("../link/runtime") as typeof import("../link/runtime");
-      const { pushAppearancePatch } = require("../features/appearance-sync") as typeof import("../features/appearance-sync");
-      pushAppearancePatch(getLinkManager(), patch);
-    } catch {
-      // unpaired / not yet started — the local flip stands as the offline
-      // fallback; the next successful PUT re-converges the devices.
-    }
-  }, []);
+  const pushAppearance = useCallback(
+    (patch: {
+      themeId?: string;
+      mode?: ThemeMode;
+      chatDensity?: ChatDensity;
+      chatTextSize?: ChatTextSize;
+      timestampsMode?: TimestampsMode;
+      toolActivity?: ToolActivity;
+    }) => {
+      try {
+        const { getLinkManager } = require("../link/runtime") as typeof import("../link/runtime");
+        const { pushAppearancePatch } = require("../features/appearance-sync") as typeof import("../features/appearance-sync");
+        pushAppearancePatch(getLinkManager(), patch);
+      } catch {
+        // unpaired / not yet started — the local flip stands as the offline
+        // fallback; the next successful PUT re-converges the devices.
+      }
+    },
+    [],
+  );
 
   const setTheme = useCallback((nextThemeId: string) => {
     setThemeIdState(getTheme(nextThemeId).id);
@@ -172,15 +293,59 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     pushAppearance({ mode: nextMode }); // the same write-through
   }, [pushAppearance]);
 
-  /** R113-e: the remote path — hydrations and live frames both land here.
-   * The echo guard (appearance-sync) suppresses the PUT while the control's
-   * setters run, so applying a server value never writes it back. */
+  // R114-c — the four chat-pref setters: optimistic local flip + persist +
+  // the partial-PUT write-through (the appearance screen's controls and the
+  // echo-guarded remote apply both land here; the same discipline as
+  // setTheme/setMode above).
+  const setChatDensity = useCallback(
+    (next: ChatDensity) => {
+      setChatDensityState(next);
+      void AsyncStorage.setItem(PREFS_KEY_CHAT_DENSITY, next).catch(() => {});
+      pushAppearance({ chatDensity: next });
+    },
+    [pushAppearance],
+  );
+  const setChatTextSize = useCallback(
+    (next: ChatTextSize) => {
+      setChatTextSizeState(next);
+      void AsyncStorage.setItem(PREFS_KEY_CHAT_TEXT_SIZE, next).catch(() => {});
+      pushAppearance({ chatTextSize: next });
+    },
+    [pushAppearance],
+  );
+  const setTimestampsMode = useCallback(
+    (next: TimestampsMode) => {
+      setTimestampsModeState(next);
+      void AsyncStorage.setItem(PREFS_KEY_TIMESTAMPS, next).catch(() => {});
+      pushAppearance({ timestampsMode: next });
+    },
+    [pushAppearance],
+  );
+  const setToolActivity = useCallback(
+    (next: ToolActivity) => {
+      setToolActivityState(next);
+      void AsyncStorage.setItem(PREFS_KEY_TOOL_ACTIVITY, next).catch(() => {});
+      pushAppearance({ toolActivity: next });
+    },
+    [pushAppearance],
+  );
+
+  /** R113-e/R114-c: the remote path — hydrations and live frames both land
+   * here. The echo guard (appearance-sync) suppresses the PUT while the
+   * control's setters run, so applying a server value never writes it back. */
   const applyServerAppearance = useCallback(
     (value: unknown): boolean => {
       const { applyServerAppearanceValue } = require("../features/appearance-sync") as typeof import("../features/appearance-sync");
-      return applyServerAppearanceValue(value, { setTheme, setMode });
+      return applyServerAppearanceValue(value, {
+        setTheme,
+        setMode,
+        setChatDensity,
+        setChatTextSize,
+        setTimestampsMode,
+        setToolActivity,
+      });
     },
-    [setTheme, setMode],
+    [setTheme, setMode, setChatDensity, setChatTextSize, setTimestampsMode, setToolActivity],
   );
 
   const systemIsDark = systemScheme === "dark";
@@ -188,8 +353,40 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const tokens = useMemo(() => resolveTheme(themeId, isDark), [themeId, isDark]);
 
   const value = useMemo<ThemeContextValue>(
-    () => ({ tokens, themeId, mode, systemIsDark, setTheme, setMode, applyServerAppearance }),
-    [tokens, themeId, mode, systemIsDark, setTheme, setMode, applyServerAppearance],
+    () => ({
+      tokens,
+      themeId,
+      mode,
+      systemIsDark,
+      setTheme,
+      setMode,
+      chatDensity,
+      chatTextSize,
+      timestampsMode,
+      toolActivity,
+      setChatDensity,
+      setChatTextSize,
+      setTimestampsMode,
+      setToolActivity,
+      applyServerAppearance,
+    }),
+    [
+      tokens,
+      themeId,
+      mode,
+      systemIsDark,
+      setTheme,
+      setMode,
+      chatDensity,
+      chatTextSize,
+      timestampsMode,
+      toolActivity,
+      setChatDensity,
+      setChatTextSize,
+      setTimestampsMode,
+      setToolActivity,
+      applyServerAppearance,
+    ],
   );
 
   // Hold the tree (opacity handled by the root) until fonts are in — the
@@ -239,4 +436,20 @@ export function useTheme(): ThemeContextValue {
     throw new Error("useTheme must be used inside <ThemeProvider>");
   }
   return ctx;
+}
+
+/**
+ * R114-c — the transcript's chat-pref resolution (Wave 3 wires the
+ * rendering; the hook already resolves the SYNCED values with the server's
+ * defaults). One read, one shape — density, text size, timestamps, tool
+ * activity — straight off the appearance domain's live state.
+ */
+export function useChatPrefs(): {
+  chatDensity: ChatDensity;
+  chatTextSize: ChatTextSize;
+  timestampsMode: TimestampsMode;
+  toolActivity: ToolActivity;
+} {
+  const { chatDensity, chatTextSize, timestampsMode, toolActivity } = useTheme();
+  return { chatDensity, chatTextSize, timestampsMode, toolActivity };
 }

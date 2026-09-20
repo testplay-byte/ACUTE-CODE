@@ -1,11 +1,12 @@
-<!-- last-reviewed: 2026-09-19 round-109 -->
+<!-- last-reviewed: 2026-09-20 round-114 -->
 <!-- status: the MOBILE design-language contract — the owner's R109 direction:
      "a combination of Clay Studio, the 3D kind of vibe... some combination of
      liquid Chrome UI design style aesthetics with the borders and such. Don't
      go with too many shiny borders but give some borders some depth." This is
      the sibling of the desktop language (docs/design-language/) — same clay
      substrate, same rationed chrome, adapted to Android's material truths
-     (elevation, edge-to-edge, touch targets). -->
+     (elevation, edge-to-edge, touch targets). R114-c: the light whites cooled
+     one step and the TAB ROOTS went header-free (§5/§6). -->
 
 # DESIGN.md — the ACUTE companion's design language
 
@@ -61,11 +62,20 @@ carried over verbatim so both ends read as one household:
 
 | Token | Light | Dark |
 |---|---|---|
-| bg | `#F4EEE5` | `#26211C` |
-| card | `#FDFBF7` | `#2F2924` |
+| bg | `#F3F4F0` | `#26211C` |
+| card | `#FDFDFB` | `#2F2924` |
 | ink | `#2A2018` | `#F2EBE1` |
 | accent | `#C4653F` | `#D98A63` |
 | accent2 | `#8A6A55` | `#B09380` |
+
+(R114-c: the light whites cooled one step at the owner's ask — "a slightly
+ colder tone of white" — a whisper of warmth survives; the shadow ink
+ cooled a half-step with them so the cast never reads orange. Dark surfaces
+ untouched.) A second documented color family exists for DATA VIZ ONLY —
+ the chart palette in `tokens.ts` (`CHART_HUES`: terracotta input /
+ sage output / violet peak + six per-model rank hues, each with a dark
+ variant). Its hues ride bars, dots, and icon chips — never a resting
+ surface.
 
 The other five themes (Nova, Bento, Midnight, Sunset, Mono) survive as
 picker options, re-tuned to the same warm-shadow grammar. Indigo/blue stay
@@ -102,25 +112,39 @@ body text.
   `max(insets.bottom, 8)`, radius 28, elevation 2 clay shadow + chrome
   edge (§2.1). Content scrolls UNDER it (the screens own a bottom
   content inset of bar-height + margins).
-- **Headers**: large-title (display type) with a subtitle line, collapsing
-  to a compact title on scroll (later: pinned compact header). The
-  connection pill (§6) lives in the header's right slot on every tab.
+- **Headers** (R114-c — the space-honest phone): the FIVE tab roots are
+  HEADER-FREE (`chrome={false}` on the scaffold — the owner: "the live
+  status and the notification at the top are unnecessary; the
+  Dashboard/Approvals/Projects headings are not needed — free the space").
+  Content starts below the status-bar inset with breathing padding; the
+  screen's own content is its top. PUSHED screens (session, settings
+  subpages, connect flows) keep the compact header: back chevron,
+  centered title + optional caption, right slot, the connection pill.
 - **Touch targets**: ≥44px everything interactive; list rows ≥64px.
 - **Spacing**: 4/8/12/16/20/24/32 grid; screen gutters 16 (phones) →
   24 (≥768dp breakpoints via `useWindowDimensions`).
 - **Keyboard**: `react-native-keyboard-controller` — inputs never sit
   under the keyboard; the floating bar hides while the keyboard is up.
 
-## §6 The connection pill — status, always visible
+## §6 The connection truth — status without permanent clutter
 
-A small pill in every tab's header (and pushed screens' compact headers):
-- `connected` — accent dot (steady) + "live"
-- `probing` — accent dot pulsing + "connecting…"
-- `offline` — warm-warning dot + "offline" (tapping opens the connect hub)
-- `unpaired` — "link a device" chip (tapping → connect hub)
+R114-c: the always-on-every-screen pill is retired from the TAB ROOTS
+(the owner's "the live status… at the top are unnecessary"). The truth
+moved to where it matters:
 
-It is the owner's "it would not show me that it has disconnected" fix made
-structural: the truth is on screen, on every screen, at all times.
+- **Pushed screens** keep the compact header's connection pill (§5) —
+  `connected` accent dot + "live", `probing` pulsing + "connecting…",
+  `offline` warning + "offline", `unpaired` "link a device"; tap → the
+  connect hub.
+- **Home** carries the roots' honesty: a quiet inline banner card ONLY
+  while the link is offline/connecting ("Offline — messages will queue" /
+  "Connecting…", tap → the connect hub); NOTHING renders while live.
+- **Every other tab** relies on pull-to-refresh for staleness + the
+  reconnect-triggered reloads (the projects list refetches on hello).
+
+It is still the owner's "it would not show me that it has disconnected"
+fix made structural — the truth is reachable, without renting the top of
+every screen for it.
 
 ## §7 Motion & haptics
 

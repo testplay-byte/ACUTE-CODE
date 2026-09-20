@@ -56,19 +56,23 @@ export const THEMES: ThemeColors[] = [
     // ROUND-109: the Clay Studio substrate — THE mobile default. Palette
     // verbatim from the desktop's tokens §1b: warm sand neutrals, warm ink,
     // a muted terracotta accent (never a blue-black, never a cold gray).
+    // ROUND-114-c: the LIGHT whites cooled one step at the owner's ask ("a
+    // slightly colder tone of white") — bg #F4EEE5→#F3F4F0, card #FDFBF7→
+    // #FDFDFB — a whisper of warmth survives (never a flat gray); DARK
+    // surfaces stay as-is.
     id: "clay",
     name: "Clay Studio",
     accent: "#C4653F",
     accent2: "#8A6A55",
-    bgLight: "#F4EEE5",
+    bgLight: "#F3F4F0",
     bgDark: "#26211C",
-    cardLight: "#FDFBF7",
+    cardLight: "#FDFDFB",
     cardDark: "#2F2924",
     textLight: "#2A2018",
     textDark: "#F2EBE1",
     dot: "#C4653F",
     dotDark: "#D98A63",
-    paletteLight: ["#C4653F", "#8A6A55", "#F4EEE5", "#FDFBF7", "#2A2018"],
+    paletteLight: ["#C4653F", "#8A6A55", "#F3F4F0", "#FDFDFB", "#2A2018"],
     paletteDark: ["#D98A63", "#B09380", "#26211C", "#2F2924", "#F2EBE1"],
     selectedBg: "#C4653F",
     selectedText: "#FFFFFF",
@@ -317,9 +321,11 @@ export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
   const accent = isDark ? theme.accentDark ?? theme.accent : theme.accent;
   const card = isDark ? theme.cardDark : theme.cardLight;
   // The clay ink family: warm in light mode (ceramics cast warm shadows —
-  // rgba(42,32,24)), deepened toward black in dark mode. Theme-independent,
-  // mode-aware — exactly the desktop's R108-e recipes.
-  const inkWarm = isDark ? "rgba(0,0,0," : "rgba(42,32,24,";
+  // R114-c cools it a half-step to rgba(38,34,28) so the warm cast never
+  // reads ORANGE against the colder #F3F4F0 white; still warm family,
+  // never the forbidden cold blue-black), deepened toward black in dark
+  // mode. Theme-independent, mode-aware — the desktop's R108-e grammar.
+  const inkWarm = isDark ? "rgba(0,0,0," : "rgba(38,34,28,";
   return {
     theme,
     isDark,
@@ -367,6 +373,49 @@ export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
     warning: "#f59e0b",
     running: "#3b82f6",
   };
+}
+
+// ── the chart palette (R114-c: the color-coded dashboard) ─────────────────
+
+/**
+ * The fixed DATA-VIZ hue set — the dashboard's documented exception to
+ * "one accent per screen" (DESIGN.md's semantic-hue family, extended for
+ * charts). Muted, clay-compatible, NEVER neon; every hue carries a dark
+ * variant tuned for ~4.5:1-ish reads against #26211C. Color rides on BARS,
+ * DOTS, and ICON CHIPS only — resting surfaces stay card-colored.
+ */
+export interface ChartHue {
+  light: string;
+  dark: string;
+}
+
+export const CHART_HUES = {
+  /** Input tokens — the theme accent terracotta (the dominant mass). */
+  input: { light: "#C4653F", dark: "#D98A63" },
+  /** Output tokens — a cool sage teal, the in/out contrast hue. */
+  output: { light: "#6F9E90", dark: "#8FBFAD" },
+  /** The peak-day tile's violet-ish 4th stat hue. */
+  peak: { light: "#7C6A9E", dark: "#9C8CC2" },
+  /** Per-model leaderboard hues, assigned BY RANK (rank 0 = first). */
+  models: [
+    { light: "#C4653F", dark: "#D98A63" }, // 1 — terracotta
+    { light: "#6F9E90", dark: "#8FBFAD" }, // 2 — sage teal
+    { light: "#B08A3C", dark: "#C9A45C" }, // 3 — muted ochre
+    { light: "#6B7F9E", dark: "#8FA3C2" }, // 4 — slate
+    { light: "#8A6A8E", dark: "#A98FB0" }, // 5 — plum
+    { light: "#8A6A55", dark: "#B09380" }, // 6 — taupe (clay accent2)
+  ] as ReadonlyArray<ChartHue>,
+} as const;
+
+/** Resolve one chart hue against the mode (pure). */
+export function chartHue(hue: ChartHue, isDark: boolean): string {
+  return isDark ? hue.dark : hue.light;
+}
+
+/** The model leaderboard's rank hue (rank 0 = the busiest model). */
+export function modelHue(rank: number, isDark: boolean): string {
+  const hue = CHART_HUES.models[rank % CHART_HUES.models.length];
+  return isDark ? hue.dark : hue.light;
 }
 
 // ── the 8-pt spacing grid ───────────────────────────────────────────────────

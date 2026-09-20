@@ -1,7 +1,10 @@
 /**
- * appearance-sync.test.ts — the appearance domain's phone half (R113-e):
- * the wire pair (GET/PUT /api/v1/settings/appearance), the shape-checking
- * parser, THE ECHO GUARD (applying a server value never PUTs it back — the
+ * appearance-sync.test.ts — the appearance domain's phone half (R113-e;
+ * R114-c — extended to the FULL five-field shape: the four chat prefs ride
+ * the GET, the partial PUT, the echo guard, and the live frames): the wire
+ * pair (GET/PUT /api/v1/settings/appearance), the shape-checking parser
+ * (missing chat fields = server defaults; present-but-invalid = reject),
+ * THE ECHO GUARD (applying a server value never PUTs it back — the
  * loop-killer), the connection-gated optimistic write-through, and the live
  * leg (hydrate on connect + hello, apply settings/appearance frames as they
  * land off the events store).
@@ -21,7 +24,7 @@ import {
   type AppearanceControl,
   type AppearancePushTarget,
 } from "../appearance-sync";
-import { parseAppearanceValue } from "@/design/theme";
+import { CHAT_PREF_DEFAULTS, parseAppearanceValue } from "@/design/theme";
 import type { EventsFrame } from "../events";
 
 // ── fakes (injected, zero React Native at the transport) ────────────────────
@@ -107,9 +110,48 @@ afterEach(() => {
 
 describe("parseAppearanceValue", () => {
   it("accepts the six-id + three-mode vocabulary, null themeId included", () => {
-    expect(parseAppearanceValue({ themeId: "bento", mode: "dark" })).toEqual({ themeId: "bento", mode: "dark" });
-    expect(parseAppearanceValue({ themeId: null, mode: "system" })).toEqual({ themeId: null, mode: "system" });
-    expect(parseAppearanceValue({ themeId: "clay", mode: "light" })).toEqual({ themeId: "clay", mode: "light" });
+    expect(parseAppearanceValue({ themeId: "bento", mode: "dark" })).toEqual({
+      themeId: "bento",
+      mode: "dark",
+      ...CHAT_PREF_DEFAULTS,
+    });
+    expect(parseAppearanceValue({ themeId: null, mode: "system" })).toEqual({
+      themeId: null,
+      mode: "system",
+      ...CHAT_PREF_DEFAULTS,
+    });
+    expect(parseAppearanceValue({ themeId: "clay", mode: "light" })).toEqual({
+      themeId: "clay",
+      mode: "light",
+      ...CHAT_PREF_DEFAULTS,
+    });
+  });
+
+  it("R114-c: the four chat-pref fields ride when present", () => {
+    expect(
+      parseAppearanceValue({
+        themeId: "clay",
+        mode: "dark",
+        chatDensity: "compact",
+        chatTextSize: "large",
+        timestampsMode: "hidden",
+        toolActivity: "compact",
+      }),
+    ).toEqual({
+      themeId: "clay",
+      mode: "dark",
+      chatDensity: "compact",
+      chatTextSize: "large",
+      timestampsMode: "hidden",
+      toolActivity: "compact",
+    });
+  });
+
+  it("R114-c: a PRESENT-but-invalid chat field rejects the whole value — never a silent default", () => {
+    expect(parseAppearanceValue({ themeId: "clay", mode: "light", chatDensity: "cozy" })).toBeNull();
+    expect(parseAppearanceValue({ themeId: "clay", mode: "light", chatTextSize: "huge" })).toBeNull();
+    expect(parseAppearanceValue({ themeId: "clay", mode: "light", timestampsMode: "always" })).toBeNull();
+    expect(parseAppearanceValue({ themeId: "clay", mode: "light", toolActivity: "verbose" })).toBeNull();
   });
 
   it("rejects malformed values honestly — never a guess", () => {
@@ -152,18 +194,55 @@ describe("applyServerAppearanceValue", () => {
     setMode(mode: "system" | "light" | "dark"): void {
       log.push(`setMode:${mode}`);
     },
+    setChatDensity(density: "comfortable" | "compact"): void {
+      log.push(`setChatDensity:${density}`);
+    },
+    setChatTextSize(size: "small" | "medium" | "large"): void {
+      log.push(`setChatTextSize:${size}`);
+    },
+    setTimestampsMode(mode: "hidden" | "hover"): void {
+      log.push(`setTimestampsMode:${mode}`);
+    },
+    setToolActivity(activity: "detailed" | "compact" | "hidden"): void {
+      log.push(`setToolActivity:${activity}`);
+    },
   });
 
-  it("applies a valid server value through BOTH setters and reports true", () => {
+  it("applies a valid five-field server value through ALL SIX setters and reports true", () => {
     const log: string[] = [];
-    expect(applyServerAppearanceValue({ themeId: "midnight", mode: "light" }, control(log))).toBe(true);
-    expect(log).toEqual(["setTheme:midnight", "setMode:light"]);
+    expect(
+      applyServerAppearanceValue(
+        {
+          themeId: "midnight",
+          mode: "light",
+          chatDensity: "compact",
+          chatTextSize: "large",
+          timestampsMode: "hidden",
+          toolActivity: "compact",
+        },
+        control(log),
+      ),
+    ).toBe(true);
+    expect(log).toEqual([
+      "setTheme:midnight",
+      "setMode:light",
+      "setChatDensity:compact",
+      "setChatTextSize:large",
+      "setTimestampsMode:hidden",
+      "setToolActivity:compact",
+    ]);
   });
 
-  it("a null themeId applies ONLY the mode — the local flavor stands (the R113-a default)", () => {
+  it("a null themeId applies the mode + chat prefs — the local flavor stands (the R113-a default)", () => {
     const log: string[] = [];
     expect(applyServerAppearanceValue({ themeId: null, mode: "dark" }, control(log))).toBe(true);
-    expect(log).toEqual(["setMode:dark"]);
+    expect(log).toEqual([
+      "setMode:dark",
+      "setChatDensity:comfortable",
+      "setChatTextSize:medium",
+      "setTimestampsMode:hover",
+      "setToolActivity:detailed",
+    ]);
   });
 
   it("a malformed value touches NOTHING and reports false", () => {
@@ -176,6 +255,7 @@ describe("applyServerAppearanceValue", () => {
   it("the guard brackets the apply — false before and after, true while the setters run", () => {
     let seenDuringTheme: boolean | undefined;
     let seenDuringMode: boolean | undefined;
+    let seenDuringDensity: boolean | undefined;
     const probing: AppearanceControl = {
       setTheme(): void {
         seenDuringTheme = isApplyingRemoteAppearance();
@@ -183,12 +263,19 @@ describe("applyServerAppearanceValue", () => {
       setMode(): void {
         seenDuringMode = isApplyingRemoteAppearance();
       },
+      setChatDensity(): void {
+        seenDuringDensity = isApplyingRemoteAppearance();
+      },
+      setChatTextSize(): void {},
+      setTimestampsMode(): void {},
+      setToolActivity(): void {},
     };
     expect(isApplyingRemoteAppearance()).toBe(false);
-    expect(applyServerAppearanceValue({ themeId: "bento", mode: "system" }, probing)).toBe(true);
+    expect(applyServerAppearanceValue({ themeId: "bento", mode: "system", chatDensity: "compact" }, probing)).toBe(true);
     expect(isApplyingRemoteAppearance()).toBe(false);
     expect(seenDuringTheme).toBe(true);
     expect(seenDuringMode).toBe(true);
+    expect(seenDuringDensity).toBe(true);
   });
 });
 
@@ -203,6 +290,22 @@ describe("pushAppearancePatch — the optimistic write-through", () => {
     expect(manager.calls[0]?.init?.bodyText).toBe('{"themeId":"sunset"}');
   });
 
+  it("R114-c: a chat-pref flip PUTs its ONE-field partial patch", async () => {
+    const manager = makeManager();
+    pushAppearancePatch(manager, { chatTextSize: "large" });
+    await settle();
+    expect(manager.calls).toHaveLength(1);
+    expect(manager.calls[0]?.init?.method).toBe("PUT");
+    expect(manager.calls[0]?.init?.bodyText).toBe('{"chatTextSize":"large"}');
+  });
+
+  it("R114-c: several chat fields ride one partial patch, key order intact", async () => {
+    const manager = makeManager();
+    pushAppearancePatch(manager, { chatDensity: "compact", toolActivity: "hidden" });
+    await settle();
+    expect(manager.calls[0]?.init?.bodyText).toBe('{"chatDensity":"compact","toolActivity":"hidden"}');
+  });
+
   it("offline → the PUT is skipped (the local value is the offline fallback)", async () => {
     const manager = makeManager({ status: "offline" });
     pushAppearancePatch(manager, { mode: "dark" });
@@ -213,7 +316,8 @@ describe("pushAppearancePatch — the optimistic write-through", () => {
   it("THE ECHO PIN: applying a server value through the theme setters NEVER PUTs it back", async () => {
     const manager = makeManager();
     // The theme provider's setters push on every call — exactly what the
-    // real control does. The echo guard must swallow the write-through.
+    // real control does (all six fields). The echo guard must swallow every
+    // write-through.
     const control: AppearanceControl = {
       setTheme(themeId: string): void {
         pushAppearancePatch(manager, { themeId });
@@ -221,8 +325,25 @@ describe("pushAppearancePatch — the optimistic write-through", () => {
       setMode(mode: "system" | "light" | "dark"): void {
         pushAppearancePatch(manager, { mode });
       },
+      setChatDensity(chatDensity: "comfortable" | "compact"): void {
+        pushAppearancePatch(manager, { chatDensity });
+      },
+      setChatTextSize(chatTextSize: "small" | "medium" | "large"): void {
+        pushAppearancePatch(manager, { chatTextSize });
+      },
+      setTimestampsMode(timestampsMode: "hidden" | "hover"): void {
+        pushAppearancePatch(manager, { timestampsMode });
+      },
+      setToolActivity(toolActivity: "detailed" | "compact" | "hidden"): void {
+        pushAppearancePatch(manager, { toolActivity });
+      },
     };
-    expect(applyServerAppearanceValue({ themeId: "midnight", mode: "light" }, control)).toBe(true);
+    expect(
+      applyServerAppearanceValue(
+        { themeId: "midnight", mode: "light", chatDensity: "compact", chatTextSize: "large" },
+        control,
+      ),
+    ).toBe(true);
     await settle();
     expect(manager.calls).toHaveLength(0); // no PUT-back — no echo loop
   });
@@ -286,6 +407,45 @@ describe("startAppearanceSync — hydrate + live frames", () => {
     // frame applied WITHOUT its own fetch (the frame IS the value).
     expect(manager.calls).toHaveLength(1);
     expect(manager.calls[0]?.path).toBe("/api/v1/settings/appearance");
+    stop();
+  });
+
+  it("R114-c: a five-field appearance frame applies verbatim (the chat prefs ride the frame)", async () => {
+    const manager = makeManager({ status: "offline" });
+    const applied: unknown[] = [];
+    const frames = makeFrames();
+    const stop = startAppearanceSync(
+      (value) => {
+        applied.push(value);
+        return true;
+      },
+      { manager, events: frames },
+    );
+    await settle();
+
+    frames.emit({
+      type: "settings",
+      domain: "appearance",
+      value: {
+        themeId: "mono",
+        mode: "dark",
+        chatDensity: "compact",
+        chatTextSize: "large",
+        timestampsMode: "hidden",
+        toolActivity: "hidden",
+      },
+    });
+    expect(applied).toEqual([
+      {
+        themeId: "mono",
+        mode: "dark",
+        chatDensity: "compact",
+        chatTextSize: "large",
+        timestampsMode: "hidden",
+        toolActivity: "hidden",
+      },
+    ]);
+    expect(manager.calls).toHaveLength(0); // offline — the frame alone applied
     stop();
   });
 

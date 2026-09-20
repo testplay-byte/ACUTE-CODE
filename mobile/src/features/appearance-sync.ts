@@ -2,16 +2,24 @@
  * appearance-sync.ts — the appearance domain's server pair + the live-sync
  * leg (R113-e: "If I am on a specific settings page and I change the
  * settings from my Android device, then the settings do not appear to be
- * changing in live view [on the PC and vice versa]" — the phone's half).
+ * changing in live view [on the PC and vice versa]" — the phone's half;
+ * R114-c: extended to the domain's FULL five-field shape — chatDensity /
+ * chatTextSize / timestampsMode / toolActivity ride every GET, partial PUT,
+ * and live frame alongside themeId+mode).
  *
- * The server is the source of truth for appearance (R113-a's domain):
+ * The server is the source of truth for appearance (R113-a's domain;
+ * R114-b's four chat fields):
  *   GET /api/v1/settings/appearance → {themeId: one of the six ids | null,
- *       mode: system|light|dark} — null themeId = "no server preference",
- *       each client falls back to its LOCAL default
- *   PUT /api/v1/settings/appearance {themeId?, mode?} — a partial patch;
- *       every PUT broadcasts {"type":"settings","domain":"appearance"} on
- *       the events bus so the change lands live on every other device
- *       (INCLUDING the phone that made it — hence the echo guard below).
+ *       mode: system|light|dark, chatDensity: comfortable|compact,
+ *       chatTextSize: small|medium|large, timestampsMode: hidden|hover,
+ *       toolActivity: detailed|compact|hidden} — null themeId = "no server
+ *       preference", each client falls back to its LOCAL flavor; a missing
+ *       chat field parses as its server default
+ *   PUT /api/v1/settings/appearance {any subset of the five} — a partial
+ *       patch; every PUT broadcasts {"type":"settings","domain":
+ *       "appearance"} on the events bus so the change lands live on every
+ *       other device (INCLUDING the phone that made it — hence the echo
+ *       guard below).
  *
  * THE ECHO GUARD (the desktop theme-store's exact semantics, ported): while
  * a server-pushed/hydrated value is being applied through the theme setters,
@@ -46,7 +54,14 @@ import { apiJson, type ApiOutcome, type ApiSender } from "./api";
 // The theme module owns the appearance VALUE + its parser; this module never
 // imports it at eval-danger (theme's require of THIS module is lazy, so the
 // arrow is one-directional at load time: appearance-sync → design/theme).
-import { parseAppearanceValue, type AppearanceValue } from "@/design/theme";
+import {
+  parseAppearanceValue,
+  type AppearanceValue,
+  type ChatDensity,
+  type ChatTextSize,
+  type TimestampsMode,
+  type ToolActivity,
+} from "@/design/theme";
 import type { EventsFrame } from "./events";
 
 // ── the wire pair ───────────────────────────────────────────────────────────
@@ -57,13 +72,27 @@ export async function fetchAppearance(sender: ApiSender): Promise<ApiOutcome<App
 }
 
 /**
- * PUT /settings/appearance — a partial patch ({themeId?, mode?}; themeId may
- * be null to CLEAR the server preference). Returns the updated value; the
- * route validates and 400s naming the field.
+ * The PATCH SHAPE — any subset of the domain's five fields (R114-c: the
+ * four chat prefs join themeId/mode; every key is optional — the server's
+ * partial-PUT semantics, one field per control flip). themeId may be null
+ * to CLEAR the server preference.
+ */
+export type AppearancePatch = {
+  themeId?: string | null;
+  mode?: AppearanceValue["mode"];
+  chatDensity?: ChatDensity;
+  chatTextSize?: ChatTextSize;
+  timestampsMode?: TimestampsMode;
+  toolActivity?: ToolActivity;
+};
+
+/**
+ * PUT /settings/appearance — a partial patch (see AppearancePatch); returns
+ * the updated value; the route validates and 400s naming the field.
  */
 export async function putAppearance(
   sender: ApiSender,
-  patch: { themeId?: string | null; mode?: AppearanceValue["mode"] },
+  patch: AppearancePatch,
 ): Promise<ApiOutcome<AppearanceValue>> {
   return apiJson<AppearanceValue>(sender, "/settings/appearance", {
     method: "PUT",
@@ -87,10 +116,15 @@ export function isApplyingRemoteAppearance(): boolean {
   return applyingRemoteAppearance;
 }
 
-/** The theme control the provider injects (its own setTheme/setMode). */
+/** The theme control the provider injects (its own setters — all six of
+ * the domain's fields as of R114-c). */
 export interface AppearanceControl {
   setTheme(themeId: string): void;
   setMode(mode: AppearanceValue["mode"]): void;
+  setChatDensity(density: ChatDensity): void;
+  setChatTextSize(size: ChatTextSize): void;
+  setTimestampsMode(mode: TimestampsMode): void;
+  setToolActivity(activity: ToolActivity): void;
 }
 
 /**
@@ -99,7 +133,9 @@ export interface AppearanceControl {
  * Shape-checked via parseAppearanceValue (in design/theme.tsx — never a
  * guess); returns whether a valid value applied. themeId === null means
  * "no server preference" — the local flavor stands (the R113-a GET default),
- * so only the mode applies in that case.
+ * so only the mode + the four chat prefs apply in that case. A chat pref
+ * missing from the wire already parsed as its server default, so all five
+ * present keys ride through.
  */
 export function applyServerAppearanceValue(
   value: unknown,
@@ -111,6 +147,10 @@ export function applyServerAppearanceValue(
   try {
     if (parsed.themeId !== null) control.setTheme(parsed.themeId);
     control.setMode(parsed.mode);
+    control.setChatDensity(parsed.chatDensity);
+    control.setChatTextSize(parsed.chatTextSize);
+    control.setTimestampsMode(parsed.timestampsMode);
+    control.setToolActivity(parsed.toolActivity);
   } finally {
     applyingRemoteAppearance = false;
   }
@@ -135,7 +175,7 @@ export interface AppearancePushTarget extends ApiSender {
  */
 export function pushAppearancePatch(
   target: AppearancePushTarget,
-  patch: { themeId?: string | null; mode?: AppearanceValue["mode"] },
+  patch: AppearancePatch,
 ): void {
   if (applyingRemoteAppearance) return; // echo guard — see the doc above
   if (target.getStatus() !== "connected") return;

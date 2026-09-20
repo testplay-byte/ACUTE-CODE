@@ -1,7 +1,8 @@
 /**
- * Approvals v2 (R109-c; R113-e — the compact header) — THE killer feature
- * (ANDROID-R1 §4), a tab root in the clay language (the large title +
- * subtitle header tier died with R113-e — the rows are the screen's top).
+ * Approvals v2 (R109-c; R113-e — the compact header; R114-c — the
+ * header-free root) — THE killer feature
+ * (ANDROID-R1 §4), a tab root in the clay language (the header row died
+ * with R114-c — the rows are the screen's top).
  * Every permission gate the desktop agent hits lands here as the EXISTING
  * approval row (toolCall, category, risk line, session/project, expiry) —
  * one tap wakes the waiting tool call on the desktop. The phone renders +
@@ -163,7 +164,7 @@ export default function ApprovalsScreen() {
   );
 
   return (
-    <ScreenScaffold title="Approvals" refreshControl={refreshControl}>
+    <ScreenScaffold title="Approvals" refreshControl={refreshControl} chrome={false}>
       {status === "unpaired" ? (
         <ErrorState title="No host linked" caption="Pair this phone to see approvals." />
       ) : rows === null && !connected ? (

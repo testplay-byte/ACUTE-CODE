@@ -220,6 +220,29 @@ export function sessionStatusTone(
   }
 }
 
+/**
+ * R114-c — the HUMAN status label (the owner: "every session shows
+ * 'queued' — not good"). The wire's vocabulary is machine truth; the badge
+ * says what the OWNER means: a queued session is OPEN (waiting for a
+ * message, nothing queued behind anything), completed is DONE, cancelled
+ * STOPPED. running/failed already read honestly. Pure — every status row
+ * (the projects accordion, the session header) renders through this.
+ */
+export function sessionStatusLabel(status: SessionStatus): string {
+  switch (status) {
+    case "queued":
+      return "open";
+    case "running":
+      return "running";
+    case "completed":
+      return "done";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "stopped";
+  }
+}
+
 /** A turn is in flight on the desktop (the R44 status contract). */
 export function isTurnRunning(session: Pick<SessionRow, "status">): boolean {
   return session.status === "running";
@@ -1229,6 +1252,28 @@ export function countProjectSessions(
     stats[session.projectId] = cur;
   }
   return stats;
+}
+
+/**
+ * R114-c — the projects accordion's session fold: sessions grouped by
+ * projectId, the list's own order preserved (created_at DESC off the route,
+ * so each group is already most-recent-first). Project-less sessions are
+ * skipped. Pure — the memo in projects.tsx keys on the folded 200.
+ */
+export function groupProjectSessions(
+  sessions: SessionRow[],
+): Record<string, SessionRow[]> {
+  const groups: Record<string, SessionRow[]> = {};
+  for (const session of sessions) {
+    if (session.projectId === null) continue;
+    const cur = groups[session.projectId];
+    if (cur === undefined) {
+      groups[session.projectId] = [session];
+    } else {
+      cur.push(session);
+    }
+  }
+  return groups;
 }
 
 // ── the client (injectable sender) ─────────────────────────────────────────

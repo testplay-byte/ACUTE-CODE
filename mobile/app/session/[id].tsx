@@ -71,6 +71,7 @@ import {
   rebaseRemoteTurn,
   reduceRemoteTurnFrame,
   sessionStatusFromWire,
+  sessionStatusLabel,
   sessionTitle,
   type AttachmentView,
   type LiveTurn,
@@ -584,7 +585,11 @@ export default function SessionScreen() {
   return (
     <ScreenScaffold
       title={detail !== null ? sessionTitle(detail) : "Session"}
-      subtitle={detail !== null ? `${detail.status === "running" ? "a turn is live" : detail.status} · ${detail.mode}` : undefined}
+      subtitle={
+        detail !== null
+          ? `${detail.status === "running" ? "a turn is live" : sessionStatusLabel(detail.status)} · ${detail.mode}`
+          : undefined
+      }
       scroll={false}
       back
       bottomInset={0}
@@ -592,7 +597,9 @@ export default function SessionScreen() {
       right={
         detail !== null ? (
           <Badge tone={detail.status === "running" ? "running" : detail.status === "failed" ? "danger" : "neutral"}>
-            {detail.status === "running" ? "live" : detail.status === "queued" ? "open" : detail.status}
+            {/* R114-c — the HUMAN label (queued reads "open", completed
+                "done", cancelled "stopped"); running keeps its live word. */}
+            {detail.status === "running" ? "live" : sessionStatusLabel(detail.status)}
           </Badge>
         ) : null
       }
