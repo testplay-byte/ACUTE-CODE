@@ -81,6 +81,42 @@ export function parseJsonBody<T>(bodyText: string): T | null {
 }
 
 /**
+ * R114-f: the 204 twin — the routes that answer NO BODY (PUT
+ * /providers/:id/key, DELETE /models/:id, DELETE /providers/:id all send
+ * 204 with an empty payload). apiJson would read that empty string as
+ * BAD_JSON; here an EMPTY 2xx body IS the success value ({ok:true,
+ * data:null}). A non-empty body still parses honestly (never a fabricated
+ * value), and HTTP errors stay values exactly like apiJson.
+ */
+export async function apiJsonNoBody(
+  sender: ApiSender,
+  path: string,
+  init: ApiCallInit = {},
+): Promise<ApiOutcome<null>> {
+  const res = await sender.api(apiPath(path), init);
+  if (!res.ok) {
+    return { ok: false, error: parseApiError(res.status, res.bodyText) };
+  }
+  if (res.bodyText.trim() === "") {
+    return { ok: true, data: null };
+  }
+  const data = parseJsonBody<unknown>(res.bodyText);
+  if (data === null) {
+    return {
+      ok: false,
+      error: {
+        status: res.status,
+        code: "BAD_JSON",
+        message: "the host's response was not valid JSON",
+      },
+    };
+  }
+  // A JSON body on a no-content route is unexpected but not a failure —
+  // the write itself succeeded.
+  return { ok: true, data: null };
+}
+
+/**
  * The one client call every feature reuses: GET/POST + JSON in, typed
  * outcome out. HTTP errors → {ok:false,error}; a 2xx with a broken body →
  * {ok:false, BAD_JSON} (honest — never a fabricated value); transport

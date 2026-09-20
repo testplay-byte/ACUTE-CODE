@@ -1,18 +1,27 @@
 /**
- * The provider detail/editor — the owner's "configure the models and
- * providers" page: the identity card (name, kind, base URL) with a live
- * "Test connection", the EDIT form (name, base URL, enabled — PATCH with
- * the busy state and the honest failure caption), the API KEY section
- * (write-only: set a new key, NEVER a reveal — it lands in the desktop
- * keyring), and the MODELS list (the live catalog; each row expands into
- * its configured record with editable displayName / contextWindow /
- * hidden, saved via PATCH /models/:id).
+ * The provider detail — the phone's full Models & Providers replica (R114-f):
+ * the header card (name, kind/baseUrl, the live enabled toggle, rename via a
+ * small sheet, "Test connection"), the API KEY POOL (masked slots — add via
+ * the next-free-slot math, per-slot test with a busy→ok/fail verdict,
+ * per-slot remove with a confirm sheet; the key VALUE is never shown back —
+ * poolInfo's `abcd…wxyz` masking is the only read), and MODELS — THE SAVED
+ * ROWS ONLY (GET /providers/:id/models-config, the DB truth the owner asked
+ * for — never the live catalog): each row's capability chips (vision/
+ * thinking/hidden) and a tap → the model actions sheet (test / edit / hide /
+ * delete), plus the add-model flow (from the live catalog with static-catalog
+ * prefill, or custom). Server validation surfaces inline everywhere.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, RefreshControl, StyleSheet, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { ChevronDown, ChevronUp, FlaskConical } from "lucide-react-native";
+import {
+  Brain,
+  Eye,
+  FlaskConical,
+  KeyRound,
+  Plus,
+} from "lucide-react-native";
 import Animated, {
   interpolateColor,
   useAnimatedStyle,
@@ -20,7 +29,8 @@ import Animated, {
   withSpring,
 } from "react-native-reanimated";
 import { ScreenScaffold } from "@/components/screen-scaffold";
-import { ErrorState, LoadingState } from "@/components/list-state";
+import { Sheet } from "@/components/sheet";
+import { ErrorState, LoadingState, SkeletonList } from "@/components/list-state";
 import {
   Badge,
   ChromeButton,
@@ -38,19 +48,41 @@ import {
 import { useTheme } from "@/design/theme";
 import { spacing } from "@/design/tokens";
 import { SPRING } from "@/design/motion";
-import { warningHaptic } from "@/design/haptics";
+import { selectionHaptic, successHaptic, warningHaptic } from "@/design/haptics";
 import {
-  fetchConfiguredModels,
+  addProviderModel,
+  catalogEntriesFromStatic,
+  catalogPrefillFor,
+  cleanModelName,
+  deleteModel,
+  deleteProviderKeySlot,
+  fetchModelCatalog,
+  fetchProviderKeys,
   fetchProviderModels,
+  fetchProviderModelsConfig,
   fetchProviders,
+  modelAddBody,
+  modelCapabilityChips,
+  modelDraftFromRecord,
+  modelEditBody,
+  nextFreeKeySlot,
+  parseModelNumericField,
+  putProviderKeySlot,
+  searchCatalogEntries,
   setProviderKey,
+  testModel,
   testProvider,
   updateModel,
   updateProvider,
+  type CatalogModelEntry,
+  type ModelFormDraft,
   type ModelRecord,
   type ModelSummary,
+  type ModelTestResult,
+  type ProviderKeySlot,
   type ProviderRow,
 } from "@/features/config";
+import { useEventsEpoch } from "@/features/events";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import { mobLog, mobWarn } from "@/lib/log";
@@ -61,94 +93,105 @@ interface ActionNote {
   text: string;
 }
 
-/** The editable subset of a configured model record. */
-interface ModelDraft {
-  displayName: string;
-  contextWindow: string;
-  hidden: boolean;
-}
-
 export default function ProviderDetailScreen() {
   const { tokens } = useTheme();
   const router = useRouter();
   const { status } = useLink();
   const connected = status === "connected";
   const { id } = useLocalSearchParams<{ id: string }>();
+  const providerId = typeof id === "string" ? id : null;
 
   const [provider, setProvider] = useState<ProviderRow | null>(null);
+  const [keys, setKeys] = useState<ProviderKeySlot[] | null>(null);
+  const [models, setModels] = useState<ModelRecord[] | null>(null);
   const [notFound, setNotFound] = useState(false);
-  const [models, setModels] = useState<ModelSummary[] | null>(null);
-  const [modelsCached, setModelsCached] = useState(false);
-  const [configured, setConfigured] = useState<ModelRecord[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // The edit form (hydrated once, on the first provider read).
-  const formHydrated = useRef(false);
-  const [editName, setEditName] = useState("");
-  const [editBaseUrl, setEditBaseUrl] = useState("");
-  const [editEnabled, setEditEnabled] = useState(true);
-  const [savingEdit, setSavingEdit] = useState(false);
-  const [editNote, setEditNote] = useState<ActionNote | null>(null);
-
-  // The API key (write-only, never a reveal).
-  const [keyInput, setKeyInput] = useState("");
-  const [settingKey, setSettingKey] = useState(false);
-  const [keyNote, setKeyNote] = useState<ActionNote | null>(null);
-
-  // The test connection line.
+  // The header actions: enabled toggle, rename sheet, provider test.
+  const [togglingEnabled, setTogglingEnabled] = useState(false);
+  const [enabledNote, setEnabledNote] = useState<ActionNote | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testNote, setTestNote] = useState<ActionNote | null>(null);
 
-  // The models section: one expanded row, per-model drafts, one save note.
-  const [expandedModelId, setExpandedModelId] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, ModelDraft>>({});
-  const [savingModelId, setSavingModelId] = useState<string | null>(null);
-  const [modelNote, setModelNote] = useState<{ modelId: string } & ActionNote | null>(null);
+  // The key pool: add (auto slot / primary replace), remove, per-slot test.
+  const [addKeyOpen, setAddKeyOpen] = useState(false);
+  const [addKeyReplacePrimary, setAddKeyReplacePrimary] = useState(false);
+  const [removeKeySlot, setRemoveKeySlot] = useState<number | null>(null);
+  const [slotTestBusy, setSlotTestBusy] = useState<number | null>(null);
+  const [slotTestNote, setSlotTestNote] = useState<({ slot: number } & ActionNote) | null>(null);
+
+  // The models: actions sheet (by row id — re-derived off the fresh list so
+  // hide/delete update it live), edit sheet, add sheet.
+  const [actionsModelId, setActionsModelId] = useState<string | null>(null);
+  const [editModelId, setEditModelId] = useState<string | null>(null);
+  const [addModelOpen, setAddModelOpen] = useState(false);
+
+  // R113-e: the live settings epoch — another device's writes (or our own
+  // writes broadcast back) reload the truth while this screen is open.
+  const settingsEpoch = useEventsEpoch("settings");
+  const mountEpoch = useRef(settingsEpoch);
+
+  const refreshProvider = useCallback(async () => {
+    if (providerId === null) return;
+    const outcome = await fetchProviders(getLinkManager());
+    if (outcome.ok) {
+      const row = outcome.data.providers.find((p) => p.id === providerId) ?? null;
+      setProvider(row);
+      setNotFound(row === null);
+    }
+  }, [providerId]);
+
+  const refreshKeys = useCallback(async () => {
+    if (providerId === null) return;
+    const outcome = await fetchProviderKeys(getLinkManager(), providerId);
+    if (outcome.ok) setKeys(outcome.data.keys);
+  }, [providerId]);
+
+  const refreshModels = useCallback(async () => {
+    if (providerId === null) return;
+    const outcome = await fetchProviderModelsConfig(getLinkManager(), providerId);
+    if (outcome.ok) setModels(outcome.data.models);
+  }, [providerId]);
 
   const load = useCallback(async () => {
-    if (!connected || typeof id !== "string") return;
+    if (!connected || providerId === null) return;
     setLoading(true);
     const sender = getLinkManager();
     try {
-      const [providersOutcome, modelsOutcome, configuredOutcome] = await Promise.all([
+      const [providersOutcome, keysOutcome, modelsOutcome] = await Promise.all([
         fetchProviders(sender),
-        fetchProviderModels(sender, id),
-        fetchConfiguredModels(sender),
+        fetchProviderKeys(sender, providerId),
+        fetchProviderModelsConfig(sender, providerId),
       ]);
       let firstError: string | null = null;
       if (providersOutcome.ok) {
-        const row = providersOutcome.data.providers.find((p) => p.id === id) ?? null;
+        const row = providersOutcome.data.providers.find((p) => p.id === providerId) ?? null;
         setProvider(row);
         setNotFound(row === null);
-        if (row !== null && !formHydrated.current) {
-          formHydrated.current = true;
-          setEditName(row.name);
-          setEditBaseUrl(row.baseUrl);
-          setEditEnabled(row.enabled);
-        }
       } else {
         firstError = `providers: ${providersOutcome.error.message}`;
       }
+      if (keysOutcome.ok) {
+        setKeys(keysOutcome.data.keys);
+      } else {
+        firstError = firstError ?? `keys: ${keysOutcome.error.message}`;
+      }
       if (modelsOutcome.ok) {
         setModels(modelsOutcome.data.models);
-        setModelsCached(modelsOutcome.data.cached);
       } else {
         firstError = firstError ?? `models: ${modelsOutcome.error.message}`;
       }
-      if (configuredOutcome.ok) {
-        setConfigured(configuredOutcome.data.models);
-      } else {
-        firstError = firstError ?? `configured models: ${configuredOutcome.error.message}`;
-      }
       setLoadError(firstError);
       if (firstError !== null) {
-        mobWarn("config", "provider detail load partially failed", { id, firstError });
+        mobWarn("config", "provider detail load partially failed", { id: providerId, firstError });
         warningHaptic();
       } else {
         mobLog("config", "provider detail loaded", {
-          id,
+          id: providerId,
+          keys: keysOutcome.ok ? keysOutcome.data.keys.length : -1,
           models: modelsOutcome.ok ? modelsOutcome.data.models.length : -1,
         });
       }
@@ -160,11 +203,19 @@ export default function ProviderDetailScreen() {
     } finally {
       setLoading(false);
     }
-  }, [connected, id]);
+  }, [connected, providerId]);
 
   useEffect(() => {
     if (connected) void load();
   }, [connected, load]);
+
+  // The live refetch — the settings world changed after mount (our own
+  // writes land here too through the events bus; the explicit refreshes
+  // below are the fast path, this is the backstop).
+  useEffect(() => {
+    if (settingsEpoch === mountEpoch.current) return;
+    if (connected) void load();
+  }, [settingsEpoch, connected, load]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -172,41 +223,20 @@ export default function ProviderDetailScreen() {
     setRefreshing(false);
   }, [load]);
 
-  // The configured records for THIS provider, keyed by modelId.
-  const configuredByModelId = useMemo(() => {
-    const map = new Map<string, ModelRecord>();
-    if (configured !== null && typeof id === "string") {
-      for (const record of configured) {
-        if (record.providerId === id) map.set(record.modelId, record);
-      }
-    }
-    return map;
-  }, [configured, id]);
+  // ── header actions ────────────────────────────────────────────────────────
 
-  // ── the edit form save ───────────────────────────────────────────────────
-  async function saveEdit(): Promise<void> {
-    if (provider === null) return;
-    const name = editName.trim();
-    const baseUrl = editBaseUrl.trim();
-    if (name === "") {
-      setEditNote({ kind: "error", text: "name cannot be empty" });
-      return;
-    }
-    setSavingEdit(true);
-    setEditNote(null);
+  async function toggleEnabled(next: boolean): Promise<void> {
+    if (provider === null || togglingEnabled) return;
+    setTogglingEnabled(true);
+    setEnabledNote(null);
     try {
-      const outcome = await updateProvider(getLinkManager(), provider.id, {
-        name,
-        baseUrl,
-        enabled: editEnabled,
-      });
+      const outcome = await updateProvider(getLinkManager(), provider.id, { enabled: next });
       if (outcome.ok) {
         setProvider(outcome.data);
-        setEditNote({ kind: "saved", text: "saved on the desktop" });
-        mobLog("config", "provider updated", { id: provider.id });
+        mobLog("config", "provider enabled toggled", { id: provider.id, enabled: next });
       } else {
-        setEditNote({ kind: "error", text: outcome.error.message });
-        mobWarn("config", "provider PATCH failed", {
+        setEnabledNote({ kind: "error", text: outcome.error.message });
+        mobWarn("config", "provider enabled PATCH failed", {
           id: provider.id,
           status: outcome.error.status,
           message: outcome.error.message,
@@ -214,54 +244,15 @@ export default function ProviderDetailScreen() {
         warningHaptic();
       }
     } catch (err) {
-      setEditNote({ kind: "error", text: "the host dropped while saving — nothing was changed" });
-      mobWarn("config", "provider PATCH transport failure", {
+      setEnabledNote({ kind: "error", text: "the host dropped while saving — nothing was changed" });
+      mobWarn("config", "provider enabled PATCH transport failure", {
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      setSavingEdit(false);
+      setTogglingEnabled(false);
     }
   }
 
-  // ── the API key (write-only) ─────────────────────────────────────────────
-  async function saveKey(): Promise<void> {
-    if (provider === null) return;
-    const value = keyInput.trim();
-    if (value === "") return;
-    setSettingKey(true);
-    setKeyNote(null);
-    try {
-      const outcome = await setProviderKey(getLinkManager(), provider.id, value);
-      if (outcome.ok) {
-        setKeyInput("");
-        setKeyNote({ kind: "saved", text: "key set — stored in the desktop keyring" });
-        mobLog("config", "provider key set", { id: provider.id });
-        // The hasKey/keyCount line is the desktop's truth — re-read it.
-        const refreshed = await fetchProviders(getLinkManager());
-        if (refreshed.ok) {
-          const row = refreshed.data.providers.find((p) => p.id === provider.id);
-          if (row !== undefined) setProvider(row);
-        }
-      } else {
-        setKeyNote({ kind: "error", text: outcome.error.message });
-        mobWarn("config", "provider key PUT failed", {
-          id: provider.id,
-          status: outcome.error.status,
-          message: outcome.error.message,
-        });
-        warningHaptic();
-      }
-    } catch (err) {
-      setKeyNote({ kind: "error", text: "the host dropped while setting the key — try again" });
-      mobWarn("config", "provider key PUT transport failure", {
-        message: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      setSettingKey(false);
-    }
-  }
-
-  // ── the test connection ──────────────────────────────────────────────────
   async function runTest(): Promise<void> {
     if (provider === null) return;
     setTesting(true);
@@ -295,92 +286,79 @@ export default function ProviderDetailScreen() {
     }
   }
 
-  // ── the models section ───────────────────────────────────────────────────
-  function toggleModel(model: ModelSummary): void {
-    if (expandedModelId === model.id) {
-      setExpandedModelId(null);
-      return;
-    }
-    const record = configuredByModelId.get(model.id) ?? null;
-    setDrafts((prev) => ({
-      ...prev,
-      [model.id]: {
-        displayName: record?.displayName ?? "",
-        contextWindow:
-          record?.contextWindow !== null && record?.contextWindow !== undefined
-            ? String(record.contextWindow)
-            : "",
-        hidden: record?.hidden ?? false,
-      },
-    }));
-    setExpandedModelId(model.id);
-    setModelNote(null);
-  }
+  // ── the key pool actions ──────────────────────────────────────────────────
 
-  function patchDraft(modelId: string, patch: Partial<ModelDraft>): void {
-    setDrafts((prev) => {
-      const current = prev[modelId];
-      if (current === undefined) return prev;
-      return { ...prev, [modelId]: { ...current, ...patch } };
-    });
-  }
-
-  async function saveModel(model: ModelSummary): Promise<void> {
-    const draft = drafts[model.id];
-    const record = configuredByModelId.get(model.id);
-    if (draft === undefined || record === undefined) return;
-    const trimmedWindow = draft.contextWindow.trim();
-    const contextWindow = trimmedWindow === "" ? null : Number(trimmedWindow);
-    if (
-      contextWindow !== null &&
-      (!Number.isFinite(contextWindow) || !Number.isInteger(contextWindow) || contextWindow <= 0)
-    ) {
-      setModelNote({
-        modelId: model.id,
-        kind: "error",
-        text: "context window must be a whole number of tokens (or blank for unknown)",
-      });
-      return;
-    }
-    setSavingModelId(model.id);
-    setModelNote(null);
+  async function testSlot(slot: number): Promise<void> {
+    if (providerId === null || slotTestBusy !== null) return;
+    setSlotTestBusy(slot);
+    setSlotTestNote(null);
     try {
-      const displayName = draft.displayName.trim();
-      const body: { displayName?: string; contextWindow?: number | null; hidden?: boolean } = {
-        hidden: draft.hidden,
-      };
-      if (displayName !== "") body.displayName = displayName;
-      // Null (blank) clears to unknown — the desktop's PATCH contract.
-      body.contextWindow = contextWindow;
-      const outcome = await updateModel(getLinkManager(), record.id, body);
+      const outcome = await testProvider(getLinkManager(), providerId, { slot });
       if (outcome.ok) {
-        setModelNote({ modelId: model.id, kind: "saved", text: "saved on the desktop" });
-        mobLog("config", "model record updated", { id: record.id, modelId: model.id });
-        // Keep the configured list honest with what the desktop now holds.
-        const refreshed = await fetchConfiguredModels(getLinkManager());
-        if (refreshed.ok) setConfigured(refreshed.data.models);
+        const { ok, latencyMs, message } = outcome.data;
+        setSlotTestNote({
+          slot,
+          kind: ok ? "saved" : "error",
+          text: ok
+            ? `ok · ${latencyMs !== undefined ? `${latencyMs}ms` : "answered"}`
+            : `failed — ${message ?? "the provider refused"}`,
+        });
+        mobLog("config", "provider slot tested", { id: providerId, slot, ok, latencyMs });
       } else {
-        setModelNote({ modelId: model.id, kind: "error", text: outcome.error.message });
-        mobWarn("config", "model PATCH failed", {
-          id: record.id,
+        setSlotTestNote({ slot, kind: "error", text: outcome.error.message });
+        mobWarn("config", "provider slot test failed", {
+          id: providerId,
+          slot,
           status: outcome.error.status,
           message: outcome.error.message,
         });
-        warningHaptic();
       }
     } catch (err) {
-      setModelNote({
-        modelId: model.id,
+      setSlotTestNote({
+        slot,
         kind: "error",
-        text: "the host dropped while saving — the record is unchanged",
+        text: "the host dropped during the test",
       });
-      mobWarn("config", "model PATCH transport failure", {
+      mobWarn("config", "provider slot test transport failure", {
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      setSavingModelId(null);
+      setSlotTestBusy(null);
     }
   }
+
+  function openAddKey(replacePrimary: boolean): void {
+    void selectionHaptic();
+    setAddKeyReplacePrimary(replacePrimary);
+    setAddKeyOpen(true);
+  }
+
+  // ── the model sheets' plumbing (sheets own their busy/error states) ───────
+
+  const actionsModel = useMemo(
+    () => (models ?? []).find((m) => m.id === actionsModelId) ?? null,
+    [models, actionsModelId],
+  );
+  const editModel = useMemo(
+    () => (models ?? []).find((m) => m.id === editModelId) ?? null,
+    [models, editModelId],
+  );
+  const savedModelIds = useMemo(() => new Set((models ?? []).map((m) => m.modelId)), [models]);
+
+  function openModelActions(model: ModelRecord): void {
+    void selectionHaptic();
+    setActionsModelId(model.id);
+  }
+
+  function openModelEdit(model: ModelRecord): void {
+    setActionsModelId(null);
+    setEditModelId(model.id);
+  }
+
+  const openAddModel = useCallback(() => {
+    void selectionHaptic();
+    setAddModelOpen(true);
+  }, []);
 
   return (
     <ScreenScaffold
@@ -402,7 +380,7 @@ export default function ProviderDetailScreen() {
       {!connected ? (
         <HostGate status={status} />
       ) : loading && provider === null && !notFound ? (
-        <LoadingState caption="loading the provider…" />
+        <SkeletonList rows={4} rowHeight={76} />
       ) : notFound ? (
         <ErrorState
           title="provider not found"
@@ -419,7 +397,7 @@ export default function ProviderDetailScreen() {
         />
       ) : provider !== null ? (
         <>
-          {/* ── the identity card + the live test ── */}
+          {/* ── the header card: identity, enabled, rename, live test ── */}
           <ClayCard elevated>
             <View style={styles.identityPad}>
               <View style={styles.identityHead}>
@@ -427,7 +405,7 @@ export default function ProviderDetailScreen() {
                   <FlaskConical size={22} color={tokens.accent} strokeWidth={2.2} />
                 </View>
                 <View style={styles.identityText}>
-                  <TypeBodyStrong>{provider.name}</TypeBodyStrong>
+                  <TypeBodyStrong numberOfLines={1}>{provider.name}</TypeBodyStrong>
                   <TypeMono numberOfLines={1} style={styles.identityMono}>
                     {provider.baseUrl}
                   </TypeMono>
@@ -435,226 +413,169 @@ export default function ProviderDetailScreen() {
                     {provider.apiFormat !== undefined && provider.apiFormat !== ""
                       ? `${provider.kind} · ${provider.apiFormat}`
                       : provider.kind}
-                    {provider.hasKey
-                      ? provider.keyCount > 1
-                        ? ` · key set (${provider.keyCount} pooled)`
-                        : " · key set"
+                    {provider.keyCount > 0
+                      ? ` · ${provider.keyCount} key${provider.keyCount === 1 ? "" : "s"}`
                       : " · no key yet"}
                   </TypeMicro>
                 </View>
-                <Badge tone={provider.enabled ? "success" : "neutral"}>
-                  {provider.enabled ? "enabled" : "off"}
-                </Badge>
-              </View>
-              <View style={styles.identityActions}>
-                <QuietButton onPress={() => void runTest()} disabled={testing}>
-                  {testing ? "testing…" : "Test connection"}
-                </QuietButton>
-                {testNote !== null ? (
-                  <View style={styles.noteRow}>
-                    <StatusDot color={testNote.kind === "error" ? tokens.danger : tokens.success} />
-                    <TypeCaption
-                      style={[
-                        styles.noteText,
-                        { color: testNote.kind === "error" ? tokens.danger : tokens.success },
-                      ]}
-                      numberOfLines={3}
-                    >
-                      {testNote.text}
-                    </TypeCaption>
-                  </View>
-                ) : null}
-              </View>
-            </View>
-          </ClayCard>
-
-          {/* ── the edit form ── */}
-          <SectionHeader>Edit</SectionHeader>
-          <ClayCard>
-            <View style={styles.formPad}>
-              <ClayInput
-                label="Name"
-                value={editName}
-                onChangeText={setEditName}
-                autoCapitalize="none"
-                autoCorrect={false}
-                accessibilityLabel="Provider name"
-              />
-              <ClayInput
-                label="Base URL"
-                mono
-                value={editBaseUrl}
-                onChangeText={setEditBaseUrl}
-                autoCapitalize="none"
-                autoCorrect={false}
-                inputMode="url"
-                accessibilityLabel="Provider base URL"
-                caption="the http(s) endpoint the desktop calls"
-              />
-              <View style={styles.toggleRow}>
-                <View style={styles.rowText}>
-                  <TypeBodyStrong>Enabled</TypeBodyStrong>
-                  <TypeCaption>disabled providers are skipped entirely</TypeCaption>
+                <View style={styles.identityToggleWrap}>
+                  <ClaySwitch
+                    value={provider.enabled}
+                    onValueChange={(next) => void toggleEnabled(next)}
+                    disabled={togglingEnabled}
+                    label="Provider enabled toggle"
+                  />
                 </View>
-                <ClaySwitch
-                  value={editEnabled}
-                  onValueChange={setEditEnabled}
-                  label="Provider enabled toggle"
-                />
               </View>
-              <ChromeButton
-                onPress={() => void saveEdit()}
-                busy={savingEdit}
-                accessibilityLabel="Save provider changes"
-              >
-                Save changes
-              </ChromeButton>
-              {editNote !== null ? <NoteLine note={editNote} /> : null}
+              {enabledNote !== null ? <NoteLine note={enabledNote} /> : null}
+              <View style={styles.identityActions}>
+                <View style={styles.identityButtons}>
+                  <QuietButton
+                    onPress={() => setRenameOpen(true)}
+                    textStyle={styles.actionButtonText}
+                  >
+                    Rename
+                  </QuietButton>
+                  <QuietButton
+                    onPress={() => void runTest()}
+                    disabled={testing}
+                    textStyle={styles.actionButtonText}
+                  >
+                    {testing ? "testing…" : "Test connection"}
+                  </QuietButton>
+                </View>
+                {testNote !== null ? <NoteLine note={testNote} /> : null}
+              </View>
             </View>
           </ClayCard>
 
-          {/* ── the API key (write-only — never a reveal) ── */}
-          <SectionHeader>API key</SectionHeader>
-          <ClayCard>
-            <View style={styles.formPad}>
-              <ClayInput
-                label="New API key"
-                mono
-                value={keyInput}
-                onChangeText={setKeyInput}
-                autoCapitalize="none"
-                autoCorrect={false}
-                secureTextEntry
-                accessibilityLabel="New API key"
-                caption="write-only from this phone — the value lands in the desktop's keyring and is never shown back"
-              />
-              <ChromeButton
-                onPress={() => void saveKey()}
-                busy={settingKey}
-                disabled={keyInput.trim() === ""}
-                accessibilityLabel="Set the API key"
-              >
-                Set key
-              </ChromeButton>
-              {keyNote !== null ? <NoteLine note={keyNote} /> : null}
-            </View>
-          </ClayCard>
+          {/* ── the API key pool (masked — the value never comes back) ── */}
+          <SectionHeader>API keys</SectionHeader>
+          {keys === null ? (
+            <SkeletonList rows={2} rowHeight={64} />
+          ) : (
+            <ClayCard>
+              <View style={styles.poolPad}>
+                {keys.map((slot, index) => {
+                  const note =
+                    slotTestNote !== null && slotTestNote.slot === slot.slot ? slotTestNote : null;
+                  const busy = slotTestBusy === slot.slot;
+                  return (
+                    <View key={slot.slot}>
+                      {index > 0 ? <View style={[styles.poolRule, { borderBottomColor: tokens.borderSubtle }]} /> : null}
+                      <View style={styles.slotRow}>
+                        <View style={[styles.slotIcon, { backgroundColor: tokens.subtleHover }]}>
+                          <KeyRound
+                            size={16}
+                            color={slot.hasKey ? tokens.accent : tokens.textTertiary}
+                            strokeWidth={2.2}
+                          />
+                        </View>
+                        <View style={styles.slotText}>
+                          <View style={styles.slotTitleLine}>
+                            <TypeBodyStrong style={styles.slotTitle}>
+                              {slot.slot === 0 ? "Primary key" : `Key ${slot.slot}`}
+                            </TypeBodyStrong>
+                            {!slot.hasKey ? <Badge tone="neutral">empty</Badge> : null}
+                          </View>
+                          <TypeMono numberOfLines={1} style={styles.slotMasked}>
+                            {slot.hasKey ? (slot.masked ?? "••••••••") : "—"}
+                          </TypeMono>
+                          {note !== null ? <NoteLine note={note} /> : null}
+                        </View>
+                        {slot.hasKey ? (
+                          <View style={styles.slotActions}>
+                            <QuietButton
+                              onPress={() => void testSlot(slot.slot)}
+                              disabled={busy}
+                              textStyle={styles.actionButtonText}
+                              style={styles.slotActionButton}
+                            >
+                              {busy ? "…" : "Test"}
+                            </QuietButton>
+                            {slot.slot === 0 ? (
+                              <QuietButton
+                                onPress={() => openAddKey(true)}
+                                textStyle={styles.actionButtonText}
+                                style={styles.slotActionButton}
+                              >
+                                Replace
+                              </QuietButton>
+                            ) : (
+                              <QuietButton
+                                tone="danger"
+                                onPress={() => setRemoveKeySlot(slot.slot)}
+                                textStyle={styles.actionButtonText}
+                                style={styles.slotActionButton}
+                              >
+                                Remove
+                              </QuietButton>
+                            )}
+                          </View>
+                        ) : null}
+                      </View>
+                    </View>
+                  );
+                })}
+                <View style={[styles.poolRule, { borderBottomColor: tokens.borderSubtle }]} />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Add an API key"
+                  onPress={() => openAddKey(false)}
+                  style={({ pressed }) => [
+                    styles.addKeyRow,
+                    { backgroundColor: pressed ? tokens.subtle : "transparent" },
+                  ]}
+                >
+                  <View style={[styles.addRowIcon, { backgroundColor: tokens.subtleHover }]}>
+                    <Plus size={16} color={tokens.accent} strokeWidth={2.2} />
+                  </View>
+                  <View style={styles.addRowText}>
+                    <TypeBodyStrong numberOfLines={1}>Add a key</TypeBodyStrong>
+                    <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+                      pasted once, masked forever — the value never returns to this phone
+                    </TypeMicro>
+                  </View>
+                </Pressable>
+              </View>
+            </ClayCard>
+          )}
 
-          {/* ── the models ── */}
+          {/* ── the models — THE SAVED ROWS ONLY (models-config, the DB
+                  truth — never the live catalog the old screen listed). */}
           <SectionHeader>
             {`Models${models !== null ? ` (${models.length})` : ""}`}
           </SectionHeader>
           {models === null ? (
-            <LoadingState caption="loading the provider's models…" />
+            <SkeletonList rows={3} rowHeight={68} />
           ) : models.length === 0 ? (
             <ClayCard>
               <View style={styles.emptyPad}>
                 <TypeCaption>
-                  the catalog is empty — the desktop could not list models from this provider
-                  {loadError !== null ? ` (${loadError})` : ""}
+                  no models saved yet — add one from the catalog or a custom id.
                 </TypeCaption>
               </View>
             </ClayCard>
           ) : (
-            <ClayCard>
-              <View style={styles.modelsPad}>
-                <TypeMicro>
-                  {modelsCached ? "CACHED CATALOG — PULL TO REFRESH" : "LIVE CATALOG FROM THE PROVIDER"}
-                </TypeMicro>
-                {models.map((model) => {
-                  const record = configuredByModelId.get(model.id) ?? null;
-                  const expanded = expandedModelId === model.id;
-                  const draft = drafts[model.id];
-                  const note = modelNote !== null && modelNote.modelId === model.id ? modelNote : null;
-                  return (
-                    <View key={model.id} style={styles.modelBlock}>
-                      <PressableCard
-                        onPress={() => toggleModel(model)}
-                        accessibilityLabel={`Model ${model.name}${record !== null ? ", configured" : ", not configured"}`}
-                      >
-                        <View style={styles.modelRowInner}>
-                          <View style={styles.rowText}>
-                            <View style={styles.rowTitleLine}>
-                              <TypeBodyStrong numberOfLines={1} style={styles.rowTitle}>
-                                {model.name}
-                              </TypeBodyStrong>
-                              {model.reasoningSupport === true ? (
-                                <Badge tone="accent">reasoning</Badge>
-                              ) : null}
-                              {record !== null && record.hidden ? (
-                                <Badge tone="neutral">hidden</Badge>
-                              ) : null}
-                            </View>
-                            <TypeMono numberOfLines={1} style={styles.modelIdMono}>
-                              {model.id}
-                            </TypeMono>
-                          </View>
-                          {expanded ? (
-                            <ChevronUp size={18} color={tokens.textTertiary} strokeWidth={2.2} />
-                          ) : (
-                            <ChevronDown size={18} color={tokens.textTertiary} strokeWidth={2.2} />
-                          )}
-                        </View>
-                      </PressableCard>
-
-                      {expanded ? (
-                        <View style={styles.modelExpand}>
-                          {record === null ? (
-                            <TypeCaption style={styles.notConfigured}>
-                              no configured record on the desktop yet — add the model from the
-                              desktop's models tab, then its name, context window, and hidden flag
-                              become editable here.
-                            </TypeCaption>
-                          ) : draft === undefined ? null : (
-                            <>
-                              <TypeMicro>CONFIGURED RECORD · {record.id}</TypeMicro>
-                              <ClayInput
-                                label="Display name"
-                                value={draft.displayName}
-                                onChangeText={(text) => patchDraft(model.id, { displayName: text })}
-                                autoCapitalize="none"
-                                autoCorrect={false}
-                                accessibilityLabel={`Display name for ${model.name}`}
-                                caption="blank keeps the stored name"
-                              />
-                              <ClayInput
-                                label="Context window"
-                                mono
-                                value={draft.contextWindow}
-                                onChangeText={(text) => patchDraft(model.id, { contextWindow: text })}
-                                keyboardType="number-pad"
-                                accessibilityLabel={`Context window for ${model.name}`}
-                                caption="tokens — blank clears to unknown"
-                              />
-                              <View style={styles.toggleRow}>
-                                <View style={styles.rowText}>
-                                  <TypeBodyStrong>Hidden</TypeBodyStrong>
-                                  <TypeCaption>hidden models stay out of pickers</TypeCaption>
-                                </View>
-                                <ClaySwitch
-                                  value={draft.hidden}
-                                  onValueChange={(next) => patchDraft(model.id, { hidden: next })}
-                                  label={`Hidden toggle for ${model.name}`}
-                                />
-                              </View>
-                              <ChromeButton
-                                onPress={() => void saveModel(model)}
-                                busy={savingModelId === model.id}
-                                accessibilityLabel={`Save ${model.name} configuration`}
-                              >
-                                Save model
-                              </ChromeButton>
-                              {note !== null ? <NoteLine note={note} /> : null}
-                            </>
-                          )}
-                        </View>
-                      ) : null}
-                    </View>
-                  );
-                })}
-              </View>
-            </ClayCard>
+            <>
+              {models.map((model) => (
+                <SavedModelRow key={model.id} model={model} onPress={() => openModelActions(model)} />
+              ))}
+            </>
           )}
+          <PressableCard onPress={openAddModel} accessibilityLabel="Add a model">
+            <View style={styles.addRowInner}>
+              <View style={[styles.addRowIcon, { backgroundColor: tokens.subtleHover }]}>
+                <Plus size={16} color={tokens.accent} strokeWidth={2.2} />
+              </View>
+              <View style={styles.addRowText}>
+                <TypeBodyStrong numberOfLines={1}>Add a model</TypeBodyStrong>
+                <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+                  from the provider's catalog, or a custom model id
+                </TypeMicro>
+              </View>
+            </View>
+          </PressableCard>
 
           {loadError !== null && provider !== null ? (
             <View style={styles.noteRow}>
@@ -668,7 +589,1274 @@ export default function ProviderDetailScreen() {
       ) : (
         <LoadingState caption="loading the provider…" />
       )}
+
+      {/* ── the sheets (always mounted, `open` toggling — the house pattern
+              that keeps the exit animation; each save refreshes its own
+              section's truth; the actions sheet hands off to the edit sheet). */}
+      {provider !== null ? (
+        <RenameProviderSheet
+          open={renameOpen}
+          provider={provider}
+          onClose={() => setRenameOpen(false)}
+          onSaved={() => void refreshProvider()}
+        />
+      ) : null}
+      {providerId !== null ? (
+        <AddKeySheet
+          open={addKeyOpen}
+          providerId={providerId}
+          keys={keys ?? []}
+          replacePrimary={addKeyReplacePrimary}
+          onClose={() => setAddKeyOpen(false)}
+          onSaved={() => {
+            void refreshKeys();
+            void refreshProvider();
+          }}
+        />
+      ) : null}
+      {providerId !== null ? (
+        <RemoveKeySheet
+          open={removeKeySlot !== null}
+          providerId={providerId}
+          slot={removeKeySlot ?? -1}
+          masked={removeKeySlot !== null ? (keys?.find((k) => k.slot === removeKeySlot)?.masked ?? null) : null}
+          onClose={() => setRemoveKeySlot(null)}
+          onRemoved={() => {
+            void refreshKeys();
+            void refreshProvider();
+          }}
+        />
+      ) : null}
+      {providerId !== null ? (
+        <ModelActionsSheet
+          open={actionsModelId !== null}
+          providerId={providerId}
+          model={actionsModel}
+          onClose={() => setActionsModelId(null)}
+          onChanged={() => void refreshModels()}
+          onEdit={openModelEdit}
+        />
+      ) : null}
+      <EditModelSheet
+        open={editModelId !== null}
+        model={editModel}
+        onClose={() => setEditModelId(null)}
+        onSaved={() => void refreshModels()}
+      />
+      {providerId !== null ? (
+        <AddModelSheet
+          open={addModelOpen}
+          providerId={providerId}
+          savedModelIds={savedModelIds}
+          onClose={() => setAddModelOpen(false)}
+          onSaved={() => void refreshModels()}
+        />
+      ) : null}
     </ScreenScaffold>
+  );
+}
+
+// ── the saved-model row (the owner's core demand — the SAVED truth) ─────────
+
+function SavedModelRow({ model, onPress }: { model: ModelRecord; onPress: () => void }) {
+  const { tokens } = useTheme();
+  const chips = modelCapabilityChips(model);
+  const label =
+    model.displayName !== null && model.displayName.trim() !== ""
+      ? model.displayName
+      : cleanModelName(model.modelId);
+  return (
+    <PressableCard onPress={onPress} accessibilityLabel={`Model ${label}`}>
+      <View style={[styles.modelRowInner, chips.hidden ? styles.modelRowHidden : null]}>
+        <View style={styles.rowText}>
+          <View style={styles.modelTitleLine}>
+            <TypeBodyStrong numberOfLines={1} style={styles.rowTitle}>
+              {label}
+            </TypeBodyStrong>
+            {chips.vision ? (
+              <View style={[styles.capChip, { backgroundColor: tokens.pillBg }]}>
+                <Eye size={11} color={tokens.accent2} strokeWidth={2.4} />
+                <TypeMicro style={{ color: tokens.textSecondary }}>vision</TypeMicro>
+              </View>
+            ) : null}
+            {chips.thinking ? (
+              <View style={[styles.capChip, { backgroundColor: tokens.pillBg }]}>
+                <Brain size={11} color={tokens.accent2} strokeWidth={2.4} />
+                <TypeMicro style={{ color: tokens.textSecondary }}>thinking</TypeMicro>
+              </View>
+            ) : null}
+            {chips.hidden ? <Badge tone="neutral">hidden</Badge> : null}
+          </View>
+          <TypeMono numberOfLines={1} style={styles.modelIdMono}>
+            {model.modelId}
+          </TypeMono>
+        </View>
+      </View>
+    </PressableCard>
+  );
+}
+
+// ── the rename sheet (name + base URL — both PATCHable) ─────────────────────
+
+function RenameProviderSheet({
+  open,
+  provider,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  provider: ProviderRow;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { tokens } = useTheme();
+  const [name, setName] = useState(provider.name);
+  const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Hydrate on the OPEN EDGE only — a mid-rename refetch (another device's
+  // write) must never clobber what's typed.
+  useEffect(() => {
+    if (!open) return;
+    setName(provider.name);
+    setBaseUrl(provider.baseUrl);
+    setError(null);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onSave = useCallback(async () => {
+    if (busy) return;
+    const trimmedName = name.trim();
+    if (trimmedName === "") {
+      setError("name cannot be empty");
+      void warningHaptic();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const outcome = await updateProvider(getLinkManager(), provider.id, {
+        name: trimmedName,
+        baseUrl: baseUrl.trim(),
+      });
+      if (outcome.ok) {
+        mobLog("config", "provider renamed", { id: provider.id });
+        void successHaptic();
+        onClose();
+        onSaved();
+      } else {
+        mobWarn("config", "provider rename PATCH failed", {
+          id: provider.id,
+          status: outcome.error.status,
+          message: outcome.error.message,
+        });
+        void warningHaptic();
+        setError(outcome.error.message);
+      }
+    } catch {
+      mobWarn("config", "provider rename threw");
+      void warningHaptic();
+      setError("the host is offline — nothing was changed");
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, name, baseUrl, provider, onClose, onSaved]);
+
+  return (
+    <Sheet open={open} onClose={onClose} title="Edit provider" testID="rename-provider-sheet">
+      <View style={styles.fieldGap}>
+        <ClayInput
+          label="Name"
+          value={name}
+          onChangeText={setName}
+          autoCapitalize="none"
+          autoCorrect={false}
+          accessibilityLabel="Provider name"
+          caption="unique across your providers — the server refuses a duplicate"
+        />
+        <ClayInput
+          label="Base URL"
+          mono
+          value={baseUrl}
+          onChangeText={setBaseUrl}
+          autoCapitalize="none"
+          autoCorrect={false}
+          inputMode="url"
+          accessibilityLabel="Provider base URL"
+          caption="the http(s) endpoint the desktop calls"
+        />
+        {error !== null ? (
+          <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+            {error}
+          </TypeCaption>
+        ) : null}
+        <ChromeButton
+          onPress={() => void onSave()}
+          disabled={busy}
+          accessibilityLabel={busy ? "Saving the provider" : "Save the provider"}
+        >
+          {busy ? "saving…" : "Save changes"}
+        </ChromeButton>
+      </View>
+    </Sheet>
+  );
+}
+
+// ── the add-key sheet (next-free-slot math; primary replace mode) ───────────
+
+function AddKeySheet({
+  open,
+  providerId,
+  keys,
+  replacePrimary,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  providerId: string;
+  keys: ProviderKeySlot[];
+  replacePrimary: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { tokens } = useTheme();
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const slot = replacePrimary ? 0 : nextFreeKeySlot(keys);
+
+  useEffect(() => {
+    if (!open) return;
+    setValue("");
+    setError(null);
+  }, [open]);
+
+  const onSave = useCallback(async () => {
+    if (busy) return;
+    const key = value.trim();
+    if (key === "") {
+      setError("paste the key first");
+      void warningHaptic();
+      return;
+    }
+    if (slot === -1) {
+      setError("the pool is full — 31 keys is the server's ceiling");
+      void warningHaptic();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      // Slot 0 IS the primary — its canonical write path is the primary
+      // endpoint; pool slots ride the slot route. Either way the VALUE
+      // never comes back: the pool re-reads masked.
+      const outcome =
+        slot === 0
+          ? await setProviderKey(getLinkManager(), providerId, key)
+          : await putProviderKeySlot(getLinkManager(), providerId, slot, key);
+      if (outcome.ok) {
+        mobLog("config", "provider key saved", { id: providerId, slot });
+        void successHaptic();
+        setValue("");
+        onClose();
+        onSaved();
+      } else {
+        mobWarn("config", "provider key save failed", {
+          id: providerId,
+          slot,
+          status: outcome.error.status,
+          message: outcome.error.message,
+        });
+        void warningHaptic();
+        setError(outcome.error.message);
+      }
+    } catch {
+      mobWarn("config", "provider key save threw");
+      void warningHaptic();
+      setError("the host is offline — the key was not saved");
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, value, slot, providerId, onClose, onSaved]);
+
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title={replacePrimary ? "Replace the primary key" : "Add an API key"}
+      testID="add-key-sheet"
+    >
+      <View style={styles.fieldGap}>
+        <TypeCaption style={{ color: tokens.textSecondary }}>
+          {replacePrimary
+            ? "the primary key (slot 0) is overwritten — the old value is gone."
+            : slot === -1
+              ? "the pool is full (31 keys) — remove one first."
+              : slot === 0
+                ? "this becomes the PRIMARY key (slot 0) — the one every turn uses first."
+                : `this lands in POOL SLOT ${slot} — a second key the runners juggle for load.`}
+        </TypeCaption>
+        <ClayInput
+          label="API key"
+          mono
+          value={value}
+          onChangeText={setValue}
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+          accessibilityLabel="API key"
+          caption="write-only from this phone — the desktop's keyring holds it, only the mask ever returns"
+        />
+        {error !== null ? (
+          <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+            {error}
+          </TypeCaption>
+        ) : null}
+        <ChromeButton
+          onPress={() => void onSave()}
+          disabled={busy || slot === -1}
+          accessibilityLabel={busy ? "Saving the key" : "Save the key"}
+        >
+          {busy ? "saving…" : "Save key"}
+        </ChromeButton>
+      </View>
+    </Sheet>
+  );
+}
+
+// ── the remove-key confirm sheet ────────────────────────────────────────────
+
+function RemoveKeySheet({
+  open,
+  providerId,
+  slot,
+  masked,
+  onClose,
+  onRemoved,
+}: {
+  open: boolean;
+  providerId: string;
+  slot: number;
+  masked: string | null;
+  onClose: () => void;
+  onRemoved: () => void;
+}) {
+  const { tokens } = useTheme();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // The snapshot keeps the content alive through the close animation (the
+  // parent nulls the slot the moment onClose fires).
+  const [shown, setShown] = useState<{ slot: number; masked: string | null } | null>(null);
+  useEffect(() => {
+    if (open) setShown({ slot, masked });
+  }, [open, slot, masked]);
+
+  const onRemove = useCallback(async () => {
+    if (busy || shown === null) return;
+    const targetSlot = shown.slot;
+    setBusy(true);
+    setError(null);
+    try {
+      const outcome = await deleteProviderKeySlot(getLinkManager(), providerId, targetSlot);
+      if (outcome.ok) {
+        mobLog("config", "provider key removed", { id: providerId, slot: targetSlot });
+        void successHaptic();
+        onClose();
+        onRemoved();
+      } else {
+        mobWarn("config", "provider key remove failed", {
+          id: providerId,
+          slot: targetSlot,
+          status: outcome.error.status,
+          message: outcome.error.message,
+        });
+        void warningHaptic();
+        setError(outcome.error.message);
+      }
+    } catch {
+      mobWarn("config", "provider key remove threw");
+      void warningHaptic();
+      setError("the host is offline — the key was not removed");
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, shown, providerId, onClose, onRemoved]);
+
+  return (
+    <Sheet open={open} onClose={onClose} title="Remove a key" testID="remove-key-sheet">
+      {shown !== null ? (
+        <View style={styles.fieldGap}>
+          <TypeBodyStrong>
+            {`Remove pool slot ${shown.slot}${shown.masked !== null ? ` (${shown.masked})` : ""}?`}
+          </TypeBodyStrong>
+          <TypeCaption style={{ color: tokens.textSecondary }}>
+            the desktop forgets this key — turns stop juggling it immediately.
+          </TypeCaption>
+          {error !== null ? (
+            <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+              {error}
+            </TypeCaption>
+          ) : null}
+          <ChromeButton
+            onPress={() => void onRemove()}
+            disabled={busy}
+            accessibilityLabel={busy ? "Removing the key" : "Remove the key"}
+          >
+            {busy ? "removing…" : "Remove key"}
+          </ChromeButton>
+          <QuietButton onPress={onClose} disabled={busy}>
+            Keep it
+          </QuietButton>
+        </View>
+      ) : null}
+    </Sheet>
+  );
+}
+
+// ── the model actions sheet (test / edit / hide / delete) ───────────────────
+
+function ModelActionsSheet({
+  open,
+  providerId,
+  model,
+  onClose,
+  onChanged,
+  onEdit,
+}: {
+  open: boolean;
+  providerId: string;
+  /** The LIVE record (null while closed — the snapshot below carries the
+   * content through the close animation and refetch hiccups). */
+  model: ModelRecord | null;
+  onClose: () => void;
+  /** The saved list refetch (hide/show/delete land their truth). */
+  onChanged: () => void;
+  onEdit: (model: ModelRecord) => void;
+}) {
+  const { tokens } = useTheme();
+  const [shown, setShown] = useState<ModelRecord | null>(null);
+  useEffect(() => {
+    if (model !== null) setShown(model);
+  }, [model]);
+
+  const [testing, setTesting] = useState(false);
+  const [testNote, setTestNote] = useState<ActionNote | null>(null);
+  const [hiding, setHiding] = useState(false);
+  const [hideNote, setHideNote] = useState<ActionNote | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Reset the transient verdicts whenever a different model opens.
+  const shownId = shown?.id ?? null;
+  useEffect(() => {
+    setTestNote(null);
+    setHideNote(null);
+    setConfirmingDelete(false);
+    setDeleteError(null);
+  }, [shownId]);
+
+  const label = useMemo(() => {
+    if (shown === null) return "";
+    return shown.displayName !== null && shown.displayName.trim() !== ""
+      ? shown.displayName
+      : cleanModelName(shown.modelId);
+  }, [shown]);
+
+  const runTest = useCallback(async () => {
+    if (testing || shown === null) return;
+    const targetId = shown.id;
+    setTesting(true);
+    setTestNote(null);
+    try {
+      const outcome = await testModel(getLinkManager(), targetId, {});
+      if (outcome.ok) {
+        setTestNote(testResultNote(outcome.data));
+        mobLog("config", "model tested", { id: targetId, ok: outcome.data.ok });
+      } else {
+        setTestNote({ kind: "error", text: outcome.error.message });
+        mobWarn("config", "model test failed", {
+          id: targetId,
+          status: outcome.error.status,
+          message: outcome.error.message,
+        });
+      }
+    } catch {
+      setTestNote({ kind: "error", text: "the host dropped during the test" });
+      mobWarn("config", "model test threw");
+    } finally {
+      setTesting(false);
+    }
+  }, [testing, shown]);
+
+  const toggleHidden = useCallback(async () => {
+    if (hiding || shown === null) return;
+    const target = shown;
+    setHiding(true);
+    setHideNote(null);
+    try {
+      const outcome = await updateModel(getLinkManager(), target.id, {
+        hidden: !target.hidden,
+      });
+      if (outcome.ok) {
+        mobLog("config", "model hidden toggled", { id: target.id, hidden: !target.hidden });
+        setHideNote({
+          kind: "saved",
+          text: outcome.data.hidden ? "hidden — stays out of every picker" : "visible again",
+        });
+        onChanged();
+      } else {
+        setHideNote({ kind: "error", text: outcome.error.message });
+        mobWarn("config", "model hidden PATCH failed", {
+          id: target.id,
+          status: outcome.error.status,
+          message: outcome.error.message,
+        });
+        warningHaptic();
+      }
+    } catch {
+      setHideNote({ kind: "error", text: "the host dropped while saving — nothing changed" });
+      mobWarn("config", "model hidden PATCH threw");
+    } finally {
+      setHiding(false);
+    }
+  }, [hiding, shown, onChanged]);
+
+  const onDelete = useCallback(async () => {
+    if (deleting || shown === null) return;
+    const targetId = shown.id;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const outcome = await deleteModel(getLinkManager(), targetId);
+      if (outcome.ok) {
+        mobLog("config", "model deleted", { id: targetId });
+        void successHaptic();
+        onClose();
+        onChanged();
+      } else {
+        mobWarn("config", "model delete failed", {
+          id: targetId,
+          status: outcome.error.status,
+          message: outcome.error.message,
+        });
+        warningHaptic();
+        setDeleteError(outcome.error.message);
+      }
+    } catch {
+      mobWarn("config", "model delete threw");
+      warningHaptic();
+      setDeleteError("the host is offline — the model was not deleted");
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleting, shown, onClose, onChanged]);
+
+  return (
+    <Sheet open={open} onClose={onClose} title={label} testID="model-actions-sheet">
+      {shown !== null ? (
+        <View style={styles.fieldGap}>
+          <View style={styles.sheetHeadMono}>
+            <TypeMono numberOfLines={1} style={styles.modelIdMono}>
+              {shown.modelId}
+            </TypeMono>
+            <TypeMicro style={{ color: tokens.textTertiary }}>{providerId}</TypeMicro>
+          </View>
+
+          {/* Test — the real completion probe (busy → ok+latency / fail). */}
+          <ChromeButton
+            onPress={() => void runTest()}
+            disabled={testing}
+            accessibilityLabel={testing ? "Testing the model" : "Test the model"}
+          >
+            {testing ? "testing…" : "Test the model"}
+          </ChromeButton>
+          {testNote !== null ? <NoteLine note={testNote} /> : null}
+
+          {/* Hide/Show — one tap, the sheet stays open (the chips update). */}
+          <QuietButton
+            onPress={() => void toggleHidden()}
+            disabled={hiding}
+            textStyle={styles.actionButtonText}
+          >
+            {hiding ? "saving…" : shown.hidden ? "Show in the chat picker" : "Hide from the chat picker"}
+          </QuietButton>
+          {hideNote !== null ? <NoteLine note={hideNote} /> : null}
+
+          {/* Edit — hands off to the edit sheet. */}
+          <QuietButton onPress={() => onEdit(shown)} textStyle={styles.actionButtonText}>
+            Edit name, context, pricing, capabilities
+          </QuietButton>
+
+          {/* Delete — the confirm step lives inline (never a one-tap loss). */}
+          {confirmingDelete ? (
+            <View style={[styles.confirmBox, { borderColor: tokens.danger }]}>
+              <TypeBodyStrong>{`Delete ${label}?`}</TypeBodyStrong>
+              <TypeCaption style={{ color: tokens.textSecondary }}>
+                This removes it from every picker.
+              </TypeCaption>
+              {deleteError !== null ? (
+                <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+                  {deleteError}
+                </TypeCaption>
+              ) : null}
+              <View style={styles.identityButtons}>
+                <QuietButton
+                  tone="danger"
+                  onPress={() => void onDelete()}
+                  disabled={deleting}
+                  textStyle={styles.actionButtonText}
+                >
+                  {deleting ? "deleting…" : "Delete it"}
+                </QuietButton>
+                <QuietButton
+                  onPress={() => setConfirmingDelete(false)}
+                  disabled={deleting}
+                  textStyle={styles.actionButtonText}
+                >
+                  Keep it
+                </QuietButton>
+              </View>
+            </View>
+          ) : (
+            <QuietButton
+              tone="danger"
+              onPress={() => setConfirmingDelete(true)}
+              textStyle={styles.actionButtonText}
+            >
+              Delete model
+            </QuietButton>
+          )}
+        </View>
+      ) : null}
+    </Sheet>
+  );
+}
+
+/** The per-model test verdict line — ok+latency (+ a reply peek) or the
+ * honest scrubbed reason. */
+function testResultNote(result: ModelTestResult): ActionNote {
+  if (result.ok) {
+    const preview =
+      result.contentPreview !== undefined && result.contentPreview.trim() !== ""
+        ? ` — “${result.contentPreview.trim().slice(0, 60)}”`
+        : "";
+    return { kind: "saved", text: `ok · ${result.latencyMs}ms${preview}` };
+  }
+  return { kind: "error", text: `failed — ${result.reason ?? "the provider refused"}` };
+}
+
+// ── the edit-model sheet (PATCH — only the fields the sheet owns) ───────────
+
+function EditModelSheet({
+  open,
+  model,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  /** The LIVE record (null while closed — the snapshot carries the content). */
+  model: ModelRecord | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { tokens } = useTheme();
+  const [shown, setShown] = useState<ModelRecord | null>(null);
+  useEffect(() => {
+    if (model !== null) setShown(model);
+  }, [model]);
+  const [draft, setDraft] = useState<ModelFormDraft>(() => blankDraft());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Hydrate the draft ONLY on the open edge — a mid-edit refetch (another
+  // device's write moving the epoch) must never clobber what's typed.
+  useEffect(() => {
+    if (open && shown !== null) {
+      setDraft(modelDraftFromRecord(shown));
+      setError(null);
+    }
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const patch = useCallback((next: Partial<ModelFormDraft>) => {
+    setDraft((prev) => ({ ...prev, ...next }));
+  }, []);
+
+  const onSave = useCallback(async () => {
+    if (busy || shown === null) return;
+    // Validate the numerics first — the per-field message shows inline.
+    for (const [field, raw] of [
+      ["Context window", draft.contextWindow],
+      ["Input price", draft.inputPricePerMtok],
+      ["Output price", draft.outputPricePerMtok],
+    ] as const) {
+      const parse = parseModelNumericField(field, raw);
+      if (!parse.ok) {
+        setError(parse.message);
+        void warningHaptic();
+        return;
+      }
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const outcome = await updateModel(getLinkManager(), shown.id, modelEditBody(draft));
+      if (outcome.ok) {
+        mobLog("config", "model record updated", { id: shown.id, modelId: shown.modelId });
+        void successHaptic();
+        onClose();
+        onSaved();
+      } else {
+        mobWarn("config", "model PATCH failed", {
+          id: shown.id,
+          status: outcome.error.status,
+          message: outcome.error.message,
+        });
+        void warningHaptic();
+        setError(outcome.error.message);
+      }
+    } catch {
+      mobWarn("config", "model PATCH threw");
+      void warningHaptic();
+      setError("the host is offline — the record is unchanged");
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, draft, shown, onClose, onSaved]);
+
+  return (
+    <Sheet open={open} onClose={onClose} title="Edit model" testID="edit-model-sheet" maxHeightFraction={0.86}>
+      {shown !== null ? (
+        <View style={styles.fieldGap}>
+        {/* modelId is IDENTITY on PATCH — read-only, shown as the mono truth. */}
+        <View style={styles.fieldWrap}>
+          <TypeCaption style={styles.fieldLabel}>Model id (read-only)</TypeCaption>
+          <View style={[styles.readOnlyMono, { borderColor: tokens.borderSubtle, backgroundColor: tokens.inputBg }]}>
+            <TypeMono numberOfLines={1}>{draft.modelId}</TypeMono>
+          </View>
+        </View>
+        <ClayInput
+          label="Display name"
+          value={draft.displayName}
+          onChangeText={(text) => patch({ displayName: text })}
+          autoCapitalize="none"
+          autoCorrect={false}
+          accessibilityLabel="Display name"
+          caption="blank = the humanized model id"
+        />
+        <ClayInput
+          label="Context window"
+          mono
+          value={draft.contextWindow}
+          onChangeText={(text) => patch({ contextWindow: text })}
+          keyboardType="number-pad"
+          accessibilityLabel="Context window"
+          caption="tokens — blank clears to unknown"
+        />
+        <ClayInput
+          label="Input price / Mtok"
+          mono
+          value={draft.inputPricePerMtok}
+          onChangeText={(text) => patch({ inputPricePerMtok: text })}
+          keyboardType="decimal-pad"
+          accessibilityLabel="Input price per million tokens"
+          caption="USD — blank clears to unknown"
+        />
+        <ClayInput
+          label="Output price / Mtok"
+          mono
+          value={draft.outputPricePerMtok}
+          onChangeText={(text) => patch({ outputPricePerMtok: text })}
+          keyboardType="decimal-pad"
+          accessibilityLabel="Output price per million tokens"
+          caption="USD — blank clears to unknown"
+        />
+
+        {/* The capability toggles — the vision flag prominent (the owner's
+            R61 ask: "Accepts image inputs; vision works whenever this is on"). */}
+        <View style={[styles.toggleCard, { borderColor: tokens.borderSubtle }]}>
+          <View style={styles.toggleRow}>
+            <View style={styles.rowText}>
+              <View style={styles.toggleTitleLine}>
+                <Eye size={15} color={tokens.accent} strokeWidth={2.2} />
+                <TypeBodyStrong>Accepts image inputs</TypeBodyStrong>
+              </View>
+              <TypeCaption>vision works whenever this is on</TypeCaption>
+            </View>
+            <ClaySwitch
+              value={draft.supportsVision}
+              onValueChange={(next) => patch({ supportsVision: next })}
+              label="Accepts image inputs toggle"
+            />
+          </View>
+          <View style={styles.toggleRow}>
+            <View style={styles.rowText}>
+              <View style={styles.toggleTitleLine}>
+                <Brain size={15} color={tokens.accent} strokeWidth={2.2} />
+                <TypeBodyStrong>Thinking</TypeBodyStrong>
+              </View>
+              <TypeCaption>reasoning-style extended thinking</TypeCaption>
+            </View>
+            <ClaySwitch
+              value={draft.supportsThinking}
+              onValueChange={(next) => patch({ supportsThinking: next })}
+              label="Thinking toggle"
+            />
+          </View>
+          <View style={styles.toggleRow}>
+            <View style={styles.rowText}>
+              <TypeBodyStrong>Hide from the chat picker</TypeBodyStrong>
+              <TypeCaption>hidden models stay out of pickers</TypeCaption>
+            </View>
+            <ClaySwitch
+              value={draft.hidden}
+              onValueChange={(next) => patch({ hidden: next })}
+              label="Hidden toggle"
+            />
+          </View>
+        </View>
+
+        {error !== null ? (
+          <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+            {error}
+          </TypeCaption>
+        ) : null}
+        <ChromeButton
+          onPress={() => void onSave()}
+          disabled={busy}
+          accessibilityLabel={busy ? "Saving the model" : "Save the model"}
+        >
+          {busy ? "saving…" : "Save model"}
+        </ChromeButton>
+        </View>
+      ) : null}
+    </Sheet>
+  );
+}
+
+// ── the add-model sheet (from the live catalog w/ static prefill, or custom) ─
+
+function AddModelSheet({
+  open,
+  providerId,
+  savedModelIds,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  providerId: string;
+  savedModelIds: Set<string>;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { tokens } = useTheme();
+  const [mode, setMode] = useState<"catalog" | "custom">("catalog");
+  const [query, setQuery] = useState("");
+  const [entries, setEntries] = useState<ModelSummary[] | null>(null);
+  const [catalogSource, setCatalogSource] = useState<"live" | "static" | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [staticCatalog, setStaticCatalog] = useState<CatalogModelEntry[]>([]);
+  const [draft, setDraft] = useState<ModelFormDraft | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // The catalog loads on open: the LIVE listing first (the provider's own
+  // /models — the working path the old screen used), the STATIC catalog as
+  // the fallback when it fails or answers empty. The static rows ride
+  // along either way — they are the prefill's pricing/context/vision source.
+  const loadCatalog = useCallback(async () => {
+    setEntries(null);
+    setCatalogSource(null);
+    setCatalogError(null);
+    try {
+      const [liveOutcome, staticOutcome] = await Promise.all([
+        fetchProviderModels(getLinkManager(), providerId),
+        fetchModelCatalog(getLinkManager()),
+      ]);
+      if (staticOutcome.ok) setStaticCatalog(staticOutcome.data.models);
+      if (liveOutcome.ok && liveOutcome.data.models.length > 0) {
+        setEntries(liveOutcome.data.models);
+        setCatalogSource("live");
+        mobLog("config", "add-model catalog loaded (live)", {
+          providerId,
+          count: liveOutcome.data.models.length,
+        });
+      } else if (staticOutcome.ok) {
+        setEntries(catalogEntriesFromStatic(staticOutcome.data.models));
+        setCatalogSource("static");
+        mobLog("config", "add-model catalog loaded (static fallback)", {
+          providerId,
+          count: staticOutcome.data.models.length,
+        });
+      } else {
+        // Both failed — the live error is the honest one to show.
+        const message = liveOutcome.ok
+          ? staticOutcome.error.message
+          : liveOutcome.error.message;
+        setCatalogError(message);
+        mobWarn("config", "add-model catalog failed", { providerId, message });
+      }
+    } catch {
+      setCatalogError("the host dropped while listing the catalog");
+      mobWarn("config", "add-model catalog threw", { providerId });
+    }
+  }, [providerId]);
+
+  useEffect(() => {
+    if (!open) return;
+    setMode("catalog");
+    setQuery("");
+    setDraft(null);
+    setError(null);
+    void loadCatalog();
+  }, [open, loadCatalog]);
+
+  // Saved models stay out of the pick-list (the desktop's rule — re-adding
+  // is an upsert, but the list should show what's ADDABLE).
+  const addable = useMemo(() => {
+    if (entries === null) return null;
+    return searchCatalogEntries(query, entries.filter((e) => !savedModelIds.has(e.id)));
+  }, [entries, query, savedModelIds]);
+
+  const patch = useCallback((next: Partial<ModelFormDraft>) => {
+    setDraft((prev) => (prev === null ? prev : { ...prev, ...next }));
+  }, []);
+
+  const pickEntry = useCallback(
+    (entry: ModelSummary) => {
+      void selectionHaptic();
+      setDraft(catalogPrefillFor(entry, staticCatalog));
+      setError(null);
+    },
+    [staticCatalog],
+  );
+
+  const onSave = useCallback(async () => {
+    if (busy || draft === null) return;
+    for (const [field, raw] of [
+      ["Context window", draft.contextWindow],
+      ["Input price", draft.inputPricePerMtok],
+      ["Output price", draft.outputPricePerMtok],
+    ] as const) {
+      const parse = parseModelNumericField(field, raw);
+      if (!parse.ok) {
+        setError(parse.message);
+        void warningHaptic();
+        return;
+      }
+    }
+    const body = modelAddBody(draft);
+    if (body === null) {
+      setError("a model id is required");
+      void warningHaptic();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const outcome = await addProviderModel(getLinkManager(), providerId, body);
+      if (outcome.ok) {
+        mobLog("config", "model added", { providerId, modelId: body.modelId });
+        void successHaptic();
+        onClose();
+        onSaved();
+      } else {
+        mobWarn("config", "model add failed", {
+          providerId,
+          status: outcome.error.status,
+          message: outcome.error.message,
+        });
+        void warningHaptic();
+        setError(outcome.error.message);
+      }
+    } catch {
+      mobWarn("config", "model add threw");
+      void warningHaptic();
+      setError("the host is offline — the model was not added");
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, draft, providerId, onClose, onSaved]);
+
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Add a model"
+      testID="add-model-sheet"
+      maxHeightFraction={0.9}
+    >
+      <View style={styles.fieldGap}>
+        {/* the two modes */}
+        <View style={styles.formatRow}>
+          <ModeChip selected={mode === "catalog"} onPress={() => setMode("catalog")}>
+            From catalog
+          </ModeChip>
+          <ModeChip selected={mode === "custom"} onPress={() => setMode("custom")}>
+            Custom
+          </ModeChip>
+        </View>
+
+        {mode === "catalog" ? (
+          <View style={styles.fieldGap}>
+            {catalogError !== null ? (
+              <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+                {catalogError}
+              </TypeCaption>
+            ) : entries === null ? (
+              <LoadingState caption="listing the provider's models…" />
+            ) : (
+              <View style={styles.fieldWrap}>
+                <ClayInput
+                  value={query}
+                  onChangeText={setQuery}
+                  placeholder="search by model id or name…"
+                  placeholderTextColor={tokens.textTertiary}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  accessibilityLabel="Search catalog models"
+                />
+                {catalogSource !== null ? (
+                  <TypeMicro style={{ color: tokens.textTertiary }}>
+                    {catalogSource === "live"
+                      ? "live catalog from the provider"
+                      : "static catalog — the live listing was empty or unreachable"}
+                  </TypeMicro>
+                ) : null}
+                <View style={styles.catalogList}>
+                  {addable === null ? null : addable.length === 0 ? (
+                    <TypeCaption style={{ color: tokens.textTertiary, paddingVertical: spacing.md }}>
+                      {entries.length === 0
+                        ? "the catalog is empty — switch to Custom and type the model id."
+                        : "everything the catalog offers is already saved (or filtered out)."}
+                    </TypeCaption>
+                  ) : (
+                    addable.slice(0, 60).map((entry) => (
+                      <Pressable
+                        key={entry.id}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Prefill ${entry.name}`}
+                        onPress={() => pickEntry(entry)}
+                        style={({ pressed }) => [
+                          styles.catalogRow,
+                          {
+                            backgroundColor: pressed ? tokens.subtle : "transparent",
+                            borderBottomColor: tokens.borderSubtle,
+                          },
+                        ]}
+                      >
+                        <View style={styles.rowText}>
+                          <TypeBodyStrong numberOfLines={1} style={styles.rowTitle}>
+                            {entry.name}
+                          </TypeBodyStrong>
+                          <TypeMono numberOfLines={1} style={styles.modelIdMono}>
+                            {entry.id}
+                          </TypeMono>
+                        </View>
+                      </Pressable>
+                    ))
+                  )}
+                  {addable !== null && addable.length > 60 ? (
+                    <TypeMicro style={{ color: tokens.textTertiary, paddingVertical: spacing.xs }}>
+                      {`showing the first 60 of ${addable.length} — search to narrow`}
+                    </TypeMicro>
+                  ) : null}
+                </View>
+              </View>
+            )}
+          </View>
+        ) : (
+          // Custom mode without a draft yet — the seed row opens the blank form.
+          <TypeCaption style={{ color: tokens.textSecondary }}>
+            type the exact model id the provider expects — everything else is optional.
+          </TypeCaption>
+        )}
+
+        {/* the form — prefilled after a catalog tap, blank after the custom
+            seed; one form serves both modes (a catalog pick can be tweaked). */}
+        <View style={[styles.fieldGap, styles.formDividerTop, { borderTopColor: tokens.borderSubtle }]}>
+          {draft === null ? (
+            mode === "custom" ? (
+              <SeedCustomDraft onSeed={() => setDraft(blankDraft())} />
+            ) : (
+              <TypeMicro style={{ color: tokens.textTertiary, paddingTop: spacing.xs }}>
+                tap a catalog entry to prefill the form for review
+              </TypeMicro>
+            )
+          ) : (
+            <>
+              <ClayInput
+                label="Model id"
+                mono
+                value={draft.modelId}
+                onChangeText={(text) => patch({ modelId: text })}
+                autoCapitalize="none"
+                autoCorrect={false}
+                accessibilityLabel="Model id"
+                caption="the exact id sent to the provider"
+              />
+                <ClayInput
+                  label="Display name"
+                  value={draft.displayName}
+                  onChangeText={(text) => patch({ displayName: text })}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  accessibilityLabel="Display name"
+                  caption="blank = the humanized model id"
+                />
+                <ClayInput
+                  label="Context window"
+                  mono
+                  value={draft.contextWindow}
+                  onChangeText={(text) => patch({ contextWindow: text })}
+                  keyboardType="number-pad"
+                  accessibilityLabel="Context window"
+                  caption="tokens — blank leaves it unknown"
+                />
+                <ClayInput
+                  label="Input price / Mtok"
+                  mono
+                  value={draft.inputPricePerMtok}
+                  onChangeText={(text) => patch({ inputPricePerMtok: text })}
+                  keyboardType="decimal-pad"
+                  accessibilityLabel="Input price per million tokens"
+                  caption="USD — blank leaves it unknown"
+                />
+                <ClayInput
+                  label="Output price / Mtok"
+                  mono
+                  value={draft.outputPricePerMtok}
+                  onChangeText={(text) => patch({ outputPricePerMtok: text })}
+                  keyboardType="decimal-pad"
+                  accessibilityLabel="Output price per million tokens"
+                  caption="USD — blank leaves it unknown"
+                />
+                <View style={[styles.toggleCard, { borderColor: tokens.borderSubtle }]}>
+                  <View style={styles.toggleRow}>
+                    <View style={styles.rowText}>
+                      <View style={styles.toggleTitleLine}>
+                        <Eye size={15} color={tokens.accent} strokeWidth={2.2} />
+                        <TypeBodyStrong>Accepts image inputs</TypeBodyStrong>
+                      </View>
+                      <TypeCaption>vision works whenever this is on</TypeCaption>
+                    </View>
+                    <ClaySwitch
+                      value={draft.supportsVision}
+                      onValueChange={(next) => patch({ supportsVision: next })}
+                      label="Accepts image inputs toggle"
+                    />
+                  </View>
+                  <View style={styles.toggleRow}>
+                    <View style={styles.rowText}>
+                      <View style={styles.toggleTitleLine}>
+                        <Brain size={15} color={tokens.accent} strokeWidth={2.2} />
+                        <TypeBodyStrong>Thinking</TypeBodyStrong>
+                      </View>
+                      <TypeCaption>reasoning-style extended thinking</TypeCaption>
+                    </View>
+                    <ClaySwitch
+                      value={draft.supportsThinking}
+                      onValueChange={(next) => patch({ supportsThinking: next })}
+                      label="Thinking toggle"
+                    />
+                  </View>
+                  <View style={styles.toggleRow}>
+                    <View style={styles.rowText}>
+                      <TypeBodyStrong>Hide from the chat picker</TypeBodyStrong>
+                      <TypeCaption>hidden models stay out of pickers</TypeCaption>
+                    </View>
+                    <ClaySwitch
+                      value={draft.hidden}
+                      onValueChange={(next) => patch({ hidden: next })}
+                      label="Hidden toggle"
+                    />
+                  </View>
+                </View>
+                {error !== null ? (
+                  <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+                    {error}
+                  </TypeCaption>
+                ) : null}
+                <ChromeButton
+                  onPress={() => void onSave()}
+                  disabled={busy}
+                  accessibilityLabel={busy ? "Saving the model" : "Save the model"}
+                >
+                  {busy ? "saving…" : "Save model"}
+                </ChromeButton>
+              </>
+            )}
+        </View>
+      </View>
+    </Sheet>
+  );
+}
+
+/** The custom-mode seed — one tap opens the blank form (kept as its own
+ * row so the catalog list stays the default surface). */
+function SeedCustomDraft({ onSeed }: { onSeed: () => void }) {
+  const { tokens } = useTheme();
+  return (
+    <PressableCard onPress={onSeed} accessibilityLabel="Start a custom model">
+      <View style={styles.addRowInner}>
+        <View style={[styles.addRowIcon, { backgroundColor: tokens.subtleHover }]}>
+          <Plus size={16} color={tokens.accent} strokeWidth={2.2} />
+        </View>
+        <View style={styles.addRowText}>
+          <TypeBodyStrong numberOfLines={1}>Start a custom model</TypeBodyStrong>
+          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+            blank form — you type the model id
+          </TypeMicro>
+        </View>
+      </View>
+    </PressableCard>
+  );
+}
+
+function blankDraft(): ModelFormDraft {
+  return {
+    modelId: "",
+    displayName: "",
+    contextWindow: "",
+    inputPricePerMtok: "",
+    outputPricePerMtok: "",
+    supportsVision: false,
+    supportsThinking: false,
+    hidden: false,
+  };
+}
+
+/** The add-model sheet's mode chip (the catalog/custom pair). */
+function ModeChip({
+  children,
+  selected,
+  onPress,
+}: {
+  children: React.ReactNode;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const { tokens } = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.modeChip,
+        {
+          backgroundColor: selected ? tokens.accent : pressed ? tokens.subtleHover : tokens.pillBg,
+          borderColor: selected ? tokens.accent : tokens.border,
+        },
+      ]}
+    >
+      <TypeCaption
+        style={{ color: selected ? tokens.accentText : tokens.textSecondary, fontWeight: "600" }}
+      >
+        {children}
+      </TypeCaption>
+    </Pressable>
   );
 }
 
@@ -776,20 +1964,58 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   identityText: { flex: 1, gap: 3 },
+  identityToggleWrap: { alignItems: "flex-end" },
   identityMono: { fontSize: 11, lineHeight: 15 },
   identityActions: { gap: spacing.md, alignItems: "flex-start" },
-  formPad: { padding: spacing.lg, gap: spacing.md },
-  toggleRow: {
+  identityButtons: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
+  actionButtonText: { fontSize: 13 },
+  poolPad: { paddingVertical: spacing.xs },
+  poolRule: { borderBottomWidth: StyleSheet.hairlineWidth },
+  slotRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
+    padding: spacing.md,
+    paddingHorizontal: spacing.lg,
+    minHeight: 64,
+  },
+  slotIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  slotText: { flex: 1, gap: 3 },
+  slotTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  slotTitle: { flexShrink: 1 },
+  slotMasked: { fontSize: 11, lineHeight: 15 },
+  slotActions: { flexDirection: "row", gap: spacing.xs, alignItems: "center" },
+  slotActionButton: { paddingHorizontal: spacing.md },
+  addKeyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    padding: spacing.md,
+    paddingHorizontal: spacing.lg,
     minHeight: 56,
   },
-  rowText: { flex: 1, gap: 3 },
-  rowTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  rowTitle: { flexShrink: 1 },
-  modelsPad: { padding: spacing.lg, gap: spacing.md },
-  modelBlock: { gap: spacing.sm },
+  addRowInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    padding: spacing.md,
+    paddingHorizontal: spacing.lg,
+    minHeight: 56,
+  },
+  addRowIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  addRowText: { flex: 1, gap: 2 },
   modelRowInner: {
     flexDirection: "row",
     alignItems: "center",
@@ -797,12 +2023,74 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     minHeight: 64,
   },
+  modelRowHidden: { opacity: 0.55 },
+  modelTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" },
   modelIdMono: { fontSize: 11, lineHeight: 15 },
-  modelExpand: { padding: spacing.md, gap: spacing.md },
-  notConfigured: { lineHeight: 18 },
+  capChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  rowText: { flex: 1, gap: 3 },
+  rowTitle: { flexShrink: 1 },
   emptyPad: { padding: spacing.lg },
   noteRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   noteText: { flex: 1 },
+  fieldGap: { gap: spacing.md },
+  fieldWrap: { gap: spacing.xs },
+  fieldLabel: { textTransform: "uppercase", letterSpacing: 0.8 },
+  formatRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  readOnlyMono: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    minHeight: 44,
+    justifyContent: "center",
+  },
+  toggleCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    padding: spacing.md,
+    gap: spacing.md,
+  },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    minHeight: 56,
+  },
+  toggleTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  sheetHeadMono: { gap: 2 },
+  confirmBox: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    padding: spacing.md,
+    gap: spacing.md,
+  },
+  catalogList: { borderRadius: 14, overflow: "hidden" },
+  catalogRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    minHeight: 56,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: spacing.sm,
+  },
+  formDividerTop: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: spacing.md },
+  modeChip: {
+    borderRadius: 999,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   switchTarget: { minWidth: 44, minHeight: 44, alignItems: "flex-end", justifyContent: "center" },
   switchTrack: {
     width: SWITCH_TRACK_W,

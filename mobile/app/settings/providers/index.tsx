@@ -1,28 +1,31 @@
 /**
- * Providers — the two-tier list (R113-e, mirroring the desktop's R113-d
- * structure): "Your providers" (the SERVER's `configured` bit — R113-a:
- * custom row OR any held key, pool-aware) first, the addable catalog below a
- * divider. Every row (name, base URL in mono, the enabled badge, the honest
- * key line — "key set · 2 pooled" / "no key yet") pushes to the SAME editor:
- * that is where a key lands, configured or not. Nothing configured yet → the
- * honest empty line above the catalog (never a fake "no providers" when the
- * presets exist). Unpaired/offline → the honest gate; pull-to-refresh rides
- * the same load.
+ * Providers — the configured-first inventory (R114-f rework): "Your
+ * providers" (the SERVER's `configured` bit — custom row OR any held key,
+ * pool-aware) as full rows (name, kind badge, the honest key-count chip,
+ * enabled state) pushing to the detail page; "Add a provider" below the
+ * divider — the unconfigured seeded presets as compact add-rows (tap → the
+ * detail page, where the key lands) plus the CUSTOM PROVIDER row opening
+ * the create sheet (name + base URL + api format + the first key). Server
+ * validation surfaces inline exactly like the New Project sheet. Live: the
+ * settings epoch reloads the tiers while the screen is open (another
+ * device's key save flips a row's tier the moment the server does).
  *
- * R113-e — LIVE: every settings PUT broadcasts on the events bus, so a
- * provider key saved on the PC (or another phone) lands here while the
- * screen is open — the events store's settings epoch moves → this screen
- * reloads (the row jumps tiers the moment the server flips its bit).
+ * R113-e — the events-bus live reload; R114-f — the phone OWNS its
+ * inventory (create included), the tiers re-derived off the fresh rows.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshControl, StyleSheet, View } from "react-native";
-import { ChevronRight, KeyRound } from "lucide-react-native";
+import { ChevronRight, KeyRound, Plus } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { ScreenScaffold } from "@/components/screen-scaffold";
+import { Sheet } from "@/components/sheet";
 import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
 import {
   Badge,
+  Chip,
+  ChromeButton,
+  ClayInput,
   PressableCard,
   SectionHeader,
   TypeBodyStrong,
@@ -32,11 +35,28 @@ import {
 } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
 import { spacing } from "@/design/tokens";
-import { fetchProviders, splitProviders, type ProviderRow } from "@/features/config";
+import { successHaptic, warningHaptic } from "@/design/haptics";
+import {
+  createCustomProvider,
+  customProviderBody,
+  fetchProviders,
+  setProviderKey,
+  splitProviders,
+  type ProviderApiFormat,
+  type ProviderRow,
+} from "@/features/config";
 import { useEventsEpoch } from "@/features/events";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import { mobLog, mobWarn } from "@/lib/log";
+
+/** The custom-create sheet's api-format options — the POST route's exact
+ * enum (anything else falls back to chat-completions server-side). */
+const API_FORMATS: ReadonlyArray<{ id: ProviderApiFormat; label: string }> = [
+  { id: "chat-completions", label: "Chat completions" },
+  { id: "anthropic-messages", label: "Anthropic messages" },
+  { id: "responses", label: "Responses" },
+];
 
 export default function ProvidersScreen() {
   const { tokens } = useTheme();
@@ -46,6 +66,7 @@ export default function ProvidersScreen() {
   const [providers, setProviders] = useState<ProviderRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [customSheetOpen, setCustomSheetOpen] = useState(false);
 
   // R113-e: the live settings epoch — a settings frame (another device's
   // key save / toggle, or the hello resync) moves it while this screen is
@@ -128,7 +149,7 @@ export default function ProvidersScreen() {
       ) : providers.length === 0 ? (
         <EmptyState
           title="no providers yet"
-          caption="add one on the desktop — it appears here the moment it exists."
+          caption="add one below — a preset with a key, or your own endpoint."
         />
       ) : (
         <>
@@ -146,23 +167,31 @@ export default function ProvidersScreen() {
             ))
           )}
 
-          {/* ── GROUP 2 — "Add a provider": the unconfigured presets under a
-              divider. Still selectable — the editor is where the key lands
-              (the desktop's R113-d rule: the catalog stays visible). */}
-          {tiers.addable.length > 0 ? (
-            <>
-              <View style={[styles.tierDivider, { borderBottomColor: tokens.borderSubtle }]} />
-              <SectionHeader>Add a provider</SectionHeader>
-              {tiers.addable.map((provider, index) => (
-                <ProviderRowCard key={provider.id} provider={provider} index={index} />
-              ))}
-            </>
-          ) : null}
+          {/* ── GROUP 2 — "Add a provider": the unconfigured presets as
+              compact add-rows + the custom-create sheet row (the custom row
+              stays reachable even with every preset configured — the owner
+              can always add another endpoint). Tapping a preset pushes to
+              its page — the key pool there is where the key lands (the
+              desktop's R113-d rule, kept). */}
+          <View style={[styles.tierDivider, { borderBottomColor: tokens.borderSubtle }]} />
+          <SectionHeader>Add a provider</SectionHeader>
+          {tiers.addable.map((provider) => (
+            <AddableRowCard key={provider.id} provider={provider} />
+          ))}
+          <CustomProviderRow onPress={() => setCustomSheetOpen(true)} />
         </>
       )}
+
+      <CustomProviderSheet
+        open={customSheetOpen}
+        onClose={() => setCustomSheetOpen(false)}
+        onCreated={() => void load()}
+      />
     </ScreenScaffold>
   );
 }
+
+// ── the configured row — the full inventory card ────────────────────────────
 
 function ProviderRowCard({ provider, index }: { provider: ProviderRow; index: number }) {
   const { tokens } = useTheme();
@@ -182,24 +211,243 @@ function ProviderRowCard({ provider, index }: { provider: ProviderRow; index: nu
             <TypeBodyStrong numberOfLines={1} style={styles.rowTitle}>
               {provider.name}
             </TypeBodyStrong>
-            <Badge tone={provider.enabled ? "success" : "neutral"}>
-              {provider.enabled ? "enabled" : "off"}
+            <Badge tone={provider.keyCount > 0 ? "accent" : "neutral"}>
+              {provider.keyCount > 0 ? `${provider.keyCount} key${provider.keyCount === 1 ? "" : "s"}` : "no key"}
             </Badge>
+            {provider.enabled ? null : <Badge tone="neutral">off</Badge>}
           </View>
           <TypeMono numberOfLines={1} style={styles.rowBaseUrl}>
             {provider.baseUrl}
           </TypeMono>
-          <TypeMicro>
-            {provider.hasKey
-              ? provider.keyCount > 1
-                ? `key set · ${provider.keyCount} pooled`
-                : "key set"
-              : "no key yet"}
-          </TypeMicro>
+          <TypeMicro>{provider.kind}</TypeMicro>
         </View>
         <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
       </View>
     </PressableCard>
+  );
+}
+
+// ── the addable preset row — compact, quiet ─────────────────────────────────
+
+function AddableRowCard({ provider }: { provider: ProviderRow }) {
+  const { tokens } = useTheme();
+  const router = useRouter();
+  return (
+    <PressableCard
+      onPress={() => router.push(`/settings/providers/${encodeURIComponent(provider.id)}`)}
+      accessibilityLabel={`Add provider ${provider.name}`}
+    >
+      <View style={styles.addRowInner}>
+        <View style={[styles.addRowIcon, { backgroundColor: tokens.subtleHover }]}>
+          <Plus size={16} color={tokens.accent2} strokeWidth={2.2} />
+        </View>
+        <View style={styles.addRowText}>
+          <TypeBodyStrong numberOfLines={1}>{provider.name}</TypeBodyStrong>
+          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+            add a key to start using it
+          </TypeMicro>
+        </View>
+        <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
+      </View>
+    </PressableCard>
+  );
+}
+
+// ── the custom-provider row ─────────────────────────────────────────────────
+
+function CustomProviderRow({ onPress }: { onPress: () => void }) {
+  const { tokens } = useTheme();
+  return (
+    <PressableCard onPress={onPress} accessibilityLabel="Add a custom provider">
+      <View style={styles.addRowInner}>
+        <View style={[styles.addRowIcon, { backgroundColor: tokens.subtleHover }]}>
+          <Plus size={16} color={tokens.accent} strokeWidth={2.2} />
+        </View>
+        <View style={styles.addRowText}>
+          <TypeBodyStrong numberOfLines={1}>Custom provider</TypeBodyStrong>
+          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+            any OpenAI-compatible endpoint
+          </TypeMicro>
+        </View>
+        <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
+      </View>
+    </PressableCard>
+  );
+}
+
+// ── the custom-create sheet ─────────────────────────────────────────────────
+
+function CustomProviderSheet({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** The list reload after a successful create (the row appears in "Your providers"). */
+  onCreated: () => void;
+}) {
+  const { tokens } = useTheme();
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiFormat, setApiFormat] = useState<ProviderApiFormat>("chat-completions");
+  const [firstKey, setFirstKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // The provider EXISTS (the POST answered ok) but the sheet stayed open —
+  // the key save failed. Re-creating would 409 on the name; the only honest
+  // action left is Done (close + reload; the key lands from its page).
+  const [created, setCreated] = useState(false);
+
+  // Every open resets the form + the stale error (the previous attempt's
+  // 409 must not haunt the next one).
+  useEffect(() => {
+    if (!open) return;
+    setName("");
+    setBaseUrl("");
+    setApiFormat("chat-completions");
+    setFirstKey("");
+    setError(null);
+    setCreated(false);
+  }, [open]);
+
+  const finish = useCallback(() => {
+    onClose();
+    onCreated();
+  }, [onClose, onCreated]);
+
+  const onCreate = useCallback(async () => {
+    if (busy || created) return;
+    const body = customProviderBody(name, baseUrl, apiFormat);
+    if (body === null) {
+      setError("a name and a base URL are both required");
+      void warningHaptic();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const outcome = await createCustomProvider(getLinkManager(), body);
+      if (outcome.ok) {
+        mobLog("config", "custom provider created", {
+          id: outcome.data.id,
+          adopted: outcome.data.adopted === true,
+        });
+        // The first key does NOT ride the create — the primary key route
+        // owns it. A key save failure never loses the provider: the row
+        // exists on the server, the sheet says so honestly, Done hands
+        // over to the list.
+        const key = firstKey.trim();
+        if (key === "") {
+          void successHaptic();
+          finish();
+          return;
+        }
+        const keyOutcome = await setProviderKey(getLinkManager(), outcome.data.id, key);
+        if (keyOutcome.ok) {
+          mobLog("config", "custom provider key set", { id: outcome.data.id });
+          void successHaptic();
+          finish();
+          return;
+        }
+        mobWarn("config", "custom provider key save failed", {
+          id: outcome.data.id,
+          status: keyOutcome.error.status,
+          message: keyOutcome.error.message,
+        });
+        void warningHaptic();
+        setCreated(true);
+        setError(
+          `the provider was created, but its key did not save — ${keyOutcome.error.message}. Add it from the provider's page.`,
+        );
+      } else {
+        mobWarn("config", "custom provider create failed", {
+          status: outcome.error.status,
+          message: outcome.error.message,
+        });
+        void warningHaptic();
+        // The route names the field (name in use / bad URL) — inline, honestly.
+        setError(outcome.error.message);
+      }
+    } catch {
+      mobWarn("config", "custom provider create threw");
+      void warningHaptic();
+      setError("the host is offline — the provider was not created");
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, created, name, baseUrl, apiFormat, firstKey, finish]);
+
+  return (
+    <Sheet open={open} onClose={onClose} title="Custom provider" testID="custom-provider-sheet">
+      <View style={styles.fieldGap}>
+        <ClayInput
+          label="Name"
+          value={name}
+          onChangeText={setName}
+          autoCapitalize="none"
+          autoCorrect={false}
+          accessibilityLabel="Provider name"
+          caption="unique across your providers — the server refuses a duplicate"
+        />
+        <ClayInput
+          label="Base URL"
+          mono
+          value={baseUrl}
+          onChangeText={setBaseUrl}
+          autoCapitalize="none"
+          autoCorrect={false}
+          inputMode="url"
+          accessibilityLabel="Provider base URL"
+          caption="the http(s) endpoint the desktop calls"
+        />
+        <View style={styles.fieldWrap}>
+          <TypeCaption style={styles.fieldLabel}>API format</TypeCaption>
+          <View style={styles.formatRow}>
+            {API_FORMATS.map((format) => (
+              <Chip
+                key={format.id}
+                selected={apiFormat === format.id}
+                onPress={() => setApiFormat(format.id)}
+                testID={`api-format-${format.id}`}
+              >
+                {format.label}
+              </Chip>
+            ))}
+          </View>
+        </View>
+        <ClayInput
+          label="First API key (optional)"
+          mono
+          value={firstKey}
+          onChangeText={setFirstKey}
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+          accessibilityLabel="First API key"
+          caption="write-only from this phone — it lands in the desktop's keyring and is never shown back"
+        />
+        {error !== null ? (
+          <TypeCaption style={{ color: tokens.danger }} numberOfLines={4}>
+            {error}
+          </TypeCaption>
+        ) : null}
+        {created ? (
+          // The provider exists — creating again would 409 on the name.
+          <ChromeButton onPress={finish} accessibilityLabel="Done — close the sheet">
+            Done — add its key from the page
+          </ChromeButton>
+        ) : (
+          <ChromeButton
+            onPress={() => void onCreate()}
+            disabled={busy}
+            accessibilityLabel={busy ? "Creating the provider" : "Create the provider"}
+          >
+            {busy ? "creating…" : "Create provider"}
+          </ChromeButton>
+        )}
+      </View>
+    </Sheet>
   );
 }
 
@@ -240,6 +488,26 @@ const styles = StyleSheet.create({
   rowTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   rowTitle: { flex: 1 },
   rowBaseUrl: { fontSize: 11, lineHeight: 15 },
+  addRowInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    padding: spacing.md,
+    paddingHorizontal: spacing.lg,
+    minHeight: 56,
+  },
+  addRowIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  addRowText: { flex: 1, gap: 2 },
   tierEmpty: { paddingHorizontal: spacing.xs, paddingVertical: spacing.sm },
   tierDivider: { borderBottomWidth: StyleSheet.hairlineWidth, marginVertical: spacing.md },
+  fieldGap: { gap: spacing.md },
+  fieldWrap: { gap: spacing.xs },
+  fieldLabel: { textTransform: "uppercase", letterSpacing: 0.8 },
+  formatRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
 });
