@@ -97,13 +97,17 @@ const PROVIDER: ProviderView = {
   enabled: true,
   createdAt: "2026-08-21T09:00:00Z",
   hasKey: true,
+  // R113-a wire: the server's configured bit (a held key makes the row
+  // configured). The R113-d rail groups on THIS, not on any client-side
+  // preset heuristic.
+  configured: true,
 };
 
 /* ── ROUND-58 (R58-d) test fixtures ───────────────────────────────────────── */
 
-/** A keyless seeded preset — R59-C: hidden from the list ENTIRELY (the
- * owner deleted the three by hand and wants them never to appear).
- * Still served by GET /providers to prove the hiding is client-side. */
+/** A keyless seeded preset — R113-d: the "Add a provider" tier (the
+ * server's configured:false). Still served by GET /providers; the rail
+ * shows it BELOW the divider, selectable into its detail pane. */
 const ANTHROPIC: ProviderView = {
   id: "anthropic",
   name: "Anthropic",
@@ -113,6 +117,7 @@ const ANTHROPIC: ProviderView = {
   enabled: true,
   createdAt: "2026-08-21T09:01:00Z",
   hasKey: false,
+  configured: false,
 };
 const OPENAI: ProviderView = {
   id: "openai",
@@ -123,6 +128,7 @@ const OPENAI: ProviderView = {
   enabled: true,
   createdAt: "2026-08-21T09:02:00Z",
   hasKey: false,
+  configured: false,
 };
 const GOOGLE: ProviderView = {
   id: "google",
@@ -133,10 +139,12 @@ const GOOGLE: ProviderView = {
   enabled: true,
   createdAt: "2026-08-21T09:03:00Z",
   hasKey: false,
+  configured: false,
 };
 
 /** A user-created CUSTOM provider (not a reserved id) — always a "live"
- * row, and its Connection card shows Base URL + API format. */
+ * row (the R113-a builder counts custom rows as configured even keyless),
+ * and its Connection card shows Base URL + API format. */
 const CUSTOM_PROVIDER: ProviderView = {
   id: "my-gateway",
   name: "My Gateway",
@@ -146,6 +154,7 @@ const CUSTOM_PROVIDER: ProviderView = {
   enabled: true,
   createdAt: "2026-08-21T09:04:00Z",
   hasKey: true,
+  configured: true,
 };
 
 /** GET /providers response (tests append preset/custom rows). */
@@ -366,8 +375,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   // R59-C: PUT /providers/:id/key — the paste-to-replace save (browser-dev
   // path). Updates the pool listing's slot-0 masked value (the post-save
   // masked display is honest — the pane invalidates + refetches it) and
-  // flips hasKey on the providers row (a stored key makes a keyless preset
-  // configured again).
+  // flips hasKey + configured on the providers row (R113-a semantics: a
+  // stored key makes the row configured — the server derives the bit from
+  // keyCount > 0).
   const keyPutMatch = url.match(/\/api\/v1\/providers\/([^/]+)\/key$/);
   if (keyPutMatch !== null && method === "PUT") {
     const value = String((body as { value: string }).value);
@@ -375,7 +385,10 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     pool.push({ slot: 0, hasKey: true, masked: `${value.slice(0, 5)}…${value.slice(-4)}` });
     pool.sort((a, b) => a.slot - b.slot);
     const saved = providersList.find((p) => p.id === keyPutMatch[1]);
-    if (saved !== undefined) saved.hasKey = true;
+    if (saved !== undefined) {
+      saved.hasKey = true;
+      saved.configured = true;
+    }
     return { status: 204, ok: true, text: async () => "" } as unknown as Response;
   }
   // Key pool (GET list + stateful PUT/DELETE per slot) — provider-scoped.
@@ -1369,8 +1382,8 @@ describe("Configure model dialog — per-1M pricing + vision (R62-2b)", () => {
 
 /* ── ROUND-59 (R59-C): the left list — CONFIGURED providers only ─────────── */
 
-describe("Left list — configured providers only (R59-C)", () => {
-  it("keyless seeded presets are ABSENT entirely — no 'Not configured' group, no preset rows; the header count reflects what is shown", async () => {
+describe("Left list — configured-first two-tier rail (R59-C → R113-d)", () => {
+  it("the rail splits into 'Your providers' (the server's configured bit) + 'Add a provider' below a divider; the count reflects the configured group", async () => {
     providersList = [PROVIDER, ANTHROPIC, OPENAI, GOOGLE].map((p) => ({ ...p }));
     renderWithProviders(<ModelsProvidersTab />);
 
@@ -1380,25 +1393,77 @@ describe("Left list — configured providers only (R59-C)", () => {
     await waitFor(() =>
       expect(within(left).getByTitle("https://openrouter.ai/api/v1 · Chat completions")).toBeTruthy(),
     );
-    // …the three keyless presets appear NOWHERE (the owner deleted them
-    // by hand and wants them never to appear — not even collapsed).
-    expect(screen.queryByText("Not configured")).toBeNull();
-    expect(screen.queryByRole("button", { name: /Not configured providers/ })).toBeNull();
-    expect(screen.queryByTitle("https://api.anthropic.com/v1 · Anthropic messages")).toBeNull();
-    expect(screen.queryByTitle("https://api.openai.com/v1 · Chat completions")).toBeNull();
-    expect(screen.queryByTitle("https://generativelanguage.googleapis.com/v1beta/openai · Chat completions")).toBeNull();
-    expect(document.querySelector("[data-not-configured-group]")).toBeNull();
-    // The count reflects what the list SHOWS — 1, not 4.
+    // R113-d (owner: "It was still showing me all the providers which I
+    // could add. It was not showing me the actual providers which were
+    // added."): the two group labels render, and BOTH tiers are visible —
+    // the configured inventory FIRST, the addable catalog second.
+    expect(within(left).getByText("Your providers")).toBeTruthy();
+    expect(within(left).getByText("Add a provider")).toBeTruthy();
+    const addDivider = left.querySelector(".border-t");
+    expect(addDivider).not.toBeNull();
+    // The addable rows carry the + affordance chip instead of a status dot…
+    expect(document.querySelector('[data-testid="provider-add-anthropic"]')).toBeTruthy();
+    expect(document.querySelector('[data-testid="provider-add-openai"]')).toBeTruthy();
+    expect(document.querySelector('[data-testid="provider-add-google"]')).toBeTruthy();
+    // …and the CONFIGURED row keeps its status dot (no add chip).
+    expect(document.querySelector('[data-testid="provider-add-openrouter"]')).toBeNull();
+    // The count reflects the CONFIGURED group — 1, not 4.
     expect(screen.getByTestId("provider-count").textContent).toBe("1");
+    // DOM order: the configured row sits ABOVE the "Add a provider" label.
+    const configuredRow = within(left).getByTitle("https://openrouter.ai/api/v1 · Chat completions");
+    const addLabel = within(left).getByText("Add a provider");
+    expect(
+      (configuredRow.compareDocumentPosition(addLabel) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
   });
 
-  it("a preset that HOLDS a key stays visible — the predicate is hasKey OR custom", async () => {
-    providersList = [PROVIDER, { ...ANTHROPIC, hasKey: true }].map((p) => ({ ...p }));
+  it("a preset the SERVER marks configured sits in 'Your providers' even when hasKey reads false — the pool-aware truth the old heuristic missed", async () => {
+    // R113-a semantics: keys held solely in pool slots read hasKey:false but
+    // configured:true — the pre-R113 client filter (hasKey || custom) HID
+    // exactly this row. The rail groups on the server bit, so it stays an
+    // inventory row.
+    providersList = [PROVIDER, { ...ANTHROPIC, hasKey: false, configured: true }].map((p) => ({ ...p }));
     renderWithProviders(<ModelsProvidersTab />);
     await waitFor(() =>
       expect(screen.getByTitle("https://api.anthropic.com/v1 · Anthropic messages")).toBeTruthy(),
     );
     expect(screen.getByTestId("provider-count").textContent).toBe("2");
+    expect(document.querySelector('[data-testid="provider-add-anthropic"]')).toBeNull();
+  });
+
+  it("NOTHING configured → the honest empty line under 'Your providers', with the addable presets still listed below", async () => {
+    providersList = [ANTHROPIC, OPENAI, GOOGLE].map((p) => ({ ...p }));
+    renderWithProviders(<ModelsProvidersTab />);
+
+    const left = document.querySelector(".w-\\[280px\\]") as HTMLElement;
+    await waitFor(() =>
+      expect(within(left).getByText("No providers configured yet — add your first below.")).toBeTruthy(),
+    );
+    // The addable tier still renders the catalog rows (clickable — their
+    // detail pane is the add-a-key surface)…
+    expect(within(left).getByText("Add a provider")).toBeTruthy();
+    expect(document.querySelector('[data-testid="provider-add-anthropic"]')).toBeTruthy();
+    // …and the count reads zero (nothing in the owner's inventory).
+    expect(screen.getByTestId("provider-count").textContent).toBe("0");
+    // Pre-select falls to the first ADDABLE preset — a fresh install lands
+    // on the "add a key" surface, not a dead placeholder.
+    await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
+  });
+
+  it("selecting an unconfigured preset opens its detail pane — the existing add-key/models surface", async () => {
+    providersList = [PROVIDER, ANTHROPIC].map((p) => ({ ...p }));
+    renderWithProviders(<ModelsProvidersTab />);
+
+    const left = document.querySelector(".w-\\[280px\\]") as HTMLElement;
+    await waitFor(() =>
+      expect(within(left).getByText("Your providers")).toBeTruthy(),
+    );
+    // Click the addable-tier row (the full row button, not just the chip).
+    fireEvent.click(within(left).getByTitle("https://api.anthropic.com/v1 · Anthropic messages"));
+    // The detail pane switches to Anthropic — the key field + test button
+    // are right there (the R59-C "hidden entirely" rule is retired).
+    await waitFor(() => expect(screen.getByLabelText("Test key")).toBeTruthy());
+    expect(screen.queryByText("Preset provider — endpoint and format are fixed.")).toBeTruthy();
   });
 
   it("R95-A: the left rail is a TALL fixed panel — h-full with a 280px floor, keeping its own inner scroller", async () => {
@@ -1416,13 +1481,13 @@ describe("Left list — configured providers only (R59-C)", () => {
     expect(left.querySelector(".overflow-y-auto.auto-scroll")).not.toBeNull();
   });
 
-  it("a keyless CUSTOM provider stays a live row — presets are the only hidden rows", async () => {
-    providersList = [PROVIDER, { ...CUSTOM_PROVIDER, hasKey: false }];
+  it("a keyless CUSTOM provider stays an inventory row — the server counts custom rows as configured", async () => {
+    providersList = [PROVIDER, { ...CUSTOM_PROVIDER, hasKey: false, configured: true }];
     renderWithProviders(<ModelsProvidersTab />);
     await waitFor(() =>
       expect(screen.getByTitle("https://gw.example.com/v1 · Chat completions")).toBeTruthy(),
     );
-    expect(screen.queryByRole("button", { name: /Not configured providers/ })).toBeNull();
+    expect(screen.getByTestId("provider-count").textContent).toBe("2");
   });
 });
 
@@ -2048,35 +2113,48 @@ describe("Pre-select + selection lifecycle (R59-C)", () => {
       expect(screen.queryByText("loading providers…")).toBeNull(),
       { timeout: 2000 },
     );
-    expect(screen.getByText("No providers — add one below.")).toBeTruthy();
+    // R113-d: the empty line is the "Your providers" group's honest note
+    // (no catalog rows exist to show below the divider either).
+    expect(screen.getByText("No providers configured yet — add your first below.")).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.getByTestId("provider-count").textContent).toBe("0");
+    expect(screen.queryByText("Add a provider")).toBeNull();
   });
 
-  it("a selected provider that LEAVES the configured list (preset key removed) is deselected gracefully — falls to the first remaining", async () => {
+  it("a selected provider that DEMOTES (the server flips its configured bit off) stays open — the row moves to the addable tier, the pane becomes the re-add-the-key surface", async () => {
     providersList = [PROVIDER, CUSTOM_PROVIDER].map((p) => ({ ...p }));
     renderWithProviders(<ModelsProvidersTab />);
     await waitFor(() =>
       expect(screen.getByRole("switch", { name: "Toggle provider OpenRouter" })).toBeTruthy(),
     );
 
-    // The stored key disappears server-side → the preset drops out of the
-    // configured list on the next refresh.
+    // The server flips OpenRouter's configured bit off (its key was
+    // removed server-side — e.g. deleted from this very pane) → the row
+    // demotes to the addable tier on the next refresh.
     providersList[0].hasKey = false;
+    providersList[0].configured = false;
     // Trigger the refresh: the toggle PATCH → invalidate → refetch.
     fireEvent.click(screen.getByRole("switch", { name: "Toggle provider OpenRouter" }));
     await waitFor(() =>
       expect(patchResponses).toContainEqual({ id: "openrouter", body: { enabled: false } }),
     );
 
-    // OpenRouter is now hidden everywhere; the selection fell to the next
-    // configured provider — the detail pane never lingers on a hidden row.
-    await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Toggle provider My Gateway" })).toBeTruthy(),
-    );
-    expect(screen.queryByRole("switch", { name: "Toggle provider OpenRouter" })).toBeNull();
+    // R113-d re-pin: the OLD fall-to-next-configured behavior belonged to
+    // the R59-C world where a demoted row VANISHED — a lingering pane on a
+    // missing row was the bug. In the two-tier rail the row stays VISIBLE
+    // (in "Add a provider", now carrying the + affordance), and the pane
+    // stays on it — exactly where the owner re-adds the key.
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="provider-add-openrouter"]')).toBeTruthy();
+    });
     const left = document.querySelector(".w-\\[280px\\]") as HTMLElement;
-    expect(within(left).queryByTitle("https://openrouter.ai/api/v1 · Chat completions")).toBeNull();
+    expect(within(left).getByTitle("https://openrouter.ai/api/v1 · Chat completions")).toBeTruthy();
+    // The pane still shows OpenRouter (still selectable, still editable).
+    expect(
+      screen.getByRole("switch", { name: "Toggle provider OpenRouter" }).getAttribute("aria-checked"),
+    ).toBe("false");
+    // The count reads the CONFIGURED tier — 1, not 2.
+    expect(screen.getByTestId("provider-count").textContent).toBe("1");
   });
 });
 

@@ -123,23 +123,17 @@ export function SettingsPage() {
     SETTINGS_SECTIONS.find((t) => t.id === tabParam)?.id ?? "appearance"
   ) as SettingsSectionId;
 
-  // ROUND-34: the in-page tab bar is GONE — the sidebar is the settings nav
-  // (owner design frame 1a). The page header adapts per section.
-  const activeMeta = SETTINGS_SECTIONS.find((t) => t.id === tab) ?? SETTINGS_SECTIONS[0];
-
   return (
     <div className="flex h-full flex-col">
-      {/* ROUND-60 (R60-B): the owner's padding directive — "All of the
-          settings have a lot of extra unnecessary padding on the right and
-          left sides… minimize the padding as much as possible." The header
-          strip drops to px-4/px-6.
-          R100-E1 (research §C2 P1(d)): the header = the label-tier Kicker +
-          the 24px/600 title (the old 11px-bold/0.18em + font-black pair was
-          the pre-round-100 spelling the ladder retired). */}
-      <div className="shrink-0 border-b border-line px-4 md:px-6 py-4">
-        <Kicker className="mb-1">Settings</Kicker>
-        <h1 className="text-[24px] font-semibold tracking-tight text-ink">{activeMeta.label}</h1>
-      </div>
+      {/* R113-d (owner: the page headers are "unnecessary, unneeded, and not
+          required" — they "take up way too much important space"): the
+          Kicker + 24px section-title header strip is DELETED. The app
+          sidebar's settings mode is the nav chrome; the content pane below
+          starts directly at the tab's own cards (the in-tab Kickers and
+          section labels stay — they are in-content labels, not page
+          headers). The px-4/px-6 · py-4 rhythm the content pane already
+          carried is the page's top chrome now (R60-B's padding directive
+          rides on, un-inflated). */}
 
       {/* R102-C: the settings-local nav column is DELETED — the app sidebar
           (left) is the settings nav on /settings; this page is the content

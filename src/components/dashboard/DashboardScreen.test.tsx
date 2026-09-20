@@ -51,20 +51,21 @@ function renderDashboard() {
 }
 
 describe("DashboardScreen (fixture backend)", () => {
-  it("renders the demo-fidelity greeting and stat cards", async () => {
+  it("renders the stat cards as the page's first content — the R113-d hero is GONE", async () => {
     renderDashboard();
 
-    // Greeting header (time-of-day line + accent welcome line).
-    expect(
-      await screen.findByText(/Workspace Overview/i),
-    ).toBeTruthy();
-    expect(screen.getByText(/what.s happening/i)).toBeTruthy();
+    // R113-d (owner: the page headers are "unnecessary, unneeded, and not
+    // required"): the Kicker + 24px greeting + description block is deleted —
+    // nothing of it renders, and the stat row is the top of the page.
+    expect(screen.queryByText(/Workspace Overview/i)).toBeNull();
+    expect(screen.queryByText(/what.s happening/i)).toBeNull();
+    expect(screen.queryByText(/good (morning|afternoon|evening|night)/i)).toBeNull();
 
     // The four stat cards (owner round-8: Projects replaces Agents here —
     // agents management lives in Settings now).
     // R97-I part 2 re-pin: the stat row is a SKELETON until every source
     // settles (never false zeros) — await a label instead of reading it at
-    // first paint (the greeting renders one commit before the queries do).
+    // first paint.
     expect(await screen.findByText("Projects")).toBeTruthy();
     expect(screen.getByText("Sessions")).toBeTruthy();
     expect(screen.getByText("Tokens")).toBeTruthy();

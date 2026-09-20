@@ -35,11 +35,16 @@ describe("App shell (owner round-8 structure)", () => {
     expect(screen.queryByRole("link", { name: "Sessions" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Agents" })).toBeNull();
 
-    // Index route is the live Dashboard: time-of-day greeting + quick actions.
-    const greeting = screen
-      .getAllByRole("heading", { level: 1 })
-      .find((h) => /Good (morning|afternoon|evening|night)/.test(h.textContent ?? ""));
-    expect(greeting).toBeTruthy();
+    // Index route is the live Dashboard. R113-d: the greeting header is
+    // DELETED (owner: page headers are "unnecessary, unneeded, and not
+    // required") — the stat cards are the page's first content, so the
+    // R97-I stat labels are the route's honest proof.
+    await screen.findByText("Turns");
+    expect(
+      screen
+        .queryAllByRole("heading", { level: 1 })
+        .find((h) => /Good (morning|afternoon|evening|night)/.test(h.textContent ?? "")),
+    ).toBeUndefined();
   });
 
   it("the dashboard's primary quick action opens the newest project's chat (R48-a: no /sessions link)", async () => {

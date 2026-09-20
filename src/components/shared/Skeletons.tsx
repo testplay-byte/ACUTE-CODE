@@ -3,10 +3,12 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 /**
  * ROUND-97 (R97-I, owner: "I want the UI to be aware of its states"): the
  * shared skeleton primitives. Until now every surface rolled its own ad-hoc
- * `animate-pulse` block (UsageScreen cards, ChatView bubbles, explorer
- * TreeSkeleton rows…) — consistent values, five spellings. These two
- * components are the one spelling: the DESIGN-SYSTEM §6 "loading: skeleton
- * rows, spinners, NEVER blank flashes" rule, prepackaged.
+ * `animate-pulse` block (UsageScreen cards, the old sessions-screen bubbles,
+ * explorer TreeSkeleton rows…) — consistent values, five spellings. These
+ * two components are the one spelling: the DESIGN-SYSTEM §6 "loading:
+ * skeleton rows, spinners, NEVER blank flashes" rule, prepackaged.
+ * (R113-d note: the sessions/ChatView file those bubbles lived in is
+ * deleted — the pattern name survives here as history.)
  *
  * Deliberately DECORATIVE (aria-hidden) — a loading REGION announces itself
  * once on its container (`role="status" aria-label="Loading …"`), not per

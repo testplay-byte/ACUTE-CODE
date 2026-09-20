@@ -65,23 +65,24 @@ afterEach(() => {
 });
 
 describe("SettingsPage padding (R60-B)", () => {
-  it("the header strip + the content container use the tightened px-4/px-6 rhythm — no px-5/px-8 anywhere", () => {
+  it("R113-d: the header strip is DELETED — the content container (px-4/px-6 · py-4) is the page's top chrome now", () => {
     renderWithProviders(<SettingsPage />); // default tab: appearance
 
-    // The header strip — the element that owns the "Settings" micro-label.
-    const header = screen.getByText("Settings").parentElement as HTMLElement;
-    expect(header).not.toBeNull();
-    expect(header.className).toContain("px-4 md:px-6");
-    expect(header.className).not.toContain("px-5");
-    expect(header.className).not.toContain("px-8");
+    // R113-d (owner: the page headers are "unnecessary, unneeded, and not
+    // required"): the border-b "Settings" Kicker + 24px section-title strip
+    // is gone — no page-level h1 renders at all.
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+    expect(screen.queryByText("Settings")).toBeNull();
 
-    // The scrollable content container.
+    // The scrollable content container keeps the tightened rhythm it has
+    // carried since R60-B — now as the FIRST element of the page.
     const content = document.querySelector(".overflow-y-auto") as HTMLElement;
     expect(content).not.toBeNull();
     expect(content.className).toContain("px-4 md:px-6");
     expect(content.className).toContain("py-4");
     expect(content.className).not.toContain("px-5");
     expect(content.className).not.toContain("py-5");
+    expect(content.className).not.toContain("py-6");
   });
 
   it("form tabs keep a readable (tighter) max-w-4xl centering — the old 5xl cap is gone", () => {
@@ -107,8 +108,9 @@ describe("SettingsPage padding (R60-B)", () => {
     expect(content.className).not.toContain("mx-auto");
 
     // The tab actually rendered behind the 401-stubbed queries: the empty
-    // provider list is the honest state.
-    await screen.findByText("No providers — add one below.");
+    // provider list is the honest state (R113-d: the "Your providers"
+    // group's empty line).
+    await screen.findByText("No providers configured yet — add your first below.");
   });
 
   // R95-A (the owner: "on any of the pages there is no need to show the Back
@@ -484,13 +486,13 @@ describe("Functionality tab + Auto-retry card (ROUND-78 R78-C, R98-I1)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("R98-I1: the tab is FUNCTIONALITY now (?tab=advanced unchanged): h1 Functionality, the two category headers, the Auto-retry card ABOVE the Debug card, and the Data & insights cross-link", async () => {
+  it("R98-I1: the tab is FUNCTIONALITY now (?tab=advanced unchanged): its own intro header, the two category headers, the Auto-retry card ABOVE the Debug card, and the Data & insights cross-link", async () => {
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
 
-    // The label rename — the h1 reads the TABS entry, the URL id is untouched.
-    expect(screen.getByRole("heading", { level: 1, name: "Functionality" })).toBeTruthy();
-    expect(screen.queryByRole("heading", { level: 1, name: "General" })).toBeNull();
-    expect(screen.queryByRole("heading", { level: 1, name: "Advanced" })).toBeNull();
+    // R113-d: the page-level h1 strip is DELETED — the tab's OWN intro
+    // header (a Kicker + the 13px/600 section title) is the top of the
+    // content. No h1 renders anywhere on the page.
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
 
     // The card + its three switches (all default ON — the R75 ladder stands).
     // Wait for a SWITCH (the loading branch shares the testid but has none).
@@ -751,15 +753,15 @@ describe("Functionality tab + Auto-retry card (ROUND-78 R78-C, R98-I1)", () => {
  * ROUND-99 (R99-F): the tab's own h2 is the "System prompt" framing title
  * (the project-wide redesign) and it SURVIVES the error gate. */
 describe("Prompts tab (ROUND-98 R98-E / ROUND-99 R99-F)", () => {
-  it("?tab=prompts deep-links to the Prompts tab: the h1 adapts, the System prompt framing mounts, and the 401'd sections GET renders the honest error card + Retry", async () => {
+  it("?tab=prompts deep-links to the Prompts tab: the System prompt framing mounts (R113-d: no page h1), and the 401'd sections GET renders the honest error card + Retry", async () => {
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=prompts" });
 
-    // The header adapts to the section (h1) while the tab renders its own
+    // R113-d: the page-level h1 strip is deleted; the tab renders its own
     // framing h2 (R99-F: "System prompt", the project-wide scope — it mounts
-    // with the manager card once the picker's projects resolve); the tab's
-    // root mounts in the standard max-w column branch (the form-tabs
-    // container, not the api tab's viewport-locked one).
-    expect(screen.getByRole("heading", { level: 1, name: "Prompts" })).toBeTruthy();
+    // with the manager card once the picker's projects resolve) in the
+    // standard max-w column branch (the form-tabs container, not the api
+    // tab's viewport-locked one).
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
     expect(screen.getByTestId("prompts-tab")).toBeTruthy();
     expect(await screen.findByRole("heading", { level: 2, name: "System prompt" })).toBeTruthy();
     // The picker defaults to the FIRST registered project (the demo fixture
@@ -1009,31 +1011,29 @@ describe("R102-C: the settings-local nav column is GONE — the app sidebar owns
     expect(screen.queryByTestId("settings-nav-appearance")).toBeNull();
     expect(screen.queryByTestId("settings-nav-about")).toBeNull();
     expect(document.querySelectorAll('[data-testid^="settings-group-"]')).toHaveLength(0);
-    // The page header still renders (Kicker + the active tab's title).
-    expect(screen.getByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
+    // R113-d: the page header is deleted too — the content pane starts
+    // directly at the tab's own cards (the tab machine still drives).
+    expect(screen.queryByRole("heading", { level: 1, name: "Appearance" })).toBeNull();
   });
 
   it("the ?tab=browser deep link still selects the Browser tab (the URL contract is untouched)", async () => {
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=browser" });
 
-    expect(screen.getByRole("heading", { level: 1, name: "Browser" })).toBeTruthy();
     expect(await screen.findByTestId("browser-settings-card")).toBeTruthy();
   });
 
-  it("R100-E1 ladder: the page header is the Kicker + 24px/600 title (no font-black), and the tab-intro headers are Kickers + 13px/600 section titles", () => {
+  it("R113-d ladder: NO page header renders — the tab-intro headers are Kickers + 13px/600 section titles (a TAB, not a page)", () => {
     // The Advanced tab renders its intro header unconditionally (the query
     // gates live INSIDE its cards), so the file-level 401 stub suffices.
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
 
-    // Page header: the label-tier Kicker + the title tier (24px/600).
-    const h1 = screen.getByRole("heading", { level: 1, name: "Functionality" });
-    expect(h1.className).toContain("text-[24px]");
-    expect(h1.className).toContain("font-semibold");
-    expect(h1.className).not.toContain("font-black");
+    // The page-level h1 (24px/600 section title) is GONE — the R113-d
+    // owner directive ("unnecessary, unneeded, and not required").
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+    expect(document.body.innerHTML).not.toMatch(/text-\[24px\]/);
 
-    // The tab-intro header: Kicker (the group name — the nav column's own
-    // group kicker carries the same text, so no getByText here) + 13px/600
-    // section title — a TAB, not a page (research §C2 P1(d)).
+    // The tab-intro header survives as the content's own label: Kicker (the
+    // group name) + 13px/600 section title — a TAB, not a page (R100-E1).
     const tabIntro = screen.getByRole("heading", { level: 2, name: "Functionality" });
     expect(tabIntro.className).toContain("text-[13px]");
     expect(tabIntro.className).toContain("font-semibold");

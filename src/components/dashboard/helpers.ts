@@ -1,10 +1,11 @@
-import { useState } from "react";
-
 /**
  * Shared helpers for the dashboard screen, ported from the owner's demo
- * (acute-agent-dashboard/src/lib/dashboard-helpers.ts): greeting hook, hex
- * alpha compositing for accent washes, and the demo border-string helper.
- * Motion variants live in src/lib/motion.ts (shared app-wide).
+ * (acute-agent-dashboard/src/lib/dashboard-helpers.ts): hex alpha compositing
+ * for accent washes and the demo border-string helper. Motion variants live
+ * in src/lib/motion.ts (shared app-wide). R113-d: useGreeting (the
+ * time-of-day greeting hook) is deleted — the dashboard's page header died
+ * with the owner's "unnecessary, unneeded, and not required" directive and
+ * the greeting was NOT relocated anywhere.
  */
 
 /** Compose an rgba() wash over a hex color; non-hex inputs pass through. */
@@ -21,18 +22,6 @@ export function withAlpha(color: string, alpha: number): string {
 
 /** Demo `bdr()` — inline-style border shorthand. */
 export const bdr = (width: string, color: string): string => `${width} solid ${color}`;
-
-/** Time-of-day greeting, sampled once per mount (demo useGreeting). */
-export function useGreeting(): string {
-  const [greeting] = useState(() => {
-    const h = new Date().getHours();
-    if (h < 12) return "Good morning";
-    if (h < 17) return "Good afternoon";
-    if (h < 21) return "Good evening";
-    return "Good night";
-  });
-  return greeting;
-}
 
 /** "Mon"-style UTC weekday for a YYYY-MM-DD bucket from the usage API. */
 export function shortUtcDay(date: string): string {

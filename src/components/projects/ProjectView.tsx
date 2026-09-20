@@ -1,12 +1,13 @@
 import { useNavigate, useParams } from "react-router";
-import { MessagesSquare } from "lucide-react";
+import { Plus } from "lucide-react";
+import { useAgents } from "../../hooks/use-agents";
 import { useProjects } from "../../hooks/use-projects";
-import { useSessions } from "../../hooks/use-sessions";
+import { useCreateSession, useSessions } from "../../hooks/use-sessions";
 import { formatWhen } from "../../lib/format";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { bdr, withAlpha } from "../dashboard/helpers";
-// R100-F (research §C2 P5): the Sessions header rides THE one kicker.
+// R100-F (research §C2 P5): the Sessions section label rides THE one kicker.
 import { Kicker } from "../ui/Kicker";
 
 /**
@@ -14,6 +15,14 @@ import { Kicker } from "../ui/Kicker";
  * project's home inside the main card. The dedicated chat window is live at
  * /project/:id/chat (M3 project-chat port); this screen remains the project's
  * landing page with its bound sessions for context.
+ *
+ * R113-d (owner: page headers are "unnecessary, unneeded, and not required";
+ * + the project/sessions flow fix): the 44px identity tile + 24px title +
+ * the "Open project chat" CTA card collapse into ONE slim row — name at the
+ * row tier + the mono rootPath inline + the New session affordance at the
+ * right end. The session rows below are the chat entry points now, and EACH
+ * row opens ITS OWN session (?session=<id>) instead of silently landing on
+ * the project's latest conversation.
  */
 export function ProjectView() {
   const { id } = useParams<{ id: string }>();
@@ -28,6 +37,35 @@ export function ProjectView() {
   const sessions = (sessionsQuery.data ?? [])
     .filter((s) => s.projectId === id)
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+
+  // R113-d: the "New session" affordance — the sidebar's project-row + is
+  // one entry point, but this screen needs its own (the flow must not depend
+  // on the sidebar being expanded). Same recipe the sidebar uses: the first
+  // non-template agent + useCreateSession, then land the chat AT the fresh
+  // session (?session= is read by use-active-session).
+  const agentsQuery = useAgents(false);
+  const createSession = useCreateSession();
+  const startNewSession = async () => {
+    if (!id || !project || createSession.isPending) return;
+    const agentId = (agentsQuery.data ?? [])[0]?.id ?? null;
+    if (!agentId) {
+      // No non-template agent in the registry yet — the chat screen's empty
+      // state owns that teaching moment (it links to Settings); land there.
+      void navigate(`/project/${id}/chat`);
+      return;
+    }
+    try {
+      const created = await createSession.mutateAsync({
+        mode: "single" as const,
+        agentId,
+        projectId: id,
+        title: `New chat · ${project.name}`,
+      });
+      void navigate(`/project/${id}/chat?session=${created.id}`);
+    } catch {
+      /* surfaced by the mutation state; keep the view stable */
+    }
+  };
 
   if (projectsQuery.isPending) {
     return (
@@ -98,69 +136,52 @@ export function ProjectView() {
     );
   }
 
-  const letter = project.name.charAt(0).toUpperCase();
-
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6">
       <div className="mx-auto max-w-3xl">
-        {/* Project header */}
+        {/* R113-d: the slim identity row (see the file header) — the name at
+            the row tier (13px/600), the mono rootPath inline, and the row's
+            right end carries the New session affordance. The pre-R113
+            header (44px tile + 24px title) and the "Open project chat" CTA
+            card are retired: the SESSION ROWS below are the chat entry
+            points (the first row is the latest session — the old CTA's
+            destination), and a fresh chat is the button. */}
         <div className="flex items-center gap-3">
-          {/* R100-F: the header tile mirrors the sidebar's flattened
-              ProjectTile grammar — flat project color + a 1px border, the
-              13px/600 letter (the `${color}CC` string-suffix hack becomes
-              withAlpha(color, 0.8) per TOKENS §1 rule 3). */}
-          <div
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl text-[13px] font-semibold text-white"
-            style={{
-              backgroundColor: withAlpha(project.color, 0.8),
-              border: "1px solid rgba(0, 0, 0, 0.14)",
-            }}
-          >
-            {letter}
-          </div>
-          <div className="min-w-0">
-            <h1 className="truncate text-[24px] font-semibold" style={{ color: styles.text }}>
+          <div className="min-w-0 flex flex-1 items-baseline gap-2.5">
+            <h1
+              className="min-w-0 truncate text-[13px] font-semibold"
+              style={{ color: styles.text }}
+              title={project.name}
+            >
               {project.name}
             </h1>
-            <div className="truncate font-mono text-[11px] tabular-nums" style={{ color: styles.textTertiary }}>
+            <span
+              className="min-w-0 flex-1 truncate font-mono text-[11px] tabular-nums"
+              style={{ color: styles.textTertiary }}
+              title={project.rootPath}
+            >
               {project.rootPath}
-            </div>
-          </div>
-        </div>
-
-        {/* Project chat entry point (M3 project-chat screen) */}
-        <div
-          className="mt-5 rounded-2xl border-[1.5px] p-4"
-          style={{
-            background: withAlpha(project.color, 0.06),
-            borderColor: withAlpha(project.color, 0.25),
-          }}
-        >
-          <div className="flex items-center gap-2">
-            <MessagesSquare size={14} style={{ color: styles.text }} />
-            <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
-              Project chat
             </span>
           </div>
-          <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
-            Agents work on this project in a dedicated chat window — files, tools and turns side
-            by side. Opening it starts (or resumes) a session bound to this workspace.
-          </p>
-          {/* R100-F (research §C2 P5): the CTA radius snaps rounded-[8px] →
-              rounded-lg and the label to the 13px/600 button tier. */}
+          {/* The Add-provider button's grammar (h-8 pill on the
+              bg-accent-soft leg — TOKENS §6's CSS hover, never a handler). */}
           <button
-            onClick={() => id && navigate(`/project/${id}/chat`)}
-            className="mt-3 h-10 cursor-pointer rounded-lg px-4 text-[13px] font-semibold transition-opacity hover:opacity-90"
-            style={{ backgroundColor: styles.accent, color: styles.accentText }}
+            type="button"
+            onClick={() => void startNewSession()}
+            disabled={createSession.isPending}
+            aria-label={`Start a new session in ${project.name}`}
+            title="New session"
+            className="shrink-0 h-8 px-3 flex items-center justify-center gap-1.5 rounded-lg text-[12px] font-semibold transition-colors bg-accent-soft hover:bg-accent-faded disabled:opacity-60"
+            style={{ color: styles.accent }}
           >
-            Open project chat
+            <Plus size={13} strokeWidth={2.5} /> New session
           </button>
         </div>
 
         {/* Sessions bound to this project (client-side projectId filter) */}
         {/* R100-F: THE one kicker (ui/Kicker) — the 11px font-bold
             tracking-widest hand-rolled header is retired. */}
-        <Kicker as="h2" className="mb-2 mt-6">
+        <Kicker as="h2" className="mb-2 mt-5">
           Sessions
         </Kicker>
         {sessionsQuery.isPending ? (
@@ -193,7 +214,13 @@ export function ProjectView() {
             {sessions.map((s) => (
               <button
                 key={s.id}
-                onClick={() => id && navigate(`/project/${id}/chat`)}
+                /* R113-d (the owner's project/sessions flow fix): each row
+                   opens THAT session — ?session=<s.id> — the same URL shape
+                   the sidebar's rows + RecentActivity use (?session= is read
+                   by use-active-session). Pre-R113 every row navigated
+                   WITHOUT the param, so clicking an older session silently
+                   reopened the project's LATEST conversation. */
+                onClick={() => id && navigate(`/project/${id}/chat?session=${s.id}`)}
                 /* R100-F: hover = the CSS wash (the JS onMouseEnter/Leave
                    pair is retired — TOKENS §6); the border rides the
                    border-line utility; row title 500, status + timestamp

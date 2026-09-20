@@ -259,7 +259,8 @@ export interface Session {
 /**
  * Append-only event-log row (ADR-0010). `payload` is typed per `type`; the
  * chat events ("message.user" | "message.assistant") carry
- * { role, content, agentId, ts } — narrowed via toChatEntries().
+ * { role, content, agentId, ts }. (R113-d: the toChatEntries() narrow-er that
+ * lived here was the deleted sessions/ChatView's — pruned with it.)
  */
 export interface SessionEvent {
   seq: number;
@@ -1134,15 +1135,6 @@ export function computeUnifiedDiff(before: string | null, after: string | null):
   return truncate(out);
 }
 
-/** A chat bubble narrowed from the event log; non-message events arrive in later waves. */
-export interface ChatEntry {
-  seq: number;
-  role: "user" | "assistant";
-  content: string;
-  agentId: string | null;
-  ts: string;
-}
-
 export interface TodoSnapshot {
   seq: number;
   todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>;
@@ -1174,28 +1166,10 @@ export function toLatestTodo(events: SessionEvent[]): TodoSnapshot | null {
   return latest;
 }
 
-export function toChatEntries(events: SessionEvent[]): ChatEntry[] {
-  return events.flatMap((event) => {
-    if (event.type !== "message.user" && event.type !== "message.assistant") return [];
-    const payload =
-      event.payload && typeof event.payload === "object"
-        ? (event.payload as Record<string, unknown>)
-        : null;
-    if (!payload || typeof payload.content !== "string") return [];
-    return [
-      {
-        seq: event.seq,
-        role: event.type === "message.user" ? "user" : "assistant",
-        content: payload.content,
-        agentId: event.agentId,
-        ts: event.ts,
-      },
-    ];
-  });
-}
-
 // ---------------------------------------------------------------------------
 // project-chat timeline (M3): fold the event log into chat items
+// (R113-d: the legacy toChatEntries()/ChatEntry pair that sat here was the
+// sessions/ChatView's transformer — dead with that file, pruned.)
 // ---------------------------------------------------------------------------
 
 /** One executed tool call as rendered by the grouped action-pills row. */
@@ -3010,6 +2984,15 @@ export interface ProviderView {
    * the backend's key-juggling work: consumers must default defensively
    * (`p.keyCount ?? (p.hasKey ? 1 : 0)`) until every sidecar serves it. */
   keyCount?: number;
+  /** R113-a (the live-sync wire wave): the server's honest "is this provider
+   * usable" bit — true for a CUSTOM row (the user created it, so it counts
+   * even keyless) OR any held key (pool-aware; see hasKey above). Seeded
+   * presets with no keys read configured:false — the "add a key" tier.
+   * Optional on the client type the same defensive way keyCount is (the
+   * field rides a wire wave); the R113-d providers rail groups on it
+   * outright (`p.configured === true`) — the client-side preset heuristic
+   * it replaces was the bug (a pool-only provider read unconfigured). */
+  configured?: boolean;
 }
 
 export async function fetchProviders(): Promise<ProviderView[]> {

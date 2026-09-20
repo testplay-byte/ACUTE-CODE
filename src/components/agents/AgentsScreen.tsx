@@ -50,6 +50,12 @@ export function AgentsScreen({ embedded = false }: { embedded?: boolean }) {
 
   return (
     <div className={embedded ? "flex h-full min-h-0 flex-col" : "flex h-full min-h-0 flex-col"}>
+      {/* R113-d (owner: the page headers are "unnecessary, unneeded, and not
+          required"): the h1 "Agents" + registry-count subtitle row is DELETED
+          — the settings tab (?tab=agents) already identifies the screen. The
+          FUNCTIONAL controls that shared the row (the template filter + New
+          agent) survive as the toolbar; the row keeps its branch padding so
+          the embedded spacing rhythm is unchanged. */}
       <motion.div
         variants={fadeInUp}
         initial="initial"
@@ -60,14 +66,6 @@ export function AgentsScreen({ embedded = false }: { embedded?: boolean }) {
             : "flex flex-wrap items-center gap-3 border-b-[1.5px] border-line px-5 py-3.5"
         }
       >
-        <div>
-          <h1 className="text-[15px] font-bold tracking-tight">Agents</h1>
-          <p className="mt-0.5 text-[11px] text-muted">
-            {query.data ? `${query.data.length} in registry` : "agent registry (SPEC F2)"}
-            {demoData ? " · demo data" : ""}
-          </p>
-        </div>
-
         <div className="ml-auto flex items-center gap-2">
           <div className="flex items-center gap-0.5 rounded-lg bg-hover p-0.5" role="group" aria-label="Template filter">
             {FILTERS.map((f) => (

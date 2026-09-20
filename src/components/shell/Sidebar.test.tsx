@@ -816,3 +816,106 @@ describe("Sidebar + ProjectView state awareness (R97-I part 2)", () => {
     expect(screen.getByText("ACUTE-CODE")).toBeTruthy();
   });
 });
+
+/* ── R113-d: the project view becomes the space-honest project home — the
+ * slim identity row (no 44px tile, no 24px title, no CTA card), per-session
+ * row navigation (?session=<THAT id> — the owner's flow fix), and the New
+ * session affordance the sidebar's project-row + already had. */
+describe("ProjectView compact header + per-session rows (R113-d)", () => {
+  /** Renders ProjectView with a probe at the chat route that mirrors the
+   * real route's URL (pathname + search) into the DOM. */
+  function ChatProbe() {
+    const { pathname, search } = useLocation();
+    return <div data-testid="chat-probe">{`${pathname}${search}`}</div>;
+  }
+
+  function renderProjectView() {
+    return renderWithProviders(
+      <Routes>
+        <Route path="/project/:id" element={<ProjectView />} />
+        <Route path="/project/:id/chat" element={<ChatProbe />} />
+      </Routes>,
+      { route: "/project/prj_seed_acute" },
+    );
+  }
+
+  it("the header is ONE slim row — 13px name + mono rootPath inline + New session; the 44px tile, 24px title and 'Open project chat' CTA are GONE", async () => {
+    renderProjectView();
+
+    // The name renders at the ROW tier (13px/600), the rootPath sits INLINE
+    // beside it (mono, 11px) — no identity tile, no page-title tier.
+    const name = await screen.findByRole("heading", { level: 1, name: "ACUTE-CODE" });
+    expect(name.className).toContain("text-[13px]");
+    expect(name.className).toContain("font-semibold");
+    expect(screen.getByText("/home/dev/ACUTE-CODE")).toBeTruthy();
+    // The pre-R113 chrome is deleted outright.
+    expect(document.querySelector(".h-11.w-11")).toBeNull();
+    expect(screen.queryByText("Open project chat")).toBeNull();
+    expect(screen.queryByText("Project chat")).toBeNull();
+    // The New session affordance rides the row's right end.
+    expect(
+      screen.getByRole("button", { name: "Start a new session in ACUTE-CODE" }),
+    ).toBeTruthy();
+  });
+
+  it("each session row opens THAT session (?session=<its id>) — not the project's latest", async () => {
+    const backend = getFixtureSessions();
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: "prj_seed_acute", title: "First chat" });
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: "prj_seed_acute", title: "Second chat" });
+    const bound = (await backend.list()).filter((s) => s.projectId === "prj_seed_acute");
+    const first = bound.find((s) => s.title === "First chat") as Session;
+    const second = bound.find((s) => s.title === "Second chat") as Session;
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+
+    // Click the FIRST row → the chat route opens AT THAT session (the
+    // pre-R113 bug: every row navigated WITHOUT ?session=, so any click
+    // landed on the project's latest conversation).
+    renderProjectView();
+    fireEvent.click(await screen.findByRole("button", { name: /First chat/ }));
+    await waitFor(() => expect(screen.getByTestId("chat-probe")).toBeTruthy());
+    expect(screen.getByTestId("chat-probe").textContent).toBe(
+      `/project/prj_seed_acute/chat?session=${first.id}`,
+    );
+
+    // …and the SECOND row opens the SECOND session — the param is per-row,
+    // not a constant (whichever of the two is "latest", at least one click
+    // here is NOT the latest, so a param-less navigation cannot pass both).
+    cleanup();
+    renderProjectView();
+    fireEvent.click(await screen.findByRole("button", { name: /Second chat/ }));
+    await waitFor(() => expect(screen.getByTestId("chat-probe")).toBeTruthy());
+    expect(screen.getByTestId("chat-probe").textContent).toBe(
+      `/project/prj_seed_acute/chat?session=${second.id}`,
+    );
+  });
+
+  it("New session creates the session and lands the chat AT it (?session=<created id>)", async () => {
+    const backend = getFixtureSessions();
+    const before = (await backend.list()).filter((s) => s.projectId === "prj_seed_acute").length;
+    renderProjectView();
+
+    const button = await screen.findByRole("button", { name: "Start a new session in ACUTE-CODE" });
+    // Flush the agents query (the fixture backend resolves on the microtask
+    // queue — the affordance reads its data on click).
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(screen.getByTestId("chat-probe")).toBeTruthy());
+    const url = screen.getByTestId("chat-probe").textContent ?? "";
+    expect(url).toMatch(/^\/project\/prj_seed_acute\/chat\?session=/);
+    // The session REALLY exists in the backend, bound to the project, via
+    // the first non-template agent (the sidebar's project-row + recipe).
+    const created = (await backend.list()).find(
+      (s) => s.title === "New chat · ACUTE-CODE",
+    ) as Session | undefined;
+    expect(created).toBeTruthy();
+    expect(url).toBe(`/project/prj_seed_acute/chat?session=${created?.id}`);
+    expect((await backend.list()).filter((s) => s.projectId === "prj_seed_acute").length).toBe(
+      before + 1,
+    );
+    expect(created?.agentId).toBe("agt_scribe");
+  });
+});

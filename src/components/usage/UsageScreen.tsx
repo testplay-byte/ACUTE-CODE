@@ -4,13 +4,11 @@ import { Activity, MessageSquare, Wrench, Zap } from "lucide-react";
 import { useNavigate } from "react-router";
 import { useDetailedUsage, useUsageKeyPools } from "../../hooks/use-usage";
 import { formatTokenCount } from "../../lib/format";
-import { ease, fadeInUp, staggerContainer } from "../../lib/motion";
+import { fadeInUp, staggerContainer } from "../../lib/motion";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-// R100-G (research §C2 P3 + §C3): the de-costumed hero rides the round-100
-// primitives — the Kicker (label tier) + 24px/600 title; the empty state's
-// framing card rides SectionCard.
-import { Kicker } from "../ui/Kicker";
+// R100-G (research §C2 P3 + §C3): the empty state's framing card rides
+// SectionCard.
 import { SectionCard } from "../ui/SectionCard";
 import { StatCard } from "../dashboard/StatCard";
 import { withAlpha } from "../dashboard/helpers";
@@ -27,19 +25,17 @@ import { DataStatsPanel } from "./DataStatsPanel";
  * ROUND-52 (R52-b): the in-app Usage screen (/usage) — the owner-approved
  * DASHBOARD usage page layout rebuilt in the app's working-UI design
  * language (DashboardScreen's container ladder, StatCard/TokenBarChart
- * patterns, useThemeStyles colors, framer-motion entrance). Sections: hero +
- * range selector, overview stat cards, activity chart + tool leaderboard,
+ * patterns, useThemeStyles colors, framer-motion entrance). Sections: the
+ * range toolbar, overview stat cards, activity chart + tool leaderboard,
  * model cards, and the projects → sessions drill-down with nested
  * sub-agent runs. Overview/drill-down rollups are whole-history; `days`
  * scopes the chart.
  *
- * R100-G (research §C2 P3): the hero is DE-COSTUMED — the rotated
- * accent-box font-black display (clamp 2.75–4.5rem + -rotate-1 +
- * bentoShadow, WIZARD-DNA §8's working-screen violations) is replaced by
- * the label-tier Kicker + 24px/600 title + one-line 13px secondary
- * description (the SettingsPage header grammar). The chart's range picker
- * snapped to the DataStatsPanel picker grammar (rounded-xl segments,
- * rounded-lg buttons, 600 weights).
+ * R113-d (owner: the page headers are "unnecessary, unneeded, and not
+ * required"): the Kicker + 24px "Usage" title + description hero is DELETED
+ * — the chart's day-range selector survives as the ONE functional toolbar
+ * row at the top (decoration dies, controls stay). Top padding snaps to the
+ * app's panel tier (py-4/py-6, the DashboardScreen rhythm).
  */
 
 const RANGE_OPTIONS = [7, 14, 30, 90] as const;
@@ -119,37 +115,13 @@ export function UsageScreen() {
       animate="animate"
       className="h-full overflow-y-auto"
     >
-      <div className="mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px] px-5 md:px-8 2xl:px-14 py-6 md:py-10 pb-16">
-        {/* Hero — R100-G (research §C2 P3): the de-costumed working-screen
-            header — label-tier Kicker + 24px/600 title + one-line 13px
-            secondary description (the rotated accent-box display hero is
-            deleted: wizard DNA stays in the wizard) — with the chart's
-            day-range picker beside it */}
-        <motion.div
-          initial={{ opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease }}
-          className="mb-8 md:mb-10 flex flex-col gap-4 md:flex-row md:items-end md:justify-between"
-        >
-          <div className="min-w-0">
-            <Kicker className="mb-1">Data &amp; Statistics</Kicker>
-            <h1
-              className="text-[24px] font-semibold tracking-tight leading-[1.2]"
-              style={{ color: styles.text }}
-            >
-              Usage
-            </h1>
-            <p
-              className="mt-2 text-[13px] max-w-[560px]"
-              style={{ color: styles.textSecondary }}
-            >
-              Every project, every session, every tool call — tokens, cost and
-              model mix from the local ledger. Overview and drill-down cover
-              all time; the chart shows the last {days} days.
-            </p>
-          </div>
+      <div className="mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px] px-5 md:px-8 2xl:px-14 py-4 md:py-6 pb-16">
+        {/* R113-d: the hero is GONE (owner directive — see the file header);
+            the day-range picker stays as the one functional toolbar row at
+            the top of the page, right-aligned where it always lived. */}
+        <div className="mb-4 md:mb-6 flex justify-end">
           <RangeSelector days={days} onChange={setDays} styles={styles} />
-        </motion.div>
+        </div>
 
         {loading ? (
           /* Loading skeletons — the dashboard's pulse-card recipe */

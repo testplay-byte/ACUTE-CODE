@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ExternalLink, FileCode2, Monitor, X } from "lucide-react";
+import { ExternalLink, FileCode2, X } from "lucide-react";
 import { useProjects } from "../../hooks/use-projects";
 import { useProjectDemos } from "../../hooks/use-demos";
 import { useThemeStyles } from "../../lib/use-theme-styles";
@@ -16,6 +16,11 @@ import { withAlpha } from "../dashboard/helpers";
  *
  * Owner R28 directive: "maybe we should give an area inside our own
  * application itself to view this demo too and other kinds of things."
+ *
+ * R113-d (owner: the page headers are "unnecessary, unneeded, and not
+ * required"): the 22px font-black "Demos" header + description block is
+ * DELETED — the per-project sections (their own in-content h2 labels) are
+ * the top of the page. Top padding snaps to the app's panel tier (py-6).
  */
 interface DemoRow {
   projectId: string;
@@ -39,21 +44,10 @@ export function DemoViewerScreen() {
 
   return (
     <div className="h-full overflow-y-auto" style={{ background: styles.bg }}>
-      <div className="mx-auto max-w-5xl px-6 py-8">
-        {/* Header */}
-        <div className="mb-6">
-          <h1 className="flex items-center gap-2 text-[22px] font-black tracking-[-0.02em]" style={{ color: styles.text }}>
-            <Monitor size={20} style={{ color: styles.accent }} />
-            Demos
-          </h1>
-          <p className="mt-1 text-[13px]" style={{ color: styles.textSecondary }}>
-            HTML demos created by the agent (or the owner) live at{" "}
-            <code className="px-1 rounded font-mono text-[12px]" style={{ background: styles.subtle, color: styles.accent }}>
-              &lt;project&gt;/demos/
-            </code>
-            . Click a demo to view it in a sandboxed iframe.
-          </p>
-        </div>
+      <div className="mx-auto max-w-5xl px-6 py-6">
+        {/* R113-d: the header (h1 "Demos" + the <project>/demos/ explainer)
+            is deleted per the owner's page-header directive — the project
+            sections below are the content, each carrying its own label. */}
 
         {projectsQuery.isLoading ? (
           <div className="text-[13px]" style={{ color: styles.textTertiary }}>Loading projects…</div>

@@ -66,7 +66,8 @@ function FirstRunCheck() {
  * should not be available anywhere in our project at all"): the standalone
  * /sessions screen is GONE — route, component, everything. Sessions still
  * exist per-project (the project's chat conversations, fork/revert/rename
- * included); only the global sessions browser was removed.
+ * included); only the global sessions browser was removed. R113-d finally
+ * deleted the orphaned ChatView/NewSessionDialog source files too.
  */
 export function App() {
   // R59-A (owner: "make that top navigation bar rounded and give it padding
@@ -123,7 +124,6 @@ export function App() {
                   element={
                     <PlaceholderPage
                       title="Not found"
-                      spec="—"
                       detail="This screen does not exist. Use the sidebar to navigate."
                     />
                   }

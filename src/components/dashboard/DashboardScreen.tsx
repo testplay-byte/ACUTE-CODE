@@ -5,13 +5,10 @@ import { useAgents } from "../../hooks/use-agents";
 import { useProjects } from "../../hooks/use-projects";
 import { useSessions, useUsageSummary } from "../../hooks/use-sessions";
 import { formatTokenCount } from "../../lib/format";
-import { ease, fadeInUp, staggerContainer } from "../../lib/motion";
+import { fadeInUp, staggerContainer } from "../../lib/motion";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-// R100-G (research §C2 P3 + §C3): the de-costumed hero rides the round-100
-// Kicker primitive (label tier) + the 24px/600 title.
-import { Kicker } from "../ui/Kicker";
-import { useGreeting, withAlpha } from "./helpers";
+import { withAlpha } from "./helpers";
 import { SkeletonBlock } from "../shared/Skeletons";
 import { StatCard } from "./StatCard";
 import { TokenBarChart } from "./TokenBarChart";
@@ -21,14 +18,18 @@ import { RecentActivity } from "./RecentActivity";
 /**
  * Dashboard screen (round-21 UI overhaul): the working-UI card ladder
  * (1280→1640px container), StatCard row, section labels and softShadow
- * cards (de-costumed R100-G per research §C2 P3 + §C3 — the wizard-DNA
- * hero violations below are deleted, not restyled). AppShell's main is
- * transparent; cards float.
+ * cards. AppShell's main is transparent; cards float.
+ *
+ * R113-d (owner: the page headers are "unnecessary, unneeded, and not
+ * required" — they "take up way too much important space"): the Kicker +
+ * 24px greeting + description hero is DELETED; the stat cards are the top
+ * of the page. The time-of-day greeting went with it (per the directive —
+ * not relocated, not re-added elsewhere). Top padding snaps to the app's
+ * panel tier (py-4/py-6 — the same rhythm SettingsPage/ProjectView carry).
  */
 export function DashboardScreen() {
   const navigate = useNavigate();
   const styles = useThemeStyles();
-  const greeting = useGreeting();
 
   const sessionsQuery = useSessions();
   const agentsQuery = useAgents(false);
@@ -58,9 +59,8 @@ export function DashboardScreen() {
   const loadError =
     sessionsQuery.isError || agentsQuery.isError || projectsQuery.isError || usage.isError;
 
-  // R100-G: the greeting is ONE plain title now — the accent-box split
-  // (last word in the rotated highlight) was the wizard display hero this
-  // wave deleted; the time-of-day greeting reads fine as a 24px/600 title.
+  // R113-d: the hero is gone (see the file header) — the skeleton/stat row
+  // below is the page's first element.
 
   return (
     <motion.div
@@ -69,29 +69,7 @@ export function DashboardScreen() {
       animate="animate"
       className="h-full overflow-y-auto"
     >
-      <div className="mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px] px-5 md:px-8 2xl:px-14 py-6 md:py-10 pb-16">
-        {/* Hero — R100-G (research §C2 P3): the de-costumed working-screen
-            header — label-tier Kicker + 24px/600 title + one-line 13px
-            secondary description (the rotated accent-box font-black display
-            hero is deleted: wizard DNA stays in the wizard). */}
-        <motion.div
-          initial={{ opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease }}
-          className="mb-8 md:mb-10"
-        >
-          <Kicker className="mb-1">Workspace Overview</Kicker>
-          <h1 className="text-[24px] font-semibold tracking-tight leading-[1.2]" style={{ color: styles.text }}>
-            {greeting}
-          </h1>
-          <p
-            className="mt-2 text-[13px] max-w-[520px]"
-            style={{ color: styles.textSecondary }}
-          >
-            Here&apos;s what&apos;s happening across your workspace.
-          </p>
-        </motion.div>
-
+      <div className="mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px] px-5 md:px-8 2xl:px-14 py-4 md:py-6 pb-16">
         {/* Stat cards — the bento recipe: card bg, softShadow, solid accent
             icon tiles. R97-I part 2: while any source is still loading the
             row is 4 StatCard-shaped skeleton blocks in the same grid (92px

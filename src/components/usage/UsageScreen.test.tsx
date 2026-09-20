@@ -231,16 +231,17 @@ function seededDetailedUsage(): DetailedUsage {
 }
 
 describe("UsageScreen (ROUND-52 R52-b)", () => {
-  it("renders the hero, overview stat cards, tool leaderboard and model card", async () => {
+  it("renders the range toolbar + overview stat cards, tool leaderboard and model card — the R113-d hero is GONE", async () => {
     vi.mocked(fetchDetailedUsage).mockResolvedValue(seededDetailedUsage());
     renderUsageScreen();
 
-    // Hero (kicker + title + range selector).
-    // R100-G re-pin: the hero de-costumed — the rotated display hero is
-    // gone; the Kicker ("Data & Statistics") + the 24px/600 "Usage" title
-    // + the one-line secondary description replace it (WIZARD-DNA §8).
-    expect(await screen.findByText("Data & Statistics")).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 1, name: "Usage" })).toBeTruthy();
+    // R113-d (owner: the page headers are "unnecessary, unneeded, and not
+    // required"): the Kicker + 24px "Usage" title + description hero is
+    // deleted; the day-range picker survives as the one functional toolbar
+    // row at the top of the page.
+    expect(screen.queryByText("Data & Statistics")).toBeNull();
+    expect(screen.queryByRole("heading", { level: 1, name: "Usage" })).toBeNull();
+    expect(screen.queryByText(/Every project, every session, every tool call/i)).toBeNull();
     expect(screen.getByRole("group", { name: /day range/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Last 30 days" })).toBeTruthy();
 

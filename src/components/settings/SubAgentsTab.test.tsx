@@ -351,7 +351,9 @@ describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d, re-pinned
 
   it("is reachable via ?tab=subagents; Advanced NO LONGER duplicates the section (R58-d)", async () => {
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=subagents" });
-    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Sub-agents" })).toBeTruthy());
+    // R113-d: the page-level h1 strip is deleted — the TAB's own h2 is the
+    // honest "you are on the Sub-agents tab" signal now.
+    await waitFor(() => expect(screen.getByRole("heading", { level: 2, name: "Sub-agents" })).toBeTruthy());
     // ROUND-92 (R92-D3): the keys presence on this page is the NOTE now.
     expect(screen.getByTestId("subagent-keys-note")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("Sub-agent parallelism")).toBeTruthy());
@@ -368,7 +370,7 @@ describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d, re-pinned
     // the intent (no sub-agent duplication) stays.
     cleanup();
     renderWithProviders(<SettingsPage />, { route: "/settings?tab=advanced" });
-    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Functionality" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { level: 2, name: "Functionality" })).toBeTruthy());
     await waitFor(() => expect(screen.getByText("Debug mode")).toBeTruthy());
     await waitFor(() => expect(screen.getByText("Agent memory")).toBeTruthy());
     expect(screen.queryByText("Agent core connection")).toBeNull();

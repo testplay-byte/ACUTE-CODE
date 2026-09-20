@@ -270,7 +270,11 @@ const formatLabel = (id: string | undefined): string =>
  * Mirrors agent-core's RESERVED_PROVIDER_IDS (storage/providers.ts) — the
  * seeded built-in adapters whose endpoint + wire format are FIXED. Client-side
  * copy because the providers list wire format carries no "reserved" flag; the
- * two constants move together (same review checklist as PRESETS above). */
+ * two constants move together (same review checklist as PRESETS above).
+ * R113-d: this set no longer decides which providers COUNT as configured —
+ * that is the SERVER's `configured` bit on the wire (R113-a). What survives
+ * here is pure detail-pane display logic: `isPreset` hides the Base URL +
+ * API-format inputs for fixed-endpoint rows. */
 const PRESET_PROVIDER_IDS: ReadonlySet<string> = new Set([
   "anthropic",
   "openai",
@@ -438,15 +442,18 @@ export function ModelsProvidersTab() {
   // ROUND-37: ONE flat list — every provider together, order = created.
   const providers = providersQuery.data ?? [];
 
-  // ROUND-59 (R59-C): the list shows CONFIGURED providers only — a provider
-  // is "configured" when it holds a key OR was created by the user (custom
-  // rows are always real choices). The R58 collapsed "Not configured"
-  // group is GONE: the owner deleted the three seeded presets by hand and
-  // wants them never to appear by default; the Add Provider dialog's
-  // preset picker remains the one sanctioned way to (re)set one up.
-  const configuredProviders = providers.filter(
-    (p) => p.hasKey || !PRESET_PROVIDER_IDS.has(p.id),
-  );
+  // R113-d (owner: "It was still showing me all the providers which I could
+  // add. It was not showing me the actual providers which were added."): the
+  // rail splits into TWO groups off the SERVER's `configured` bit (R113-a
+  // wire — custom row OR any held key; pool-aware). "Your providers" sits on
+  // top; the remaining presets become the "Add a provider" tier below a
+  // divider (still selectable — their detail pane is where the key lands).
+  // The ROUND-59 client heuristic (hasKey || !PRESET_PROVIDER_IDS) this
+  // replaces was WRONG in both directions: a pool-only provider read
+  // unconfigured, and the owner's "which are added" question got answered
+  // with a catalog instead of an inventory.
+  const configuredProviders = providers.filter((p) => p.configured === true);
+  const addableProviders = providers.filter((p) => p.configured !== true);
 
   // ROUND-62 (R62-2b): the fan-out helper above — provider mutations reach
   // the session page's picker cache too (the old settings-only
@@ -462,19 +469,22 @@ export function ModelsProvidersTab() {
   // "by default when the user opens the providers page, it will pre-select
   // the top provider and open its details on the right") — and keep the
   // selection honest when the underlying list changes: a selected row that
-  // is no longer VISIBLE (deleted, or its key was removed from a preset so
-  // it left the configured list) is cleared and falls to the first
-  // remaining row instead of lingering in the detail pane.
+  // is no longer served is cleared and falls to the first remaining
+  // CONFIGURED row (R113-d: rows in the addable tier are also selectable,
+  // so "gone" means gone from the LIST; when nothing is configured the
+  // first addable preset pre-selects — its detail pane is the "add a key"
+  // surface, which is exactly where a fresh install should land).
   // Deliberately keyed on `providers` (the query data identity — it only
   // moves when the query resolves or refetches with changed content): an
   // explicit user click is never re-processed, and the null selection the
   // "Add provider" flow may set is not instantly overridden.
   useEffect(() => {
     const hidden =
-      selectedId !== null && !configuredProviders.some((p) => p.id === selectedId);
+      selectedId !== null && !providers.some((p) => p.id === selectedId);
     if (hidden) setSelectedId(null);
-    if ((selectedId === null || hidden) && configuredProviders.length > 0) {
-      setSelectedId(configuredProviders[0].id);
+    if (selectedId === null || hidden) {
+      const fallback = configuredProviders[0] ?? addableProviders[0];
+      if (fallback) setSelectedId(fallback.id);
     }
   }, [providers]);
 
@@ -509,8 +519,10 @@ export function ModelsProvidersTab() {
           style={{ borderColor: styles.border }}
         >
           <SectionLabel>Providers</SectionLabel>
-          {/* ROUND-59 (R59-C): the count reflects what the list SHOWS —
-              configured rows only (unconfigured presets are absent). */}
+          {/* ROUND-59 (R59-C, R113-d re-scoped): the count reflects the
+              "Your providers" group — the configured inventory the owner
+              asked to see first (the addable tier below is a catalog, not
+              an inventory). */}
           <span
             data-testid="provider-count"
             className="font-mono text-[10px]"
@@ -538,11 +550,20 @@ export function ModelsProvidersTab() {
               loading providers…
             </div>
           )}
-          {/* ROUND-59 (R59-C): empty means NO CONFIGURED rows — keyless
-              presets don't count as providers here anymore. */}
+          {/* R113-d: GROUP 1 — "Your providers" (the server's configured bit).
+              The R59-C flat configured-only list became a two-tier rail: the
+              owner asked for HIS providers first, the addable catalog
+              second. The group label is an in-content Kicker (the same
+              SectionLabel tier the rail header uses). */}
+          {!providersQuery.isLoading && (
+            <Kicker className="px-2.5 pt-1 pb-1.5">Your providers</Kicker>
+          )}
+          {/* R113-d: the honest empty line when nothing is configured yet —
+              the app's empty-state idiom (one short tertiary line, no card
+              ceremony for a rail this narrow). */}
           {!providersQuery.isLoading && configuredProviders.length === 0 && (
             <div className="px-2.5 py-1.5 text-[11px]" style={{ color: styles.textTertiary }}>
-              No providers — add one below.
+              No providers configured yet — add your first below.
             </div>
           )}
           {configuredProviders.map((p) => (
@@ -553,6 +574,27 @@ export function ModelsProvidersTab() {
               onClick={() => setSelectedId(p.id)}
             />
           ))}
+          {/* R113-d: GROUP 2 — "Add a provider": the unconfigured presets,
+              quieter (a + affordance instead of the status dot) under a
+              divider. Selecting one still opens its detail pane — that is
+              where the key/models land (the R59-C "hidden entirely" rule is
+              retired: the owner wants to SEE his providers, not lose the
+              path to the catalog). */}
+          {addableProviders.length > 0 && (
+            <>
+              <div className="mx-2.5 my-2 border-t" style={{ borderColor: styles.border }} />
+              <Kicker className="px-2.5 pb-1.5">Add a provider</Kicker>
+              {addableProviders.map((p) => (
+                <ProviderListRow
+                  key={p.id}
+                  provider={p}
+                  active={p.id === selectedId}
+                  addable
+                  onClick={() => setSelectedId(p.id)}
+                />
+              ))}
+            </>
+          )}
         </div>
         {/* + Add provider → the preset-or-custom DIALOG (owner R37) */}
         <div className="shrink-0 p-1.5 border-t" style={{ borderColor: styles.border }}>
@@ -658,10 +700,15 @@ function DetailScrollArea({ children }: { children: React.ReactNode }) {
 function ProviderListRow({
   provider,
   active,
+  addable = false,
   onClick,
 }: {
   provider: ProviderView;
   active: boolean;
+  /** R113-d: rows in the "Add a provider" tier — the trailing status dot
+   * becomes a small accent + affordance (the "add this one" signal) and the
+   * row stays fully clickable (its detail pane is the add-a-key surface). */
+  addable?: boolean;
   onClick: () => void;
 }) {
   const styles = useThemeStyles();
@@ -729,14 +776,28 @@ function ProviderListRow({
           {keyCount} {keyCount === 1 ? "key" : "keys"}
         </span>
       )}
-      {/* Status dot: green = key stored; grey = no key. */}
-      <span
-        className="w-2 h-2 shrink-0 rounded-full"
-        style={{
-          background: provider.hasKey ? SEMANTIC_COLORS.success : withAlpha(styles.text, 0.25),
-        }}
-        title={provider.hasKey ? "Key stored" : "No key set"}
-      />
+      {/* Status dot: green = key stored; grey = no key. R113-d: addable-tier
+          rows trade the dot for the accent + chip — "configured" rows carry
+          state, catalog rows carry the action. */}
+      {addable ? (
+        <span
+          data-testid={`provider-add-${provider.id}`}
+          className="shrink-0 w-4 h-4 grid place-items-center rounded-full"
+          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          title="Add this provider — open its detail to set the key"
+          aria-hidden
+        >
+          <Plus size={10} strokeWidth={2.5} />
+        </span>
+      ) : (
+        <span
+          className="w-2 h-2 shrink-0 rounded-full"
+          style={{
+            background: provider.hasKey ? SEMANTIC_COLORS.success : withAlpha(styles.text, 0.25),
+          }}
+          title={provider.hasKey ? "Key stored" : "No key set"}
+        />
+      )}
     </button>
   );
 }

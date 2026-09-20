@@ -48,9 +48,6 @@ src/
 │   │                         (Explorer, Todo) + CommandPalette ⌘K + ChatMarkdown
 │   │                         + DebugReportCard / TurnErrorCard / ScreenshotRow /
 │   │                         BrowserCheckpointCard / SubAgentCard
-│   ├── sessions/             Legacy deep-link chat (/sessions/:id) — ChatView is a
-│   │                         SECOND simpler renderer kept in sync by copy
-│   │                         (retirement candidate, MODULARITY-ASSESSMENT §10)
 │   ├── settings/             SettingsPage = thin tab switch; self-contained tabs:
 │   │                         ModelsProviders (the big one), SubAgents, Skills,
 │   │                         Mcp, ComputerUse, ImageAnalysis (+ Functionality card)
@@ -78,7 +75,9 @@ src/
 | `/usage` | Usage screen | token/cost dashboards |
 | `/settings` | Settings hub | the tab switch |
 | `/demos` | Demo viewer | sandboxed iframe demos |
-| `/sessions/:id` | Legacy session chat | deep-link only since R48 |
+
+The legacy `/sessions/:id` deep-link chat (components/sessions/) was unrouted
+since R48 and its source files were deleted in R113-d.
 
 Popout (`popout/`) and mini (`mini/`) are separate Vite entries, not routes.
 
