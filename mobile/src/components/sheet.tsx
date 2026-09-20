@@ -13,7 +13,14 @@
  */
 
 import { useEffect, useState } from "react";
-import { Modal, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   runOnJS,
@@ -51,6 +58,16 @@ export function Sheet({
 }: SheetProps) {
   const { tokens } = useTheme();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  // R114 — the systemic empty-sheet fix: Android's Yoga collapses a flex:1
+  // ScrollView inside a content-sized (auto-height) panel to ZERO height —
+  // every sheet rendered as just the title row + X. The scroller is now
+  // clamped in PIXELS (resolved against the live window height) so the panel
+  // can wrap its content without the flex chicken-and-egg.
+  const maxContentHeight = Math.max(
+    240,
+    Math.round(windowHeight * maxHeightFraction) - SHEET_CHROME,
+  );
   const progress = useSharedValue(0);
   // Mount/unmount discipline: the panel springs IN on open, times OUT on
   // close, and the Modal unmounts only after the exit settles — one clean
@@ -110,7 +127,6 @@ export function Sheet({
               {
                 backgroundColor: tokens.card,
                 borderTopColor: tokens.clayTopEdge,
-                maxHeight: `${Math.round(maxHeightFraction * 100)}%`,
               },
             ]}
           >
@@ -130,7 +146,7 @@ export function Sheet({
               </Pressable>
             </View>
             <ScrollView
-              style={{ flex: 1 }}
+              style={{ maxHeight: maxContentHeight }}
               contentContainerStyle={[
                 styles.content,
                 { paddingBottom: Math.max(insets.bottom, spacing.lg) + spacing.sm },
@@ -145,6 +161,9 @@ export function Sheet({
     </Modal>
   );
 }
+
+/** The non-content chrome above the scroller (grip row 44 + padding + buffer). */
+const SHEET_CHROME = 64;
 
 const styles = StyleSheet.create({
   anchor: {
