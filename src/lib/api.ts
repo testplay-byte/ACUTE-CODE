@@ -254,6 +254,22 @@ export interface Session {
    * agent picks its posture per request. Typed like permissionMode: optional
    * so fixture sessions keep compiling; the live sidecar always sends it. */
   activeMode?: string | null;
+  /** ROUND-114 (R114-e): the session's SERVER-SIDE selected model — the
+   * persistent tier between the composer's per-send override and the agent
+   * row (migration 0041, landed R114-b). null / absent = follow the agent
+   * default (every pre-R114 row and the fixtures); a complete pair is the
+   * cross-device truth the phone's pick and the desktop's pick converge on
+   * (PATCH /sessions/:id {model}; prepareTurn resolves override → this →
+   * agent). Optional so fixture sessions keep compiling. */
+  selectedModel?: SessionSelectedModel | null;
+}
+
+/** ROUND-114 (R114-e): the server-side selected-model pair — the exact wire
+ * shape PATCH /sessions/:id accepts as `{model}` (null clears back to the
+ * agent default) and session views carry as `selectedModel`. */
+export interface SessionSelectedModel {
+  providerId: string;
+  model: string;
 }
 
 /**
@@ -2139,6 +2155,29 @@ export async function patchSessionPermissions(
   });
 }
 
+/**
+ * ROUND-114 (R114-e, owner: "the phone showed Auto while the PC had a model
+ * selected"): set the session's SERVER-SIDE selected model — PATCH
+ * /sessions/:id with `{ model }` (a complete pair, or null to clear back to
+ * the agent default). The pair is the persistent tier the phone + desktop
+ * converge on (prepareTurn resolves per-send override → session tier →
+ * agent row); the events bus mirrors the write as a `{kind:"meta"}` session
+ * frame so every other device's composer follows the pick live. Returns the
+ * fresh session row (the PATCH route answers the bare row, not the detail
+ * shape). Throws ApiError 400 (VALIDATION, field body.model.*) for an
+ * unknown/unconfigured provider or a model that matches no models row or
+ * catalog entry, 404 for an unknown session.
+ */
+export async function patchSessionSelectedModel(
+  sessionId: string,
+  model: SessionSelectedModel | null,
+): Promise<Session> {
+  return request<Session>(`/sessions/${sessionId}`, {
+    method: "PATCH",
+    json: { model },
+  });
+}
+
 
 /**
  * ROUND-50 (R50-c1): the context donut's data source —
@@ -2915,10 +2954,26 @@ export async function updateDesktopNotificationsSettings(
  * preference or {themeId:null, mode:"system"}; PUT takes a partial patch and
  * broadcasts {type:"settings",domain:"appearance"} on the events bus so the
  * change lands LIVE on every other device (the phone changing the desktop's
- * theme is a first-class use case — device tokens are welcome). */
+ * theme is a first-class use case — device tokens are welcome).
+ * ROUND-114 (R114-e, owner: PC settings should propagate to the phone): the
+ * domain grew the four CHAT-DENSITY fields R114-b landed server-side —
+ * chatDensity/chatTextSize/timestampsMode/toolActivity ride the same GET/PUT
+ * and broadcast (the desktop's Settings → Appearance toggles now sync like
+ * the theme always has). All four default to the values the local store
+ * shipped pre-R114 (comfortable/medium/hover/detailed), so a pre-R114-e
+ * server row reads as "no change" and every client stays byte-identical
+ * until someone flips one. */
 export interface AppearanceSettings {
   themeId: string | null;
   mode: "system" | "light" | "dark";
+  /** R114-e: chat vertical density (theme-store `density`). */
+  chatDensity: "comfortable" | "compact";
+  /** R114-e: chat text size (theme-store `chatTextSize`). */
+  chatTextSize: "small" | "medium" | "large";
+  /** R114-e: message timestamps (theme-store `timestampsMode`). */
+  timestampsMode: "hidden" | "hover";
+  /** R114-e: tool activity rendering (theme-store `activityMode`). */
+  toolActivity: "detailed" | "compact" | "hidden";
 }
 
 export async function fetchAppearanceSettings(): Promise<AppearanceSettings> {
@@ -3393,6 +3448,16 @@ export type SubAgentInnerEvent =
 
 /** Events arriving over POST /sessions/:id/messages/stream (SSE). */
 export type StreamTurnEvent =
+  /** ROUND-114 (R114-b wire / R114-e consumer): the turn's OPENING frame —
+   * emitted the instant prepareTurn succeeds, BEFORE the first persisted
+   * event, exactly once per POST/stream (queue continuations and orchestrator
+   * children stay quiet). Carries the USER text (a remote client renders the
+   * user bubble immediately instead of waiting for the debounced folded-log
+   * refetch) and the three-tier ladder's RESOLVED model + provider (so a
+   * remote UI labels the live turn honestly instead of "Auto"). The
+   * initiating client receives it too — benign: its optimistic echo already
+   * rendered and the frame only adopts the model for display. */
+  | { type: "turn.started"; text: string; model: string; providerId: string }
   | { type: "text-delta"; delta: string }
   /** ROUND-35: thinking/reasoning tokens — rendered separately, muted + collapsible. */
   | { type: "thinking-delta"; delta: string }
@@ -4456,9 +4521,14 @@ export async function discardUpdateDownload(): Promise<{ ok: boolean; status: st
  * owner's directive — Settings → Image Analysis). Same mode semantics as
  * the R61 computer-use vision block, now app-wide: every image analysis
  * (computer-use screenshots, browser screenshots, the analyze_image tool)
- * reads THIS. */
+ * reads THIS.
+ * ROUND-114 (R114-b retired "off" server-side; R114-e narrows the client
+ * type): mode is now ONLY "main" | "separate" — a marked model can always
+ * see (the server coerces any legacy stored "off" to "main" on read, and
+ * still ACCEPTS a legacy "off" on PUT for wire compat, so old clients keep
+ * working; this client simply never sends or renders it). */
 export interface VisionSettings {
-  mode: "off" | "separate" | "main";
+  mode: "main" | "separate";
   provider: string | null;
   modelId: string | null;
 }

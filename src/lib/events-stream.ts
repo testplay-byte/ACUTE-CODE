@@ -55,9 +55,21 @@ export type EventsStreamFrame =
       type: "session";
       sessionId: string;
       projectId: string | null;
-      kind: "event" | "status" | "created";
+      kind: "event" | "status" | "created" | "meta";
       seq?: number;
       status?: string;
+      /** ROUND-114 (R114-e, the R114-b wire): meta frames only — the
+       * session's NEW operating mode, present only on a permissionMode
+       * change. */
+      permissionMode?: string;
+      /** R114-e: the NEW task-posture id (null = cleared), present only on
+       * an activeMode change. */
+      activeMode?: string | null;
+      /** R114-e: the NEW selected-model pair (null = cleared back to the
+       * agent default), present only on a selectedModel change. Absent
+       * keys stay absent on the wire — a field this change did not touch
+       * never rides as undefined. */
+      selectedModel?: { providerId: string; model: string } | null;
     }
   | { type: "turn"; sessionId: string; frame: unknown }
   | { type: "project"; projectId: string; kind: "created" | "updated" }
@@ -213,7 +225,10 @@ const SETTINGS_DOMAIN_QUERY_KEYS: Record<string, readonly (readonly unknown[])[]
   "desktop-notifications": [["desktop-notifications-settings"]],
   "device-link": [["device-link-settings"], ["mobile-link-info"]],
   "cloud-connector": [["cloud-connector-settings"]],
-  vision: [["vision-settings"], ["vision-key"], ["vision-model-rows"]],
+  // R114-e: the vision tab's model lists ride the SHARED ["models-configured"]
+  // cache now (["vision-model-rows"] retired with the per-provider fetch
+  // sweep) — a pushed vision-domain PUT refreshes it alongside the settings.
+  vision: [["vision-settings"], ["vision-key"], ["models-configured"]],
 };
 
 /**
@@ -231,10 +246,18 @@ const SETTINGS_DOMAIN_QUERY_KEYS: Record<string, readonly (readonly unknown[])[]
  *              converge without a per-token refetch storm); kind:"created"
  *              additionally refreshes the projects list (a new session may
  *              belong to a project the client doesn't know yet).
+ *              ROUND-114 (R114-e): kind:"meta" skips the debounce ENTIRELY —
+ *              a preference patch (permissionMode / activeMode /
+ *              selectedModel) is ONE tiny row write, never a per-token
+ *              burst, and the phone's model pick should flip the desktop's
+ *              composer display the moment the frame lands (the debounced
+ *              path would eat up to 300ms for no dedupe value).
  *   turn     → stream-store.ingestRemoteFrame (the live mirror — IGNORED
  *              while this device's own stream renders the same turn).
  *              Terminal frames ALSO invalidate the folded log + usage +
  *              context meter: the mirror retires, the event log is truth.
+ *              R114-e: turn.started opens the mirror INSTANTLY with the user
+ *              text + resolved model (see stream-store).
  *   project  → the projects list (a new project appears in the sidebar).
  *   settings → "appearance" applies straight into the theme store (the
  *              palette shifts live; the echo guard there suppresses the
@@ -251,6 +274,20 @@ export function handleEventsFrame(qc: QueryClient, frame: EventsStreamFrame): vo
       return;
     }
     case "session": {
+      // R114-e: a META frame is a preference patch (mode / posture / model)
+      // written at a storage choke point — one tiny row, never a burst.
+      // Refetch the session views IMMEDIATELY: the composer's model display
+      // seeds from session.selectedModel (AgentChatPanel), so a phone-side
+      // pick flips the desktop's pill the moment this frame lands, and the
+      // 300ms debounce would only add latency with zero dedupe value.
+      // ["session"] is the PREFIX of the detail key ["session", source, id]
+      // (hooks/use-sessions.ts); ["sessions"] refreshes the list rows the
+      // sidebar + this panel's session picker read.
+      if (frame.kind === "meta") {
+        void qc.invalidateQueries({ queryKey: ["session"] });
+        void qc.invalidateQueries({ queryKey: ["sessions"] });
+        return;
+      }
       scheduleSessionInvalidation(qc);
       if (frame.kind === "created") {
         // A new session row (POST /sessions, a delegation child, a fork) —

@@ -1135,6 +1135,7 @@ import {
   httpSessions,
   ingestAttachmentPath,
   patchSessionPermissions,
+  patchSessionSelectedModel,
   pickFilesViaBackend,
   readAttachmentFiles,
   streamSessionMessage,
@@ -1413,6 +1414,76 @@ describe("patchSessionPermissions (ROUND-50 R50-c1)", () => {
     const err = await patchSessionPermissions("sess_1", "yolo" as "plan").catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(err.details).toEqual({ field: "body.mode" });
+  });
+});
+
+// ── ROUND-114 (R114-e): the session's SERVER-SIDE selected model — the pick-
+// becomes-server-truth PATCH (owner: "the phone showed Auto while the PC had a
+// model selected"). Body {model: {providerId, model} | null}; the route
+// answers the fresh session row. ──
+describe("patchSessionSelectedModel (ROUND-114 R114-e)", () => {
+  const row = {
+    id: "sess_1",
+    projectId: null,
+    agentId: "agt_1",
+    mode: "single",
+    status: "queued",
+    title: null,
+    createdAt: "2026-09-20T00:00:00Z",
+    updatedAt: "2026-09-20T00:00:00Z",
+    parentSessionId: null,
+    subRole: null,
+    permissionMode: "ask",
+    selectedModel: { providerId: "zai", model: "z-ai/glm-4.7" },
+  };
+
+  it("PATCHes { model: {providerId, model} } and returns the fresh session row", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, row));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await patchSessionSelectedModel("sess_1", {
+      providerId: "zai",
+      model: "z-ai/glm-4.7",
+    });
+    expect(updated.selectedModel).toEqual({ providerId: "zai", model: "z-ai/glm-4.7" });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://sidecar.test/api/v1/sessions/sess_1");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({
+      model: { providerId: "zai", model: "z-ai/glm-4.7" },
+    });
+  });
+
+  it("null clears the session tier back to the agent default ({ model: null } on the wire)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { ...row, selectedModel: null }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await patchSessionSelectedModel("sess_1", null);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ model: null });
+  });
+
+  it("400 VALIDATION naming body.model surfaces as ApiError (the picker shows it, the send still rides the override)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(400, {
+          error: {
+            code: "VALIDATION",
+            message: "model.providerId 'nope' is not a configured provider",
+            details: { field: "body.model.providerId" },
+          },
+        }),
+      ),
+    );
+    const err = await patchSessionSelectedModel("sess_1", {
+      providerId: "nope",
+      model: "x",
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.details).toEqual({ field: "body.model.providerId" });
   });
 });
 

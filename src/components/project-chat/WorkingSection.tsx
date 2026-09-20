@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  BookOpenText,
   Check,
   ChevronDown,
   CircleCheck,
@@ -12,6 +13,7 @@ import {
   Loader2,
   PanelRightOpen,
   RotateCcw,
+  Search,
   Settings2,
   Square,
   Terminal,
@@ -164,6 +166,13 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   todo_write: Settings2,
   index_project: Terminal,
   delegate_task: Terminal,
+  // R114-e (the transcript polish round, mirroring the phone's R114-d
+  // SkillCard): the skills tools get their OWN icons + labels so a
+  // read_skill row reads as what it is — one quiet "Read skill · <name>"
+  // line (the collapsed row already shows only label + argsSummary +
+  // status; the raw body stays behind the manual expand).
+  read_skill: BookOpenText,
+  search_skills: Search,
 };
 
 /** Past-tense verb labels (proposed2.PNG: "Analyzed …" one-liners). */
@@ -185,6 +194,9 @@ const TOOL_LABELS: Record<string, string> = {
   web_fetch: "Fetched",
   index_project: "Indexed",
   delegate_task: "Delegated",
+  // R114-e: the skills pair (see TOOL_ICONS above).
+  read_skill: "Read skill",
+  search_skills: "Searched skills",
 };
 
 /** ROUND-58 (R58-cf): stable empty default for the pending-write-inputs

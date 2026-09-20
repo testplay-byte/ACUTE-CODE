@@ -1,6 +1,11 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from "vitest";
-import { filterModelsForPicker, isFreeModelEntry, useSettingsStore } from "./settings-store";
+import {
+  filterConfiguredProviders,
+  filterModelsForPicker,
+  isFreeModelEntry,
+  useSettingsStore,
+} from "./settings-store";
 
 function reset() {
   localStorage.clear();
@@ -63,5 +68,37 @@ describe("filterModelsForPicker (the shared free-only filter)", () => {
     const out = filterModelsForPicker(rows, false);
     expect(out).not.toBe(rows);
     expect(out).toEqual(rows);
+  });
+});
+
+// ── ROUND-114 (R114-e, the ModelSelector audit): the CONFIGURED-provider
+// filter every model picker shares — a provider is pickable only when it is
+// ENABLED and holds a key (owner: "the picker shows providers I haven't
+// added"). ──
+describe("filterConfiguredProviders (R114-e — the shared configured-provider filter)", () => {
+  const providers = [
+    { id: "openrouter", name: "OpenRouter", enabled: true, hasKey: true },
+    // Disabled in Settings — never a pickable source.
+    { id: "openai", name: "OpenAI", enabled: false, hasKey: true },
+    // The seeded preset the owner never added a key to — the owner's exact
+    // complaint ("the picker shows providers I haven't added").
+    { id: "anthropic", name: "Anthropic", enabled: true, hasKey: false },
+    // hasKey absent (unknown — an older sidecar row): allowed, never guessed.
+    { id: "zai", name: "Z.ai", enabled: true },
+    { id: "local", name: "Local", enabled: false },
+  ];
+
+  it("keeps only enabled providers holding a key (hasKey undefined = allowed)", () => {
+    expect(filterConfiguredProviders(providers).map((p) => p.id)).toEqual(["openrouter", "zai"]);
+  });
+
+  it("preserves order and returns a copy, never the caller's array", () => {
+    const out = filterConfiguredProviders(providers);
+    expect(out).not.toBe(providers);
+    expect(out).toEqual([providers[0], providers[3]]);
+  });
+
+  it("an empty input yields the empty list (never throws)", () => {
+    expect(filterConfiguredProviders([])).toEqual([]);
   });
 });

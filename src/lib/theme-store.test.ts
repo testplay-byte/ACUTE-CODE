@@ -300,3 +300,131 @@ describe("R113-b: server-backed appearance (hydration + write-through + echo gua
     expect(useThemeStore.getState().mode).toBe("dark");
   });
 });
+
+// ── ROUND-114 (R114-e): the appearance domain's four CHAT fields go live-synced
+// (owner: PC settings should propagate to the phone — and vice versa). The
+// setters write through under the SERVER field spellings, the server value
+// applies all five fields under one echo guard, and a present-but-invalid
+// value rejects the WHOLE frame (a half-applied patch would leave the devices
+// disagreeing). ──
+describe("R114-e: the four chat fields join the synced appearance domain", () => {
+  it("setDensity/setChatTextSize/setTimestampsMode/setActivityMode write through ONE-FIELD partial PUTs under the server spellings", () => {
+    const { calls } = liveModeFetchStub();
+
+    useThemeStore.getState().setDensity("compact");
+    useThemeStore.getState().setChatTextSize("large");
+    useThemeStore.getState().setTimestampsMode("hover");
+    useThemeStore.getState().setActivityMode("compact");
+
+    const puts = calls.filter((c) => c.method === "PUT");
+    expect(puts).toHaveLength(4);
+    // The server domain spells density "chatDensity" and activity "toolActivity"
+    // (R114-b); text size + timestamps keep their local names.
+    expect(JSON.parse(puts[0].body!)).toEqual({ chatDensity: "compact" });
+    expect(JSON.parse(puts[1].body!)).toEqual({ chatTextSize: "large" });
+    expect(JSON.parse(puts[2].body!)).toEqual({ timestampsMode: "hover" });
+    expect(JSON.parse(puts[3].body!)).toEqual({ toolActivity: "compact" });
+    // Optimistic first: every local flip landed before the PUT fired.
+    expect(useThemeStore.getState().density).toBe("compact");
+    expect(useThemeStore.getState().chatTextSize).toBe("large");
+    expect(useThemeStore.getState().timestampsMode).toBe("hover");
+    expect(useThemeStore.getState().activityMode).toBe("compact");
+  });
+
+  it("setSidebarTint stays LOCAL-ONLY (not part of the server domain — zero PUTs)", () => {
+    const { calls } = liveModeFetchStub();
+
+    useThemeStore.getState().setSidebarTint("bold");
+
+    expect(useThemeStore.getState().sidebarTint).toBe("bold");
+    expect(calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+  });
+
+  it("hydrateAppearanceFromServer converges the chat fields on boot (the server wins when reachable)", async () => {
+    liveModeFetchStub({
+      get: {
+        themeId: "bento",
+        mode: "light",
+        chatDensity: "compact",
+        chatTextSize: "small",
+        timestampsMode: "hover",
+        toolActivity: "hidden",
+      },
+    });
+
+    await hydrateAppearanceFromServer();
+
+    expect(useThemeStore.getState().themeId).toBe("bento");
+    expect(useThemeStore.getState().mode).toBe("light");
+    expect(useThemeStore.getState().density).toBe("compact");
+    expect(useThemeStore.getState().chatTextSize).toBe("small");
+    expect(useThemeStore.getState().timestampsMode).toBe("hover");
+    expect(useThemeStore.getState().activityMode).toBe("hidden");
+  });
+
+  it("a pre-R114-b server row (the four fields ABSENT) leaves every local value standing", async () => {
+    liveModeFetchStub({ get: { themeId: "bento", mode: "light" } });
+    useThemeStore.setState({
+      density: "compact",
+      chatTextSize: "large",
+      timestampsMode: "hover",
+      activityMode: "hidden",
+    });
+
+    await hydrateAppearanceFromServer();
+
+    // Backward compat: an absent field never touches its local twin.
+    expect(useThemeStore.getState().density).toBe("compact");
+    expect(useThemeStore.getState().chatTextSize).toBe("large");
+    expect(useThemeStore.getState().timestampsMode).toBe("hover");
+    expect(useThemeStore.getState().activityMode).toBe("hidden");
+  });
+
+  it("applyServerAppearance applies ALL FIVE fields live with ZERO echo PUTs (a phone flip lands on the desktop)", () => {
+    const { calls } = liveModeFetchStub();
+
+    applyServerAppearance({
+      themeId: "clay",
+      mode: "dark",
+      chatDensity: "compact",
+      chatTextSize: "large",
+      timestampsMode: "hover",
+      toolActivity: "compact",
+    });
+
+    expect(useThemeStore.getState().themeId).toBe("clay");
+    expect(useThemeStore.getState().mode).toBe("dark");
+    expect(useThemeStore.getState().density).toBe("compact");
+    expect(useThemeStore.getState().chatTextSize).toBe("large");
+    expect(useThemeStore.getState().timestampsMode).toBe("hover");
+    expect(useThemeStore.getState().activityMode).toBe("compact");
+    // The echo guard: nothing bounced back to the bus.
+    expect(calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+  });
+
+  it("a PARTIAL live frame (one field) applies just that field — the rest stand", () => {
+    liveModeFetchStub();
+    useThemeStore.setState({ density: "comfortable", chatTextSize: "large" });
+
+    applyServerAppearance({ chatTextSize: "small" });
+
+    expect(useThemeStore.getState().chatTextSize).toBe("small");
+    expect(useThemeStore.getState().density).toBe("comfortable");
+  });
+
+  it("a present-but-INVALID chat field rejects the WHOLE frame (malformed is malformed — no half-applied patch)", () => {
+    liveModeFetchStub();
+
+    applyServerAppearance({ themeId: "bento", chatDensity: "cozy" });
+    applyServerAppearance({ chatTextSize: "XL" });
+    applyServerAppearance({ timestampsMode: "always" });
+    applyServerAppearance({ toolActivity: "verbose" });
+
+    // themeId was valid in the first frame but rides the same rejection.
+    expect(useThemeStore.getState().themeId).toBe("nova");
+    expect(useThemeStore.getState().chatTextSize).toBe("medium");
+    expect(useThemeStore.getState().timestampsMode).toBe("hidden");
+    expect(useThemeStore.getState().activityMode).toBe("detailed");
+    expect(useThemeStore.getState().density).toBe("comfortable");
+  });
+});

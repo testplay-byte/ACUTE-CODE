@@ -932,7 +932,11 @@ function renderBlocks(content: string, projectId: string, styles: ThemeStyles): 
           <div key={`md-ol-${i}`} className="my-1 flex flex-col gap-1 min-w-0">
             {b.items.map((it, j) => (
               <div key={j} className="flex gap-1.5 min-w-0">
-                <span className="shrink-0 select-none font-mono text-[11px] leading-[1.65]" style={{ color: styles.textTertiary }}>
+                {/* R114-e (the transcript polish pass): a fixed minimum width
+                    + right alignment on the marker keeps the text start
+                    aligned across 1- and 2-digit lists ("9." vs "10.") — the
+                    same one-line discipline the bullets' single glyph has. */}
+                <span className="shrink-0 min-w-5 text-right select-none font-mono text-[11px] leading-[1.65]" style={{ color: styles.textTertiary }}>
                   {it.marker}.
                 </span>
                 <span className="min-w-0 flex-1">{renderInline(it.text, projectId, `ol${i}-${j}`, styles)}</span>
@@ -1016,8 +1020,17 @@ function renderBlocks(content: string, projectId: string, styles: ThemeStyles): 
  * The chat answer renderer. Drop-in for the old RichText: same props, same
  * path-pill + CodeBlock behavior, plus full markdown blocks. Line-based, so
  * a mid-stream partial answer renders progressively (render line-by-line).
+ * R114-e (the transcript polish pass): the FIRST block drops its top margin
+ * (the variant rule below beats the per-block mt/my utilities on
+ * specificity) — the turn header / bubble already provides the opening gap,
+ * and a first paragraph riding 4–6px lower than every later sibling was the
+ * one visible rhythm inconsistency left after R100-D.
  */
 export function ChatMarkdown({ content, projectId }: { content: string; projectId: string }) {
   const styles = useThemeStyles();
-  return <div className="min-w-0 break-words">{renderBlocks(content, projectId, styles)}</div>;
+  return (
+    <div className="min-w-0 break-words [&>*:first-child]:mt-0">
+      {renderBlocks(content, projectId, styles)}
+    </div>
+  );
 }

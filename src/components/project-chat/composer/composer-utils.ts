@@ -453,6 +453,37 @@ export function saveLastUsedModel(v: ModelOverride): void {
   }
 }
 
+// ── ROUND-114 (R114-e): the session's DISPLAY model ladder ───────────────────
+
+/**
+ * R114-e (owner: "the phone showed Auto while the PC had a model selected"):
+ * the composer's DISPLAY resolution for a session — the first tier wins:
+ *
+ *   1. loadModelOverride(sessionId) — this device's per-session pick
+ *      (localStorage; the per-send override logic keeps its override-first
+ *      semantics regardless of what this returns);
+ *   2. session.selectedModel — the SERVER's cross-device truth (the phone's
+ *      PATCH /sessions/:id {model} lands here through the meta frame's
+ *      immediate invalidation, so the desktop's pill follows the phone's
+ *      pick live);
+ *   3. loadLastUsedModel() — the global remember-my-last-pick default
+ *      (R89-B4).
+ *
+ * Pure display seeding: run on session switch/load. `null` out of every
+ * tier = the agent-default send (the pill shows the agent's model).
+ */
+export function resolveSessionModelDisplay(
+  sessionId: string | null,
+  selectedModel: { providerId: string; model: string } | null | undefined,
+): ModelOverride | null {
+  const override = loadModelOverride(sessionId);
+  if (override !== null) return override;
+  if (selectedModel != null && selectedModel.providerId !== "" && selectedModel.model !== "") {
+    return { providerId: selectedModel.providerId, model: selectedModel.model };
+  }
+  return loadLastUsedModel();
+}
+
 // ── Project file flattening (@ quick-picker + Add Context → project files) ──
 
 /** Flatten a project tree to its FILE paths (DFS, folders skipped). */

@@ -75,6 +75,13 @@ const queueMock = vi.hoisted(() => ({
   dequeueSessionMessage: null as unknown as ReturnType<typeof vi.fn>,
 }));
 
+/** ROUND-114 (R114-e): the pick-becomes-server-truth PATCH — mocked so a
+ * picker click in these tests never touches the network (the interaction
+ * pin lives in Composer.test.tsx's model-selector suite). */
+const selectedModelMock = vi.hoisted(() => ({
+  patchSessionSelectedModel: null as unknown as ReturnType<typeof vi.fn>,
+}));
+
 vi.mock("../../lib/api", async () => {
   const mod = await import("../../lib/api");
   const agentsFx = await import("../../lib/agent-fixtures");
@@ -87,6 +94,7 @@ vi.mock("../../lib/api", async () => {
   streamMock.streamSessionMessage = vi.fn();
   queueMock.queueSessionMessage = vi.fn();
   queueMock.dequeueSessionMessage = vi.fn();
+  selectedModelMock.patchSessionSelectedModel = vi.fn();
   return {
     ...mod,
     getAgentsBackend: () => agentsFx.getFixtureAgents(),
@@ -99,6 +107,7 @@ vi.mock("../../lib/api", async () => {
     streamSessionMessage: streamMock.streamSessionMessage,
     queueSessionMessage: queueMock.queueSessionMessage,
     dequeueSessionMessage: queueMock.dequeueSessionMessage,
+    patchSessionSelectedModel: selectedModelMock.patchSessionSelectedModel,
   };
 });
 
@@ -132,6 +141,22 @@ beforeEach(() => {
   queueMock.queueSessionMessage.mockResolvedValue({ ok: true, seq: 41 });
   queueMock.dequeueSessionMessage.mockReset();
   queueMock.dequeueSessionMessage.mockResolvedValue(undefined);
+  // R114-e: the session-model PATCH resolves the fresh row by default.
+  selectedModelMock.patchSessionSelectedModel.mockReset();
+  selectedModelMock.patchSessionSelectedModel.mockResolvedValue({
+    id: "sess_selected_model",
+    projectId: null,
+    agentId: "agt_scribe",
+    mode: "single",
+    status: "queued",
+    title: null,
+    createdAt: "2026-09-20T00:00:00Z",
+    updatedAt: "2026-09-20T00:00:00Z",
+    parentSessionId: null,
+    subRole: null,
+    permissionMode: "ask",
+    selectedModel: null,
+  });
   // R78: the store starts clean (the queue slices are per-session state).
   useStreamStore.setState({ bySession: {}, subagentsLive: {} });
 });
@@ -1631,6 +1656,137 @@ describe("AgentChatPanel remote live turn (ROUND-113 R113-b)", () => {
       expect(document.querySelector('[data-testid="streaming-caret"]')).toBeNull();
       expect(document.querySelector("[data-queued-live-list]")).toBeNull();
     }, SLOW);
+  });
+});
+
+// ── ROUND-114 (R114-e, owner: "after sending from mobile, the PC send button
+// status does not change; no processing/thinking status"): turn.started opens
+// the remote mirror the INSTANT the phone sends — the user bubble renders from
+// the frame's own text (no waiting for the debounced folded-log refetch), the
+// "Thinking…" placeholder shows while no content has arrived (the empty-liveTurn
+// placeholder applies to remote mirrors too), the resolved model labels the
+// live turn, and the persisted message.user row REPLACES the live copy on
+// refetch — never a double bubble. ──
+describe("AgentChatPanel remote turn.started (ROUND-114 R114-e)", () => {
+  const SLOW = { timeout: 5000 };
+
+  /** The slice exactly as ingestRemoteFrame leaves it after the OPENING
+   * turn.started frame: remote mirror open, the phone's text + the resolved
+   * model stamped, no content yet. */
+  function remoteStartedSlice(userText: string, model: string) {
+    return {
+      liveTurn: {
+        startedAtMs: Date.now() - 500,
+        working: [],
+        streamText: "",
+        streamThinking: "",
+        stopped: false,
+        stoppedByUser: false,
+        streamingToolInputs: [],
+        debugReport: null,
+        browserCheckpoint: null,
+        retry: null,
+        note: null,
+        // R114-e: the turn.started frame's stamps (the store's own branch).
+        userText,
+        model,
+      } as LiveTurn,
+      streamBusy: false,
+      sendError: null,
+      liveError: null,
+      pendingEcho: null,
+      lastLiveEndMs: 0,
+      lastTurnStoppedByUser: false,
+      lastTurnStoppedTs: null,
+      queued: [],
+      deliveredQueued: [],
+      queueKeptNotice: null,
+      remote: true,
+    };
+  }
+
+  it("the phone's message + Thinking placeholder + the resolved model render the INSTANT the mirror opens; the composer flips to Stop", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r114e_started",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "turn.started probe",
+          createdAt: "2026-09-20T12:00:00Z",
+          updatedAt: "2026-09-20T12:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy(), SLOW);
+
+    useStreamStore.setState({
+      bySession: { sess_r114e_started: remoteStartedSlice("hey from the phone", "z-ai/glm-4.7") },
+    });
+
+    // The user bubble renders from the FRAME's own text — before any folded
+    // log refetch could have carried the persisted row.
+    expect(await screen.findByText("hey from the phone", {}, SLOW)).toBeTruthy();
+    // The "Thinking…" placeholder (the empty-liveTurn path — applies to
+    // remote mirrors exactly as to own turns).
+    expect(await screen.findByText(/^Thinking/, {}, SLOW)).toBeTruthy();
+    // The resolved model labels the live turn's header (the honest label —
+    // the three-tier ladder's verdict off turn.started).
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="turn-header"]')?.textContent).toContain(
+        "z-ai/glm-4.7",
+      );
+    }, SLOW);
+    // busy: Send is gone, Stop owns the anchor (the phone's turn IS running).
+    expect(await screen.findByRole("button", { name: "Stop generation" }, SLOW)).toBeTruthy();
+  });
+
+  it("the persisted message.user row REPLACES the live copy — never a double bubble (content dedupe)", async () => {
+    const projects = await getFixtureProjects().list();
+    // The folded log already carries the persisted row (the refetch landed).
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r114e_dedupe",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "running",
+          title: "dedupe probe",
+          createdAt: "2026-09-20T12:00:00Z",
+          updatedAt: "2026-09-20T12:05:00Z",
+        },
+        events: [
+          {
+            seq: 1,
+            type: "message.user",
+            agentId: "agt_scribe",
+            payload: { role: "user", content: "hey from the phone", agentId: "agt_scribe", ts: "2026-09-20T12:00:10Z" },
+            ts: "2026-09-20T12:00:10Z",
+          },
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(screen.getByText("hey from the phone")).toBeTruthy(), SLOW);
+
+    // The mirror opens with the IDENTICAL text — the dedupe must hold it.
+    useStreamStore.setState({
+      bySession: { sess_r114e_dedupe: remoteStartedSlice("hey from the phone", "z-ai/glm-4.7") },
+    });
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="turn-header"]')?.textContent).toContain(
+        "z-ai/glm-4.7",
+      );
+    }, SLOW);
+
+    // Exactly ONE bubble carrying the phone's message.
+    expect(screen.getAllByText("hey from the phone")).toHaveLength(1);
   });
 });
 

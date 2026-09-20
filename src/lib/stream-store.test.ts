@@ -2176,3 +2176,69 @@ describe("stream store R93 kept-queue + recovery frames", () => {
     await promise;
   });
 });
+
+// ─── ROUND-114 (R114-e): turn.started — the own-stream opening frame ─────────
+
+describe("stream store turn.started (ROUND-114 R114-e — the own-stream leg)", () => {
+  beforeEach(() => {
+    useStreamStore.setState({ bySession: {} });
+  });
+
+  it("the OWN stream's opening frame adopts the RESOLVED model and never renders a second user text", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "own message");
+    // The turn's FIRST frame (emitted the instant prepareTurn succeeded).
+    sse.emit({ type: "turn.started", text: "own message", model: "z-ai/glm-4.7", providerId: "zai" });
+    await vi.waitFor(() => {
+      const slice = useStreamStore.getState().bySession[PARENT];
+      // The resolved model rides the live turn (the header's honest label);
+      // the userText stays ABSENT — the optimistic pendingEcho already
+      // rendered this device's message, a mirror would double it.
+      expect(slice?.liveTurn?.model).toBe("z-ai/glm-4.7");
+      expect(slice?.liveTurn?.userText).toBeUndefined();
+      // Benign opening: no content yet, so the "Thinking…" placeholder's
+      // exact precondition holds (empty text + thinking + working).
+      expect(slice?.liveTurn?.streamText).toBe("");
+      expect(slice?.liveTurn?.streamThinking).toBe("");
+      expect(slice?.liveTurn?.working).toEqual([]);
+    });
+
+    // The frame is benign: the stream keeps rendering normally after it.
+    sse.emit({ type: "text-delta", delta: "answer" });
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.streamText).toBe("answer");
+    });
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+    // The model rode the turn for its whole life (the folded turn's own
+    // event-log model takes over after the refetch, as always).
+    expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.model).toBe("z-ai/glm-4.7");
+  });
+
+  it("the model adoption is a LABEL write only — queue chips and stop signals are untouched", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "work");
+    // A queued message + the opening frame land in either order — the
+    // turn.started branch must not disturb the queue slice (it only writes
+    // liveTurn.model / userText).
+    sse.emit({ type: "user.queued", seq: 5, content: "follow-up", ts: "2026-09-14T11:00:00Z" });
+    sse.emit({ type: "turn.started", text: "work", model: "m2", providerId: "p2" });
+    await vi.waitFor(() => {
+      const slice = useStreamStore.getState().bySession[PARENT];
+      expect(slice?.liveTurn?.model).toBe("m2");
+      expect(slice?.queued).toEqual([{ seq: 5, content: "follow-up", ts: "2026-09-14T11:00:00Z" }]);
+      expect(slice?.liveTurn?.stopped).toBe(false);
+      expect(slice?.lastTurnStoppedByUser).toBe(false);
+    });
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+});

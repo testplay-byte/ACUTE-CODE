@@ -7,7 +7,7 @@ import {
   fetchProviders,
   type Agent,
 } from "../../../lib/api";
-import { filterModelsForPicker, useSettingsStore } from "../../../lib/settings-store";
+import { filterConfiguredProviders, filterModelsForPicker, useSettingsStore } from "../../../lib/settings-store";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
 import {
@@ -289,8 +289,12 @@ export function ModelSelector({
   // them. `hasKey` is the configured signal (same filter the Settings
   // provider list uses); the BUTTON's label lookup stays unfiltered so an
   // agent wired to a since-de-keyed provider still resolves its name.
+  //
+  // R114-e (the ModelSelector audit): the rule moved into settings-store's
+  // filterConfiguredProviders (stated + tested once); this is now a pure
+  // call — behavior byte-identical.
   const enabledProviders = useMemo(
-    () => providers.filter((p) => p.enabled && p.hasKey !== false),
+    () => filterConfiguredProviders(providers),
     [providers],
   );
 

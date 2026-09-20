@@ -2,32 +2,38 @@
 /**
  * ROUND-66 (R66-2-b) — the DEDICATED Image analysis settings tab (the
  * owner's B3+B5 directive: the vision model removed from Computer Use into
- * its own section — provider + model + API key + supports-vision rows):
+ * its own section).
+ * ROUND-114 (R114-e re-pin + additions — the owner's directive: "remove the
+ * off mode — main model and separate model only; the separate picker must
+ * show the models that support vision, from the ones I actually have"):
  *
- *  1. loading → data flow; the default OFF state (mode radio Off selected,
- *     the off hint of what enabling gives, the readiness line).
+ *  1. loading → data flow; the DEFAULT state is MAIN (mode radio Main
+ *     selected + the recommended badge, the main-mode hint + model rows,
+ *     the readiness line). The "off" radio is GONE (two options only).
  *  2. The mode radio PUTs {mode:"separate"} (PUT /vision/settings) and the
- *     provider/model/key card mounts.
- *  3. "separate": provider select + model input + Save model →
+ *     separate picker card mounts.
+ *  3. "separate": the picker lists CONFIGURED ∩ supportsVision rows only
+ *     (visionCapableModelRows — non-vision rows, hidden rows and rows under
+ *     unconfigured providers never render); selecting a row PUTs
  *     updateVisionSettings({provider, modelId}).
- *  4. "separate" + no key: paste + Save → setVisionKey(provider, value)
+ *  4. A saved pair that is no longer pickable renders the honest
+ *     re-point note; the empty state points at Models & Providers.
+ *  5. "separate" + no key: paste + Save → setVisionKey(provider, value)
  *     (web-mode REST fallback — the Tauri shell is absent in tests).
- *  5. "separate" + key saved: masked value + "Key saved" chip + Replace
+ *  6. "separate" + key saved: masked value + "Key saved" chip + Replace
  *     reveals the replacement input; the key is never shown in full.
- *  6. Clear → clearVisionKey(provider).
- *  7. "main": the amber hint + the compact configured-models list with the
- *     eye toggle → updateProviderModelConfig(id, {supportsVision}).
- *  8. The readiness line reads the settings state (off / unconfigured /
+ *  7. Clear → clearVisionKey(provider).
+ *  8. "main": the amber hint + the configured-models list with the eye
+ *     toggle → updateProviderModelConfig(id, {supportsVision}).
+ *  9. The readiness line reads the settings state (unconfigured /
  *     configured + key saved).
- *  9. The load-error hint (coreUnreachableHint) when the sidecar fails.
- * 10. OFF: no model/key cards mount at all.
+ * 10. The load-error hint (coreUnreachableHint) when the sidecar fails.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
   clearVisionKey,
-  fetchModelsCatalog,
-  fetchProviderModelConfig,
+  fetchConfiguredModels,
   fetchProviders,
   fetchVisionKey,
   fetchVisionSettings,
@@ -36,19 +42,19 @@ import {
   updateVisionSettings,
 } from "../../lib/api";
 import type {
-  ModelsCatalog,
   ProviderModelConfig,
   ProviderView,
   VisionSettings,
 } from "../../lib/api";
+import { visionCapableModelRows } from "./ImageAnalysisTab";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 import ImageAnalysisTab from "./ImageAnalysisTab";
 
-// The tab is a VIEW over the /vision/settings + /computer-use/vision-key
-// REST surfaces — the api module is mocked exactly as the real sidecar
-// shapes it (MemoryPanel.test.tsx pattern). The settings object is MUTABLE:
-// PUT /vision/settings patches it so the invalidation → refetch cycle
-// behaves like the server.
+// The tab is a VIEW over the /vision/settings + /computer-use/vision-key +
+// /models/configured + /providers REST surfaces — the api module is mocked
+// exactly as the real sidecar shapes it (MemoryPanel.test.tsx pattern). The
+// settings object is MUTABLE: PUT /vision/settings patches it so the
+// invalidation → refetch cycle behaves like the server.
 vi.mock("../../lib/api", () => ({
   fetchVisionSettings: vi.fn(),
   updateVisionSettings: vi.fn(),
@@ -57,7 +63,7 @@ vi.mock("../../lib/api", () => ({
   clearVisionKey: vi.fn(),
   fetchProviders: vi.fn(),
   fetchModelsCatalog: vi.fn(),
-  fetchProviderModelConfig: vi.fn(),
+  fetchConfiguredModels: vi.fn(),
   updateProviderModelConfig: vi.fn(),
 }));
 
@@ -75,6 +81,16 @@ const PROVIDERS: ProviderView[] = [
     hasKey: true,
   },
   {
+    id: "zai",
+    name: "Z.ai",
+    kind: "openai-compatible",
+    baseUrl: "https://api.z.ai/v1",
+    apiFormat: "chat-completions",
+    enabled: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    hasKey: true,
+  },
+  {
     id: "anthropic",
     name: "Anthropic",
     kind: "anthropic",
@@ -86,49 +102,17 @@ const PROVIDERS: ProviderView[] = [
   },
 ];
 
-const CATALOG: ModelsCatalog = {
-  models: [
-    {
-      modelId: "z-ai/glm-5.2:free",
-      displayName: "Z.ai: GLM 5.2",
-      contextWindow: 256000,
-      maxOutputTokens: 65536,
-      inputPricePerMtok: 0,
-      inputPriceCachedPerMtok: 0,
-      outputPricePerMtok: 0,
-      free: true,
-      supportsTools: true,
-      supportsStructuredOutputs: true,
-      supportsVision: false,
-    },
-    {
-      modelId: "nvidia/nemotron-3.5-lightning:free",
-      displayName: "NVIDIA: Nemotron 3.5 Lightning",
-      contextWindow: 1000000,
-      maxOutputTokens: 32768,
-      inputPricePerMtok: 0,
-      inputPriceCachedPerMtok: 0,
-      outputPricePerMtok: 0,
-      free: true,
-      supportsTools: true,
-      supportsStructuredOutputs: true,
-      supportsVision: true,
-    },
-  ],
-  defaultModelId: "z-ai/glm-5.2:free",
-  subagentDefaultModelId: "nvidia/nemotron-3.5-lightning:free",
-  recommendedModelIds: ["z-ai/glm-5.2:free"],
-};
-
 function modelRowFactory(m: {
   id: string;
+  providerId?: string;
   modelId: string;
   displayName: string;
   supportsVision: boolean;
+  hidden?: boolean;
 }): ProviderModelConfig {
   return {
     id: m.id,
-    providerId: "openrouter",
+    providerId: m.providerId ?? "openrouter",
     modelId: m.modelId,
     displayName: m.displayName,
     contextWindow: 256000,
@@ -148,7 +132,7 @@ function modelRowFactory(m: {
     supportsVideoOutput: null,
     supportsAudioOutput: null,
     sizeLabel: null,
-    hidden: false,
+    hidden: m.hidden ?? false,
     sortOrder: 0,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -168,6 +152,30 @@ const MODEL_ROWS: ProviderModelConfig[] = [
     displayName: "NVIDIA: Nemotron 3.5 Lightning",
     supportsVision: true,
   }),
+  // Hidden + vision-capable: curated OFF — never pickable.
+  modelRowFactory({
+    id: "mrow_3",
+    modelId: "hidden/gemini-2.5-flash",
+    displayName: "Hidden Gemini",
+    supportsVision: true,
+    hidden: true,
+  }),
+  // Vision-capable but under an UNCONFIGURED provider (disabled + keyless).
+  modelRowFactory({
+    id: "mrow_4",
+    providerId: "anthropic",
+    modelId: "anthropic/claude-sonnet-4.5",
+    displayName: "Claude Sonnet 4.5",
+    supportsVision: true,
+  }),
+  // A second vision-capable row under the second configured provider.
+  modelRowFactory({
+    id: "mrow_5",
+    providerId: "zai",
+    modelId: "zai/glm-4.6v",
+    displayName: "GLM 4.6V",
+    supportsVision: true,
+  }),
 ];
 
 /** The live settings the mocked GET serves / PUT patches. */
@@ -177,7 +185,9 @@ let keyState: { providerId: string; hasKey: boolean; masked: string | null };
 
 beforeEach(() => {
   resetTestState();
-  settings = { mode: "off", provider: null, modelId: null };
+  // R114-e: "off" is retired server-side (coerced to "main" on read) — the
+  // default the mocked GET serves is the honest post-R114 fresh default.
+  settings = { mode: "main", provider: null, modelId: null };
   keyState = { providerId: "openrouter", hasKey: false, masked: null };
   vi.mocked(fetchVisionSettings).mockReset().mockImplementation(async () => settings);
   vi.mocked(updateVisionSettings).mockReset().mockImplementation(async (patch) => {
@@ -198,33 +208,50 @@ beforeEach(() => {
     return undefined;
   });
   vi.mocked(fetchProviders).mockReset().mockResolvedValue(PROVIDERS);
-  vi.mocked(fetchModelsCatalog).mockReset().mockResolvedValue(CATALOG);
-  vi.mocked(fetchProviderModelConfig)
-    .mockReset()
-    .mockImplementation(async (providerId: string) =>
-      providerId === "openrouter" ? MODEL_ROWS : [],
-    );
+  vi.mocked(fetchConfiguredModels).mockReset().mockResolvedValue(MODEL_ROWS);
   vi.mocked(updateProviderModelConfig)
     .mockReset()
     .mockResolvedValue(undefined as unknown as ProviderModelConfig);
 });
 
-describe("ImageAnalysisTab (ROUND-66 R66-2-b)", () => {
-  it("renders loading → data with the default OFF state (off hint + readiness line)", async () => {
+describe("visionCapableModelRows (R114-e — the pure picker filter)", () => {
+  it("lists configured ∩ supportsVision rows only — non-vision, hidden, and unconfigured-provider rows never render", () => {
+    const rows = visionCapableModelRows(MODEL_ROWS, PROVIDERS);
+    expect(rows.map((r) => r.model.id)).toEqual(["mrow_2", "mrow_5"]);
+    expect(rows[0]).toMatchObject({
+      providerId: "openrouter",
+      providerName: "OpenRouter",
+      model: { modelId: "nvidia/nemotron-3.5-lightning:free" },
+    });
+    expect(rows[1]).toMatchObject({ providerId: "zai", providerName: "Z.ai" });
+  });
+
+  it("an empty provider/model input yields the empty list (never throws)", () => {
+    expect(visionCapableModelRows([], PROVIDERS)).toEqual([]);
+    expect(visionCapableModelRows(MODEL_ROWS, [])).toEqual([]);
+  });
+});
+
+describe("ImageAnalysisTab (ROUND-66 R66-2-b · R114-e re-pin)", () => {
+  it("renders loading → data with the default MAIN state (two-option radio, main hint + rows, readiness line)", async () => {
     renderWithProviders(<ImageAnalysisTab />);
 
     expect(screen.getByText("loading image analysis settings…")).toBeTruthy();
-    // The mode radio resolves with Off selected (the default).
-    const off = await screen.findByRole("radio", { name: "Image analysis mode: Off" });
-    expect(off.getAttribute("aria-checked")).toBe("true");
-    // The off hint (and the header) tell the owner what enabling gives.
-    expect(screen.getAllByText(/analyze_image tool/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/screenshot descriptions/).length).toBeGreaterThan(0);
-    // The readiness line says off.
-    expect((await screen.findByTestId("vision-readiness")).textContent).toContain("Off");
-    // OFF: no model/key cards mount at all.
+    // The mode radio resolves with Main selected (the post-R114 default).
+    const main = await screen.findByRole("radio", { name: "Image analysis mode: Main model" });
+    expect(main.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText("recommended")).toBeTruthy();
+    // R114-e: the OFF radio is GONE — exactly two options.
+    expect(screen.queryByRole("radio", { name: "Image analysis mode: Off" })).toBeNull();
+    expect(screen.getAllByRole("radio", { name: /Image analysis mode/ })).toHaveLength(2);
+    // MAIN: the main-mode card mounts (the eye-toggle list).
+    expect(await screen.findByTestId("main-vision-card")).toBeTruthy();
+    // The readiness line speaks main-mode semantics.
+    expect((await screen.findByTestId("vision-readiness")).textContent).toContain(
+      "marked supports vision",
+    );
+    // MAIN: no separate picker / key row.
     expect(screen.queryByTestId("separate-vision-card")).toBeNull();
-    expect(screen.queryByTestId("main-vision-card")).toBeNull();
     expect(screen.queryByTestId("vision-key-row")).toBeNull();
   });
 
@@ -235,31 +262,84 @@ describe("ImageAnalysisTab (ROUND-66 R66-2-b)", () => {
     expect(separate.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(separate);
     await waitFor(() => expect(updateVisionSettings).toHaveBeenCalledWith({ mode: "separate" }));
-    // The refetch (post-invalidation) lands "separate": the provider/model
-    // card mounts with the recommended badge on the separate row.
+    // The refetch (post-invalidation) lands "separate": the picker card
+    // mounts (its rows render — the radiogroup's aria-label is not visible
+    // text) with the recommended badge on the MAIN row above it.
     const card = await screen.findByTestId("separate-vision-card");
-    expect(card.textContent).toContain("Provider");
-    expect(screen.getByLabelText("Vision provider")).toBeTruthy();
-    expect(screen.getByLabelText("Vision model id")).toBeTruthy();
+    expect(card.textContent).toContain("NVIDIA: Nemotron 3.5 Lightning");
     expect(screen.getByText("recommended")).toBeTruthy();
   });
 
-  it("'separate': provider select + model input + Save model → updateVisionSettings({provider, modelId})", async () => {
+  it("'separate': the picker lists CONFIGURED ∩ supportsVision rows; selecting one PUTs the pair", async () => {
     settings = { mode: "separate", provider: null, modelId: null };
     renderWithProviders(<ImageAnalysisTab />);
 
-    await screen.findByTestId("separate-vision-card");
-    fireEvent.change(screen.getByLabelText("Vision provider"), { target: { value: "openrouter" } });
-    fireEvent.change(screen.getByLabelText("Vision model id"), {
-      target: { value: "nvidia/nemotron-3.5-lightning:free" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save vision model" }));
+    // Only the two pickable rows render (non-vision, hidden and
+    // unconfigured-provider rows are filtered by visionCapableModelRows).
+    const picker = await screen.findByRole("radiogroup", { name: "Separate vision model" });
+    expect(picker.textContent).toContain("NVIDIA: Nemotron 3.5 Lightning");
+    expect(picker.textContent).toContain("GLM 4.6V");
+    expect(picker.textContent).not.toContain("Z.ai: GLM 5.2");
+    expect(picker.textContent).not.toContain("Hidden Gemini");
+    expect(picker.textContent).not.toContain("Claude Sonnet 4.5");
+    // Each row shows its provider label + the vision badge.
+    expect(picker.textContent).toContain("OpenRouter");
+    expect(picker.textContent).toContain("Z.ai");
+    expect(screen.getAllByText("vision").length).toBeGreaterThanOrEqual(2);
+
+    // No saved pair yet → no row selected.
+    expect(picker.querySelector('[aria-checked="true"]')).toBeNull();
+
+    // Selecting the Nemotron row PUTs the pair through the existing route.
+    fireEvent.click(screen.getByRole("radio", { name: "Vision model OpenRouter nvidia/nemotron-3.5-lightning:free" }));
     await waitFor(() =>
       expect(updateVisionSettings).toHaveBeenCalledWith({
         provider: "openrouter",
         modelId: "nvidia/nemotron-3.5-lightning:free",
       }),
     );
+  });
+
+  it("'separate' with a SAVED pair: the saved row renders selected; clicking it again is a no-op", async () => {
+    settings = { mode: "separate", provider: "openrouter", modelId: "nvidia/nemotron-3.5-lightning:free" };
+    renderWithProviders(<ImageAnalysisTab />);
+
+    const saved = await screen.findByRole("radio", {
+      name: "Vision model OpenRouter nvidia/nemotron-3.5-lightning:free",
+    });
+    expect(saved.getAttribute("aria-checked")).toBe("true");
+
+    vi.mocked(updateVisionSettings).mockClear();
+    fireEvent.click(saved);
+    await waitFor(() => expect(screen.getByTestId("separate-vision-card")).toBeTruthy());
+    // The already-saved row never re-PUTs (the honest dirty check).
+    expect(updateVisionSettings).not.toHaveBeenCalled();
+  });
+
+  it("'separate' with a saved pair that is NO LONGER pickable: the honest re-point note", async () => {
+    settings = { mode: "separate", provider: "anthropic", modelId: "anthropic/claude-sonnet-4.5" };
+    renderWithProviders(<ImageAnalysisTab />);
+
+    const card = await screen.findByTestId("separate-vision-card");
+    await waitFor(() =>
+      expect(card.textContent).toContain("no longer in the list"),
+    );
+  });
+
+  it("'separate' with NOTHING vision-capable: the empty state + the link to Models & Providers", async () => {
+    settings = { mode: "separate", provider: null, modelId: null };
+    vi.mocked(fetchConfiguredModels).mockResolvedValue(
+      MODEL_ROWS.filter((m) => m.supportsVision !== true),
+    );
+    renderWithProviders(<ImageAnalysisTab />);
+
+    const empty = await screen.findByTestId("vision-picker-empty");
+    expect(empty.textContent).toContain("No vision-capable models yet");
+    expect(
+      screen.getByRole("button", { name: "Open Models and Providers" }),
+    ).toBeTruthy();
+    // No picker radiogroup, no saved-pair note (nothing to re-point).
+    expect(screen.queryByRole("radiogroup", { name: "Separate vision model" })).toBeNull();
   });
 
   it("'separate' + saved provider + no key: the paste row mounts; paste + Save → setVisionKey (REST fallback)", async () => {
@@ -277,7 +357,7 @@ describe("ImageAnalysisTab (ROUND-66 R66-2-b)", () => {
   });
 
   it("'separate' + key saved: masked value + Key saved chip + Replace reveals the replacement input; never the full key", async () => {
-    settings = { mode: "separate", provider: "openrouter", modelId: "google/gemini-2.5-flash" };
+    settings = { mode: "separate", provider: "openrouter", modelId: "nvidia/nemotron-3.5-lightning:free" };
     keyState = { providerId: "openrouter", hasKey: true, masked: "sk-or-v…f9c2" };
     renderWithProviders(<ImageAnalysisTab />);
 
@@ -304,12 +384,12 @@ describe("ImageAnalysisTab (ROUND-66 R66-2-b)", () => {
     await waitFor(() => expect(clearVisionKey).toHaveBeenCalledWith("openrouter"));
   });
 
-  it("'separate' with no SAVED provider: the key row asks to save a provider first", async () => {
+  it("'separate' with no SAVED provider: the key row asks to pick a model first", async () => {
     settings = { mode: "separate", provider: null, modelId: null };
     renderWithProviders(<ImageAnalysisTab />);
 
     await screen.findByTestId("separate-vision-card");
-    expect(screen.getByText(/Save a provider first/)).toBeTruthy();
+    expect(screen.getByText(/Pick a model above first/)).toBeTruthy();
     expect(screen.queryByTestId("vision-key-row")).toBeNull();
     // The key endpoint was never called (nothing to query yet).
     expect(fetchVisionKey).not.toHaveBeenCalled();
@@ -322,8 +402,9 @@ describe("ImageAnalysisTab (ROUND-66 R66-2-b)", () => {
     const card = await screen.findByTestId("main-vision-card");
     // The hint points at Models & Providers.
     expect(card.textContent).toContain("must be marked supports vision");
-    // The compact rows render with their current state.
-    expect(await screen.findByText("supports vision")).toBeTruthy();
+    // The compact rows render with their current state (ALL configured rows
+    // list here — the eye toggle manages the flag wherever the row lives).
+    expect((await screen.findAllByText("supports vision")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("no images")).toBeTruthy();
     // The eye toggle on the no-vision row PATCHes the flag.
     fireEvent.click(screen.getByRole("button", { name: "Toggle supports vision for z-ai/glm-5.2:free" }));
@@ -333,13 +414,13 @@ describe("ImageAnalysisTab (ROUND-66 R66-2-b)", () => {
   });
 
   it("the readiness line reads the settings state (configured + key saved → the green reading)", async () => {
-    settings = { mode: "separate", provider: "openrouter", modelId: "google/gemini-2.5-flash" };
+    settings = { mode: "separate", provider: "openrouter", modelId: "nvidia/nemotron-3.5-lightning:free" };
     keyState = { providerId: "openrouter", hasKey: true, masked: "sk-or-v…f9c2" };
     renderWithProviders(<ImageAnalysisTab />);
 
     const readiness = await screen.findByTestId("vision-readiness");
     await waitFor(() =>
-      expect(readiness.textContent).toContain("openrouter/google/gemini-2.5-flash"),
+      expect(readiness.textContent).toContain("openrouter/nvidia/nemotron-3.5-lightning:free"),
     );
     expect(readiness.textContent).toContain("dedicated key saved");
   });

@@ -1,9 +1,14 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router";
 import { Check, Eye, EyeOff, ScanEye } from "lucide-react";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { isTauri } from "../../lib/sidecar";
+// R114-e: the CONFIGURED-provider filter the composer's picker shares (the
+// ModelSelector audit's one stated rule — a keyless seeded preset or a
+// provider disabled in Settings is never a pickable source).
+import { filterConfiguredProviders } from "../../lib/settings-store";
 import { withAlpha } from "../dashboard/helpers";
 // R100-E2: the round-100 primitives + the semantic status home (the local
 // AMBER const and the inline status hexes retired — TOKENS.md §7).
@@ -13,8 +18,7 @@ import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { ClampedText } from "../shared/ClampedText";
 import {
   clearVisionKey,
-  fetchModelsCatalog,
-  fetchProviderModelConfig,
+  fetchConfiguredModels,
   fetchProviders,
   fetchVisionKey,
   fetchVisionSettings,
@@ -159,22 +163,26 @@ function RadioRow({
 
 /* ── Card (a): the mode radio ─────────────────────────────────────────────── */
 
+/**
+ * R114-e (owner: "remove the off mode — main model and separate model
+ * only"): exactly TWO modes — the main model (recommended default; a model
+ * marked supportsVision can always see since R114-b retired "off"
+ * server-side) and a separate vision model. The old "off" row is GONE and
+ * the settings type narrowed to "main" | "separate" (the server coerces any
+ * legacy stored "off" to "main" on read — no migration, no dead state to
+ * render).
+ */
 const VISION_MODES: { id: VisionSettings["mode"]; title: string; description: string; badge?: string }[] = [
   {
-    id: "off",
-    title: "Off",
-    description: "No image is described by any model — every surface reports that honestly.",
+    id: "main",
+    title: "Main model",
+    description: "The agent's own model describes images — works whenever its row is marked supports vision.",
+    badge: "recommended",
   },
   {
     id: "separate",
     title: "Separate model",
-    description: "Pick any provider + model + its own API key — completely independent of the chat model.",
-    badge: "recommended",
-  },
-  {
-    id: "main",
-    title: "Main model",
-    description: "Use the agent's model for images when its row is marked supports vision.",
+    description: "Pick one configured vision-capable model (with its own optional dedicated key) — independent of the chat model.",
   },
 ];
 
@@ -279,13 +287,6 @@ function VisionModeCard() {
           />
         ))}
       </div>
-      {settings.mode === "off" && (
-        <p className="text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
-          Off means no model ever sees an image. Turning it on gives: screenshot descriptions in
-          computer use, screenshot descriptions in the embedded browser, and the general
-          analyze_image tool (any local file or http(s) image URL) — no computer use needed.
-        </p>
-      )}
       {settings.mode === "separate" && (
         <SeparateModelCard
           key={`${settings.provider ?? "-"}|${settings.modelId ?? "-"}`}
@@ -300,10 +301,115 @@ function VisionModeCard() {
 
 /* ── Card (b): the separate model + its dedicated key ────────────────────── */
 
+/** R114-e: one pickable row of the separate vision picker (see below). */
+export interface VisionPickerRow {
+  /** The row's provider id (the vision settings' `provider`). */
+  providerId: string;
+  /** The provider's display name (the row's group label). */
+  providerName: string;
+  /** The configured model row (the vision settings' `modelId` is its modelId). */
+  model: ProviderModelConfig;
+}
+
 /**
- * "separate" mode: provider + model + the dedicated vision key row. Mounted
- * keyed on the SAVED pair so drafts re-initialize after each save. The KEY
- * row rides the SAVED provider (its own dedicated slot, never the
+ * ROUND-114 (R114-e, owner: "the separate picker must show the models that
+ * support vision, from the ones I actually have"): the separate picker's
+ * row list — the CONFIGURED model rows (GET /models/configured) filtered to
+ * supportsVision === true, hidden rows excluded, grouped flat under their
+ * provider's display name, and only under CONFIGURED providers
+ * (filterConfiguredProviders — the exact verdict the composer's picker
+ * uses: a keyless seeded preset or a provider disabled in Settings is never
+ * a pickable source; that unfiltered <select> was the D4 audit's leak).
+ * Order: the provider list's order, then each provider's row order. PURE —
+ * exported for the test suite.
+ */
+export function visionCapableModelRows(
+  models: readonly ProviderModelConfig[],
+  providers: readonly ProviderView[],
+): VisionPickerRow[] {
+  const out: VisionPickerRow[] = [];
+  for (const provider of filterConfiguredProviders(providers)) {
+    for (const model of models) {
+      if (model.providerId !== provider.id) continue;
+      if (model.supportsVision !== true || model.hidden === true) continue;
+      out.push({ providerId: provider.id, providerName: provider.name, model });
+    }
+  }
+  return out;
+}
+
+/**
+ * R114-e: ONE pickable row — display name + provider label + a small
+ * vision badge; selecting rides the card's PUT mutation. Compact and calm
+ * (the phone's one-line discipline): the full modelId stays in the row's
+ * title tooltip.
+ */
+function VisionPickerRowButton({
+  row,
+  selected,
+  pending,
+  onPick,
+}: {
+  row: VisionPickerRow;
+  selected: boolean;
+  pending: boolean;
+  onPick: () => void;
+}) {
+  const styles = useThemeStyles();
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={onPick}
+      disabled={pending}
+      aria-label={`Vision model ${row.providerName} ${row.model.modelId}`}
+      title={`${row.providerId}/${row.model.modelId}`}
+      data-vision-picker-row={`${row.providerId}/${row.model.modelId}`}
+      className="w-full flex items-center gap-2 px-3 py-2 border-b last:border-b-0 text-left disabled:cursor-not-allowed transition-colors"
+      style={{
+        borderColor: styles.borderSubtle,
+        background: selected ? withAlpha(styles.accent, 0.07) : "transparent",
+      }}
+    >
+      {selected ? (
+        <Check size={12} className="shrink-0" style={{ color: styles.accent }} />
+      ) : (
+        <span className="w-3 shrink-0" />
+      )}
+      <span className="min-w-0 flex-1 flex items-baseline gap-1.5">
+        <ClampedText
+          text={row.model.displayName.trim() !== "" ? row.model.displayName : row.model.modelId}
+          lines={1}
+          className="text-[12px] font-medium"
+          style={{ color: styles.text }}
+        />
+        <span
+          className="font-mono text-[10px] shrink-0 truncate"
+          style={{ color: styles.textTertiary }}
+          title={`${row.providerId}/${row.model.modelId}`}
+        >
+          {row.providerName}
+        </span>
+      </span>
+      <span
+        className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
+        style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
+      >
+        <Eye size={10} aria-hidden />
+        vision
+      </span>
+    </button>
+  );
+}
+
+/**
+ * "separate" mode: R114-e REBUILT — the picker is a clean list of the
+ * configured, vision-capable model rows (visionCapableModelRows — no
+ * provider dropdown, no free-text model input, no static OpenRouter
+ * datalist; the owner's directive); selecting a row PUTs the pair through
+ * the existing updateVisionSettings. The dedicated vision-key row below is
+ * UNTOUCHED and still rides the SAVED provider (its own slot, never the
  * provider's primary key).
  */
 function SeparateModelCard({
@@ -315,23 +421,24 @@ function SeparateModelCard({
 }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
-  const [provider, setProvider] = useState<string | null>(settings.provider);
-  const [modelId, setModelId] = useState(settings.modelId ?? "");
+  const navigate = useNavigate();
   const [keyDraft, setKeyDraft] = useState("");
   const [replacing, setReplacing] = useState(false);
 
   const providersQuery = useQuery({
     queryKey: ["settings-providers"],
     queryFn: fetchProviders,
+    staleTime: 60 * 1000,
+    retry: false,
   });
-  const catalogQuery = useQuery({
-    queryKey: ["models-catalog"],
-    queryFn: fetchModelsCatalog,
-    staleTime: 10 * 60 * 1000,
+  const configuredQuery = useQuery({
+    queryKey: ["models-configured"],
+    queryFn: fetchConfiguredModels,
+    staleTime: 60 * 1000,
     retry: false,
   });
 
-  // The key row rides the SAVED provider (the one "Save model" persisted).
+  // The key row rides the SAVED provider (the one the picker persisted).
   const savedProvider = settings.provider;
   const visionKeyQuery = useQuery({
     queryKey: ["vision-key", savedProvider],
@@ -339,11 +446,18 @@ function SeparateModelCard({
     enabled: savedProvider !== null,
   });
 
+  const rows = visionCapableModelRows(configuredQuery.data ?? [], providersQuery.data ?? []);
+  const savedRow =
+    savedProvider !== null && settings.modelId !== null
+      ? rows.find((r) => r.providerId === savedProvider && r.model.modelId === settings.modelId) ??
+        null
+      : null;
+
   const saveModel = useMutation({
-    mutationFn: () =>
+    mutationFn: (row: VisionPickerRow) =>
       updateVisionSettings({
-        provider,
-        modelId: modelId.trim() || null,
+        provider: row.providerId,
+        modelId: row.model.modelId,
       }),
     onSuccess: () => {
       onNote("Vision model saved.");
@@ -402,75 +516,87 @@ function SeparateModelCard({
     color: styles.text,
   };
 
-  const visionModels =
-    catalogQuery.data?.models.filter((m) => m.supportsVision) ?? [];
-  const dirty =
-    provider !== settings.provider || modelId.trim() !== (settings.modelId ?? "");
   const keyInfo = visionKeyQuery.data;
 
   return (
     <div className="flex flex-col gap-2.5" data-testid="separate-vision-card">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[11px] font-medium shrink-0" style={{ color: styles.textSecondary }}>
-          Provider
+      {/* The picker — configured ∩ supportsVision, grouped flat with provider
+          labels (R114-e; the empty state points at the flag's home). */}
+      {configuredQuery.isLoading || providersQuery.isLoading ? (
+        <span className="text-[11px] font-mono" style={{ color: styles.textTertiary }}>
+          listing vision-capable models…
         </span>
-        <select
-          value={provider ?? ""}
-          onChange={(e) => {
-            setProvider(e.target.value === "" ? null : e.target.value);
-            setReplacing(false);
-          }}
-          aria-label="Vision provider"
-          className="h-8 rounded-lg border-[1.5px] px-2 text-[11px] outline-none"
-          style={inputStyle}
+      ) : configuredQuery.isError || providersQuery.isError ? (
+        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+          {configuredQuery.isError
+            ? configuredQuery.error instanceof Error
+              ? configuredQuery.error.message
+              : String(configuredQuery.error)
+            : providersQuery.error instanceof Error
+              ? providersQuery.error.message
+              : String(providersQuery.error)}
+        </p>
+      ) : rows.length === 0 ? (
+        <div
+          className="flex items-center gap-2 flex-wrap rounded-lg border-[1.5px] px-3 py-2.5"
+          style={{ borderColor: styles.border, background: withAlpha(styles.accent, 0.03) }}
+          data-testid="vision-picker-empty"
         >
-          <option value="">— pick a provider —</option>
-          {(providersQuery.data ?? []).map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.enabled ? "" : " (disabled)"}
-            </option>
-          ))}
-        </select>
-        <span className="text-[11px] font-medium shrink-0" style={{ color: styles.textSecondary }}>
-          Model
-        </span>
-        <input
-          list="vision-model-options"
-          value={modelId}
-          onChange={(e) => setModelId(e.target.value)}
-          placeholder="provider/model or free-text id"
-          aria-label="Vision model id"
-          className="h-8 flex-1 min-w-[200px] rounded-lg border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
-          style={inputStyle}
-        />
-        <datalist id="vision-model-options">
-          {visionModels.map((m) => (
-            <option key={m.modelId} value={m.modelId}>
-              {m.displayName}
-            </option>
-          ))}
-        </datalist>
-        <button
-          onClick={() => saveModel.mutate()}
-          disabled={!dirty || saveModel.isPending}
-          aria-label="Save vision model"
-          className="h-8 px-3 rounded-lg text-[11px] font-medium shrink-0 disabled:opacity-50"
-          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          <p className="text-[11px] leading-relaxed min-w-0 flex-1" style={{ color: styles.textSecondary }}>
+            No vision-capable models yet — add one in Models &amp; Providers and mark it
+            vision-capable.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate("/settings?tab=api")}
+            aria-label="Open Models and Providers"
+            className="h-7 px-2.5 rounded-lg text-[11px] font-medium shrink-0"
+            style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          >
+            Open Models &amp; Providers
+          </button>
+        </div>
+      ) : (
+        <div
+          role="radiogroup"
+          aria-label="Separate vision model"
+          className="rounded-lg border-[1.5px] overflow-hidden max-h-64 overflow-y-auto"
+          style={{ borderColor: styles.border }}
         >
-          {saveModel.isPending ? "Saving…" : "Save model"}
-        </button>
-      </div>
-      <p className="text-[11px]" style={{ color: styles.textTertiary }}>
-        {visionModels.length > 0
-          ? `${visionModels.length} catalog models support images (the datalist); any id can be typed.`
-          : "The model is a free-text id — the catalog is unavailable right now."}
-      </p>
+          {rows.map((row) => (
+            <VisionPickerRowButton
+              key={`${row.providerId}/${row.model.id}`}
+              row={row}
+              selected={
+                savedProvider === row.providerId && settings.modelId === row.model.modelId
+              }
+              pending={saveModel.isPending}
+              onPick={() => {
+                // Clicking the already-saved row is a no-op (the honest
+                // dirty check — no pointless PUT, no "saved" churn).
+                if (savedProvider === row.providerId && settings.modelId === row.model.modelId) {
+                  return;
+                }
+                saveModel.mutate(row);
+              }}
+            />
+          ))}
+        </div>
+      )}
+      {/* A SAVED pair that no longer matches any pickable row (the provider
+          lost its key, the row lost its vision flag, the row was deleted) —
+          the honest note instead of a silently missing selection. */}
+      {savedProvider !== null && settings.modelId !== null && savedRow === null && rows.length > 0 ? (
+        <p className="text-[11px]" style={{ color: styles.textTertiary }}>
+          The saved model ({savedProvider}/{settings.modelId}) is no longer in the list — pick a
+          model above to re-point the vision relay.
+        </p>
+      ) : null}
 
       {/* The dedicated vision key row — rides the SAVED provider. */}
       {savedProvider === null ? (
         <p className="text-[11px]" style={{ color: styles.textTertiary }}>
-          Save a provider first — its dedicated vision key slot rides the saved provider id.
+          Pick a model above first — its dedicated vision key slot rides the saved provider id.
         </p>
       ) : visionKeyQuery.isLoading ? (
         <span className="text-[11px] font-mono" style={{ color: styles.textTertiary }}>
@@ -574,11 +700,11 @@ function SeparateModelCard({
 
 /** One configured model row in "main" mode — the eye toggles supportsVision. */
 function VisionModelRow({
-  provider,
+  providerName,
   model,
   onNote,
 }: {
-  provider: ProviderView;
+  providerName: string;
   model: ProviderModelConfig;
   onNote: (text: string, isError?: boolean, isWarning?: boolean) => void;
 }) {
@@ -588,7 +714,7 @@ function VisionModelRow({
     mutationFn: () => updateProviderModelConfig(model.id, { supportsVision: !model.supportsVision }),
     onSuccess: () => {
       onNote("Vision flag saved.");
-      void queryClient.invalidateQueries({ queryKey: ["vision-model-rows"] });
+      void queryClient.invalidateQueries({ queryKey: ["models-configured"] });
     },
     onError: (err: Error) => onNote(err.message, true),
   });
@@ -626,9 +752,9 @@ function VisionModelRow({
         <span
           className="font-mono text-[10px] shrink-0 truncate"
           style={{ color: styles.textTertiary }}
-          title={`${provider.name} · ${model.modelId}`}
+          title={`${model.providerId}/${model.modelId}`}
         >
-          {provider.name}/{model.modelId}
+          {providerName}/{model.modelId}
         </span>
       </span>
       <span
@@ -647,23 +773,28 @@ function VisionModelRow({
 /** "main" mode: the hint + the compact configured-models list. */
 function MainModelCard({ onNote }: { onNote: (text: string, isError?: boolean) => void }) {
   const styles = useThemeStyles();
-  const rowsQuery = useQuery({
-    queryKey: ["vision-model-rows"],
-    queryFn: async () => {
-      const providers = await fetchProviders();
-      const rows = await Promise.all(
-        providers.map(async (p) => {
-          try {
-            const models = await fetchProviderModelConfig(p.id);
-            return models.map((m) => ({ provider: p, model: m }));
-          } catch {
-            return [] as { provider: ProviderView; model: ProviderModelConfig }[];
-          }
-        }),
-      );
-      return rows.flat();
-    },
+  // R114-e: the list rides the SHARED ["models-configured"] cache now (one
+  // GET /models/configured call instead of N per-provider fetches) with the
+  // ["settings-providers"] names for the row labels — the eye-toggle surface
+  // stays byte-identical (ALL configured rows, including a disabled
+  // provider's — the flag is manageable wherever the row lives).
+  const configuredQuery = useQuery({
+    queryKey: ["models-configured"],
+    queryFn: fetchConfiguredModels,
+    staleTime: 60 * 1000,
+    retry: false,
   });
+  const providersQuery = useQuery({
+    queryKey: ["settings-providers"],
+    queryFn: fetchProviders,
+    staleTime: 60 * 1000,
+    retry: false,
+  });
+  const rows = (configuredQuery.data ?? []).map((model) => ({
+    model,
+    providerName:
+      providersQuery.data?.find((p) => p.id === model.providerId)?.name ?? model.providerId,
+  }));
 
   return (
     <div className="flex flex-col gap-2.5" data-testid="main-vision-card">
@@ -676,17 +807,17 @@ function MainModelCard({ onNote }: { onNote: (text: string, isError?: boolean) =
           Models&nbsp;&amp;&nbsp;Providers (the eye toggle on a model row) — or flip it right here:
         </p>
       </div>
-      {rowsQuery.isLoading ? (
+      {configuredQuery.isLoading ? (
         <span className="text-[11px] font-mono" style={{ color: styles.textTertiary }}>
           listing configured models…
         </span>
-      ) : rowsQuery.isError ? (
+      ) : configuredQuery.isError ? (
         <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
-          {rowsQuery.error instanceof Error
-            ? rowsQuery.error.message
-            : String(rowsQuery.error)}
+          {configuredQuery.error instanceof Error
+            ? configuredQuery.error.message
+            : String(configuredQuery.error)}
         </p>
-      ) : (rowsQuery.data ?? []).length === 0 ? (
+      ) : rows.length === 0 ? (
         <p className="text-[11px]" style={{ color: styles.textTertiary }}>
           No configured model rows yet — add models under Models&nbsp;&amp;&nbsp;Providers first.
         </p>
@@ -695,10 +826,10 @@ function MainModelCard({ onNote }: { onNote: (text: string, isError?: boolean) =
           className="rounded-lg border-[1.5px] overflow-hidden max-h-64 overflow-y-auto"
           style={{ borderColor: styles.border }}
         >
-          {(rowsQuery.data ?? []).map(({ provider, model }) => (
+          {rows.map(({ providerName, model }) => (
             <VisionModelRow
               key={model.id}
-              provider={provider}
+              providerName={providerName}
               model={model}
               onNote={onNote}
             />
@@ -730,9 +861,10 @@ function ReadinessCard() {
 
   let line: string;
   let ready = false;
-  if (settings.mode === "off") {
-    line = "Off — no model analyzes any image.";
-  } else if (settings.mode === "separate") {
+  // R114-e: "off" is retired — a marked model can always see, so the
+  // readiness line speaks main/separate only (the server coerces any legacy
+  // stored "off" to "main" on read).
+  if (settings.mode === "separate") {
     if (settings.provider === null || settings.modelId === null) {
       line = "Separate model picked — but no provider/model is saved yet.";
     } else if (keySaved) {

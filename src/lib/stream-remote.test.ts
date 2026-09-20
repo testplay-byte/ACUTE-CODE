@@ -313,3 +313,114 @@ describe("stream store remote mirror (ROUND-113 R113-b)", () => {
     expect(useStreamStore.getState().bySession[SID]).toBeUndefined();
   });
 });
+
+// ── ROUND-114 (R114-e): turn.started — the instant remote mirror open ────────
+
+describe("stream store remote mirror · turn.started (ROUND-114 R114-e)", () => {
+  it("turn.started opens the mirror INSTANTLY with the user text + resolved model (the composer flip)", () => {
+    useStreamStore.getState().ingestRemoteFrame(SID, {
+      type: "turn.started",
+      text: "hey from the phone",
+      model: "z-ai/glm-4.7",
+      providerId: "zai",
+    });
+
+    const slice = useStreamStore.getState().bySession[SID];
+    // The mirror is OPEN and marked remote — remoteRunning keys off exactly
+    // this (slice.remote + liveTurn + !stopped), so the composer flips to
+    // Stop + Queue within the frame's arrival, not after the folded refetch.
+    expect(slice?.remote).toBe(true);
+    expect(slice?.streamBusy).toBe(false);
+    expect(slice?.liveTurn).not.toBeNull();
+    expect(slice?.liveTurn?.stopped).toBe(false);
+    // The turn's resolved model + the phone's user text ride the live turn
+    // (the panel renders the user bubble + the honest model label from
+    // them while the folded log catches up).
+    expect(slice?.liveTurn?.model).toBe("z-ai/glm-4.7");
+    expect(slice?.liveTurn?.userText).toBe("hey from the phone");
+    // The sidebar spinner marks the session as running server-side.
+    expect(useActiveStreams.getState().active.has(SID)).toBe(true);
+    // No content yet — the "Thinking…" placeholder's exact precondition
+    // (empty text + thinking + working), verified on the store shape.
+    expect(slice?.liveTurn?.streamText).toBe("");
+    expect(slice?.liveTurn?.streamThinking).toBe("");
+    expect(slice?.liveTurn?.working).toEqual([]);
+  });
+
+  it("turn.started followed by deltas keeps streaming normally (the mirror never resets mid-turn)", () => {
+    const ingest = useStreamStore.getState().ingestRemoteFrame;
+    ingest(SID, { type: "turn.started", text: "hi", model: "m1", providerId: "p1" });
+    ingest(SID, { type: "text-delta", delta: "answer" });
+
+    const slice = useStreamStore.getState().bySession[SID];
+    expect(slice?.liveTurn?.userText).toBe("hi");
+    expect(slice?.liveTurn?.model).toBe("m1");
+    expect(slice?.liveTurn?.streamText).toBe("answer");
+  });
+
+  it("an OWN stream in flight → the mirrored turn.started is ignored (no double user text)", () => {
+    // Seed an own-stream slice exactly as startStream leaves it mid-turn.
+    useStreamStore.setState((s) => ({
+      bySession: {
+        ...s.bySession,
+        [SID]: {
+          liveTurn: {
+            startedAtMs: Date.now(),
+            working: [],
+            streamText: "",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: "own message",
+          lastLiveEndMs: 0,
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: false,
+        },
+      },
+    }));
+
+    useStreamStore.getState().ingestRemoteFrame(SID, {
+      type: "turn.started",
+      text: "echo of own message",
+      model: "m",
+      providerId: "p",
+    });
+
+    // The own reader owns the render: the mirrored opening frame never
+    // stamped userText/model onto the OWN live turn.
+    const slice = useStreamStore.getState().bySession[SID];
+    expect(slice?.remote).toBe(false);
+    expect(slice?.liveTurn?.userText).toBeUndefined();
+    expect(slice?.liveTurn?.model).toBeUndefined();
+    expect(slice?.pendingEcho).toBe("own message");
+  });
+
+  it("turn.started after a retired turn opens a FRESH mirror (reset, no stale userText/model)", () => {
+    vi.useFakeTimers();
+    const ingest = useStreamStore.getState().ingestRemoteFrame;
+    ingest(SID, { type: "turn.started", text: "turn one", model: "m1", providerId: "p1" });
+    ingest(SID, { type: "stopped" });
+    vi.advanceTimersByTime(1_500);
+    // The retire cleared the mirror.
+    expect(useStreamStore.getState().bySession[SID]?.liveTurn).toBeNull();
+
+    ingest(SID, { type: "turn.started", text: "turn two", model: "m2", providerId: "p2" });
+    const slice = useStreamStore.getState().bySession[SID];
+    expect(slice?.remote).toBe(true);
+    expect(slice?.liveTurn?.userText).toBe("turn two");
+    expect(slice?.liveTurn?.model).toBe("m2");
+  });
+});

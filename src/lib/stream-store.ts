@@ -127,6 +127,20 @@ export interface LiveTurn {
   // registry is a 12-LRU with a 10-minute TTL — expired tiles render the
   // honest "expired" placeholder, so a long turn's early rows degrade
   // honestly instead of silently vanishing; cap-free is correct).
+  /** ROUND-114 (R114-e, the turn.started consumer): the turn's RESOLVED
+   * model — stamped from the opening turn.started frame (the three-tier
+   * ladder's verdict, identical on the own path and the remote mirror).
+   * The live turn's header renders it (the honest label instead of the
+   * composer's presumptive pick); absent until the frame lands (an older
+   * sidecar) — callers fall back to their previous model source. */
+  model?: string;
+  /** ROUND-114 (R114-e): the turn's USER text, stamped from turn.started on
+   * a REMOTE mirror only (the own path's optimistic pendingEcho already
+   * renders the bubble — setting this there would double it). The panel
+   * renders it as the remote user bubble with a content dedupe against the
+   * folded log, so the persisted message.user row REPLACES it the moment
+   * the refetch lands — never a double bubble. Cleared with the liveTurn. */
+  userText?: string;
 }
 
 /** ROUND-75 (R75): the live retry-ladder status (LiveTurn.retry's shape). */
@@ -1650,6 +1664,26 @@ function handleStreamEvent(
   const cur = useStreamStore.getState().bySession[sessionId];
   if (!cur || cur.liveTurn === null) return;
   let liveTurn = cur.liveTurn;
+
+  // ── ROUND-114 (R114-e): the turn's OPENING frame — turn.started. Both the
+  // own-stream reader and the remote mirror dispatch through here, so ONE
+  // branch serves both: the frame's RESOLVED model is adopted onto the live
+  // turn (the honest label — the composer's pick could be absent while the
+  // session/agent tier answered), and on a REMOTE mirror the frame's text
+  // ALSO becomes the user bubble (`userText` — the phone's message, rendered
+  // by the panel until the folded log's message.user row replaces it on
+  // refetch). On the OWN path the text is deliberately dropped: the local
+  // optimistic echo already rendered the identical bubble.
+  if (event.type === "turn.started") {
+    patchSession(sessionId, {
+      liveTurn: {
+        ...liveTurn,
+        model: event.model,
+        ...(cur.remote === true ? { userText: event.text } : {}),
+      },
+    });
+    return;
+  }
 
   // ── ROUND-75 (R75): the retry-ladder / overflow-recovery status lines ──
   // A meta.retry frame sets liveTurn.retry (the ladder is waiting out a

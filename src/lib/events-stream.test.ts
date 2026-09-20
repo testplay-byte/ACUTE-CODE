@@ -10,10 +10,13 @@
  *     · hello → the resync sweep (sessions/projects/session/settings);
  *     · session frames → the DEBOUNCED session+sessions invalidation (a
  *       rapid burst collapses into ONE refetch; kind:"created" adds projects
- *       immediately);
+ *       immediately); ROUND-114 (R114-e): kind:"meta" skips the debounce
+ *       entirely (a preference patch is one tiny row write — the phone's
+ *       model pick flips the desktop's composer the moment the frame lands);
  *     · turn frames → the remote mirror lands in the stream store (remote
  *       flag, live text) and TERMINAL frames additionally invalidate the
- *       folded log + usage + context meter;
+ *       folded log + usage + context meter; R114-e: turn.started opens the
+ *       mirror INSTANTLY with the user text + resolved model;
  *     · project frames → the projects list;
  *     · settings frames → "appearance" applies into the theme store (no
  *       query), a known domain invalidates its own key, an unknown domain
@@ -72,10 +75,18 @@ beforeEach(() => {
     token: "tok_123",
     demoData: false,
   });
-  // Isolate the module-level stores between tests.
+  // Isolate the module-level stores between tests (R114-e: the FULL
+  // appearance shape — the appearance-frame tests assert the chat fields).
   useStreamStore.setState({ bySession: {}, subagentsLive: {} });
   useActiveStreams.setState({ active: new Set<string>() });
-  useThemeStore.setState({ themeId: "nova", mode: "dark" });
+  useThemeStore.setState({
+    themeId: "nova",
+    mode: "dark",
+    density: "comfortable",
+    chatTextSize: "medium",
+    timestampsMode: "hidden",
+    activityMode: "detailed",
+  });
   resetEventsStreamStateForTest();
 });
 
@@ -214,6 +225,37 @@ describe("handleEventsFrame (the dispatch)", () => {
     expect(invalidatedKeys(invalidateSpy)).toContainEqual(["projects"]);
   });
 
+  // ── ROUND-114 (R114-e): kind:"meta" — a preference patch (permissionMode /
+  // activeMode / selectedModel) skips the debounce ENTIRELY so a phone-side
+  // model pick flips the desktop's composer display the moment the frame
+  // lands (the 300ms debounce would only add latency for zero dedupe value). ──
+  it("kind:'meta' invalidates session+sessions IMMEDIATELY — no debounce, no timer left pending", () => {
+    vi.useFakeTimers();
+    const { qc, invalidateSpy } = makeQC();
+
+    handleEventsFrame(qc, sessionFrame({
+      kind: "meta",
+      selectedModel: { providerId: "zai", model: "z-ai/glm-4.7" },
+    }));
+
+    // The invalidation fired SYNCHRONOUSLY — the composer's model display
+    // seeds from the refetched session row's selectedModel.
+    expect(invalidatedKeys(invalidateSpy)).toContainEqual(["session"]);
+    expect(invalidatedKeys(invalidateSpy)).toContainEqual(["sessions"]);
+
+    // And no debounced follow-up was armed (advancing the clock fires nothing).
+    const callsAfterFrame = invalidateSpy.mock.calls.length;
+    vi.advanceTimersByTime(600);
+    expect(invalidateSpy.mock.calls.length).toBe(callsAfterFrame);
+  });
+
+  it("kind:'meta' with a cleared selectedModel (null) rides the same immediate path", () => {
+    const { qc, invalidateSpy } = makeQC();
+    handleEventsFrame(qc, sessionFrame({ kind: "meta", selectedModel: null }));
+    expect(invalidatedKeys(invalidateSpy)).toContainEqual(["session"]);
+    expect(invalidatedKeys(invalidateSpy)).toContainEqual(["sessions"]);
+  });
+
   it("project frames invalidate the projects list", () => {
     const { qc, invalidateSpy } = makeQC();
     handleEventsFrame(qc, { type: "project", projectId: "p_new", kind: "created" });
@@ -237,6 +279,31 @@ describe("handleEventsFrame (the dispatch)", () => {
     ]);
     // The sidebar spinner mark: a turn IS running on the server.
     expect(useActiveStreams.getState().active.has(SID)).toBe(true);
+  });
+
+  // ── ROUND-114 (R114-e): turn.started — the opening frame opens the mirror
+  // INSTANTLY with the phone's user text + the resolved model (the composer
+  // flips to Stop + Queue within the frame's arrival; the "Thinking…"
+  // placeholder's exact precondition holds until content lands). ──
+  it("turn.started opens the mirror INSTANTLY with the user text + resolved model (the composer flip)", () => {
+    const { qc, invalidateSpy } = makeQC();
+    handleEventsFrame(qc, {
+      type: "turn",
+      sessionId: SID,
+      frame: { type: "turn.started", text: "hey from the phone", model: "z-ai/glm-4.7", providerId: "zai" },
+    });
+
+    const slice = useStreamStore.getState().bySession[SID];
+    expect(slice?.remote).toBe(true);
+    expect(slice?.liveTurn?.userText).toBe("hey from the phone");
+    expect(slice?.liveTurn?.model).toBe("z-ai/glm-4.7");
+    // No content yet — the empty-liveTurn placeholder's precondition; the
+    // sidebar spinner mark is up.
+    expect(slice?.liveTurn?.streamText).toBe("");
+    expect(useActiveStreams.getState().active.has(SID)).toBe(true);
+    // turn.started is NOT terminal: no invalidation (the debounced folded-log
+    // refetch stays quiet until the turn ends).
+    expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
   it("non-terminal turn frames do NOT invalidate the usage/context queries", () => {
@@ -283,6 +350,35 @@ describe("handleEventsFrame (the dispatch)", () => {
 
     expect(useThemeStore.getState().themeId).toBe("clay");
     expect(useThemeStore.getState().mode).toBe("light");
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  // ── ROUND-114 (R114-e): the appearance frame carries the FULL five-field
+  // shape now — a phone-side chat-pref flip lands on the desktop live (the
+  // theme store's echo guard suppresses the write-back PUT; theme-store.test
+  // pins that half, this pins the DISPATCH half). ──
+  it("settings 'appearance' applies ALL FIVE fields live (a phone's chat prefs land on the desktop)", () => {
+    const { qc, invalidateSpy } = makeQC();
+    handleEventsFrame(qc, {
+      type: "settings",
+      domain: "appearance",
+      value: {
+        themeId: "bento",
+        mode: "dark",
+        chatDensity: "compact",
+        chatTextSize: "large",
+        timestampsMode: "hover",
+        toolActivity: "hidden",
+      },
+    });
+
+    expect(useThemeStore.getState().themeId).toBe("bento");
+    expect(useThemeStore.getState().mode).toBe("dark");
+    expect(useThemeStore.getState().density).toBe("compact");
+    expect(useThemeStore.getState().chatTextSize).toBe("large");
+    expect(useThemeStore.getState().timestampsMode).toBe("hover");
+    expect(useThemeStore.getState().activityMode).toBe("hidden");
+    // Still no query — the appearance state IS the store.
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 

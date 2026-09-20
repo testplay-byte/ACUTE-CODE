@@ -97,8 +97,19 @@ let appearanceHydration: Promise<void> | null = null;
  * demo/unauthenticated mode (no sidecar to sync with). A failed PUT is a
  * silent no-op: the local value stays, the next successful PUT re-converges
  * the devices.
- */
-function pushAppearanceToServer(patch: { themeId?: string; mode?: ThemeMode }): void {
+ * ROUND-114 (R114-e): the patch widened to the FULL six-field domain — the
+ * four chat-density fields (chatDensity/chatTextSize/timestampsMode/
+ * toolActivity) write through exactly like themeId/mode always have, so the
+ * PC's Settings → Appearance flips land on the phone and vice versa
+ * (sidebarTint stays local-only: it is not part of the server domain). */
+function pushAppearanceToServer(patch: {
+  themeId?: string;
+  mode?: ThemeMode;
+  chatDensity?: Density;
+  chatTextSize?: ChatTextSize;
+  timestampsMode?: TimestampsMode;
+  toolActivity?: ActivityMode;
+}): void {
   if (applyingRemoteAppearance) return; // echo guard — see the doc above
   const { demoData, token } = useConfigStore.getState();
   if (demoData || !token) return;
@@ -114,10 +125,26 @@ function pushAppearanceToServer(patch: { themeId?: string; mode?: ThemeMode }): 
  * default); a non-null id applies. Invalidates nothing: zustand's set
  * notifies useThemeSync/useThemeStyles subscribers and the palette applies
  * on their re-render.
+ * ROUND-114 (R114-e): the FULL six-field domain applies here — every PRESENT
+ * chat-density field (chatDensity/chatTextSize/timestampsMode/toolActivity)
+ * rides the same echo-guarded application, so a phone-side flip lands on the
+ * desktop live (and the boot hydration converges the fields like `mode`
+ * always converged). Validation posture: a present-but-INVALID value rejects
+ * the WHOLE frame (malformed is malformed — a half-applied patch would leave
+ * the devices disagreeing); an ABSENT field simply doesn't touch its local
+ * twin (the pre-R114-b server omits all four — every local value stands,
+ * which is byte-identical because the server defaults match the local ones).
  */
 export function applyServerAppearance(value: unknown): void {
   if (typeof value !== "object" || value === null) return;
-  const raw = value as { themeId?: unknown; mode?: unknown };
+  const raw = value as {
+    themeId?: unknown;
+    mode?: unknown;
+    chatDensity?: unknown;
+    chatTextSize?: unknown;
+    timestampsMode?: unknown;
+    toolActivity?: unknown;
+  };
   const themeId = raw.themeId;
   const mode = raw.mode;
   if (
@@ -135,6 +162,38 @@ export function applyServerAppearance(value: unknown): void {
   ) {
     return;
   }
+  // R114-e: the four chat-density vocabularies — same strict per-field
+  // check, same reject-the-whole-frame posture (see the doc above).
+  if (
+    raw.chatDensity !== undefined &&
+    raw.chatDensity !== "comfortable" &&
+    raw.chatDensity !== "compact"
+  ) {
+    return;
+  }
+  if (
+    raw.chatTextSize !== undefined &&
+    raw.chatTextSize !== "small" &&
+    raw.chatTextSize !== "medium" &&
+    raw.chatTextSize !== "large"
+  ) {
+    return;
+  }
+  if (
+    raw.timestampsMode !== undefined &&
+    raw.timestampsMode !== "hidden" &&
+    raw.timestampsMode !== "hover"
+  ) {
+    return;
+  }
+  if (
+    raw.toolActivity !== undefined &&
+    raw.toolActivity !== "detailed" &&
+    raw.toolActivity !== "compact" &&
+    raw.toolActivity !== "hidden"
+  ) {
+    return;
+  }
   applyingRemoteAppearance = true;
   try {
     if (typeof themeId === "string") {
@@ -142,6 +201,20 @@ export function applyServerAppearance(value: unknown): void {
     }
     if (mode === "system" || mode === "light" || mode === "dark") {
       useThemeStore.getState().setMode(mode);
+    }
+    // R114-e: every present chat field applies under the same guard (the
+    // casts are narrowed by the validation ladder above).
+    if (raw.chatDensity !== undefined) {
+      useThemeStore.getState().setDensity(raw.chatDensity as Density);
+    }
+    if (raw.chatTextSize !== undefined) {
+      useThemeStore.getState().setChatTextSize(raw.chatTextSize as ChatTextSize);
+    }
+    if (raw.timestampsMode !== undefined) {
+      useThemeStore.getState().setTimestampsMode(raw.timestampsMode as TimestampsMode);
+    }
+    if (raw.toolActivity !== undefined) {
+      useThemeStore.getState().setActivityMode(raw.toolActivity as ActivityMode);
     }
   } finally {
     applyingRemoteAppearance = false;
@@ -245,6 +318,10 @@ export const useThemeStore = create<ThemeState>()(
       // R113-b: every local flavor/mode flip ALSO pushes to the server
       // (optimistic write-through — see pushAppearanceToServer). The local
       // set stays the UX source: a failed PUT never rolls the click back.
+      // ROUND-114 (R114-e): the four chat-density setters join the
+      // write-through — density/text size/timestamps/tool activity now land
+      // on every device watching this sidecar (the server domain's four new
+      // fields, R114-b). sidebarTint stays local-only (not in the domain).
       setTheme: (themeId) => {
         set({ themeId });
         pushAppearanceToServer({ themeId });
@@ -266,11 +343,25 @@ export const useThemeStore = create<ThemeState>()(
           pushAppearanceToServer({ mode });
           return { mode };
         }),
-      setDensity: (density) => set({ density }),
+      setDensity: (density) => {
+        set({ density });
+        // R114-e: the server domain spells this field chatDensity.
+        pushAppearanceToServer({ chatDensity: density });
+      },
       setSidebarTint: (sidebarTint) => set({ sidebarTint }),
-      setActivityMode: (activityMode) => set({ activityMode }),
-      setChatTextSize: (chatTextSize) => set({ chatTextSize }),
-      setTimestampsMode: (timestampsMode) => set({ timestampsMode }),
+      setActivityMode: (activityMode) => {
+        set({ activityMode });
+        // R114-e: the server domain spells this field toolActivity.
+        pushAppearanceToServer({ toolActivity: activityMode });
+      },
+      setChatTextSize: (chatTextSize) => {
+        set({ chatTextSize });
+        pushAppearanceToServer({ chatTextSize });
+      },
+      setTimestampsMode: (timestampsMode) => {
+        set({ timestampsMode });
+        pushAppearanceToServer({ timestampsMode });
+      },
     }),
     // version stays 1: zustand shallow-merges persisted state over the new
     // defaults, so existing users keep their theme/mode and gain the defaults

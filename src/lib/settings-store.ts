@@ -41,6 +41,24 @@ export function filterModelsForPicker<
   return models.filter((m) => isFreeModelEntry(m));
 }
 
+/**
+ * ROUND-114 (R114-e, the ModelSelector audit): the CONFIGURED-provider
+ * filter every model picker shares — a provider is pickable only when it is
+ * ENABLED and holds a key (`hasKey !== false`; a seeded preset the owner
+ * never added a key to, or a provider switched off in Settings, must never
+ * render as a pickable source — the owner: "the picker shows providers I
+ * haven't added"). Extracted from ModelSelector's inline filter so the rule
+ * is stated once, tested once, and the ImageAnalysisTab's vision picker
+ * (same round) reads the exact same verdict. Order preserved; the pickers'
+ * BUTTON label lookups keep the UNFILTERED list (an agent wired to a
+ * since-disabled provider still resolves its display name).
+ */
+export function filterConfiguredProviders<
+  T extends { enabled: boolean; hasKey?: boolean },
+>(providers: readonly T[]): T[] {
+  return providers.filter((p) => p.enabled && p.hasKey !== false);
+}
+
 interface SettingsState {
   /** Show only free models in model lists/pickers (owner default: true). */
   modelsFreeOnly: boolean;

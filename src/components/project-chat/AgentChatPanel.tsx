@@ -88,6 +88,9 @@ import {
   getAgentsBackend,
   listSessionRatings,
   patchSessionPermissions,
+  // ROUND-114 (R114-e): the session's server-side selected model (the
+  // pick-becomes-server-truth PATCH — see onModelChange).
+  patchSessionSelectedModel,
   queueSessionMessage,
   rateReply,
   resolveAgentQuestion,
@@ -117,9 +120,8 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
 import { Composer } from "./composer/Composer";
 import {
-  loadLastUsedModel,
-  loadModelOverride,
   loadThinkingLevel,
+  resolveSessionModelDisplay,
   saveLastUsedModel,
   saveModelOverride,
   saveThinkingLevel,
@@ -2171,8 +2173,16 @@ export function AgentChatPanel({
   // last-used model (saved by every pick + every send) instead of the
   // agent template's default — no more GLM-by-default once another model
   // has actually been used.
+  //
+  // ROUND-114 (R114-e, owner: "the phone showed Auto while the PC had a
+  // model selected"): the seed grew a SERVER tier — the display ladder is
+  // now per-session localStorage override → session.selectedModel (the
+  // cross-device truth PATCH /sessions/:id {model} maintains; a phone-side
+  // pick rides the meta frame's immediate invalidation into the refetched
+  // session row) → global last-used. DISPLAY-LEVEL ONLY: the per-send
+  // override logic below keeps its override-first semantics exactly.
   const [modelOverride, setModelOverride] = useState<ModelOverride | null>(() =>
-    loadModelOverride(session?.id ?? null) ?? loadLastUsedModel(),
+    resolveSessionModelDisplay(session?.id ?? null, session?.selectedModel ?? null),
   );
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(() =>
     loadThinkingLevel(session?.id ?? null),
@@ -2193,6 +2203,19 @@ export function AgentChatPanel({
   // Session switch → reload each session's own persisted composer state
   // (runTurn saves the fresh session's values at creation, so a first send
   // carries the choices made pre-session into the new session's keys).
+  // R114-e: the seed runs through the FULL display ladder (override →
+  // session.selectedModel → last-used) and ALSO re-runs when the session's
+  // selectedModel CHANGES (same session id) while no local override is
+  // persisted — that is exactly how a phone-side pick lands here: the meta
+  // frame's immediate invalidation refetches the session row, the new
+  // selectedModel flows in, and the pill follows the phone. A session with
+  // a LOCAL override never re-seeds (tier 1 wins; a local pick made on
+  // THIS device keeps displaying what this device picked).
+  const sessionSelectedModel = session?.selectedModel ?? null;
+  const sessionSelectedModelKey =
+    sessionSelectedModel !== null
+      ? `${sessionSelectedModel.providerId}/${sessionSelectedModel.model}`
+      : "none";
   useEffect(() => {
     // R90-A4 (the owner: in a new chat "the provider was OpenRouter, even
     // though I did not have OpenRouter added to it, and the model was not
@@ -2202,8 +2225,22 @@ export function AgentChatPanel({
     // ghost). The INITIAL useState below already fell back to the global
     // last-used model (R89-B4); this effect now does the same, so a new
     // chat keeps the last-used model instead of regressing to the seed.
-    setModelOverride(loadModelOverride(activeSessionId) ?? loadLastUsedModel());
-  }, [activeSessionId]);
+    setModelOverride(
+      resolveSessionModelDisplay(
+        activeSessionId,
+        // The captured session row's pair — the effect re-runs when the
+        // KEY changes (see the dep array), so a remote pick's fresh row is
+        // always the one seeded here.
+        sessionSelectedModelKey === "none"
+          ? null
+          : sessionSelectedModel,
+      ),
+    );
+    // Deps note (no react-hooks lint runs here — the intent stands in
+    // prose): sessionSelectedModel is captured via its STABLE string key
+    // (an object dep would re-fire on every refetch's new row identity);
+    // activeSessionId + the key together are the full trigger.
+  }, [activeSessionId, sessionSelectedModelKey]);
   useEffect(() => {
     setThinkingLevel(loadThinkingLevel(activeSessionId));
   }, [activeSessionId]);
@@ -2218,6 +2255,33 @@ export function AgentChatPanel({
     // un-remember it — the agent default becomes what's sent, and the send
     // path re-saves the EFFECTIVE pair there).
     if (v !== null) saveLastUsedModel(v);
+    // ROUND-114 (R114-e, owner: "the phone showed Auto while the PC had a
+    // model selected"): the pick is now SERVER TRUTH too — fire-and-forget
+    // PATCH /sessions/:id {model} (the persistent tier between the per-send
+    // override and the agent row). The other devices' composers follow it
+    // through the meta frame (immediate invalidation); this device's own
+    // display never moves (the localStorage override above already won).
+    // A clear (v === null — the agent-default pick) clears the session tier
+    // too, so "Auto" means Auto everywhere. A failed PATCH is a quiet
+    // warn-and-keep: the pick still rides every send as the per-send
+    // override (the backend's override-first gate), so nothing breaks.
+    if (liveMode && activeSessionId !== null) {
+      const sid = activeSessionId;
+      void patchSessionSelectedModel(
+        sid,
+        v !== null ? { providerId: v.providerId, model: v.model } : null,
+      )
+        .then(() => {
+          // Queue the refetch AFTER the write (fire-and-forget ordering:
+          // the events-bus meta frame ALSO invalidates — duplicate
+          // invalidation is a cheap no-op for react-query).
+          void queryClient.invalidateQueries({ queryKey: ["session"] });
+          void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+        })
+        .catch((err: unknown) => {
+          console.warn("[chat] session model PATCH failed (the pick still rides the send)", err);
+        });
+    }
     // ROUND-92 (R92-B): the picker's SELF-HEAL — an UNCONFIGURED agent
     // (providerId/model null on the row: the R91-A force-delete reset
     // state, or a template that never had one) arms itself from the first
@@ -3448,6 +3512,35 @@ export function AgentChatPanel({
                 />
               ))}
 
+            {/* ── ROUND-114 (R114-e, owner: "after sending from mobile, the PC
+                send button status does not change; no processing/thinking
+                status"): the REMOTE turn's user bubble. turn.started opened
+                the mirror carrying the phone's message text
+                (liveTurn.userText — the store never sets it on an OWN turn,
+                where the optimistic pendingEcho already rendered the
+                identical bubble), so the message is visible the INSTANT the
+                frame lands instead of after the debounced folded-log
+                refetch. Same content-dedupe trick as pendingEcho/delivered:
+                the moment the refetched event log carries the persisted
+                message.user row, this live copy drops out — never a double
+                bubble. ── */}
+            {remoteRunning &&
+            liveTurn?.userText !== undefined &&
+            liveTurn.userText !== "" &&
+            !items.some((it) => it.kind === "user" && it.content === liveTurn.userText) ? (
+              <MessageRenderer
+                key="remote-turn-user"
+                item={{
+                  kind: "user",
+                  seq: -1,
+                  content: liveTurn.userText,
+                  ts: new Date(liveTurn.startedAtMs).toISOString(),
+                }}
+                sessionId={null}
+                projectId={projectId}
+              />
+            ) : null}
+
             {/* ── ROUND-37 LIVE TURN: the Working section grows above the
                 streaming presumptive-final text (which flows into the
                 timeline as a full answer block the moment a tool lands —
@@ -3488,12 +3581,14 @@ export function AgentChatPanel({
                 ) : null}
                 {/* R99-B: the LIVE turn's header — the same identity row the
                     folded turn renders (the live→folded handoff is seamless:
-                    header → header). The model is the panel's EFFECTIVE one
-                    (the send carried it — LiveTurn has no model of its own,
-                    exactly like the debug full-copy below); the timestamp is
-                    the turn's wall-clock start. */}
+                    header → header). R114-e: the model is the turn.started
+                    frame's RESOLVED one first (the three-tier ladder's
+                    verdict — identical on the own path and the phone-started
+                    mirror; absent on an older sidecar, where the panel's
+                    EFFECTIVE pick stays the fallback, exactly the pre-R114
+                    label); the timestamp is the turn's wall-clock start. */}
                 <AssistantTurnHeader
-                  model={effectiveModel ?? undefined}
+                  model={liveTurn.model ?? effectiveModel ?? undefined}
                   ts={new Date(liveTurn.startedAtMs).toISOString()}
                 />
                 {liveSection}
@@ -3584,16 +3679,20 @@ export function AgentChatPanel({
                     copyText={liveTurn.streamText}
                     fullCopyText={
                       // ROUND-67 (R67-B): the live-completed turn gets the
-                      // same second copy option. The model is the panel's
-                      // effective one (the send carried it — LiveTurn has no
-                      // model of its own; the refetched folded turn carries
-                      // the authoritative event-log model). Duration is
-                      // measured from the live turn's clock.
+                      // same second copy option. R114-e: the model is the
+                      // turn.started frame's RESOLVED one first
+                      // (LiveTurn.model — honest for a REMOTE mirror too,
+                      // where the phone's send carried a model this
+                      // composer never picked), the panel's effective pick
+                      // as the fallback (an older sidecar never sent the
+                      // frame; the refetched folded turn carries the
+                      // authoritative event-log model either way). Duration
+                      // is measured from the live turn's clock.
                       debugMode
                         ? buildFullTurnText({
                             working: liveTurn.working,
                             finalText: liveTurn.streamText,
-                            model: effectiveModel ?? undefined,
+                            model: liveTurn.model ?? effectiveModel ?? undefined,
                             ms: Date.now() - liveTurn.startedAtMs,
                           })
                         : undefined

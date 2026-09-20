@@ -88,6 +88,7 @@ import {
   fetchProviderModels,
   ingestAttachmentPath,
   patchSessionPermissions,
+  patchSessionSelectedModel,
   pickFilesViaBackend,
   queueSessionMessage,
   readAttachmentFiles,
@@ -282,6 +283,10 @@ vi.mock("../../../lib/api", async () => {
     uploadAttachmentBytes: vi.fn(async () => ({ path: "attachments/staged.png", name: "staged.png", size: 0 })),
     ingestAttachmentPath: vi.fn(async () => ({ path: "attachments/staged.png", name: "staged.png", size: 0 })),
     patchSessionPermissions: vi.fn(async () => PATCHED_DETAIL),
+    // ROUND-114 (R114-e): the pick-becomes-server-truth PATCH — mocked so a
+    // picker click in these tests never touches the network (the R114-e
+    // interaction test asserts its body below).
+    patchSessionSelectedModel: vi.fn(async () => PATCHED_DETAIL),
     fetchSessionContext: vi.fn(async () => CONTEXT_REPORT),
     streamSessionMessage: vi.fn(async () => undefined),
     // ROUND-78 (R78-D): the queue client pair — defaults resolve happy
@@ -318,6 +323,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ path: "attachments/staged.png", name: "staged.png", size: 0 });
   vi.mocked(patchSessionPermissions).mockReset().mockResolvedValue(PATCHED_DETAIL);
+  vi.mocked(patchSessionSelectedModel).mockReset().mockResolvedValue(PATCHED_DETAIL);
   vi.mocked(fetchSessionContext).mockReset().mockResolvedValue(CONTEXT_REPORT);
   vi.mocked(streamSessionMessage).mockReset().mockResolvedValue(undefined);
   // R78: the queue pair starts at the happy default each test.
@@ -1384,6 +1390,16 @@ describe("Composer: model selector (owner spec F)", () => {
       model: "z-ai/glm-5.2:free",
       providerId: "openrouter",
     });
+
+    // ROUND-114 (R114-e, owner: "the phone showed Auto while the PC had a
+    // model selected"): the pick is SERVER TRUTH too — the fire-and-forget
+    // PATCH /sessions/:id {model} fires alongside the localStorage write, so
+    // the phone's composer follows this pick through the meta frame.
+    await waitFor(() => expect(patchSessionSelectedModel).toHaveBeenCalled());
+    expect(vi.mocked(patchSessionSelectedModel).mock.calls[0]).toEqual([
+      SESSION_ID,
+      { model: "z-ai/glm-5.2:free", providerId: "openrouter" },
+    ]);
 
     // The override model rides the next send.
     fireEvent.change(textarea(), { target: { value: "go" } });
