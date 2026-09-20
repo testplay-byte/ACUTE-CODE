@@ -47,15 +47,51 @@
  * truth backstop; the composer's model pick PATCHes the session's
  * server-side selected model (the cross-device truth); the thinking
  * placeholder + the chat prefs (density / text size / timestamps / tool
- * activity) shape the transcript; the keyboard leg guarantees adjustResize
- * + one animated inset pipeline (useReanimatedKeyboardAnimation).
+ * activity) shape the transcript.
+ *
+ * ROUND-115 (R115-K — the keyboard architecture: ONE dock, ONE expression):
+ * the screen's keyboard handling is now a SINGLE deterministic mechanism —
+ * the composer dock. What's gone, and why (three stacked mechanisms used to
+ * fight = version roulette: the owner still saw the keys covering the input):
+ *   · KeyboardAvoidingView REMOVED — its behavior="padding" math is
+ *     parent-frame-relative and under-reports on inset (edge-to-edge)
+ *     devices, so its lift fought the other two mechanisms;
+ *   · useReanimatedKeyboardAnimation REMOVED — it implicitly calls
+ *     useResizeMode() (ADJUST_RESIZE), a deprecated no-op on API 35
+ *     edge-to-edge that still mutates the window on ≤ API 34 (the roulette:
+ *     double-lift on old devices, uncovered input on new ones);
+ *   · the window goes ADJUST_NOTHING for this screen's lifetime
+ *     (KeyboardController.setInputMode on mount) — the window never resizes
+ *     or pans, while the IME WindowInsetsAnimation events still stream
+ *     (they're inset-driven, not resize-driven). On unmount
+ *     KeyboardController.setDefaultMode() restores the manifest-declared
+ *     mode — the exact restore useResizeMode used to perform, so every
+ *     other screen keeps its pre-R115-K behavior.
+ * THE DOCK (the Animated.View wrapping <Composer>) owns the keyboard through
+ * ONE expression: paddingBottom = max(insetsBottom, kbHeight). Closed → the
+ * gesture-bar inset; open → the full keyboard height; ONE smooth UI-thread
+ * rise; the inverted FlatList above reflows on its own; NO extra
+ * padding/offsets anywhere else in the tree. kbHeight (positive while open,
+ * 0 closed) is fed by TWO idempotent paths — defensive, because the
+ * reanimated worklet path may be dead under Reanimated 4.5.1 and both write
+ * the SAME value so whichever fires wins: (1) the UI-thread worklet
+ * useGenericKeyboardHandler (chosen precisely because it does NOT touch the
+ * resize mode) riding the onMove/onEnd frames, and (2) a JS-thread
+ * KeyboardEvents listener synced ONLY on the animation end states
+ * (didShow/didHide — the worklet path's own final values), so it can never
+ * jump the dock ahead of the worklet's rising frames.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, FlatList, RefreshControl, StyleSheet, View } from "react-native";
-import { KeyboardAvoidingView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import {
+  AndroidSoftInputModes,
+  KeyboardController,
+  KeyboardEvents,
+  useGenericKeyboardHandler,
+} from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, { useAnimatedStyle } from "react-native-reanimated";
+import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { Composer, type ComposerMode } from "@/components/composer";
@@ -631,22 +667,71 @@ export default function SessionScreen() {
   const composerMode: ComposerMode =
     status !== "connected" ? "offline" : liveRunning || remoteRunning ? "running" : "compose";
 
-  // R114-d — the keyboard truth, ONE animated pipeline: the library's
-  // reanimated keyboard values (which also GUARANTEE Android's adjustResize
-  // soft-input mode for this screen's lifetime — useReanimatedKeyboardAnimation
-  // calls useResizeMode internally; nothing else in the app guaranteed it, the
-  // one gap that could leave the composer flat under the keys on
-  // edge-to-edge Android). The composer's bottom inset fades OUT as the
-  // keyboard rises past the gesture bar — max(insets.bottom + kb, 0), kb
-  // negative — on the SAME UI-thread clock the KeyboardAvoidingView's
-  // padding animates on: no JS-thread swap racing the lift, no dead strip,
-  // no bounce on close. `keyboard.height` is NEGATIVE while open (the
-  // library's convention), so closed → insets.bottom, open → 0.
-  const keyboard = useReanimatedKeyboardAnimation();
+  // ── R115-K — the keyboard architecture: ONE dock, ONE expression ─────────
+  // (the header comment above carries the full contract). The dock's kbHeight
+  // is POSITIVE while open, 0 when closed, written by two idempotent paths.
   const insets = useSafeAreaInsets();
   const insetsBottom = insets.bottom;
-  const composerInsetStyle = useAnimatedStyle(() => ({
-    paddingBottom: Math.max(insetsBottom + keyboard.height.value, 0),
+  const kbHeight = useSharedValue(0);
+
+  // The window mode: ADJUST_NOTHING for this screen's lifetime — the window
+  // never resizes or pans; the dock owns the lift (the IME insets still
+  // stream — they're inset-driven, not resize-driven). Unmount restores the
+  // manifest-declared mode through setDefaultMode() — the exact restore the
+  // removed useResizeMode performed, so every other screen (tab roots, the
+  // KeyboardAwareScrollView forms) keeps its pre-R115-K behavior.
+  useEffect(() => {
+    KeyboardController.setInputMode(AndroidSoftInputModes.SOFT_INPUT_ADJUST_NOTHING);
+    return () => {
+      KeyboardController.setDefaultMode();
+    };
+  }, []);
+
+  // The UI-thread path: raw keyboard frames → the shared value. Raw events
+  // carry a POSITIVE height while open (the library negates only for its own
+  // useReanimatedKeyboardAnimation convention). useGenericKeyboardHandler is
+  // the one hook that does NOT mutate the soft-input mode.
+  useGenericKeyboardHandler(
+    {
+      onMove: (e) => {
+        "worklet";
+        kbHeight.value = e.height;
+      },
+      onEnd: (e) => {
+        "worklet";
+        kbHeight.value = e.height;
+      },
+    },
+    [],
+  );
+
+  // The defensive JS-thread twin (the fallback probe): the library's JS
+  // events synced ONLY on the animation END states — didShow/didHide carry
+  // exactly the worklet path's final values, so on a healthy device the
+  // write is idempotent (invisible), and on a device where the reanimated
+  // worklet path is dead the dock still lands correct (one snap at animation
+  // end instead of the ride). willShow is deliberately NOT synced: it fires
+  // at animation START with the destination height and would jump the dock
+  // ahead of the worklet's rising frames.
+  useEffect(() => {
+    const shown = KeyboardEvents.addListener("keyboardDidShow", (e) => {
+      kbHeight.value = e.height;
+    });
+    const hidden = KeyboardEvents.addListener("keyboardDidHide", () => {
+      kbHeight.value = 0;
+    });
+    return () => {
+      shown.remove();
+      hidden.remove();
+    };
+  }, []);
+
+  // THE DOCK EXPRESSION — the entire keyboard architecture in one line:
+  // closed → max(inset, 0) = the gesture-bar inset; open → max(inset, kb) =
+  // the full keyboard height. One smooth UI-thread rise; the inverted
+  // FlatList above reflows on its own; nothing else offsets anything.
+  const dockStyle = useAnimatedStyle(() => ({
+    paddingBottom: Math.max(insetsBottom, kbHeight.value),
   }));
 
   const data = useMemo(() => [...displayItems].reverse(), [displayItems]);
@@ -707,17 +792,16 @@ export default function SessionScreen() {
         ) : null
       }
     >
-      {/* The keyboard-aware body — react-native-keyboard-controller's view
-          (the REAL Android fix: behavior padding works with edge-to-edge).
-          The whole composer — control row, chips, input — rides INSIDE it,
-          so the padding lifts every row clear of the keyboard while the
-          inverted FlatList scrolls above them. R114-d: the composer's own
-          bottom inset animates on the SAME pipeline (composerInsetStyle) and
-          the hook guarantees adjustResize — the two gaps that could leave the
-          field or the control row under the keys. The list keeps
+      {/* R115-K — the dock owns the keyboard: NO KeyboardAvoidingView, NO
+          offsets, NO window resize (the window is ADJUST_NOTHING while this
+          screen lives). The only thing that moves is the dock's own animated
+          paddingBottom (dockStyle — max(insetsBottom, kbHeight)); the whole
+          composer — offline/outbox/note rows, the @-picker popup, chips,
+          input, control row — rides INSIDE it, and the inverted FlatList
+          above (flex:1) reflows on its own. The list keeps
           keyboardShouldPersistTaps="handled" so a control-pill tap while the
           keys are up never dismiss-focus-then-refocus jarringly. */}
-      <KeyboardAvoidingView behavior="padding" style={styles.body}>
+      <View style={styles.body}>
         {loading ? (
           <View style={styles.centerWrap}>
             <LoadingState caption="loading the transcript…" />
@@ -768,8 +852,11 @@ export default function SessionScreen() {
             </TypeCaption>
           </View>
         )}
+        {/* THE DOCK (R115-K) — the single keyboard mechanism: its animated
+            paddingBottom (dockStyle) is max(insetsBottom, kbHeight), so the
+            whole Composer column rides one UI-thread lift. */}
         <Animated.View
-          style={[styles.composerWrap, { backgroundColor: tokens.bg }, composerInsetStyle]}
+          style={[styles.composerWrap, { backgroundColor: tokens.bg }, dockStyle]}
         >
           <Composer
             mode={composerMode}
@@ -789,7 +876,7 @@ export default function SessionScreen() {
             streaming={liveRunning || remoteRunning}
           />
         </Animated.View>
-      </KeyboardAvoidingView>
+      </View>
     </ScreenScaffold>
   );
 }

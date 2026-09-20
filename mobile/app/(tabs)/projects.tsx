@@ -1,34 +1,47 @@
 /**
- * Projects v4 (R113-e; R114-c — the inline accordion + the honest status
- * labels + the folder-browser New Project sheet + the New Session naming
- * sheet) — the registry AS THE TAB. A row's tap no longer pushes the
- * per-project page (the owner: "tapping a project should expand its
- * sessions below, not open a new page"): the row TOGGLES an inline
- * expansion (the house spring on height + opacity) revealing that
- * project's sessions as compact rows (title, HUMAN status badge —
- * sessionStatusLabel: queued reads "open", completed "done" — last
- * activity), a "+N more" reveal when the fold holds more than eight, and
- * a "New session" row at the end. The per-row Plus and the "New session"
- * row open the New Session sheet (optional name + the full/ask/plan
- * operating mode); app/project/[id].tsx is now a thin redirect for deep
- * links only.
+ * Projects v5 (R115-h — the round-115 projects tab, rebuilt per
+ * docs/design-language/android/): the registry AS THE List archetype.
  *
- * The NEW PROJECT affordance moved into the content (the header row died
- * with R114-c's chromeless roots): a compact "New project" action row at
- * the list's top. Its sheet is the reworked create: (a) name, (b) the
- * ROOT FOLDER BROWSER over GET /api/v1/system/fs/browse (breadcrumb row
- * of the current path, dirs-only list with chevrons, "Use this folder"
- * confirm — the manual absolute-path input survives behind "Type a path
- * instead"), (c) the optional color the POST /projects route truly
- * accepts (#rrggbb; the server picks its own otherwise), (d) Create with
- * the honest busy + inline errors. The server validates the folder exists
- * on disk — 400s name the field.
+ * THE ROW (components.md's row anatomy): [LetterAvatar 40 — the project's
+ * own color + first letter] [TypeBodyStrong name + ONE meta line — the
+ * smart root path (shortRootPath: TypeMono 12, the trailing project-name
+ * segment dropped, "…/"-shed to a 28-char budget)] [trailing: the
+ * session-count Badge ("3"; "{n} running" in the running tone while a
+ * turn runs) + the chevron — the ONLY affordance; the per-row Plus button
+ * is DEAD (donts #3: never a chevron AND an action button on one row)].
+ *
+ * THE ACCORDION (R114-c's inline expansion, FIXED R115-h — donts #10, the
+ * "dead measurement pattern"): the clip View carries overflow:hidden ONLY
+ * (the old static height: 0 made Yoga clamp the relative auto-height
+ * child to 0 — onLayout reported 0 forever, the spring target stayed 0,
+ * the fold never opened). The measurement child is ABSOLUTE (top/left/
+ * right 0), so it sizes to its NATURAL height even while the parent clips
+ * at 0 — the measured height is always real, and it lives in a SHARED
+ * VALUE the open-toggle effect reads fresh: a re-measure while open (the
+ * "+N more" reveal, a live refetch landing new rows) re-springs the panel
+ * to the new height. The chevron keeps its own 180° spring; one row open
+ * at a time. The fold's rows keep the honest labels (sessionStatusLabel:
+ * queued reads "open", completed "done") + Badge, the "+N more" reveal,
+ * and the "New session" row at the end.
+ *
+ * THE NEW PROJECT ACTION (screen-archetypes §2): at the list's BOTTOM,
+ * half width (48%), FolderPlus + "New project" — no description, no
+ * chevron, the quiet outline. Its sheet asks ONE question (components.md):
+ * WHICH FOLDER — the Name field and the Color swatches are DEAD (donts
+ * #18: never ask for derivable data — the name is the folder's basename,
+ * the color is the server's own). The folder browser (breadcrumbs + the
+ * dirs list + the home cap: the server pins parent null AT the user's
+ * home dir, and the client hides Up whenever parent === null) + the
+ * collapsed "Type a path instead" disclosure for power users. Once "Use
+ * this folder" is tapped: the FULL path as a mono chip + "Select another
+ * folder" (back to browsing) + the separate "Create the project" primary.
+ * The old "tap a project to expand…" footnote is DELETED (copy.md — the
+ * affordance teaches itself).
  *
  * LIVE (R113-e): the events store drives the reloads — hello (the resync)
  * and the debounced session-frame batches bump the epochs this screen keys
  * its refetches on, so a project created on the PC appears here the moment
- * it exists and the counts/dots follow every turn. The "{n} running" meta
- * stays live off the same fold.
+ * it exists and the count badges follow every turn.
  */
 
 import { useRouter } from "expo-router";
@@ -49,7 +62,6 @@ import Animated, {
   withSpring,
 } from "react-native-reanimated";
 import {
-  Check,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -60,12 +72,14 @@ import {
 } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { Sheet } from "@/components/sheet";
+import { LetterAvatar } from "@/components/letter-avatar";
 import { EmptyState, ErrorState, SkeletonList } from "@/components/list-state";
 import {
   Badge,
   ChromeButton,
   Chip,
   PressableCard,
+  QuietButton,
   StatusDot,
   TypeBody,
   TypeBodyStrong,
@@ -76,7 +90,7 @@ import {
 import { selectionHaptic, successHaptic, warningHaptic } from "@/design/haptics";
 import { useTheme } from "@/design/theme";
 import { SPRING } from "@/design/motion";
-import { RADIUS_INPUT, TOUCH_TARGET, fontFamily, spacing } from "@/design/tokens";
+import { RADIUS_INPUT, TILE_ROW, TOUCH_TARGET, fontFamily, spacing } from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import { useEventsEpoch } from "@/features/events";
@@ -99,7 +113,7 @@ import {
   sessionTitle,
   type SessionRow,
 } from "@/features/sessions";
-import { breadcrumbSegments, fetchFsBrowse, type FsBrowseReply } from "@/features/fs-browse";
+import { breadcrumbSegments, fetchFsBrowse, shortRootPath, type FsBrowseReply } from "@/features/fs-browse";
 import { mobLog, mobWarn } from "@/lib/log";
 
 /** The client-side fold limit (the sessions route has NO server-side
@@ -109,16 +123,10 @@ const SESSION_FOLD_LIMIT = 200;
 /** How many sessions the accordion renders before the "+N more" reveal. */
 const EXPAND_PREVIEW = 8;
 
-/** The preset project colors the New Project sheet offers (the POST route
- * accepts exactly a #rrggbb string; null = the server picks its own). */
-const PROJECT_COLORS: ReadonlyArray<string> = [
-  "#C4653F", // terracotta
-  "#6F9E90", // sage
-  "#B08A3C", // ochre
-  "#6B7F9E", // slate
-  "#8A6A8E", // plum
-  "#8A6A55", // taupe
-];
+/** The fold rows' indent — aligned under the row's label (gutter + the
+ * 40px letter avatar + the row gap), so the sessions read as the row's
+ * children. */
+const FOLD_INDENT = spacing.lg + TILE_ROW + spacing.md;
 
 export default function ProjectsTab() {
   const { tokens } = useTheme();
@@ -172,7 +180,7 @@ export default function ProjectsTab() {
   }, []);
 
   // The session fold — one quiet fetch of the recent 200 feeding BOTH the
-  // count line and the accordion's rows (failure stays quiet: decoration,
+  // count badges and the accordion's rows (failure stays quiet: decoration,
   // never a failure state).
   const loadSessions = useCallback(async () => {
     try {
@@ -287,22 +295,20 @@ export default function ProjectsTab() {
         <ErrorState title="Couldn't load projects" caption={error} retryLabel="try again" onRetry={() => void load()} />
       ) : projects.length === 0 ? (
         <>
-          {/* R114-c: the New Project affordance moved INTO the content (the
-              header row died with the chromeless roots) — a compact action
-              row at the list's top. */}
-          <NewProjectActionRow onPress={() => setNewProjectOpen(true)} />
           <EmptyState
             Icon={FolderGit2}
             title="No projects yet."
-            caption="tap “New project” to register a folder from the desktop, or create one there — it appears here the moment it exists."
+            caption="Pick a folder on the desktop to begin."
           />
+          {/* The New action lives at the list's BOTTOM (screen-archetypes
+              §2) — half width, quiet, no description, no chevron. */}
+          <NewProjectActionRow onPress={() => setNewProjectOpen(true)} />
         </>
       ) : (
         <>
           {error !== null ? (
             <TypeCaption style={{ color: tokens.warning }}>{`last refresh failed — ${error}`}</TypeCaption>
           ) : null}
-          <NewProjectActionRow onPress={() => setNewProjectOpen(true)} />
           {visibleProjects.map((project, index) => (
             <ProjectRowCard
               key={project.id}
@@ -318,13 +324,11 @@ export default function ProjectsTab() {
               onOpenSession={(row) => router.push(`/session/${row.id}`)}
             />
           ))}
-          <TypeMicro style={[styles.footer, { color: tokens.textTertiary }]}>
-            tap a project to expand its sessions · counts fold the host's {SESSION_FOLD_LIMIT} most recent
-          </TypeMicro>
+          <NewProjectActionRow onPress={() => setNewProjectOpen(true)} />
         </>
       )}
 
-      {/* ── the New Project sheet: name + the folder browser + color ── */}
+      {/* ── the New Project sheet: ONE question — which folder ── */}
       <NewProjectSheet
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
@@ -347,43 +351,56 @@ export default function ProjectsTab() {
   );
 }
 
-// ── the New Project action row (the content-borne affordance) ───────────────
+// ── the New Project action (the list's bottom — half width, quiet) ─────────
 
 function NewProjectActionRow({ onPress }: { onPress: () => void }) {
   const { tokens } = useTheme();
   return (
-    <PressableCard onPress={onPress} accessibilityLabel="New project">
-      <View style={styles.actionRowInner}>
-        <View style={[styles.actionIcon, { backgroundColor: tokens.subtleHover }]}>
-          <FolderPlus size={20} color={tokens.accent} strokeWidth={2.2} />
-        </View>
-        <View style={styles.actionText}>
-          <TypeBodyStrong>New project</TypeBodyStrong>
-          <TypeCaption numberOfLines={1}>register a folder from the desktop</TypeCaption>
-        </View>
-        <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
-      </View>
-    </PressableCard>
+    <Pressable
+      accessibilityLabel="New project"
+      accessibilityRole="button"
+      testID="projects-new-project"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.newProjectAction,
+        {
+          borderColor: pressed ? tokens.borderStrong : tokens.border,
+          backgroundColor: pressed ? tokens.subtle : "transparent",
+        },
+      ]}
+    >
+      <FolderPlus size={20} color={tokens.accent} strokeWidth={2.2} />
+      <TypeBodyStrong style={{ color: tokens.textSecondary }}>New project</TypeBodyStrong>
+    </Pressable>
   );
 }
 
-// ── the accordion (the house spring on height + opacity) ────────────────────
+// ── the accordion (the house spring on height + opacity) ───────────────────
 
 /**
- * The inline expansion — height + opacity under the ONE spring. The content
- * stays mounted (clipped at height 0) so its measured height is always
- * current when a toggle lands; onLayout re-syncs an OPEN panel whose rows
- * changed (a live refetch while expanded).
+ * The inline expansion — height + opacity under the ONE spring.
+ *
+ * R115-h — THE YOGA FIX (donts #10): the clip View carries overflow:hidden
+ * ONLY (no static height — it raced the animated value AND made Yoga clamp
+ * the relative auto-height child to 0, so onLayout reported 0 forever and
+ * the spring target never left 0). The measurement child is ABSOLUTE
+ * (top/left/right 0): it lays out at its NATURAL height even while the
+ * parent clips at 0, so the measured height is always the real number.
+ * The content stays mounted (always measured) — a live refetch while open
+ * re-measures and re-springs to the fresh height, and the "+N more"
+ * reveal lands the same way.
  */
 function Accordion({ open, children }: { open: boolean; children: React.ReactNode }) {
   const height = useSharedValue(0);
   const opacity = useSharedValue(0);
-  const contentHeight = useRef(0);
+  // The measured natural height — a SHARED VALUE so the toggle effect
+  // reads the FRESH number whenever it fires.
+  const contentHeight = useSharedValue(0);
 
   useEffect(() => {
-    height.value = withSpring(open ? contentHeight.current : 0, SPRING);
+    height.value = withSpring(open ? contentHeight.value : 0, SPRING);
     opacity.value = withSpring(open ? 1 : 0, SPRING);
-  }, [open, height, opacity]);
+  }, [open, height, opacity, contentHeight]);
 
   const style = useAnimatedStyle(() => ({
     height: Math.max(0, height.value),
@@ -391,20 +408,26 @@ function Accordion({ open, children }: { open: boolean; children: React.ReactNod
   }));
 
   const onLayout = (event: LayoutChangeEvent) => {
-    contentHeight.current = event.nativeEvent.layout.height;
-    if (open) height.value = withSpring(contentHeight.current, SPRING);
+    const measured = event.nativeEvent.layout.height;
+    if (measured <= 0) return;
+    contentHeight.value = measured;
+    // An OPEN panel whose content re-measured springs to the new height;
+    // a CLOSED one just records it for the next toggle.
+    if (open) height.value = withSpring(measured, SPRING);
   };
 
   return (
     <Animated.View style={[styles.accordionClip, style]}>
-      <View collapsable={false} onLayout={onLayout} style={styles.accordionInner}>
+      {/* The ABSOLUTE measurement child — auto height at any clip height
+          (collapsable={false} keeps RN from folding it out of the tree). */}
+      <View collapsable={false} onLayout={onLayout} style={styles.accordionMeasure}>
         {children}
       </View>
     </Animated.View>
   );
 }
 
-// ── the project row (header + the inline session expansion) ─────────────────
+// ── the project row (identity + the inline session expansion) ──────────────
 
 function ProjectRowCard({
   project,
@@ -448,46 +471,28 @@ function ProjectRowCard({
     <PressableCard
       onPress={onToggle}
       enterIndex={Math.min(index, 12)}
-      accessibilityLabel={`Project ${project.name}${expanded ? ", expanded" : ""}`}
+      accessibilityLabel={`Project ${project.name}${stats !== undefined ? `, ${stats.total} session${stats.total === 1 ? "" : "s"}` : ""}${running > 0 ? `, ${running} running` : ""}${expanded ? ", expanded" : ""}`}
       accessibilityState={{ expanded }}
     >
       <View style={styles.rowInner}>
-        <View style={[styles.dot, { backgroundColor: project.color }]} />
+        <LetterAvatar label={project.name} color={project.color} />
         <View style={styles.rowMain}>
           <TypeBodyStrong numberOfLines={1}>{project.name}</TypeBodyStrong>
           <TypeMono numberOfLines={1} style={styles.rootPath}>
-            {project.rootPath}
+            {shortRootPath(project.rootPath, project.name)}
           </TypeMono>
-          <View style={styles.metaRow}>
-            {running > 0 ? (
-              // The live pulse — a turn is running in this project right now
-              // (the events store keeps the fold fresh).
-              <StatusDot color={tokens.accent} pulse size={7} />
-            ) : null}
-            {stats !== undefined ? (
-              <TypeMicro>
-                {running > 0
-                  ? `${running} running · ${stats.total} session${stats.total === 1 ? "" : "s"}`
-                  : `${stats.total} session${stats.total === 1 ? "" : "s"}`}
-              </TypeMicro>
-            ) : null}
-          </View>
         </View>
+        {stats !== undefined ? (
+          // The session count as a compact Badge — "3", or "{n} running"
+          // in the running tone while a turn runs (the events store keeps
+          // the fold live). Never a text line; never a second affordance.
+          <Badge tone={running > 0 ? "running" : "neutral"} style={styles.countBadge}>
+            {running > 0 ? `${running} running` : `${stats.total}`}
+          </Badge>
+        ) : null}
         <Animated.View style={chevronStyle}>
           <ChevronDown size={18} color={tokens.textTertiary} strokeWidth={2.2} />
         </Animated.View>
-        <Pressable
-          accessibilityLabel={`New session in ${project.name}`}
-          accessibilityRole="button"
-          hitSlop={4}
-          onPress={onNewSession}
-          style={({ pressed }) => [
-            styles.newButton,
-            { backgroundColor: pressed ? tokens.subtleHover : tokens.subtle, borderColor: tokens.borderSubtle },
-          ]}
-        >
-          <Plus size={20} color={tokens.accent} strokeWidth={2.2} />
-        </Pressable>
       </View>
 
       {/* ── the inline session expansion (R114-c) ── */}
@@ -574,7 +579,15 @@ function timeAgoShort(then: number, now: number = Date.now()): string {
   return `${d}d ago`;
 }
 
-// ── the New Project sheet (name + folder browser + color) ───────────────────
+// ── the New Project sheet (ONE question: which folder) ──────────────────────
+
+/** The project name DERIVED from the chosen folder — its basename
+ * (components.md: "Derived data is derived, never asked"). */
+function folderBasename(path: string): string {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  const parts = normalized.split("/").filter((part) => part !== "");
+  return parts.length > 0 ? (parts[parts.length - 1] as string) : normalized;
+}
 
 function NewProjectSheet({
   open,
@@ -586,17 +599,16 @@ function NewProjectSheet({
   onCreated: () => void;
 }) {
   const { tokens } = useTheme();
-  // (a) the name
-  const [name, setName] = useState("");
-  // (b) the root folder — the browser OR the manual absolute path
+  // The ONE question: WHICH FOLDER. `root` null = browsing; a string = the
+  // selected folder. The name is the folder's basename (derived, never
+  // asked); the color is the server's own (never asked).
+  const [root, setRoot] = useState<string | null>(null);
+  // The power-user escape hatch — collapsed by default, ONE line when open.
   const [manual, setManual] = useState(false);
-  const [root, setRoot] = useState("");
+  const [manualPath, setManualPath] = useState("");
   const [browse, setBrowse] = useState<FsBrowseReply | null>(null);
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
-  // (c) the optional color (the POST route accepts #rrggbb; null = server's)
-  const [color, setColor] = useState<string | null>(null);
-  // (d) create
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -633,11 +645,22 @@ function NewProjectSheet({
   const dirs = useMemo(() => browse?.entries.filter((entry) => entry.dir) ?? [], [browse]);
   const crumbs = useMemo(() => (browse === null ? [] : breadcrumbSegments(browse.path)), [browse]);
 
+  // The selection commit — shared by "Use this folder" and the manual path's
+  // return key. Selecting collapses the manual disclosure (answered).
+  const selectFolder = useCallback((path: string) => {
+    void selectionHaptic();
+    setRoot(path);
+    setManual(false);
+  }, []);
+
   const onCreate = useCallback(async () => {
-    if (busy) return;
-    const body = newProjectBody(name, root, color ?? undefined);
+    if (busy || root === null) return;
+    const trimmedRoot = root.trim();
+    // The name is DERIVED from the folder; the color rides unset (the
+    // server picks its own) — neither is ever asked.
+    const body = newProjectBody(folderBasename(trimmedRoot), trimmedRoot);
     if (body === null) {
-      setError("a name and an absolute folder path are both required");
+      setError("an absolute folder path is required");
       void warningHaptic();
       return;
     }
@@ -649,11 +672,10 @@ function NewProjectSheet({
         mobLog("projects", "project created", { id: outcome.data.id, name: body.name });
         void successHaptic();
         // Reset for the next open (the browser re-browses the home dir).
-        setName("");
-        setRoot("");
-        setColor(null);
+        setRoot(null);
         setBrowse(null);
         setManual(false);
+        setManualPath("");
         onCreated();
       } else {
         mobWarn("projects", "project create failed", {
@@ -661,8 +683,8 @@ function NewProjectSheet({
           code: outcome.error.code,
         });
         void warningHaptic();
-        // The route names the field (missing name / folder doesn't exist / a
-        // project already uses the folder) — surface it inline, honestly.
+        // The route names the field (the folder doesn't exist / a project
+        // already uses it) — surface it inline, honestly.
         setError(outcome.error.message);
       }
     } catch {
@@ -672,7 +694,7 @@ function NewProjectSheet({
     } finally {
       setBusy(false);
     }
-  }, [busy, name, root, color, onCreated]);
+  }, [busy, root, onCreated]);
 
   return (
     <Sheet
@@ -682,246 +704,215 @@ function NewProjectSheet({
       testID="new-project-sheet"
       maxHeightFraction={0.86}
     >
-      <View style={styles.fieldGap}>
-        {/* (a) the name */}
-        <View style={styles.fieldWrap}>
-          <TypeCaption style={styles.fieldLabel}>Name</TypeCaption>
-          <TextInput
-            accessibilityLabel="Project name"
-            placeholder="acute-code"
-            placeholderTextColor={tokens.textTertiary}
-            value={name}
-            onChangeText={setName}
-            autoCapitalize="none"
-            autoCorrect={false}
-            style={[
-              styles.fieldInput,
-              { color: tokens.text, borderColor: tokens.inputBorder, backgroundColor: tokens.inputBg },
-            ]}
-          />
+      {root !== null ? (
+        // ── the SELECTED state: the FULL path as a mono chip (its own
+        // block) + "Select another folder" + the separate primary ──
+        <View style={styles.fieldGap}>
+          <View style={[styles.chosenRoot, { borderColor: tokens.borderSubtle, backgroundColor: tokens.inputBg }]}>
+            <TypeMono numberOfLines={2} style={styles.chosenRootText}>
+              {root}
+            </TypeMono>
+          </View>
+          <QuietButton
+            onPress={() => {
+              void selectionHaptic();
+              setRoot(null);
+            }}
+            testID="new-project-select-another"
+          >
+            Select another folder
+          </QuietButton>
+          {error !== null ? (
+            <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+              {error}
+            </TypeCaption>
+          ) : null}
+          <ChromeButton
+            onPress={() => void onCreate()}
+            disabled={busy}
+            accessibilityLabel={busy ? "Creating the project" : "Create the project"}
+            testID="new-project-create"
+          >
+            {busy ? "creating…" : "Create the project"}
+          </ChromeButton>
         </View>
-
-        {/* (b) the root folder — the confirmed path line, then browser/manual */}
-        <View style={styles.fieldWrap}>
-          <TypeCaption style={styles.fieldLabel}>Root folder (on the desktop)</TypeCaption>
-          {root.trim() !== "" ? (
-            <View style={[styles.chosenRoot, { borderColor: tokens.borderSubtle, backgroundColor: tokens.inputBg }]}>
-              <TypeMono numberOfLines={1} style={styles.chosenRootText}>
-                {root}
-              </TypeMono>
+      ) : (
+        // ── the BROWSE state: breadcrumbs + the dirs list + the confirm ──
+        <View style={styles.fieldGap}>
+          <View style={styles.browserWrap}>
+            {/* the breadcrumb row — the current path, every crumb tappable;
+                the Up affordance hides at the navigation cap (parent null —
+                the server pins it AT the user's home dir, never past) */}
+            <View style={styles.breadcrumbRow}>
+              {browse !== null && browse.parent !== null ? (
+                <Pressable
+                  accessibilityLabel="Go up one folder"
+                  accessibilityRole="button"
+                  hitSlop={6}
+                  onPress={() => void browseTo(browse.parent ?? undefined)}
+                  style={[styles.upButton, { borderColor: tokens.borderSubtle }]}
+                >
+                  <ChevronUp size={16} color={tokens.textSecondary} strokeWidth={2.2} />
+                </Pressable>
+              ) : null}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.breadcrumbContent}
+                style={styles.breadcrumbScroll}
+              >
+                {crumbs.map((crumb, i) => {
+                  const isCurrent = i === crumbs.length - 1;
+                  return (
+                    <Pressable
+                      key={crumb.path}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Browse ${crumb.path}`}
+                      onPress={() => void browseTo(crumb.path)}
+                      hitSlop={4}
+                      style={({ pressed }) => [
+                        styles.crumb,
+                        {
+                          backgroundColor: isCurrent
+                            ? tokens.subtleHover
+                            : pressed
+                              ? tokens.subtle
+                              : "transparent",
+                        },
+                      ]}
+                    >
+                      <TypeMicro
+                        numberOfLines={1}
+                        style={{ color: isCurrent ? tokens.text : tokens.textSecondary }}
+                      >
+                        {crumb.label}
+                      </TypeMicro>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
             </View>
-          ) : (
-            <TypeMicro style={{ color: tokens.textTertiary }}>
-              browse the desktop's folders, or type an absolute path
-            </TypeMicro>
-          )}
 
-          {manual ? (
-            <View style={styles.fieldGap}>
+            {/* the dirs-only list (a fixed-height scroller — the sheet's own
+                scroller wraps the whole form) */}
+            <View
+              style={[styles.dirList, { borderColor: tokens.borderSubtle, backgroundColor: tokens.inputBg }]}
+              accessibilityLabel="Folder list"
+            >
+              {browseLoading ? (
+                <View style={styles.browserPad}>
+                  <ActivityIndicator size="small" color={tokens.accent} />
+                </View>
+              ) : browseError !== null ? (
+                <View style={styles.browserPad}>
+                  <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+                    {browseError}
+                  </TypeCaption>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => void browseTo(browse?.path)}
+                    hitSlop={8}
+                  >
+                    <TypeMicro style={{ color: tokens.accent }}>retry</TypeMicro>
+                  </Pressable>
+                </View>
+              ) : dirs.length === 0 ? (
+                <View style={styles.browserPad}>
+                  <TypeCaption style={{ color: tokens.textTertiary }}>
+                    no subfolders here — use this folder
+                  </TypeCaption>
+                </View>
+              ) : (
+                <ScrollView style={styles.dirScroll} nestedScrollEnabled>
+                  {dirs.map((entry) => (
+                    <Pressable
+                      key={entry.path}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open folder ${entry.name}`}
+                      onPress={() => void browseTo(entry.path)}
+                      style={({ pressed }) => [
+                        styles.dirRow,
+                        { backgroundColor: pressed ? tokens.subtle : "transparent" },
+                      ]}
+                    >
+                      <Folder size={16} color={tokens.accent2} strokeWidth={2.2} />
+                      <TypeBody numberOfLines={1} style={styles.dirName}>
+                        {entry.name}
+                      </TypeBody>
+                      <ChevronRight size={14} color={tokens.textTertiary} strokeWidth={2.2} />
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+            {browse?.truncated === true ? (
+              <TypeMicro style={{ color: tokens.textTertiary }}>
+                showing the first 400 entries
+              </TypeMicro>
+            ) : null}
+
+            {/* the confirm — locks the current browse path in */}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Use this folder as the project root"
+              disabled={browse === null}
+              onPress={() => {
+                if (browse !== null) selectFolder(browse.path);
+              }}
+              testID="new-project-use-folder"
+              style={({ pressed }) => [
+                styles.useFolderButton,
+                {
+                  borderColor: pressed ? tokens.borderStrong : tokens.border,
+                  backgroundColor: pressed ? tokens.subtle : "transparent",
+                  opacity: browse === null ? 0.5 : 1,
+                },
+              ]}
+            >
+              <FolderPlus size={15} color={tokens.accent} strokeWidth={2.2} />
+              <TypeBodyStrong style={styles.useFolderText}>Use this folder</TypeBodyStrong>
+            </Pressable>
+          </View>
+
+          {/* the power-user escape hatch — collapsed by default, ONE line
+              when open; the keyboard's return key commits the path */}
+          <View style={styles.fieldWrap}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded: manual }}
+              onPress={() => setManual((prev) => !prev)}
+              hitSlop={8}
+              testID="new-project-manual-toggle"
+            >
+              <TypeMicro style={{ color: tokens.accent }}>
+                {manual ? "Hide the path field" : "Type a path instead"}
+              </TypeMicro>
+            </Pressable>
+            {manual ? (
               <TextInput
                 accessibilityLabel="Project root folder path"
-                placeholder="/home/z/repos/acute-code"
+                placeholder={browse?.path ?? "/home/z/repos/acute-code"}
                 placeholderTextColor={tokens.textTertiary}
-                value={root}
-                onChangeText={setRoot}
+                value={manualPath}
+                onChangeText={setManualPath}
                 autoCapitalize="none"
                 autoCorrect={false}
                 autoComplete="off"
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                  const trimmed = manualPath.trim();
+                  if (trimmed !== "") selectFolder(trimmed);
+                }}
                 style={[
                   styles.fieldInput,
                   styles.fieldMono,
                   { color: tokens.text, borderColor: tokens.inputBorder, backgroundColor: tokens.inputBg },
                 ]}
               />
-              <Pressable accessibilityRole="button" onPress={() => setManual(false)} hitSlop={8}>
-                <TypeMicro style={{ color: tokens.accent }}>Browse folders instead</TypeMicro>
-              </Pressable>
-            </View>
-          ) : (
-            <View style={styles.browserWrap}>
-              {/* the breadcrumb row — the current path, every crumb tappable */}
-              <View style={styles.breadcrumbRow}>
-                {browse !== null && browse.parent !== null ? (
-                  <Pressable
-                    accessibilityLabel="Go up one folder"
-                    accessibilityRole="button"
-                    hitSlop={6}
-                    onPress={() => void browseTo(browse.parent ?? undefined)}
-                    style={[styles.upButton, { borderColor: tokens.borderSubtle }]}
-                  >
-                    <ChevronUp size={16} color={tokens.textSecondary} strokeWidth={2.2} />
-                  </Pressable>
-                ) : null}
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.breadcrumbContent}
-                  style={styles.breadcrumbScroll}
-                >
-                  {crumbs.map((crumb, i) => {
-                    const isCurrent = i === crumbs.length - 1;
-                    return (
-                      <Pressable
-                        key={crumb.path}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Browse ${crumb.path}`}
-                        onPress={() => void browseTo(crumb.path)}
-                        hitSlop={4}
-                        style={({ pressed }) => [
-                          styles.crumb,
-                          {
-                            backgroundColor: isCurrent
-                              ? tokens.subtleHover
-                              : pressed
-                                ? tokens.subtle
-                                : "transparent",
-                          },
-                        ]}
-                      >
-                        <TypeMicro
-                          numberOfLines={1}
-                          style={{ color: isCurrent ? tokens.text : tokens.textSecondary }}
-                        >
-                          {crumb.label}
-                        </TypeMicro>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-
-              {/* the dirs-only list (a fixed-height scroller — the sheet's own
-                  scroller wraps the whole form) */}
-              <View
-                style={[styles.dirList, { borderColor: tokens.borderSubtle, backgroundColor: tokens.inputBg }]}
-                accessibilityLabel="Folder list"
-              >
-                {browseLoading ? (
-                  <View style={styles.browserPad}>
-                    <ActivityIndicator size="small" color={tokens.accent} />
-                  </View>
-                ) : browseError !== null ? (
-                  <View style={styles.browserPad}>
-                    <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
-                      {browseError}
-                    </TypeCaption>
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() => void browseTo(browse?.path)}
-                      hitSlop={8}
-                    >
-                      <TypeMicro style={{ color: tokens.accent }}>retry</TypeMicro>
-                    </Pressable>
-                  </View>
-                ) : dirs.length === 0 ? (
-                  <View style={styles.browserPad}>
-                    <TypeCaption style={{ color: tokens.textTertiary }}>
-                      no subfolders here — use this folder or go up
-                    </TypeCaption>
-                  </View>
-                ) : (
-                  <ScrollView style={styles.dirScroll} nestedScrollEnabled>
-                    {dirs.map((entry) => (
-                      <Pressable
-                        key={entry.path}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Open folder ${entry.name}`}
-                        onPress={() => void browseTo(entry.path)}
-                        style={({ pressed }) => [
-                          styles.dirRow,
-                          { backgroundColor: pressed ? tokens.subtle : "transparent" },
-                        ]}
-                      >
-                        <Folder size={16} color={tokens.accent2} strokeWidth={2.2} />
-                        <TypeBody numberOfLines={1} style={styles.dirName}>
-                          {entry.name}
-                        </TypeBody>
-                        <ChevronRight size={14} color={tokens.textTertiary} strokeWidth={2.2} />
-                      </Pressable>
-                    ))}
-                  </ScrollView>
-                )}
-              </View>
-              {browse?.truncated === true ? (
-                <TypeMicro style={{ color: tokens.textTertiary }}>
-                  showing the first 400 entries
-                </TypeMicro>
-              ) : null}
-
-              {/* the confirm — locks the current browse path in */}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Use this folder as the project root"
-                disabled={browse === null}
-                onPress={() => {
-                  void selectionHaptic();
-                  if (browse !== null) setRoot(browse.path);
-                }}
-                style={({ pressed }) => [
-                  styles.useFolderButton,
-                  {
-                    borderColor: pressed ? tokens.borderStrong : tokens.border,
-                    backgroundColor: pressed ? tokens.subtle : "transparent",
-                    opacity: browse === null ? 0.5 : 1,
-                  },
-                ]}
-              >
-                <FolderPlus size={15} color={tokens.accent} strokeWidth={2.2} />
-                <TypeBodyStrong style={styles.useFolderText}>Use this folder</TypeBodyStrong>
-              </Pressable>
-
-              <Pressable accessibilityRole="button" onPress={() => setManual(true)} hitSlop={8}>
-                <TypeMicro style={{ color: tokens.accent }}>Type a path instead</TypeMicro>
-              </Pressable>
-            </View>
-          )}
-        </View>
-
-        {/* (c) the optional color — the one extra field the route accepts */}
-        <View style={styles.fieldWrap}>
-          <TypeCaption style={styles.fieldLabel}>Color (optional)</TypeCaption>
-          <View style={styles.colorRow}>
-            {PROJECT_COLORS.map((preset) => {
-              const selected = color === preset;
-              return (
-                <Pressable
-                  key={preset}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Project color ${preset}`}
-                  onPress={() => {
-                    void selectionHaptic();
-                    setColor(selected ? null : preset);
-                  }}
-                  style={[
-                    styles.colorSwatch,
-                    { backgroundColor: preset },
-                    selected ? { borderColor: tokens.text } : null,
-                  ]}
-                >
-                  {selected ? <Check size={13} color="#FFFFFF" strokeWidth={3} /> : null}
-                </Pressable>
-              );
-            })}
-            <TypeMicro style={[styles.colorAuto, { color: tokens.textTertiary }]}>
-              {color === null ? "auto — the host picks" : "tap again for auto"}
-            </TypeMicro>
+            ) : null}
           </View>
         </View>
-
-        {/* (d) the create */}
-        {error !== null ? (
-          <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
-            {error}
-          </TypeCaption>
-        ) : null}
-        <ChromeButton
-          onPress={() => void onCreate()}
-          disabled={busy}
-          accessibilityLabel={busy ? "Creating the project" : "Create the project"}
-        >
-          {busy ? "creating…" : "Create the project"}
-        </ChromeButton>
-      </View>
+      )}
     </Sheet>
   );
 }
@@ -1023,12 +1014,14 @@ function NewSessionSheet({
     <Sheet open={open} onClose={onClose} title="New session" testID="new-session-sheet">
       <View style={styles.fieldGap}>
         {project !== null ? (
+          // The context row — the project's letter avatar (donts #15: the
+          // colored dot is retired) + name + the smart path.
           <View style={styles.sheetProjectRow}>
-            <View style={[styles.dot, { backgroundColor: project.color }]} />
+            <LetterAvatar label={project.name} color={project.color} size={36} />
             <View style={styles.sheetProjectText}>
               <TypeBodyStrong numberOfLines={1}>{project.name}</TypeBodyStrong>
               <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-                {project.rootPath}
+                {shortRootPath(project.rootPath, project.name)}
               </TypeMicro>
             </View>
           </View>
@@ -1092,6 +1085,7 @@ function NewSessionSheet({
 }
 
 const styles = StyleSheet.create({
+  // ── the project row: [avatar 40] [label + ONE meta line] [badge + chevron] ──
   rowInner: {
     flexDirection: "row",
     alignItems: "center",
@@ -1099,41 +1093,28 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     minHeight: 68,
   },
-  dot: { width: 12, height: 12, borderRadius: 6 },
   rowMain: { flex: 1, gap: 3 },
   rootPath: { fontSize: 12 },
-  metaRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  newButton: {
-    width: TOUCH_TARGET,
-    height: TOUCH_TARGET,
-    borderRadius: RADIUS_INPUT,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  footer: { textAlign: "center", paddingTop: spacing.sm },
+  countBadge: { alignSelf: "center" },
 
-  // ── the New Project action row (content-borne, R114-c) ──
-  actionRowInner: {
+  // ── the New Project action (the list's bottom — half width, quiet) ──
+  newProjectAction: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
-    padding: spacing.md,
-    paddingHorizontal: spacing.lg,
-    minHeight: 64,
-  },
-  actionIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 15,
-    alignItems: "center",
     justifyContent: "center",
+    gap: spacing.sm,
+    width: "48%",
+    alignSelf: "flex-start",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: RADIUS_INPUT,
+    minHeight: TOUCH_TARGET + 2,
+    paddingHorizontal: spacing.lg,
   },
-  actionText: { flex: 1, gap: 2 },
 
-  // ── the accordion ──
-  accordionClip: { height: 0, overflow: "hidden" },
-  accordionInner: {},
+  // ── the accordion (R115-h: overflow ONLY — no static height) ──
+  accordionClip: { overflow: "hidden" },
+  /** The ABSOLUTE measurement child — natural height at any clip height. */
+  accordionMeasure: { position: "absolute", top: 0, left: 0, right: 0 },
   sessionsWell: {
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingBottom: spacing.sm,
@@ -1143,7 +1124,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
-    paddingLeft: spacing.lg + 24,
+    paddingLeft: FOLD_INDENT,
     paddingRight: spacing.lg,
     minHeight: 48,
   },
@@ -1151,7 +1132,7 @@ const styles = StyleSheet.create({
   sessionTitle: { fontWeight: "600", fontSize: 14 },
   sessionMeta: { flexDirection: "row", gap: 4, alignItems: "center", flexWrap: "wrap" },
   moreRow: {
-    paddingLeft: spacing.lg + 24,
+    paddingLeft: FOLD_INDENT,
     paddingRight: spacing.lg,
     paddingVertical: spacing.sm,
     minHeight: 44,
@@ -1161,13 +1142,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    paddingLeft: spacing.lg + 24,
+    paddingLeft: FOLD_INDENT,
     paddingRight: spacing.lg,
     paddingVertical: spacing.sm + 2,
     minHeight: 48,
   },
 
-  // ── the shared sheet fields ──
+  // ── the shared sheet fields (the New Session sheet + the manual path) ──
   fieldGap: { gap: spacing.md, paddingTop: spacing.xs },
   fieldWrap: { gap: 6 },
   fieldLabel: { paddingLeft: spacing.xs },
@@ -1234,19 +1215,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   useFolderText: { fontSize: 15 },
-
-  // ── the color picker row ──
-  colorRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" },
-  colorSwatch: {
-    width: 32,
-    height: 32,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: "transparent",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  colorAuto: { flex: 1, minWidth: 120 },
 
   // ── the New Session sheet ──
   sheetProjectRow: {

@@ -1030,11 +1030,15 @@ describe("R114-b: GET /system/fs/browse", () => {
     expect(names.indexOf(".hidden-dir")).toBeLessThan(names.indexOf("alpha"));
   });
 
-  it("path omitted → the user's HOME directory; a filesystem root answers parent:null", async () => {
+  it("path omitted → the user's HOME directory (the navigation cap — parent null); a filesystem root answers parent:null", async () => {
     const response = await authInject({ method: "GET", url: "/api/v1/system/fs/browse" });
     expect(response.statusCode).toBe(200);
     expect(response.json().path).toBe(homedir());
     expect(Array.isArray(response.json().entries)).toBe(true);
+    // R115-h — the home cap: navigation stops AT the user's home directory
+    // (components.md's folder-browser rule). The home browse itself answers
+    // parent:null, so the picker's Up never climbs past home.
+    expect(response.json().parent).toBeNull();
     // The root of the tree (POSIX "/" in this sandbox): no parent above it.
     const root = await authInject({ method: "GET", url: "/api/v1/system/fs/browse?path=%2F" });
     expect(root.statusCode).toBe(200);

@@ -36,6 +36,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bell, ChevronRight, FolderGit2, MonitorSmartphone } from "lucide-react-native";
 import { StyleSheet, View } from "react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
+import { LetterAvatar } from "@/components/letter-avatar";
 import { timeAgo } from "@/components/host-card";
 import {
   Badge,
@@ -255,7 +256,7 @@ export default function HomeScreen() {
                   >
                     <View style={styles.runInner}>
                       {project !== null ? (
-                        <LetterAvatar name={project.name} color={project.color} />
+                        <LetterAvatar label={project.name} color={project.color} />
                       ) : (
                         // No project (or not in the registry fold) — the
                         // honest neutral identity, never a guessed letter.
@@ -322,31 +323,6 @@ export default function HomeScreen() {
   );
 }
 
-// ── the project letter avatar (02-patterns/components.md) ──────────────────
-
-/**
- * R115-f — the project identity tile: the name's first letter, white
- * TypeBodyStrong, on the project's own theme color, a TILE_ROW (40px)
- * circle. Local to home — no shared LetterAvatar exists anywhere in src/
- * (grep-verified; the projects tab still carries its colored dot, a later
- * wave's rework). The white-on-color literal is the components.md idiom
- * (Badge's own fg) — no token exists for on-project-color text.
- */
-function LetterAvatar({ name, color }: { name: string; color: string }) {
-  const trimmed = name.trim();
-  const letter = trimmed === "" ? "?" : trimmed.charAt(0).toUpperCase();
-  return (
-    <View
-      // The row's own accessibility label names the project — the bare
-      // letter must not double-read.
-      accessibilityElementsHidden
-      style={[styles.letterAvatar, { backgroundColor: color }]}
-    >
-      <TypeBodyStrong style={styles.letterAvatarText}>{letter}</TypeBodyStrong>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   // The compact strip row (connection + activity): one line, 52px min.
   stripInner: {
@@ -391,14 +367,6 @@ const styles = StyleSheet.create({
     minHeight: 64,
   },
   runText: { flex: 1, gap: 2 },
-  letterAvatar: {
-    width: TILE_ROW,
-    height: TILE_ROW,
-    borderRadius: TILE_ROW / 2,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  letterAvatarText: { color: "#FFFFFF" },
   neutralTile: {
     width: TILE_ROW,
     height: TILE_ROW,

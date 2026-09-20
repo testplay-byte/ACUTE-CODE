@@ -3,7 +3,10 @@
  * /api/v1/system/fs/browse, the R114-b wire contract, consumed as-is:
  *
  *   GET /system/fs/browse?path=<abs>  → { path: string;
- *       parent: string | null;          (null at a filesystem root)
+ *       parent: string | null;          (null at a filesystem root AND at
+ *                                          the user's home dir — R115-h:
+ *                                          navigation caps at home, the
+ *                                          picker hides Up there)
  *       entries: Array<{name, path, dir}> (dirs first, then files, each
  *                                          alphabetical; dotfiles skipped);
  *       truncated: boolean }             (the honest 400-entry cap flag)
@@ -28,7 +31,10 @@ export interface FsBrowseEntry {
 export interface FsBrowseReply {
   /** The directory this reply lists (the browse target, resolved). */
   path: string;
-  /** The parent directory — the Up affordance's next hop; null at a root. */
+  /** The parent directory — the Up affordance's next hop; null at a
+   * filesystem root AND at the user's home dir (R115-h: navigation caps at
+   * home — never an Up past it; the manual path field stays the power-user
+   * escape hatch). */
   parent: string | null;
   /** Dirs first then files, each alphabetical; dotfiles already skipped. */
   entries: FsBrowseEntry[];
@@ -71,4 +77,60 @@ export function breadcrumbSegments(path: string): Array<{ label: string; path: s
     segments.push({ label: part, path: acc });
   }
   return isAbsolute ? [{ label: "/", path: "/" }, ...segments] : segments;
+}
+
+/**
+ * shortRootPath — the smart path line for project rows (R115-h): the root
+ * path folded to a display budget (default 28 chars — the TypeMono 12 meta
+ * line's comfortable width). The rules, in order:
+ *   1. separators normalize to "/" and trailing slashes drop;
+ *   2. the TRAILING segment drops when it equals the project's name
+ *      (case-insensitive) — the row already says the name, the path line
+ *      orients ("acute-code" + "/home/z/repos/acute-code" →
+ *      "/home/z/repos");
+ *   3. the TAIL that fits the budget is kept — when leading folders shed,
+ *      the line prefixes "…/";
+ *   4. a single segment too long for the budget middle-truncates with "…".
+ * The filesystem root answers "/" (a Windows drive root answers "C:/").
+ * Pure; never throws.
+ */
+export function shortRootPath(rootPath: string, projectName: string, budget = 28): string {
+  const slashed = rootPath.replace(/\\/g, "/");
+  if (slashed === "") return "";
+  // A slash-only path IS the filesystem root (never an empty string).
+  if (/^\/+$/.test(slashed)) return "/";
+  const normalized = slashed.replace(/\/+$/, "");
+  // A bare Windows drive root renders its own root form ("C:/").
+  if (/^[A-Za-z]:$/.test(normalized)) return `${normalized}/`;
+
+  const segments = normalized.split("/").filter((part) => part !== "");
+  const name = projectName.trim().toLowerCase();
+  // (2) the trailing drop — only when something remains below it (a lone
+  // segment never drops: the path IS the project folder at a root).
+  if (segments.length > 1 && name !== "" && segments[segments.length - 1]!.toLowerCase() === name) {
+    segments.pop();
+  }
+
+  // (3) the full path — leading "/" for POSIX absolutes — when it fits.
+  const absolute = normalized.startsWith("/");
+  const full = `${absolute ? "/" : ""}${segments.join("/")}`;
+  if (full.length <= budget) return full;
+
+  // …else the tail that fits the shed allowance ("…/" costs two chars).
+  const allowance = Math.max(1, budget - 2);
+  const tail: string[] = [];
+  for (let i = segments.length - 1; i >= 0; i -= 1) {
+    const segment = segments[i]!;
+    const joined = tail.length === 0 ? segment.length : segment.length + 1 + tail.join("/").length;
+    if (joined > allowance) break;
+    tail.unshift(segment);
+  }
+  if (tail.length > 0) return `…/${tail.join("/")}`;
+
+  // (4) a single over-long segment — middle-truncate it to the budget.
+  const last = segments[segments.length - 1] ?? normalized;
+  const keep = Math.max(1, budget - 1);
+  const left = Math.ceil(keep / 2);
+  const right = keep - left;
+  return `${last.slice(0, left)}…${last.slice(last.length - right)}`;
 }

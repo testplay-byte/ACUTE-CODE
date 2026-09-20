@@ -12,12 +12,14 @@
  *   /connect/scan        → the camera scanner (pinch zoom + torch)
  *   /connect/manual      → the manual entry page (address/URL + PIN + fingerprint)
  *   /activity            → the notifications history (pushed from the bell)
- *   /(tabs)/…            → home · projects · approvals · dashboard · settings
+ *   /(tabs)/…            → home · projects · approvals · dashboard · more
  *                          (the group renders the FLOATING bottom bar; the
- *                          old sessions tab merged INTO projects — R113-e)
+ *                          old sessions tab merged INTO projects — R113-e;
+ *                          the settings tab became the MORE hub — R115-g)
  *   /project/:id         → a project's sessions (pushed from the tab)
  *   /session/:id         → the pushed transcript + live stream + composer
- *   /settings/*          → the pushed management pages (host, appearance,
+ *   /settings/*          → the pushed management hub (index, pushed from
+ *                          the More tab) + its pages (host, appearance,
  *                          providers, agents, prompts, preferences)
  *
  * R108 BOOT DISCIPLINE (the splash-forever lesson, kept): every startup

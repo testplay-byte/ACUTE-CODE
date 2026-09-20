@@ -682,8 +682,12 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
   //     · hard cap 400 entries per response — beyond it the response is
   //       truncated and carries truncated: true (always present as a
   //       boolean so the picker can branch without "in" checks);
-  //     · parent = the browsed directory's parent (null at a filesystem
-  //       root, where dirname(path) === path — the picker hides Up).
+  //     · parent = the browsed directory's parent — null at a filesystem
+  //       root (dirname(path) === path) AND when the browsed directory IS
+  //       the user's home (R115-h: navigation caps at home — the picker's
+  //       Up never climbs past it; the manual path field stays the
+  //       power-user escape hatch). One level below home still answers
+  //       the home dir as its parent — Up climbs TO home, never past.
   //   → 404 non-existent path (the OS's ENOENT message rides along);
   //   → 400 unreadable/not-a-directory (the OS's message rides along).
   scope.get("/system/fs/browse", async (request, reply) => {
@@ -737,12 +741,18 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
     const truncated = entries.length > FS_BROWSE_MAX_ENTRIES;
     const capped = truncated ? entries.slice(0, FS_BROWSE_MAX_ENTRIES) : entries;
 
-    // (e) The parent for the picker's Up affordance (null at a filesystem
-    // root — dirname("/") === "/", dirname("C:\\") === "C:\\").
+    // (e) The parent for the picker's Up affordance — R115-h: navigation
+    // caps AT the user's home directory (components.md's folder-browser
+    // rule — "no 'up' affordance past it"): null at a filesystem root
+    // (dirname("/") === "/", dirname("C:\\") === "C:\\") AND when the
+    // browsed directory IS the home directory itself (the sheet starts
+    // there). A direct child of home keeps home as its parent — Up
+    // arrives at home and stops, never past it.
     const parentDir = dirname(target);
+    const parent = parentDir === target || target === homedir() ? null : parentDir;
     return reply.code(200).send({
       path: target,
-      parent: parentDir === target ? null : parentDir,
+      parent,
       entries: capped,
       truncated,
     });

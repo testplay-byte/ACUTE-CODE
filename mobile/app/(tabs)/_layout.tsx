@@ -1,25 +1,27 @@
 /**
  * The tab group layout — FIVE tabs behind the FLOATING clay bar (R109):
- * Home · Projects · Approvals (with the live pending badge) · Dashboard ·
- * Settings. The bar floats with margins on all four sides, radius 28, the
- * elevation-2 clay shadow and the chrome edge (DESIGN.md §2.1/§5); content
- * scrolls under it via the TabBarInsetContext every screen's scaffold reads.
+ * Home · Projects · Approvals (live pending badge + the §4.5 breathe) ·
+ * Dashboard · More. The bar floats with margins on all four sides, radius
+ * 28, the elevation-2 clay shadow and the chrome edge (components.md §Tab
+ * bar); content scrolls under it via the TabBarInsetContext every screen's
+ * scaffold reads.
  *
- * R113-e — the tabs merge: the standalone SESSIONS tab is DEAD (the owner:
- * "the session screen is completely bad so completely remove it… the
- * project screen relies on the session screen too. If I click on any one
- * of the projects, it leads me to the sessions screen"). PROJECTS is the
- * tab now — its rows open the per-project detail (app/project/[id].tsx,
- * the project's own sessions) instead of pushing the old global sessions
- * list with a filter param.
+ * R115-g — the round-115 pinned decision: tab 5 is the MORE hub (app/
+ * (tabs)/more.tsx — connection summary, activity, about, the settings
+ * ENTRY), not the settings list itself. The settings hub moved to the
+ * pushed settings stack (app/settings/index.tsx); the old (tabs)/settings
+ * route is gone. The universal three-dots glyph ("Ellipsis" — this lucide
+ * version's name for EllipsisHorizontal) is the icon.
  *
  * The approvals badge: a calm 45-second poll while connected (the live
  * notification stream covers the rest — approvals are also notifications).
+ * While the count is > 0 the tab's icon + label breathe in the accent
+ * (motion.md §4.5) — the badge alone was judged not enough.
  */
 
 import { Tabs } from "expo-router";
 import { useEffect, useState } from "react";
-import { Folders, Gauge, House, Settings2, ShieldCheck } from "lucide-react-native";
+import { Ellipsis, Folders, Gauge, House, ShieldCheck } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { FloatingTabBar, type TabDescriptor } from "@/components/tab-bar";
 import { TabBarInsetContext } from "@/components/screen-scaffold";
@@ -57,9 +59,15 @@ export default function TabsLayout() {
   const tabs: TabDescriptor[] = [
     { name: "home", label: "Home", icon: House },
     { name: "projects", label: "Projects", icon: Folders },
-    { name: "approvals", label: "Approvals", icon: ShieldCheck, badge: pendingCount },
+    {
+      name: "approvals",
+      label: "Approvals",
+      icon: ShieldCheck,
+      badge: pendingCount,
+      alert: pendingCount > 0,
+    },
     { name: "dashboard", label: "Dashboard", icon: Gauge },
-    { name: "settings", label: "Settings", icon: Settings2 },
+    { name: "more", label: "More", icon: Ellipsis },
   ];
 
   // The content inset the floating bar demands (DESIGN.md §5): the bar's
@@ -94,7 +102,7 @@ export default function TabsLayout() {
         <Tabs.Screen name="projects" />
         <Tabs.Screen name="approvals" />
         <Tabs.Screen name="dashboard" />
-        <Tabs.Screen name="settings" />
+        <Tabs.Screen name="more" />
       </Tabs>
     </TabBarInsetContext.Provider>
   );

@@ -1,48 +1,32 @@
 /**
- * Settings — the management HUB (tab root, R109; R113-e — the compact
- * header; R114-c — the header-free root: the row cards are the screen's
- * top now): every desktop-management page one tap away — connection, appearance, providers, agents, prompts,
- * preferences — plus the about card (version, the view+input ceiling, the
- * wizard replay). Unpaired → the config rows carry the honest "requires a
- * linked host" caption and are disabled (the hub itself never pretends the
- * desktop is reachable).
+ * Settings — the management HUB (R109 tab root; R115-g — MOVED here into
+ * the pushed settings stack, its tab slot taken by the MORE hub): every
+ * desktop-management page one tap away — connection, appearance, providers,
+ * agents, prompts, preferences. A PUSHED screen now: the standard compact
+ * header (chevron | title | right slot). The about card (version, the
+ * one-line role, the wizard replay) lives in the More tab. Unpaired → the
+ * config rows carry the honest "requires a linked host" caption and are
+ * disabled (the hub itself never pretends the desktop is reachable).
  */
 
 import { useRouter } from "expo-router";
 import { useEffect } from "react";
 import { StyleSheet, View } from "react-native";
-import Constants from "expo-constants";
 import {
   Bot,
   Boxes,
   ChevronRight,
   FileText,
-  Info,
   Palette,
   SlidersHorizontal,
   Unplug,
 } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
-import {
-  Badge,
-  ClayCard,
-  PressableCard,
-  QuietButton,
-  StatusDot,
-  TypeBody,
-  TypeBodyStrong,
-  TypeCaption,
-  TypeMicro,
-} from "@/design/primitives";
+import { PressableCard, StatusDot, TypeBodyStrong, TypeCaption } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
 import { getTheme, spacing } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
-import { resetOnboarding } from "@/features/onboarding";
 import { mobLog } from "@/lib/log";
-
-/** The version the about card shows — the BUILD's own app.json version
- * (embedded by expo-constants), falling back to the R109 release number. */
-const APP_VERSION = Constants.expoConfig?.version ?? "0.105.0";
 
 export default function SettingsScreen() {
   const { tokens, themeId, mode } = useTheme();
@@ -63,7 +47,7 @@ export default function SettingsScreen() {
   const configCaption = unpaired ? "requires a linked host" : null;
 
   return (
-    <ScreenScaffold title="Settings" chrome={false}>
+    <ScreenScaffold title="Settings" back>
       {/* ── the connection row: the live truth + the host's name ── */}
       <PressableCard
         onPress={() => router.push("/settings/host")}
@@ -151,38 +135,8 @@ export default function SettingsScreen() {
         disabled={unpaired}
         onPress={() => router.push("/settings/preferences")}
       />
-
-      {/* ── about: version + the view/input ceiling + the wizard replay ── */}
-      <ClayCard>
-        <View style={styles.aboutPad}>
-          <View style={styles.aboutHead}>
-            <View style={[styles.aboutIcon, { backgroundColor: tokens.subtleHover }]}>
-              <Info size={20} color={tokens.accent} strokeWidth={2.2} />
-            </View>
-            <View style={styles.aboutHeadText}>
-              <TypeBodyStrong>ACUTE companion</TypeBodyStrong>
-              <TypeMicro>VIEW + INPUT MEDIUM · ANDROID</TypeMicro>
-            </View>
-            <Badge tone="neutral">v{APP_VERSION}</Badge>
-          </View>
-          <TypeBody style={styles.aboutBody}>
-            This phone is a view + input medium for the desktop agent — nothing is
-            processed here, no model runs here. Every action rides the paired,
-            pinned link to your own desktop.
-          </TypeBody>
-          <QuietButton onPress={() => onReplayWizard(router)}>Replay the setup wizard</QuietButton>
-        </View>
-      </ClayCard>
     </ScreenScaffold>
   );
-}
-
-/** The wizard replay: clear the onboarding flag, land on the welcome page. */
-function onReplayWizard(router: ReturnType<typeof useRouter>): void {
-  mobLog("settings", "wizard replay requested");
-  void resetOnboarding().then(() => {
-    router.replace("/onboarding/welcome");
-  });
 }
 
 /** A desktop-management row (disabled with the honest caption when unpaired). */
@@ -249,15 +203,4 @@ const styles = StyleSheet.create({
   },
   rowText: { flex: 1, gap: 3 },
   rowTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  aboutPad: { padding: spacing.lg, gap: spacing.md },
-  aboutHead: { flexDirection: "row", alignItems: "center", gap: spacing.md },
-  aboutIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 15,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  aboutHeadText: { flex: 1, gap: 2 },
-  aboutBody: { lineHeight: 21, paddingBottom: spacing.xs },
 });

@@ -31,8 +31,13 @@
  *
  * While a turn runs, Send becomes Stop (+ Queue); while the link is offline,
  * Send lands the message in the outbox (overrides ride the flush). The
- * outbox chip keeps its DISMISS affordance. Keyboard-aware via the screen's
- * KeyboardAvoidingView; touch targets ≥ 44px; the send haptic.
+ * outbox chip keeps its DISMISS affordance. Keyboard-wise the Composer is a
+ * PASSENGER of the session screen's dock (R115-K): this root View sits
+ * inside the dock's Animated.View whose ONE expression — paddingBottom =
+ * max(insetsBottom, kbHeight) — lifts EVERYTHING here (offline/outbox/note
+ * rows, the @-picker popup above the input, attachment chips, the input row,
+ * the control row) clear of the keys; this file carries NO keyboard offset
+ * logic of its own. Touch targets ≥ 44px; the send haptic.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -600,7 +605,10 @@ export function Composer({
       )}
 
       {/* The @ quick-picker — a compact popup ABOVE the input (the desktop's
-          popup-over-the-caret pattern, restated for the phone's column). */}
+          popup-over-the-caret pattern, restated for the phone's column). It's
+          a plain sibling INSIDE the dock's column (R115-K): when the keys
+          rise, the dock's animated paddingBottom lifts it together with the
+          input row — no offset of its own. */}
       {atToken !== null && atMatches.length > 0 && (
         <View style={[styles.atPicker, { backgroundColor: tokens.card, borderColor: tokens.border, borderTopColor: tokens.clayTopEdge }]}>
           <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.md, paddingTop: spacing.xs }}>

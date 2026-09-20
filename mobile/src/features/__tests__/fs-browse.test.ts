@@ -9,7 +9,7 @@
 import { describe, expect, it } from "@jest/globals";
 
 import type { ApiSender } from "../api";
-import { breadcrumbSegments, fetchFsBrowse } from "../fs-browse";
+import { breadcrumbSegments, fetchFsBrowse, shortRootPath } from "../fs-browse";
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -140,5 +140,51 @@ describe("breadcrumbSegments — the picker's tappable ancestry", () => {
       { label: "z", path: "C:/Users/z" },
       { label: "repos", path: "C:/Users/z/repos" },
     ]);
+  });
+});
+
+// ── the smart path line (R115-h — the project row's TypeMono meta) ─────────
+
+describe("shortRootPath — the project row's folded root path", () => {
+  const TABLE: ReadonlyArray<{ rootPath: string; projectName: string; expected: string }> = [
+    // The filesystem root answers itself.
+    { rootPath: "/", projectName: "anything", expected: "/" },
+    // A single segment fits — and never drops, even when it IS the name
+    // (the path would otherwise collapse to a bare "/").
+    { rootPath: "/srv", projectName: "other", expected: "/srv" },
+    { rootPath: "/dashboard", projectName: "dashboard", expected: "/dashboard" },
+    // The trailing project-name segment drops (case-insensitive) — the row
+    // already says the name; the path line orients.
+    { rootPath: "/home/z/repos/acute-code", projectName: "acute-code", expected: "/home/z/repos" },
+    { rootPath: "/home/z/repos/ACUTE-CODE", projectName: "Acute-Code", expected: "/home/z/repos" },
+    // Overflow sheds the leading folders under a "…/" prefix — the TAIL
+    // that fits the 28-char budget is what stays.
+    {
+      rootPath: "/home/z/dev/projects/very/deeply/nested/here/now",
+      projectName: "proj",
+      expected: "…/deeply/nested/here/now",
+    },
+    // Windows drives normalize to "/"; the drive root answers "C:/".
+    { rootPath: "C:\\Users\\z\\repos\\dashboard", projectName: "dashboard", expected: "C:/Users/z/repos" },
+    { rootPath: "C:\\", projectName: "proj", expected: "C:/" },
+    // A single over-long segment (40 chars > the budget) middle-truncates.
+    {
+      rootPath: `/home/z/repos/${"a".repeat(40)}`,
+      projectName: "proj",
+      expected: `${"a".repeat(14)}…${"a".repeat(13)}`,
+    },
+  ];
+
+  it.each(TABLE)(
+    "shortRootPath(%j, %j) folds to %j",
+    ({ rootPath, projectName, expected }) => {
+      expect(shortRootPath(rootPath, projectName)).toBe(expected);
+    },
+  );
+
+  it("the budget is callable — a tighter budget sheds more leading folders", () => {
+    // At the default 28 the full tail fits; at 12 only the deepest pair.
+    expect(shortRootPath("/home/z/repos/acute-code", "acute-code")).toBe("/home/z/repos");
+    expect(shortRootPath("/home/z/repos/acute-code", "acute-code", 12)).toBe("…/z/repos");
   });
 });
