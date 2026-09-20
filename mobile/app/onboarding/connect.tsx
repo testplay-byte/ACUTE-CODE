@@ -1,19 +1,24 @@
 /**
  * The wizard's connect step — the bridge into the real connection flow:
- * the two ways to link (scan the desktop's QR / type it in), plus "do it
- * later" (the tabs work unpaired; the connect hub is one tap away). This
- * screen completes the wizard either way — the pairing itself lives in
- * /connect (the hub the app reuses forever after).
+ * the two ways to link (scan the QR / type it in) plus "do it later" (the
+ * tabs work unpaired; the connect hub is one tap away).
+ *
+ * R115: minimal — the title (no description paragraph), the two one-line
+ * option cards, and the footer pair. The TLS trust card and the old long
+ * "Scan the pairing code" CTA are deleted (onboarding.md screen 3). The
+ * wizard completes on this screen's FIRST action either way; the pairing
+ * itself lives in /connect (the hub the app reuses forever after).
  */
 
 import { useRouter } from "expo-router";
 import { StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Keyboard, QrCode, ScanLine } from "lucide-react-native";
-import { ChromeButton, ClayCard, PressableCard, QuietButton, TypeBody, TypeCaption, TypeDisplay, TypeMicro } from "@/design/primitives";
+import { Keyboard, ScanLine } from "lucide-react-native";
+import { ChromeButton, FadeInUp, QuietButton, TypeDisplay } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
 import { completeOnboarding } from "@/features/onboarding";
 import { spacing } from "@/design/tokens";
+import { PairOptionsPair } from "@/components/pair-options";
 
 export default function ConnectStepScreen() {
   const { tokens } = useTheme();
@@ -28,61 +33,42 @@ export default function ConnectStepScreen() {
     <SafeAreaView style={[styles.root, { backgroundColor: tokens.bg }]} edges={["top", "left", "right"]}>
       <View style={styles.body}>
         <View style={styles.hero}>
-          <TypeDisplay style={styles.title}>Link your desktop</TypeDisplay>
-          <TypeBody style={styles.tagline}>
-            One link, one time — the phone then remembers this desktop and reconnects on its own.
-          </TypeBody>
+          <FadeInUp index={0}>
+            <TypeDisplay style={styles.title}>Link your desktop</TypeDisplay>
+          </FadeInUp>
         </View>
 
-        <View style={styles.options}>
-          <PressableCard
-            elevated
-            onPress={() => void finishWizard("/connect/scan")}
-            accessibilityLabel="Scan the QR code on your desktop"
-          >
-            <View style={styles.optionInner}>
-              <View style={[styles.optionIcon, { backgroundColor: tokens.subtleHover }]}>
-                <ScanLine size={24} color={tokens.accent} strokeWidth={2.2} />
-              </View>
-              <View style={styles.optionText}>
-                <TypeBody>Scan the QR code</TypeBody>
-                <TypeCaption>
-                  On the desktop: Settings → Link a device — then point the camera here. Fastest way.
-                </TypeCaption>
-              </View>
-            </View>
-          </PressableCard>
-
-          <PressableCard
-            onPress={() => void finishWizard("/connect/manual")}
-            accessibilityLabel="Enter the address and PIN by hand"
-          >
-            <View style={styles.optionInner}>
-              <View style={[styles.optionIcon, { backgroundColor: tokens.subtleHover }]}>
-                <Keyboard size={24} color={tokens.accent} strokeWidth={2.2} />
-              </View>
-              <View style={styles.optionText}>
-                <TypeBody>Type it in instead</TypeBody>
-                <TypeCaption>
-                  Address (or a tunnel URL) + the 8-digit PIN — works from anywhere, camera never needed.
-                </TypeCaption>
-              </View>
-            </View>
-          </PressableCard>
-        </View>
-
-        <ClayCard>
-          <View style={styles.trustInner}>
-            <View style={styles.trustRow}>
-              <QrCode size={16} color={tokens.textTertiary} strokeWidth={2} />
-              <TypeMicro>THE LINK RIDES TLS · THE PHONE PINS THE DESKTOP'S CERTIFICATE AT PAIRING TIME</TypeMicro>
-            </View>
-          </View>
-        </ClayCard>
+        <PairOptionsPair
+          start={1}
+          options={[
+            {
+              icon: ScanLine,
+              label: "Scan the QR code",
+              description: "From the desktop's Link a device screen.",
+              onPress: () => void finishWizard("/connect/scan"),
+              testID: "link-scan",
+            },
+            {
+              icon: Keyboard,
+              label: "Type it in instead",
+              description: "Address and PIN, no camera needed.",
+              onPress: () => void finishWizard("/connect/manual"),
+              testID: "link-manual",
+            },
+          ]}
+        />
 
         <View style={styles.footer}>
-          <ChromeButton onPress={() => void finishWizard("/connect/scan")}>Scan the pairing code</ChromeButton>
-          <QuietButton onPress={() => void finishWizard("/")}>Do it later</QuietButton>
+          <FadeInUp index={3}>
+            <ChromeButton flat testID="link-scan-cta" onPress={() => void finishWizard("/connect/scan")}>
+              Scan
+            </ChromeButton>
+          </FadeInUp>
+          <FadeInUp index={4}>
+            <QuietButton testID="link-do-later" onPress={() => void finishWizard("/")}>
+              Do it later
+            </QuietButton>
+          </FadeInUp>
         </View>
       </View>
     </SafeAreaView>
@@ -92,20 +78,7 @@ export default function ConnectStepScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1 },
   body: { flex: 1, padding: spacing.lg, gap: spacing.xl, justifyContent: "space-between" },
-  hero: { alignItems: "center", gap: spacing.md, paddingTop: spacing.xxl },
+  hero: { alignItems: "center", paddingTop: spacing.xxl },
   title: { textAlign: "center" },
-  tagline: { textAlign: "center", maxWidth: 320 },
-  options: { gap: spacing.md },
-  optionInner: { flexDirection: "row", gap: spacing.md, padding: spacing.lg, alignItems: "center" },
-  optionIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  optionText: { flex: 1, gap: 2 },
-  trustInner: { padding: spacing.lg },
-  trustRow: { flexDirection: "row", gap: spacing.sm, alignItems: "center" },
   footer: { gap: spacing.md, paddingBottom: spacing.xl },
 });

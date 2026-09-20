@@ -113,6 +113,13 @@ export interface SessionInput {
    * this function trusts its argument (same contract as every other
    * SessionInput field). Default null = unaddressed (pre-R79 behavior). */
   taskId?: string | null;
+  /** ROUND-115 (R115-E2): WHO created this session — "device" when the
+   * POST /sessions request authenticated with a DEVICE token (the phone
+   * minted it). NOT persisted (the row is identical either way); it rides
+   * the events-bus "created" frame as source:"device" so the desktop can
+   * auto-navigate to the phone's new chat. Absent = the pre-R115 frame
+   * shape (shell, CLI, delegation children, forks — every other creator). */
+  source?: "device";
 }
 
 /** Event JSON as served by the API (API.md §5.6). `agentId` comes from the payload. */
@@ -308,8 +315,12 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
   // (desktop sidebar / phone session list) refresh. Covers POST /sessions,
   // delegation children, and every other creator through the one choke
   // point. The row is already durable at this line (the INSERT ran above).
+  // R115-E2: a DEVICE-token creation (the phone's POST) carries
+  // source:"device" ADDITIVELY — the desktop's dispatcher routes the user
+  // to the new chat; every other creator keeps the bare frame shape.
   getEventsBus().publishSessionFrame(session.id, session.projectId, "created", {
     status: session.status,
+    ...(input.source !== undefined ? { source: input.source } : {}),
   });
   return session;
 }

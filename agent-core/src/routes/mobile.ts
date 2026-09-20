@@ -33,6 +33,9 @@ import { errorBody } from "./helpers.js";
 import { VERSION } from "../lib/version.js";
 import { PAIRING_MAX_ATTEMPTS, PAIRING_TTL_MS, requestArrivedOverTls } from "../lib/device-link.js";
 import { getCloudConnectorStatus, normalizeRelayUrl } from "../lib/cloud-connector.js";
+// R115-E2: the word-pair machine name (lib/machine-label.ts) — the friendly
+// label every pairing surface below carries ADDITIVELY.
+import { getMachineLabel } from "../lib/machine-label.js";
 import {
   createMobileDevice,
   deleteMobileDevice,
@@ -72,6 +75,19 @@ function isOverTls(request: FastifyRequest): boolean {
 }
 
 /**
+ * ROUND-115 (R115-E2): this machine's word-pair label for the pairing
+ * surfaces — minted ONCE and persisted in the data dir
+ * (`machine-label.json`, the vapid.json pattern), so the name the phone
+ * home-screen shows survives restarts. Null only in the no-dataDir
+ * hermetic builds (which cannot reach the pairing payloads anyway — the
+ * 503s above fire first); callers fall back to hostname() exactly as the
+ * pre-R115 wire did.
+ */
+async function machineLabelOf(ctx: RouteContext): Promise<string | null> {
+  return ctx.dataDir !== undefined ? await getMachineLabel(ctx.dataDir) : null;
+}
+
+/**
  * ROUND-112 (R112-a): the phone's cloud reachability address —
  * `<relayBase>/m/<machineId>` — carried by the QR payload, the claim
  * response, and link-info ONLY while the cloud connector's tunnel is
@@ -90,7 +106,6 @@ function relayAddressOf(machineId: string | null): string | null {
 
 export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext): void {
   const { db, mobileLink } = ctx;
-
   // ── POST /api/v1/mobile/pair/start — the QR payload's mint ───────────
   scope.post("/mobile/pair/start", async (request, reply) => {
     if (rejectDeviceTokens(request, reply)) return reply;
@@ -122,7 +137,12 @@ export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext):
     // ROUND-112: `relay` joins ADDITIVELY — the cloud connector's guest
     // address, present only while the tunnel is live (0.105.0 phones
     // ignore it; 0.106.0 phones put it after the LAN ladder).
+    // ROUND-115 (R115-E2): `machineLabel` joins the same way — the minted
+    // word-pair name ("Confused Coconut") the phone shows on its home
+    // screen + the PC's pairing dialog. STRICTLY ADDITIVE: v stays 1 and
+    // every v1 field keeps its name and value (old phones ignore it).
     const relay = relayAddressOf(status.machineId);
+    const machineLabel = await machineLabelOf(ctx);
     return {
       v: QR_PAYLOAD_VERSION,
       addrs: status.addrs,
@@ -133,6 +153,7 @@ export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext):
       ttl: PAIRING_TTL_MS,
       expiresAt: pairing.expiresAt,
       ...(relay !== null ? { relay } : {}),
+      ...(machineLabel !== null ? { machineLabel } : {}),
     };
   });
 
@@ -203,12 +224,16 @@ export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext):
     // What the phone persists (Keystore + its link record — LINKING-PROTOCOL
     // §2: token + certFP + addresses, nothing more). ROUND-112: `relay` is
     // the additive cloud address, present only while the tunnel is live.
+    // ROUND-115 (R115-E2): machine.name becomes the minted word-pair label
+    // (the phone stores it as its hostLabel) — hostname() stays the honest
+    // fallback for the no-dataDir builds; `version` is untouched.
     const relay = relayAddressOf(status.machineId);
+    const machineLabel = await machineLabelOf(ctx);
     return {
       deviceToken,
       deviceId,
       machine: {
-        name: hostname(),
+        name: machineLabel ?? hostname(),
         version: VERSION,
       },
       certFP: status.certFP,
@@ -247,7 +272,11 @@ export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext):
     const active = mobileLink.activePairing();
     // ROUND-112: the additive cloud address while the tunnel is live (the
     // Devices tab's "Reachable over the internet" hint reads this).
+    // ROUND-115 (R115-E2): `machineLabel` rides additively too (the Devices
+    // tab's pairing dialog reads the friendly name off the pair/start
+    // payload; this endpoint carries it for symmetry + future consumers).
     const relay = relayAddressOf(status.machineId);
+    const machineLabel = await machineLabelOf(ctx);
     return {
       enabled: status.enabled,
       port: status.port,
@@ -256,6 +285,7 @@ export function registerMobileRoutes(scope: FastifyInstance, ctx: RouteContext):
       machineId: status.machineId,
       activePairing: active === null ? null : { pin: active.pin, expiresAt: active.expiresAt },
       ...(relay !== null ? { relay } : {}),
+      ...(machineLabel !== null ? { machineLabel } : {}),
     };
   });
 }

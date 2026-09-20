@@ -18,6 +18,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { RouteContext } from "./context.js";
+// R115-E2: the wall's per-request auth KIND — a POST /sessions that rode a
+// DEVICE token (the phone minted the session) tags the created frame with
+// source:"device" so the desktop auto-navigates to the new chat.
+import { deviceAuthOf } from "./context.js";
 import type {
   MessageAttachment,
   PermissionMode,
@@ -384,6 +388,12 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
       mode: "single" as RunMode,
       projectId,
       title,
+      // R115-E2: the phone's hand — the request authenticated with a
+      // device token (routes/context.ts deviceAuthOf, the same read the
+      // mobile routes' shell-only guard uses). RIDES THE EVENTS-BUS FRAME
+      // ONLY (additive source:"device"); the session row itself is
+      // identical no matter who created it.
+      ...(deviceAuthOf(request) !== null ? { source: "device" as const } : {}),
     });
     return reply.code(202).send(session);
   });

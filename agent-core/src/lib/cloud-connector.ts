@@ -39,6 +39,11 @@ import { request as httpsRequest } from "node:https";
 import WebSocket from "ws";
 import { log } from "./log.js";
 import { VERSION } from "./version.js";
+// R115-E2: the minted word-pair machine name — the hello frame's label
+// default (lib/machine-label.ts; the boot + settings apply paths warm the
+// cache BEFORE any connector starts, so the relay registry shows the
+// friendly name, not a bare hostname).
+import { cachedMachineLabel } from "./machine-label.js";
 
 /* ── The tunnel protocol's exact texts (the relay matches PING byte-for-byte
  *    at the edge — setWebSocketAutoResponse — so these are CONSTANTS, never
@@ -211,7 +216,10 @@ export interface CloudConnectorConfig {
   hostKey: string;
   /** This machine's stable 64-hex identity (the device cert's SHA-256). */
   machineId: string;
-  /** The machine name the relay registry shows (link-info/claim's hostname()). */
+  /** The machine name the relay registry shows. ROUND-115 (R115-E2): when
+   * unset, the minted word-pair label ("Confused Coconut") wins over the
+   * old hostname() default — the phone's home screen + the PC's pairing
+   * dialog show the same friendly name the QR payload carries. */
   label?: string;
   /** The app version the hello frame carries (agent-core's VERSION). */
   appVersion?: string;
@@ -316,7 +324,11 @@ export function createCloudConnector(options: CloudConnectorOptions): CloudConne
   const relayUrl = normalizeRelayUrl(options.relayUrl);
   const hostKey = options.hostKey;
   const machineId = options.machineId;
-  const label = options.label ?? hostname();
+  // R115-E2: explicit override wins (tests pass their own label); else the
+  // MINTED machine label when this process has loaded/minted one (the boot
+  // + settings paths pass it explicitly anyway — this default is the
+  // backstop); else the pre-R115 hostname().
+  const label = options.label ?? cachedMachineLabel() ?? hostname();
   const appVersion = options.appVersion ?? VERSION;
   const tlsPort = options.tlsPort;
   const createSocket = options.createTunnelSocket ?? defaultTunnelSocketFactory;

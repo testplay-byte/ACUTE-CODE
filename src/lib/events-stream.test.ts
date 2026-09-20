@@ -32,6 +32,10 @@ import { useConfigStore } from "./config-store";
 import { useStreamStore } from "./stream-store";
 import { useActiveStreams } from "./active-streams";
 import { useThemeStore } from "./theme-store";
+// R115-E2: the device-created navigation bridge + the local-toast surface
+// the busy guard rides (both consumed by the dispatcher under test).
+import { useSessionNavStore } from "./session-nav-store";
+import { useNotificationStreamStore } from "../hooks/use-notifications";
 import {
   handleEventsFrame,
   openEventsStream,
@@ -390,4 +394,70 @@ describe("handleEventsFrame (the dispatch)", () => {
     handleEventsFrame(qc, { type: "settings", domain: "some-future-domain", value: {} });
     expect(invalidatedKeys(invalidateSpy)).toContainEqual(["settings"]);
   });
+// ── ROUND-115 (R115-E2): the DEVICE-SOURCED created frame — the phone
+// minted a session (POST /sessions rode a device token) and the desktop
+// should land in its chat: the session-nav store when idle, the linked
+// local toast ("New session from your phone", the Toaster's actionable
+// R99-C idiom) when a turn is streaming here. ──
+describe("R115-E2: device-sourced created frames route the desktop", () => {
+  beforeEach(() => {
+    useSessionNavStore.setState({ navSeq: 0, lastNav: null });
+    useNotificationStreamStore.setState({
+      unread: 0,
+      lastSeq: 0,
+      lastNotification: null,
+      status: "idle",
+    });
+  });
+
+  it("idle → the session-nav store gets the chat URL (the Toaster openSession shape)", () => {
+    const { qc, invalidateSpy } = makeQC();
+    handleEventsFrame(
+      qc,
+      sessionFrame({ kind: "created", projectId: "proj_7", source: "device" }),
+    );
+    expect(useSessionNavStore.getState().lastNav).toEqual({
+      url: `/project/proj_7/chat?session=${SID}`,
+    });
+    // The standard created invalidations still fired (the list refetch
+    // rides along with the navigation).
+    expect(invalidatedKeys(invalidateSpy)).toContainEqual(["projects"]);
+    // No toast for the idle leg — navigation is the whole story.
+    expect(useNotificationStreamStore.getState().lastNotification).toBeNull();
+  });
+
+  it("busy (a turn streaming here) → the linked local toast instead, NO navigation", () => {
+    const { qc } = makeQC();
+    useActiveStreams.setState({ active: new Set(["sess_local_busy"]) });
+    handleEventsFrame(
+      qc,
+      sessionFrame({ kind: "created", projectId: "proj_7", source: "device" }),
+    );
+    expect(useSessionNavStore.getState().lastNav).toBeNull();
+    const n = useNotificationStreamStore.getState().lastNotification;
+    expect(n?.title).toBe("New session from your phone");
+    expect(n?.body).toBe("Tap to open it.");
+    // The Open action: the toast's link is the SAME chat URL (a linked
+    // local toast is persistent + clickable — the R99-C actionable idiom).
+    expect(n?.link).toBe(`/project/proj_7/chat?session=${SID}`);
+  });
+
+  it("a shell-sourced created frame (no source key) never navigates nor toasts", () => {
+    const { qc, invalidateSpy } = makeQC();
+    handleEventsFrame(qc, sessionFrame({ kind: "created", projectId: "proj_7" }));
+    expect(invalidatedKeys(invalidateSpy)).toContainEqual(["projects"]);
+    expect(useSessionNavStore.getState().lastNav).toBeNull();
+    expect(useNotificationStreamStore.getState().lastNotification).toBeNull();
+  });
+
+  it("a device-sourced frame with projectId null has nowhere to route — invalidations only", () => {
+    const { qc } = makeQC();
+    handleEventsFrame(
+      qc,
+      sessionFrame({ kind: "created", projectId: null, source: "device" }),
+    );
+    expect(useSessionNavStore.getState().lastNav).toBeNull();
+    expect(useNotificationStreamStore.getState().lastNotification).toBeNull();
+  });
+});
 });

@@ -4870,7 +4870,10 @@ export interface ActivePairing {
 /** GET /mobile/link-info — the Devices tab's one-shot status: the live
  * listener state (port + LAN addresses the phone can reach) + the active
  * pairing window, if any. ROUND-112: `relay` joins ADDITIVELY — the cloud
- * connector's guest address, present only while the tunnel is connected. */
+ * connector's guest address, present only while the tunnel is connected.
+ * ROUND-115 (R115-E2): `machineLabel` joins the same way — the minted
+ * word-pair machine name (machine-label.json beside vapid.json); absent
+ * on pre-R115 sidecars (the dialog renders gracefully without it). */
 export interface MobileLinkInfo {
   enabled: boolean;
   port: number | null;
@@ -4881,6 +4884,9 @@ export interface MobileLinkInfo {
   /** `<relayBase>/m/<machineId>` — present only while remote access is
    * connected (0.105.0-era payloads simply omit it). */
   relay?: string;
+  /** R115-E2: this desktop's friendly word-pair name ("Confused Coconut") —
+   * present on R115+ sidecars; old payloads omit it. */
+  machineLabel?: string;
 }
 
 export async function fetchMobileLinkInfo(): Promise<MobileLinkInfo> {
@@ -4906,6 +4912,11 @@ export interface MobilePairingPayload {
    * connector is connected (strictly additive — v stays 1 and old phones
    * ignore unknown fields). */
   relay?: string;
+  /** ROUND-115 (R115-E2): this desktop's friendly word-pair name
+   * ("Confused Coconut") — minted once, persisted in the machine data
+   * dir, shown on the phone's home + this dialog. Strictly additive: v
+   * stays 1, old phones ignore it, pre-R115 payloads omit it. */
+  machineLabel?: string;
 }
 
 export async function startMobilePairing(): Promise<MobilePairingPayload> {

@@ -57,6 +57,13 @@ export type EventsBusFrame =
   //              running→queued at turn end; status = the NEW value).
   //   "created"— a new session exists (POST /sessions, a delegation child,
   //              a fork) — watchers refresh their session lists.
+  //              ROUND-115 (R115-E2): a session created by a request that
+  //              authenticated with a DEVICE token (the phone minted it
+  //              through POST /sessions) carries source:"device" — the
+  //              desktop's events-stream dispatcher routes the user to the
+  //              new chat instead of only refreshing the list. Absent on
+  //              every shell/CLI/agent-created session (additive; old
+  //              clients ignore the unknown field).
   //   "meta"   — ROUND-114 (R114-b): a session-level PREFERENCE changed —
   //              the operating mode (permissionMode), the task posture
   //              (activeMode), and/or the selected model (selectedModel).
@@ -75,6 +82,10 @@ export type EventsBusFrame =
       kind: "event" | "status" | "created" | "meta";
       seq?: number;
       status?: string;
+      /** R115-E2: present ONLY on kind:"created" frames whose POST /sessions
+       *       rode a device token — "device" (the phone's hand). Absent on
+       *       every other creation (shell, CLI, delegation children, forks). */
+      source?: "device";
       /** R114-b: the session's NEW operating mode ("full"|"ask"|"plan"),
        *       present only on a permissionMode change. */
       permissionMode?: string;
@@ -129,12 +140,14 @@ class EventsBus {
     }
   }
 
-  /** A session-scoped change (log append / status flip / creation). */
+  /** A session-scoped change (log append / status flip / creation).
+   * R115-E2: details.source rides ONLY device-token creations (see the
+   * frame type above) — absent keys stay absent on the wire. */
   publishSessionFrame(
     sessionId: string,
     projectId: string | null,
     kind: "event" | "status" | "created",
-    details: { seq?: number; status?: string } = {},
+    details: { seq?: number; status?: string; source?: "device" } = {},
   ): void {
     this.publish({
       type: "session",
@@ -143,6 +156,7 @@ class EventsBus {
       kind,
       ...(details.seq !== undefined ? { seq: details.seq } : {}),
       ...(details.status !== undefined ? { status: details.status } : {}),
+      ...(details.source !== undefined ? { source: details.source } : {}),
     });
   }
 

@@ -381,7 +381,13 @@ export function readFileWindow(root: string, relative: string, options?: ReadFil
   }
 }
 
-/** write_file — create or overwrite (parent folders auto-created). */
+/** write_file — create or overwrite (parent folders auto-created).
+ * ROUND-115 convention (docs/design-language/android/README.md, the pinned
+ * table): the project's exchange folders are <root>/attachments/ (UPLOADS —
+ * the chat upload route creates it, routes/attachments.ts) and
+ * <root>/downloads/ (DOWNLOADS — created on demand by the desktop browser's
+ * download path; until that path lands, THIS recursive mkdir is the only
+ * code that mints it, e.g. an agent saving a fetched file to downloads/x). */
 export function writeFile(root: string, relative: string, content: string): ToolResult {
   const resolved = resolveInsideRoot(root, relative);
   if ("error" in resolved) return { ok: false, output: resolved.error };

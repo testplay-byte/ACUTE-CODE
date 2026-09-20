@@ -169,6 +169,9 @@ import {
   startCloudConnector,
   stopCloudConnector,
 } from "./lib/cloud-connector.js";
+// R115-E2: the minted word-pair machine name — the cloud connector's hello
+// label (the pairing surfaces in routes/mobile.ts read it through ctx).
+import { getMachineLabel } from "./lib/machine-label.js";
 // R106-S1: the app version (ROUND-63's readAppVersion) moved to
 // lib/version.ts so routes/mobile.ts can share it without an import cycle;
 // re-exported here — every existing `import { VERSION } from "../server"`
@@ -2352,10 +2355,22 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
               : "incomplete config (relayUrl/hostKey missing)",
         });
       } else {
+        // R115-E2: the hello frame's label = the minted word-pair machine
+        // name (machine-label.json beside vapid.json) — the relay registry
+        // shows the friendly name, never a bare hostname. Best-effort: a
+        // failed label read falls back to the connector's own hostname()
+        // default (the never-fatal posture of this whole block).
+        let label: string | undefined;
+        try {
+          label = await getMachineLabel(dirname(options.dbPath));
+        } catch {
+          label = undefined;
+        }
         startCloudConnector({
           relayUrl,
           hostKey: cloudSettings.hostKey,
           machineId: identity.machineId,
+          ...(label !== undefined ? { label } : {}),
           tlsPort: () => deviceLinkControllerFor(app)?.status().port ?? null,
         });
         log("info", "boot.cloud_connector", {

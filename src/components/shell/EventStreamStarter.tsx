@@ -1,9 +1,14 @@
 import { useEffect, useRef } from "react";
+import { useNavigate } from "react-router";
 import { useConfigStore } from "../../lib/config-store";
 import { getQueryClient } from "../../lib/query-client";
 // R113-b: the events stream client — the pure dispatcher + the fetch-SSE
 // transport this starter owns the lifetime of.
 import { handleEventsFrame, openEventsStream } from "../../lib/events-stream";
+// R115-E2: the device-created session's navigation inbox (lib/session-
+// nav-store.ts) — the dispatcher deposits the URL; this component, mounted
+// inside the Router tree exactly like the Toaster, performs the navigate().
+import { useSessionNavStore } from "../../lib/session-nav-store";
 
 /**
  * ROUND-113 (R113-b): boots the EVENTS stream once on app mount — the
@@ -24,6 +29,14 @@ import { handleEventsFrame, openEventsStream } from "../../lib/events-stream";
  * exactly the NotificationStreamStarter contract: the starter never tries
  * to hit a non-existent sidecar, so the demo runs clean.
  *
+ * ROUND-115 (R115-E2): the starter ALSO consumes the session-nav store —
+ * handleEventsFrame deposits `/project/{id}/chat?session={sid}` there when
+ * a device-sourced "created" frame lands while the desktop is idle, and
+ * the navigate() happens HERE (the Toaster's openSession mechanism: a
+ * once-mounted component inside the Router owns the side-effect). Each
+ * requestNav bump is exactly one navigation; a remount never replays old
+ * intents (the subscription only fires on new writes).
+ *
  * Mounted ONCE in AppShell.tsx next to <NotificationStreamStarter />.
  * Returns null — this component renders nothing; it exists purely to own
  * the SSE lifecycle side-effects.
@@ -32,6 +45,17 @@ export function EventStreamStarter() {
   const demoData = useConfigStore((s) => s.demoData);
   const baseUrl = useConfigStore((s) => s.baseUrl);
   const token = useConfigStore((s) => s.token);
+  const navigate = useNavigate();
+  // R115-E2: the navigation leg — the events dispatcher's intents, executed
+  // with the Router this component already lives inside (the Toaster's
+  // openSession pattern; no router access leaks into lib/).
+  useEffect(() => {
+    return useSessionNavStore.subscribe((state) => {
+      if (state.lastNav === null) return;
+      navigate(state.lastNav.url);
+    });
+  }, [navigate]);
+
   // Ref-guard: collapse duplicate subscriptions across React strict-mode
   // double-mounts (the NotificationStreamStarter pattern).
   const startedRef = useRef(false);

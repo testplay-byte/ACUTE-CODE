@@ -338,6 +338,11 @@ export function registerAttachmentRoutes(scope: FastifyInstance, ctx: RouteConte
 
       // Persist INSIDE the project (fs-ops writeFile style: sync fs,
       // mkdir with parents, try/catch, honest envelope).
+      // ROUND-115 folder convention (the pinned round-115 table):
+      //   uploads   = <root>/attachments/  (THIS route — the one creator);
+      //   downloads = <root>/downloads/    (created on demand by the desktop
+      //               browser's download path when it lands; see the twin
+      //               note on tools/fs-ops.ts writeFile's mkdir).
       try {
         const attachmentsDir = join(project.rootPath, "attachments");
         mkdirSync(attachmentsDir, { recursive: true });

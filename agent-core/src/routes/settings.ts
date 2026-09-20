@@ -75,6 +75,9 @@ import {
   reconfigureCloudConnector,
   stopCloudConnector,
 } from "../lib/cloud-connector.js";
+// R115-E2: the minted word-pair machine name — the hello frame's label
+// (the same name the pairing payload carries; lib/machine-label.ts).
+import { getMachineLabel } from "../lib/machine-label.js";
 
 /**
  * ROUND-82 (R82, §2.4.5): shape check for the orchestration PATCH's
@@ -669,10 +672,16 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
       await stopCloudConnector();
     } else if (identity !== null) {
       try {
+        // R115-E2: the hello frame's label = the minted word-pair machine
+        // name (machine-label.json beside vapid.json) — same name the
+        // pairing payload carries. Best-effort: a failed read falls back to
+        // the connector's own hostname() default.
+        const label = ctx.dataDir !== undefined ? await getMachineLabel(ctx.dataDir) : undefined;
         await reconfigureCloudConnector({
           relayUrl,
           hostKey,
           machineId: identity.machineId,
+          ...(label !== undefined ? { label } : {}),
           tlsPort: () => ctx.mobileLink?.status().port ?? null,
         });
       } catch {

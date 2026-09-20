@@ -677,3 +677,149 @@ describe("DevicesTab §c: the linked-devices list", () => {
     });
   });
 });
+
+// ── §b ROUND-115 (R115-E1): the pairing dialog's round-115 upgrades — the
+//    word-pair machine name line, the copy-pairing-text button (+ its
+//    clipboard-missing fallback), the fullscreen QR magnifier, and the
+//    manual fallback's per-block copy affordances. ──────────────────────────
+
+describe("DevicesTab §b R115: the pairing dialog upgrades (ROUND-115 R115-E1)", () => {
+  /** The happy-dom clipboard swap (the ChatMarkdown.test.tsx pattern —
+   * happy-dom exposes navigator.clipboard as getter-only). */
+  function stubClipboard(write: ReturnType<typeof vi.fn>): void {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: write },
+      configurable: true,
+    });
+  }
+
+  /** Open the pairing dialog with the given payload; resolves when the PIN
+   * row is live (the dialog's "ready" signal every test below shares). */
+  async function openDialog(payload: MobilePairingPayload): Promise<void> {
+    enableLinks();
+    vi.mocked(startMobilePairing).mockResolvedValue(payload);
+    renderWithProviders(<DevicesTab />);
+    await screen.findByTestId("link-status");
+    fireEvent.click(screen.getByTestId("pair-start-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("pair-pin").textContent).toBe(payload.pin);
+    });
+  }
+
+  it("the payload's machineLabel renders as the quiet 'This desktop is …' line — absent gracefully on old payloads", async () => {
+    await openDialog({ ...pairingPayload(Date.now() + 120_000), machineLabel: "Confused Coconut" });
+    expect(screen.getByTestId("pair-machine-label").textContent).toBe(
+      "This desktop is Confused Coconut",
+    );
+
+    // A pre-R115 payload (no machineLabel) — the line simply does not render.
+    cleanup();
+    await openDialog(pairingPayload(Date.now() + 120_000));
+    expect(screen.queryByTestId("pair-machine-label")).toBeNull();
+  });
+
+  it("'Copy pairing text' copies `firstAddr:port · PIN pin` and flips to the Copied state", async () => {
+    const write = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(write);
+    await openDialog(pairingPayload(Date.now() + 120_000));
+
+    const button = screen.getByTestId("pair-copy-text");
+    expect(button.textContent).toContain("Copy pairing text");
+    fireEvent.click(button);
+    expect(write).toHaveBeenCalledWith("192.168.1.42:45999 · PIN 49301182");
+    await waitFor(() => {
+      expect(screen.getByTestId("pair-copy-text").textContent).toContain("Copied");
+    });
+    // No fallback note — the clipboard worked.
+    expect(screen.queryByTestId("pair-copy-note")).toBeNull();
+  });
+
+  it("a MISSING clipboard falls back to the legacy select-text leg: the manual section opens + the quiet note", async () => {
+    // navigator.clipboard undefined — the writeText path is unavailable.
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    await openDialog(pairingPayload(Date.now() + 120_000));
+
+    expect(screen.queryByTestId("pair-manual")).toBeNull();
+    fireEvent.click(screen.getByTestId("pair-copy-text"));
+    expect(screen.getByTestId("pair-manual")).toBeTruthy();
+    expect(screen.getByTestId("pair-copy-note").textContent).toContain(
+      "Clipboard unavailable — select the details below instead.",
+    );
+  });
+
+  it("clicking the QR opens the fullscreen magnifier; Esc and the X close it (the dialog stays open)", async () => {
+    await openDialog(pairingPayload(Date.now() + 120_000));
+
+    // Closed by default.
+    expect(screen.queryByTestId("pair-qr-fullscreen")).toBeNull();
+    // Click the tile → the magnifier: same payload, the scan hint, the X.
+    fireEvent.click(screen.getByTestId("pair-qr"));
+    const fullscreen = screen.getByTestId("pair-qr-fullscreen");
+    expect(fullscreen).toBeTruthy();
+    expect(screen.getByTestId("pair-qr-fullscreen-hint").textContent).toBe(
+      "Scan with ACUTE on your phone",
+    );
+    await waitFor(() => {
+      expect(fullscreen.querySelector("svg")).toBeTruthy();
+    });
+
+    // Esc closes the magnifier — AND the pairing dialog itself stays open
+    // (the overlay swallows the key before the Radix layer under it).
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("pair-qr-fullscreen")).toBeNull();
+    expect(screen.getByTestId("pair-pin").textContent).toBe("49301182");
+
+    // Re-open, then the X button closes it too.
+    fireEvent.click(screen.getByTestId("pair-qr"));
+    fireEvent.click(screen.getByTestId("pair-qr-fullscreen-close"));
+    expect(screen.queryByTestId("pair-qr-fullscreen")).toBeNull();
+    expect(screen.getByTestId("pair-pin").textContent).toBe("49301182");
+  });
+
+  it("the expired window's tile is NOT a magnifier (a dead code teaches nothing magnified)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-18T12:00:00Z"));
+    try {
+      enableLinks();
+      const payload = pairingPayload(Date.now() + 120_000);
+      vi.mocked(startMobilePairing).mockResolvedValue(payload);
+      vi.mocked(fetchMobileLinkInfo).mockResolvedValue(
+        linkInfoFactory({
+          enabled: true,
+          port: 45999,
+          addrs: ["192.168.1.42"],
+          certFP: CERT_FP,
+          machineId: MACHINE_ID,
+          activePairing: { pin: payload.pin, expiresAt: payload.expiresAt },
+        }),
+      );
+      renderWithProviders(<DevicesTab />);
+      await tick(0);
+      fireEvent.click(screen.getByTestId("pair-start-button"));
+      await tick(0);
+      await tick(120_000);
+
+      expect(screen.getByTestId("pair-expired")).toBeTruthy();
+      expect(screen.getByTestId("pair-qr").getAttribute("role")).toBeNull();
+      fireEvent.click(screen.getByTestId("pair-qr"));
+      expect(screen.queryByTestId("pair-qr-fullscreen")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the manual fallback's blocks carry copy affordances — first addr:port and the PIN", async () => {
+    const write = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(write);
+    await openDialog(pairingPayload(Date.now() + 120_000));
+
+    fireEvent.click(screen.getByTestId("pair-manual-toggle"));
+    // Address block: the FIRST LAN address + port (the QR ladder's pick).
+    fireEvent.click(screen.getByTestId("pair-manual-addrs-copy"));
+    expect(write).toHaveBeenCalledWith("192.168.1.42:45999");
+    // PIN block: the 8-digit PIN alone (the phone's paste flow splits them).
+    fireEvent.click(screen.getByTestId("pair-manual-pin-copy"));
+    expect(write).toHaveBeenCalledWith("49301182");
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+});

@@ -506,6 +506,19 @@ export const fontStack = {
   }),
 };
 
+// ── tile + chip geometry (R115: the wizard / connection option grammar) ────
+
+/** The welcome hero's logo tile — 76 (the top of the archetype's 72–76 range). */
+export const TILE_HERO = 76;
+/** The compact hero tile (the camera-ask screen) — the archetype's 72. */
+export const TILE_HERO_COMPACT = 72;
+/** The pair-option row's icon chip — 48 (pair-options.tsx). */
+export const TILE_OPTION = 48;
+/** The welcome feature row's identity chip — 40. */
+export const TILE_ROW = 40;
+/** The 48px option chip's corner radius — 16. */
+export const RADIUS_CHIP = 16;
+
 // ── touch + layout constants (DESIGN.md §5) ────────────────────────────────
 
 /** Every interactive element's minimum hit target. */

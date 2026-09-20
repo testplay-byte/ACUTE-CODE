@@ -33,3 +33,19 @@ export const ENTRANCE_DELTA = 8;
 
 /** The press scale — 0.98, the "quiet instrument" press state (no ripple). */
 export const PRESS_SCALE = 0.98;
+
+// ── the R115 animated moments (motion.md §4 — the round-115 mandates) ──────
+
+/** The hero tile's entrance scale start — motion.md §4.1: scale 0.9→1 on the
+ *  house spring (welcome's logo tile, the camera-ask tile). */
+export const ENTRANCE_SCALE_FROM = 0.9;
+
+/** The welcome hero icon's idle-float amplitude (px) — motion.md §4.1, the
+ *  ONE sanctioned continuous idle animation (the wizard's hero only). */
+export const IDLE_FLOAT_DELTA = 4;
+
+/** One leg of the idle float's ~2.4s period (ms): down 1200, back 1200. */
+export const IDLE_FLOAT_LEG_MS = 1200;
+
+/** The granted moment's icon crossfade (motion.md §4.2, ~200ms). */
+export const CROSSFADE_MS = 200;

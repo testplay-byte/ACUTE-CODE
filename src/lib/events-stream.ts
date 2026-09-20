@@ -42,7 +42,13 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useConfigStore } from "./config-store";
 import type { StreamTurnEvent } from "./api";
 import { useStreamStore } from "./stream-store";
+import { useActiveStreams } from "./active-streams";
 import { applyServerAppearance } from "./theme-store";
+// R115-E2: the device-created session's navigation bridge (the store the
+// AppShell-mounted EventStreamStarter consumes with useNavigate) + the
+// local-toast surface for the busy guard (the update-checker precedent).
+import { useSessionNavStore } from "./session-nav-store";
+import { pushLocalToast } from "../hooks/use-notifications";
 
 // ── The wire shapes (mirrored from agent-core/src/lib/events-bus.ts) ─────────
 
@@ -58,6 +64,11 @@ export type EventsStreamFrame =
       kind: "event" | "status" | "created" | "meta";
       seq?: number;
       status?: string;
+      /** R115-E2 (agent-core events-bus.ts): present ONLY on kind:"created"
+       * frames whose POST /sessions rode a device token — "device" (the
+       * phone minted the session). Absent on every shell/CLI/agent creation
+       * (strictly additive — the pre-R115 wire keeps its exact shape). */
+      source?: "device";
       /** ROUND-114 (R114-e, the R114-b wire): meta frames only — the
        * session's NEW operating mode, present only on a permissionMode
        * change. */
@@ -246,6 +257,11 @@ const SETTINGS_DOMAIN_QUERY_KEYS: Record<string, readonly (readonly unknown[])[]
  *              converge without a per-token refetch storm); kind:"created"
  *              additionally refreshes the projects list (a new session may
  *              belong to a project the client doesn't know yet).
+ *              ROUND-115 (R115-E2): kind:"created" + source:"device" (the
+ *              phone minted the session) ALSO routes the desktop to the
+ *              new chat — via the session-nav store when idle, or a linked
+ *              local toast ("New session from your phone", the Toaster's
+ *              actionable R99-C idiom) when a turn is streaming here.
  *              ROUND-114 (R114-e): kind:"meta" skips the debounce ENTIRELY —
  *              a preference patch (permissionMode / activeMode /
  *              selectedModel) is ONE tiny row write, never a per-token
@@ -293,6 +309,23 @@ export function handleEventsFrame(qc: QueryClient, frame: EventsStreamFrame): vo
         // A new session row (POST /sessions, a delegation child, a fork) —
         // its project may itself be new to this client.
         void qc.invalidateQueries({ queryKey: ["projects"] });
+        // R115-E2 (E2b): THE PHONE'S HAND — a created frame sourced from a
+        // device token. After the invalidations, route the desktop to the
+        // new chat (the Toaster openSession URL shape, verbatim). GUARD:
+        // only when NO turn is streaming here (useActiveStreams — own
+        // stream or remote mirror, either way the screen is busy); a busy
+        // desktop gets the linked local toast instead (click = the Open
+        // action; the toast stays until dismissed — the R99-C idiom).
+        // projectId null = nowhere to route (the chat route is
+        // project-scoped) — the invalidations above are the whole story.
+        if (frame.source === "device" && frame.projectId !== null) {
+          const url = `/project/${encodeURIComponent(frame.projectId)}/chat?session=${encodeURIComponent(frame.sessionId)}`;
+          if (useActiveStreams.getState().active.size > 0) {
+            pushLocalToast("New session from your phone", "Tap to open it.", "task_complete", url);
+          } else {
+            useSessionNavStore.getState().requestNav(url);
+          }
+        }
       }
       return;
     }

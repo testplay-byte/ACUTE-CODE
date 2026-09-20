@@ -7,8 +7,10 @@
  *                   shadow, matte 1px top-edge highlight (form, not glow)
  *   PressableCard — the press state: tint + 0.98 scale + shadow collapse,
  *                   one spring, NO ripple (android_ripple stays off forever)
+ *   FadeInUp      — the fade-in-up entrance for non-card blocks (R115 §2)
  *   ChromeButton  — the primary CTA: accent fill + the quiet vertical sheen
- *                   (one of the three sanctioned chrome surfaces, §2)
+ *                   (one of the three sanctioned chrome surfaces, §2);
+ *                   flat = the R115 wizard CTA (sheen-less, clay shadow)
  *   QuietButton   — the secondary action: outlined, flat, honest
  *   ChromeEdge    — the 1px gradient border wrapper (the floating bar's
  *                   edge + selected markers — the other sanctioned chrome)
@@ -42,6 +44,7 @@ import {
 } from "react-native";
 import Animated, {
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withDelay,
   withRepeat,
@@ -211,6 +214,52 @@ export function PressableCard({
   );
 }
 
+// ── FadeInUp — the entrance grammar for non-card blocks (R115) ─────────
+
+export interface FadeInUpProps {
+  children?: React.ReactNode;
+  /** The stagger index — the entrance waits 30ms × index (motion.md §2);
+   * the screen's hero enters at 0, everything after staggers on that beat. */
+  index?: number;
+  /** Hold the entrance (opacity 0) until this flips true — the granted
+   * sequence's "then" gate (the Continue CTA waits for Skip's exit).
+   * Default true: enter on mount. */
+  active?: boolean;
+  style?: StyleProp<ViewStyle>;
+  testID?: string;
+}
+
+/**
+ * The fade-in-up entrance (motion.md §2) for hero text and CTAs — the same
+ * recipe PressableCard's `enterIndex` plays, extracted for non-card blocks
+ * (wizard titles, taglines, footer buttons). Reduced motion snaps it
+ * (motion.md §5: entrance/stagger animations drop).
+ */
+export function FadeInUp({ children, index = 0, active = true, style, testID }: FadeInUpProps) {
+  const entered = useSharedValue(0);
+  const reduced = useReducedMotion();
+
+  useEffect(() => {
+    if (!active) return; // held — the caller flips `active` to release it
+    if (reduced) {
+      entered.value = 1;
+      return;
+    }
+    entered.value = withDelay(staggerDelay(index), withSpring(1, SPRING));
+  }, [active, index, reduced, entered]);
+
+  const animated = useAnimatedStyle(() => ({
+    opacity: entered.value,
+    transform: [{ translateY: (1 - entered.value) * ENTRANCE_DELTA }],
+  }));
+
+  return (
+    <Animated.View testID={testID} style={[animated, style]}>
+      {children}
+    </Animated.View>
+  );
+}
+
 // ── ChromeButton — the primary CTA (sanctioned chrome surface #2) ───────────
 
 export interface ChromeButtonProps {
@@ -219,6 +268,11 @@ export interface ChromeButtonProps {
   disabled?: boolean;
   /** The quiet vertical sheen (default true — the §2.2 jewelry). */
   sheen?: boolean;
+  /** R115: the flat wizard CTA — solid accent, NO sheen gradient, the clay
+   *  elevation-2 shadow (the round-115 "no glow/sheen on CTAs" verdict,
+   *  components.md's Primary idiom). Additive + optional: every other
+   *  caller renders exactly as before. */
+  flat?: boolean;
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
   /** Show the busy spinner instead of the label. */
@@ -230,13 +284,15 @@ export interface ChromeButtonProps {
 /**
  * The primary action — accent fill, radius 14, 50px tall, and the ONE quiet
  * glint: a white α→0 gradient across the top half (a "one quiet glint,"
- * never a mirror). Pressed = scale 0.98 + tint.
+ * never a mirror). Pressed = scale 0.98 + tint. `flat` (R115) drops the
+ * glint and adds the clay elevation-2 shadow — the wizard CTA idiom.
  */
 export function ChromeButton({
   children,
   onPress,
   disabled = false,
   sheen = true,
+  flat = false,
   style,
   textStyle,
   busy = false,
@@ -280,6 +336,9 @@ export function ChromeButton({
           flexDirection: "row",
           gap: spacing.sm,
           opacity: disabled ? 0.7 : 1,
+          // The flat wizard CTA carries the clay elevation-2 shadow; pressed
+          // collapses it to the tight leg (the house press grammar).
+          ...(flat ? { boxShadow: p ? tokens.clayShadowPressed : tokens.clayShadow2 } : null),
         },
         style,
       ]}
@@ -289,7 +348,7 @@ export function ChromeButton({
           <ActivityIndicator color={fg} />
         ) : (
           <>
-            {sheen && !disabled ? (
+            {sheen && !flat && !disabled ? (
               <View
                 pointerEvents="none"
                 style={{

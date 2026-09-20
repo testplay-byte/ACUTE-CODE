@@ -1815,6 +1815,13 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
           .send(rewritten);
       }
       // Binary/media passthrough (Range results keep their 206 + headers).
+      // ROUND-115 note (the pinned round-115 table): there is NO file
+      // download path in this proxy today — bytes stream to the panel's
+      // iframe in memory and nothing is written to disk. When a "save this
+      // download" affordance lands, its save location is pinned:
+      // <projectRoot>/downloads/, created on demand (mkdirSync recursive —
+      // the tools/fs-ops.ts writeFile pattern), the twin of uploads =
+      // <root>/attachments/ (routes/attachments.ts).
       reply.code(response.status).header("cache-control", "no-store").type(contentType);
       const contentRange = response.headers.get("content-range");
       if (contentRange !== null) reply.header("content-range", contentRange);
