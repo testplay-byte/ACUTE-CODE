@@ -26,10 +26,14 @@ export interface MarkdownTextProps {
   color?: string;
   /** Dense mode (tool output tails etc.) — smaller body. */
   dense?: boolean;
+  /** R114-d — the chatTextSize pref's body-text scale (0.92/1.0/1.08). Scales
+   * the PARAGRAPH body + line height only; code blocks/mono stay unscaled
+   * (the calibration marks — features/chat-prefs.ts). */
+  textScale?: number;
   testID?: string;
 }
 
-export function MarkdownText({ content, color, dense = false, testID }: MarkdownTextProps) {
+export function MarkdownText({ content, color, dense = false, textScale = 1, testID }: MarkdownTextProps) {
   const { tokens } = useTheme();
   const blocks = useMemo(() => parseMarkdown(content), [content]);
   const ink = color ?? tokens.text;
@@ -37,7 +41,7 @@ export function MarkdownText({ content, color, dense = false, testID }: Markdown
   return (
     <View testID={testID} style={styles.root} pointerEvents="box-none">
       {blocks.map((block, i) => (
-        <BlockView key={i} block={block} ink={ink} dense={dense} />
+        <BlockView key={i} block={block} ink={ink} dense={dense} textScale={textScale} />
       ))}
     </View>
   );
@@ -45,11 +49,21 @@ export function MarkdownText({ content, color, dense = false, testID }: Markdown
 
 // ── the block renderer ──────────────────────────────────────────────────────
 
-function BlockView({ block, ink, dense }: { block: Block; ink: string; dense: boolean }) {
+function BlockView({
+  block,
+  ink,
+  dense,
+  textScale,
+}: {
+  block: Block;
+  ink: string;
+  dense: boolean;
+  textScale: number;
+}) {
   const { tokens } = useTheme();
   switch (block.t) {
     case "paragraph":
-      return <InlineText inlines={block.inlines} ink={ink} dense={dense} />;
+      return <InlineText inlines={block.inlines} ink={ink} dense={dense} textScale={textScale} />;
     case "heading": {
       const size = block.level === 1 ? 21 : block.level === 2 ? 18 : block.level === 3 ? 16 : dense ? 14 : 15;
       return (
@@ -75,7 +89,7 @@ function BlockView({ block, ink, dense }: { block: Block; ink: string; dense: bo
     case "quote":
       return (
         <View style={[styles.quote, { borderLeftColor: tokens.accent2 }]}>
-          <InlineText inlines={block.inlines} ink={tokens.textSecondary} dense={dense} />
+          <InlineText inlines={block.inlines} ink={tokens.textSecondary} dense={dense} textScale={textScale} />
         </View>
       );
     case "hr":
@@ -84,7 +98,7 @@ function BlockView({ block, ink, dense }: { block: Block; ink: string; dense: bo
       return (
         <View style={styles.list}>
           {block.items.map((item, i) => (
-            <ListRow key={i} item={item} ordered={block.ordered} index={i + 1} ink={ink} dense={dense} />
+            <ListRow key={i} item={item} ordered={block.ordered} index={i + 1} ink={ink} dense={dense} textScale={textScale} />
           ))}
         </View>
       );
@@ -118,16 +132,18 @@ function ListRow({
   index,
   ink,
   dense,
+  textScale,
 }: {
   item: ListItem;
   ordered: boolean;
   index: number;
   ink: string;
   dense: boolean;
+  textScale: number;
 }) {
   return (
     <View style={styles.listRow}>
-      <InlineText inlines={item.inlines} ink={ink} dense={dense} marker={ordered ? `${index}.  ` : "•  "} />
+      <InlineText inlines={item.inlines} ink={ink} dense={dense} textScale={textScale} marker={ordered ? `${index}.  ` : "•  "} />
       {item.sub !== null ? (
         <View style={styles.listSub}>
           <InlineText inlines={item.sub} ink={ink} dense marker="–  " />
@@ -143,17 +159,24 @@ function InlineText({
   inlines,
   ink,
   dense,
+  textScale,
   headingSize,
   marker,
 }: {
   inlines: Inline[];
   ink: string;
   dense?: boolean;
+  textScale?: number;
   headingSize?: number;
   marker?: string;
 }) {
-  const size = headingSize ?? (dense ? 13 : 15);
-  const lineHeight = headingSize !== undefined ? Math.round(size * 1.38) : dense ? 18.5 : 22;
+  // R114-d — the chatTextSize scale rides the PARAGRAPH body (and the dense
+  // variant); headings keep their own ladder, and the mono/code tokens the
+  // renderer owns stay UNSCALED (the calibration marks).
+  const scale = textScale ?? 1;
+  const size = headingSize ?? Math.round((dense ? 13 : 15) * scale);
+  const lineHeight =
+    headingSize !== undefined ? Math.round(size * 1.38) : Math.round((dense ? 18.5 : 22) * scale);
   return (
     <Text
       style={{

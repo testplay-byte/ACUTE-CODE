@@ -38,19 +38,31 @@
  *     under the streamed tail) instead of freezing the overlay.
  *
  * The phone renders + taps. NOTHING is processed here (§4's ceiling).
+ *
+ * ROUND-114 (R114-d — the honest transcript): turn.started opens the remote
+ * mirror INSTANTLY (the user bubble renders off the frame's own text + the
+ * resolved model labels the header, the placeholder, and the live assistant
+ * cards); meta frames (mode / task posture / selectedModel) apply to the
+ * detail row IN PLACE — instant label flips, the debounced rehydrate as the
+ * truth backstop; the composer's model pick PATCHes the session's
+ * server-side selected model (the cross-device truth); the thinking
+ * placeholder + the chat prefs (density / text size / timestamps / tool
+ * activity) shape the transcript; the keyboard leg guarantees adjustResize
+ * + one animated inset pipeline (useReanimatedKeyboardAnimation).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, FlatList, RefreshControl, StyleSheet, View } from "react-native";
-import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { KeyboardAvoidingView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { Composer, type ComposerMode } from "@/components/composer";
 import { TranscriptItemView } from "@/components/transcript";
 import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
 import { Badge, TypeCaption } from "@/design/primitives";
-import { useTheme } from "@/design/theme";
+import { useChatPrefs, useTheme } from "@/design/theme";
 import { spacing } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { getLinkManager } from "@/link/runtime";
@@ -58,6 +70,7 @@ import type { SseStream } from "@/link/connection";
 import {
   abandonLiveTurn,
   applyLiveFrame,
+  applySessionMetaPatch,
   beginLiveTurn,
   foldSessionEvents,
   fetchSessionDetail,
@@ -65,6 +78,7 @@ import {
   parseStreamFrame,
   patchSessionActiveMode,
   patchSessionPermissions,
+  patchSessionSelectedModel,
   postQueue,
   postResolveQuestion,
   postStop,
@@ -73,6 +87,8 @@ import {
   sessionStatusFromWire,
   sessionStatusLabel,
   sessionTitle,
+  shortModelId,
+  thinkingPlaceholderVisible,
   type AttachmentView,
   type LiveTurn,
   type SessionDetailWire,
@@ -80,6 +96,7 @@ import {
   type SendOverrides,
   type TranscriptItem,
 } from "@/features/sessions";
+import { foldToolActivity } from "@/features/chat-prefs";
 import { getEventsStore, turnFrameRecord, type EventsFrame } from "@/features/events";
 import { getOutbox, outboxForSession, type OutboxEntry } from "@/features/outbox";
 import { mobLog, mobWarn } from "@/lib/log";
@@ -266,9 +283,12 @@ export default function SessionScreen() {
         mobLog("events", "remote mirror opened", { sessionId });
         remoteRef.current = true;
         remoteBaseCountRef.current = baseItemsRef.current.length;
-        // The user card that STARTED this turn is already persisted — pull
-        // the truth in (the rebase folds it under the mirror).
-        void rehydrate();
+        // R114-d: turn.started's own text renders the user bubble NOW — no
+        // immediate refetch needed for it. The truth still lands promptly:
+        // the message.user append fires a session {kind:"event"} frame the
+        // 800ms debounced rehydrate below picks up, the calm 3s poll watches
+        // the rest, and rebaseRemoteTurn drops the mirrored card when the
+        // persisted row arrives (no doubling).
       }
       setLiveState(result.turn);
       if (result.terminal) {
@@ -312,6 +332,24 @@ export default function SessionScreen() {
               prev !== null && prev.status !== nextStatus ? { ...prev, status: nextStatus } : prev,
             );
           }
+        }
+        if (frame.kind === "meta") {
+          // R114-d — a PREFERENCE flip (mode / task posture / selected model)
+          // applies IN PLACE, instant, no debounce: the frame IS the new
+          // truth (the composer pill, the mode chips, the header subtitle
+          // all read the detail row). The debounced rehydrate below stays
+          // the truth-backstop, exactly like every other session frame.
+          setDetail((prev) =>
+            prev !== null
+              ? applySessionMetaPatch(prev, {
+                  ...(frame.permissionMode !== undefined
+                    ? { permissionMode: frame.permissionMode }
+                    : {}),
+                  ...(frame.activeMode !== undefined ? { activeMode: frame.activeMode } : {}),
+                  ...(frame.selectedModel !== undefined ? { selectedModel: frame.selectedModel } : {}),
+                })
+              : prev,
+          );
         }
         scheduleRehydrate();
         return;
@@ -533,31 +571,83 @@ export default function SessionScreen() {
     [sessionId],
   );
 
+  /** PATCH /sessions/:id {model} — R114-d: the composer's model pick is ALSO
+   * the session's server-side selected model (the cross-device truth — the
+   * desktop + every other phone see the flip through the meta frame; the
+   * response is the fresh row). A failure surfaces honestly; the LOCAL
+   * per-send override the composer saved still rides the next send either
+   * way. */
+  const onModelChange = useCallback(
+    (model: { providerId: string; model: string } | null) => {
+      void patchSessionSelectedModel(getLinkManager(), sessionId, model)
+        .then((outcome) => {
+          if (outcome.ok) {
+            setDetail((prev) => (prev === null ? prev : { ...prev, ...outcome.data }));
+          } else {
+            setError(`couldn't set the model: ${outcome.error.message}`);
+          }
+        })
+        .catch(() => {
+          setError("couldn't set the model — the host is offline");
+        });
+    },
+    [sessionId],
+  );
+
   // ── render ─────────────────────────────────────────────────────────────────
 
+  // R114-d — the chat prefs drive the transcript's rendering here (the hook
+  // is reactive: a flip in Settings → Appearance re-renders this memo).
+  const prefs = useChatPrefs();
+
   const displayItems = useMemo<TranscriptItem[]>(() => {
-    if (live !== null) return live.items;
-    const pending: TranscriptItem[] = outboxEntries.map((entry) => ({
-      kind: "user",
-      key: entry.id,
-      content: entry.content,
-      queued: true,
-      attachments: entry.overrides?.attachments ?? null,
-    }));
-    return [...baseItems, ...pending];
-  }, [live, baseItems, outboxEntries]);
+    let items: TranscriptItem[];
+    if (live !== null) {
+      items = live.items;
+    } else {
+      const pending: TranscriptItem[] = outboxEntries.map((entry) => ({
+        kind: "user",
+        key: entry.id,
+        content: entry.content,
+        queued: true,
+        attachments: entry.overrides?.attachments ?? null,
+        ts: null,
+      }));
+      items = [...baseItems, ...pending];
+    }
+    // R114-d — the THINKING PLACEHOLDER: while the live turn streams with
+    // no assistant content yet, the animated card sits exactly where the
+    // assistant message will appear (the list's tail). The first real
+    // delta retires it (thinkingPlaceholderVisible flips false).
+    if (live !== null && thinkingPlaceholderVisible(live)) {
+      items = [...items, { kind: "thinking", key: "live-thinking", model: live.model }];
+    }
+    // R114-d — toolActivity=hidden folds consecutive tool runs into one
+    // quiet meta line per turn (chat-prefs.ts — the other prefs the item
+    // components read themselves through useChatPrefs).
+    return foldToolActivity(items, prefs.toolActivity);
+  }, [live, baseItems, outboxEntries, prefs.toolActivity]);
 
   const composerMode: ComposerMode =
     status !== "connected" ? "offline" : liveRunning || remoteRunning ? "running" : "compose";
 
-  // The composer's bottom inset: the SAFE AREA while the keyboard is closed,
-  // 0 while it's open (the keyboard already covers the gesture bar — a
-  // standing inset would hold the composer a dead strip above the keys).
-  // useKeyboardState is react-native-keyboard-controller's own JS-thread
-  // truth, so the swap never races the KAV's animated padding.
-  const keyboard = useKeyboardState();
+  // R114-d — the keyboard truth, ONE animated pipeline: the library's
+  // reanimated keyboard values (which also GUARANTEE Android's adjustResize
+  // soft-input mode for this screen's lifetime — useReanimatedKeyboardAnimation
+  // calls useResizeMode internally; nothing else in the app guaranteed it, the
+  // one gap that could leave the composer flat under the keys on
+  // edge-to-edge Android). The composer's bottom inset fades OUT as the
+  // keyboard rises past the gesture bar — max(insets.bottom + kb, 0), kb
+  // negative — on the SAME UI-thread clock the KeyboardAvoidingView's
+  // padding animates on: no JS-thread swap racing the lift, no dead strip,
+  // no bounce on close. `keyboard.height` is NEGATIVE while open (the
+  // library's convention), so closed → insets.bottom, open → 0.
+  const keyboard = useReanimatedKeyboardAnimation();
   const insets = useSafeAreaInsets();
-  const composerBottomInset = keyboard.isVisible ? 0 : insets.bottom;
+  const insetsBottom = insets.bottom;
+  const composerInsetStyle = useAnimatedStyle(() => ({
+    paddingBottom: Math.max(insetsBottom + keyboard.height.value, 0),
+  }));
 
   const data = useMemo(() => [...displayItems].reverse(), [displayItems]);
 
@@ -587,7 +677,20 @@ export default function SessionScreen() {
       title={detail !== null ? sessionTitle(detail) : "Session"}
       subtitle={
         detail !== null
-          ? `${detail.status === "running" ? "a turn is live" : sessionStatusLabel(detail.status)} · ${detail.mode}`
+          ? // R114-d — status · mode · model (the owner: "I don't see which
+            // model was being used in the chat itself" — the header names
+            // the effective pair: the session's selectedModel, else the live
+            // turn's resolved model, else nothing). Long ids shorten through
+            // shortModelId so the one-line subtitle never wraps.
+            [
+              detail.status === "running" ? "a turn is live" : sessionStatusLabel(detail.status),
+              detail.mode,
+              ...(detail.selectedModel !== null
+                ? [shortModelId(detail.selectedModel.model)]
+                : live !== null && live.model !== null
+                  ? [shortModelId(live.model)]
+                  : []),
+            ].join(" · ")
           : undefined
       }
       scroll={false}
@@ -608,7 +711,12 @@ export default function SessionScreen() {
           (the REAL Android fix: behavior padding works with edge-to-edge).
           The whole composer — control row, chips, input — rides INSIDE it,
           so the padding lifts every row clear of the keyboard while the
-          inverted FlatList scrolls above them. */}
+          inverted FlatList scrolls above them. R114-d: the composer's own
+          bottom inset animates on the SAME pipeline (composerInsetStyle) and
+          the hook guarantees adjustResize — the two gaps that could leave the
+          field or the control row under the keys. The list keeps
+          keyboardShouldPersistTaps="handled" so a control-pill tap while the
+          keys are up never dismiss-focus-then-refocus jarringly. */}
       <KeyboardAvoidingView behavior="padding" style={styles.body}>
         {loading ? (
           <View style={styles.centerWrap}>
@@ -660,8 +768,8 @@ export default function SessionScreen() {
             </TypeCaption>
           </View>
         )}
-        <View
-          style={[styles.composerWrap, { backgroundColor: tokens.bg, paddingBottom: composerBottomInset }]}
+        <Animated.View
+          style={[styles.composerWrap, { backgroundColor: tokens.bg }, composerInsetStyle]}
         >
           <Composer
             mode={composerMode}
@@ -670,15 +778,17 @@ export default function SessionScreen() {
             projectId={detail?.projectId ?? null}
             permissionMode={detail?.permissionMode ?? "ask"}
             activeMode={detail?.activeMode ?? null}
+            selectedModel={detail?.selectedModel ?? null}
             onPermissionModeChange={onPermissionModeChange}
             onActiveModeChange={onActiveModeChange}
+            onModelChange={onModelChange}
             onSend={onSend}
             onStop={onStop}
             onQueue={onQueue}
             onDismissOutbox={() => void onDismissOutbox()}
             streaming={liveRunning || remoteRunning}
           />
-        </View>
+        </Animated.View>
       </KeyboardAvoidingView>
     </ScreenScaffold>
   );

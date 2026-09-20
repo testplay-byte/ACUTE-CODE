@@ -13,7 +13,9 @@ import { describe, expect, it } from "@jest/globals";
 import type { ApiSender, SseSender } from "../api";
 import {
   abandonLiveTurn,
+  appendToolInputRaw,
   applyLiveFrame,
+  applySessionMetaPatch,
   beginLiveTurn,
   beginRemoteTurn,
   countProjectSessions,
@@ -28,6 +30,7 @@ import {
   parseStreamFrame,
   patchSessionActiveMode,
   patchSessionPermissions,
+  patchSessionSelectedModel,
   postQueue,
   postResolveQuestion,
   postStop,
@@ -39,6 +42,8 @@ import {
   sessionStatusLabel,
   sessionStatusTone,
   sessionTitle,
+  shortModelId,
+  thinkingPlaceholderVisible,
   type LiveTurn,
   type SessionEventWire,
   type SessionRow,
@@ -68,6 +73,9 @@ function makeSession(overrides: Partial<SessionRow> = {}): SessionRow {
     permissionMode: "ask",
     activeMode: null,
     taskId: null,
+    // R114-d: the session's server-side selected model (null = the agent
+    // default — every pre-R114 row reads as this).
+    selectedModel: null,
     ...overrides,
   };
 }
@@ -942,5 +950,290 @@ describe("sessions — the remote mirror", () => {
     // null-project rows are nobody's (the accordion renders project rows only)
     expect(Object.values(groups).flat()).toHaveLength(4);
     expect(groupProjectSessions([])).toEqual({});
+  });
+});
+
+
+// ── R114-d: turn.started — the instant live-turn open ───────────────────────
+
+describe("sessions — turn.started (R114-d)", () => {
+  it("the OWN stream: the frame sets the turn's resolved model; the optimistic card never doubles", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    expect(turn.model).toBeNull();
+    turn = applyLiveFrame(
+      turn,
+      { type: "turn.started", text: "go", model: "z-ai/glm-5.2:free", providerId: "openrouter" },
+      NOW + 1,
+    );
+    expect(turn.model).toBe("z-ai/glm-5.2:free");
+    // ONE user card — the optimistic one beginLiveTurn pushed (the frame
+    // recognized it and did not stack a second bubble).
+    const users = turn.items.filter((item) => item.kind === "user");
+    expect(users).toHaveLength(1);
+    expect(users[0]?.kind === "user" && users[0].content).toBe("go");
+  });
+
+  it("the OWN stream: assistant cards created AFTER the frame carry the model (the live mono line)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(
+      turn,
+      { type: "turn.started", text: "go", model: "glm-4.7", providerId: "z-ai" },
+      NOW + 1,
+    );
+    turn = applyLiveFrame(turn, { type: "text-delta", delta: "hi" }, NOW + 2);
+    const assistant = turn.items.find((item) => item.kind === "assistant");
+    expect(assistant?.kind === "assistant" && assistant.model).toBe("glm-4.7");
+    expect(assistant?.kind === "assistant" && assistant.live).toBe(true);
+  });
+
+  it("the REMOTE mirror: turn.started opens the overlay and renders the user bubble off the frame's own text", () => {
+    const base = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "earlier ask" }),
+    ]);
+    const result = reduceRemoteTurnFrame({
+      live: null,
+      remote: false,
+      ownStream: false,
+      baseItems: base,
+      frame: { type: "turn.started", text: "the PC's new ask", model: "glm-4.7", providerId: "z-ai" },
+      now: NOW,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.began).toBe(true);
+    expect(result?.turn.model).toBe("glm-4.7");
+    // The bubble is THERE — no waiting for the persisted-fold refetch.
+    const users = result?.turn.items.filter((item) => item.kind === "user");
+    expect(users).toHaveLength(2); // the base's earlier ask + the mirrored card
+    expect(users?.[1]?.kind === "user" && users[1].content).toBe("the PC's new ask");
+    // The placeholder math sees only the user card — the placeholder is due.
+    expect(thinkingPlaceholderVisible(result?.turn as LiveTurn)).toBe(true);
+  });
+
+  it("the mirror's turn.started card is DROPPED when the persisted row lands (rebaseRemoteTurn never doubles)", () => {
+    const base = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "earlier ask" }),
+    ]);
+    const opened = reduceRemoteTurnFrame({
+      live: null,
+      remote: false,
+      ownStream: false,
+      baseItems: base,
+      frame: { type: "turn.started", text: "the PC's ask", model: "glm-4.7", providerId: "z-ai" },
+      now: NOW,
+    });
+    const mirror = opened?.turn as LiveTurn;
+    // The rehydrate: the fresh base carries the PERSISTED user card that
+    // started the turn.
+    const grownBase = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "earlier ask" }),
+      event(2, "message.user", { role: "user", content: "the PC's ask" }),
+    ]);
+    const rebased = rebaseRemoteTurn(mirror, grownBase, base.length);
+    const users = rebased.items.filter((item) => item.kind === "user");
+    expect(users).toHaveLength(2); // persisted earlier ask + persisted THIS ask
+    expect(users[1]?.kind === "user" && users[1].key).toBe("e2"); // the persisted card owns the slot
+  });
+
+  it("a malformed turn.started never crashes and never pushes an empty bubble", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, { type: "turn.started" }, NOW + 1);
+    expect(turn.model).toBeNull();
+    expect(turn.items.filter((item) => item.kind === "user")).toHaveLength(1);
+  });
+});
+
+// ── R114-d: the thinking placeholder's verdict ──────────────────────────────
+
+describe("sessions — thinkingPlaceholderVisible (R114-d)", () => {
+  it("visible while the turn streams with only the user card at the tail", () => {
+    const own = beginLiveTurn([], "go", NOW);
+    expect(thinkingPlaceholderVisible(own)).toBe(true);
+    // The remote mirror needs its user card first (turn.started pushes it).
+    const mirror = applyLiveFrame(
+      beginRemoteTurn([]),
+      { type: "turn.started", text: "hi", model: "m", providerId: "p" },
+      NOW,
+    );
+    expect(thinkingPlaceholderVisible(mirror)).toBe(true);
+    // A mirror with NO user card anywhere (a pre-turn.started frame) — no
+    // anchor, no placeholder (never a guess).
+    expect(thinkingPlaceholderVisible(beginRemoteTurn([]))).toBe(false);
+  });
+
+  it("retired by the first real content (text, thinking, or tool work) and by every terminal state", () => {
+    const text = applyLiveFrame(beginLiveTurn([], "go", NOW), { type: "text-delta", delta: "x" }, NOW + 1);
+    expect(thinkingPlaceholderVisible(text)).toBe(false);
+    const think = applyLiveFrame(beginLiveTurn([], "go", NOW), { type: "thinking-delta", delta: "hmm" }, NOW + 1);
+    expect(thinkingPlaceholderVisible(think)).toBe(false);
+    const tooling = applyLiveFrame(
+      beginLiveTurn([], "go", NOW),
+      { type: "tool-input-start", toolCallId: "c1", toolName: "write_file" },
+      NOW + 1,
+    );
+    expect(thinkingPlaceholderVisible(tooling)).toBe(false);
+    const done = applyLiveFrame(beginLiveTurn([], "go", NOW), { type: "done" }, NOW + 1);
+    expect(thinkingPlaceholderVisible(done)).toBe(false);
+    expect(thinkingPlaceholderVisible(abandonLiveTurn(beginLiveTurn([], "go", NOW)))).toBe(false);
+  });
+
+  it("dim meta lines do NOT retire it (only real work does); a persisted tail card is not an anchor", () => {
+    const meta = applyLiveFrame(beginLiveTurn([], "go", NOW), { type: "meta.retry", attempt: 1, totalAttempts: 3, remainingMs: 10, errorClass: "rate_limit", message: "waiting" }, NOW + 1);
+    expect(thinkingPlaceholderVisible(meta)).toBe(true);
+    // The base ends with a PERSISTED user card (the previous turn's) and the
+    // mirror is fresh — no live-keyed anchor, no placeholder.
+    const base = foldSessionEvents([event(1, "message.user", { content: "old ask" })]);
+    expect(thinkingPlaceholderVisible(beginRemoteTurn(base))).toBe(false);
+  });
+});
+
+// ── R114-d: the live tool-input streaming (the write preview's feed) ────────
+
+describe("sessions — tool-input streaming (R114-d)", () => {
+  it("tool-input-start opens a RUNNING card keyed by toolCallId (idempotent on replays)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, { type: "tool-input-start", toolCallId: "call_1", toolName: "write_file" }, NOW + 1);
+    turn = applyLiveFrame(turn, { type: "tool-input-start", toolCallId: "call_1", toolName: "write_file" }, NOW + 2);
+    const tools = turn.items.filter((item) => item.kind === "tool");
+    expect(tools).toHaveLength(1); // ONE card, never a stack
+    expect(tools[0]?.kind === "tool" && tools[0].toolCallId).toBe("call_1");
+    expect(tools[0]?.kind === "tool" && tools[0].ok).toBeNull();
+    expect(tools[0]?.kind === "tool" && tools[0].inputRaw).toBe("");
+  });
+
+  it("tool-input-delta accumulates the partial-JSON raw on the matching card", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, { type: "tool-input-start", toolCallId: "call_1", toolName: "write_file" }, NOW + 1);
+    turn = applyLiveFrame(turn, { type: "tool-input-delta", toolCallId: "call_1", inputTextDelta: '{"path":"src/a.ts","con' }, NOW + 2);
+    turn = applyLiveFrame(turn, { type: "tool-input-delta", toolCallId: "call_1", inputTextDelta: 'tent":"hello' }, NOW + 3);
+    const tool = turn.items.find((item) => item.kind === "tool");
+    expect(tool?.kind === "tool" && tool.inputRaw).toBe('{"path":"src/a.ts","content":"hello');
+    // A delta for an id we never saw grows nothing (joined mid-call).
+    turn = applyLiveFrame(turn, { type: "tool-input-delta", toolCallId: "ghost", inputTextDelta: "junk" }, NOW + 4);
+    const after = turn.items.find((item) => item.kind === "tool");
+    expect(after?.kind === "tool" && after.inputRaw).toBe('{"path":"src/a.ts","content":"hello');
+  });
+
+  it("tool-call FINALIZES the streaming card (args land, raw stays); tool-result settles + spends the raw", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, { type: "tool-input-start", toolCallId: "call_1", toolName: "write_file" }, NOW + 1);
+    turn = applyLiveFrame(turn, { type: "tool-input-delta", toolCallId: "call_1", inputTextDelta: '{"path":"a.ts","content":"x"}' }, NOW + 2);
+    turn = applyLiveFrame(turn, { type: "tool-call", toolName: "write_file", argsSummary: "path: a.ts, content: 1 chars" }, NOW + 3);
+    let tools = turn.items.filter((item) => item.kind === "tool");
+    expect(tools).toHaveLength(1); // finalized IN PLACE — never a second card
+    expect(tools[0]?.kind === "tool" && tools[0].argsSummary).toBe("path: a.ts, content: 1 chars");
+    expect(tools[0]?.kind === "tool" && tools[0].inputRaw).not.toBeNull(); // preview rides until the result
+    turn = applyLiveFrame(
+      turn,
+      { type: "tool-result", toolName: "write_file", argsSummary: "path: a.ts, content: 1 chars", ok: true, outputSummary: "wrote a.ts — 1 char" },
+      NOW + 4,
+    );
+    tools = turn.items.filter((item) => item.kind === "tool");
+    expect(tools[0]?.kind === "tool" && tools[0].ok).toBe(true);
+    expect(tools[0]?.kind === "tool" && tools[0].outputSummary).toBe("wrote a.ts — 1 char");
+    expect(tools[0]?.kind === "tool" && tools[0].inputRaw).toBeNull(); // spent
+    expect(tools[0]?.kind === "tool" && tools[0].toolCallId).toBeNull();
+    expect(tools[0]?.kind === "tool" && tools[0].live).toBe(false);
+  });
+
+  it("a tool-call with NO streaming input opens its card the classic way (non-streaming providers)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, { type: "tool-call", toolName: "run_command", argsSummary: "command: pnpm test" }, NOW + 1);
+    const tool = turn.items.find((item) => item.kind === "tool");
+    expect(tool?.kind === "tool" && tool.toolCallId).toBeNull();
+    expect(tool?.kind === "tool" && tool.inputRaw).toBeNull();
+    expect(tool?.kind === "tool" && tool.argsSummary).toBe("command: pnpm test");
+  });
+
+  it("appendToolInputRaw keeps the HEAD past the cap (the path rides the head of write args)", () => {
+    expect(appendToolInputRaw(null, "abc")).toBe("abc");
+    expect(appendToolInputRaw("abc", "def")).toBe("abcdef");
+    const big = "x".repeat(256 * 1024);
+    expect(appendToolInputRaw(big, "more")).toBe(big); // saturated — frozen
+    const head = "x".repeat(256 * 1024 - 3);
+    expect(appendToolInputRaw(head, "abcdef")).toBe(`${head}abc`); // sliced at the cap
+  });
+});
+
+// ── R114-d: the screenshot frame's TRUE shape ───────────────────────────────
+
+describe("sessions — the screenshot frame (R114-d)", () => {
+  it("carries sessionId/frameId/tool/note; the caption payload is the note (never a ts)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(
+      turn,
+      { type: "screenshot", sessionId: "sess_1", frameId: "bs_9", tool: "browser_control", note: "browser panel" },
+      NOW + 1,
+    );
+    const image = turn.items.find((item) => item.kind === "image");
+    expect(image?.kind === "image" && image.frameId).toBe("bs_9");
+    expect(image?.kind === "image" && image.tool).toBe("browser_control");
+    expect(image?.kind === "image" && image.note).toBe("browser panel");
+    expect(image?.kind === "image" && image.key).toBe("img-bs_9");
+  });
+
+  it("a frame without a note still lands (the caption renders the tool alone); empty ids drop", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, { type: "screenshot", sessionId: "s", frameId: "cu_1", tool: "screenshot" }, NOW + 1);
+    turn = applyLiveFrame(turn, { type: "screenshot", sessionId: "s", frameId: "", tool: "zoom" }, NOW + 2);
+    const images = turn.items.filter((item) => item.kind === "image");
+    expect(images).toHaveLength(1);
+    expect(images[0]?.kind === "image" && images[0].note).toBe("");
+  });
+});
+
+// ── R114-d: the meta frame's in-place patch + the selected-model client ─────
+
+describe("sessions — the session meta patch (R114-d)", () => {
+  it("present keys overwrite; absent keys leave the row untouched", () => {
+    const row = makeSession({ selectedModel: { providerId: "openrouter", model: "z-ai/glm-5.2:free" } });
+    const flipped = applySessionMetaPatch(row, { permissionMode: "full" });
+    expect(flipped.permissionMode).toBe("full");
+    expect(flipped.selectedModel).toEqual({ providerId: "openrouter", model: "z-ai/glm-5.2:free" });
+    expect(flipped.activeMode).toBeNull();
+    const cleared = applySessionMetaPatch(flipped, { selectedModel: null });
+    expect(cleared.selectedModel).toBeNull();
+    expect(cleared.permissionMode).toBe("full"); // untouched by the model flip
+    const posture = applySessionMetaPatch(cleared, { activeMode: "deep-research" });
+    expect(posture.activeMode).toBe("deep-research");
+    // Nothing carried → the row IS the row (a stable identity, no churn).
+    expect(applySessionMetaPatch(row, {})).toEqual(row);
+  });
+
+  it("PATCHes the session's server-side selected model — pair, and null clears", async () => {
+    const { sender, calls } = makeApiSender(() => ({
+      status: 200,
+      bodyText: JSON.stringify(makeSession({ selectedModel: { providerId: "z-ai", model: "glm-4.7" } })),
+    }));
+    const set = await patchSessionSelectedModel(sender, "sess_1", { providerId: "z-ai", model: "glm-4.7" });
+    expect(set.ok && set.data.selectedModel).toEqual({ providerId: "z-ai", model: "glm-4.7" });
+    expect(calls[0]?.path).toBe("/api/v1/sessions/sess_1");
+    expect(calls[0]?.init.method).toBe("PATCH");
+    expect(JSON.parse(calls[0]?.init.bodyText ?? "")).toEqual({ model: { providerId: "z-ai", model: "glm-4.7" } });
+    const cleared = await patchSessionSelectedModel(sender, "sess_1", null);
+    expect(cleared.ok).toBe(true);
+    expect(JSON.parse(calls[1]?.init.bodyText ?? "")).toEqual({ model: null });
+  });
+
+  it("shortModelId trims the provider prefix + caps the tail", () => {
+    expect(shortModelId("z-ai/glm-4.7")).toBe("glm-4.7");
+    expect(shortModelId("glm-4.7")).toBe("glm-4.7");
+    expect(shortModelId("openrouter/deepseek/deepseek-chat-v3.1-long")).toBe("deepseek/deepseek-cha…");
+    expect(shortModelId("")).toBe("");
+  });
+});
+
+// ── R114-d: the folded rows carry their timestamps ──────────────────────────
+
+describe("sessions — message timestamps ride the fold (R114-d)", () => {
+  it("user and assistant items carry the event's ts (the timestampsMode gate renders, never invents)", () => {
+    const items = foldSessionEvents([
+      event(1, "message.user", { content: "hi" }),
+      event(2, "message.assistant", { content: "hello", model: "glm-4.7" }),
+    ]);
+    expect(items[0]?.kind === "user" && items[0].ts).toBe("2026-09-18T11:00:00Z");
+    expect(items[1]?.kind === "assistant" && items[1].ts).toBe("2026-09-18T11:00:00Z");
+    // Live cards: beginLiveTurn stamps the turn-time ISO.
+    const turn = beginLiveTurn([], "go", 5_000);
+    expect(turn.items[0]?.kind === "user" && turn.items[0].ts).toBe("1970-01-01T00:00:05.000Z");
   });
 });

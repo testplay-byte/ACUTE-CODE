@@ -19,8 +19,13 @@
  *   data: {"type":"hello"}                        — once, on every (re)connect;
  *                                                   semantics: "resync everything"
  *   data: {"type":"session","sessionId","projectId","kind":"event"|"status"|"created","seq?","status?"}
+ *   data: {"type":"session","sessionId","projectId","kind":"meta",          (R114-b)
+ *          "permissionMode"?|"activeMode"?|"selectedModel"?} — a session-level
+ *          PREFERENCE changed (operating mode / task posture / selected
+ *          model); only the field(s) this change touched ride the frame
  *   data: {"type":"turn","sessionId","frame":<the exact StreamTurnEvent the
- *          initiating socket received — published pre-serialization>}
+ *          initiating socket received — published pre-serialization; R114-b
+ *          added turn.started as the turn's FIRST frame>}
  *   data: {"type":"project","projectId","kind":"created"|"updated"}
  *   data: {"type":"settings","domain","value"}
  *   : ping                                       — comment heartbeat, 10s
@@ -72,6 +77,18 @@ export type EventsFrame =
       seq?: number;
       status?: string;
     }
+  | {
+      /** R114-b/R114-d: a session-level PREFERENCE changed (operating mode /
+       * task posture / selected model). Only the field(s) the change touched
+       * ride — absent keys stay absent (never undefined on the wire). */
+      type: "session";
+      sessionId: string;
+      projectId: string | null;
+      kind: "meta";
+      permissionMode?: string;
+      activeMode?: string | null;
+      selectedModel?: { providerId: string; model: string } | null;
+    }
   | { type: "turn"; sessionId: string; frame: unknown }
   | { type: "project"; projectId: string; kind: "created" | "updated" }
   | { type: "settings"; domain: string; value: unknown };
@@ -93,11 +110,48 @@ export function parseEventsFrame(raw: string): EventsFrame | null {
       return { type: "hello" };
     case "session": {
       if (typeof obj.sessionId !== "string") return null;
-      if (obj.kind !== "event" && obj.kind !== "status" && obj.kind !== "created") return null;
+      if (obj.kind !== "event" && obj.kind !== "status" && obj.kind !== "created" && obj.kind !== "meta") {
+        return null;
+      }
+      const projectId = typeof obj.projectId === "string" ? obj.projectId : null;
+      if (obj.kind === "meta") {
+        // R114-b/R114-d: the preference frame — present keys only (never
+        // undefined). selectedModel is null (clear) or a COMPLETE pair;
+        // anything else is malformed and the frame drops whole (the same
+        // honest-skip guard every other shape carries — never a guess).
+        let selectedModel: { providerId: string; model: string } | null | undefined;
+        if ("selectedModel" in obj) {
+          const value = obj.selectedModel;
+          if (value === null) {
+            selectedModel = null;
+          } else if (
+            typeof value === "object" &&
+            value !== null &&
+            typeof (value as Record<string, unknown>).providerId === "string" &&
+            typeof (value as Record<string, unknown>).model === "string"
+          ) {
+            const pair = value as { providerId: string; model: string };
+            selectedModel = { providerId: pair.providerId, model: pair.model };
+          } else {
+            return null;
+          }
+        }
+        return {
+          type: "session",
+          sessionId: obj.sessionId,
+          projectId,
+          kind: "meta",
+          ...(typeof obj.permissionMode === "string" ? { permissionMode: obj.permissionMode } : {}),
+          ...(obj.activeMode === null || typeof obj.activeMode === "string"
+            ? { activeMode: obj.activeMode as string | null }
+            : {}),
+          ...(selectedModel !== undefined ? { selectedModel } : {}),
+        };
+      }
       return {
         type: "session",
         sessionId: obj.sessionId,
-        projectId: typeof obj.projectId === "string" ? obj.projectId : null,
+        projectId,
         kind: obj.kind,
         ...(typeof obj.seq === "number" ? { seq: obj.seq } : {}),
         ...(typeof obj.status === "string" ? { status: obj.status } : {}),
@@ -374,7 +428,13 @@ export class EventsController {
         break;
       }
       case "session": {
-        this.scheduleSessionsRefresh();
+        // R114-d: a `meta` frame is a PREFERENCE flip — the open session
+        // screen applies the carried value in place (the frame IS the new
+        // truth) and keeps its own debounced rehydrate as the backstop;
+        // nothing in the lists reads mode/model, so no epoch bump rides it.
+        // Every other session kind appends/status-flips/creates — the
+        // debounced list batch stands.
+        if (frame.kind !== "meta") this.scheduleSessionsRefresh();
         break;
       }
       case "turn": {

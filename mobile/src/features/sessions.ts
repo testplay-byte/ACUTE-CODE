@@ -54,6 +54,16 @@
  * the PC streams LIVE on the phone through the SAME applyLiveFrame reducer
  * the phone's own sends use, and the initiator guard keeps an own stream
  * authoritative (no doubled deltas).
+ *
+ * ROUND-114 (R114-d — the honest transcript): turn.started (the R114-b
+ * early frame) opens the mirror INSTANTLY (the remote user bubble renders
+ * off the frame's own text + the resolved model labels the turn), the
+ * tool-input-delta frames the phone previously ignored now feed a LIVE
+ * WRITE PREVIEW (the running card's accumulated partial-JSON raw), and the
+ * screenshot frame carries its true {sessionId, frameId, tool, note} shape.
+ * User/assistant items carry `ts` (the timestampsMode pref), the tool items
+ * carry toolCallId/inputRaw, and SessionRow carries the server-side
+ * selectedModel (PATCH {model} + the meta frame's live sync).
  */
 
 import { apiJson, type ApiOutcome, type ApiSender, type SseSender } from "./api";
@@ -77,6 +87,18 @@ export interface SessionRow {
   permissionMode: string;
   activeMode: string | null;
   taskId: string | null;
+  /** R114-d (the R114-b wire): the session's SERVER-SIDE selected model —
+   * the persistent tier between the per-send override and the agent row
+   * (both-null = follow the agent default). GET list/detail carry it;
+   * PATCH /sessions/:id {model} sets/clears it; the meta frame syncs it
+   * live. The composer pill reads it as its honest no-override label. */
+  selectedModel: SessionSelectedModel | null;
+}
+
+/** The selected-model pair as the wire carries it (R114-b, verbatim). */
+export interface SessionSelectedModel {
+  providerId: string;
+  model: string;
 }
 
 export interface SessionEventWire {
@@ -134,7 +156,17 @@ export interface SendOverrides {
  * (the truth) replaces the live list wholesale at turn end.
  */
 export type TranscriptItem =
-  | { kind: "user"; key: string; content: string; queued: boolean; attachments: AttachmentView[] | null }
+  | {
+      kind: "user";
+      key: string;
+      content: string;
+      queued: boolean;
+      attachments: AttachmentView[] | null;
+      /** R114-d: the message's own clock (the persisted event's ts; the live
+       * cards carry the turn-time ISO). null = nothing to render — the
+       * timestampsMode pref gates the display, never the data. */
+      ts: string | null;
+    }
   | {
       kind: "assistant";
       key: string;
@@ -145,6 +177,8 @@ export type TranscriptItem =
        * fade-in-up entrance); persisted items carry the merged content. */
       chunks: string[] | null;
       live: boolean;
+      /** R114-d: the event's ts (persisted) or the turn-time ISO (live). */
+      ts: string | null;
     }
   | {
       kind: "tool";
@@ -157,6 +191,13 @@ export type TranscriptItem =
       /** Live tail of a running tool (tool-output frames). */
       outputTail: string | null;
       live: boolean;
+      /** R114-d: the streaming input's toolCallId (tool-input-start/-delta
+       * association — null when the card was opened by tool-call directly). */
+      toolCallId: string | null;
+      /** R114-d: the accumulated PARTIAL-JSON args raw (tool-input-delta
+       * frames) — the live write preview's source. Cleared when the call
+       * settles (tool-result) exactly the way the desktop strips liveInput. */
+      inputRaw: string | null;
     }
   | {
       kind: "approval";
@@ -189,7 +230,16 @@ export type TranscriptItem =
       taskId: string | null;
       detail: string | null;
     }
-  | { kind: "image"; key: string; frameId: string; tool: string; ts: string }
+  | { kind: "image"; key: string; frameId: string; tool: string; note: string }
+  | {
+      /** R114-d — the THINKING PLACEHOLDER: rendered by the session screen
+       * while a live turn streams with no assistant content yet (the
+       * thinkingPlaceholderVisible verdict). Never produced by the fold or
+       * the reducer — a display-only synthetic item. */
+      kind: "thinking";
+      key: string;
+      model: string | null;
+    }
   | { kind: "meta"; key: string; text: string }
   | { kind: "error"; key: string; code: string; message: string }
   | { kind: "debug"; key: string; content: string; live: boolean };
@@ -356,6 +406,7 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
           content,
           queued: false,
           attachments: readAttachmentViews(payload.attachments),
+          ts: event.ts,
         });
         break;
       }
@@ -368,6 +419,7 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
           content,
           queued: true,
           attachments: readAttachmentViews(payload.attachments),
+          ts: event.ts,
         });
         break;
       }
@@ -384,6 +436,7 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
           model,
           chunks: null,
           live: false,
+          ts: event.ts,
         });
         break;
       }
@@ -401,6 +454,8 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
           outputSummary,
           outputTail: null,
           live: false,
+          toolCallId: null,
+          inputRaw: null,
         });
         break;
       }
@@ -546,6 +601,7 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
  * dim meta line and ignores the rest). Forward compatibility by decree.
  */
 export type StreamTurnFrame =
+  | { type: "turn.started"; text: string; model: string; providerId: string }
   | { type: "text-delta"; delta: string }
   | { type: "thinking-delta"; delta: string }
   | { type: "tool-input-start"; toolCallId: string; toolName: string }
@@ -598,7 +654,7 @@ export type StreamTurnFrame =
       sources?: string[];
     }
   | { type: "todo-updated"; sessionId: string; todos: TodoItemView[]; source?: "agent" | "user" }
-  | { type: "screenshot"; frameId: string; tool: string; ts: string }
+  | { type: "screenshot"; sessionId: string; frameId: string; tool: string; note?: string }
   | {
       type: "approval.requested";
       approvalId: string;
@@ -644,6 +700,12 @@ export interface LiveTurn {
   items: TranscriptItem[];
   /** The message that started the turn (the optimistic user card). */
   sentContent: string;
+  /** R114-d: the turn's RESOLVED model (turn.started's `model` — the
+   * three-tier ladder's verdict). Feeds the thinking placeholder's label
+   * and the live assistant cards' mono line; null until the frame lands
+   * (or when an older sidecar never sends it — the placeholder then reads
+   * "Thinking" alone, never a guess). */
+  model: string | null;
   /** Set when a terminal frame arrived — the screen closes + rehydrates. */
   terminal: "done" | "stopped" | "error" | null;
   /** The error frame's payload when terminal === "error". */
@@ -653,6 +715,29 @@ export interface LiveTurn {
 /** Cap on the live assistant's delta chunks — beyond it the oldest chunks
  * merge (keeps the per-delta entrance cheap on very long replies). */
 const MAX_LIVE_CHUNKS = 240;
+
+/** R114-d: cap on a running tool card's accumulated input raw (~256KB,
+ * head-kept — `path` precedes `content` in write_file/edit_file args, so the
+ * head carries the path; the desktop's MAX_STREAMING_INPUT_BYTES twin). */
+const MAX_TOOL_INPUT_RAW = 256 * 1024;
+
+/** The live timestamps' source: the reducer receives `now` in ms — the
+ * items carry ISO strings (the render layer formats; the reducer stays
+ * pure + testable). */
+function isoAt(now: number): string {
+  return new Date(now).toISOString();
+}
+
+/**
+ * R114-d — append one tool-input delta to a running card's partial-args raw,
+ * keeping the HEAD past the cap (the path argument rides the head of the
+ * JSON; tail-keeping would orphan it). Exported for the tests. */
+export function appendToolInputRaw(prev: string | null, delta: string): string {
+  const base = prev ?? "";
+  if (base.length >= MAX_TOOL_INPUT_RAW) return base;
+  const next = base + delta;
+  return next.length > MAX_TOOL_INPUT_RAW ? next.slice(0, MAX_TOOL_INPUT_RAW) : next;
+}
 
 /**
  * Begin a turn: the optimistic user card lands immediately (carrying the
@@ -675,9 +760,11 @@ export function beginLiveTurn(
         content,
         queued: false,
         attachments,
+        ts: isoAt(now),
       },
     ],
     sentContent: content,
+    model: null,
     terminal: null,
     error: null,
   };
@@ -728,9 +815,10 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
       key: liveItemKey(now, `a${items.length}`),
       content: thinking ? "" : delta,
       thinking: thinking ? delta : null,
-      model: null,
+      model: turn.model,
       chunks: thinking ? [] : [delta],
       live: true,
+      ts: isoAt(now),
     });
   };
 
@@ -744,6 +832,34 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
   };
 
   switch (type) {
+    case "turn.started": {
+      // R114-d — the turn's FIRST frame: the resolved effective model (the
+      // placeholder + the live assistant cards name it) and, on a REMOTE
+      // mirror, the user bubble rendered from the frame's own text — no
+      // waiting for the persisted-fold refetch. On the OWN stream the
+      // optimistic card beginLiveTurn pushed is already up (key prefix
+      // "live-user-"), so the bubble never doubles.
+      const model =
+        typeof frame.model === "string" && frame.model.trim() !== "" ? frame.model : null;
+      if (model !== null) next.model = model;
+      const last = items[items.length - 1];
+      const ownOptimistic =
+        last !== undefined && last.kind === "user" && last.key.startsWith("live-user-");
+      if (!ownOptimistic) {
+        const text = typeof frame.text === "string" ? frame.text : "";
+        if (text.trim() !== "") {
+          items.push({
+            kind: "user",
+            key: liveItemKey(now, `tsu${items.length}`),
+            content: text,
+            queued: false,
+            attachments: null,
+            ts: isoAt(now),
+          });
+        }
+      }
+      break;
+    }
     case "text-delta": {
       const delta = typeof frame.delta === "string" ? frame.delta : "";
       pushAssistantDelta(delta, false);
@@ -755,25 +871,91 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
       break;
     }
     case "tool-input-start": {
+      // R114-d: the model started STREAMING this call's JSON arguments — a
+      // running tool card opens NOW (the write preview's home). The old
+      // "preparing X…" meta line is gone: the card carries the name, the
+      // live status, and (once deltas land) the streaming args themselves.
+      // Idempotent on a replayed start frame — one card per toolCallId.
       flushAssistant();
       const toolName = typeof frame.toolName === "string" ? frame.toolName : "tool";
-      items.push({ kind: "meta", key: liveItemKey(now, `ti${items.length}`), text: `preparing ${toolName}…` });
-      break;
-    }
-    case "tool-input-delta": {
-      break; // the compact preview tier — the phone stays quiet on it
-    }
-    case "tool-call": {
-      flushAssistant();
+      const toolCallId = typeof frame.toolCallId === "string" ? frame.toolCallId : "";
+      if (
+        toolCallId !== "" &&
+        items.some((item) => item.kind === "tool" && item.toolCallId === toolCallId)
+      ) {
+        break;
+      }
       items.push({
         kind: "tool",
-        key: liveItemKey(now, `t${items.length}`),
-        toolName: typeof frame.toolName === "string" ? frame.toolName : "tool",
-        argsSummary: typeof frame.argsSummary === "string" ? frame.argsSummary : "",
+        key: liveItemKey(now, `ti${items.length}`),
+        toolName,
+        argsSummary: "",
         ok: null,
         outputSummary: null,
         outputTail: null,
         live: true,
+        toolCallId: toolCallId !== "" ? toolCallId : null,
+        inputRaw: "",
+      });
+      break;
+    }
+    case "tool-input-delta": {
+      // R114-d — THE WRITE PREVIEW'S FEED (deliberately ignored since R113-c:
+      // the owner: "writing a file was not shown properly on mobile while PC
+      // streamed it"). The growing JSON-args prefix accumulates on the
+      // running card the matching tool-input-start opened; the renderer's
+      // tolerant extractor (features/streaming-args.ts) pulls
+      // path/content-so-far out of it. Association is by toolCallId; a
+      // delta for an id we never saw grows nothing (the final tool-call
+      // frame still renders the row — the desktop's joined-mid-call rule).
+      const toolCallId = typeof frame.toolCallId === "string" ? frame.toolCallId : "";
+      const delta = typeof frame.inputTextDelta === "string" ? frame.inputTextDelta : "";
+      if (delta === "") break;
+      const target =
+        toolCallId !== ""
+          ? [...items]
+              .reverse()
+              .find((item) => item.kind === "tool" && item.toolCallId === toolCallId)
+          : [...items]
+              .reverse()
+              .find((item) => item.kind === "tool" && item.live && item.inputRaw !== null);
+      if (target !== undefined && target.kind === "tool") {
+        const index = items.indexOf(target);
+        items[index] = { ...target, inputRaw: appendToolInputRaw(target.inputRaw, delta) };
+      }
+      break;
+    }
+    case "tool-call": {
+      flushAssistant();
+      // R114-d: finalize the card the streaming input opened (the wire's
+      // tool-call carries NO toolCallId — match the running card by name;
+      // the raw STAYS until the result, exactly the desktop's liveInput
+      // lifecycle). No streaming input ever seen (a non-streaming provider
+      // or a joined-mid-call gap) → the card opens here, as before.
+      const toolName = typeof frame.toolName === "string" ? frame.toolName : "tool";
+      const argsSummary = typeof frame.argsSummary === "string" ? frame.argsSummary : "";
+      const target = [...items]
+        .reverse()
+        .find(
+          (item) =>
+            item.kind === "tool" && item.toolName === toolName && item.inputRaw !== null,
+        );
+      if (target !== undefined && target.kind === "tool") {
+        const index = items.indexOf(target);
+        items[index] = { ...target, argsSummary, live: true };
+        break;
+      }
+      items.push({
+        kind: "tool",
+        key: liveItemKey(now, `t${items.length}`),
+        toolName,
+        argsSummary,
+        ok: null,
+        outputSummary: null,
+        outputTail: null,
+        live: true,
+        toolCallId: null,
+        inputRaw: null,
       });
       break;
     }
@@ -798,6 +980,11 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
           outputSummary: outputSummary ?? target.outputSummary,
           outputTail: target.outputTail,
           live: false,
+          // R114-d: the settled card keeps its place + args; the streaming
+          // preview raw is spent (the result summary owns the story now) —
+          // the desktop's liveInput-strip twin.
+          toolCallId: null,
+          inputRaw: null,
         };
       } else {
         items.push({
@@ -809,6 +996,8 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
           outputSummary,
           outputTail: null,
           live: false,
+          toolCallId: null,
+          inputRaw: null,
         });
       }
       break;
@@ -848,7 +1037,14 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
     case "user.queued": {
       const content = typeof frame.content === "string" ? frame.content : "";
       const seq = typeof frame.seq === "number" ? frame.seq : 0;
-      items.push({ kind: "user", key: `q${seq}`, content, queued: true, attachments: null });
+      items.push({
+        kind: "user",
+        key: `q${seq}`,
+        content,
+        queued: true,
+        attachments: null,
+        ts: typeof frame.ts === "string" ? frame.ts : null,
+      });
       break;
     }
     case "queued.delivered": {
@@ -859,7 +1055,14 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
         const index = items.indexOf(target);
         items[index] = { ...target, content, queued: false };
       } else {
-        items.push({ kind: "user", key: `q${seq}`, content, queued: false, attachments: null });
+        items.push({
+          kind: "user",
+          key: `q${seq}`,
+          content,
+          queued: false,
+          attachments: null,
+          ts: typeof frame.ts === "string" ? frame.ts : null,
+        });
       }
       break;
     }
@@ -989,6 +1192,10 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
       // (interleaved with the tool rows). LIVE-ONLY — rasters are ephemeral
       // server-side (10-min TTL, LRU 12, never persisted); the folded log
       // carries no screenshots by design, on both ends.
+      // R114-d: the frame's TRUE shape is {sessionId, frameId, tool, note?}
+      // (computer-use + browser both emit `note`, never a ts) — the caption
+      // now reads `tool · note` instead of the always-empty ts the old type
+      // invented.
       const frameId = typeof frame.frameId === "string" ? frame.frameId : "";
       if (frameId === "") break;
       items.push({
@@ -996,7 +1203,7 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
         key: `img-${frameId}`,
         frameId,
         tool: typeof frame.tool === "string" ? frame.tool : "tool",
-        ts: typeof frame.ts === "string" ? frame.ts : "",
+        note: typeof frame.note === "string" ? frame.note : "",
       });
       break;
     }
@@ -1130,23 +1337,71 @@ export function abandonLiveTurn(turn: LiveTurn): LiveTurn {
   return { ...turn, phase: "idle", terminal: null };
 }
 
+/** The item kinds that mean the agent is already WORKING — once any of them
+ * lands after the turn's user card, the thinking placeholder is spent (the
+ * R114-d rule: only text/thinking DELTAS or real tool work replace it; dim
+ * meta lines do not). */
+const THINKING_PROGRESS_KINDS: ReadonlySet<string> = new Set([
+  "assistant",
+  "tool",
+  "approval",
+  "question",
+  "todo",
+  "subagent",
+  "image",
+  "error",
+  "debug",
+]);
+
+/**
+ * R114-d — is the THINKING PLACEHOLDER due? True while a live turn streams
+ * with NO assistant content arrived yet (no text/thinking deltas, no tool
+ * work — only the turn's own user card sits at the tail, live-keyed).
+ * False once real content lands (the first delta replaces it), on every
+ * terminal/abandoned state, and when the tail's user card is not THIS
+ * turn's (a persisted row — nothing live to anchor the placeholder to).
+ * Pure — the screen calls it per render, the tests pin the verdicts.
+ */
+export function thinkingPlaceholderVisible(turn: LiveTurn): boolean {
+  if (turn.phase !== "streaming" || turn.terminal !== null) return false;
+  let lastUserIdx = -1;
+  for (let i = turn.items.length - 1; i >= 0; i -= 1) {
+    if (turn.items[i]?.kind === "user") {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  if (lastUserIdx === -1) return false;
+  const card = turn.items[lastUserIdx];
+  if (card === undefined || card.kind !== "user" || !card.key.startsWith("live-")) {
+    return false;
+  }
+  for (let i = lastUserIdx + 1; i < turn.items.length; i += 1) {
+    const item = turn.items[i];
+    if (item !== undefined && THINKING_PROGRESS_KINDS.has(item.kind)) return false;
+  }
+  return true;
+}
+
 // ── the REMOTE mirror (R113-e — the phone's live view of ANOTHER device's
 // turn, fed by the events stream's {type:"turn"} frames) ──────────────────
 
 /**
  * Begin a REMOTE turn's mirror: another device started this turn, and the
  * events stream mirrors every frame the initiating socket receives. The
- * overlay carries the current base + the mirrored frames — NO optimistic
- * user card (the message that started the turn was typed on the other
- * device; its persisted row lands through the rebase/rehydrate). No clock:
- * the mirror has no optimistic card to key off a timestamp (the own-turn
- * begin's only `now` consumer).
+ * overlay carries the current base + the mirrored frames — no optimistic
+ * user card of OURS (R114-d: the turn's own turn.started frame renders the
+ * OTHER device's message as the user card the moment it lands; before that
+ * frame the placeholder math sees only the base). No clock: the mirror has
+ * no optimistic card to key off a timestamp (the own-turn begin's only
+ * `now` consumer).
  */
 export function beginRemoteTurn(baseItems: TranscriptItem[]): LiveTurn {
   return {
     phase: "streaming",
     items: [...baseItems],
     sentContent: "",
+    model: null,
     terminal: null,
     error: null,
   };
@@ -1165,7 +1420,25 @@ export function rebaseRemoteTurn(
   baseItems: TranscriptItem[],
   baseCount: number,
 ): LiveTurn {
-  return { ...turn, items: [...baseItems, ...turn.items.slice(baseCount)] };
+  const tail = turn.items.slice(baseCount);
+  // R114-d: turn.started's mirrored user card (the frame's own text, pushed
+  // so the bubble rendered BEFORE the persisted fold refetch) duplicates the
+  // message.user row the fresh base now carries — drop the LIVE one (the
+  // persisted card owns the slot; content-identical, key-stable). Anything
+  // else folds exactly as before.
+  if (tail.length > 0) {
+    const head = tail[0];
+    const last = baseItems.length > 0 ? baseItems[baseItems.length - 1] : undefined;
+    if (
+      head?.kind === "user" &&
+      head.key.startsWith("live-") &&
+      last?.kind === "user" &&
+      last.content === head.content
+    ) {
+      return { ...turn, items: [...baseItems, ...tail.slice(1)] };
+    }
+  }
+  return { ...turn, items: [...baseItems, ...tail] };
 }
 
 /** One remote-turn decision off the events stream — the screen drives the
@@ -1235,6 +1508,47 @@ export function sessionStatusFromWire(value: unknown): SessionStatus | null {
     return value;
   }
   return null;
+}
+
+/** R114-d — one {kind:"meta"} session frame's carried preference changes
+ * (the R114-b wire: only the field(s) this change touched ride — absent
+ * keys stay absent, never undefined). Extracted as its own type so the
+ * session screen's in-place patch + the tests share ONE shape. */
+export interface SessionMetaPatch {
+  permissionMode?: string;
+  activeMode?: string | null;
+  selectedModel?: SessionSelectedModel | null;
+}
+
+/**
+ * R114-d — apply a meta frame's carried fields to the CURRENT session row
+ * IN PLACE (the instant label flip — no refetch round-trip): present keys
+ * overwrite, absent keys leave the row untouched, and the caller keeps its
+ * wider type (the screen's detail carries events/lastSeq). Pure — pinned
+ * by tests; the screen's debounced rehydrate stays the truth backstop.
+ */
+export function applySessionMetaPatch<T extends SessionRow>(row: T, patch: SessionMetaPatch): T {
+  let next = row;
+  if (patch.permissionMode !== undefined) {
+    next = { ...next, permissionMode: patch.permissionMode };
+  }
+  if (patch.activeMode !== undefined) {
+    next = { ...next, activeMode: patch.activeMode };
+  }
+  if (patch.selectedModel !== undefined) {
+    next = { ...next, selectedModel: patch.selectedModel };
+  }
+  return next;
+}
+
+/**
+ * R114-d — the compact model id for the header subtitle + anywhere a long
+ * provider-prefixed id would wrap: the segment after the last "/" (the
+ * provider prefix), capped at 22 chars with an ellipsis. Pure.
+ */
+export function shortModelId(modelId: string): string {
+  const bare = modelId.includes("/") ? modelId.split("/").slice(1).join("/") : modelId;
+  return bare.length > 22 ? `${bare.slice(0, 21)}…` : bare;
 }
 
 /** Per-project session stats folded client-side (the sessions route has NO
@@ -1417,5 +1731,25 @@ export async function patchSessionActiveMode(
   return apiJson<SessionRow>(sender, `/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     bodyText: JSON.stringify({ activeMode }),
+  });
+}
+
+/**
+ * R114-d — PATCH /sessions/:id {model}: the session's SERVER-SIDE selected
+ * model (the R114-b contract: a complete {providerId, model} pair validated
+ * server-side against the configured providers + models/catalog, or null to
+ * clear back to the agent default). Returns the updated session row; the
+ * {kind:"meta", selectedModel} frame the setter publishes flips every open
+ * device's label live. The local per-send override stays a SEPARATE tier
+ * (sendBody) — this row is what the other devices see.
+ */
+export async function patchSessionSelectedModel(
+  sender: ApiSender,
+  sessionId: string,
+  model: SessionSelectedModel | null,
+): Promise<ApiOutcome<SessionRow>> {
+  return apiJson<SessionRow>(sender, `/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    bodyText: JSON.stringify({ model }),
   });
 }

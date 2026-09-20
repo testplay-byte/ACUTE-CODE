@@ -35,13 +35,27 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { Check, ChevronDown, ChevronUp, CircleX, ImageIcon, Minus, Wrench } from "lucide-react-native";
-import { useTheme } from "@/design/theme";
+import { BookOpenText, Check, ChevronDown, ChevronUp, CircleX, FileCode2, ImageIcon, Minus, SquareTerminal, Wrench } from "lucide-react-native";
+import { useTheme, useChatPrefs } from "@/design/theme";
 import { Badge, TypeBody, TypeCaption, TypeMono } from "@/design/primitives";
 import { MarkdownText } from "@/components/markdown-text";
 import { ImageViewer } from "@/components/image-viewer";
 import { getLinkManager } from "@/link/runtime";
 import { fetchRasterFile, type RasterState } from "@/features/raster";
+import {
+  densityVerticalPadding,
+  messageClock,
+  textSizeScale,
+  timestampsVisible,
+  toolActivityVisibility,
+} from "@/features/chat-prefs";
+import {
+  extractStringArg,
+  extractWritePreview,
+  READ_TOOLS,
+  TERMINAL_TOOLS,
+  WRITE_TOOLS,
+} from "@/features/streaming-args";
 import {
   ENTRANCE_DELTA,
   SPRING,
@@ -55,6 +69,7 @@ import {
   spacing,
   TYPE_BODY,
   TYPE_CAPTION,
+  TYPE_MICRO,
 } from "@/design/tokens";
 import type { AttachmentView, TranscriptItem } from "@/features/sessions";
 
@@ -103,7 +118,7 @@ export function TranscriptItemView({
 }) {
   switch (item.kind) {
     case "user":
-      return <UserBubble content={item.content} queued={item.queued} attachments={item.attachments} />;
+      return <UserBubble content={item.content} queued={item.queued} attachments={item.attachments} ts={item.ts} />;
     case "assistant":
       return <AssistantBlock item={item} />;
     case "tool":
@@ -118,6 +133,8 @@ export function TranscriptItemView({
       return <SubAgentCard item={item} />;
     case "image":
       return <ImageTile item={item} />;
+    case "thinking":
+      return <ThinkingPlaceholder model={item.model} />;
     case "meta":
       return <MetaLine text={item.text} />;
     case "error":
@@ -150,12 +167,20 @@ function UserBubble({
   content,
   queued,
   attachments,
+  ts,
 }: {
   content: string;
   queued: boolean;
   attachments: AttachmentView[] | null;
+  ts: string | null;
 }) {
   const { tokens } = useTheme();
+  // R114-d — the chat prefs: density shrinks the bubble's VERTICAL padding;
+  // text size scales the body; timestamps gate the quiet clock.
+  const prefs = useChatPrefs();
+  const pad = densityVerticalPadding(prefs.chatDensity);
+  const scale = textSizeScale(prefs.chatTextSize);
+  const clock = timestampsVisible(prefs.timestampsMode) ? messageClock(ts) : null;
   return (
     <View style={styles.userRow}>
       <View
@@ -167,6 +192,7 @@ function UserBubble({
             borderTopColor: queued ? tokens.clayTopEdge : "transparent",
             borderColor: queued ? tokens.border : "transparent",
             boxShadow: queued ? tokens.clayShadowSm : undefined,
+            paddingVertical: pad,
           },
         ]}
       >
@@ -178,9 +204,9 @@ function UserBubble({
         <Text
           style={{
             color: queued ? tokens.text : tokens.selectedText,
-            fontSize: TYPE_BODY,
+            fontSize: Math.round(TYPE_BODY * scale),
             fontFamily: fontFamily.medium,
-            lineHeight: 21,
+            lineHeight: Math.round(21 * scale),
           }}
         >
           {content}
@@ -215,6 +241,13 @@ function UserBubble({
           </View>
         )}
       </View>
+      {clock !== null && (
+        <TypeCaption
+          style={{ color: tokens.textTertiary, fontSize: 10, marginTop: 2, alignSelf: "flex-end" }}
+        >
+          {clock}
+        </TypeCaption>
+      )}
     </View>
   );
 }
@@ -223,6 +256,11 @@ function UserBubble({
 
 function AssistantBlock({ item }: { item: TranscriptItem & { kind: "assistant" } }) {
   const { tokens } = useTheme();
+  // R114-d — the prefs: body text scales (mono/micro lines never do —
+  // they are the calibration marks); timestamps gate the meta clock.
+  const prefs = useChatPrefs();
+  const scale = textSizeScale(prefs.chatTextSize);
+  const clock = timestampsVisible(prefs.timestampsMode) ? messageClock(item.ts) : null;
   const liveText =
     item.live && item.chunks !== null ? item.chunks.join("") : null;
   const settled = !item.live && item.content !== "" ? item.content : null;
@@ -234,17 +272,20 @@ function AssistantBlock({ item }: { item: TranscriptItem & { kind: "assistant" }
       )}
       {liveText !== null && liveText !== "" ? (
         <View style={styles.assistantLive}>
-          <MarkdownText content={liveText} />
+          <MarkdownText content={liveText} textScale={scale} />
           <Caret color={tokens.accent} />
         </View>
       ) : settled !== null ? (
-        <MarkdownText content={settled} />
+        <MarkdownText content={settled} textScale={scale} />
       ) : item.live ? (
         <Caret color={tokens.accent} />
       ) : null}
-      {item.model !== null && !item.live && (
+      {/* R114-d — the model line renders LIVE too (turn.started names the
+          resolved pair; the owner: "I don't see which model was being used
+          in the chat itself"); the clock rides the same quiet meta line. */}
+      {(item.model !== null || clock !== null) && (
         <TypeMono style={{ color: tokens.textTertiary, marginTop: spacing.xs, fontSize: 10.5 }}>
-          {item.model}
+          {[item.model, clock].filter((part) => part !== null).join(" · ")}
         </TypeMono>
       )}
     </View>
@@ -266,6 +307,79 @@ function Caret({ color }: { color: string }) {
     <Animated.View
       accessibilityLabel="the agent is still writing"
       style={[animated, { width: 8, height: 15, borderRadius: 2, backgroundColor: color, marginLeft: 2 }]}
+    />
+  );
+}
+
+// ── the THINKING PLACEHOLDER (R114-d — "while it is processing it does not
+// show me anything"): sits exactly where the assistant message will appear
+// while a live turn streams with NO content yet. The house StatusDot pulse
+// grammar (three staggered dots), the word "Thinking", and the turn's
+// resolved model in micro mono — calm motion, never a spinner. The first
+// real delta replaces it (the screen stops emitting the synthetic item). ──
+
+function ThinkingPlaceholder({ model }: { model: string | null }) {
+  const { tokens } = useTheme();
+  return (
+    <View
+      accessibilityLabel={
+        model !== null ? `The agent is thinking with ${model}` : "The agent is thinking"
+      }
+      style={[
+        styles.thinking,
+        {
+          borderColor: tokens.borderSubtle,
+          backgroundColor: tokens.monoBg,
+          borderTopColor: tokens.clayTopEdge,
+          boxShadow: tokens.clayShadowSm,
+        },
+      ]}
+    >
+      <View style={styles.thinkingDots}>
+        {[0, 1, 2].map((i) => (
+          <View key={i} style={styles.thinkingDotSlot}>
+            <ThinkingDot color={tokens.textTertiary} delay={i * 180} />
+          </View>
+        ))}
+        <TypeCaption style={{ color: tokens.textTertiary, marginLeft: spacing.xs }}>
+          Thinking
+        </TypeCaption>
+        {model !== null && (
+          // The spec's micro-mono model name (the calibration-mark voice the
+          // assistant cards' own model line speaks — scaled never, tertiary
+          // always).
+          <TypeMono style={{ color: tokens.textTertiary, fontSize: 11 }}>
+            {`· ${model}`}
+          </TypeMono>
+        )}
+      </View>
+    </View>
+  );
+}
+
+/** One pulsing dot of the placeholder — the StatusDot's calm 1.2s opacity
+ * pulse (the house motion vocabulary), staggered per dot. */
+function ThinkingDot({ color, delay }: { color: string; delay: number }) {
+  const opacity = useSharedValue(0.35);
+  useEffect(() => {
+    const total = 600 + 600;
+    const sleep = delay % total;
+    // Stagger via an initial offset, then the same repeat both dots run —
+    // withRepeat has no delay option; a leading timing of `sleep` ms sets
+    // the phase.
+    opacity.value = withSequence(
+      withTiming(0.35, { duration: sleep }),
+      withRepeat(
+        withSequence(withTiming(1, { duration: 600 }), withTiming(0.35, { duration: 600 })),
+        -1,
+        false,
+      ),
+    );
+  }, [opacity, delay]);
+  const animated = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return (
+    <Animated.View
+      style={[animated, { width: 6, height: 6, borderRadius: 3, backgroundColor: color }]}
     />
   );
 }
@@ -311,18 +425,83 @@ function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
   );
 }
 
-// ── tool (clay tile, tap to expand the full story) ──────────────────────────
+// ── tool (the per-tool dispatcher — R114-d) ─────────────────────────────────
+//
+// The owner's reports: "'read skill' showed the full view with an ok status
+// — ugly"; "writing a file was not shown properly on mobile while PC
+// streamed it". One dispatcher, one presentation per tool family, the
+// generic card as the fallback for everything unknown:
+//   · read_skill (the compact-read family) → ONE quiet line: skill icon +
+//     "Skill · <name>" + status; the args dump renders ONLY on manual expand.
+//   · write_file / edit_file → the WRITE card: mono path, the live char
+//     counter + a quiet 2-3 line content tail WHILE the args stream (the
+//     tool-input-delta raw the reducer now accumulates), the result summary
+//     once the call settles.
+//   · run_command / bash → the TERMINAL card: mono command line, the
+//     streamed tool-output tail as a quiet terminal block, status on result.
+// The collapsed discipline: every card renders ONE compact line when
+// collapsed (icon + humanized name + one-line summary + status); expand
+// shows the details. chatDensity shrinks the vertical padding;
+// toolActivity=compact pins every card collapsed (no expansion); hidden
+// folds the runs away entirely before the list renders (chat-prefs.ts).
 
-function ToolCard({ item }: { item: TranscriptItem & { kind: "tool" } }) {
+type ToolItem = TranscriptItem & { kind: "tool" };
+
+function ToolCard({ item }: { item: ToolItem }) {
+  const prefs = useChatPrefs();
+  const visibility = toolActivityVisibility(prefs.toolActivity);
+  if (visibility.collapsedRows) {
+    return <CompactToolRow item={item} />;
+  }
+  if (WRITE_TOOLS.has(item.toolName)) {
+    return <WriteCard item={item} expandable={visibility.expandable} />;
+  }
+  if (TERMINAL_TOOLS.has(item.toolName)) {
+    return <TerminalCard item={item} expandable={visibility.expandable} />;
+  }
+  if (READ_TOOLS.has(item.toolName)) {
+    return <SkillCard item={item} expandable={visibility.expandable} />;
+  }
+  return <GenericToolCard item={item} expandable={visibility.expandable} />;
+}
+
+/** The running/ok/FAIL badge every tool row ends with. */
+function ToolStatusBadge({ ok }: { ok: boolean | null }) {
+  if (ok === null) return <Badge tone="warning">running</Badge>;
+  return ok ? <Badge tone="success">ok</Badge> : <Badge tone="danger">FAIL</Badge>;
+}
+
+/** "run_command" → "run command" (the humanized name the rows lead with). */
+function humanizeToolName(name: string): string {
+  return name.replace(/_/g, " ");
+}
+
+/** The write card's file path: the streaming raw's `path` arg first (the
+ * tolerant extractor — live, before the args complete), else the settled
+ * argsSummary's `path: …` segment. */
+function writePath(item: ToolItem): string | null {
+  if (item.inputRaw !== null) {
+    const preview = extractWritePreview(item.inputRaw);
+    if (preview.path !== null) return preview.path;
+  }
+  return item.argsSummary.match(/^path:\s*([^,]+)/)?.[1] ?? null;
+}
+
+/** The one-line summary the collapsed generic row shows. */
+function genericOneLineSummary(item: ToolItem): string {
+  if (TERMINAL_TOOLS.has(item.toolName)) {
+    return item.argsSummary.match(/^command:\s*(.*)$/)?.[1] ?? item.argsSummary;
+  }
+  return item.argsSummary;
+}
+
+/** The shared card shell: the clay tile + the density-aware vertical padding. */
+function ToolShell({ item, children }: { item: ToolItem; children: React.ReactNode }) {
   const { tokens } = useTheme();
-  const [expanded, setExpanded] = useState(false);
+  const prefs = useChatPrefs();
   const failed = item.ok === false;
-  const running = item.ok === null;
   return (
-    <Pressable
-      accessibilityLabel={`Tool ${item.toolName}${running ? " running" : failed ? " failed" : " succeeded"}${expanded ? ", expanded" : ""}`}
-      accessibilityRole="button"
-      onPress={() => setExpanded((v) => !v)}
+    <View
       style={[
         styles.toolCard,
         {
@@ -330,45 +509,308 @@ function ToolCard({ item }: { item: TranscriptItem & { kind: "tool" } }) {
           borderTopColor: tokens.clayTopEdge,
           borderColor: failed ? tokens.danger : tokens.borderSubtle,
           boxShadow: tokens.clayShadowSm,
+          paddingVertical: densityVerticalPadding(prefs.chatDensity),
         },
       ]}
     >
-      <View style={styles.toolHead}>
-        <Wrench size={13} color={tokens.textSecondary} strokeWidth={2.2} />
-        <TypeMono style={{ color: tokens.text, fontFamily: fontFamily.monoMedium }}>{item.toolName}</TypeMono>
-        <View style={{ flex: 1 }} />
-        {running ? (
-          <Badge tone="warning">running</Badge>
-        ) : failed ? (
-          <Badge tone="danger">FAIL</Badge>
-        ) : (
-          <Badge tone="success">ok</Badge>
-        )}
-        {expanded ? (
+      {children}
+    </View>
+  );
+}
+
+/** The head row every card leads with: icon + title (mono, one line) +
+ * the status badge (+ the chevron while expandable). Tappable as the whole
+ * card's expand when `onToggle` is set. */
+function ToolHeadRow({
+  item,
+  icon,
+  title,
+  expanded,
+  expandable,
+  onToggle,
+}: {
+  item: ToolItem;
+  icon: React.ReactNode;
+  title: string;
+  expanded: boolean;
+  expandable: boolean;
+  onToggle?: () => void;
+}) {
+  const { tokens } = useTheme();
+  const row = (
+    <View style={styles.toolHead}>
+      {icon}
+      <TypeMono
+        style={{ color: tokens.text, fontFamily: fontFamily.monoMedium, flex: 1 }}
+        numberOfLines={1}
+      >
+        {title}
+      </TypeMono>
+      <ToolStatusBadge ok={item.ok} />
+      {expandable ? (
+        expanded ? (
           <ChevronUp size={15} color={tokens.textTertiary} strokeWidth={2} />
         ) : (
           <ChevronDown size={15} color={tokens.textTertiary} strokeWidth={2} />
-        )}
-      </View>
-      {item.argsSummary !== "" && (
+        )
+      ) : null}
+    </View>
+  );
+  if (onToggle === undefined) return row;
+  return (
+    <Pressable
+      accessibilityLabel={`Tool ${item.toolName}${item.ok === null ? " running" : item.ok === false ? " failed" : " succeeded"}${expanded ? ", expanded" : ""}`}
+      accessibilityRole="button"
+      onPress={onToggle}
+    >
+      {row}
+    </Pressable>
+  );
+}
+
+/** toolActivity=compact — the ALWAYS-collapsed single-line row (icon +
+ * humanized name + one-line summary + status; no expansion, ever). */
+function CompactToolRow({ item }: { item: ToolItem }) {
+  const { tokens } = useTheme();
+  const summary = WRITE_TOOLS.has(item.toolName)
+    ? writePath(item)
+    : genericOneLineSummary(item);
+  return (
+    <ToolShell item={item}>
+      <ToolHeadRow
+        item={item}
+        icon={<Wrench size={13} color={tokens.textSecondary} strokeWidth={2.2} />}
+        title={humanizeToolName(item.toolName)}
+        expanded={false}
+        expandable={false}
+      />
+      {summary !== null && summary !== "" && (
+        <TypeMono style={{ color: tokens.textSecondary }} numberOfLines={1}>
+          {summary}
+        </TypeMono>
+      )}
+    </ToolShell>
+  );
+}
+
+/** read_skill + the compact-read family — the quiet ONE-line row (the owner:
+ * "'read skill' showed the full view with an ok status — ugly"). The args
+ * dump renders ONLY on manual expand. */
+function SkillCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
+  const { tokens } = useTheme();
+  const [expanded, setExpanded] = useState(false);
+  const showDetails = expandable && expanded;
+  const name =
+    item.inputRaw !== null
+      ? extractStringArg(item.inputRaw, "name")
+      : { found: false, value: "" };
+  const skillName =
+    name.found && name.value.trim() !== ""
+      ? name.value.trim()
+      : item.argsSummary.match(/^name:\s*([^,]+)/)?.[1] ?? "";
+  const title =
+    item.toolName === "read_skill"
+      ? skillName !== ""
+        ? `Skill · ${skillName}`
+        : "Skill"
+      : humanizeToolName(item.toolName);
+  return (
+    <ToolShell item={item}>
+      <ToolHeadRow
+        item={item}
+        icon={<BookOpenText size={13} color={tokens.accent2} strokeWidth={2.2} />}
+        title={title}
+        expanded={showDetails}
+        expandable={expandable}
+        onToggle={expandable ? () => setExpanded((v) => !v) : undefined}
+      />
+      {showDetails && (
+        <Reveal open>
+          {item.argsSummary !== "" && (
+            <TypeMono style={{ color: tokens.textSecondary }} numberOfLines={6}>
+              {item.argsSummary}
+            </TypeMono>
+          )}
+          {item.outputSummary !== null && item.outputSummary !== "" && (
+            <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={4}>
+              {item.outputSummary}
+            </TypeMono>
+          )}
+        </Reveal>
+      )}
+    </ToolShell>
+  );
+}
+
+/** write_file / edit_file — the WRITE card: mono path, the LIVE char counter
+ * + a quiet content tail while the args stream, the result summary once the
+ * call settles. The preview's source is the tool-input-delta raw the
+ * reducer accumulates (R114-d — the frames the phone used to ignore). */
+function WriteCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
+  const { tokens } = useTheme();
+  const [expanded, setExpanded] = useState(false);
+  const showDetails = expandable && expanded;
+  const running = item.ok === null;
+  const streaming = running && item.inputRaw !== null;
+  const preview = extractWritePreview(item.inputRaw ?? "");
+  const path = writePath(item);
+  const verb = item.toolName === "write_file" ? "Writing" : "Editing";
+  const title =
+    path !== null
+      ? `${verb} ${path}`
+      : running
+        ? `${verb}…`
+        : humanizeToolName(item.toolName);
+  // The quiet content tail — the LAST 160 chars of what has arrived (the
+  // head lives in the reducer's raw; the tail is what is being typed NOW).
+  const tail =
+    streaming && preview.content !== ""
+      ? preview.content.length > 160
+        ? `…${preview.content.slice(preview.content.length - 160)}`
+        : preview.content
+      : null;
+  return (
+    <ToolShell item={item}>
+      <ToolHeadRow
+        item={item}
+        icon={<FileCode2 size={13} color={tokens.accent} strokeWidth={2.2} />}
+        title={title}
+        expanded={showDetails}
+        expandable={expandable}
+        onToggle={expandable ? () => setExpanded((v) => !v) : undefined}
+      />
+      {streaming && (
+        <View style={{ gap: spacing.xs }}>
+          <TypeCaption style={{ color: tokens.textTertiary, fontSize: TYPE_MICRO - 0.5 }}>
+            {preview.chars.toLocaleString()} chars
+          </TypeCaption>
+          {tail !== null && (
+            <TypeMono
+              style={[
+                styles.terminalBlock,
+                {
+                  color: tokens.textTertiary,
+                  backgroundColor: tokens.monoBg,
+                  borderColor: tokens.borderSubtle,
+                },
+              ]}
+              numberOfLines={3}
+            >
+              {tail}
+            </TypeMono>
+          )}
+        </View>
+      )}
+      {!running && item.outputSummary !== null && item.outputSummary !== "" && (
+        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={showDetails ? undefined : 3}>
+          {item.outputSummary}
+        </TypeMono>
+      )}
+      {showDetails && (
+        <Reveal open>
+          {item.argsSummary !== "" && (
+            <TypeMono style={{ color: tokens.textSecondary }} numberOfLines={6}>
+              {item.argsSummary}
+            </TypeMono>
+          )}
+          {item.outputTail !== null && item.outputTail !== "" && (
+            <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={8}>
+              {item.outputTail}
+            </TypeMono>
+          )}
+        </Reveal>
+      )}
+    </ToolShell>
+  );
+}
+
+/** run_command / bash — the TERMINAL card: mono command line (the
+ * argsSummary), the streamed tool-output tail as a quiet terminal block,
+ * the exit status badge on the result. */
+function TerminalCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
+  const { tokens } = useTheme();
+  const [expanded, setExpanded] = useState(false);
+  const showDetails = expandable && expanded;
+  const command = genericOneLineSummary(item);
+  return (
+    <ToolShell item={item}>
+      <ToolHeadRow
+        item={item}
+        icon={<SquareTerminal size={13} color={tokens.accent} strokeWidth={2.2} />}
+        title={humanizeToolName(item.toolName)}
+        expanded={showDetails}
+        expandable={expandable}
+        onToggle={expandable ? () => setExpanded((v) => !v) : undefined}
+      />
+      {command !== "" && (
         <TypeMono
           style={{ color: tokens.textSecondary }}
-          numberOfLines={expanded ? undefined : 3}
+          numberOfLines={showDetails ? 2 : 1}
         >
-          {item.argsSummary}
+          {command}
         </TypeMono>
       )}
       {item.outputTail !== null && item.outputTail !== "" && (
-        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={expanded ? undefined : 8}>
+        <TypeMono
+          style={[
+            styles.terminalBlock,
+            {
+              color: tokens.textTertiary,
+              backgroundColor: tokens.monoBg,
+              borderColor: tokens.borderSubtle,
+            },
+          ]}
+          numberOfLines={showDetails ? undefined : 3}
+        >
           {item.outputTail}
         </TypeMono>
       )}
       {item.outputSummary !== null && item.outputSummary !== "" && (
-        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={expanded ? undefined : 6}>
+        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={showDetails ? undefined : 3}>
           {item.outputSummary}
         </TypeMono>
       )}
-    </Pressable>
+    </ToolShell>
+  );
+}
+
+/** The generic fallback — the pre-R114-d card, now with the collapsed
+ * discipline (ONE compact line when collapsed) + the density padding. */
+function GenericToolCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
+  const { tokens } = useTheme();
+  const [expanded, setExpanded] = useState(false);
+  const showDetails = expandable && expanded;
+  const summary = genericOneLineSummary(item);
+  return (
+    <ToolShell item={item}>
+      <ToolHeadRow
+        item={item}
+        icon={<Wrench size={13} color={tokens.textSecondary} strokeWidth={2.2} />}
+        title={humanizeToolName(item.toolName)}
+        expanded={showDetails}
+        expandable={expandable}
+        onToggle={expandable ? () => setExpanded((v) => !v) : undefined}
+      />
+      {summary !== "" && (
+        <TypeMono style={{ color: tokens.textSecondary }} numberOfLines={showDetails ? undefined : 1}>
+          {summary}
+        </TypeMono>
+      )}
+      {showDetails && (
+        <Reveal open>
+          {item.outputTail !== null && item.outputTail !== "" && (
+            <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={8}>
+              {item.outputTail}
+            </TypeMono>
+          )}
+          {item.outputSummary !== null && item.outputSummary !== "" && (
+            <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={6}>
+              {item.outputSummary}
+            </TypeMono>
+          )}
+        </Reveal>
+      )}
+    </ToolShell>
   );
 }
 
@@ -796,7 +1238,10 @@ function ImageTile({ item }: { item: TranscriptItem & { kind: "image" } }) {
       {state.uri !== null && (
         <ImageViewer
           uri={state.uri}
-          caption={`Captured by ${item.tool}${item.ts !== "" ? ` · ${item.ts}` : ""}`}
+          // R114-d — the caption reads the frame's TRUE note (the tool that
+          // captured it · the capture's note); the old `ts` field was never
+          // on the wire (always the empty string).
+          caption={`Captured by ${item.tool}${item.note !== "" ? ` · ${item.note}` : ""}`}
           open={viewerOpen}
           onClose={() => setViewerOpen(false)}
         />
@@ -995,6 +1440,28 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.xs,
     minHeight: 32,
+  },
+  /** R114-d — the thinking placeholder's staggered dot row. */
+  thinkingDots: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    minHeight: 32,
+  },
+  thinkingDotSlot: {
+    width: 6,
+    height: 6,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  /** R114-d — the quiet terminal block (the write preview's content tail +
+   * the command output tail): hairline-bordered, mono-backed at the call
+   * site (token-scoped), tertiary ink. */
+  terminalBlock: {
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
   toolCard: {
     borderRadius: RADIUS_INPUT,

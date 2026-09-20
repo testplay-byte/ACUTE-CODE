@@ -79,6 +79,66 @@ describe("parseEventsFrame", () => {
     ).toEqual({ type: "settings", domain: "appearance", value: { themeId: null, mode: "dark" } });
   });
 
+  // ── R114-b/R114-d: the META frame — a session-level preference flip ──────
+
+  it("R114-d: parses a meta frame with only the field(s) the change touched (absent keys stay absent)", () => {
+    const modelOnly = parseEventsFrame(
+      JSON.stringify({
+        type: "session",
+        sessionId: "sess_1",
+        projectId: "proj_1",
+        kind: "meta",
+        selectedModel: { providerId: "z-ai", model: "glm-4.7" },
+      }),
+    );
+    expect(modelOnly).toEqual({
+      type: "session",
+      sessionId: "sess_1",
+      projectId: "proj_1",
+      kind: "meta",
+      selectedModel: { providerId: "z-ai", model: "glm-4.7" },
+    });
+    if (modelOnly?.type === "session" && modelOnly.kind === "meta") {
+      expect("permissionMode" in modelOnly).toBe(false);
+      expect("activeMode" in modelOnly).toBe(false);
+    }
+    const modeOnly = parseEventsFrame(
+      JSON.stringify({ type: "session", sessionId: "s", kind: "meta", permissionMode: "full" }),
+    );
+    expect(modeOnly).toEqual({
+      type: "session",
+      sessionId: "s",
+      projectId: null,
+      kind: "meta",
+      permissionMode: "full",
+    });
+    // activeMode/selectedModel carry null for a CLEAR (the wire contract).
+    const cleared = parseEventsFrame(
+      JSON.stringify({ type: "session", sessionId: "s", kind: "meta", selectedModel: null, activeMode: null }),
+    );
+    expect(cleared).toEqual({
+      type: "session",
+      sessionId: "s",
+      projectId: null,
+      kind: "meta",
+      selectedModel: null,
+      activeMode: null,
+    });
+  });
+
+  it("R114-d: a malformed selectedModel pair drops the frame whole (never a guess)", () => {
+    expect(
+      parseEventsFrame(
+        JSON.stringify({ type: "session", sessionId: "s", kind: "meta", selectedModel: { providerId: "x" } }),
+      ),
+    ).toBeNull();
+    expect(
+      parseEventsFrame(
+        JSON.stringify({ type: "session", sessionId: "s", kind: "meta", selectedModel: "glm-4.7" }),
+      ),
+    ).toBeNull();
+  });
+
   it("non-JSON, wrong-typed and unknown shapes are honest nulls", () => {
     expect(parseEventsFrame("not json")).toBeNull();
     expect(parseEventsFrame(": ping")).toBeNull();
@@ -279,6 +339,35 @@ describe("EventsController — the dispatch", () => {
     expect(store.getState().settingsEpoch).toBe(1);
     expect(store.getState().sessionsEpoch).toBe(0);
     expect(store.getState().projectsEpoch).toBe(0);
+  });
+
+  it("R114-d: META frames move NO epoch (the open session screen applies the carried value in place) but reach listeners verbatim", async () => {
+    const seen: EventsFrame[] = [];
+    store.subscribeFrames((frame) => {
+      seen.push(frame);
+    });
+    controller.handleFrame({
+      type: "session",
+      sessionId: "sess_1",
+      projectId: null,
+      kind: "meta",
+      selectedModel: { providerId: "z-ai", model: "glm-4.7" },
+    });
+    await jest.advanceTimersByTimeAsync(1_500);
+    expect(store.getState()).toEqual({
+      streamLive: false,
+      sessionsEpoch: 0,
+      projectsEpoch: 0,
+      settingsEpoch: 0,
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual({
+      type: "session",
+      sessionId: "sess_1",
+      projectId: null,
+      kind: "meta",
+      selectedModel: { providerId: "z-ai", model: "glm-4.7" },
+    });
   });
 
   it("turn frames move NO epoch (the open session screen owns the mirror) but reach frame listeners verbatim", async () => {

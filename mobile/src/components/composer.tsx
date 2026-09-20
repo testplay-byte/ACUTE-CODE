@@ -14,9 +14,14 @@
  *     time (the desktop's R67-A pipeline);
  *   · MODE: the desktop's exact per-session PATCH (full/ask/plan) + the
  *     task-mode picker (GET /projects/:id/modes → activeMode);
- *   · MODEL: the configured-models sheet ("Auto (session default)" on top);
- *     the pick is a per-send override riding the send (model + providerId),
- *     persisted per session and remembered globally for the next one;
+ *   · MODEL (R114-d — THE HONEST LADDER): the local per-send override →
+ *     the session's server-side selectedModel → the context report's
+ *     effective model → "Auto" only when NOTHING is known. A pick writes
+ *     BOTH tiers: the per-send override (persisted per session, rides the
+ *     send) AND PATCH /sessions/:id {model} (the server-side truth — the
+ *     desktop + every other phone see the flip live through the meta
+ *     frame); "Auto (session default)" clears both back to the agent
+ *     default. The configured-models sheet lists the same rows;
  *   · THINKING: the desktop's exact level vocabulary + model-aware menu
  *     (detected reasoning ladders); rides the send as thinkingLevel;
  *   · CONTEXT: the meter pill (pressure-colored ring + %) fed by
@@ -119,10 +124,18 @@ export interface ComposerProps {
   permissionMode: string;
   /** The session row's CURRENT task mode id (null = none). */
   activeMode: string | null;
+  /** R114-d — the session row's SERVER-SIDE selected model (the tier between
+   * the per-send override and the agent row; null = follow the agent
+   * default). The pill's honest label when no local override is set. */
+  selectedModel: { providerId: string; model: string } | null;
   /** PATCH /sessions/:id/permissions — the screen owns the round-trip. */
   onPermissionModeChange: (mode: "full" | "ask" | "plan") => void;
   /** PATCH /sessions/:id {activeMode} — the screen owns the round-trip. */
   onActiveModeChange: (modeId: string | null) => void;
+  /** R114-d — PATCH /sessions/:id {model} — the session's server-side selected
+   * model (the cross-device truth; the other devices see the flip live via
+   * the meta frame). The screen owns the round-trip. */
+  onModelChange?: (model: { providerId: string; model: string } | null) => void;
   /** Fires with the text + the assembled per-send overrides (R113-c). */
   onSend: (content: string, overrides: SendOverrides) => void;
   onStop: () => void;
@@ -149,8 +162,10 @@ export function Composer({
   projectId,
   permissionMode,
   activeMode,
+  selectedModel,
   onPermissionModeChange,
   onActiveModeChange,
+  onModelChange,
   onSend,
   onStop,
   onQueue,
@@ -516,16 +531,33 @@ export function Composer({
       setModelOverride(override);
       void saveModelOverride(sessionId, override);
       if (override !== null) void saveLastUsedModel(override);
+      // R114-d — the pick is ALSO the session's server-side selected model
+      // (PATCH /sessions/:id {model}): the other devices see the flip live
+      // through the meta frame — the "Auto pill showed Auto while PC had a
+      // model selected" divergence dies at the source. null = clear both
+      // tiers back to the agent default.
+      if (onModelChange !== undefined) onModelChange(override);
       setSheet(null);
     },
-    [sessionId],
+    [sessionId, onModelChange],
   );
 
   // ── render ────────────────────────────────────────────────────────────────
 
   const modeLabel = modeOption(permissionMode).label;
+  // R114-d — THE HONEST MODEL LADDER: the local per-send override → the
+  // session's server-side selectedModel → the context report's effective
+  // model → only when NOTHING is known, "Auto" (the owner: "the Auto pill
+  // showed Auto while PC had a model selected"). Every tier shortens through
+  // shortModelLabel so long ids stay one pill.
   const modelLabel =
-    modelOverride !== null ? shortModelLabel(modelOverride.model, models) : "Auto";
+    modelOverride !== null
+      ? shortModelLabel(modelOverride.model, models)
+      : selectedModel !== null
+        ? shortModelLabel(selectedModel.model, models)
+        : contextReport !== null && contextReport.model.trim() !== ""
+          ? shortModelLabel(contextReport.model, models)
+          : "Auto";
   const thinkingLabel = thinkingSpec.unsupported ? "Off" : thinkingOption(displayedThinkingLevel).label;
   const ctxPct = contextReport !== null ? contextPercent(contextReport.usedTokens, contextReport.contextWindow) : null;
   const ctxPressure = contextReport !== null ? contextPressure(contextReport.usedTokens, contextReport.contextWindow) : "unknown";
@@ -792,7 +824,7 @@ export function Composer({
         <ControlPill
           label={modelLabel}
           icon={<Cpu size={13} color={tokens.accent} strokeWidth={2.2} />}
-          accessibilityLabel={`Model: ${modelOverride !== null ? modelLabel : "Auto (session default)"}`}
+          accessibilityLabel={`Model: ${modelLabel}`}
           chevron
           onPress={() => setSheet("model")}
         />
@@ -931,10 +963,14 @@ export function Composer({
 
       <Sheet open={sheet === "model"} onClose={() => setSheet(null)} title="Model">
         <SheetRow
-          icon={<Cpu size={15} color={modelOverride === null ? tokens.accent : tokens.textSecondary} strokeWidth={2.3} />}
+          icon={<Cpu size={15} color={modelOverride === null && selectedModel === null ? tokens.accent : tokens.textSecondary} strokeWidth={2.3} />}
           title="Auto (session default)"
-          caption="the session agent's own model"
-          selected={modelOverride === null}
+          caption={
+            selectedModel === null
+              ? "the session agent's own model"
+              : "clears the session's selected model back to the agent default"
+          }
+          selected={modelOverride === null && selectedModel === null}
           onPress={() => pickModel(null)}
         />
         {models === null ? (
@@ -950,10 +986,10 @@ export function Composer({
             .map((m) => (
               <SheetRow
                 key={m.id}
-                icon={<Cpu size={15} color={isModelSelected(modelOverride, m) ? tokens.accent : tokens.textSecondary} strokeWidth={2.3} />}
+                icon={<Cpu size={15} color={isModelInPlay(modelOverride, selectedModel, m) ? tokens.accent : tokens.textSecondary} strokeWidth={2.3} />}
                 title={m.displayName ?? m.modelId}
                 caption={`${providerName(m.providerId)}${m.contextWindow !== null ? ` · ${formatTokens(m.contextWindow)} ctx` : ""}`}
-                selected={isModelSelected(modelOverride, m)}
+                selected={isModelInPlay(modelOverride, selectedModel, m)}
                 onPress={() => pickModel({ model: m.modelId, providerId: m.providerId })}
               />
             ))
@@ -1262,6 +1298,18 @@ function shortModelLabel(modelId: string, models: ModelRecord[] | null): string 
 
 function isModelSelected(override: ModelOverride | null, m: ModelRecord): boolean {
   return override !== null && override.model === m.modelId && override.providerId === m.providerId;
+}
+
+/** R114-d — the model row's "in play" truth: the local override when set,
+ * else the session's SERVER-side selectedModel (the row the other devices
+ * see). The sheet marks the tier that actually answers the next send. */
+function isModelInPlay(
+  override: ModelOverride | null,
+  selectedModel: { providerId: string; model: string } | null,
+  m: ModelRecord,
+): boolean {
+  if (override !== null) return isModelSelected(override, m);
+  return selectedModel !== null && selectedModel.model === m.modelId && selectedModel.providerId === m.providerId;
 }
 
 const styles = StyleSheet.create({
