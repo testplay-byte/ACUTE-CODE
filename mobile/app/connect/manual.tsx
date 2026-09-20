@@ -1,30 +1,48 @@
 /**
- * The manual entry page (R109: "it should lead to a new page where the user
- * can input the values manually or he can configure them as such") — the
- * full form: address (tunnel URL or host:port), the 8-digit PIN, the
- * optional certificate fingerprint (paste from the desktop), with live
- * tunnel/LAN detection and honest per-field validation. Submitting leads
- * to the confirm step — never straight to pairing.
+ * The manual entry page — Archetype 3 (the form), rebuilt per
+ * onboarding.md's "Manual entry (the anti-pattern, fixed)":
+ *
+ *   [chevron header: "Manual entry"]
+ *      "Enter the pairing values" (ONE line — no paragraph)
+ *      [Paste] smart action — parses address + PIN (+cert) from the
+ *              desktop's "Copy pairing text" clipboard payload
+ *      Address input (mono) + ONE-clause shape hint
+ *      Pairing PIN input (mono, 4+4 grouped as typed)
+ *      [Certificate fingerprint — collapsed "optional" disclosure]
+ *      "Continue" (primary; disabled until address+PIN; busy while submitting)
+ *
+ * The intro-paragraph card, the pin-only footnote, and the multi-clause
+ * hints are DELETED (the R115 copy law). The validation + parse flow and
+ * the confirm-screen route params are unchanged — submitting still leads
+ * to the confirm step, never straight to pairing.
  */
 
 import * as Clipboard from "expo-clipboard";
-import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
-import { Globe, Network, ClipboardPaste } from "lucide-react-native";
+import { ClipboardPaste, Globe, Network } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
+import { Disclosure } from "@/components/disclosure";
 import {
-  ClayCard,
   ClayInput,
   ChromeButton,
-  TypeBody,
+  FadeInUp,
+  PressableCard,
+  TypeBodyStrong,
   TypeCaption,
+  TypeHeading,
   TypeMicro,
 } from "@/design/primitives";
-import { selectionHaptic } from "@/design/haptics";
+import { selectionHaptic, warningHaptic } from "@/design/haptics";
 import { useTheme } from "@/design/theme";
-import { spacing } from "@/design/tokens";
-import { parseManualEntry } from "@/link/pairing";
+import { RADIUS_CHIP, TILE_OPTION, spacing } from "@/design/tokens";
+import {
+  formatCertFP,
+  formatPin,
+  parseManualEntry,
+  parsePairingText,
+} from "@/link/pairing";
 import { mobLog } from "@/lib/log";
 
 export default function ManualEntryScreen() {
@@ -33,48 +51,88 @@ export default function ManualEntryScreen() {
   const [address, setAddress] = useState("");
   const [pin, setPin] = useState("");
   const [certFP, setCertFP] = useState("");
+  const [certOpen, setCertOpen] = useState(false);
+  const [pasteNote, setPasteNote] = useState<string | null>(null);
   const [addressError, setAddressError] = useState<string | null>(null);
   const [pinError, setPinError] = useState<string | null>(null);
   const [fpError, setFpError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  // The busy state covers the navigation prep only — coming BACK from the
+  // confirm step must never show a stuck busy button.
+  useFocusEffect(
+    useCallback(() => {
+      setSubmitting(false);
+    }, []),
+  );
 
   const trimmedAddress = address.trim();
   const trimmedPin = pin.trim();
   const trimmedFp = certFP.trim();
 
-  // The live shape hint — what the address parses AS, as the user types.
+  // The live shape hint — ONE clause each (the tunnel/LAN truth, shortened
+  // from the old two-clause sentences per the copy law).
   const shape = useMemo(() => {
     if (trimmedAddress === "") return null;
     // The cloud relay's room form (v0.106.0): https://<relay>/m/<machineId> —
     // the path IS the address (it routes to the desktop's room).
     if (/^https:\/\/[^\/]+\/m\/[0-9a-fA-F]{64}\/?$/i.test(trimmedAddress)) {
-      return { kind: "tunnel" as const, label: "cloud relay — reaches the desktop from any network" };
+      return { kind: "tunnel" as const, label: "Tunnel — works from any network" };
     }
     if (/^https:\/\//i.test(trimmedAddress)) {
-      return { kind: "tunnel" as const, label: "tunnel URL — works from any network" };
+      return { kind: "tunnel" as const, label: "Tunnel — works from any network" };
     }
     if (/^http:\/\//i.test(trimmedAddress)) {
-      return { kind: "bad" as const, label: "http is refused — the link rides TLS" };
+      return { kind: "bad" as const, label: "http is refused" };
     }
     if (/^[A-Za-z0-9\.\-\[\]:]+$/.test(trimmedAddress) && trimmedAddress.includes(":")) {
-      return { kind: "lan" as const, label: "LAN address — same network as the desktop" };
+      return { kind: "lan" as const, label: "LAN — same network as the desktop" };
     }
-    if (trimmedAddress !== "" && !trimmedAddress.includes(":")) {
-      return { kind: "bad" as const, label: "add the port — like 192.168.1.20:8443" };
+    if (!trimmedAddress.includes(":")) {
+      return { kind: "bad" as const, label: "Add the port — like 192.168.1.20:8443" };
     }
     return null;
   }, [trimmedAddress]);
 
-  async function onPasteAddress() {
+  // Smart paste: one tap reads the clipboard and fills the form from the
+  // desktop's "Copy pairing text" payload (parsePairingText also accepts the
+  // loose human formats). Invalid → ONE honest line, never a red card.
+  async function onSmartPaste() {
+    let text = "";
     try {
-      const text = await Clipboard.getStringAsync();
-      if (text.trim() !== "") {
-        setAddress(text.trim());
-        void selectionHaptic();
-        mobLog("pair", "address pasted from clipboard");
-      }
+      text = await Clipboard.getStringAsync();
     } catch {
-      // Clipboard is a convenience — a failure is quiet.
+      text = "";
     }
+    const values = parsePairingText(text);
+    if (values === null) {
+      setPasteNote("No pairing values found on the clipboard.");
+      void warningHaptic();
+      return;
+    }
+    setPasteNote(null);
+    setAddress(values.address);
+    setPin(values.pin);
+    if (values.certFP !== undefined) {
+      setCertFP(formatCertFP(values.certFP));
+      setCertOpen(true);
+    }
+    void selectionHaptic();
+    mobLog("pair", "pairing text pasted", {
+      kind: values.address.toLowerCase().startsWith("https://") ? "tunnel" : "lan",
+    });
+  }
+
+  function onEditAddress(text: string) {
+    setAddress(text);
+    setPasteNote(null);
+  }
+
+  // The PIN renders 4+4 once the 8th digit lands (the space is stripped on
+  // submit — the raw state stays digits-only).
+  function onEditPin(text: string) {
+    setPin(text.replace(/\D/g, "").slice(0, 8));
+    setPasteNote(null);
   }
 
   function onSubmit() {
@@ -95,138 +153,160 @@ export default function ManualEntryScreen() {
     }
     void selectionHaptic();
     mobLog("pair", "manual entry validated", { kind: result.value.kind });
+    setSubmitting(true);
     router.push({
       pathname: "/connect/confirm",
       params: { source: "manual", payload: JSON.stringify(result.value) },
     });
   }
 
-  const ShapeIcon =
-    shape?.kind === "tunnel" ? Globe : shape?.kind === "lan" ? Network : null;
+  const ShapeIcon = shape?.kind === "tunnel" ? Globe : shape?.kind === "lan" ? Network : null;
+  const canSubmit = trimmedPin !== "" && trimmedAddress !== "";
 
   return (
     <ScreenScaffold title="Manual entry" back noPill keyboardAware>
-      <ClayCard elevated>
-        <View style={styles.introPad}>
-          <TypeBody style={styles.introTitle}>Enter the connection values</TypeBody>
-          <TypeCaption style={styles.introBody}>
-            The desktop shows its address and the one-time PIN under Settings → Link a device. A
-            tunnel or cloud-relay URL (https://…) reaches it from any network; a LAN address
-            (host:port) needs the same Wi-Fi.
-          </TypeCaption>
-        </View>
-      </ClayCard>
+      <FadeInUp index={0}>
+        <TypeHeading style={styles.hero}>Enter the pairing values</TypeHeading>
+      </FadeInUp>
 
-      <View style={styles.form}>
-        <View>
-          <ClayInput
-            label="Address or tunnel URL"
-            mono
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-            placeholder="192.168.1.20:8443  ·  https://acute.example.com"
-            value={address}
-            onChangeText={setAddress}
-            style={styles.monoInput}
-          />
-          <View style={styles.addressMetaRow}>
-            {shape !== null && ShapeIcon !== null ? (
-              <View style={styles.shapeRow}>
-                <ShapeIcon size={14} color={tokens.textTertiary} strokeWidth={2.2} />
-                <TypeMicro>{shape.label}</TypeMicro>
-              </View>
-            ) : shape?.kind === "bad" ? (
-              <TypeMicro style={{ color: tokens.warning }}>{shape.label}</TypeMicro>
-            ) : null}
-            <View style={styles.spacer} />
-            <View style={styles.pasteWrap}>
-              <ChromeButton sheen={false} onPress={() => void onPasteAddress()} style={styles.pasteBtn}>
-                <View style={styles.pasteRow}>
-                  <ClipboardPaste size={14} color={tokens.accentText} strokeWidth={2.2} />
-                  <TypeMicro style={{ color: tokens.accentText }}>paste</TypeMicro>
-                </View>
-              </ChromeButton>
+      <FadeInUp index={1}>
+        <PressableCard
+          elevated
+          onPress={() => void onSmartPaste()}
+          accessibilityLabel="Paste pairing text"
+          testID="manual-paste"
+        >
+          <View style={styles.pasteInner}>
+            <View style={[styles.pasteChip, { backgroundColor: tokens.subtleHover }]}>
+              <ClipboardPaste size={24} color={tokens.accent} strokeWidth={2.2} />
+            </View>
+            <View style={styles.pasteText}>
+              <TypeBodyStrong>Paste pairing text</TypeBodyStrong>
+              {pasteNote !== null ? (
+                <TypeCaption style={{ color: tokens.warning }}>{pasteNote}</TypeCaption>
+              ) : null}
             </View>
           </View>
-          {addressError !== null ? (
-            <TypeCaption style={{ color: tokens.danger }}>{addressError}</TypeCaption>
-          ) : null}
-        </View>
+        </PressableCard>
+      </FadeInUp>
 
-        <View>
-          <ClayInput
-            label="Pairing PIN"
-            mono
-            keyboardType="number-pad"
-            maxLength={8}
-            placeholder="8 digits"
-            value={pin}
-            onChangeText={setPin}
-          />
-          <TypeCaption style={styles.pinHint}>
-            Valid for 120 seconds — generate a fresh one on the desktop if it expired.
-          </TypeCaption>
-          {pinError !== null ? (
-            <TypeCaption style={{ color: tokens.danger }}>{pinError}</TypeCaption>
-          ) : null}
-        </View>
+      <View style={styles.form}>
+        <FadeInUp index={2}>
+          <View>
+            <ClayInput
+              label="Address or tunnel URL"
+              mono
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              placeholder="192.168.1.20:8443  ·  https://acute.example.com"
+              value={address}
+              onChangeText={onEditAddress}
+              returnKeyType={canSubmit ? "go" : "next"}
+              onSubmitEditing={canSubmit ? onSubmit : undefined}
+              style={styles.monoInput}
+            />
+            {shape !== null ? (
+              shape.kind === "bad" ? (
+                <TypeMicro style={[styles.shapeRow, { color: tokens.warning }]}>
+                  {shape.label}
+                </TypeMicro>
+              ) : ShapeIcon !== null ? (
+                <View style={styles.shapeRow}>
+                  <ShapeIcon size={14} color={tokens.textTertiary} strokeWidth={2.2} />
+                  <TypeMicro>{shape.label}</TypeMicro>
+                </View>
+              ) : null
+            ) : null}
+            {addressError !== null ? (
+              <TypeCaption style={{ color: tokens.danger }}>{addressError}</TypeCaption>
+            ) : null}
+          </View>
+        </FadeInUp>
 
-        <View>
-          <ClayInput
-            label="Certificate fingerprint — optional"
-            mono
-            autoCapitalize="characters"
-            autoCorrect={false}
-            placeholder="AA:BB:CC:… (64 hex, from the desktop's Devices tab)"
-            value={certFP}
-            onChangeText={setCertFP}
-            style={styles.monoInput}
-          />
-          <TypeCaption style={styles.fpHint}>
-            Pairing without it trusts the host's certificate on first use (the QR path pins it
-            automatically). Typing it makes a LAN pairing exactly as strong.
-          </TypeCaption>
-          {fpError !== null ? (
-            <TypeCaption style={{ color: tokens.danger }}>{fpError}</TypeCaption>
-          ) : null}
-        </View>
+        <FadeInUp index={3}>
+          <View>
+            <ClayInput
+              label="Pairing PIN"
+              mono
+              keyboardType="number-pad"
+              maxLength={9}
+              placeholder="8 digits"
+              value={formatPin(pin)}
+              onChangeText={onEditPin}
+              returnKeyType={canSubmit ? "go" : "done"}
+              onSubmitEditing={canSubmit ? onSubmit : undefined}
+            />
+            {pinError !== null ? (
+              <TypeCaption style={{ color: tokens.danger }}>{pinError}</TypeCaption>
+            ) : null}
+          </View>
+        </FadeInUp>
+
+        <FadeInUp index={4}>
+          <Disclosure
+            open={certOpen}
+            onToggle={() => setCertOpen((open) => !open)}
+            accessibilityLabel="Optional: certificate fingerprint"
+            testID="manual-cert-disclosure"
+            label={<TypeCaption style={{ color: tokens.textTertiary }}>Optional: certificate fingerprint</TypeCaption>}
+          >
+            <ClayInput
+              mono
+              autoCapitalize="characters"
+              autoCorrect={false}
+              placeholder="AA:BB:CC:… (64 hex, from the desktop's Devices tab)"
+              value={certFP}
+              onChangeText={setCertFP}
+              returnKeyType={canSubmit ? "go" : "done"}
+              onSubmitEditing={canSubmit ? onSubmit : undefined}
+              style={styles.monoInput}
+            />
+            {fpError !== null ? (
+              <TypeCaption style={{ color: tokens.danger }}>{fpError}</TypeCaption>
+            ) : null}
+          </Disclosure>
+        </FadeInUp>
       </View>
 
-      <ChromeButton
-        onPress={onSubmit}
-        disabled={trimmedPin === "" || trimmedAddress === ""}
-        busy={false}
-      >
-        Continue
-      </ChromeButton>
-
-      <TypeCaption style={styles.footNote}>
-        Leaving the address empty with just the PIN re-pairs the desktop you already linked.
-      </TypeCaption>
+      <FadeInUp index={5}>
+        <ChromeButton
+          flat
+          onPress={onSubmit}
+          disabled={!canSubmit}
+          busy={submitting}
+          testID="manual-continue"
+        >
+          Continue
+        </ChromeButton>
+      </FadeInUp>
     </ScreenScaffold>
   );
 }
 
 const styles = StyleSheet.create({
-  introPad: { padding: spacing.lg, gap: spacing.md },
-  introTitle: { fontSize: 17 },
-  introBody: { lineHeight: 19 },
-  form: { gap: spacing.lg },
-  monoInput: { fontSize: 13.5 },
-  addressMetaRow: {
+  hero: { paddingTop: spacing.xs },
+  pasteInner: {
     flexDirection: "row",
+    gap: spacing.md,
+    padding: spacing.lg,
     alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: spacing.xs,
-    minHeight: 30,
   },
-  shapeRow: { flexDirection: "row", gap: 5, alignItems: "center" },
-  spacer: { flex: 1 },
-  pasteWrap: {},
-  pasteBtn: { minHeight: 32, paddingHorizontal: spacing.md, paddingVertical: 6 },
-  pasteRow: { flexDirection: "row", gap: 5, alignItems: "center" },
-  pinHint: { marginTop: -6 },
-  fpHint: { marginTop: -6, lineHeight: 17 },
-  footNote: { textAlign: "center", lineHeight: 17 },
+  pasteChip: {
+    width: TILE_OPTION,
+    height: TILE_OPTION,
+    borderRadius: RADIUS_CHIP,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pasteText: { flex: 1, gap: spacing.xs },
+  form: { gap: spacing.xl },
+  monoInput: { fontSize: 13.5 },
+  shapeRow: {
+    flexDirection: "row",
+    gap: 5,
+    alignItems: "center",
+    marginTop: spacing.xs,
+    minHeight: 18,
+  },
 });

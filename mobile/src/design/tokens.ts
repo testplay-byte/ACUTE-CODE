@@ -475,6 +475,11 @@ export const TYPE_CAPTION = 12.5;
 export const TYPE_MICRO = 11;
 /** 13 / 400 mono — commands, tool output, fingerprints, PINs. */
 export const TYPE_MONO = 13;
+/**
+ * 26 / mono-medium — the confirm screen's big grouped pairing PIN (the ONE
+ * value-tier display size; onboarding.md "Confirm the host", R115-D).
+ */
+export const TYPE_PIN_DISPLAY = 26;
 
 // ── radii (DESIGN.md §1) ─────────────────────────────────────────────────────
 

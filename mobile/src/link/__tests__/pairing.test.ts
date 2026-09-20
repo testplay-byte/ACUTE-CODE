@@ -1,6 +1,8 @@
 /**
- * pairing.test.ts — the QR payload parser (happy + every malformed case)
- * and the three manual fallback forms.
+ * pairing.test.ts — the QR payload parser (happy + every malformed case),
+ * the three manual fallback forms, and the smart-paste parser
+ * (parsePairingText — the desktop's "Copy pairing text" format plus the
+ * loose human forms).
  */
 
 import { describe, expect, it } from "@jest/globals";
@@ -11,6 +13,7 @@ import {
   normalizeCertFP,
   parseManualEntry,
   parsePairingPayload,
+  parsePairingText,
   parseRelayUrl,
   shortCertFP,
   shortMachineId,
@@ -391,5 +394,93 @@ describe("fingerprint display helpers", () => {
   it("shortCertFP and shortMachineId abbreviate for cards", () => {
     expect(shortCertFP(FP)).toBe("AABBCC…8899");
     expect(shortMachineId(FP)).toBe("aabbccdd");
+  });
+});
+
+// ── parsePairingText (smart paste, R115-D) ─────────────────────────────────
+
+describe("parsePairingText", () => {
+  const MACHINE_ID = "aabbccdd00112233445566778899aabbccdd00112233445566778899aabbccdd";
+  const CERT_COLONS =
+    "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99";
+  const CERT_BARE = CERT_COLONS.replace(/:/g, "").toLowerCase();
+
+  it("parses the desktop's exact Copy pairing text format", () => {
+    expect(parsePairingText("192.168.1.4:8443 · PIN 12345678")).toEqual({
+      address: "192.168.1.4:8443",
+      pin: "12345678",
+    });
+  });
+
+  // The table: the loose human forms — separators, orderings, labels.
+  it.each<[string, { address: string; pin: string }]>([
+    ["192.168.1.4:8443 PIN 12345678", { address: "192.168.1.4:8443", pin: "12345678" }],
+    ["192.168.1.4:8443\nPIN 12345678", { address: "192.168.1.4:8443", pin: "12345678" }],
+    ["pin: 12345678 · 192.168.1.4:8443", { address: "192.168.1.4:8443", pin: "12345678" }],
+    ["PIN12345678 at 192.168.1.4:8443", { address: "192.168.1.4:8443", pin: "12345678" }],
+    ["office-desktop.local:53411 · PIN 87654321", { address: "office-desktop.local:53411", pin: "87654321" }],
+    ["[fe80::1]:8443 PIN 12345678", { address: "[fe80::1]:8443", pin: "12345678" }],
+    ["12345678 192.168.1.20:8443", { address: "192.168.1.20:8443", pin: "12345678" }],
+    ["192.168.1.20:8443 99887766", { address: "192.168.1.20:8443", pin: "99887766" }],
+    ["Address: 192.168.1.20:8443, PIN: 99887766", { address: "192.168.1.20:8443", pin: "99887766" }],
+    ["See https://host.example.com. PIN 12345678", { address: "https://host.example.com", pin: "12345678" }],
+  ])("parses the loose form %j", (text, expected) => {
+    expect(parsePairingText(text)).toEqual(expected);
+  });
+
+  it("parses the tunnel URL form (https address, no port split)", () => {
+    expect(parsePairingText("https://abc-xyz.trycloudflare.com · PIN 12345678")).toEqual({
+      address: "https://abc-xyz.trycloudflare.com",
+      pin: "12345678",
+    });
+  });
+
+  it("parses the cloud relay's room URL without eating its hex as the PIN", () => {
+    const text = `https://acute-relay.anikuta.workers.dev/m/${MACHINE_ID} · PIN 12345678`;
+    expect(parsePairingText(text)).toEqual({
+      address: `https://acute-relay.anikuta.workers.dev/m/${MACHINE_ID}`,
+      pin: "12345678",
+    });
+    // The same URL with NO PIN marker and nothing else — the machineId's
+    // hex must never masquerade as the PIN → honest null.
+    expect(parsePairingText(`https://relay.example.com/m/${MACHINE_ID}`)).toBeNull();
+  });
+
+  it("extracts + normalizes a trailing certificate fingerprint when present", () => {
+    expect(parsePairingText(`192.168.1.4:8443 · PIN 12345678 · ${CERT_COLONS}`)).toEqual({
+      address: "192.168.1.4:8443",
+      pin: "12345678",
+      certFP: CERT_BARE,
+    });
+  });
+
+  it("rejects an 8-digit run flanked by hex chars (fingerprints, machineIds)", () => {
+    // "12345678" sits inside a hex string — only the standalone run wins.
+    expect(parsePairingText("192.168.1.4:8443 abc12345678def 00000000")).toEqual({
+      address: "192.168.1.4:8443",
+      pin: "00000000",
+    });
+  });
+
+  // The negative table: nothing usable → null (ONE honest line upstream).
+  it.each<[string]>([
+    ["",],
+    ["   "],
+    ["hello world"],
+    ["12345678"],
+    ["192.168.1.4:8443"],
+    ["PIN 1234 192.168.1.4:8443"],
+    ["192.168.1.4:99999 · PIN 12345678"],
+    ["1234567 192.168.1.4:8443"],
+    ["123456789 192.168.1.4:8443"],
+    [`PIN 12345678 (a ${CERT_COLONS} fingerprint, no address)`],
+  ])("parses nothing usable from %j", (text) => {
+    expect(parsePairingText(text)).toBeNull();
+  });
+
+  it("never mutates the caller's string (pure)", () => {
+    const text = "192.168.1.4:8443 · PIN 12345678";
+    parsePairingText(text);
+    expect(text).toBe("192.168.1.4:8443 · PIN 12345678");
   });
 });

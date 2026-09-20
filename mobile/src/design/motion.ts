@@ -49,3 +49,17 @@ export const IDLE_FLOAT_LEG_MS = 1200;
 
 /** The granted moment's icon crossfade (motion.md §4.2, ~200ms). */
 export const CROSSFADE_MS = 200;
+
+// ── the R115-D connect-flow moments (motion.md §4.3/§4.4 + the QR scanner) ──
+
+/** The connect hero's traveling-dash loop (motion.md §4.3, ~1.6s). */
+export const LINK_LOOP_MS = 1600;
+
+/** The scanner's traveling scan line — one full top→bottom pass (~1.8s). */
+export const SCAN_TRAVEL_MS = 1800;
+
+/** The full-screen pairing moment, chips→merge→typed name (motion.md §4.4, ~1.4s). */
+export const PAIRING_MERGE_MS = 1400;
+
+/** The pairing content crossfade (motion.md §4.4 — the whole screen swaps, 150ms). */
+export const PAIRING_FADE_MS = 150;

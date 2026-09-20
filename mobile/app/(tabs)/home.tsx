@@ -1,290 +1,355 @@
 /**
- * Home v3 (R109; R113-e — the tabs merge; R114-c — the header-free root)
- * — the dashboard-front door: the header row is GONE (chromeless — the
- * owner: "the live status and the notification at the top are
- * unnecessary… free the space"), so the content IS the screen's top. In
- * order: the quiet CONNECTION BANNER (only while offline/connecting —
- * "messages will queue", tap → the connect hub; nothing renders while
- * live), the compact ACTIVITY row (the old bell's entry, unread-gated —
- * the accent dot badge only exists when something is actually unread),
- * the live host hero (status, retry, last-seen — the clay centerpiece),
- * the quick-action grid (approvals with its live badge, projects — the
- * sessions card folded into it when the sessions tab died), the recent
- * activity preview, and the theme dots. Unpaired → the honest "link a
- * device" card. Everything clay; nothing glow.
+ * Home v4 (R115-f — the honest home) — the List archetype, header-free root
+ * (docs/design-language/android/02-patterns/screen-archetypes.md §2): one
+ * quiet strip per truth, rows of two text lines max, nothing that fidgets.
+ * Top → bottom:
+ *
+ *   · THE CONNECTION ROW — one compact PressableCard (the big hero is DEAD:
+ *     version / last-seen / last-failure / retry all moved out — /connect
+ *     owns retry now). Dot: live=success, probing=warning+pulse,
+ *     offline=danger. Word: "Live" / "Looking for the host…" / "Offline"
+ *     (copy.md's pinned vocabulary). Caption: the host's word-pair name
+ *     (Wave E — hostLabel IS "Confused Coconut" now), so the row reads
+ *     "Live · Confused Coconut"; offline appends "· messages will queue"
+ *     (one line — the old banner folded into it). Tap → /connect.
+ *   · THE ACTIVITY STRIP — only while unread > 0 (bell chip + "{n} unread"
+ *     + chevron → /activity; no unread → no row, no noise).
+ *   · HAPPENING NOW — the heart of the round: the host's RUNNING sessions
+ *     (status === "running" straight off GET /sessions — the server's field
+ *     is the only truth; up to 4) as rows: project letter avatar (TILE_ROW
+ *     circle, the project's own color) + sessionTitle + "{projectName} ·
+ *     {sessionStatusLabel}" + the Live badge → /session/{id}. Live-refreshed
+ *     off the events epochs (hello + debounced session batches + project
+ *     frames — the projects.tsx pattern). Empty → the section simply
+ *     doesn't render (no empty state — quiet is the honest default).
+ *   · RECENT ACTIVITY — the 4-row preview (read-state dot, title, timeAgo)
+ *     + "see all"; the one-liner empty state.
+ *
+ * DELETED FOREVER (R115-f): the Appearance section + ThemeDots (the theme
+ * lives in settings now), the Quick actions 2×2 grid, the unpaired
+ * Scan/Enter card (the gate routes unpaired users to /connect as their
+ * landing — home renders the one-liner card for the deep-link case only).
  */
 
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Bell, ChevronRight, FolderGit2, MonitorSmartphone } from "lucide-react-native";
 import { StyleSheet, View } from "react-native";
-import {
-  Bell,
-  ChevronRight,
-  FolderGit2,
-  MonitorSmartphone,
-  ShieldCheck,
-} from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { timeAgo } from "@/components/host-card";
-import { ThemeDots } from "@/components/theme-picker";
 import {
+  Badge,
   ClayCard,
   PressableCard,
-  QuietButton,
   SectionHeader,
   StatusDot,
   TypeBodyStrong,
   TypeCaption,
   TypeMicro,
-  TypeTitle,
 } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
-import { spacing } from "@/design/tokens";
+import { spacing, TILE_ROW } from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import { useActivityFeed, useUnread } from "@/features/activity";
+import { useEventsEpoch } from "@/features/events";
+import { fetchProjects, type ProjectRow } from "@/features/config";
+import {
+  fetchSessions,
+  sessionStatusLabel,
+  sessionTitle,
+  type SessionRow,
+} from "@/features/sessions";
+import { mobLog, mobWarn } from "@/lib/log";
+
+/** The fold the sessions route serves (the same limit projects.tsx folds). */
+const SESSION_FOLD_LIMIT = 200;
+
+/** How many running sessions "Happening now" renders. */
+const RUNNING_PREVIEW = 4;
+
+/** How many notification rows the recent preview renders. */
+const RECENT_PREVIEW = 4;
 
 export default function HomeScreen() {
   const { tokens } = useTheme();
   const router = useRouter();
-  const { status, host, live, lastSeen, lastFailure } = useLink();
+  const { status, host } = useLink();
   const { state: activityState } = useActivityFeed();
   const unread = useUnread();
   const [, setTick] = useState(0);
 
-  // The honest relative clock — 30s.
+  // ── the world: projects (identity) + sessions (what's running) ──
+  const [projects, setProjects] = useState<ProjectRow[] | null>(null);
+  const [sessionRows, setSessionRows] = useState<SessionRow[] | null>(null);
+
+  // ── the live epochs (the projects.tsx pattern): hello (the resync), a
+  // debounced session-frame batch, or a project frame moves these — the
+  // refetch effect below keys on them. ──
+  const sessionsEpoch = useEventsEpoch("sessions");
+  const projectsEpoch = useEventsEpoch("projects");
+  // The MOUNT values — the refetch fires only when an epoch moves PAST its
+  // mount value (the mount loads above own the first fetch).
+  const mountEpochs = useRef({ sessions: sessionsEpoch, projects: projectsEpoch });
+
+  // The honest relative clock — 30s (the recent rows' "5m ago").
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 30_000);
     return () => clearInterval(t);
   }, []);
 
-  const connected = status === "connected";
-  const offline = status === "offline";
-  const connecting = status === "probing";
-  // R114-c — the banner's truth: only a PAIRED link that is not live yet
-  // (unpaired shows the hero's own honest card instead).
-  const showLinkBanner = host !== null && (offline || connecting);
+  // The project registry — the letter avatars' colors + the caption names.
+  // Failure stays quiet: identity is decoration here, never a failure state
+  // (the connection row owns the link's truth).
+  const loadProjects = useCallback(async () => {
+    try {
+      const outcome = await fetchProjects(getLinkManager());
+      if (outcome.ok) {
+        setProjects(outcome.data.projects);
+        mobLog("home", "projects loaded", { count: outcome.data.projects.length });
+      } else {
+        mobWarn("home", "projects unavailable", { status: outcome.error.status });
+      }
+    } catch {
+      mobWarn("home", "projects threw");
+    }
+  }, []);
 
-  // R113-e: the tabs merge — the Sessions card's destination became the
-  // Projects tab; folded with the old Projects card (two cards pointing at
-  // one tab is noise). Approvals keeps its badge + the hero carries the
-  // rest.
-  const quickActions = [
-    {
-      icon: ShieldCheck,
-      label: "Approvals",
-      caption: "the pocket brake pedal",
-      route: "/approvals" as const,
-      tone: "accent" as const,
-    },
-    {
-      icon: FolderGit2,
-      label: "Projects",
-      caption: "the registry & its sessions",
-      route: "/projects" as const,
-      tone: "neutral" as const,
-    },
-  ];
+  // The session fold — the same quiet 200 projects.tsx rides; a session
+  // shows as "running" ONLY through the server's own status field.
+  const loadSessions = useCallback(async () => {
+    try {
+      const outcome = await fetchSessions(getLinkManager(), { limit: SESSION_FOLD_LIMIT });
+      if (outcome.ok) {
+        setSessionRows(outcome.data.sessions);
+        mobLog("home", "session fold loaded", { sessions: outcome.data.sessions.length });
+      } else {
+        mobWarn("home", "session fold unavailable", { status: outcome.error.status });
+      }
+    } catch {
+      mobWarn("home", "session fold threw");
+    }
+  }, []);
+
+  // Load on mount + every (re)connect.
+  useEffect(() => {
+    if (status !== "connected") return; // unpaired/offline stay quiet — the row carries it
+    void loadProjects();
+    void loadSessions();
+  }, [status, loadProjects, loadSessions]);
+
+  // R115-f: the live refetch — a hello (the resync sweep), a project frame,
+  // or a debounced session-frame batch landed AFTER this screen mounted.
+  useEffect(() => {
+    if (sessionsEpoch === mountEpochs.current.sessions && projectsEpoch === mountEpochs.current.projects) return;
+    if (status !== "connected") return;
+    void loadProjects();
+    void loadSessions();
+  }, [sessionsEpoch, projectsEpoch, status, loadProjects, loadSessions]);
+
+  const connected = status === "connected";
+  const probing = status === "probing";
+  const offline = !connected && !probing;
+
+  // "Happening now" — the server's status field is the ONLY truth.
+  const running = useMemo(
+    () => (sessionRows ?? []).filter((row) => row.status === "running").slice(0, RUNNING_PREVIEW),
+    [sessionRows],
+  );
+  const projectById = useMemo(() => {
+    const map = new Map<string, ProjectRow>();
+    for (const project of projects ?? []) map.set(project.id, project);
+    return map;
+  }, [projects]);
+
+  // The connection row's pinned vocabulary (copy.md): the word + the
+  // word-pair name read as one line — "Live · Confused Coconut".
+  const statusWord = connected ? "Live" : probing ? "Looking for the host…" : "Offline";
 
   return (
     <ScreenScaffold title="ACUTE" chrome={false}>
-      {/* ── R114-c: the quiet connection banner — honesty WITHOUT permanent
-          clutter. Offline: "messages will queue" (the outbox's promise);
-          connecting: the calm word. Live: NOTHING (the hero + pull-to-refresh
-          carry the rest). Tap → the connect hub. */}
-      {showLinkBanner ? (
+      {host === null ? (
+        // ── unpaired: the honest one-liner (the gate normally lands these
+        //     users on /connect before home ever renders — this card is the
+        //     deep-link case). One line, one destination. ──
         <PressableCard
           onPress={() => router.push("/connect")}
-          accessibilityLabel={offline ? "Offline, messages will queue — open connection settings" : "Connecting — open connection settings"}
-          style={styles.bannerCard}
+          accessibilityLabel="No desktop linked — open the connect screen"
+          testID="home-unpaired"
         >
-          <View style={styles.bannerInner}>
-            <StatusDot color={tokens.warning} pulse={connecting} size={9} />
-            <TypeCaption
-              style={{ flex: 1, color: offline ? tokens.warning : tokens.textSecondary }}
-              numberOfLines={1}
-            >
-              {offline ? "Offline — messages will queue" : "Connecting…"}
-            </TypeCaption>
-            <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
+          <View style={styles.unpairedInner}>
+            <MonitorSmartphone size={20} color={tokens.textTertiary} strokeWidth={2.2} />
+            <TypeBodyStrong>No desktop linked</TypeBodyStrong>
+            <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
           </View>
         </PressableCard>
-      ) : null}
-
-      {/* ── R114-c: the bell's replacement — a compact Activity row, visible
-          ONLY while something is unread (the accent dot badge is the whole
-          point; no unread → no row, no noise). */}
-      {unread > 0 ? (
-        <PressableCard
-          onPress={() => router.push("/activity")}
-          accessibilityLabel={`Activity, ${unread} unread notifications`}
-          style={styles.bannerCard}
-        >
-          <View style={styles.bannerInner}>
-            <View style={[styles.activityIcon, { backgroundColor: tokens.subtleHover }]}>
-              <Bell size={17} color={tokens.accent} strokeWidth={2.2} />
-              <View
-                style={[styles.activityDot, { backgroundColor: tokens.accent }]}
-                accessibilityLabel={`${unread} unread`}
-              />
-            </View>
-            <View style={styles.activityRowText}>
-              <TypeBodyStrong style={styles.activityTitle}>Activity</TypeBodyStrong>
-              <TypeCaption numberOfLines={1}>
-                {unread === 1 ? "1 unread notification" : `${unread} unread notifications`}
-              </TypeCaption>
-            </View>
-            <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
-          </View>
-        </PressableCard>
-      ) : null}
-
-      {host === null ? (
-        // ── unpaired: the honest first card ──
-        <ClayCard elevated>
-          <View style={styles.unpairedPad}>
-            <View style={[styles.unpairedIcon, { backgroundColor: tokens.subtleHover }]}>
-              <MonitorSmartphone size={26} color={tokens.accent} strokeWidth={2.2} />
-            </View>
-            <View style={styles.unpairedText}>
-              <TypeTitle>No host linked yet</TypeTitle>
-              <TypeCaption style={styles.unpairedBody}>
-                Pair with the desktop once — scan its QR code or type the values — and this phone
-                remembers it for months.
-              </TypeCaption>
-            </View>
-          </View>
-          <View style={styles.unpairedActions}>
-            <QuietButton onPress={() => router.push("/connect/scan")}>Scan the QR code</QuietButton>
-            <QuietButton onPress={() => router.push("/connect/manual")}>Enter manually</QuietButton>
-          </View>
-        </ClayCard>
       ) : (
-        // ── the host hero ──
-        <ClayCard elevated>
-          <View style={styles.heroPad}>
-            <View style={styles.heroRow}>
-              <View style={[styles.heroIcon, { backgroundColor: tokens.subtleHover }]}>
-                <MonitorSmartphone size={24} color={tokens.accent} strokeWidth={2.2} />
+        <>
+          {/* ── the connection row — the whole link truth in one compact
+              strip; tap → the connect hub (which owns retry). ── */}
+          <PressableCard
+            onPress={() => router.push("/connect")}
+            enterIndex={0}
+            accessibilityLabel={`${statusWord}, ${host.hostLabel}${offline ? ", messages will queue" : ""} — open connection settings`}
+            testID="home-status"
+          >
+            <View style={styles.stripInner}>
+              <StatusDot
+                color={connected ? tokens.success : probing ? tokens.warning : tokens.danger}
+                pulse={probing}
+              />
+              <View style={styles.stripText}>
+                <TypeBodyStrong numberOfLines={1}>{statusWord}</TypeBodyStrong>
+                <TypeCaption numberOfLines={1} style={styles.stripMeta}>
+                  {`· ${host.hostLabel}${offline ? " · messages will queue" : ""}`}
+                </TypeCaption>
               </View>
-              <View style={styles.heroText}>
-                <TypeBodyStrong style={styles.heroLabel}>{host.hostLabel}</TypeBodyStrong>
-                <View style={styles.heroStatusRow}>
-                  <StatusDot
-                    color={
-                      connected ? tokens.success : offline ? tokens.warning : tokens.accent
-                    }
-                    pulse={!connected}
+              <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
+            </View>
+          </PressableCard>
+
+          {/* ── the activity strip — visible ONLY while something is unread
+              (no unread → no row, no noise). ── */}
+          {unread > 0 ? (
+            <PressableCard
+              onPress={() => router.push("/activity")}
+              enterIndex={1}
+              accessibilityLabel={`Activity, ${unread} unread notification${unread === 1 ? "" : "s"}`}
+              testID="home-activity-strip"
+            >
+              <View style={styles.stripInner}>
+                <View style={[styles.bellChip, { backgroundColor: tokens.subtleHover }]}>
+                  <Bell size={17} color={tokens.accent} strokeWidth={2.2} />
+                  <View
+                    style={[styles.bellDot, { backgroundColor: tokens.accent }]}
+                    accessibilityLabel={`${unread} unread`}
                   />
-                  <TypeCaption
-                    style={{
-                      color: connected
-                        ? tokens.success
-                        : offline
-                          ? tokens.warning
-                          : tokens.textSecondary,
-                    }}
-                  >
-                    {connected
-                      ? `connected · desktop v${live?.version ?? "?"}`
-                      : status === "probing"
-                        ? "looking for the host…"
-                        : "host offline — retrying"}
+                </View>
+                <View style={styles.stripText}>
+                  <TypeBodyStrong numberOfLines={1}>Activity</TypeBodyStrong>
+                  <TypeCaption numberOfLines={1} style={styles.stripMeta}>
+                    {`· ${unread} unread`}
                   </TypeCaption>
                 </View>
-              </View>
-              {!connected ? (
-                <QuietButton onPress={() => getLinkManager().retryNow()}>
-                  <View style={styles.retryRow}>
-                    <RefreshCw size={15} color={tokens.textSecondary} strokeWidth={2.2} />
-                  </View>
-                </QuietButton>
-              ) : null}
-            </View>
-            <TypeCaption style={styles.heroMeta}>
-              last seen {lastSeen === null ? "never" : timeAgo(lastSeen)}
-              {offline && lastFailure !== null ? ` · ${lastFailure.message}` : ""}
-            </TypeCaption>
-          </View>
-        </ClayCard>
-      )}
-
-      {/* ── the quick-action grid ── */}
-      <SectionHeader>Quick actions</SectionHeader>
-      <View style={styles.quickGrid}>
-        {quickActions.map((action, i) => {
-          const Icon = action.icon;
-          return (
-            <PressableCard
-              key={action.label}
-              elevated={i === 0}
-              enterIndex={i}
-              onPress={() => router.push(action.route as never)}
-              style={styles.quickCard}
-              accessibilityLabel={action.label}
-            >
-              <View style={styles.quickInner}>
-                <View style={[styles.quickIcon, { backgroundColor: tokens.subtleHover }]}>
-                  <Icon size={22} color={tokens.accent} strokeWidth={2.2} />
-                </View>
-                <TypeBodyStrong>{action.label}</TypeBodyStrong>
-                <TypeMicro>{action.caption}</TypeMicro>
+                <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
               </View>
             </PressableCard>
-          );
-        })}
-      </View>
+          ) : null}
 
-      {/* ── the recent activity preview ── */}
-      <SectionHeader action="see all" onAction={() => router.push("/activity")}>
-        Recent activity
-      </SectionHeader>
-      {activityState.latest.length === 0 ? (
-        <ClayCard>
-          <View style={styles.activityPad}>
-            <TypeCaption>
-              {connected
-                ? "nothing yet — approvals, finished tasks, and failures land here live"
-                : "connect to the host to see live activity"}
-            </TypeCaption>
-          </View>
-        </ClayCard>
-      ) : (
-        <ClayCard>
-          <View style={styles.activityPad}>
-            {activityState.latest.slice(0, 4).map((n) => (
-              <View key={n.id} style={styles.activityRow}>
-                <StatusDot
-                  color={n.read === 0 ? tokens.accent : tokens.textTertiary}
-                  size={7}
-                />
-                <View style={styles.activityText}>
-                  <TypeCaption numberOfLines={1}>{n.title}</TypeCaption>
-                  <TypeMicro numberOfLines={1}>
-                    {timeAgo(new Date(n.ts).getTime())} ago
-                  </TypeMicro>
-                </View>
+          {/* ── "Happening now" — the host's running sessions; the section
+              simply doesn't render when nothing runs (no empty state). ── */}
+          {running.length > 0 ? (
+            <>
+              <SectionHeader>Happening now</SectionHeader>
+              {running.map((row, i) => {
+                const project =
+                  row.projectId !== null ? (projectById.get(row.projectId) ?? null) : null;
+                const title = sessionTitle(row);
+                return (
+                  <PressableCard
+                    key={row.id}
+                    onPress={() => router.push(`/session/${row.id}`)}
+                    enterIndex={2 + i}
+                    accessibilityLabel={`Session ${title}, ${sessionStatusLabel(row.status)}${project !== null ? `, ${project.name}` : ""}`}
+                    testID={`home-running-${row.id}`}
+                  >
+                    <View style={styles.runInner}>
+                      {project !== null ? (
+                        <LetterAvatar name={project.name} color={project.color} />
+                      ) : (
+                        // No project (or not in the registry fold) — the
+                        // honest neutral identity, never a guessed letter.
+                        <View style={[styles.neutralTile, { backgroundColor: tokens.subtleHover }]}>
+                          <FolderGit2 size={20} color={tokens.textTertiary} strokeWidth={2.2} />
+                        </View>
+                      )}
+                      <View style={styles.runText}>
+                        <TypeBodyStrong numberOfLines={1}>{title}</TypeBodyStrong>
+                        <TypeCaption numberOfLines={1}>
+                          {project !== null
+                            ? `${project.name} · ${sessionStatusLabel(row.status)}`
+                            : sessionStatusLabel(row.status)}
+                        </TypeCaption>
+                      </View>
+                      <Badge tone="running">Live</Badge>
+                    </View>
+                  </PressableCard>
+                );
+              })}
+            </>
+          ) : null}
+
+          {/* ── the recent activity preview ── */}
+          <SectionHeader action="see all" onAction={() => router.push("/activity")}>
+            Recent activity
+          </SectionHeader>
+          {activityState.latest.length === 0 ? (
+            <ClayCard>
+              <View style={styles.emptyPad}>
+                <TypeCaption>
+                  {connected
+                    ? "Nothing yet — approvals and finished tasks land here live."
+                    : "Nothing yet — activity lands when the host is back."}
+                </TypeCaption>
               </View>
-            ))}
-          </View>
-        </ClayCard>
+            </ClayCard>
+          ) : (
+            <ClayCard>
+              <View style={styles.recentPad}>
+                {activityState.latest.slice(0, RECENT_PREVIEW).map((n, i) => {
+                  const ts = new Date(n.ts).getTime();
+                  return (
+                    <View key={n.id} style={styles.recentRow} testID={`home-recent-${i}`}>
+                      <StatusDot
+                        color={n.read === 0 ? tokens.accent : tokens.textTertiary}
+                        size={7}
+                      />
+                      <View style={styles.recentText}>
+                        <TypeCaption numberOfLines={1}>{n.title}</TypeCaption>
+                        <TypeMicro numberOfLines={1}>
+                          {Number.isNaN(ts) ? "" : timeAgo(ts)}
+                        </TypeMicro>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </ClayCard>
+          )}
+        </>
       )}
-
-      {/* ── the theme dots ── */}
-      <SectionHeader>Appearance</SectionHeader>
-      <ClayCard>
-        <View style={styles.themePad}>
-          <ThemeDots />
-        </View>
-      </ClayCard>
     </ScreenScaffold>
   );
 }
 
+// ── the project letter avatar (02-patterns/components.md) ──────────────────
+
+/**
+ * R115-f — the project identity tile: the name's first letter, white
+ * TypeBodyStrong, on the project's own theme color, a TILE_ROW (40px)
+ * circle. Local to home — no shared LetterAvatar exists anywhere in src/
+ * (grep-verified; the projects tab still carries its colored dot, a later
+ * wave's rework). The white-on-color literal is the components.md idiom
+ * (Badge's own fg) — no token exists for on-project-color text.
+ */
+function LetterAvatar({ name, color }: { name: string; color: string }) {
+  const trimmed = name.trim();
+  const letter = trimmed === "" ? "?" : trimmed.charAt(0).toUpperCase();
+  return (
+    <View
+      // The row's own accessibility label names the project — the bare
+      // letter must not double-read.
+      accessibilityElementsHidden
+      style={[styles.letterAvatar, { backgroundColor: color }]}
+    >
+      <TypeBodyStrong style={styles.letterAvatarText}>{letter}</TypeBodyStrong>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  bannerCard: {},
-  bannerInner: {
+  // The compact strip row (connection + activity): one line, 52px min.
+  stripInner: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
@@ -292,14 +357,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     minHeight: 52,
   },
-  activityIcon: {
+  // The word + "· meta" cluster — no gap: the caption's own "· " lead is
+  // the separator, so the line reads "Live · Confused Coconut".
+  stripText: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    flex: 1,
+    minWidth: 0,
+  },
+  stripMeta: { flexShrink: 1 },
+  bellChip: {
     width: 36,
     height: 36,
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
   },
-  activityDot: {
+  bellDot: {
     position: "absolute",
     top: -1,
     right: -1,
@@ -307,51 +381,41 @@ const styles = StyleSheet.create({
     height: 10,
     borderRadius: 5,
   },
-  activityRowText: { flex: 1, gap: 1 },
-  activityTitle: { fontSize: 15 },
-  unpairedPad: { padding: spacing.lg, gap: spacing.md, flexDirection: "row", alignItems: "center" },
-  unpairedIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 19,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  unpairedText: { flex: 1, gap: 2 },
-  unpairedBody: { lineHeight: 18 },
-  unpairedActions: {
+  // The running-session row: [identity 40] [label + one meta line] [badge].
+  runInner: {
     flexDirection: "row",
+    alignItems: "center",
     gap: spacing.md,
+    padding: spacing.md,
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
+    minHeight: 64,
   },
-  heroPad: { padding: spacing.lg, gap: spacing.md },
-  heroRow: { flexDirection: "row", gap: spacing.md, alignItems: "center" },
-  heroIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 18,
+  runText: { flex: 1, gap: 2 },
+  letterAvatar: {
+    width: TILE_ROW,
+    height: TILE_ROW,
+    borderRadius: TILE_ROW / 2,
     alignItems: "center",
     justifyContent: "center",
   },
-  heroText: { flex: 1, gap: 3 },
-  heroLabel: { fontSize: 16 },
-  heroStatusRow: { flexDirection: "row", gap: 6, alignItems: "center" },
-  retryRow: { width: 20, height: 20, alignItems: "center", justifyContent: "center" },
-  heroMeta: {},
-  quickGrid: { flexDirection: "row", gap: spacing.md },
-  quickCard: { flex: 1 },
-  quickInner: { padding: spacing.md, gap: spacing.sm, alignItems: "flex-start" },
-  quickIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
+  letterAvatarText: { color: "#FFFFFF" },
+  neutralTile: {
+    width: TILE_ROW,
+    height: TILE_ROW,
+    borderRadius: TILE_ROW / 2,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: spacing.xs,
   },
-  activityPad: { padding: spacing.md, gap: spacing.md },
-  activityRow: { flexDirection: "row", gap: spacing.sm, alignItems: "center" },
-  activityText: { flex: 1 },
-  themePad: { padding: spacing.md },
+  recentPad: { padding: spacing.md, gap: spacing.md },
+  recentRow: { flexDirection: "row", gap: spacing.sm, alignItems: "center" },
+  recentText: { flex: 1, gap: 1 },
+  emptyPad: { padding: spacing.lg },
+  unpairedInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.lg,
+    minHeight: 64,
+  },
 });

@@ -1,38 +1,78 @@
 /**
  * The confirm + pair step — the one screen that actually PAIRS. It receives
  * the candidate from the scanner (a QR payload) or the manual page (a
- * manual target) as JSON params, shows the host's identity for the final
- * look (addresses, the certificate fingerprint that will be pinned, the
- * machine id) and — R110 #6 (v0.106.0) — the PAIRING PIN prominently, in
- * the grouped 4+4 mono spelling, with the QR window's live countdown: the
- * owner cross-checks this against the desktop's Link-a-device screen while
- * pairing runs. Then it runs the pairing ladder:
+ * manual target) as JSON params.
  *
- *   validate → probe the address ladder (LAN first, relay last) → claim → store
+ * R115-D — onboarding.md's "Confirm the host" (Archetype 3, highlight
+ * discipline): each datum its OWN tier — ADDRESS (mono body + one
+ * tunnel/LAN caption), PAIRING PIN (big grouped 4+4 mono), the VALID-FOR
+ * chip (prominent, warning tint under 30s, one calm scale pulse per tick),
+ * and the certificate micro line (the fingerprint collapsed behind a
+ * disclosure). The "PIN window is 120 seconds" footnote is DELETED.
  *
- * On success: the phone adopts the host, one success haptic, straight to
- * home. On failure: the typed ladder's honest error card + retry.
+ * Countdown hits 0 → the actions area is REPLACED by the warning state card
+ * ("The window closed — rescan the QR code") — never a dead Pair button.
+ *
+ * On Pair: the FULL-SCREEN pairing moment (motion.md §4.4) — the content
+ * crossfades out (150ms), two clay chips (desktop + phone) spring together
+ * and merge, the desktop's word-pair name types in (TypeTitle), ~1.4s,
+ * successHaptic at the merge — then the pairing ladder (validate → probe →
+ * claim → store) proceeds exactly as before: success adopts the host and
+ * lands on home; failure springs the overlay back out and renders the
+ * honest FailureCard.
  */
 
 import * as Device from "expo-device";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
-import { CircleAlert, FingerprintPattern, KeyRound, MonitorSmartphone } from "lucide-react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StyleSheet, View, useWindowDimensions } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import Animated, {
+  interpolate,
+  runOnJS,
+  useAnimatedReaction,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withSequence,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
+import { CircleAlert, Monitor, Smartphone } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
+import { Disclosure } from "@/components/disclosure";
 import {
   Badge,
   ClayCard,
   ChromeButton,
+  FadeInUp,
   QuietButton,
   TypeBody,
+  TypeBodyStrong,
   TypeCaption,
   TypeMicro,
   TypeMono,
+  TypeTitle,
 } from "@/design/primitives";
 import { successHaptic, warningHaptic } from "@/design/haptics";
 import { useTheme } from "@/design/theme";
-import { fontFamily, spacing } from "@/design/tokens";
+import {
+  RADIUS_CARD,
+  RADIUS_CHIP,
+  RADIUS_PILL,
+  RADIUS_TILE,
+  TILE_HERO,
+  TILE_OPTION,
+  TYPE_BODY,
+  TYPE_MICRO,
+  TYPE_PIN_DISPLAY,
+  fontFamily,
+  mixHex,
+  spacing,
+} from "@/design/tokens";
+import { PAIRING_FADE_MS, PAIRING_MERGE_MS, SPRING } from "@/design/motion";
 import { acuteNetTransport } from "@/link/native-transport";
 import { hostStore } from "@/link/host-store";
 import {
@@ -42,11 +82,20 @@ import {
   type PairFailure,
 } from "@/link/pair-flow";
 import type { ManualTarget, PairingPayload } from "@/link/pairing";
-import { formatCertFP, formatPin } from "@/link/pairing";
+import { formatCertFP, formatPin, shortCertFP } from "@/link/pairing";
 import { getLinkManager } from "@/link/runtime";
 import { mobLog, mobWarn } from "@/lib/log";
 
 type Phase = { kind: "confirm" } | { kind: "pairing" } | { kind: "error"; failure: PairFailure };
+
+/** The countdown's urgency threshold — the chip tints warning under 30s. */
+const URGENT_SECONDS = 30;
+
+// The pairing moment's choreography (all derived from PAIRING_MERGE_MS):
+const MEET_DELAY_MS = PAIRING_FADE_MS; // the chips move once the content is gone
+const TYPE_DELAY_MS = PAIRING_MERGE_MS / 2; // the name starts typing at the merge
+const TYPE_MS = PAIRING_MERGE_MS * 0.4; // …and finishes ≈1.26s in (~1.4s total)
+const EXIT_MS = 300; // the failure spring-back-out
 
 export default function ConfirmScreen() {
   const { tokens } = useTheme();
@@ -54,6 +103,9 @@ export default function ConfirmScreen() {
   const params = useLocalSearchParams<{ source?: string; payload?: string }>();
   const [phase, setPhase] = useState<Phase>({ kind: "confirm" });
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [pairingExit, setPairingExit] = useState(false);
+  const [fpOpen, setFpOpen] = useState(false);
+  const reduced = useReducedMotion();
 
   // R110 #6: the QR window's honest countdown — a 1s tick while the screen
   // is mounted (the parsed expiresAt drives it; manual entries have no
@@ -63,9 +115,11 @@ export default function ConfirmScreen() {
     return () => clearInterval(t);
   }, []);
 
-  // The candidate + the QR's window expiry — parsed ONCE from the params
-  // (honest fallback: back to the hub when the params are missing or corrupt).
-  const parsed = React.useMemo(() => {
+  // The candidate + the QR's window expiry + the desktop's word-pair name —
+  // parsed ONCE from the params (honest fallback: back to the hub when the
+  // params are missing or corrupt). machineLabel rides the payload
+  // additively (R115-E); pre-R115 payloads render "the desktop".
+  const parsed = useMemo(() => {
     const raw = typeof params.payload === "string" ? params.payload : "";
     if (raw === "") return null;
     try {
@@ -74,15 +128,63 @@ export default function ConfirmScreen() {
         return {
           candidate: candidateFromManual(value as ManualTarget),
           expiresAt: null as number | null,
+          machineLabel: null as string | null,
         };
       }
       const payload = value as PairingPayload;
       const expiresAt = typeof payload.expiresAt === "number" ? payload.expiresAt : null;
-      return { candidate: candidateFromQr(payload), expiresAt };
+      const labelSource = (value as { machineLabel?: unknown }).machineLabel;
+      const machineLabel =
+        typeof labelSource === "string" && labelSource.trim() !== "" ? labelSource.trim() : null;
+      return { candidate: candidateFromQr(payload), expiresAt, machineLabel };
     } catch {
       return null;
     }
   }, [params.source, params.payload]);
+
+  // ── the pairing moment's bridge: the stage reports "merged", the ladder
+  //    waits for it so navigation always lands AFTER the full moment ──
+  const mergedRef = useRef(false);
+  const mergeResolveRef = useRef<(() => void) | null>(null);
+  const failureRef = useRef<PairFailure | null>(null);
+
+  function waitForMerge(): Promise<void> {
+    if (mergedRef.current) return Promise.resolve();
+    return new Promise((resolve) => {
+      mergeResolveRef.current = resolve;
+      // Safety valve: a lost animation (or a stage that never mounts) must
+      // never deadlock the pairing ladder behind the moment.
+      setTimeout(resolve, PAIRING_MERGE_MS + 800);
+    });
+  }
+
+  const handleMeet = useCallback(() => {
+    // The merge moment itself — motion.md §4.4's single successHaptic.
+    void successHaptic();
+  }, []);
+  const handleMerged = useCallback(() => {
+    mergedRef.current = true;
+    mergeResolveRef.current?.();
+    mergeResolveRef.current = null;
+  }, []);
+  const handleStageExited = useCallback(() => {
+    const failure = failureRef.current;
+    if (failure !== null) setPhase({ kind: "error", failure });
+  }, []);
+
+  // The content crossfades out when the pairing moment takes over (150ms)
+  // and back in when it exits. (Declared before the params fallback return
+  // — hooks run unconditionally.)
+  const contentOpacity = useSharedValue(1);
+  useEffect(() => {
+    const hidden = phase.kind === "pairing";
+    if (reduced) {
+      contentOpacity.value = hidden ? 0 : 1;
+      return;
+    }
+    contentOpacity.value = withTiming(hidden ? 0 : 1, { duration: PAIRING_FADE_MS });
+  }, [phase.kind, reduced, contentOpacity]);
+  const contentStyle = useAnimatedStyle(() => ({ opacity: contentOpacity.value }));
 
   if (parsed === null) {
     return (
@@ -98,20 +200,26 @@ export default function ConfirmScreen() {
     );
   }
 
-  const { candidate, expiresAt } = parsed;
+  const { candidate, expiresAt, machineLabel } = parsed;
   const secondsLeft =
     expiresAt !== null ? Math.max(0, Math.ceil((expiresAt - nowMs) / 1_000)) : null;
+  const expired = secondsLeft === 0;
 
   async function onPair() {
+    // Reset the moment's bookkeeping (a retry after failure re-runs it all).
+    mergedRef.current = false;
+    failureRef.current = null;
+    setPairingExit(false);
     setPhase({ kind: "pairing" });
     mobLog("pair", "pairing started", { kind: candidate.kind });
-    const result = await pairWithHost(candidate, {
+    const ladder = pairWithHost(candidate, {
       net: acuteNetTransport,
       store: hostStore,
       label: Device.modelName ?? Device.deviceName ?? "Android device",
     });
+    await waitForMerge();
+    const result = await ladder;
     if (result.ok) {
-      void successHaptic();
       mobLog("pair", "pairing succeeded", { host: result.value.host.hostLabel });
       getLinkManager().adoptPairedHost(result.value);
       router.replace("/");
@@ -119,7 +227,8 @@ export default function ConfirmScreen() {
     }
     void warningHaptic();
     mobWarn("pair", "pairing failed", { kind: result.error.kind, message: result.error.message });
-    setPhase({ kind: "error", failure: result.error });
+    failureRef.current = result.error;
+    setPairingExit(true); // the stage springs back out → the FailureCard renders
   }
 
   const pin = candidate.pin;
@@ -127,105 +236,368 @@ export default function ConfirmScreen() {
   const certFP = candidate.certFP;
 
   return (
-    <ScreenScaffold title="Confirm the host" back noPill>
-      <ClayCard elevated>
-        <View style={styles.identityPad}>
-          <View style={styles.identityRow}>
-            <View style={[styles.identityIcon, { backgroundColor: tokens.subtleHover }]}>
-              <MonitorSmartphone size={22} color={tokens.accent} strokeWidth={2.2} />
-            </View>
-            <View style={styles.identityText}>
-              <TypeBody>{addrs[0] ?? "the desktop"}</TypeBody>
-              <TypeCaption>
-                {candidate.kind === "tunnel"
-                  ? "tunnel link — reachable from any network"
-                  : candidate.relay !== null
-                    ? `${addrs.length} address${addrs.length === 1 ? "" : "es"} · port ${candidate.port} · cloud relay fallback`
-                    : `${addrs.length} address${addrs.length === 1 ? "" : "es"} · port ${candidate.port}`}
-              </TypeCaption>
-            </View>
-          </View>
-
-          {/* R110 #6: the pairing PIN, prominent — grouped 4+4 mono (the
-              desktop's value-tier spelling), visible through the countdown
-              AND the pairing spinner below. */}
-          <View style={[styles.pinBlock, { borderTopColor: tokens.borderSubtle }]}>
-            <TypeMicro>PAIRING PIN</TypeMicro>
-            <View style={styles.pinDigitsRow}>
-              <KeyRound size={20} color={tokens.accent} strokeWidth={2.2} />
-              <TypeMono style={styles.pinDigits} numberOfLines={1} testID="pair-pin">
-                {formatPin(pin)}
-              </TypeMono>
-            </View>
-            <TypeCaption style={styles.pinNote}>
-              {secondsLeft === null
-                ? "match it against the PIN on the desktop's Link-a-device screen"
-                : secondsLeft > 0
-                  ? `valid for another ${secondsLeft}s — match it against the desktop's screen`
-                  : "the window closed — generate a new PIN on the desktop and scan again"}
-            </TypeCaption>
-          </View>
-
-          <View style={[styles.fpRow, { borderTopColor: tokens.borderSubtle }]}>
-            <FingerprintPattern size={16} color={tokens.textTertiary} strokeWidth={2} />
-            <View style={styles.fpText}>
-              {certFP !== null ? (
-                <>
-                  <TypeCaption>this certificate gets pinned on first contact:</TypeCaption>
-                  <TypeMono numberOfLines={2} style={styles.fpMono}>
-                    {formatCertFP(certFP)}
+    <>
+      <ScreenScaffold title="Confirm the host" back noPill>
+        <Animated.View
+          style={[styles.content, contentStyle]}
+          pointerEvents={phase.kind === "pairing" ? "none" : "auto"}
+        >
+          <FadeInUp index={0}>
+            <ClayCard elevated>
+              <View style={styles.identityPad}>
+                {/* ADDRESS — its own tier */}
+                <View style={styles.tier}>
+                  <TypeMicro style={styles.tierLabel}>Address</TypeMicro>
+                  <TypeMono numberOfLines={1} style={styles.addressMono}>
+                    {addrs[0] ?? "the desktop"}
                   </TypeMono>
-                </>
-              ) : (
-                <TypeCaption>
-                  no fingerprint provided — the host's certificate is trusted on first use (QR
-                  pairing pins it automatically)
-                </TypeCaption>
-              )}
-            </View>
-          </View>
-        </View>
-      </ClayCard>
+                  <TypeCaption>
+                    {candidate.kind === "tunnel"
+                      ? "Tunnel — works from any network"
+                      : "LAN — same network as the desktop"}
+                  </TypeCaption>
+                </View>
 
-      {phase.kind === "error" ? <FailureCard failure={phase.failure} /> : null}
+                {/* PAIRING PIN — its own tier, the big grouped mono */}
+                <View style={[styles.tier, styles.tierDivided]}>
+                  <TypeMicro style={styles.tierLabel}>Pairing PIN</TypeMicro>
+                  <TypeMono style={styles.pinDigits} numberOfLines={1} testID="pair-pin">
+                    {formatPin(pin)}
+                  </TypeMono>
+                </View>
+
+                {/* Valid-for chip — prominent, its own row (QR candidates) */}
+                {secondsLeft !== null && secondsLeft > 0 ? (
+                  <View style={[styles.tier, styles.tierDivided]}>
+                    <ValidForChip seconds={secondsLeft} />
+                  </View>
+                ) : null}
+
+                {/* Certificate — ONE micro line; the fp collapsed behind a
+                    disclosure when the candidate carries one */}
+                <View style={[styles.certLine, styles.tierDivided]}>
+                  {certFP !== null ? (
+                    <>
+                      <TypeMicro>Certificate pinned on first contact</TypeMicro>
+                      <Disclosure
+                        open={fpOpen}
+                        onToggle={() => setFpOpen((open) => !open)}
+                        accessibilityLabel="Show the full certificate fingerprint"
+                        testID="confirm-cert-disclosure"
+                        label={<TypeMono>{shortCertFP(certFP)}</TypeMono>}
+                      >
+                        <TypeMono numberOfLines={2} style={styles.fpMono}>
+                          {formatCertFP(certFP)}
+                        </TypeMono>
+                      </Disclosure>
+                    </>
+                  ) : (
+                    <TypeMicro>Certificate trusted on first use (QR pins it)</TypeMicro>
+                  )}
+                </View>
+              </View>
+            </ClayCard>
+          </FadeInUp>
+
+          {phase.kind === "error" ? <FailureCard failure={phase.failure} /> : null}
+
+          {expired ? (
+            /* The window closed — the actions area is REPLACED (no dead
+               Pair button on an expired window). */
+            <FadeInUp index={1}>
+              <ClayCard bordered>
+                <View
+                  style={[
+                    styles.expiredPad,
+                    { backgroundColor: mixHex(tokens.warning, tokens.card, 0.08) },
+                  ]}
+                >
+                  <CircleAlert size={22} color={tokens.warning} strokeWidth={2.2} />
+                  <TypeBodyStrong style={styles.expiredLine}>
+                    The window closed — rescan the QR code
+                  </TypeBodyStrong>
+                  <QuietButton
+                    onPress={() => router.replace("/connect/scan")}
+                    testID="confirm-scan-again"
+                  >
+                    Scan again
+                  </QuietButton>
+                </View>
+              </ClayCard>
+            </FadeInUp>
+          ) : (
+            <FadeInUp index={1}>
+              <View style={styles.actions}>
+                <ChromeButton
+                  flat
+                  onPress={() => void onPair()}
+                  disabled={phase.kind === "pairing"}
+                  testID="confirm-pair"
+                >
+                  Pair with this host
+                </ChromeButton>
+                <QuietButton onPress={() => router.back()}>Not this one</QuietButton>
+              </View>
+            </FadeInUp>
+          )}
+        </Animated.View>
+      </ScreenScaffold>
 
       {phase.kind === "pairing" ? (
-        <ClayCard>
-          <View style={styles.pairingPad}>
-            <ActivityIndicator color={tokens.accent} />
-            <TypeBody>linking to the host…</TypeBody>
-            <TypeCaption>probing the addresses, then claiming the PIN</TypeCaption>
-          </View>
-        </ClayCard>
-      ) : (
-        <View style={styles.actions}>
-          <ChromeButton onPress={() => void onPair()}>Pair with this host</ChromeButton>
-          <QuietButton onPress={() => router.back()}>Not this one</QuietButton>
-        </View>
-      )}
-
-      <TypeCaption style={styles.footNote}>
-        The PIN window is 120 seconds. If it closes, the desktop can generate a fresh one without
-        touching anything here.
-      </TypeCaption>
-    </ScreenScaffold>
+        <PairingStage
+          machineLabel={machineLabel}
+          onMeet={handleMeet}
+          onDone={handleMerged}
+          exiting={pairingExit}
+          onExited={handleStageExited}
+        />
+      ) : null}
+    </>
   );
 }
+
+// ── the valid-for chip (countdown pressure, motion.md §3) ───────────────────
+
+function ValidForChip({ seconds }: { seconds: number }) {
+  const { tokens } = useTheme();
+  const reduced = useReducedMotion();
+  const scale = useSharedValue(1);
+  const urgent = seconds < URGENT_SECONDS;
+
+  useEffect(() => {
+    if (!urgent || reduced) return;
+    // One calm scale pulse per tick under 30s — never seizure flashing.
+    scale.value = withSequence(withSpring(1.05, SPRING), withSpring(1, SPRING));
+  }, [seconds, urgent, reduced, scale]);
+
+  const style = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  const bg = urgent ? mixHex(tokens.warning, tokens.bg, 0.14) : tokens.pillBg;
+  const border = urgent ? mixHex(tokens.warning, tokens.bg, 0.45) : tokens.border;
+  const fg = urgent ? tokens.warning : tokens.textSecondary;
+
+  return (
+    <Animated.View
+      accessibilityLabel={`Valid for ${seconds} seconds`}
+      style={[styles.validChip, { backgroundColor: bg, borderColor: border }, style]}
+    >
+      <TypeMicro style={{ color: fg }}>Valid for {seconds}s</TypeMicro>
+    </Animated.View>
+  );
+}
+
+// ── the full-screen pairing moment (motion.md §4.4) ─────────────────────────
+
+/** The merged pair's resting offsets (the chips overlap into one linked tile). */
+const MERGE_DESK_X = -14;
+const MERGE_DESK_Y = -8;
+const MERGE_PHONE_X = 16;
+const MERGE_PHONE_Y = 12;
+
+function PairingStage({
+  machineLabel,
+  onMeet,
+  onDone,
+  exiting,
+  onExited,
+}: {
+  machineLabel: string | null;
+  onMeet: () => void;
+  onDone: () => void;
+  exiting: boolean;
+  onExited: () => void;
+}) {
+  const { tokens } = useTheme();
+  const reduced = useReducedMotion();
+  const { width } = useWindowDimensions();
+  const label = machineLabel ?? "the desktop";
+
+  const meet = useSharedValue(0);
+  const typeProgress = useSharedValue(0);
+  const enter = useSharedValue(0);
+  const exit = useSharedValue(1);
+  const [typedCount, setTypedCount] = useState(0);
+  const [waiting, setWaiting] = useState(false);
+
+  // The parent's callbacks ride a ref — the mount choreography runs ONCE,
+  // not per render identity.
+  const cbRef = useRef({ onMeet, onDone, onExited });
+  cbRef.current = { onMeet, onDone, onExited };
+  const fireMeet = useCallback(() => cbRef.current.onMeet(), []);
+  const fireDone = useCallback(() => {
+    cbRef.current.onDone();
+    setWaiting(true);
+  }, []);
+  const fireExited = useCallback(() => cbRef.current.onExited(), []);
+
+  useEffect(() => {
+    if (reduced) {
+      meet.value = 1;
+      typeProgress.value = 1;
+      setTypedCount(label.length);
+      setWaiting(true);
+      fireMeet();
+      fireDone();
+      return;
+    }
+    // The chips spring together once the content has crossfaded out; the
+    // spring's settle IS the merge moment (the successHaptic fires there).
+    meet.value = withDelay(
+      MEET_DELAY_MS,
+      withSpring(1, SPRING, (finished) => {
+        if (finished) runOnJS(fireMeet)();
+      }),
+    );
+    // The word-pair name types in after the merge; the whole moment ≈ 1.4s.
+    typeProgress.value = withDelay(
+      TYPE_DELAY_MS,
+      withTiming(1, { duration: TYPE_MS }, (finished) => {
+        if (finished) runOnJS(fireDone)();
+      }),
+    );
+  }, [reduced, label.length, meet, typeProgress, fireMeet, fireDone]);
+
+  // The typewriter: the name reveals character-by-character on the UI thread.
+  useAnimatedReaction(
+    () => typeProgress.value,
+    (value) => {
+      "worklet";
+      runOnJS(setTypedCount)(Math.round(value * label.length));
+    },
+    [label.length, typeProgress],
+  );
+
+  useEffect(() => {
+    if (reduced) {
+      enter.value = 1;
+      return;
+    }
+    enter.value = withTiming(1, { duration: PAIRING_FADE_MS });
+  }, [reduced, enter]);
+
+  // Failure: the chips spring back out and the stage fades — THEN the
+  // FailureCard renders (never a hard cut).
+  useEffect(() => {
+    if (!exiting) return;
+    if (reduced) {
+      fireExited();
+      return;
+    }
+    meet.value = withSpring(0, SPRING);
+    exit.value = withTiming(0, { duration: EXIT_MS }, (finished) => {
+      if (finished) runOnJS(fireExited)();
+    });
+  }, [exiting, reduced, meet, exit, fireExited]);
+
+  const stageStyle = useAnimatedStyle(() => ({ opacity: enter.value * exit.value }));
+  const spread = width / 3;
+  const deskStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: interpolate(meet.value, [0, 1], [-spread, MERGE_DESK_X]) },
+      { translateY: interpolate(meet.value, [0, 1], [0, MERGE_DESK_Y]) },
+    ],
+  }));
+  const phoneStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: interpolate(meet.value, [0, 1], [spread, MERGE_PHONE_X]) },
+      { translateY: interpolate(meet.value, [0, 1], [0, MERGE_PHONE_Y]) },
+    ],
+  }));
+
+  return (
+    <SafeAreaView style={styles.stageRoot} edges={["top", "left", "right"]}>
+      <Animated.View style={[styles.stageFill, { backgroundColor: tokens.bg }, stageStyle]}>
+        <View style={styles.stageField}>
+          <Animated.View
+            style={[
+              styles.chipDesktop,
+              styles.chipBase,
+              {
+                backgroundColor: tokens.card,
+                borderTopColor: tokens.clayTopEdge,
+                boxShadow: tokens.clayShadow2,
+              },
+              deskStyle,
+            ]}
+          >
+            <Monitor size={28} color={tokens.accent} strokeWidth={2.2} />
+          </Animated.View>
+          <Animated.View
+            style={[
+              styles.chipPhone,
+              styles.chipBase,
+              {
+                backgroundColor: tokens.card,
+                borderTopColor: tokens.clayTopEdge,
+                boxShadow: tokens.clayShadow2,
+              },
+              phoneStyle,
+            ]}
+          >
+            <Smartphone size={20} color={tokens.accent} strokeWidth={2.2} />
+          </Animated.View>
+        </View>
+        <View style={styles.stageLabel}>
+          <TypeTitle numberOfLines={1} style={styles.stageName}>
+            {label.slice(0, typedCount)}
+          </TypeTitle>
+          {waiting ? <WaitingDots /> : null}
+        </View>
+      </Animated.View>
+    </SafeAreaView>
+  );
+}
+
+/** The calm waiting idiom (motion.md §3) — three 6px dots, 1.2s pulse, 180ms
+ *  stagger, while the pairing ladder probes the addresses. */
+function WaitingDots() {
+  const { tokens } = useTheme();
+  return (
+    <View style={styles.waitingRow} accessibilityLabel="Looking for the host">
+      <WaitingDot index={0} color={tokens.accent} />
+      <WaitingDot index={1} color={tokens.accent} />
+      <WaitingDot index={2} color={tokens.accent} />
+      <TypeCaption style={styles.waitingText}>Looking for the host…</TypeCaption>
+    </View>
+  );
+}
+
+function WaitingDot({ index, color }: { index: number; color: string }) {
+  const reduced = useReducedMotion();
+  const opacity = useSharedValue(0.3);
+  useEffect(() => {
+    if (reduced) {
+      opacity.value = 0.6;
+      return;
+    }
+    // The initial 180ms × index delay phase-shifts the identical loops, so
+    // the stagger persists for the whole wait.
+    opacity.value = withDelay(
+      index * 180,
+      withRepeat(
+        withSequence(withTiming(1, { duration: 600 }), withTiming(0.3, { duration: 600 })),
+        -1,
+        false,
+      ),
+    );
+  }, [index, opacity, reduced]);
+  const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return <Animated.View style={[styles.waitingDot, { backgroundColor: color }, style]} />;
+}
+
+// ── the failure card (one-line hints, copy.md) ──────────────────────────────
 
 function FailureCard({ failure }: { failure: PairFailure }) {
   const { tokens } = useTheme();
   const tone = failure.kind === "tls" ? "danger" : "neutral";
   const hint =
     failure.kind === "wrong-pin"
-      ? failure.attemptsRemaining !== undefined
-        ? `${failure.message} · ${failure.attemptsRemaining} attempts left`
-        : failure.message
+      ? failure.message
       : failure.kind === "window-closed"
-        ? "the 120-second window closed — generate a new PIN on the desktop and scan again"
+        ? "The window closed — rescan the QR code"
         : failure.kind === "tls"
-          ? "the certificate fingerprint does not match what was pinned — re-pair from the desktop's QR"
+          ? "Certificate mismatch — re-pair from the desktop's QR"
           : failure.kind === "wrong-host"
-            ? "a different machine answered — check the address"
+            ? "A different machine answered — check the address"
             : failure.message;
   return (
     <ClayCard bordered>
@@ -241,37 +613,68 @@ function FailureCard({ failure }: { failure: PairFailure }) {
 }
 
 const styles = StyleSheet.create({
+  content: { gap: spacing.lg },
   identityPad: { padding: spacing.lg, gap: spacing.md },
-  identityRow: { flexDirection: "row", gap: spacing.md, alignItems: "center" },
-  identityIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 15,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  identityText: { flex: 1, gap: 2 },
-  pinBlock: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: spacing.md, gap: spacing.xs },
-  pinDigitsRow: { flexDirection: "row", gap: spacing.sm, alignItems: "center" },
+  tier: { gap: spacing.xs },
+  tierLabel: { textTransform: "uppercase", letterSpacing: 0.8 },
+  tierDivided: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: spacing.md },
+  addressMono: { fontSize: TYPE_BODY, fontFamily: fontFamily.monoMedium, lineHeight: 22 },
   pinDigits: {
-    fontSize: 26,
+    fontSize: TYPE_PIN_DISPLAY,
     lineHeight: 32,
     fontFamily: fontFamily.monoMedium,
     letterSpacing: 1.5,
   },
-  pinNote: { lineHeight: 16 },
-  fpRow: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingTop: spacing.md,
-    alignItems: "flex-start",
+  validChip: {
+    alignSelf: "flex-start",
+    borderRadius: RADIUS_PILL,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
-  fpText: { flex: 1, gap: 2 },
-  fpMono: { fontSize: 11.5, lineHeight: 16 },
+  certLine: { gap: spacing.xs },
+  fpMono: { fontSize: TYPE_MICRO, lineHeight: 16 },
   actions: { gap: spacing.md },
-  pairingPad: { padding: spacing.xl, gap: spacing.md, alignItems: "center" },
+  expiredPad: {
+    padding: spacing.xl,
+    gap: spacing.md,
+    alignItems: "center",
+    borderRadius: RADIUS_CARD - 1,
+  },
+  expiredLine: { textAlign: "center" },
   errorPad: { padding: spacing.lg, gap: spacing.md },
   errorRow: { flexDirection: "row", gap: spacing.sm, alignItems: "center" },
-  footNote: { textAlign: "center", lineHeight: 17 },
+  // ── the full-screen pairing stage ──
+  stageRoot: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
+  // The whole moment centers as one column: the chip field above, the typed
+  // name (and the waiting dots) directly beneath the merged pair.
+  stageFill: { flex: 1, alignItems: "center", justifyContent: "center", gap: spacing.xl },
+  stageField: { width: "100%", height: TILE_HERO + spacing.xl },
+  chipBase: {
+    position: "absolute",
+    left: "50%",
+    top: "50%",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  chipDesktop: {
+    width: TILE_HERO,
+    height: TILE_HERO,
+    borderRadius: RADIUS_TILE,
+    marginLeft: -TILE_HERO / 2,
+    marginTop: -TILE_HERO / 2,
+  },
+  chipPhone: {
+    width: TILE_OPTION,
+    height: TILE_OPTION,
+    borderRadius: RADIUS_CHIP,
+    marginLeft: -TILE_OPTION / 2,
+    marginTop: -TILE_OPTION / 2,
+  },
+  stageLabel: { alignItems: "center", gap: spacing.md },
+  stageName: { textAlign: "center", maxWidth: 300 },
+  waitingRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  waitingDot: { width: 6, height: 6, borderRadius: 3 },
+  waitingText: { marginTop: 0 },
 });
