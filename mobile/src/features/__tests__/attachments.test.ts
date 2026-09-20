@@ -5,8 +5,9 @@
  * emails, whitespace-closed tokens), the project-tree walk + live filter
  * (the desktop's exact DFS + limit-8), and the typed clients' bodies
  * (POST /attachments/read, POST /attachments/upload, GET
- * /projects/:id/tree, GET /projects/:id/modes) — all against an injected
- * fake sender, zero React Native.
+ * /projects/:id/tree) — all against an injected fake sender, zero React
+ * Native. (GET /projects/:id/modes lost its last consumer with R115-i's
+ * task-mode deletion; the client went with it — R115-p.)
  */
 
 import { describe, expect, it } from "@jest/globals";
@@ -16,7 +17,6 @@ import {
   MAX_ATTACHMENTS,
   attachmentFromRead,
   detectAtToken,
-  fetchProjectModes,
   fetchProjectTree,
   filterProjectFiles,
   flattenTreeFiles,
@@ -235,21 +235,14 @@ describe("attachments — the typed clients", () => {
     });
   });
 
-  it("GET /projects/:id/tree and GET /projects/:id/modes (the picker's data)", async () => {
-    const { sender, calls } = makeSender((path) => ({
+  it("GET /projects/:id/tree (the picker's data)", async () => {
+    const { sender, calls } = makeSender(() => ({
       status: 200,
-      bodyText: JSON.stringify(
-        path.endsWith("/tree")
-          ? { tree: [], rootPath: "/tmp/proj" }
-          : { modes: [{ id: "deep-research", name: "Deep Research", description: "d", source: "builtin", readOnly: false }] },
-      ),
+      bodyText: JSON.stringify({ tree: [], rootPath: "/tmp/proj" }),
     }));
     const tree = await fetchProjectTree(sender, "proj 1"); // id is encoded
     expect(tree.ok && tree.data.rootPath).toBe("/tmp/proj");
     expect(calls[0]?.path).toBe("/api/v1/projects/proj%201/tree");
-    const modes = await fetchProjectModes(sender, "proj 1");
-    expect(modes.ok && modes.data.modes[0]?.id).toBe("deep-research");
-    expect(calls[1]?.path).toBe("/api/v1/projects/proj%201/modes");
-    expect(calls[1]?.init.method).toBeUndefined(); // a plain GET
+    expect(calls[0]?.init.method).toBeUndefined(); // a plain GET
   });
 });

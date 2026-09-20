@@ -73,13 +73,16 @@ export default function SettingsScreen() {
                 pulse={status === "probing"}
               />
             </View>
+            {/* R115-p — copy.md's pinned state vocabulary (the same words the
+                home strip + the More hub spell): "Live" / "Looking for the
+                host…" / "Offline", the word-pair name after the separator. */}
             <TypeCaption numberOfLines={1}>
               {host !== null
                 ? connected
-                  ? `live · ${host.hostLabel}`
+                  ? `Live · ${host.hostLabel}`
                   : status === "probing"
-                    ? `connecting… · ${host.hostLabel}`
-                    : `offline · ${host.hostLabel}`
+                    ? `Looking for the host… · ${host.hostLabel}`
+                    : `Offline · ${host.hostLabel}`
                 : "no desktop linked yet"}
             </TypeCaption>
           </View>

@@ -53,15 +53,6 @@ export interface AttachmentUploadResult {
   size: number;
 }
 
-/** One task-mode row (GET /projects/:id/modes — metadata only). */
-export interface ProjectModeRow {
-  id: string;
-  name: string;
-  description: string;
-  source: string;
-  readOnly: boolean;
-}
-
 /** One tree node (GET /projects/:id/tree — the desktop's TreeNode). */
 export interface TreeNode {
   type: "file" | "dir";
@@ -254,13 +245,7 @@ export async function fetchProjectTree(
   );
 }
 
-/** GET /projects/:id/modes — the task-modes index (metadata only). */
-export async function fetchProjectModes(
-  sender: ApiSender,
-  projectId: string,
-): Promise<ApiOutcome<{ modes: ProjectModeRow[] }>> {
-  return apiJson<{ modes: ProjectModeRow[] }>(
-    sender,
-    `/projects/${encodeURIComponent(projectId)}/modes`,
-  );
-}
+// R115-p: fetchProjectModes (GET /projects/:id/modes) was DELETED with the
+// task-mode picker (R115-i) — it had no remaining production consumer. The
+// endpoint itself still exists for the desktop's own picker; mobile re-adds
+// a client only if a future wave needs it.

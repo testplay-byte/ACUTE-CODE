@@ -9,7 +9,8 @@
  *   /                    → the router gate (onboarding → connect → tabs)
  *   /onboarding/*        → the FIRST-RUN setup wizard (welcome → permissions → connect)
  *   /connect             → the connection hub (add a connection: scan / manual; host management)
- *   /connect/scan        → the camera scanner (pinch zoom + torch)
+ *   /connect/scan        → the camera scanner (pinch zoom + the photo-pick
+ *                          fallback — R115-d deleted the torch, donts #22)
  *   /connect/manual      → the manual entry page (address/URL + PIN + fingerprint)
  *   /activity            → the notifications history (pushed from the bell)
  *   /(tabs)/…            → home · projects · approvals · dashboard · more

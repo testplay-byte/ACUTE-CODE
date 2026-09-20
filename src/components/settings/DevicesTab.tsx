@@ -655,8 +655,11 @@ function FullscreenPairQr({ payload, onClose }: { payload: string; onClose: () =
       onMouseDown={swallowPointer}
       className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-black/90"
     >
-      {/* bg-black/90 + text-white — the shared Dialog overlay's own dim
-          utilities (ui/dialog.tsx); pure black needs no theme pipeline. */}
+      {/* R115-p comment fix: bg-black/90 + text-white/75 are THIS overlay's
+          own dim utilities — ui/dialog.tsx's scrim is bg-black/40 and has no
+          white-text leg; the magnifier deliberately dims harder (arm's-length
+          QR needs the dead-black ground). Pure black/white at opacity are
+          opacity utilities, not theme colors — no pipeline needed. */}
       <div
         className="rounded-md overflow-hidden grid place-items-center"
         style={{ width: QR_FULLSCREEN_SIZE, height: QR_FULLSCREEN_SIZE, background: QR_MODULE_LIGHT }}
