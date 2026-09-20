@@ -1,13 +1,15 @@
-<!-- last-reviewed: 2026-09-20 round-113 -->
+<!-- last-reviewed: 2026-09-20 round-114 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` +
 `agent-core/src/routes/<domain>.ts` (the R84 split moved 71 of 131 routes
 into 14 domain modules) + `browser-proxy.ts`; established round-17
-(2026-08-23), refreshed continuously since (R37→R85, then R113; the R80.5
+(2026-08-23), refreshed continuously since (R37→R85, then R113, then
+R114; the R80.5
 backfill of 11 previously-undocumented routes + the R85 backfill of
-`GET /providers/:id/models-config` + the R113 live-sync additions — see the
-ROUND-80.5 and R113 sections at the end).
+`GET /providers/:id/models-config` + the R113 live-sync additions + the
+R114 sync-foundation additions — see the ROUND-80.5, R113, and R114
+sections at the end).
 The
 aspirational full contract (52
 operations, WS gateway, planned routes) lives in
@@ -77,21 +79,23 @@ duplicating the set).
 | Route | Contract |
 |---|---|
 | `POST /sessions` | `{mode:"single", agentId (required, validated), projectId?, title?}` → `202` (queued). **ROUND-50/R81: rows carry `permissionMode`** (`full\|ask\|plan`, default `ask`; the retired `editor` reads as `ask`; sub-agent children copy the parent's mode at delegation) |
-| `GET /sessions?limit=&offset=` | newest-first + total (NO projectId filter — client-side) |
-| `GET /sessions/:id` | session + `events[]` + `lastSeq` (events embedded; no backfill route). **R73/R81: rows carry `activeMode`** (the active POSTURE id or `null`; set/cleared via PATCH below or the agent's `switch_mode` tool — non-enforcing guidance since R81; see ROUND-73 additions) |
-| `PATCH /sessions/:id` | **round-33 (rename) · R73 (mode switch) · R81 (posture pointer)** — body `{title?, activeMode?}`, each independently optional: `title` (string ≤200) renames; `activeMode` is a POSTURE id (resolved against the session's project — projectless resolves builtins only; unknown → `400 VALIDATION` with `availableModes` in details, validated BEFORE any write), `null` clears, absent = untouched. `200` the bare updated session row (NOT the GET shape — no `events`/`lastSeq`). `404` unknown. R81: the posture is NON-ENFORCING guidance (switch_mode's REST surface — no shipped UI calls it); enforcement lives in the operating mode. |
-| `PATCH /sessions/:id/permissions` | **ROUND-50 · R81 (the unified operating-mode picker)** — `{mode: "full"\|"ask"\|"plan"}` → `200` the updated session + `events[]` + `lastSeq` (same shape as GET). `400 VALIDATION body.mode` otherwise — **R81: `editor` is retired** (the 400 carries a `details.hint` naming the mapping: "mode 'editor' was removed in R81 — use 'ask'…"; migration 0029 + a read-time remap map existing `editor` rows to `ask`, fail-closed). `404` unknown. Enforcement (R81, ADR-0029 — the SOLE enforcement tier): `sessionToolAllowList` (runtime.ts — shared with the context route): *plan* intersects tools to the 19-tool `PLAN_MODE_TOOLS` read-only/research set (canonical home `agents/mode-policy.ts`; includes the git inspectors, `analyze_image`, `job_status` — the retired R75 review/explore extras); *full* auto-approves every ask-tier gate EXCEPT the denylist-supreme (sudo/rm -rf/… never bypassed) while agent allowlists stay authoritative; *ask* keeps the interactive approval gates; the system prompt gains an OPERATING MODE section (non-ask modes only). The R75 task-mode policy tier is RETIRED — postures no longer narrow toolsets. |
+| `GET /sessions?limit=&offset=` | newest-first + total (NO projectId filter — client-side). **R114: rows carry `selectedModel`** (`{providerId, model}\|null` — the server-side session model tier, migration 0041; null = follow the agent default) |
+| `GET /sessions/:id` | session + `events[]` + `lastSeq` (events embedded; no backfill route). **R73/R81: rows carry `activeMode`** (the active POSTURE id or `null`; set/cleared via PATCH below or the agent's `switch_mode` tool — non-enforcing guidance since R81; see ROUND-73 additions). **R114: rows carry `selectedModel`** (see the R114 additions at the end) |
+| `PATCH /sessions/:id` | **round-33 (rename) · R73 (mode switch) · R81 (posture pointer) · R114 (selected model)** — body `{title?, activeMode?, model?}`, each independently optional: `title` (string ≤200) renames; `activeMode` is a POSTURE id (resolved against the session's project — projectless resolves builtins only; unknown → `400 VALIDATION` with `availableModes` in details, validated BEFORE any write), `null` clears, absent = untouched; `model` is the session's server-side selected-model pair (`{providerId, model}\|null` — see the R114 additions; validated BEFORE any write). `200` the bare updated session row (NOT the GET shape — no `events`/`lastSeq`). `404` unknown. R81: the posture is NON-ENFORCING guidance (switch_mode's REST surface — no shipped UI calls it); enforcement lives in the operating mode. |
+| `PATCH /sessions/:id/permissions` | **ROUND-50 · R81 (the unified operating-mode picker) · R114 (the selected-model pair rides the same route — the composer flips mode and model in one breath; see the R114 additions)** — `{mode: "full"\|"ask"\|"plan", model?}` → `200` the updated session + `events[]` + `lastSeq` (same shape as GET). `400 VALIDATION body.mode` otherwise — **R81: `editor` is retired** (the 400 carries a `details.hint` naming the mapping: "mode 'editor' was removed in R81 — use 'ask'…"; migration 0029 + a read-time remap map existing `editor` rows to `ask`, fail-closed). `404` unknown. Enforcement (R81, ADR-0029 — the SOLE enforcement tier): `sessionToolAllowList` (runtime.ts — shared with the context route): *plan* intersects tools to the 19-tool `PLAN_MODE_TOOLS` read-only/research set (canonical home `agents/mode-policy.ts`; includes the git inspectors, `analyze_image`, `job_status` — the retired R75 review/explore extras); *full* auto-approves every ask-tier gate EXCEPT the denylist-supreme (sudo/rm -rf/… never bypassed) while agent allowlists stay authoritative; *ask* keeps the interactive approval gates; the system prompt gains an OPERATING MODE section (non-ask modes only). The R75 task-mode policy tier is RETIRED — postures no longer narrow toolsets. |
 | `GET /sessions/:id/context?model=&providerId=` | **ROUND-50 (the composer's context donut) · ROUND-83 (the honest metering round — every new field additive; see the [CONTEXT-METER runbook](../../runbooks/CONTEXT-METER.md))** — `{model, providerId, contextWindow, contextWindowSource: "override"\|"catalog"\|"default", maxOutputTokens, available, usedTokens, usedTokensBasis: "estimated", breakdown:{systemPrompt, systemTools, memory, messages, meta, mcpTools:0}, actual\|null, compaction?, cache:{inputTokens, cachedInputTokens, hitRate\|null}, sessionTotals:{inputTokens, outputTokens, requests, costUsd, providerCalls}, usage:{main, subagents, combined}}`. Window + output reserve = `resolveTurnBudget` (models row → catalog → defaults; the OWNER's `max_output_tokens` finally honored; `available = window − output − 8 000` — the SAME line the compaction trigger and context guard use, ONE truth). **R83: the meter builds the same prompt sections a real turn carries** (skills, task-modes index, active mode, background tasks, environment) and MEASURES the real JSON tool schemas per effective tool (`tools/index.ts measureToolSchemaTokens`, in-process cached — replacing the fixed ≈350/tool approximation); **the messages estimate APPLIES the newest `context.compact` event** (the model receives summary + tail) and `compaction:{throughSeq, droppedMessages, tokensSaved}` reports it. **`actual`** = the provider's OWN prompt tokens for the last request (the newest `message.assistant` stats carrier — `{inputTokens, outputTokens, cachedInputTokens\|null, at, model}`; null before the first reply, never a fabricated 0). **`hitRate` is null when no usage row reported a cache tier** (the rate reads the raw SUM — no COALESCE; a provider without cache reporting renders "— not reported", never 0%). **`providerCalls`** = `SUM(usage_events.provider_calls)` (migration 0031 — the real SDK-call count; `requests` counts TURNS, one row per turn since R24). Cache from REAL `usage_events.cached_input_tokens` (migration 0020). ROUND-51: `usage:{main, subagents, combined}` (subagents = the DIRECT children's usage_events, listSubAgents parity; main/combined carry `providerCalls`). Flat pre-R83 fields byte-identical (additive shape). |
 | `POST /sessions/:id/compact` | **ROUND-83** — the compaction affordance the pre-R83 800K guard promised while no such command existed. Body `{}` → force-runs the SAME `assembleWithCompaction` machinery the turn loop uses (summarize the over-budget head into a dense briefing, persist the `context.compact` event, keep the newest messages; the summarizer's own spend is a usage row with `origin:"compaction"`). `200 {compacted: true, throughSeq, droppedMessages, tokensSaved}` · `200 {compacted: false, reason}` (nothing to summarize — a single-message session keeps its final message by construction; summarizer failure degrades to the honest hard trim, never a 500). Gates: `404` unknown session · `409` no agent / vanished agent / unconfigured model / missing provider / no baseUrl / disabled provider / no key. The next turn's assembly AND the context meter read the persisted event (fork/revert inherit it, ADR-0010). |
 | `POST /sessions/:id/messages` | `{content, model?}` — **synchronous whole turn** → `200 {assistantMessage:{seq,role,agentId,content,ts}, usage}`; 404/409 (terminal/unconfigured/no key)/502 provider. **ROUND-50: also accepts `thinkingLevel?: "default"\|"low"\|"high"\|"max"` (400 otherwise; injected as `reasoning.effort` on chat-completions bodies) and `attachments?: [{name, path?, size?, text?}]` (≤20, name ≤200 chars, text capped 128 KB server-side; persisted on the `message.user` payload and rendered into model-facing history as `--- attached file: … ---` blocks)** |
-| `POST /sessions/:id/messages/stream` | **SSE (the UI's primary path)** — same validation (incl. the ROUND-50 `thinkingLevel`/`attachments` fields); `text/event-stream` frames: `{type:"text-delta",delta}` · `{type:"thinking-delta",delta}` · `{type:"tool-call",toolName,argsSummary}` · `{type:"tool-result",toolName,argsSummary,ok}` · `{type:"finish",usage[,cachedInputTokens]}` · `subagent-status`/`subagent-event` envelopes (children stream their own live deltas — ROUND-50) · terminal `{type:"done",assistantMessage,usage}` or `{type:"error",status,code,message}`. **R42: a client disconnect does NOT abort the turn** — it completes in the background (events persist; the completion notification fires + Web Push delivers it to the closed window's service worker). A deliberate stop is `POST /sessions/:id/stop`. |
+| `POST /sessions/:id/messages/stream` | **SSE (the UI's primary path)** — same validation (incl. the ROUND-50 `thinkingLevel`/`attachments` fields); `text/event-stream` frames: **R114: `{type:"turn.started", text, model, providerId}` — the turn's FIRST frame** (emitted the instant `prepareTurn` succeeds, once per POST/stream; see the R114 additions) · `{type:"text-delta",delta}` · `{type:"thinking-delta",delta}` · `{type:"tool-call",toolName,argsSummary}` · `{type:"tool-result",toolName,argsSummary,ok}` · `{type:"finish",usage[,cachedInputTokens]}` · `subagent-status`/`subagent-event` envelopes (children stream their own live deltas — ROUND-50) · terminal `{type:"done",assistantMessage,usage}` or `{type:"error",status,code,message}`. **R42: a client disconnect does NOT abort the turn** — it completes in the background (events persist; the completion notification fires + Web Push delivers it to the closed window's service worker). A deliberate stop is `POST /sessions/:id/stop`. |
 | `POST /attachments/read` | **ROUND-50** — `{paths: string[] (≤20), projectId?}` → `{files: [{path, name, size, text\|null, truncated, error?}]}`. Text = first 128 KB head (`truncated:true` when longer); NUL-in-first-8KB sniff → `text:null`; relative paths resolve ONLY inside `projectId`'s root (escape/missing project → per-file `error`, never a 500); absolute paths read as-is (user-picked). Files >512 KB refuse (the honest per-file error — see the ROUND-67 section for the upload route that supersedes this cap for drop/paste). |
 | `POST /attachments/upload` | **ROUND-67** — the ingestion route (see the ROUND-67 section): `{projectId, name, dataBase64?\|absolutePath?}` (exactly ONE source) → `200 {path: "attachments/<name>", name, size}`; ≤8 MB decoded, sanitized names, content-dedupe (never overwrites). |
 | `POST /internal/dialog/files` | **ROUND-50** — the multi-FILE OS picker (the composer's Attach files). Tauri `pick_files` (rfd, parented to the main window, topmost) inside the shell; PowerShell `OpenFileDialog` Multiselect fallback (R48 topmost-owner pattern) outside → `{files: string[]}` (`[]` = cancelled). Never called by tests (blocks on a human). |
 | `POST /sessions/:id/stop` | **R42** — explicitly aborts the live streamed turn for the session → `{ok:true, stopped:boolean}`; the stream resolves with `{type:"stopped"}` (NOT an error; no task_failed notification). |
 
 `model` on either turn route overrides the agent's model for that call
-(ADR-0015). Usage on streamed turns = awaited totals cross-checked against
+(ADR-0015). **R114: the resolution is a THREE-TIER ladder — per-send
+override → `session.selectedModel` → agent row** (each side falls through
+independently; see the R114 additions at the end). Usage on streamed turns = awaited totals cross-checked against
 per-step sums (some providers only report per-step).
 
 ## Event log (ADR-0010, append-only, per-session `seq`)
@@ -1182,7 +1186,10 @@ screenshots AND the new `analyze_image` tool all read this one
 configuration):
 
 - `GET` → the bare `VisionSettings` `{mode: "off"|"separate"|"main",
-  provider: string|null, modelId: string|null}`.
+  provider: string|null, modelId: string|null}`. **R114: `"off"` is
+  RETIRED — the type is `"main"|"separate"`, and a stored `"off"` (or any
+  unknown value) READS as `"main"`** (a marked model always sees; see the
+  R114 additions at the end).
 - `PUT` → validated partial patch (mode enum, provider slug
   `^[a-z0-9_-]+$`, modelId ≤ 256 chars; `null` clears) → the new settings
   BARE; `400 VALIDATION` with the field named on bad payloads. The writes
@@ -2496,7 +2503,7 @@ Frames (the whole wire contract — JSON, one `data:` line each):
 | Frame | Semantics |
 |---|---|
 | `{"type":"hello"}` | once, immediately on open. **"Resync everything"**: a fresh/reconnected watcher refetches its state, then follows frames (whatever landed between the last received frame and the hello is caught by that refetch) |
-| `{"type":"session","sessionId","projectId","kind":"event"\|"status"\|"created","seq?","status?"}` | a session-scoped change. `event` = a row appended to the append-only session log (`seq` = the new row's seq — watchers refetch `GET /sessions/:id` and fold from their last seen seq). `status` = a REAL flip (`status` = the NEW value; a no-op write publishes nothing). `created` = a new session exists (POST /sessions AND delegation children — published at the `createSession` storage choke point; `forkSession` announces its own) |
+| `{"type":"session","sessionId","projectId","kind":"event"\|"status"\|"created"\|"meta","seq?","status?"}` | a session-scoped change. `event` = a row appended to the append-only session log (`seq` = the new row's seq — watchers refetch `GET /sessions/:id` and fold from their last seen seq). `status` = a REAL flip (`status` = the NEW value; a no-op write publishes nothing). `created` = a new session exists (POST /sessions AND delegation children — published at the `createSession` storage choke point; `forkSession` announces its own). **`meta` = R114: a session-level PREFERENCE changed** — `permissionMode?`/`activeMode?`/`selectedModel?` ride present-keys-only (see the R114 additions at the end) |
 | `{"type":"turn","sessionId","frame"}` | the LIVE turn mirror: `frame` is the EXACT `StreamTurnEvent` the initiating socket receives, published pre-serialization (text-delta, thinking-delta, tool-call/tool-result, meta.*, user.queued, error, done, stopped, debug-*, subagent-status…). Published BEFORE the clientGone check — the mirror survives the initiator's own death mid-turn |
 | `{"type":"project","projectId","kind":"created"\|"updated"}` | a project row was created (POST /projects). `updated` is reserved vocabulary — no project-update route exists, and DELETE stays unannounced in v1 |
 | `{"type":"settings","domain","value"}` | a settings domain was PUT; `value` is the persisted object as the domain's GET serves it — secrets NEVER ride the frame (cloud-connector broadcasts `hostKeyPresent`, not the key) |
@@ -2519,6 +2526,10 @@ notification-bus contract, verbatim — the notification bus itself is
 COMPLETELY untouched).
 
 ### GET/PUT /api/v1/settings/appearance — the theme-sync domain (NEW)
+
+**R114 widened this domain to FIVE fields** (the four chat-density prefs
+joined themeId/mode — same partial-PUT + broadcast contract; see the R114
+additions at the end for the full shape). The R113 two-field contract:
 
 - `GET` → `{themeId: nova|bento|midnight|sunset|mono|clay|null, mode:
   "system"|"light"|"dark"}` — the stored preference, or the default
@@ -2556,3 +2567,197 @@ COMPLETELY untouched).
   screen render configured-first ("Your providers" above the add-a-provider
   catalog tier); the CLI's display-only reads are unchanged (the field is
   additive; nobody breaks).
+
+## R114 additions (2026-09-20) — the sync-foundation round (mode/model live sync + turn.started + the honest model)
+
+**Truth for this section:** `agent-core/src/routes/sessions.ts`
+(`readSessionModelPatch` + both PATCH routes),
+`agent-core/src/storage/sessions.ts` (the selected-model tier + the
+meta-frame choke points),
+`agent-core/src/storage/migrations/0041_session_selected_model.sql`,
+`agent-core/src/agents/runtime.ts` (`turn.started` + the three-tier
+`prepareTurn` ladder), `agent-core/src/routes/sse.ts` (the once-per-POST
+gate), `agent-core/src/lib/events-bus.ts` (`publishSessionMetaFrame`),
+`agent-core/src/storage/settings.ts` (the appearance five-field domain),
+`agent-core/src/storage/vision.ts` +
+`agent-core/src/tools/plugins/computer-use.ts` (the vision rework),
+`agent-core/src/routes/system.ts` (fs browse). The round's story:
+`docs/ui-iterations/round-114.md`.
+Pinned by `agent-core/tests/r114-sync-wave.test.ts` (38 tests).
+
+### PATCH /sessions/:id + PATCH /sessions/:id/permissions — the `model` body field (NEW field on both routes)
+
+The session's SERVER-SIDE selected model — the persistent tier between
+the per-send override and the agent row (until R114 the desktop's pick
+lived only in browser localStorage; the phone rendered "Auto" and the two
+devices silently disagreed). Body field `model`, shared by BOTH PATCH
+routes (the composer flips mode and model in one breath):
+
+- **absent** → untouched; **`null`** → CLEAR (back to the agent default);
+  an object → must be a COMPLETE `{providerId, model}` pair.
+- Validation runs BEFORE any write (a bad model never renames the session
+  or switches the mode as a side effect): the pair must name a KNOWN +
+  CONFIGURED provider (a row WITH a `baseUrl` — the send-time gates then
+  police enabled/key honestly, exactly like an agent row referencing
+  them) and a model that matches a models row for that provider OR a
+  catalog entry (the same surface the pickers list — never a string a
+  picker could not have produced).
+- 400 shapes (all `VALIDATION`, field named in `details`):
+  not-an-object/partial-pair → `body.model` ("model must be
+  { providerId, model } or null…" / "…must carry BOTH providerId and
+  model"); unknown-or-baseUrl-less provider → `body.model.providerId`;
+  unknown model → `body.model.model`.
+- Persistence: migration `0041_session_selected_model.sql`
+  (`sessions.model_provider` + `model_id`; BOTH NULL = follow the agent
+  default — every pre-R114 row composes byte-identically; NULLs are
+  written only as a pair; a half-written/corrupt row fails open to null
+  at read). Writes flow through `setSessionSelectedModel` — the storage
+  choke point that publishes the meta frame. Forks deliberately start
+  modelless.
+- **The meta-frame publication**: every setter
+  (`updateSessionPermissionMode` / `updateSessionActiveMode` /
+  `setSessionSelectedModel`) publishes
+  `{type:"session", kind:"meta", …}` on the events bus at the choke point
+  — so BOTH PATCH routes AND the agent's `switch_mode` tool ride ONE
+  hook, and the other device's composer follows the flip live (never on
+  the next unrelated refetch).
+- **`prepareTurn`'s three-tier ladder**: per-send override →
+  `session.selectedModel` → agent row, each SIDE falling through
+  independently (a half override contributes its side and falls through —
+  the pre-R114 chain semantics the orchestrator's `subagentModel` arm
+  relies on; a complete override still wins outright).
+  `GET /sessions/:id/context`'s effective-model line mirrors the same
+  ladder (query pair → session tier → agent).
+
+### GET /sessions + GET /sessions/:id — the `selectedModel` row field (NEW field, additive)
+
+Every session row (list + detail + fork responses) now carries
+`selectedModel: {providerId, model} | null` (null = follow the agent
+default). Consumers: the phone's composer pill (local override →
+`detail.selectedModel` → the context report → "Auto") and the desktop's
+display seed (`loadModelOverride(sessionId) ?? session.selectedModel ??
+loadLastUsedModel()`, re-seeded on the session's `selectedModel` string
+key so a phone-side pick lands through the meta frame's invalidation).
+
+### The `turn.started` StreamTurnEvent (NEW SSE frame — the turn's FIRST frame)
+
+`{type:"turn.started", text, model, providerId}` — emitted the instant
+`prepareTurn` succeeds, BEFORE `setSessionStatus`/`appendSessionEvent`
+and before any loop-top queue delivery:
+
+- **First-frame guarantee**: nothing precedes it on the turn's stream
+  except the route's leading `: ping` comment — the OTHER device flips
+  into processing state and renders the user bubble BEFORE the persisted
+  fold refetch (pre-R114, nothing reached a watcher until the first
+  text/tool delta: the desktop's send button never flipped when the phone
+  sent).
+- **Once per POST/stream**: the sse route passes `emitTurnStarted: true`
+  for the POST's own first turn ONLY — queue continuations and the
+  orchestrator's streamed children stay quiet (they already have live
+  context via `user.queued` / `subagent-status` frames; a re-announcement
+  would be noise, and a child's frame would nest oddly inside the
+  subagent-event envelope). Default OFF on direct
+  `runStreamedAgentTurn` calls.
+- Payload: the USER text (`text` — a remote client renders the user
+  bubble immediately) + the RESOLVED effective `model` + `providerId`
+  (the three-tier ladder's verdict — a remote UI labels the live turn
+  honestly instead of "Auto"). NOT persisted (the `message.user` append
+  is the durable record). Rides the initiator's own stream (benign — its
+  reducer treats it as the opening frame) AND the events-bus mirror
+  `{type:"turn", sessionId, frame}` verbatim.
+
+### GET/PUT /api/v1/settings/appearance — the FIVE-field domain (R113's two fields + four)
+
+`{themeId: nova|bento|midnight|sunset|mono|clay|null, mode:
+"system"|"light"|"dark", chatDensity: "comfortable"|"compact",
+chatTextSize: "small"|"medium"|"large", timestampsMode:
+"hidden"|"hover", toolActivity: "detailed"|"compact"|"hidden"}`.
+
+- Defaults: `null / system / comfortable / medium / hover / detailed`.
+  Missing rows read as defaults — a pre-R114 database GETs the full
+  five-field shape with the new fields at their defaults (**no migration
+  needed**: the settings key-value table absorbs them, one row per
+  field, `appearance.<camelCase>`).
+- `PUT` takes a PARTIAL patch (any subset; an absent field never touches
+  its row — the R113 two-field semantics, extended); each enum validated
+  only when present; `400 VALIDATION` names `body.<field>`. All four new
+  fields are cosmetic-only render prefs — no turn machinery reads them.
+- Every PUT BROADCASTS the full five-field shape
+  (`{"type":"settings","domain":"appearance",value}` — value = the
+  persisted object as GET serves it). Consumers: the phone's Chat
+  section (four segmented rows, one-field partial PUTs) + the transcript
+  mappings; the desktop's write-through setters + echo-guarded live
+  apply (a present-but-INVALID value rejects the whole frame on both
+  clients — malformed is malformed).
+
+### Vision — the mode narrowing + the always-on ladder (BREAKING-ish: "off" retired)
+
+The owner directive: **a model marked `supportsVision` must ALWAYS be
+able to see, regardless of any other setting.**
+
+- `VisionMode = "main" | "separate"` (was `"off" | "separate" |
+  "main"`). READ COERCION: a stored `"off"` (the pre-R114 default, still
+  sitting in real databases) or any unknown value reads as `"main"`
+  (readEnum's fail-open fallback — stable + idempotent forever; no row
+  rewrites). WRITE COERCION: `PUT /vision/settings` ACCEPTS a legacy
+  `"off"` and coerces it to `"main"` (wire compat — an old client PUTting
+  its stored value gets the new semantics, never a 400); anything else
+  outside `main|separate` 400s. `POST /vision/test`'s dead off-branch is
+  deleted.
+- **`relayVision`'s ladder** (computer-use + browser screenshots +
+  `analyze_image` all relay through it): (1) `"separate"` FULLY
+  CONFIGURED (provider + modelId) → `describeRaster` on the dedicated
+  pair with the `<providerId>-vision` keyring slot; (2) else the MAIN
+  MODEL MARKED `supportsVision` → the turn's own model (mode `"main"` OR
+  the fallback from a chosen-but-incomplete separate pick — a half-built
+  separate picker must not blind a vision-capable session); (3) else the
+  honest refusal naming BOTH fixes (mark the model in Models &
+  Providers / pick the separate model in Settings → Image Analysis; the
+  separate-unconfigured variant adds why no fallback existed).
+- **`sessionHasVisionPath`** mirrors the ladder tier-for-tier (the flat
+  OR would let leftover separate rows un-blind a session whose relay
+  actually refuses — one vision configuration, one failure story).
+  Screenshot tools refuse only when NEITHER path works; any
+  settings-read failure → false (fail-closed).
+
+### GET /api/v1/system/fs/browse — the phone's New Project folder picker (NEW)
+
+`?path=<abs>&hidden=<0|1>` → `200 {path, parent: string|null,
+entries: [{name, path, dir}], truncated}` — names/types/paths ONLY,
+never file contents:
+
+- `path` omitted/blank → the user's HOME (`os.homedir()`); `hidden=1`
+  (or `"true"`) includes dotfiles, the default skips them.
+- Entries: DIRECTORIES first, then files, each alphabetical (the plain
+  string comparison — deterministic across machines); hard cap **400**
+  entries per response with `truncated: true` (a directory with thousands
+  of files answers fast; the picker paginates by descending into
+  subdirectories).
+- `parent` = the browsed directory's parent, `null` at a filesystem root
+  (`dirname("/") === "/"` — the picker hides Up).
+- `404 NOT_FOUND` on ENOENT (the OS's message rides along);
+  `400 VALIDATION` on not-a-directory/unreadable (the OS's message —
+  never a 500).
+- **Device-token reachable** (deliberately NOT on the device blocklist —
+  a paired phone is a view+input medium with config rights per the R109
+  ruling; only `/api/v1/system/reset` is blocked under `/system/*`).
+  Pinned by a real pair→claim→TLS-device-token test with the
+  `/computer-use/config` 403 contrast leg.
+
+### The events-bus session frame extension (kind "meta")
+
+The R113 session frame's `kind` vocabulary gains `"meta"`:
+
+`{"type":"session","sessionId","projectId","kind":"meta",
+"permissionMode"?, "activeMode"?, "selectedModel"?}` — a session-level
+PREFERENCE changed. Only the field(s) this change touched ride the frame
+(absent keys stay ABSENT on the JSON wire — never `undefined`);
+`activeMode`/`selectedModel` carry `null` for a clear. One frame per
+change, written at the storage choke point the durable row lands
+through, so the phone + desktop never silently disagree; a watcher
+applies the carried value directly (it IS the new truth) or refetches
+the session row. Consumers: the phone's `applySessionMetaPatch`
+(in-place detail flips; the frame moves NO list epochs — nothing in the
+lists reads mode/model) and the desktop's immediate
+`["session"]+["sessions"]` invalidation (no debounce — a preference
+patch is one tiny row write).

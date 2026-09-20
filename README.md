@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-20 round-113 -->
+<!-- last-reviewed: 2026-09-20 round-114 -->
 # ACUTE-CODE
 
 Local-first, closed-source multi-agent engineering workbench for Windows
@@ -23,24 +23,34 @@ Node sidecar; `shared/` holds domain types; `src-tauri/` is the Rust shell.
 - `pnpm dev` — Vite dev server on port 5173 (UI only)
 - **Desktop app:** `pnpm build`, then from `src-tauri/`: `cargo run` — debug builds load the embedded `../dist`; at launch the shell spawns `agent-core/dist/main.js`, does the stdout ready-line handshake, and injects provider keys from the OS secure store (Windows Credential Manager; the Linux Secret Service — ADR-0031). A `pnpm tauri` script exists (`package.json`), but the documented path remains build-then-cargo.
 
-## The Android companion (live sync — round-113 state)
+## The Android companion (live sync + full inventory — round-114 state)
 
 A phone pairs to the desktop (Settings → Devices; on the LAN or through the
 cloud relay — `docs/guides/CLOUDFLARE-SETUP.md`) and the two ends stay LIVE
 against each other: a turn started on either device streams to every open
 screen (thinking, tool runs, the caret — `GET /api/v1/events/stream`, the
-events-bus mirror), appearance and settings changes propagate the moment
-they're saved, and session/project lists refresh as things happen.
+events-bus mirror) and flips the OTHER device to its processing state the
+moment it begins (`turn.started` — the remote bubble, the resolved model,
+the Thinking placeholder); appearance — theme, mode, and the four chat
+prefs (density / text size / timestamps / tool activity) — plus the
+session's operating mode and selected model propagate the moment they're
+saved, and session/project lists refresh as things happen.
 
 Navigation is projects-first on both platforms: the desktop's project view
 lists each project's sessions row-by-row (a row opens its session); the
-phone's tabs are home · projects · approvals · dashboard · settings, with a
-project detail screen carrying that project's sessions. The phone's chat
-screen carries the PC composer's controls — operation mode, model selection,
-thinking level, the context ring + breakdown, attach/upload, and @-file
-mentions from the project. Providers list configured-first on both ends
-("Your providers" above the add-a-provider catalog). The events wire
-contract: `docs/architecture/api/IMPLEMENTED-API.md` (the R113 additions).
+phone's Projects tab expands each project INLINE (its sessions, honest
+status labels, quick new-session) — no navigation round-trip. The phone's
+chat screen carries the PC composer's controls — operation mode, model
+selection (the honest effective-model pill, not "Auto"), thinking level,
+the context ring + breakdown, attach/upload, and @-file mentions from the
+project — with per-tool cards (skills, streaming file writes, terminal
+tails) that mirror the PC's transcript. The dashboard is color-coded
+(stacked in/out usage bars, per-model hues); the phone owns its inventory
+in full: Models & Providers management (custom provider creation, the key
+pool, saved models with capability editing/testing/hiding/deletion) —
+providers list configured-first on both ends ("Your providers" above the
+add-a-provider catalog). The events wire contract:
+`docs/architecture/api/IMPLEMENTED-API.md` (the R113 + R114 additions).
 
 ## Linux release (round-100; ARM64 since round-101)
 

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-20 round-113 -->
+<!-- last-reviewed: 2026-09-20 round-114 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,44 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [Unreleased]
+<!-- targets 0.108.0 — the release round renames this section when it tags -->
+
+### The empty bottom menus, fixed at the root (the phone's headline fix)
+- **Every bottom-sheet menu on the phone — the model picker, the mode sheet, all of them — rendered as a title row and an X.** The root was one layout bug, not twenty: Android's Yoga engine collapses a flex:1 scroll area inside a content-sized panel to zero height. One clamp later (the scroller is pixel-limited against the live window height), every menu works — and every menu this round built on top of it.
+
+### Live sync, everywhere it was still missing
+- **Mode and model changes propagate.** Pick a model or flip the operating mode on either device and the other follows the moment it's saved — a session-level preference frame now rides the same events stream that carries turns, and the session's model lives on the SERVER (not in one browser's localStorage), so a fresh window, the phone, and the CLI all agree on what the next turn runs.
+- **The other device shows it's working, the INSTANT a turn begins — in both directions.** A new `turn.started` frame fires before anything else: send from the phone and the PC's send button flips to Stop/Queue with a remote bubble, the resolved model, and a Thinking placeholder; send from the PC and the phone's transcript opens the live turn immediately. No more silent preparation while you wonder whether the send landed.
+- **The chat preferences sync too**: density, text size, timestamps, and tool-activity rendering joined the appearance domain — set them on either device and both transcripts change.
+
+### The honest model + the honest transcript
+- **The model pill stops lying.** "Auto" now appears only when the session truly follows the agent default; otherwise the pill names the model the next turn will actually run (and the live turn carries its resolved model on both platforms).
+- **A real Thinking placeholder** — animated dots with the model's name — stands in until the first real output, on both platforms.
+- **Tool activity streams honestly on the phone**: skill reads are one quiet line (expandable, not a wall of JSON), file writes show a LIVE preview while the model is still typing them (path, character counter, content tail), terminal commands carry their streamed output tail, and screenshots finally render (a wire-shape fix — the frames never matched the app's types). The activity can be compacted or folded away entirely with the tool-activity pref.
+- **Formatting polish**: ordered lists keep their text aligned across 9. and 10., the first paragraph of a reply no longer rides lower than its siblings, and skill/tool rows read as what they are.
+
+### The phone's home screen, redesigned to say something
+- **The dashboard is color-coded**: stacked input/output bars (the stack IS the day), a per-model leaderboard in stable hues, toned stat tiles, and health cards that keep their danger/warning colors — the information the monochrome chart was missing.
+- **Projects expand inline** — tap a project and its sessions unfold underneath (honest status labels: done, stopped, open — never raw "queued"), with quick new-session and a "+N more" reveal. No more navigating to a near-empty page.
+- **The top chrome is gone**: no page titles, no notification bell, no status pill on the tab screens (the bell's unread count moved to the home activity row; connection trouble still shows an honest banner). The clay surfaces went a colder white — warm cast gone, dark mode untouched.
+- **New Project picks a real folder**: a folder browser over the machine's filesystem (breadcrumbs, Up, dotfile toggle — names only, never file contents), or type the path.
+
+### Vision: always on when the model can see
+- **A model marked vision-capable can always see.** The "off" mode is retired from Image Analysis — the choice is only WHICH model looks (the main model's own vision, recommended, or a dedicated vision model), and a half-configured separate picker no longer blinds a session whose main model is marked.
+- **The separate-model picker lists only configured, vision-capable models** — the old provider dropdown + free-text model input (which happily offered providers you never added) is gone. Pickers across the app were audited: every chat-facing one offers configured providers only.
+
+### The phone owns its inventory
+- **Models & Providers is a full replica on the phone**: create custom providers (name, base URL, API format, first key), manage the whole key pool (masked slots, per-slot test, add/remove — the primary replaces), and curate SAVED models — add from the live catalog with prefill or a custom id, edit capabilities (including the vision flag), hide from pickers, test with a reply peek, delete. "Show me the models I SAVED, not everything the provider offers" is now the structural truth.
+
+### The audit fixes
+- The composer's project-files list scrolls on Android, sub-agent badges read owner vocabulary (done/stopped, never raw machine statuses), and the Image Analysis tab's documentation tells the current truth.
+
+### For the builders
+- **Migration 0041** (`0041_session_selected_model.sql`) adds `sessions.model_provider` + `model_id` — both NULL = follow the agent default; every pre-R114 row composes byte-identically. The appearance domain's four chat fields need NO migration (the settings key-value table absorbs them).
+- The new frames/routes — the meta session frame (`kind:"meta"` with `permissionMode`/`activeMode`/`selectedModel`), `turn.started`, the `model` field on both PATCH routes, the five-field appearance domain, the vision mode narrowing + `relayVision` ladder, and `GET /system/fs/browse`: `docs/architecture/api/IMPLEMENTED-API.md` (the R114 additions section). The round's full story: `docs/ui-iterations/round-114.md`.
+- Desktop: `src/lib/stream-store.ts` + `src/lib/events-stream.ts` (turn.started + the meta frame), `src/components/project-chat/composer/composer-utils.ts` (the three-tier model display), `src/lib/theme-store.ts` (the six-field write-through), `src/components/settings/ImageAnalysisTab.tsx`. Mobile: `mobile/src/features/sessions.ts` (the live-turn + meta machinery), `mobile/src/components/transcript.tsx` + `mobile/src/features/streaming-args.ts` (the tool-card family), `mobile/src/features/config.ts` (the inventory feature layer), `mobile/src/features/fs-browse.ts`.
 
 ## [0.107.0] - 2026-09-20 — live sync between every device (the events stream + the Projects-first shells + the phone's chat replica)
 
