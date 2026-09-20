@@ -13,7 +13,7 @@ import {
 // for it (the vi.mock("mermaid") factory-run counter in ChatMarkdown.test
 // is the laziness observable).
 import { Code2, Eye, Minus, Plus, RotateCcw } from "lucide-react";
-import { useThemeStore } from "../../lib/theme-store";
+import { resolveThemeMode, useThemeStore } from "../../lib/theme-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { SkeletonBlock } from "../shared/Skeletons";
@@ -128,6 +128,10 @@ function describeMermaidError(err: unknown): string | null {
 export function MermaidDiagram({ code }: { code: string }) {
   const styles = useThemeStyles();
   const mode = useThemeStore((s) => s.mode);
+  // R113-b: "system" resolves to the palette the desktop actually paints —
+  // the diagram theme follows the SAME resolution as the CSS bridge
+  // (mermaid only knows light/dark, exactly like data-mode).
+  const resolvedMode = resolveThemeMode(mode);
   const [svg, setSvg] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   // R101-F (DEFECT 1): the failure's REASON (describeMermaidError's capped
@@ -190,7 +194,7 @@ export function MermaidDiagram({ code }: { code: string }) {
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: "strict",
-          theme: mode === "dark" ? "dark" : "default",
+          theme: resolvedMode === "dark" ? "dark" : "default",
         });
         // R101-F (DEFECT 3): ONE bounded retry of mermaid.render with a
         // FRESH id — render can fail transiently (font/theme timing on the
@@ -228,7 +232,7 @@ export function MermaidDiagram({ code }: { code: string }) {
     return () => {
       cancelled = true;
     };
-  }, [code, mode]);
+  }, [code, resolvedMode]);
 
   // R102-D: the NON-passive ctrl/cmd+wheel zoom listener. ctrl+wheel is the
   // browser's page-zoom + the trackpad PINCH gesture — both must zoom the

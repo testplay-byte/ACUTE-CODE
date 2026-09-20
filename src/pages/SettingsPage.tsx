@@ -25,7 +25,7 @@ import {
 // The icon imports the page itself still needs (cards, not nav): BarChart3
 // (the Data-insights cross-link card), SlidersHorizontal (the Debug card),
 // Info (the browser-engine line), plus the interactive-set below.
-import { BarChart3, Brain, Check, Globe, Info, Minus, Moon, Plus, RefreshCw, RotateCcw, SlidersHorizontal, Sun, Timer, Trash2 } from "lucide-react";
+import { BarChart3, Brain, Check, Globe, Info, Minus, Monitor, Moon, Plus, RefreshCw, RotateCcw, SlidersHorizontal, Sun, Timer, Trash2 } from "lucide-react";
 // R98-J: the desktop-notifications card's BellRing icon (the bridge card
 // lives in AdvancedTab beside DebugModeCard).
 import { BellRing } from "lucide-react";
@@ -43,7 +43,9 @@ import { setDesktopNotificationsEnabled } from "../lib/desktop-notifications";
 // in-memory cache so the next link click obeys without a restart (the
 // setDesktopNotificationsEnabled pattern).
 import { setLinkOpeningMode } from "../lib/open-link";
-import { useThemeStore } from "../lib/theme-store";
+// R113-b: resolveThemeMode — the "system" mode previews as its resolved
+// palette (the swatch strip shows what the desktop paints right now).
+import { resolveThemeMode, useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
 // R97-I part 3 (the state-awareness sweep): the settings cards' honest
@@ -198,6 +200,9 @@ function AppearanceTab() {
   const setTheme = useThemeStore((s) => s.setTheme);
   const mode = useThemeStore((s) => s.mode);
   const setMode = useThemeStore((s) => s.setMode);
+  // R113-b: "system" resolves against the OS preference for the preview
+  // row below (the swatch strip shows the palette the desktop would paint).
+  const resolvedMode = resolveThemeMode(mode);
   // ROUND-34 (owner's appearance design): density control.
   const density = useThemeStore((s) => s.density);
   const setDensity = useThemeStore((s) => s.setDensity);
@@ -228,17 +233,24 @@ function AppearanceTab() {
             12 inner knob), labels follow the weight law (500 active, 400
             rest), max-w-[320px] → max-w-80 (the scale spelling). */}
         <div
-          className="relative mb-3 grid w-full max-w-80 grid-cols-2 gap-1.5 rounded-2xl p-1"
+          className="relative mb-3 grid w-full max-w-80 grid-cols-3 gap-1.5 rounded-2xl p-1"
           role="radiogroup"
           aria-label="Theme mode"
           style={{ background: styles.toggleTrack, border: bdr("1.5px", styles.border) }}
         >
+          {/* R113-b: the third mode — "system" follows the OS preference
+              live (the store's usePrefersColorSchemeDark subscription). The
+              sliding knob tracks the ACTIVE option's index across the
+              3-column track. */}
           <div
-            className="absolute bottom-1 top-1 w-[calc(50%-6px)] rounded-xl transition-all duration-300"
-            style={{ left: mode === "dark" ? "calc(50% + 2px)" : "4px", background: styles.toggleActive }}
+            className="absolute bottom-1 top-1 w-[calc((100%-8px)/3)] rounded-xl transition-all duration-300"
+            style={{
+              left: `calc(${(["light", "system", "dark"] as const).indexOf(mode)} * (100% - 8px) / 3 + 4px)`,
+              background: styles.toggleActive,
+            }}
           />
-          {(["light", "dark"] as const).map((m) => {
-            const Icon = m === "light" ? Sun : Moon;
+          {(["light", "system", "dark"] as const).map((m) => {
+            const Icon = m === "light" ? Sun : m === "system" ? Monitor : Moon;
             const active = mode === m;
             return (
               <button
@@ -263,7 +275,9 @@ function AppearanceTab() {
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {THEMES.map((t) => {
             const selected = t.id === themeId;
-            const colors = mode === "dark" ? t.paletteDark : t.paletteLight;
+            // R113-b: "system" previews the palette the desktop would paint
+            // right now (the resolved OS preference), same as it renders.
+            const colors = resolvedMode === "dark" ? t.paletteDark : t.paletteLight;
             return (
               <button
                 key={t.id}

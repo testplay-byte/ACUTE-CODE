@@ -442,6 +442,13 @@ export interface StreamSessionState {
    * message." Cleared by startStream (the backend pre-flips the queue
    * into the new turn). */
   queueKeptNotice: number | null;
+  /** ROUND-113 (R113-b): this slice's liveTurn is a REMOTE MIRROR — the
+   * events stream (GET /api/v1/events/stream) is replaying a turn ANOTHER
+   * device initiated (the phone, the CLI). Own streams set this false the
+   * moment startStream takes the slice; the panel's busy/isRunning gates
+   * and the retire path below key off it. A remote mirror never owns an
+   * AbortController or a fetch — it is a pure render of ingested frames. */
+  remote: boolean;
 }
 
 interface StreamStore {
@@ -536,6 +543,19 @@ interface StreamStore {
    * chip's X / "Send now" optimistic half — the DELETE /sessions/:id/queue/:seq
    * round-trip follows; a failure toasts and the refetch re-syncs). */
   removeQueuedMessage: (sessionId: string, seq: number) => void;
+  /** ROUND-113 (R113-b): ingest ONE mirrored turn frame from the events
+   * stream — a turn ANOTHER device started (the phone, the CLI, a second
+   * desktop window). Own-stream in flight → IGNORED (the initiating
+   * client's own SSE reader already renders that turn; a mirror would
+   * double-render). Otherwise the frame runs through the SAME reducer the
+   * own path uses (handleStreamEvent) into a liveTurn marked remote:true,
+   * so the panel renders remote turns with ZERO special-casing — thinking
+   * block, streaming caret, tool cards, queue chips, all of it. Terminal
+   * frames retire the mirror after a beat (the folded log takes over via
+   * the starter's invalidations — this store stays a pure state mirror for
+   * remote turns and never touches the queryClient; ONE place owns
+   * refetches: src/lib/events-stream.ts). */
+  ingestRemoteFrame: (sessionId: string, frame: StreamTurnEvent) => void;
 }
 
 /** Module-level controllers + seq counters (NOT React state — they don't
@@ -563,6 +583,7 @@ function emptyState(): StreamSessionState {
     queued: [],
     deliveredQueued: [],
     queueKeptNotice: null,
+    remote: false,
   };
 }
 
@@ -979,6 +1000,10 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
       // R93-B1: a fresh turn clears the kept-queue notice (the backend's
       // pre-flip folds the stranded messages into this new turn's history).
       queueKeptNotice: null,
+      // R113-b: an OWN stream takes the slice back from any remote mirror
+      // (the own reader is the rendering path now; mirrored frames of this
+      // same turn arrive and are ignored while streamBusy stays true).
+      remote: false,
     });
 
     const controller = new AbortController();
@@ -1185,6 +1210,9 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
   clearStream: (sessionId) => {
     controllers.delete(sessionId);
     seqCounters.delete(sessionId);
+    // R113-b: a cleared slice can't be retired — drop any pending mirror
+    // timer with it (function-declaration hoisting makes the call safe).
+    cancelRemoteRetire(sessionId);
     set((s) => {
       const next = { ...s.bySession };
       delete next[sessionId];
@@ -1273,7 +1301,154 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
       patchSession(sessionId, { liveError: null });
     }
   },
+
+  // ── ROUND-113 (R113-b): the REMOTE mirror — one device's turn, every
+  // device's live transcript. See the interface docblock; the retire timer
+  // + active-streams marks live here (pure sidebar-liveness state), while
+  // ALL queryClient refetches stay in events-stream.ts (one place only).
+  ingestRemoteFrame: (sessionId, frame) => {
+    const cur = get().bySession[sessionId];
+
+    // (1) An OWN stream is in flight on this session → the initiating
+    // reader already renders this exact frame (the bus mirrors the frames
+    // the initiator itself receives, so they come back through the events
+    // stream too). Ignore: a mirror would double every delta.
+    if (cur?.streamBusy === true) return;
+
+    // (2) Terminal frame → the turn is OVER server-side. Apply it first (a
+    // liveError card, the rating key, the stopped freeze — the same reducer
+    // the own path uses, so the remote UX matches the local one beat for
+    // beat), then schedule the retire. No liveTurn (we joined after the
+    // turn's last real frame) → nothing to retire; the starter's
+    // invalidation is the whole story.
+    if (frame.type === "done" || frame.type === "error" || frame.type === "stopped") {
+      if (cur?.remote === true && cur.liveTurn !== null) {
+        handleStreamEvent(sessionId, frame);
+        scheduleRemoteRetire(sessionId);
+      }
+      return;
+    }
+
+    // (3) A live frame. If a retire was PENDING, the previous turn ended
+    // (its terminal frame already landed) — this frame opens a NEW turn:
+    // the fresh-turn reset below runs instead of appending (two turns'
+    // frames must never share one liveTurn; a queue-continuation can never
+    // race this — the backend emits those BEFORE the terminal frame).
+    const previousTurnEnded = remoteRetireTimers.has(sessionId);
+    cancelRemoteRetire(sessionId);
+
+    // (4) No liveTurn yet (or the slice holds a LEFTOVER OWN turn — the
+    // post-done fold handoff, remote:false — or the previous REMOTE turn
+    // just went terminal) → this is the first mirrored frame of a turn we
+    // only now learned about. Open a REMOTE liveTurn (the fresh-turn shape
+    // startStream seeds, plus the same slice resets a fresh own turn
+    // performs — stale error cards, queue chips and stop signals belong to
+    // the PREVIOUS turn) and mark the sidebar spinner: a turn IS running
+    // on the server no matter which device started it. Mixing a leftover
+    // liveTurn with a new remote turn's frames would corrupt both renders,
+    // so the replacement is unconditional.
+    if (cur === undefined || cur.liveTurn === null || cur.remote !== true || previousTurnEnded) {
+      patchSession(sessionId, {
+        liveTurn: {
+          startedAtMs: Date.now(),
+          working: [],
+          streamText: "",
+          streamThinking: "",
+          stopped: false,
+          stoppedByUser: false,
+          streamingToolInputs: [],
+          debugReport: null,
+          browserCheckpoint: null,
+          retry: null,
+          note: null,
+        },
+        // R113-b: a remote mirror never owns a pendingEcho/sendError — the
+        // message that started this turn was typed on ANOTHER device (those
+        // two belong to the local composer's send lifecycle and stay as-is).
+        streamBusy: false,
+        remote: true,
+        // The fresh-turn resets (the startStream contract): a stale live
+        // error card, queue state and user-stop signal are the PREVIOUS
+        // turn's story.
+        liveError: null,
+        queued: [],
+        deliveredQueued: [],
+        queueKeptNotice: null,
+        lastTurnStoppedByUser: false,
+        lastTurnStoppedTs: null,
+      });
+      useActiveStreams.getState().start(sessionId);
+    }
+
+    // (5) The shared reducer — the SAME code path the own stream's SSE
+    // reader dispatches through (turn-independent frames like subagent-*
+    // and the queue chips work identically; turn-scoped frames find the
+    // remote liveTurn opened above).
+    handleStreamEvent(sessionId, frame);
+  },
 }));
+
+// ── ROUND-113 (R113-b): the remote-mirror retire machinery ──────────────────
+
+/**
+ * How long a COMPLETED remote mirror stays visible after its terminal frame
+ * (ms). The own-stream path clears the liveTurn only after its panel's
+ * `await invalidateQueries` resolves (the folded log must be in hand); a
+ * remote turn has no owning panel, so the beat stands in for that await: the
+ * starter invalidates `["session"]` at the terminal frame and the desktop's
+ * refetch is a local-sidecar round-trip (~tens of ms) — 1.5s is >20x margin.
+ * If the refetch somehow runs slower, the folded log lands over a cleared
+ * mirror (a brief nothing where the turn was) instead of a permanent
+ * double-render; the pre-existing queued/live handoff makes the same bet.
+ */
+const REMOTE_RETIRE_MS = 1_500;
+
+/** One pending retire timer per session (module-level — survives remounts,
+ * dies with the slice in clearStream and is called off by the next live
+ * frame of a fresh turn). */
+const remoteRetireTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelRemoteRetire(sessionId: string): void {
+  const pending = remoteRetireTimers.get(sessionId);
+  if (pending !== undefined) {
+    clearTimeout(pending);
+    remoteRetireTimers.delete(sessionId);
+  }
+}
+
+/** Terminal frame landed on a remote mirror → retire it after the beat. The
+ * sidebar spinner stops NOW (the turn is over server-side); the liveTurn
+ * itself clears with the timer so the partial stays visible while the folded
+ * log catches up. liveError deliberately SURVIVES the clear — the error card
+ * renders until the persisted turn.error event supersedes it (the panel's
+ * errorTs match), exactly like an own-stream failure. */
+function scheduleRemoteRetire(sessionId: string): void {
+  cancelRemoteRetire(sessionId);
+  useActiveStreams.getState().stop(sessionId);
+  // ROUND-67 (R67/F1) parity: the own path's finally releases the computer
+  // monitor's turn-hold when the turn ends — a remote turn that used
+  // computer tools must decay its "agent is using your computer" indicator
+  // the same way (the own finally never runs for a mirrored turn).
+  useComputerMonitorStore.getState().releaseTurnHold(sessionId);
+  const timer = setTimeout(() => {
+    remoteRetireTimers.delete(sessionId);
+    const cur = useStreamStore.getState().bySession[sessionId];
+    // Guard: an OWN stream may have taken the slice since the timer armed
+    // (remote flipped false) — never clear a turn this device is rendering.
+    if (cur === undefined || cur.remote !== true) return;
+    patchSession(sessionId, {
+      liveTurn: null,
+      remote: false,
+      lastLiveEndMs: Date.now(),
+      // Same handoff the own path's finally performs: the refetched folded
+      // log owns the queue's render (message.queued events fold as `queued`
+      // items; delivered ones as ordinary user items).
+      queued: [],
+      deliveredQueued: [],
+    });
+  }, REMOTE_RETIRE_MS);
+  remoteRetireTimers.set(sessionId, timer);
+}
 
 /** ROUND-65 (R65): scoped activity bump — no-op when the session's project
  * is unknown (never yank an unrelated sidebar). */

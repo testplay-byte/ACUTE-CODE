@@ -1,4 +1,4 @@
-import { useThemeStore } from "../../lib/theme-store";
+import { resolveThemeMode, useThemeStore } from "../../lib/theme-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useOnboardingStore } from "./onboarding-store";
 import { WIZARD_EDGE } from "./onboarding-types";
@@ -27,7 +27,9 @@ import { AllSetScreen } from "./AllSetScreen";
 
 export function SetupWizard() {
   const step = useOnboardingStore((s) => s.step);
-  const isDark = useThemeStore((s) => s.mode) === "dark";
+  // R113-b: "system" resolves (the wizard's dot-grid + scrollbar follow the
+  // same palette the rest of the app paints).
+  const isDark = resolveThemeMode(useThemeStore((s) => s.mode)) === "dark";
   const s = useThemeStyles();
 
   return (

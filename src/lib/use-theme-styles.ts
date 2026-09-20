@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { useThemeStore } from "./theme-store";
+import { usePrefersColorSchemeDark, useThemeStore } from "./theme-store";
 import { deriveThemeStyles, syncThemeCssVars, type ThemeStyles } from "./themes";
 
 /**
@@ -16,11 +16,16 @@ import { deriveThemeStyles, syncThemeCssVars, type ThemeStyles } from "./themes"
  * Every component should use this instead of hard-coding colors. As a side
  * effect it keeps the :root --ac-* CSS-variable bridge in sync (see
  * deriveThemeStyles/syncThemeCssVars in themes.ts).
+ *
+ * ROUND-113 (R113-b): "system" mode resolves here — isDark follows the OS
+ * preference LIVE (the usePrefersColorSchemeDark subscription re-renders on
+ * an OS flip), exactly like useThemeSync's document mirror.
  */
 export function useThemeStyles(): ThemeStyles {
   const themeId = useThemeStore((s) => s.themeId);
   const mode = useThemeStore((s) => s.mode);
-  const isDark = mode === "dark";
+  const systemDark = usePrefersColorSchemeDark();
+  const isDark = mode === "dark" || (mode === "system" && systemDark);
 
   const styles = useMemo(
     () => deriveThemeStyles(themeId, isDark),

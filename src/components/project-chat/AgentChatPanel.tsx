@@ -2095,6 +2095,15 @@ export function AgentChatPanel({
   );
   const liveTurn = streamSlice?.liveTurn ?? null;
   const streamBusy = streamSlice?.streamBusy ?? false;
+  // R113-b: a REMOTE mirror is in flight — another device's turn on THIS
+  // session, replayed by the events stream. Keyed on the slice's remote
+  // flag (NOT "liveTurn != null && !streamBusy" — that would also match
+  // the own-turn post-done window where liveTurn lingers a beat before the
+  // panel clears it, and busy/flicker would regress). Drives busy (a send
+  // while a remote turn runs must take the QUEUE path — the stream POST
+  // would 409 "a turn is already in flight") and the sidebar spinner below.
+  const remoteRunning =
+    streamSlice?.remote === true && liveTurn !== null && !liveTurn.stopped;
   // ROUND-43: the LIVE turn error — renders the error card immediately when a
   // stream fails; the persisted `turn.error` event takes over after the
   // refetch (matched by errorTs) so the card survives reloads.
@@ -2285,7 +2294,13 @@ export function AgentChatPanel({
   // fires even when no panel is mounted (background session writes refresh
   // the explorer live).
 
-  const busy = createSession.isPending || sendMessage.isPending || pendingUser !== null || streamBusy;
+  // R113-b: remoteRunning joins the busy union — the session is OCCUPIED
+  // (server-side) even though this device owns no fetch: Enter routes to
+  // the queue path (onQueue), Stop reaches the server's /stop, and the
+  // turn-scoped affordances (revert, queued-send-now) wait like any busy
+  // turn.
+  const busy =
+    createSession.isPending || sendMessage.isPending || pendingUser !== null || streamBusy || remoteRunning;
 
   // Optimistic echo lives only until the refetched log contains it (ChatView pattern).
   // ROUND-39: prefer the stream store's pendingEcho (survives remounts); fall
@@ -2504,7 +2519,13 @@ export function AgentChatPanel({
   // if the panel unmounted, the store's abort/clear path handles the stop.
   const startStream = useActiveStreams((s) => s.start);
   const stopStream = useActiveStreams((s) => s.stop);
-  const isRunning = streamBusy || sendMessage.isPending;
+  // R113-b: remoteRunning joins isRunning — a session switch onto a
+  // remotely-running session must (re)mark the sidebar spinner itself: the
+  // ingest path's mark only fires on the FIRST mirrored frame, and this
+  // effect's stop(activeSessionId) on the switch would otherwise kill it.
+  // start/stop are idempotent, so the own-stream marks and the remote marks
+  // compose cleanly.
+  const isRunning = streamBusy || sendMessage.isPending || remoteRunning;
   useEffect(() => {
     if (activeSessionId === null) return;
     if (isRunning) startStream(activeSessionId);
@@ -3041,7 +3062,10 @@ export function AgentChatPanel({
       onModelChange={onModelChange}
       transcriptLength={items.length}
       liveTick={liveWorkingCount}
-      streaming={streamBusy}
+      // R113-b: a REMOTE turn streams too — the context donut live-polls
+      // (streaming → zero staleTime + live refetch) exactly like an own
+      // turn, so the meter tracks the phone's turn as it grows.
+      streaming={streamBusy || remoteRunning}
       autoFocus={autoFocus}
       inputRef={inputRef}
     />
@@ -3524,7 +3548,10 @@ export function AgentChatPanel({
                         fine (the parser is line-based, so the text renders
                         line-by-line as it arrives). */}
                     <ChatMarkdown content={liveTurn.streamText} projectId={projectId} />
-                    {streamBusy && !liveTurn.stopped ? (
+                    {/* R113-b: the caret pulses for REMOTE turns too — a
+                        mirror in flight is just as "generating" as an own
+                        stream (remoteRunning already implies !stopped). */}
+                    {(streamBusy || remoteRunning) && !liveTurn.stopped ? (
                       /* R99-B: the thin streaming caret — a 2px accent bar,
                          ~1em tall, breathing 1s ease opacity 1↔0.4
                          (ac-caret-pulse — the MOTION registry's stream-caret

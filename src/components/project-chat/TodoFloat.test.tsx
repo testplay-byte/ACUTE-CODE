@@ -67,6 +67,7 @@ function sessionState(over: Partial<StreamSessionState> = {}): StreamSessionStat
     queued: [],
     deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
     ...over,
   };
 }

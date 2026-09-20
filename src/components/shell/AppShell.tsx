@@ -21,8 +21,18 @@ import { hydrateLinkOpeningMode } from "../../lib/open-link";
 // uses, 24h-cadence-gated, and surfaces a pending update as the Sidebar's
 // Settings dot + ONE clickable toast. Failures are silent console.warns.
 import { initUpdateChecker } from "../../lib/update-checker";
+// R113-b: the server-backed appearance — boot hydration from GET
+// /settings/appearance (best-effort; the local persisted values stay the
+// offline fallback, and the events stream pushes later changes live).
+import { hydrateAppearanceFromServer } from "../../lib/theme-store";
 import { AcuteLogo, Sidebar } from "./Sidebar";
 import { NotificationStreamStarter } from "../notifications/NotificationStreamStarter";
+// R113-b (the live-sync round): the EVENTS stream starter — one long-lived
+// GET /api/v1/events/stream subscription that fans session/turn/settings/
+// project frames into this app (the phone's turn streams on the desktop,
+// another device's theme flip lands live). Mounted ONCE here, beside the
+// notifications stream, so it survives every route change.
+import { EventStreamStarter } from "./EventStreamStarter";
 import { Toaster } from "../notifications/Toaster";
 // R60-D: the shared webview-suppression guard (R62: also the general
 // overlay watcher — installed once here so it covers every route).
@@ -74,6 +84,10 @@ export function AppShell() {
   useEffect(() => {
     initDesktopNotifications();
     void hydrateLinkOpeningMode();
+    // R113-b: the appearance domain hydrates on the same boot beat — the
+    // server wins when reachable (themeId only when it carries a real
+    // preference; mode outright), local values stay the fallback.
+    void hydrateAppearanceFromServer();
     initUpdateChecker();
   }, []);
   // Round-28 WS-D2: boot-time health ping. If the sidecar is up + token is
@@ -103,6 +117,10 @@ export function AppShell() {
           — boots once on mount, auto-reconnects on close, no-op in demo
           mode. Mounted HERE so it survives every route change. */}
       <NotificationStreamStarter />
+      {/* R113-b: the events SSE stream — the live-sync backbone's desktop
+          half (session/turn/settings/project frames). Same lifetime contract
+          as the notifications starter above. */}
+      <EventStreamStarter />
       {/* ROUND-42: Web Push setup — registers /sw.js + subscribes the browser
           so desktop notifications fire even when the app window is CLOSED
           (the service worker receives the push; click opens the session). */}

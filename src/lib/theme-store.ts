@@ -1,7 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { deriveThemeStyles, syncThemeCssVars, THEMES } from "./themes";
+// ROUND-113 (R113-b): the appearance domain's server pair — hydration on
+// boot, optimistic write-through on every local flip. api.ts's graph never
+// imports this module (verified: fixtures/config-store/sidecar only), so the
+// edge is acyclic.
+import { fetchAppearanceSettings, updateAppearanceSettings } from "./api";
+import { useConfigStore } from "./config-store";
 
 /**
  * Theme state store — absorbed into the demo-fidelity theme engine
@@ -14,10 +20,25 @@ import { deriveThemeStyles, syncThemeCssVars, THEMES } from "./themes";
  * - applyTheme() mirrors themeId/mode onto <html data-theme data-mode> AND
  *   bridges the derived palette onto :root as --ac-* custom properties before
  *   first paint.
+ *
+ * ROUND-113 (R113-b, the live-sync round): the mode gains "system" (resolved
+ * against prefers-color-scheme at apply time — <html data-mode> only ever
+ * carries the RESOLVED "light"/"dark", because index.css keys on those two
+ * spellings) and the whole appearance became SERVER-BACKED: boot hydrates
+ * from GET /settings/appearance (local values stay the offline fallback),
+ * every local setTheme/setMode optimistically PUTs the domain, and a
+ * settings-event frame pushes another device's change straight into the store
+ * (the write-through is suppressed while applying a remote value — the echo
+ * guard; otherwise the desktop would PUT back the value it just received,
+ * bouncing the bus frame to every other device forever).
  */
 export { THEMES };
 export type ThemeId = string;
-export type ThemeMode = "light" | "dark";
+/** R113-b: "system" follows the OS (prefers-color-scheme) — resolved at
+ * apply/render time, never persisted resolved (an OS flip while the app is
+ * open re-resolves live). Existing persisted "light"/"dark" values stay
+ * valid; version stays 1 (zustand shallow-merges them over the default). */
+export type ThemeMode = "light" | "dark" | "system";
 /** ROUND-34 (settings appearance page): layout density + sidebar tint strength. */
 export type Density = "comfortable" | "compact";
 export type SidebarTint = "subtle" | "warm" | "bold";
@@ -47,10 +68,167 @@ interface ThemeState {
   setMode: (mode: ThemeMode) => void;
   toggleMode: () => void;
   setDensity: (density: Density) => void;
-  setSidebarTint: (tint: SidebarTint) => void;
+  setSidebarTint: (sidebarTint: SidebarTint) => void;
   setActivityMode: (mode: ActivityMode) => void;
   setChatTextSize: (size: ChatTextSize) => void;
   setTimestampsMode: (mode: TimestampsMode) => void;
+}
+
+// ── R113-b: server-backed appearance ────────────────────────────────────────
+
+/**
+ * The echo guard: true while a server-pushed/hydrated value is being applied
+ * through setTheme/setMode. The write-through in those actions checks this
+ * flag and skips the PUT — otherwise applying {"themeId":"bento"} from the
+ * events stream would PUT {"themeId":"bento"} right back, the sidecar would
+ * broadcast another settings frame, and every device would loop forever.
+ */
+let applyingRemoteAppearance = false;
+
+/** The boot hydration's memo — null until hydrateAppearanceFromServer() is
+ * first called (the hydrateLinkOpeningMode pattern). */
+let appearanceHydration: Promise<void> | null = null;
+
+/**
+ * R113-b: push one local appearance change to the server. Fire-and-forget
+ * and STRICTLY optional — the local flip already applied (optimistic; the
+ * server is a sync backbone, not the source of truth for THIS device's
+ * clicks). Skipped while applying a remote value (the echo guard) and in
+ * demo/unauthenticated mode (no sidecar to sync with). A failed PUT is a
+ * silent no-op: the local value stays, the next successful PUT re-converges
+ * the devices.
+ */
+function pushAppearanceToServer(patch: { themeId?: string; mode?: ThemeMode }): void {
+  if (applyingRemoteAppearance) return; // echo guard — see the doc above
+  const { demoData, token } = useConfigStore.getState();
+  if (demoData || !token) return;
+  void updateAppearanceSettings(patch).catch(() => undefined);
+}
+
+/**
+ * R113-b: apply a SERVER-pushed appearance value (the boot hydration AND the
+ * events-stream settings frame both land here — one path, one echo guard).
+ * Shape-checked, never trusted: a non-object value, an unknown mode or a
+ * non-string themeId is ignored (never a reason to guess). themeId === null
+ * means "no server preference" — the local flavor stands (the R113-a GET
+ * default); a non-null id applies. Invalidates nothing: zustand's set
+ * notifies useThemeSync/useThemeStyles subscribers and the palette applies
+ * on their re-render.
+ */
+export function applyServerAppearance(value: unknown): void {
+  if (typeof value !== "object" || value === null) return;
+  const raw = value as { themeId?: unknown; mode?: unknown };
+  const themeId = raw.themeId;
+  const mode = raw.mode;
+  if (
+    themeId !== undefined &&
+    themeId !== null &&
+    typeof themeId !== "string"
+  ) {
+    return;
+  }
+  if (
+    mode !== undefined &&
+    mode !== "system" &&
+    mode !== "light" &&
+    mode !== "dark"
+  ) {
+    return;
+  }
+  applyingRemoteAppearance = true;
+  try {
+    if (typeof themeId === "string") {
+      useThemeStore.getState().setTheme(themeId);
+    }
+    if (mode === "system" || mode === "light" || mode === "dark") {
+      useThemeStore.getState().setMode(mode);
+    }
+  } finally {
+    applyingRemoteAppearance = false;
+  }
+}
+
+/**
+ * R113-b: app-boot hydration — one best-effort GET /settings/appearance. The
+ * server wins when reachable (themeId applied only when it carries a real
+ * preference; mode applied outright — that IS the sync semantic); a failure
+ * keeps the local persisted values (the offline fallback) and is silent.
+ * Memoized: the second call returns the same settled promise (AppShell's
+ * boot effect + any late test both converge on one request).
+ */
+export function hydrateAppearanceFromServer(): Promise<void> {
+  if (appearanceHydration === null) {
+    const { demoData, token } = useConfigStore.getState();
+    appearanceHydration =
+      demoData || !token
+        ? Promise.resolve()
+        : fetchAppearanceSettings()
+            .then((settings) => {
+              applyServerAppearance(settings);
+            })
+            .catch(() => undefined);
+  }
+  return appearanceHydration;
+}
+
+/** Test hook: forget the hydration memo so the next call re-fetches. */
+export function resetAppearanceHydrationForTest(): void {
+  appearanceHydration = null;
+}
+
+// ── system-mode resolution ─────────────────────────────────────────────────
+
+/** The media query "system" mode resolves against. */
+const PREFERS_DARK_QUERY = "(prefers-color-scheme: dark)";
+
+/**
+ * R113-b: resolve a ThemeMode to the concrete palette mode. "light"/"dark"
+ * pass through; "system" reads the OS preference (matchMedia unavailable —
+ * SSR/odd sandboxes — resolves LIGHT: the same default the CSS fallback
+ * `:root:not([data-mode])` paints).
+ */
+export function resolveThemeMode(mode: ThemeMode): "light" | "dark" {
+  if (mode === "dark") return "dark";
+  if (mode === "light") return "light";
+  if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+    // Null-safe on the RESULT too: a half-implemented matchMedia (or a
+    // mocked one returning undefined) must never throw — it resolves LIGHT,
+    // the same default the CSS fallback `:root:not([data-mode])` paints.
+    const mql = window.matchMedia(PREFERS_DARK_QUERY);
+    if (mql !== null && mql !== undefined && mql.matches === true) {
+      return "dark";
+    }
+  }
+  return "light";
+}
+
+/**
+ * R113-b: reactive prefers-color-scheme for any component (useThemeStyles,
+ * useThemeSync, the mermaid diagram). Subscribes for the hook's lifetime and
+ * re-renders on OS flips — a "system" desktop follows a live OS theme change
+ * without re-opening settings. Cheap: one matchMedia listener per consumer.
+ */
+export function usePrefersColorSchemeDark(): boolean {
+  const [dark, setDark] = useState(() => resolveThemeMode("system") === "dark");
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mql = window.matchMedia(PREFERS_DARK_QUERY);
+    const onChange = () => setDark(mql.matches);
+    // happy-dom/JSDOM-era safety: addEventListener is the standard path
+    // (MediaQueryList has been an EventTarget everywhere since 2020); the
+    // legacy addListener backstop keeps very old webviews correct too.
+    if (typeof mql.addEventListener === "function") {
+      mql.addEventListener("change", onChange);
+      return () => mql.removeEventListener("change", onChange);
+    }
+    const legacy = mql as MediaQueryList & {
+      addListener?: (cb: () => void) => void;
+      removeListener?: (cb: () => void) => void;
+    };
+    legacy.addListener?.(onChange);
+    return () => legacy.removeListener?.(onChange);
+  }, []);
+  return dark;
 }
 
 export const useThemeStore = create<ThemeState>()(
@@ -64,9 +242,30 @@ export const useThemeStore = create<ThemeState>()(
       timestampsMode: "hidden",
       sidebarTint: "subtle",
       activityMode: "detailed",
-      setTheme: (themeId) => set({ themeId }),
-      setMode: (mode) => set({ mode }),
-      toggleMode: () => set((s) => ({ mode: s.mode === "dark" ? "light" : "dark" })),
+      // R113-b: every local flavor/mode flip ALSO pushes to the server
+      // (optimistic write-through — see pushAppearanceToServer). The local
+      // set stays the UX source: a failed PUT never rolls the click back.
+      setTheme: (themeId) => {
+        set({ themeId });
+        pushAppearanceToServer({ themeId });
+      },
+      setMode: (mode) => {
+        set({ mode });
+        pushAppearanceToServer({ mode });
+      },
+      // The onboarding flavor picker's light/dark toggle stays a CONCRETE
+      // pick (never lands on "system" — that is the picker's whole point);
+      // from "system" the first toggle resolves to the OS's opposite.
+      // R113-b: the toggle write-throughs too — the wizard's flavor cards
+      // PUT their themeId, so a mode flip that stayed local-only would
+      // leave the server holding a stale mode for the next boot's
+      // hydration to resurrect (the same convergence setTheme/setMode own).
+      toggleMode: () =>
+        set((s) => {
+          const mode: ThemeMode = resolveThemeMode(s.mode) === "dark" ? "light" : "dark";
+          pushAppearanceToServer({ mode });
+          return { mode };
+        }),
       setDensity: (density) => set({ density }),
       setSidebarTint: (sidebarTint) => set({ sidebarTint }),
       setActivityMode: (activityMode) => set({ activityMode }),
@@ -74,27 +273,43 @@ export const useThemeStore = create<ThemeState>()(
       setTimestampsMode: (timestampsMode) => set({ timestampsMode }),
     }),
     // version stays 1: zustand shallow-merges persisted state over the new
-    // defaults, so existing users keep their theme/mode and gain the defaults.
+    // defaults, so existing users keep their theme/mode and gain the defaults
+    // (a persisted "light"/"dark" remains valid vocabulary; only never-before-
+    // persisted profiles gain the ability to store "system").
     { name: "acute-code.theme", version: 1 },
   ),
 );
 
-/** Mirror the store onto <html> attributes + :root --ac-* vars; run pre-paint. */
+/**
+ * Mirror the store onto <html> attributes + :root --ac-* vars; run pre-paint.
+ * R113-b: a "system" mode RESOLVES here — data-mode only ever carries
+ * "light"/"dark" (index.css keys its selector pairs on exactly those two
+ * spellings), and the derived palette follows the resolved value.
+ */
 export function applyTheme(themeId: ThemeId, mode: ThemeMode, sidebarTint?: SidebarTint) {
+  const resolved = resolveThemeMode(mode);
   const root = document.documentElement;
   root.dataset.theme = themeId;
-  root.dataset.mode = mode;
+  root.dataset.mode = resolved;
   // Unknown ids fall back to THEMES[0] inside deriveThemeStyles, so a stale
   // persisted id can never leave the bridge unstyled.
-  syncThemeCssVars(deriveThemeStyles(themeId, mode === "dark", sidebarTint));
+  syncThemeCssVars(deriveThemeStyles(themeId, resolved === "dark", sidebarTint));
 }
 
-/** Subscribe the document to the store for the app's lifetime. */
+/**
+ * Subscribe the document to the store for the app's lifetime.
+ * R113-b: while in "system" mode the OS preference is a RENDER input — an
+ * OS theme flip re-runs the effect and re-applies the palette live (the
+ * usePrefersColorSchemeDark subscription re-renders this component).
+ */
 export function useThemeSync() {
   const themeId = useThemeStore((s) => s.themeId);
   const mode = useThemeStore((s) => s.mode);
   const sidebarTint = useThemeStore((s) => s.sidebarTint);
+  const systemDark = usePrefersColorSchemeDark();
+  // Re-resolve on OS flips: `mode` alone would miss a system change.
+  const resolved = mode === "system" ? (systemDark ? "dark" : "light") : mode;
   useEffect(() => {
-    applyTheme(themeId, mode, sidebarTint);
-  }, [themeId, mode, sidebarTint]);
+    applyTheme(themeId, resolved, sidebarTint);
+  }, [themeId, resolved, sidebarTint]);
 }

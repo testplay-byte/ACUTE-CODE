@@ -2932,6 +2932,34 @@ export async function updateDesktopNotificationsSettings(
   });
 }
 
+/** ROUND-113 (R113-a/R113-b, the theme-sync backbone): the APPEARANCE
+ * settings domain — one preference shared by every device watching this
+ * sidecar. themeId is one of the six flavor ids (nova|bento|midnight|sunset|
+ * mono|clay) or null (= no server preference — each client falls back to its
+ * LOCAL flavor, the honest pre-R113 behavior); mode gains "system" (the
+ * desktop resolves it via prefers-color-scheme). GET answers the stored
+ * preference or {themeId:null, mode:"system"}; PUT takes a partial patch and
+ * broadcasts {type:"settings",domain:"appearance"} on the events bus so the
+ * change lands LIVE on every other device (the phone changing the desktop's
+ * theme is a first-class use case — device tokens are welcome). */
+export interface AppearanceSettings {
+  themeId: string | null;
+  mode: "system" | "light" | "dark";
+}
+
+export async function fetchAppearanceSettings(): Promise<AppearanceSettings> {
+  return request<AppearanceSettings>("/settings/appearance");
+}
+
+export async function updateAppearanceSettings(
+  patch: Partial<AppearanceSettings>,
+): Promise<AppearanceSettings> {
+  return request<AppearanceSettings>("/settings/appearance", {
+    method: "PUT",
+    json: patch,
+  });
+}
+
 /** Key-pool slot info (masked — values never leave the sidecar). */
 export interface KeyPoolSlot {
   slot: number;

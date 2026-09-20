@@ -1037,6 +1037,7 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -1087,6 +1088,7 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });

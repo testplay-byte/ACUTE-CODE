@@ -440,6 +440,7 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -500,6 +501,7 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -560,6 +562,7 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -1009,6 +1012,7 @@ describe("AgentChatPanel response ratings (ROUND-59 R59-D)", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -1480,6 +1484,7 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -1514,6 +1519,7 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -1521,6 +1527,109 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
       expect(document.querySelector('[data-testid="streaming-caret"]')).toBeNull();
       // The streamed text itself stays.
       expect(screen.getByText(/still arriving/)).toBeTruthy();
+    }, SLOW);
+  });
+});
+
+// ── ROUND-113 (R113-b): the REMOTE live turn — another device's turn on this
+// session, replayed by the events stream into the SAME live section. The panel
+// must render it with ZERO special-casing: streaming text + the caret, the
+// queue chips the phone queued, and the busy composer (Stop reaches the
+// server's /stop; Enter routes to the queue path). ──
+describe("AgentChatPanel remote live turn (ROUND-113 R113-b)", () => {
+  const SLOW = { timeout: 5000 };
+
+  it("a remote mirror streams through the SAME live section: caret + text + queue chips + the busy composer", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r113b_remote",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Remote mirror probe",
+          createdAt: "2026-09-20T12:00:00Z",
+          updatedAt: "2026-09-20T12:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy(), SLOW);
+
+    // The slice exactly as ingestRemoteFrame leaves it mid-turn: remote:true,
+    // streamBusy:false (a mirror never owns a fetch), one queued chip the
+    // phone pushed, streamed text on the live turn.
+    useStreamStore.setState({
+      bySession: {
+        sess_r113b_remote: {
+          liveTurn: {
+            startedAtMs: Date.now() - 3000,
+            working: [],
+            streamText: "The phone's turn is streaming on the desktop",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+          },
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: 0,
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [{ seq: 12, content: "follow-up typed on the phone", ts: "2026-09-20T12:00:30Z" }],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: true,
+        },
+      },
+    });
+
+    // The SAME live section renders: streamed text + the pulsing caret (a
+    // mirror in flight is just as "generating" as an own stream).
+    expect(await screen.findByText(/phone's turn is streaming/, {}, SLOW)).toBeTruthy();
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="streaming-caret"]')).not.toBeNull();
+    }, SLOW);
+    // The phone's queued chip renders from the mirror.
+    expect(document.querySelector("[data-queued-live-list]")?.textContent).toContain(
+      "follow-up typed on the phone",
+    );
+    // busy: the composer swaps Send for Stop (a turn IS running server-side —
+    // Stop routes to the server's /stop and resolves the remote turn).
+    expect(await screen.findByRole("button", { name: "Stop generation" }, SLOW)).toBeTruthy();
+
+    // The retire lands (the store's retire timer clears the mirror): the
+    // caret goes, the streamed text follows the folded log's render.
+    useStreamStore.setState({
+      bySession: {
+        sess_r113b_remote: {
+          liveTurn: null,
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: false,
+        },
+      },
+    });
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="streaming-caret"]')).toBeNull();
+      expect(document.querySelector("[data-queued-live-list]")).toBeNull();
     }, SLOW);
   });
 });
@@ -1681,6 +1790,7 @@ describe("AgentChatPanel timeline rail (ROUND-101 R101-D)", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -1771,6 +1881,7 @@ describe("AgentChatPanel inline screenshots (ROUND-68 R68-A)", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -1863,6 +1974,7 @@ describe("AgentChatPanel ROUND-75 retry ladder surfaces", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -2025,6 +2137,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
           queued,
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -2209,6 +2322,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -2354,6 +2468,7 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -2403,6 +2518,7 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
@@ -2691,6 +2807,7 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
           queued: [],
           deliveredQueued: [],
           queueKeptNotice: null,
+          remote: false,
         },
       },
     });
