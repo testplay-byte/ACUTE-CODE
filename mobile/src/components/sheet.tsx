@@ -10,6 +10,12 @@
  * exactly like the preferences/provider screens' expand patterns, just
  * anchored to the bottom. Every row the callers render must keep the 44px
  * touch discipline.
+ *
+ * R115 — the ghost-panel fix: the panel now enters FULLY OPAQUE, sliding its
+ * whole height from below the fold (the old 96px-rise + 0.4-start opacity let
+ * the page show through/below the sheet during the open animation). The scrim
+ * rides its own faster timing so the dim completes as the panel crosses the
+ * fold. Exit unchanged: spring-down + unmount after the timing settles.
  */
 
 import { useEffect, useState } from "react";
@@ -68,27 +74,35 @@ export function Sheet({
     240,
     Math.round(windowHeight * maxHeightFraction) - SHEET_CHROME,
   );
-  const progress = useSharedValue(0);
-  // Mount/unmount discipline: the panel springs IN on open, times OUT on
-  // close, and the Modal unmounts only after the exit settles — one clean
+  // R115 — two independent values: the panel spring and the scrim's faster
+  // timing. Mount/unmount discipline: the panel springs IN on open, times OUT
+  // on close, and the Modal unmounts only after the exit settles — one clean
   // animation, never a hard cut, never a flash of unanimated content.
+  const panelProgress = useSharedValue(0);
+  const scrimProgress = useSharedValue(0);
   const [rendered, setRendered] = useState(open);
 
   useEffect(() => {
     if (open) {
       setRendered(true);
-      progress.value = withSpring(1, SPRING);
+      scrimProgress.value = withTiming(1, { duration: 160 });
+      panelProgress.value = withSpring(1, SPRING);
       return;
     }
-    progress.value = withTiming(0, { duration: 180 }, (finished) => {
+    scrimProgress.value = withTiming(0, { duration: 160 });
+    panelProgress.value = withTiming(0, { duration: 180 }, (finished) => {
       if (finished) runOnJS(setRendered)(false);
     });
-  }, [open, progress]);
+  }, [open, panelProgress, scrimProgress]);
 
-  const scrim = useAnimatedStyle(() => ({ opacity: progress.value }));
+  // The panel's slide travel: at least its own maximum height, so the sheet
+  // enters from fully below the fold — the background is never visible
+  // through or beneath the rising panel.
+  const panelTravel = Math.round(windowHeight * maxHeightFraction) + 48;
+
+  const scrim = useAnimatedStyle(() => ({ opacity: scrimProgress.value }));
   const panel = useAnimatedStyle(() => ({
-    transform: [{ translateY: (1 - progress.value) * 96 }],
-    opacity: 0.4 + 0.6 * progress.value,
+    transform: [{ translateY: (1 - panelProgress.value) * panelTravel }],
   }));
 
   return (
