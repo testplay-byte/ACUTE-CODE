@@ -11,7 +11,9 @@
  *     connected and the app is foregrounded (the screens call flush());
  *   · a send is delivered by the SAME stream route the composer uses
  *     (POST /sessions/:id/messages/stream — the turn streams and the entry
- *     resolves on the terminal frame: done/stopped/error);
+ *     resolves on the terminal frame: done/stopped/error), carrying the
+ *     composer's per-send overrides the message was composed with (R113-c —
+ *     model/providerId/thinkingLevel/attachments replay on flush);
  *   · on terminal OR an HTTP-level refusal (4xx/5xx before the stream
  *     opened — validation, unknown session) the entry is REMOVED (the
  *     outcome is known; the transcript refetch shows the truth);
@@ -23,7 +25,7 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { parseStreamFrame } from "./sessions";
+import { parseStreamFrame, sendBody, type SendOverrides } from "./sessions";
 import type { SseSender } from "./api";
 import type { SseStream } from "@/link/connection";
 
@@ -35,6 +37,9 @@ export interface OutboxEntry {
   content: string;
   /** Epoch ms of when the message was composed. */
   queuedAt: number;
+  /** R113-c: the composer's per-send overrides at compose time — the entry
+   * replays them on flush through the SAME stream body a live send rides. */
+  overrides?: SendOverrides;
 }
 
 export interface OutboxState {
@@ -58,6 +63,7 @@ export function enqueueOutbox(
   sessionId: string,
   content: string,
   now: number,
+  overrides: SendOverrides = {},
 ): OutboxState {
   const trimmed = content.trim();
   if (trimmed === "") return state;
@@ -66,8 +72,20 @@ export function enqueueOutbox(
     sessionId,
     content: trimmed,
     queuedAt: now,
+    ...(hasOverrides(overrides) ? { overrides } : {}),
   };
   return { entries: [...state.entries, entry] };
+}
+
+/** True when an overrides bag carries ANY field (an empty bag stays off the
+ * entry — the persisted shape stays byte-compatible with pre-R113 queues). */
+function hasOverrides(overrides: SendOverrides): boolean {
+  return (
+    (overrides.model !== undefined && overrides.model !== "") ||
+    (overrides.providerId !== undefined && overrides.providerId !== "") ||
+    (overrides.thinkingLevel !== undefined && overrides.thinkingLevel !== "default") ||
+    (overrides.attachments !== undefined && overrides.attachments.length > 0)
+  );
 }
 
 /** Remove one entry (delivered / refused / dismissed). */
@@ -100,20 +118,43 @@ export function parseOutbox(raw: string | null): OutboxState {
     const valid: OutboxEntry[] = [];
     for (const entry of entries) {
       if (typeof entry !== "object" || entry === null) continue;
-      const { id, sessionId, content, queuedAt } = entry as Record<string, unknown>;
+      const { id, sessionId, content, queuedAt, overrides } = entry as Record<string, unknown>;
       if (
         typeof id === "string" &&
         typeof sessionId === "string" &&
         typeof content === "string" &&
         typeof queuedAt === "number"
       ) {
-        valid.push({ id, sessionId, content, queuedAt });
+        valid.push({ id, sessionId, content, queuedAt, ...parseEntryOverrides(overrides) });
       }
     }
     return { entries: valid };
   } catch {
     return EMPTY_OUTBOX;
   }
+}
+
+/** Read one persisted entry's overrides bag (R113-c) — malformed shapes read
+ * as absent (an unreadable override never blocks the queue). */
+function parseEntryOverrides(raw: unknown): { overrides?: SendOverrides } {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const record = raw as Record<string, unknown>;
+  const overrides: SendOverrides = {};
+  if (typeof record.model === "string" && record.model !== "") overrides.model = record.model;
+  if (typeof record.providerId === "string" && record.providerId !== "") {
+    overrides.providerId = record.providerId;
+  }
+  if (typeof record.thinkingLevel === "string" && record.thinkingLevel !== "default") {
+    overrides.thinkingLevel = record.thinkingLevel;
+  }
+  if (Array.isArray(record.attachments) && record.attachments.length > 0) {
+    const attachments = record.attachments.filter(
+      (a): a is { name: string; path?: string; size?: number; text?: string | null } =>
+        typeof a === "object" && a !== null && !Array.isArray(a) && typeof (a as { name?: unknown }).name === "string",
+    );
+    if (attachments.length > 0) overrides.attachments = attachments;
+  }
+  return hasOverrides(overrides) ? { overrides } : {};
 }
 
 // ── the controller (the app's singleton; the store is injected) ─────────────
@@ -179,9 +220,14 @@ export class OutboxController {
   }
 
   /** Compose offline: the message lands in the queue. */
-  async enqueue(sessionId: string, content: string, now = Date.now()): Promise<void> {
+  async enqueue(
+    sessionId: string,
+    content: string,
+    overrides: SendOverrides = {},
+    now = Date.now(),
+  ): Promise<void> {
     await this.ensureLoaded();
-    this.state = enqueueOutbox(this.state, sessionId, content, now);
+    this.state = enqueueOutbox(this.state, sessionId, content, now, overrides);
     await this.persist();
   }
 
@@ -259,7 +305,7 @@ function sendOnce(
     try {
       stream = sender.sse(
         `/api/v1/sessions/${encodeURIComponent(entry.sessionId)}/messages/stream`,
-        { method: "POST", bodyText: JSON.stringify({ content: entry.content }) },
+        { method: "POST", bodyText: sendBody(entry.content, entry.overrides ?? {}) },
       );
     } catch {
       finish("blocked");

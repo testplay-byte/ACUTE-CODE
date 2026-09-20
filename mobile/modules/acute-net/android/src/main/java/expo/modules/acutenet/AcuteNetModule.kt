@@ -69,8 +69,15 @@ class AcuteNetModule : Module() {
     Name("AcuteNet")
     Events("data", "error", "close")
 
-    // ── request(options) → Promise<{status, headers, bodyText}> ──────────
+    // ── request(options) → Promise<{status, headers, bodyText|bodyBase64}> ─
+    // R113-c: options.responseBase64 = true reads the response body as RAW
+    // BYTES base64 (bodyBase64; bodyText stays "") instead of the UTF-8
+    // decode — the ONLY honest way to carry a PNG raster (the screenshot
+    // thumbnails) across the bridge, which `body?.string()` would mojibake.
+    // Text responses keep the exact pre-R113 shape (bodyText, no bodyBase64
+    // key), so no existing consumer's destructure ever sees a new field.
     AsyncFunction("request") { options: Map<String, Any?>, promise: Promise ->
+      val responseBase64 = (options["responseBase64"] as? Boolean) ?: false
       val call = try {
         buildCall(options, sse = false)
       } catch (e: IllegalArgumentException) {
@@ -93,6 +100,24 @@ class AcuteNetModule : Module() {
 
         override fun onResponse(call: Call, response: Response) {
           response.use {
+            if (responseBase64) {
+              val bodyBase64 = try {
+                val bytes = it.body?.bytes() ?: ByteArray(0)
+                android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+              } catch (e: IOException) {
+                promise.reject(classifyNetworkError(e), e.message ?: "failed to read the response body", e)
+                return
+              }
+              promise.resolve(
+                mapOf(
+                  "status" to it.code,
+                  "headers" to LinkedHashMap<String, String>(),
+                  "bodyText" to "",
+                  "bodyBase64" to bodyBase64,
+                )
+              )
+              return
+            }
             val bodyText = try {
               it.body?.string() ?: ""
             } catch (e: IOException) {

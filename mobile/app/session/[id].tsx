@@ -1,10 +1,13 @@
 /**
- * Session v2 (R109) — the transcript + live stream + composer
- * (LINKING-PROTOCOL §3), now with the FORMATTED transcript (markdown via
- * TranscriptItemView), the proper Android keyboard handling
- * (react-native-keyboard-controller — the input NEVER hides under the
- * keyboard), the outbox chip's dismiss affordance, and the [ACUTE-MOB]
- * stream logging:
+ * Session v3 (R113-c) — the transcript + live stream + composer
+ * (LINKING-PROTOCOL §3), now a REAL REPLICA of the PC chat (the owner's
+ * directive): every send carries the composer's per-send overrides
+ * (model/providerId/thinkingLevel/attachments — openTurnStream, the queue
+ * route, and the outbox flush all ride the SAME body), the question cards
+ * answer through POST /agent-questions/:id/resolve, the operating/task modes
+ * PATCH per-session exactly like the desktop, and the composer (control row
+ * + chips included) clears the keyboard with the bottom safe-area inset
+ * applied while it's closed:
  *
  *   · the transcript: GET /sessions/:id's persisted event log, folded into
  *     the chat — complete even if the phone was offline all day;
@@ -17,16 +20,17 @@
  *     transcript honest — the transcript is the truth;
  *   · the composer: Send / Stop / Queue (the queue route's 409
  *     NO_LIVE_TURN falls back to an ordinary send), offline sends land in
- *     the outbox (flushed in order when the link returns), and the chip
- *     can be dismissed entry-by-entry.
+ *     the outbox (flushed in order when the link returns — overrides ride
+ *     the flush), and the chip can be dismissed entry-by-entry.
  *
  * The phone renders + taps. NOTHING is processed here (§4's ceiling).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, FlatList, RefreshControl, StyleSheet, View } from "react-native";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { Composer, type ComposerMode } from "@/components/composer";
 import { TranscriptItemView } from "@/components/transcript";
@@ -43,12 +47,18 @@ import {
   beginLiveTurn,
   foldSessionEvents,
   fetchSessionDetail,
+  openTurnStream,
   parseStreamFrame,
+  patchSessionActiveMode,
+  patchSessionPermissions,
   postQueue,
+  postResolveQuestion,
   postStop,
   sessionTitle,
+  type AttachmentView,
   type LiveTurn,
   type SessionDetailWire,
+  type SendOverrides,
   type TranscriptItem,
 } from "@/features/sessions";
 import { getOutbox, outboxForSession, type OutboxEntry } from "@/features/outbox";
@@ -179,23 +189,26 @@ export default function SessionScreen() {
   }, [rehydrate, setLiveState]);
 
   const openStream = useCallback(
-    (content: string) => {
+    (content: string, overrides: SendOverrides) => {
       const link = getLinkManager();
       let stream: SseStream;
       try {
-        stream = link.sse(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages/stream`, {
-          method: "POST",
-          bodyText: JSON.stringify({ content }),
-        });
+        // R113-c: the composer's per-send overrides ride the SAME body the
+        // desktop composer assembles (model/providerId/thinkingLevel/
+        // attachments — sendBody in features/sessions.ts).
+        stream = openTurnStream(link, sessionId, content, overrides);
       } catch {
-        // The link dropped between the tap and the socket — the outbox owns it.
-        void getOutbox().enqueue(sessionId, content);
+        // The link dropped between the tap and the socket — the outbox owns it
+        // (the overrides ride the flush).
+        void getOutbox().enqueue(sessionId, content, overrides);
         return;
       }
       mobLog("stream", "opened", { sessionId });
       streamClosedRef.current = false;
       streamRef.current = stream;
-      setLiveState(beginLiveTurn(baseItems, content, Date.now()));
+      setLiveState(
+        beginLiveTurn(baseItems, content, Date.now(), overrideAttachmentViews(overrides)),
+      );
       stream.addEventListener("data", (ev) => {
         const frame = parseStreamFrame(ev.data);
         if (frame === null) return;
@@ -245,12 +258,12 @@ export default function SessionScreen() {
   const liveRunning = live !== null && (live.phase === "streaming" || live.phase === "stopping");
 
   const onSend = useCallback(
-    (content: string) => {
+    (content: string, overrides: SendOverrides) => {
       if (status !== "connected") {
-        void getOutbox().enqueue(sessionId, content);
+        void getOutbox().enqueue(sessionId, content, overrides);
         return;
       }
-      openStream(content);
+      openStream(content, overrides);
     },
     [status, sessionId, openStream],
   );
@@ -272,8 +285,8 @@ export default function SessionScreen() {
   }, [sessionId, rehydrate, setLiveState]);
 
   const onQueue = useCallback(
-    (content: string) => {
-      void postQueue(getLinkManager(), sessionId, content)
+    (content: string, overrides: SendOverrides) => {
+      void postQueue(getLinkManager(), sessionId, content, overrides)
         .then((outcome) => {
           if (outcome.ok) {
             void rehydrate(); // the queued chip rides the folded log
@@ -281,13 +294,13 @@ export default function SessionScreen() {
           }
           if (outcome.error.code === "NO_LIVE_TURN") {
             // The turn ended between tap and POST — the honest fallback.
-            openStream(content);
+            openStream(content, overrides);
             return;
           }
           setError(`couldn't queue the message: ${outcome.error.message}`);
         })
         .catch(() => {
-          void getOutbox().enqueue(sessionId, content);
+          void getOutbox().enqueue(sessionId, content, overrides);
         });
     },
     [sessionId, rehydrate, openStream],
@@ -301,6 +314,63 @@ export default function SessionScreen() {
     mobLog("outbox", "entries dismissed", { count: outboxEntries.length, sessionId });
   }, [outboxEntries, sessionId]);
 
+  // ── the ask_user answers (R113-c — the desktop QuestionCard's POST) ──────
+
+  /** Resolve one question card: 200 settles the card (the stream's own
+   * agent-question.resolved frame confirms it), 404 = already timed out —
+   * the card's own state is the fallback either way. */
+  const onAnswerQuestion = useCallback(
+    async (questionId: string, answers: string[], sources: Array<"option" | "custom">): Promise<boolean> => {
+      try {
+        const outcome = await postResolveQuestion(getLinkManager(), questionId, answers, sources);
+        return outcome.ok;
+      } catch {
+        return false; // transport — the card stays answerable
+      }
+    },
+    [],
+  );
+
+  // ── the composer's per-session settings (PATCH round-trips) ─────────────
+
+  /** PATCH /sessions/:id/permissions — the desktop ModeSwitcher's exact
+   * per-session round-trip (applies to the NEXT turn). */
+  const onPermissionModeChange = useCallback(
+    (permissionMode: "full" | "ask" | "plan") => {
+      void patchSessionPermissions(getLinkManager(), sessionId, permissionMode)
+        .then((outcome) => {
+          if (outcome.ok) {
+            setDetail((prev) => (prev === null ? outcome.data : { ...prev, ...outcome.data }));
+          } else {
+            setError(`couldn't switch the mode: ${outcome.error.message}`);
+          }
+        })
+        .catch(() => {
+          setError("couldn't switch the mode — the host is offline");
+        });
+    },
+    [sessionId],
+  );
+
+  /** PATCH /sessions/:id {activeMode} — the task-mode picker (validated
+   * against the same resolver GET /projects/:id/modes serves). */
+  const onActiveModeChange = useCallback(
+    (activeMode: string | null) => {
+      void patchSessionActiveMode(getLinkManager(), sessionId, activeMode)
+        .then((outcome) => {
+          if (outcome.ok) {
+            setDetail((prev) => (prev === null ? prev : { ...prev, ...outcome.data }));
+          } else {
+            setError(`couldn't set the task mode: ${outcome.error.message}`);
+          }
+        })
+        .catch(() => {
+          setError("couldn't set the task mode — the host is offline");
+        });
+    },
+    [sessionId],
+  );
+
   // ── render ─────────────────────────────────────────────────────────────────
 
   const displayItems = useMemo<TranscriptItem[]>(() => {
@@ -310,12 +380,22 @@ export default function SessionScreen() {
       key: entry.id,
       content: entry.content,
       queued: true,
+      attachments: entry.overrides?.attachments ?? null,
     }));
     return [...baseItems, ...pending];
   }, [live, baseItems, outboxEntries]);
 
   const composerMode: ComposerMode =
     status !== "connected" ? "offline" : liveRunning || remoteRunning ? "running" : "compose";
+
+  // The composer's bottom inset: the SAFE AREA while the keyboard is closed,
+  // 0 while it's open (the keyboard already covers the gesture bar — a
+  // standing inset would hold the composer a dead strip above the keys).
+  // useKeyboardState is react-native-keyboard-controller's own JS-thread
+  // truth, so the swap never races the KAV's animated padding.
+  const keyboard = useKeyboardState();
+  const insets = useSafeAreaInsets();
+  const composerBottomInset = keyboard.isVisible ? 0 : insets.bottom;
 
   const data = useMemo(() => [...displayItems].reverse(), [displayItems]);
 
@@ -357,7 +437,10 @@ export default function SessionScreen() {
       }
     >
       {/* The keyboard-aware body — react-native-keyboard-controller's view
-          (the REAL Android fix: behavior padding works with edge-to-edge). */}
+          (the REAL Android fix: behavior padding works with edge-to-edge).
+          The whole composer — control row, chips, input — rides INSIDE it,
+          so the padding lifts every row clear of the keyboard while the
+          inverted FlatList scrolls above them. */}
       <KeyboardAvoidingView behavior="padding" style={styles.body}>
         {loading ? (
           <View style={styles.centerWrap}>
@@ -388,7 +471,11 @@ export default function SessionScreen() {
             inverted
             keyExtractor={(item) => item.key}
             renderItem={({ item }) => (
-              <TranscriptItemView item={item} onApprovalDecide={() => router.navigate("/approvals")} />
+              <TranscriptItemView
+                item={item}
+                onApprovalDecide={() => router.navigate("/approvals")}
+                onAnswerQuestion={onAnswerQuestion}
+              />
             )}
             ItemSeparatorComponent={ItemSeparator}
             contentContainerStyle={styles.transcriptContent}
@@ -405,14 +492,23 @@ export default function SessionScreen() {
             </TypeCaption>
           </View>
         )}
-        <View style={[styles.composerWrap, { backgroundColor: tokens.bg }]}>
+        <View
+          style={[styles.composerWrap, { backgroundColor: tokens.bg, paddingBottom: composerBottomInset }]}
+        >
           <Composer
             mode={composerMode}
             outboxCount={outboxEntries.length}
+            sessionId={sessionId}
+            projectId={detail?.projectId ?? null}
+            permissionMode={detail?.permissionMode ?? "ask"}
+            activeMode={detail?.activeMode ?? null}
+            onPermissionModeChange={onPermissionModeChange}
+            onActiveModeChange={onActiveModeChange}
             onSend={onSend}
             onStop={onStop}
             onQueue={onQueue}
             onDismissOutbox={() => void onDismissOutbox()}
+            streaming={liveRunning || remoteRunning}
           />
         </View>
       </KeyboardAvoidingView>
@@ -422,6 +518,19 @@ export default function SessionScreen() {
 
 function ItemSeparator() {
   return <View style={{ height: spacing.md }} />;
+}
+
+/** The display chips for a send's overrides (the optimistic user card + the
+ * pending outbox rows) — the wire's MessageAttachment display fields. */
+function overrideAttachmentViews(overrides: SendOverrides): AttachmentView[] | null {
+  const attachments = overrides.attachments;
+  if (attachments === undefined || attachments.length === 0) return null;
+  const views = attachments.map((a) => ({
+    name: a.name,
+    ...(a.path !== undefined ? { path: a.path } : {}),
+    ...(a.size !== undefined ? { size: a.size } : {}),
+  }));
+  return views.length > 0 ? views : null;
 }
 
 const styles = StyleSheet.create({

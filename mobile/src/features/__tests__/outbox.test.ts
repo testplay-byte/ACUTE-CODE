@@ -127,6 +127,34 @@ describe("outbox — the pure reducer", () => {
     expect(outboxForSession(state, "sess_2")).toHaveLength(1);
     expect(outboxForSession(state, "sess_3")).toHaveLength(0);
   });
+
+  // ── R113-c: the per-send overrides ride the entry ──
+
+  it("enqueues the composer's overrides; empty bags stay OFF the entry (byte-compatible)", () => {
+    const withOverrides = enqueueOutbox(EMPTY_OUTBOX, "sess_1", "hello", 1000, {
+      model: "z-ai/glm-5.2:free",
+      providerId: "openrouter",
+      thinkingLevel: "high",
+      attachments: [{ name: "photo.png", path: "attachments/photo.png", size: 2048 }],
+    });
+    expect(withOverrides.entries[0]?.overrides).toEqual({
+      model: "z-ai/glm-5.2:free",
+      providerId: "openrouter",
+      thinkingLevel: "high",
+      attachments: [{ name: "photo.png", path: "attachments/photo.png", size: 2048 }],
+    });
+    // nothing set (or only defaults) → NO overrides key at all
+    const bare = enqueueOutbox(EMPTY_OUTBOX, "sess_1", "hello", 1000);
+    expect(bare.entries[0]?.overrides).toBeUndefined();
+    expect("overrides" in (bare.entries[0] ?? {})).toBe(false);
+    const defaults = enqueueOutbox(EMPTY_OUTBOX, "sess_1", "hello", 1000, {
+      thinkingLevel: "default",
+      attachments: [],
+      model: "",
+      providerId: "",
+    });
+    expect(defaults.entries[0]?.overrides).toBeUndefined();
+  });
 });
 
 // ── persistence ─────────────────────────────────────────────────────────────
@@ -135,6 +163,50 @@ describe("outbox — persistence", () => {
   it("round-trips serialize → parse", () => {
     const state = enqueueOutbox(EMPTY_OUTBOX, "sess_1", "hello", 1000);
     expect(parseOutbox(serializeOutbox(state))).toEqual(state);
+  });
+
+  it("round-trips an entry's overrides (R113-c — the flush replays them)", () => {
+    const state = enqueueOutbox(EMPTY_OUTBOX, "sess_1", "hello", 1000, {
+      model: "z-ai/glm-5.2:free",
+      providerId: "openrouter",
+      thinkingLevel: "max",
+      attachments: [{ name: "photo.png", path: "attachments/photo.png", size: 2048 }],
+    });
+    const parsed = parseOutbox(serializeOutbox(state));
+    expect(parsed.entries[0]?.overrides).toEqual(state.entries[0]?.overrides);
+  });
+
+  it("malformed overrides read as ABSENT (never block the queue); pre-R113 entries still parse", () => {
+    const blob = JSON.stringify({
+      entries: [
+        {
+          id: "a",
+          sessionId: "sess_1",
+          content: "old shape",
+          queuedAt: 1,
+          // a pre-R113 queue persisted NO overrides — still valid today
+        },
+        {
+          id: "b",
+          sessionId: "sess_1",
+          content: "junk overrides",
+          queuedAt: 2,
+          overrides: { model: 7, attachments: "nope", thinkingLevel: "default" },
+        },
+        {
+          id: "c",
+          sessionId: "sess_1",
+          content: "bad attachment rows",
+          queuedAt: 3,
+          overrides: { attachments: [{ name: "ok.txt" }, "junk", { path: "no-name" }] },
+        },
+      ],
+    });
+    const state = parseOutbox(blob);
+    expect(state.entries).toHaveLength(3);
+    expect(state.entries[0]?.overrides).toBeUndefined();
+    expect(state.entries[1]?.overrides).toBeUndefined(); // every field junk → absent
+    expect(state.entries[2]?.overrides?.attachments).toEqual([{ name: "ok.txt" }]); // salvage the valid row
   });
 
   it("reads corrupt blobs as EMPTY (the honest fallback)", () => {
@@ -163,12 +235,12 @@ describe("outbox — the controller", () => {
   it("persists on enqueue and reloads on the next controller", async () => {
     const store = memoryStore();
     const controller = new OutboxController(store);
-    await controller.enqueue("sess_1", "hello", 1000);
+    await controller.enqueue("sess_1", "hello", {}, 1000);
     expect(store.saved).toHaveLength(1);
     expect(store.saved[0]).toBe(serializeOutbox({ entries: controller.getState().entries }));
 
     const second = new OutboxController(store);
-    await second.enqueue("sess_2", "again", 2000); // forces the load
+    await second.enqueue("sess_2", "again", {}, 2000); // forces the load
     expect(second.getState().entries.map((entry) => entry.content)).toEqual(["hello", "again"]);
   });
 
@@ -177,19 +249,19 @@ describe("outbox — the controller", () => {
     const controller = new OutboxController(store);
     const events: number[] = [];
     const unsubscribe = controller.subscribe(() => events.push(controller.getState().entries.length));
-    await controller.enqueue("sess_1", "one", 1000);
-    await controller.enqueue("sess_1", "two", 2000);
+    await controller.enqueue("sess_1", "one", {}, 1000);
+    await controller.enqueue("sess_1", "two", {}, 1000);
     expect(events).toEqual([0, 1, 2]);
     unsubscribe();
-    await controller.enqueue("sess_1", "three", 3000);
+    await controller.enqueue("sess_1", "three", {}, 1000);
     expect(events).toEqual([0, 1, 2]);
   });
 
   it("flushes in order, one at a time, removing on terminal frames", async () => {
     const store = memoryStore();
     const controller = new OutboxController(store);
-    await controller.enqueue("sess_1", "first", 1000);
-    await controller.enqueue("sess_2", "second", 2000);
+    await controller.enqueue("sess_1", "first", {}, 1000);
+    await controller.enqueue("sess_2", "second", {}, 2000);
     const { sender, opens } = makeSseSender((stream, index) => {
       if (index === 0) {
         // first entry: the turn runs and completes
@@ -218,10 +290,36 @@ describe("outbox — the controller", () => {
     expect(opens.every((open) => open.closed)).toBe(true);
   });
 
+  it("flushes through the SAME stream body a live send rides — overrides replay (R113-c)", async () => {
+    const store = memoryStore();
+    const controller = new OutboxController(store);
+    await controller.enqueue("sess_1", "hello", {
+      model: "z-ai/glm-5.2:free",
+      providerId: "openrouter",
+      thinkingLevel: "high",
+      attachments: [{ name: "photo.png", path: "attachments/photo.png", size: 2048 }],
+    }, 1000);
+    await controller.enqueue("sess_1", "plain", {}, 2000);
+    const { sender, opens } = makeSseSender((stream) => {
+      stream.emitData('{"type":"done"}');
+      stream.emitClose();
+    });
+    const result = await controller.flush(sender);
+    expect(result.delivered).toBe(2);
+    expect(JSON.parse(opens[0]?.openedWith.bodyText ?? "")).toEqual({
+      content: "hello",
+      model: "z-ai/glm-5.2:free",
+      providerId: "openrouter",
+      thinkingLevel: "high",
+      attachments: [{ name: "photo.png", path: "attachments/photo.png", size: 2048 }],
+    });
+    expect(opens[1]?.openedWith.bodyText).toBe('{"content":"plain"}');
+  });
+
   it("removes the entry on an HTTP refusal (the host's definitive no)", async () => {
     const store = memoryStore();
     const controller = new OutboxController(store);
-    await controller.enqueue("sess_gone", "hello", 1000);
+    await controller.enqueue("sess_gone", "hello", {}, 1000);
     const { sender } = makeSseSender((stream) => {
       stream.emitError({ kind: "http", message: "server answered HTTP 404", status: 404 });
       stream.emitClose();
@@ -234,8 +332,8 @@ describe("outbox — the controller", () => {
   it("KEEPS the entry and stops the flush on a transport failure", async () => {
     const store = memoryStore();
     const controller = new OutboxController(store);
-    await controller.enqueue("sess_1", "first", 1000);
-    await controller.enqueue("sess_1", "second", 2000);
+    await controller.enqueue("sess_1", "first", {}, 1000);
+    await controller.enqueue("sess_1", "second", {}, 1000);
     const { sender, opens } = makeSseSender((stream) => {
       stream.emitError({ kind: "network", message: "host unreachable" });
       stream.emitClose();
@@ -250,7 +348,7 @@ describe("outbox — the controller", () => {
   it("removes on an ambiguous close-without-terminal (at-least-once, documented)", async () => {
     const store = memoryStore();
     const controller = new OutboxController(store);
-    await controller.enqueue("sess_1", "hello", 1000);
+    await controller.enqueue("sess_1", "hello", {}, 1000);
     const { sender } = makeSseSender((stream) => {
       stream.emitData('{"type":"text-delta","delta":"partial"}');
       stream.emitClose(); // no terminal frame
@@ -263,7 +361,7 @@ describe("outbox — the controller", () => {
   it("guards concurrent flushes (the in-flight flag)", async () => {
     const store = memoryStore();
     const controller = new OutboxController(store);
-    await controller.enqueue("sess_1", "hello", 1000);
+    await controller.enqueue("sess_1", "hello", {}, 1000);
     // The first flush holds on a stream that never emits (a turn still
     // running server-side) — it stays pending, exactly like real life.
     const holding = makeSseSender(() => {});

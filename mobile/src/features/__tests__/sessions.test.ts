@@ -21,9 +21,13 @@ import {
   isTurnRunning,
   openTurnStream,
   parseStreamFrame,
+  patchSessionActiveMode,
+  patchSessionPermissions,
   postQueue,
+  postResolveQuestion,
   postStop,
   queueBody,
+  sendBody,
   sessionStatusTone,
   sessionTitle,
   type SessionEventWire,
@@ -208,10 +212,10 @@ describe("sessions — the persisted event fold", () => {
   it("renders unknown event types as dim meta lines (never a crash)", () => {
     const items = foldSessionEvents([
       event(1, "some.future.event", { anything: true }),
-      event(2, "todo.update", { todos: [{ content: "a", status: "completed" }, { content: "b", status: "pending" }] }),
+      event(2, "another.future.event", { more: "stuff" }),
     ]);
     expect(items[0]?.kind === "meta" && items[0].text).toBe("some.future.event");
-    expect(items[1]?.kind === "meta" && items[1].text).toBe("todos — 1/2 done");
+    expect(items[1]?.kind === "meta" && items[1].text).toBe("another.future.event");
   });
 
   it("drops empty payloads quietly (no phantom bubbles)", () => {
@@ -220,6 +224,105 @@ describe("sessions — the persisted event fold", () => {
       event(2, "message.assistant", { role: "assistant", content: "" }),
     ]);
     expect(items).toHaveLength(0);
+  });
+
+  // ── R113-c: the rich fold — todo cards, question cards, attachment chips ──
+
+  it("folds todo.update into ONE card carrying the LATEST snapshot (source rides)", () => {
+    const items = foldSessionEvents([
+      event(1, "message.user", { content: "build it" }),
+      event(2, "todo.update", { todos: [{ content: "a", status: "pending" }] }),
+      event(3, "todo.update", { todos: [{ content: "a", status: "completed" }, { content: "b", status: "in_progress" }] }),
+    ]);
+    const todos = items.filter((item) => item.kind === "todo");
+    expect(todos).toHaveLength(1); // one card, never a stack
+    expect(todos[0]?.kind === "todo" && todos[0].key).toBe("todos"); // stable key → in-place updates
+    expect(
+      todos[0]?.kind === "todo" && todos[0].todos.map((t) => `${t.content}:${t.status}`),
+    ).toEqual(["a:completed", "b:in_progress"]);
+    expect(todos[0]?.kind === "todo" && todos[0].source).toBe("agent");
+    // the card sits AFTER the message it answers (positioned at the LATEST
+    // todo event — the upsert never stacks a second card)
+    const userIndex = items.findIndex((item) => item.kind === "user");
+    const todoIndex = items.findIndex((item) => item.kind === "todo");
+    expect(userIndex).toBeGreaterThanOrEqual(0);
+    expect(todoIndex).toBeGreaterThan(userIndex);
+  });
+
+  it("marks a user-edited todo list (the widget's manual edit)", () => {
+    const items = foldSessionEvents([
+      event(1, "todo.update", { todos: [{ content: "a", status: "completed" }], source: "user" }),
+    ]);
+    expect(items[0]?.kind === "todo" && items[0].source).toBe("user");
+  });
+
+  it("an EMPTY todo.update (the R88 clear) REMOVES the card", () => {
+    const items = foldSessionEvents([
+      event(1, "todo.update", { todos: [{ content: "a", status: "pending" }] }),
+      event(2, "todo.update", { todos: [] }),
+    ]);
+    expect(items.filter((item) => item.kind === "todo")).toHaveLength(0);
+  });
+
+  it("folds agent-question.requested → pending card, resolved patches it IN PLACE", () => {
+    const items = foldSessionEvents([
+      event(1, "agent-question.requested", {
+        questionId: "q_1",
+        questions: [
+          { question: "Which DB?", options: ["sqlite", "postgres"], allowCustom: false },
+          { question: "Migrations?", options: [], allowCustom: true, placeholder: "your plan" },
+        ],
+      }),
+      event(2, "agent-question.resolved", {
+        questionId: "q_1",
+        resolution: "answered",
+        answers: ["sqlite", "hand-written"],
+        sources: ["option", "custom"],
+      }),
+    ]);
+    const questions = items.filter((item) => item.kind === "question");
+    expect(questions).toHaveLength(1); // ONE card — the resolution patches, never stacks
+    const card = questions[0];
+    expect(card?.kind === "question" && card.resolution).toBe("answered");
+    expect(card?.kind === "question" && card.answers).toEqual(["sqlite", "hand-written"]);
+    expect(card?.kind === "question" && card.sources).toEqual(["option", "custom"]);
+    expect(card?.kind === "question" && card.questions).toHaveLength(2);
+    expect(card?.kind === "question" && card.questions[0]?.allowCustom).toBe(false);
+    expect(card?.kind === "question" && card.questions[1]?.placeholder).toBe("your plan");
+  });
+
+  it("timeout/cancelled resolutions render honestly; orphans never crash the fold", () => {
+    const timeout = foldSessionEvents([
+      event(1, "agent-question.requested", { questionId: "q_9", questions: [{ question: "still there?" }] }),
+      event(2, "agent-question.resolved", { questionId: "q_9", resolution: "timeout" }),
+    ]);
+    expect(timeout[0]?.kind === "question" && timeout[0].resolution).toBe("timeout");
+    const orphan = foldSessionEvents([
+      event(1, "agent-question.resolved", { questionId: "q_ghost", resolution: "cancelled", answers: [] }),
+    ]);
+    expect(orphan).toHaveLength(1); // the honest note card (questions empty)
+    expect(orphan[0]?.kind === "question" && orphan[0].resolution).toBe("cancelled");
+  });
+
+  it("folds message.user attachments into chips (malformed rows dropped)", () => {
+    const items = foldSessionEvents([
+      event(1, "message.user", {
+        content: "look at this",
+        attachments: [
+          { name: "photo.png", path: "attachments/photo.png", size: 2048 },
+          { name: "notes.txt", size: 10 },
+          { path: "no-name.txt" },
+          "junk",
+        ],
+      }),
+    ]);
+    const user = items[0];
+    expect(user?.kind === "user" && user.attachments).toEqual([
+      { name: "photo.png", path: "attachments/photo.png", size: 2048 },
+      { name: "notes.txt", size: 10 },
+    ]);
+    const bare = foldSessionEvents([event(2, "message.user", { content: "no files" })]);
+    expect(bare[0]?.kind === "user" && bare[0].attachments).toBeNull();
   });
 });
 
@@ -324,7 +427,114 @@ describe("sessions — the live turn state machine", () => {
     expect(approvals[0]?.kind === "approval" && approvals[0].decision).toBe("approved");
   });
 
-  it("renders the dim meta lines: continuation, retry, sub-agent, finish tokens", () => {
+  // ── R113-c: the rich live frames — sub-agent cards, screenshots, todos ──
+
+  it("subagent-status upserts ONE card per child through every transition", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(
+      turn,
+      { type: "subagent-status", sessionId: "child_1", parentSessionId: "sess_1", status: "queued", task: "research the relay", role: "researcher" },
+      NOW + 1,
+    );
+    turn = applyLiveFrame(
+      turn,
+      { type: "subagent-status", sessionId: "child_1", parentSessionId: "sess_1", status: "running", task: "research the relay", role: "researcher", code: "A1B2", model: "z-ai/glm-5.2:free", taskId: "task_7" },
+      NOW + 2,
+    );
+    turn = applyLiveFrame(
+      turn,
+      { type: "subagent-status", sessionId: "child_1", parentSessionId: "sess_1", status: "failed", task: "research the relay", role: "researcher", code: "A1B2", detail: "stalled: no activity for 5m" },
+      NOW + 3,
+    );
+    const cards = turn.items.filter((item) => item.kind === "subagent");
+    expect(cards).toHaveLength(1); // ONE card, upserted by child sessionId
+    const card = cards[0];
+    expect(card?.kind === "subagent" && card.key).toBe("sub-child_1");
+    expect(card?.kind === "subagent" && card.childSessionId).toBe("child_1");
+    expect(card?.kind === "subagent" && card.status).toBe("failed");
+    expect(card?.kind === "subagent" && card.role).toBe("researcher");
+    expect(card?.kind === "subagent" && card.task).toBe("research the relay");
+    expect(card?.kind === "subagent" && card.code).toBe("A1B2");
+    expect(card?.kind === "subagent" && card.detail).toBe("stalled: no activity for 5m");
+    // the latest frame wins wholesale (the upsert REPLACES the card — a frame
+    // that omits model/taskId clears them; the runtime attaches model to
+    // every frame a delegation emits, so this is the replace-only semantics)
+    expect(card?.kind === "subagent" && card.model).toBeNull();
+    expect(card?.kind === "subagent" && card.taskId).toBeNull();
+    // the intermediate running frame DID carry them
+    turn = applyLiveFrame(
+      turn,
+      { type: "subagent-status", sessionId: "child_1", parentSessionId: "sess_1", status: "running", task: "research the relay", role: "researcher", model: "z-ai/glm-5.2:free", taskId: "task_7" },
+      NOW + 5,
+    );
+    const running = turn.items.find((item) => item.kind === "subagent");
+    expect(running?.kind === "subagent" && running.model).toBe("z-ai/glm-5.2:free");
+    expect(running?.kind === "subagent" && running.taskId).toBe("task_7");
+    // a second child stacks its OWN card
+    turn = applyLiveFrame(
+      turn,
+      { type: "subagent-status", sessionId: "child_2", parentSessionId: "sess_1", status: "running", task: "write tests", role: "coder" },
+      NOW + 6,
+    );
+    expect(turn.items.filter((item) => item.kind === "subagent")).toHaveLength(2);
+  });
+
+  it("screenshot frames land image tiles keyed by frameId (empty ids drop)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, { type: "screenshot", frameId: "bs_1", tool: "browser_control" }, NOW + 1);
+    turn = applyLiveFrame(turn, { type: "screenshot", frameId: "", tool: "computer_use" }, NOW + 2);
+    const images = turn.items.filter((item) => item.kind === "image");
+    expect(images).toHaveLength(1);
+    expect(images[0]?.kind === "image" && images[0].key).toBe("img-bs_1");
+    expect(images[0]?.kind === "image" && images[0].frameId).toBe("bs_1");
+    expect(images[0]?.kind === "image" && images[0].tool).toBe("browser_control");
+  });
+
+  it("live agent-question frames: the ask lands pending, resolved patches the card", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(
+      turn,
+      { type: "agent-question", sessionId: "sess_1", questionId: "q_5", questions: [{ question: "Deploy now?", options: ["yes", "no"] }] },
+      NOW + 1,
+    );
+    let cards = turn.items.filter((item) => item.kind === "question");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]?.kind === "question" && cards[0].resolution).toBe("pending");
+    expect(cards[0]?.kind === "question" && cards[0].questions[0]?.options).toEqual(["yes", "no"]);
+    turn = applyLiveFrame(
+      turn,
+      { type: "agent-question.resolved", sessionId: "sess_1", questionId: "q_5", resolution: "answered", answers: ["yes"], sources: ["option"] },
+      NOW + 2,
+    );
+    cards = turn.items.filter((item) => item.kind === "question");
+    expect(cards).toHaveLength(1); // patched in place, never a second card
+    expect(cards[0]?.kind === "question" && cards[0].resolution).toBe("answered");
+    expect(cards[0]?.kind === "question" && cards[0].answers).toEqual(["yes"]);
+  });
+
+  it("live todo-updated frames upsert the ONE card (stable key, latest snapshot)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, { type: "todo-updated", sessionId: "sess_1", todos: [{ content: "a", status: "pending" }] }, NOW + 1);
+    turn = applyLiveFrame(turn, { type: "todo-updated", sessionId: "sess_1", todos: [{ content: "a", status: "completed" }] }, NOW + 2);
+    const cards = turn.items.filter((item) => item.kind === "todo");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]?.kind === "todo" && cards[0].todos).toEqual([{ content: "a", status: "completed" }]);
+    expect(cards[0]?.kind === "todo" && cards[0].key).toBe("todos");
+  });
+
+  it("the optimistic user card carries the send's attachment chips (R113-c)", () => {
+    const turn = beginLiveTurn([], "here is the screenshot", NOW, [
+      { name: "photo.png", path: "attachments/photo.png", size: 2048 },
+    ]);
+    const user = turn.items[0];
+    expect(user?.kind === "user" && user.attachments).toEqual([
+      { name: "photo.png", path: "attachments/photo.png", size: 2048 },
+    ]);
+    const bare = beginLiveTurn([], "plain", NOW);
+    expect(bare.items[0]?.kind === "user" && bare.items[0].attachments).toBeNull();
+  });
+
+  it("renders the dim meta lines: continuation, retry, finish tokens", () => {
     let turn = beginLiveTurn([], "go", NOW);
     turn = applyLiveFrame(turn, { type: "meta.continuation", iteration: 2 }, NOW + 1);
     turn = applyLiveFrame(
@@ -332,16 +542,10 @@ describe("sessions — the live turn state machine", () => {
       { type: "meta.retry", attempt: 2, totalAttempts: 6, remainingMs: 4000, errorClass: "rate_limit", message: "rate limited" },
       NOW + 2,
     );
-    turn = applyLiveFrame(
-      turn,
-      { type: "subagent-status", status: "running", task: "t", role: "researcher", code: "A1B2" },
-      NOW + 3,
-    );
     turn = applyLiveFrame(turn, { type: "finish", usage: { inputTokens: 10, outputTokens: 5 } }, NOW + 4);
     const texts = turn.items.filter((item) => item.kind === "meta").map((item) => (item.kind === "meta" ? item.text : ""));
     expect(texts).toContain("round 2");
     expect(texts.some((text) => text.includes("attempt 2/6"))).toBe(true);
-    expect(texts.some((text) => text.includes("researcher A1B2 running"))).toBe(true);
     expect(texts.some((text) => text.includes("10 in · 5 out"))).toBe(true);
   });
 
@@ -433,5 +637,101 @@ describe("sessions — the typed client", () => {
     expect(opens[0]?.url).toBe("/api/v1/sessions/sess_1/messages/stream");
     expect(opens[0]?.method).toBe("POST");
     expect(opens[0]?.bodyText).toBe('{"content":"hello"}');
+  });
+
+  // ── R113-c: the per-send override bodies (the desktop composer's wire) ──
+
+  it("assembles the send body: overrides ride ONLY when set (desktop parity)", () => {
+    expect(sendBody("hello")).toBe('{"content":"hello"}');
+    expect(sendBody("hello", {})).toBe('{"content":"hello"}');
+    expect(sendBody("hello", { thinkingLevel: "default" })).toBe('{"content":"hello"}');
+    expect(sendBody("hello", { attachments: [] })).toBe('{"content":"hello"}');
+    expect(sendBody("hello", { model: "", providerId: "" })).toBe('{"content":"hello"}');
+    const full = sendBody("hello", {
+      model: "z-ai/glm-5.2:free",
+      providerId: "openrouter",
+      thinkingLevel: "high",
+      attachments: [{ name: "photo.png", path: "attachments/photo.png", size: 2048 }],
+    });
+    expect(JSON.parse(full)).toEqual({
+      content: "hello",
+      model: "z-ai/glm-5.2:free",
+      providerId: "openrouter",
+      thinkingLevel: "high",
+      attachments: [{ name: "photo.png", path: "attachments/photo.png", size: 2048 }],
+    });
+    // the xhigh rung is real vocabulary (R96-F) and rides verbatim
+    expect(JSON.parse(sendBody("hi", { thinkingLevel: "xhigh" }))).toEqual({
+      content: "hi",
+      thinkingLevel: "xhigh",
+    });
+  });
+
+  it("the queue body drops thinkingLevel but keeps the model pair + attachments (the route's own honesty)", () => {
+    expect(queueBody("hello", { thinkingLevel: "high" })).toBe('{"content":"hello"}');
+    const queued = queueBody("hello", {
+      model: "z-ai/glm-5.2:free",
+      providerId: "openrouter",
+      thinkingLevel: "high",
+      attachments: [{ name: "a.txt" }],
+    });
+    expect(JSON.parse(queued)).toEqual({
+      content: "hello",
+      model: "z-ai/glm-5.2:free",
+      providerId: "openrouter",
+      attachments: [{ name: "a.txt" }],
+    });
+  });
+
+  it("opens the turn stream carrying the composer's overrides", () => {
+    const { sender, opens } = makeSseSender();
+    openTurnStream(sender, "sess_1", "hello", {
+      model: "z-ai/glm-5.2:free",
+      providerId: "openrouter",
+      thinkingLevel: "max",
+      attachments: [{ name: "photo.png", path: "attachments/photo.png" }],
+    });
+    expect(JSON.parse(opens[0]?.bodyText ?? "")).toEqual({
+      content: "hello",
+      model: "z-ai/glm-5.2:free",
+      providerId: "openrouter",
+      thinkingLevel: "max",
+      attachments: [{ name: "photo.png", path: "attachments/photo.png" }],
+    });
+  });
+
+  it("resolves ask_user questions through POST /agent-questions/:id/resolve", async () => {
+    const { sender, calls } = makeApiSender(() => ({
+      status: 200,
+      bodyText: JSON.stringify({ ok: true }),
+    }));
+    const outcome = await postResolveQuestion(sender, "q_1", ["yes"], ["option"]);
+    expect(outcome.ok).toBe(true);
+    expect(calls[0]?.path).toBe("/api/v1/agent-questions/q_1/resolve");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(JSON.parse(calls[0]?.init.bodyText ?? "")).toEqual({ answers: ["yes"], sources: ["option"] });
+    // sources are optional on the wire
+    const bare = await postResolveQuestion(sender, "q_2", ["no"]);
+    expect(bare.ok).toBe(true);
+    expect(JSON.parse(calls[1]?.init.bodyText ?? "")).toEqual({ answers: ["no"] });
+  });
+
+  it("PATCHes the per-session operating mode + task mode (desktop parity)", async () => {
+    const { sender, calls } = makeApiSender((path) => ({
+      status: 200,
+      bodyText: JSON.stringify(path.includes("permissions") ? { ...makeSession(), events: [], lastSeq: 0 } : makeSession({ activeMode: "deep-research" })),
+    }));
+    const permissions = await patchSessionPermissions(sender, "sess_1", "plan");
+    expect(permissions.ok).toBe(true);
+    expect(calls[0]?.path).toBe("/api/v1/sessions/sess_1/permissions");
+    expect(calls[0]?.init.method).toBe("PATCH");
+    expect(calls[0]?.init.bodyText).toBe('{"mode":"plan"}');
+    const active = await patchSessionActiveMode(sender, "sess_1", "deep-research");
+    expect(active.ok && active.data.activeMode).toBe("deep-research");
+    expect(calls[1]?.path).toBe("/api/v1/sessions/sess_1");
+    expect(calls[1]?.init.bodyText).toBe('{"activeMode":"deep-research"}');
+    const cleared = await patchSessionActiveMode(sender, "sess_1", null);
+    expect(cleared.ok).toBe(true);
+    expect(calls[2]?.init.bodyText).toBe('{"activeMode":null}');
   });
 });

@@ -14,19 +14,33 @@
  *          message.queued, message.assistant (content/thinking/model/usage),
  *          tool.use (toolName/argsSummary/ok/outputSummary), turn.error,
  *          turn.warning, approval.requested, approval.resolved, debug.report,
- *          todo.update, session.reverted; anything else → a dim meta line.
+ *          todo.update, agent-question.requested/resolved (R87 — the
+ *          ask_user cards), session.reverted; anything else → a dim meta line.
  *          A session row with status "running" has a turn in flight (the
  *          runtime flips queued→running at turn start and back to queued at
  *          turn end — R44; terminal statuses are completed/failed/cancelled).
- *   POST /api/v1/sessions/:id/messages/stream  body {content}
+ *   POST /api/v1/sessions/:id/messages/stream  body {content, model?,
+ *        providerId?, thinkingLevel?, attachments?} (R113-c — the composer's
+ *        per-send overrides, the SAME fields the desktop composer rides)
  *        → SSE `data:` frames, each one StreamTurnEvent JSON (the shared
  *          union). Terminal frames: {type:"done"} · {type:"stopped"} ·
  *          {type:"error",status,code,message}. The turn SURVIVES a closed
  *          stream (R42) — the transcript rehydrate is always the truth.
  *   POST /api/v1/sessions/:id/stop   → {ok, stopped}  (idempotent honesty)
- *   POST /api/v1/sessions/:id/queue  body {content}
+ *   POST /api/v1/sessions/:id/queue  body {content, model?, providerId?,
+ *        attachments?} (thinkingLevel is validated-then-IGNORED server-side —
+ *        a queued message carries no reasoning effort; the phone omits it)
  *        → 200 {ok, seq} · 409 NO_LIVE_TURN (the honest fallback to a normal
  *          send) · 409 CONFLICT on terminal sessions · 400 empty content.
+ *   POST /api/v1/agent-questions/:id/resolve body {answers, sources?}
+ *        → 200 {ok:true} · 404 unknown/expired id (the card's own timeout is
+ *        the fallback) — the R87 ask_user answer API the phone now rides.
+ *   PATCH /api/v1/sessions/:id/permissions body {mode: full|ask|plan}
+ *        → the updated session detail — the composer's operating-mode
+ *        switcher (the desktop's exact per-session PATCH; the NEXT turn).
+ *   PATCH /api/v1/sessions/:id body {activeMode?: string|null}
+ *        → the updated session row — the task-mode picker (validated against
+ *        the SAME modes resolver GET /projects/:id/modes serves).
  *
  * The screen wires this module to acute-net via the manager's api()/sse();
  * everything here is pure TypeScript over injected values — unit-tested with
@@ -71,13 +85,47 @@ export interface SessionDetailWire extends SessionRow {
 
 // ── the transcript view model (what the screen renders) ─────────────────────
 
+/** One ask_user question (agent-core agent-question.ts AgentQuestion, 1:1). */
+export interface QuestionView {
+  question: string;
+  options: string[];
+  allowCustom: boolean;
+  placeholder: string | null;
+}
+
+/** One todo row (agent-core tools/todo.ts TodoItem, 1:1). */
+export interface TodoItemView {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+/** One attachment riding a user message (shared MessageAttachment display). */
+export interface AttachmentView {
+  name: string;
+  path?: string;
+  size?: number;
+}
+
+/** The per-send override fields the stream route accepts (R113-c) — the
+ * desktop composer's exact wire additions. */
+export interface SendOverrides {
+  /** The full model id (e.g. "z-ai/glm-5.2:free"). */
+  model?: string;
+  /** The provider whose catalog the model was picked from. */
+  providerId?: string;
+  /** The reasoning-effort hint ("default" = provider default — omitted). */
+  thinkingLevel?: string;
+  /** The staged chips (name + path/size/text — the shared MessageAttachment). */
+  attachments?: Array<{ name: string; path?: string; size?: number; text?: string | null }>;
+}
+
 /**
  * One rendered transcript row. The persisted fold and the live stream BOTH
  * produce these — the screen renders one list either way, and the rehydrate
  * (the truth) replaces the live list wholesale at turn end.
  */
 export type TranscriptItem =
-  | { kind: "user"; key: string; content: string; queued: boolean }
+  | { kind: "user"; key: string; content: string; queued: boolean; attachments: AttachmentView[] | null }
   | {
       kind: "assistant";
       key: string;
@@ -110,6 +158,29 @@ export type TranscriptItem =
       category: string;
       decision: string | null;
     }
+  | {
+      kind: "question";
+      key: string;
+      questionId: string;
+      questions: QuestionView[];
+      resolution: "pending" | "answered" | "timeout" | "cancelled";
+      answers: string[] | null;
+      sources: string[] | null;
+    }
+  | { kind: "todo"; key: string; todos: TodoItemView[]; source: "agent" | "user" }
+  | {
+      kind: "subagent";
+      key: string;
+      childSessionId: string;
+      role: string;
+      task: string;
+      status: string;
+      code: string | null;
+      model: string | null;
+      taskId: string | null;
+      detail: string | null;
+    }
+  | { kind: "image"; key: string; frameId: string; tool: string; ts: string }
   | { kind: "meta"; key: string; text: string }
   | { kind: "error"; key: string; code: string; message: string }
   | { kind: "debug"; key: string; content: string; live: boolean };
@@ -166,6 +237,76 @@ function readString(source: Record<string, unknown>, key: string): string | null
   return typeof value === "string" ? value : null;
 }
 
+/** Read a persisted todo.update payload's todos (tools/todo.ts TodoItem[]) —
+ * null when absent/malformed; an EMPTY array is the R88 "cleared" state. */
+function readTodoItems(raw: unknown): TodoItemView[] | null {
+  if (!Array.isArray(raw)) return null;
+  const todos: TodoItemView[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) continue;
+    const content = typeof item.content === "string" ? item.content.trim() : "";
+    if (content === "") continue;
+    const status =
+      item.status === "completed" || item.status === "in_progress" ? item.status : "pending";
+    todos.push({ content: content.slice(0, 200), status });
+  }
+  return todos;
+}
+
+/** Read a persisted agent-question payload's questions (AgentQuestion[]). */
+function readQuestionViews(raw: unknown): QuestionView[] {
+  if (!Array.isArray(raw)) return [];
+  const questions: QuestionView[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) continue;
+    const question = typeof item.question === "string" ? item.question.trim() : "";
+    if (question === "") continue;
+    const options = Array.isArray(item.options)
+      ? item.options.filter((o): o is string => typeof o === "string" && o.trim() !== "")
+      : [];
+    questions.push({
+      question,
+      options,
+      allowCustom: item.allowCustom === false ? false : true,
+      placeholder: typeof item.placeholder === "string" ? item.placeholder : null,
+    });
+  }
+  return questions;
+}
+
+/** Read a message.user payload's attachments (shared MessageAttachment[]). */
+function readAttachmentViews(raw: unknown): AttachmentView[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const views: AttachmentView[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) continue;
+    const name = typeof item.name === "string" ? item.name : "";
+    if (name === "") continue;
+    views.push({
+      name,
+      ...(typeof item.path === "string" ? { path: item.path } : {}),
+      ...(typeof item.size === "number" && Number.isFinite(item.size) ? { size: item.size } : {}),
+    });
+  }
+  return views.length > 0 ? views : null;
+}
+
+/** ONE todo card per session — the latest snapshot, positioned at the LATEST
+ * todo event (the desktop's live card semantics: the list updates in place,
+ * never stacking a card per write). An EMPTY array (the R88 clear) REMOVES
+ * the card — no list, nothing to show. */
+const TODO_ITEM_KEY = "todos";
+
+function upsertTodoItem(
+  items: TranscriptItem[],
+  todos: TodoItemView[],
+  source: "agent" | "user",
+): TranscriptItem[] {
+  const rest = items.filter((item) => item.kind !== "todo");
+  if (todos.length === 0) return rest;
+  return [...rest, { kind: "todo", key: TODO_ITEM_KEY, todos, source }];
+}
+
 /** Fold the persisted event log → transcript items (pure, order-preserving).
  * Unknown event types render as dim meta lines (forward compatibility — the
  * phone never crashes on a frame the desktop learned after it). */
@@ -177,13 +318,25 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
       case "message.user": {
         const content = readString(payload, "content") ?? "";
         if (content.trim() === "") break;
-        items.push({ kind: "user", key: `e${event.seq}`, content, queued: false });
+        items.push({
+          kind: "user",
+          key: `e${event.seq}`,
+          content,
+          queued: false,
+          attachments: readAttachmentViews(payload.attachments),
+        });
         break;
       }
       case "message.queued": {
         const content = readString(payload, "content") ?? "";
         if (content.trim() === "") break;
-        items.push({ kind: "user", key: `e${event.seq}`, content, queued: true });
+        items.push({
+          kind: "user",
+          key: `e${event.seq}`,
+          content,
+          queued: true,
+          attachments: readAttachmentViews(payload.attachments),
+        });
         break;
       }
       case "message.assistant": {
@@ -277,12 +430,65 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
         break;
       }
       case "todo.update": {
-        const todos = Array.isArray(payload.todos) ? payload.todos : [];
-        const done = todos.filter(
-          (t) => isRecord(t) && t.status === "completed",
-        ).length;
-        if (todos.length === 0) break;
-        items.push({ kind: "meta", key: `e${event.seq}`, text: `todos — ${done}/${todos.length} done` });
+        const todos = readTodoItems(payload.todos);
+        if (todos === null) break;
+        // ONE card, the LATEST snapshot (the desktop's live card semantics).
+        const nextItems = upsertTodoItem(items, todos, payload.source === "user" ? "user" : "agent");
+        items.length = 0;
+        items.push(...nextItems);
+        break;
+      }
+      case "agent-question.requested": {
+        const questionId = readString(payload, "questionId");
+        if (questionId === null) break;
+        const questions = readQuestionViews(payload.questions);
+        if (questions.length === 0) break;
+        items.push({
+          kind: "question",
+          key: `e${event.seq}`,
+          questionId,
+          questions,
+          resolution: "pending",
+          answers: null,
+          sources: null,
+        });
+        break;
+      }
+      case "agent-question.resolved": {
+        const questionId = readString(payload, "questionId");
+        if (questionId === null) break;
+        const resolution =
+          payload.resolution === "answered"
+            ? "answered"
+            : payload.resolution === "cancelled"
+              ? "cancelled"
+              : "timeout";
+        const answers = Array.isArray(payload.answers)
+          ? payload.answers.filter((a): a is string => typeof a === "string")
+          : null;
+        const sources = Array.isArray(payload.sources)
+          ? payload.sources.filter((s): s is string => typeof s === "string")
+          : null;
+        // Patch the matching card in place (the desktop's questionIndex fold).
+        const target = [...items]
+          .reverse()
+          .find((item) => item.kind === "question" && item.questionId === questionId);
+        if (target !== undefined && target.kind === "question") {
+          const index = items.indexOf(target);
+          items[index] = { ...target, resolution, answers, sources };
+        } else {
+          // An orphan resolution (the requested event predates a log trim) —
+          // the honest note card, questions empty.
+          items.push({
+            kind: "question",
+            key: `e${event.seq}`,
+            questionId,
+            questions: [],
+            resolution,
+            answers,
+            sources,
+          });
+        }
         break;
       }
       case "session.reverted": {
@@ -335,12 +541,32 @@ export type StreamTurnFrame =
   | { type: "meta.continuation_complete"; iterations: number }
   | {
       type: "subagent-status";
-      status: string;
+      sessionId: string;
+      parentSessionId: string;
+      status: "queued" | "running" | "completed" | "failed";
       task: string;
       role: string;
       code?: string;
+      model?: string;
+      taskId?: string | null;
       detail?: string;
     }
+  | {
+      type: "agent-question";
+      sessionId: string;
+      questionId: string;
+      questions: Array<{ question: string; options?: string[]; allowCustom?: boolean; placeholder?: string }>;
+    }
+  | {
+      type: "agent-question.resolved";
+      sessionId: string;
+      questionId: string;
+      resolution: "answered" | "timeout" | "cancelled";
+      answers?: string[];
+      sources?: string[];
+    }
+  | { type: "todo-updated"; sessionId: string; todos: TodoItemView[]; source?: "agent" | "user" }
+  | { type: "screenshot"; frameId: string; tool: string; ts: string }
   | {
       type: "approval.requested";
       approvalId: string;
@@ -396,17 +622,28 @@ export interface LiveTurn {
  * merge (keeps the per-delta entrance cheap on very long replies). */
 const MAX_LIVE_CHUNKS = 240;
 
-/** Begin a turn: the optimistic user card lands immediately, phase streams. */
+/**
+ * Begin a turn: the optimistic user card lands immediately (carrying the
+ * chips the message was sent with — R113-c, so the phone's own send shows
+ * its attachments before the rehydrate confirms them), phase streams.
+ */
 export function beginLiveTurn(
   baseItems: TranscriptItem[],
   content: string,
   now: number,
+  attachments: AttachmentView[] | null = null,
 ): LiveTurn {
   return {
     phase: "streaming",
     items: [
       ...baseItems,
-      { kind: "user", key: `live-user-${now}`, content, queued: false },
+      {
+        kind: "user",
+        key: `live-user-${now}`,
+        content,
+        queued: false,
+        attachments,
+      },
     ],
     sentContent: content,
     terminal: null,
@@ -579,7 +816,7 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
     case "user.queued": {
       const content = typeof frame.content === "string" ? frame.content : "";
       const seq = typeof frame.seq === "number" ? frame.seq : 0;
-      items.push({ kind: "user", key: `q${seq}`, content, queued: true });
+      items.push({ kind: "user", key: `q${seq}`, content, queued: true, attachments: null });
       break;
     }
     case "queued.delivered": {
@@ -590,7 +827,7 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
         const index = items.indexOf(target);
         items[index] = { ...target, content, queued: false };
       } else {
-        items.push({ kind: "user", key: `q${seq}`, content, queued: false });
+        items.push({ kind: "user", key: `q${seq}`, content, queued: false, attachments: null });
       }
       break;
     }
@@ -628,14 +865,106 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
       break; // the turn's own terminal frame follows — stay quiet
     }
     case "subagent-status": {
-      const status = typeof frame.status === "string" ? frame.status : "";
+      // R113-c: the REAL card (the desktop's SubAgentCard semantics) — ONE
+      // card per CHILD, upserted by its sessionId through every transition
+      // (queued → running → completed/failed). Live-only by design: the
+      // parent's persisted log carries no per-transition events, so the
+      // rehydrate folds the delegate_task tool cards instead (the desktop's
+      // own honesty limit, mirrored).
+      flushAssistant();
+      const childSessionId = typeof frame.sessionId === "string" ? frame.sessionId : "";
       const role = typeof frame.role === "string" ? frame.role : "sub-agent";
-      const code = typeof frame.code === "string" ? ` ${frame.code}` : "";
-      const detail = typeof frame.detail === "string" ? ` — ${frame.detail}` : "";
+      const task = typeof frame.task === "string" ? frame.task : "";
+      const status = typeof frame.status === "string" ? frame.status : "queued";
+      const card = {
+        kind: "subagent" as const,
+        key: `sub-${childSessionId}`,
+        childSessionId,
+        role,
+        task,
+        status,
+        code: typeof frame.code === "string" ? frame.code : null,
+        model: typeof frame.model === "string" ? frame.model : null,
+        taskId: typeof frame.taskId === "string" ? frame.taskId : null,
+        detail: typeof frame.detail === "string" ? frame.detail : null,
+      };
+      const existing = items.findIndex(
+        (item) => item.kind === "subagent" && item.childSessionId === childSessionId,
+      );
+      if (existing >= 0) {
+        items[existing] = card;
+      } else {
+        items.push(card);
+      }
+      break;
+    }
+    case "todo-updated": {
+      // The LIVE todo card — same ONE-card upsert the persisted fold runs
+      // (the stable key means the row updates in place, exactly the way the
+      // desktop's working-stream card does).
+      const todos = readTodoItems(frame.todos) ?? [];
+      const nextItems = upsertTodoItem(
+        items,
+        todos,
+        frame.source === "user" ? "user" : "agent",
+      );
+      items.length = 0;
+      items.push(...nextItems);
+      break;
+    }
+    case "agent-question": {
+      flushAssistant();
+      const questionId = typeof frame.questionId === "string" ? frame.questionId : "";
+      if (questionId === "") break;
+      const questions = readQuestionViews(frame.questions);
+      if (questions.length === 0) break;
       items.push({
-        kind: "meta",
-        key: liveItemKey(now, `s${items.length}`),
-        text: `${role}${code} ${status}${detail}`,
+        kind: "question",
+        key: `q-${questionId}`,
+        questionId,
+        questions,
+        resolution: "pending",
+        answers: null,
+        sources: null,
+      });
+      break;
+    }
+    case "agent-question.resolved": {
+      const questionId = typeof frame.questionId === "string" ? frame.questionId : "";
+      const resolution =
+        frame.resolution === "answered"
+          ? "answered"
+          : frame.resolution === "cancelled"
+            ? "cancelled"
+            : "timeout";
+      const answers = Array.isArray(frame.answers)
+        ? frame.answers.filter((a): a is string => typeof a === "string")
+        : null;
+      const sources = Array.isArray(frame.sources)
+        ? frame.sources.filter((s): s is string => typeof s === "string")
+        : null;
+      const target = [...items]
+        .reverse()
+        .find((item) => item.kind === "question" && item.questionId === questionId);
+      if (target !== undefined && target.kind === "question") {
+        const index = items.indexOf(target);
+        items[index] = { ...target, resolution, answers, sources };
+      }
+      break;
+    }
+    case "screenshot": {
+      // R68-A parity: the inline capture tile lands AT THE CAPTURE MOMENT
+      // (interleaved with the tool rows). LIVE-ONLY — rasters are ephemeral
+      // server-side (10-min TTL, LRU 12, never persisted); the folded log
+      // carries no screenshots by design, on both ends.
+      const frameId = typeof frame.frameId === "string" ? frame.frameId : "";
+      if (frameId === "") break;
+      items.push({
+        kind: "image",
+        key: `img-${frameId}`,
+        frameId,
+        tool: typeof frame.tool === "string" ? frame.tool : "tool",
+        ts: typeof frame.ts === "string" ? frame.ts : "",
       });
       break;
     }
@@ -791,15 +1120,36 @@ export async function fetchSessionDetail(
   return apiJson<SessionDetailWire>(sender, `/sessions/${encodeURIComponent(id)}`);
 }
 
-/** The live-turn stream: POST + the composer's message (the manager's sse()). */
+/** The stream send's body — content + the composer's per-send overrides
+ * (R113-c), assembled EXACTLY the way the desktop composer assembles it:
+ * `thinkingLevel: "default"` and empty attachments are OMITTED (the backend
+ * treats absent = provider default; an override rides only when set). Pure. */
+export function sendBody(content: string, overrides: SendOverrides = {}): string {
+  return JSON.stringify({
+    content,
+    ...(overrides.model !== undefined && overrides.model !== "" ? { model: overrides.model } : {}),
+    ...(overrides.providerId !== undefined && overrides.providerId !== ""
+      ? { providerId: overrides.providerId }
+      : {}),
+    ...(overrides.thinkingLevel !== undefined && overrides.thinkingLevel !== "default"
+      ? { thinkingLevel: overrides.thinkingLevel }
+      : {}),
+    ...(overrides.attachments !== undefined && overrides.attachments.length > 0
+      ? { attachments: overrides.attachments }
+      : {}),
+  });
+}
+
+/** The live-turn stream: POST + the composer's message + overrides. */
 export function openTurnStream(
   sender: SseSender,
   sessionId: string,
   content: string,
+  overrides: SendOverrides = {},
 ): SseStream {
   return sender.sse(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages/stream`, {
     method: "POST",
-    bodyText: JSON.stringify({ content }),
+    bodyText: sendBody(content, overrides),
   });
 }
 
@@ -816,9 +1166,16 @@ export async function postStop(
   );
 }
 
-/** The queue body — content validates exactly like the send routes. */
-export function queueBody(content: string): string {
-  return JSON.stringify({ content });
+/** The queue body — content validates exactly like the send routes. The
+ * queue's OWN override fields (model/providerId/attachments — R82) ride when
+ * set; thinkingLevel is deliberately ABSENT (the route validates the shape
+ * then ignores it — a queued message carries no reasoning effort). */
+export function queueBody(content: string, overrides: SendOverrides = {}): string {
+  return sendBody(content, {
+    model: overrides.model,
+    providerId: overrides.providerId,
+    attachments: overrides.attachments,
+  });
 }
 
 /** POST queue — 409 NO_LIVE_TURN is the honest fallback to a normal send. */
@@ -826,10 +1183,61 @@ export async function postQueue(
   sender: ApiSender,
   sessionId: string,
   content: string,
+  overrides: SendOverrides = {},
 ): Promise<ApiOutcome<{ ok: boolean; seq: number }>> {
   return apiJson<{ ok: boolean; seq: number }>(
     sender,
     `/sessions/${encodeURIComponent(sessionId)}/queue`,
-    { method: "POST", bodyText: queueBody(content) },
+    { method: "POST", bodyText: queueBody(content, overrides) },
   );
+}
+
+/** POST /agent-questions/:id/resolve — the ask_user card's answer (R87).
+ * 404 = unknown/expired id (the card's own timeout already settled it). */
+export async function postResolveQuestion(
+  sender: ApiSender,
+  questionId: string,
+  answers: string[],
+  sources?: string[],
+): Promise<ApiOutcome<{ ok: boolean }>> {
+  return apiJson<{ ok: boolean }>(
+    sender,
+    `/agent-questions/${encodeURIComponent(questionId)}/resolve`,
+    {
+      method: "POST",
+      bodyText: JSON.stringify({
+        answers,
+        ...(sources !== undefined ? { sources } : {}),
+      }),
+    },
+  );
+}
+
+/** PATCH /sessions/:id/permissions — the operating-mode switcher (the
+ * desktop's exact per-session PATCH; full|ask|plan, applied to the NEXT
+ * turn). Returns the updated session detail. */
+export async function patchSessionPermissions(
+  sender: ApiSender,
+  sessionId: string,
+  mode: "full" | "ask" | "plan",
+): Promise<ApiOutcome<SessionDetailWire>> {
+  return apiJson<SessionDetailWire>(
+    sender,
+    `/sessions/${encodeURIComponent(sessionId)}/permissions`,
+    { method: "PATCH", bodyText: JSON.stringify({ mode }) },
+  );
+}
+
+/** PATCH /sessions/:id — the task-mode picker: activeMode is a mode id from
+ * GET /projects/:id/modes (validated against the SAME resolver server-side)
+ * or null to clear. Returns the updated session row. */
+export async function patchSessionActiveMode(
+  sender: ApiSender,
+  sessionId: string,
+  activeMode: string | null,
+): Promise<ApiOutcome<SessionRow>> {
+  return apiJson<SessionRow>(sender, `/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    bodyText: JSON.stringify({ activeMode }),
+  });
 }

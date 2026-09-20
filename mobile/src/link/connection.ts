@@ -74,6 +74,9 @@ export interface ApiCallInit {
   headers?: Record<string, string>;
   bodyText?: string;
   timeoutMs?: number;
+  /** R113-c: the response is BINARY — read it as base64 (`bodyBase64` on the
+   * result; bodyText ""). The screenshot-raster path. */
+  responseBase64?: boolean;
 }
 
 /** The fetch-like result — HTTP errors are VALUES here, transport throws. */
@@ -82,6 +85,9 @@ export interface ApiResult {
   status: number;
   headers: Record<string, string>;
   bodyText: string;
+  /** Raw response body as base64 — present only when responseBase64 was
+   * requested (R113-c). */
+  bodyBase64?: string;
 }
 
 /** Thrown by api()/sse() when the link isn't in the connected state. */
@@ -538,6 +544,7 @@ export class ConnectionManager {
         bodyText: init.bodyText,
         timeoutMs: init.timeoutMs,
         pinSha256: pin,
+        ...(init.responseBase64 === true ? { responseBase64: true } : {}),
       });
       const relayHostOffline = res.status === 503 && parseAppErrorCode(res.bodyText) === HOST_OFFLINE_CODE;
       if (!relayHostOffline) {
@@ -556,6 +563,7 @@ export class ConnectionManager {
         status: res.status,
         headers: res.headers,
         bodyText: res.bodyText,
+        ...(res.bodyBase64 !== undefined ? { bodyBase64: res.bodyBase64 } : {}),
       };
     } catch (err) {
       const netErr = err as NetError;

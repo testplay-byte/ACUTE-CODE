@@ -7,6 +7,10 @@
  *   openSse(options) → SseStream — a small EventSource-like handle
  *                        { addEventListener("data"|"error"|"close", fn), close() }
  *
+ * R113-c: request() accepts `responseBase64: true` for BINARY responses
+ * (the screenshot rasters) — the body then arrives as `bodyBase64` instead
+ * of the UTF-8 `bodyText` (which would mojibake PNG bytes).
+ *
  * The native module (android/…/AcuteNetModule.kt, OkHttp) carries BOTH the
  * pinned-TLS fetch and the SSE stream so the TOFU certificate pin is enforced
  * at the socket layer. Reconnect/backoff logic does NOT live here or in
@@ -26,12 +30,17 @@ export interface NativeNetOptions {
   bodyText: string | null;
   timeoutMs: number;
   pinSha256: string | null;
+  /** R113-c: true → the native side reads the body as raw bytes and returns
+   * `bodyBase64` (bodyText "") — the binary-response path (PNG rasters). */
+  responseBase64?: boolean;
 }
 
 interface NativeHttpResponse {
   status: number;
   headers: Record<string, string>;
   bodyText: string;
+  /** Present ONLY when responseBase64 was requested (R113-c). */
+  bodyBase64?: string;
 }
 
 type AcuteNetEventsMap = {
@@ -65,12 +74,18 @@ export interface HttpRequestOptions {
    * When absent, standard CA verification runs (the Cloudflare-tunnel path).
    */
   pinSha256?: string | null;
+  /** R113-c: true → resolve with `bodyBase64` (the raw body, base64-encoded;
+   * bodyText "") — the binary-response path. Text stays the default. */
+  responseBase64?: boolean;
 }
 
 export interface HttpResponse {
   status: number;
   headers: Record<string, string>;
   bodyText: string;
+  /** The raw response body as base64 — present ONLY when responseBase64 was
+   * requested (R113-c; the screenshot rasters). */
+  bodyBase64?: string;
 }
 
 export type NetErrorKind = "network" | "tls" | "http" | "canceled" | "bad-argument" | "unknown";
@@ -143,6 +158,7 @@ function toNativeOptions(options: HttpRequestOptions): NativeNetOptions {
     bodyText: options.bodyText ?? null,
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     pinSha256: normalizePin(options.pinSha256),
+    responseBase64: options.responseBase64 === true ? true : undefined,
   };
 }
 
