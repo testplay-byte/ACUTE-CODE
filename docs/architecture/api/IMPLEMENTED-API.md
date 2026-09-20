@@ -1,12 +1,13 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-20 round-113 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` +
 `agent-core/src/routes/<domain>.ts` (the R84 split moved 71 of 131 routes
 into 14 domain modules) + `browser-proxy.ts`; established round-17
-(2026-08-23), refreshed continuously since (R37→R85; the R80.5 backfill of
-11 previously-undocumented routes + the R85 backfill of
-`GET /providers/:id/models-config` — see the ROUND-80.5 section at the end).
+(2026-08-23), refreshed continuously since (R37→R85, then R113; the R80.5
+backfill of 11 previously-undocumented routes + the R85 backfill of
+`GET /providers/:id/models-config` + the R113 live-sync additions — see the
+ROUND-80.5 and R113 sections at the end).
 The
 aspirational full contract (52
 operations, WS gateway, planned routes) lives in
@@ -40,7 +41,9 @@ vite dev origins.
 
 ## /api/v1/providers
 
-`GET /providers` → `{providers:[{id,name,kind,baseUrl,enabled,hasKey}]}` ·
+`GET /providers` → `{providers:[{id,name,kind,baseUrl,enabled,hasKey,
+keyCount,configured}]}` (`hasKey` pool-aware + `configured` since R113 — see
+the R113 additions at the end) ·
 `POST /providers` (custom openai-compatible) ·
 `GET /providers/:id/models` (5-min cache) ·
 `GET /providers/:id/models-config` (round-19, backfilled R85 — the per-provider
@@ -2467,3 +2470,89 @@ the per-model test button, the model edit dialog). Spec:
   derives a fresh id from the requested NAME (`prv_<slug>`, walking `-2`
   `-3…` suffixes; 201 as a create). PATCH /providers/:id enforces the same
   name-uniqueness on renames (409 body.name).
+
+## R113 additions (2026-09-20) — the live-sync round (the events fan-out)
+
+**Truth for this section:** `agent-core/src/lib/events-bus.ts` (the frame
+contract), `agent-core/src/routes/events.ts` (the SSE route),
+`agent-core/src/routes/settings.ts` (the appearance domain),
+`agent-core/src/providers/registry.ts` (`toProviderView`). The round's story:
+`docs/ui-iterations/round-113.md`.
+
+### GET /api/v1/events/stream — the watcher's single live channel (NEW)
+
+SSE (the hijacked-raw-socket `GET /notifications/stream` pattern verbatim:
+CORS rides `writeHead`, the immediate `hello` frame, the R112 10 s `: ping`
+comment heartbeat, close-handler teardown of heartbeat + subscription).
+Bearer-gated like every route in the scope — the SHELL token (desktop) and
+paired DEVICE tokens (phone) both pass; NOT on the device-token blocklist
+(the phone's live view of turns the desktop starts); cloud-relay-reachable
+(the relay's guest allowlist permits `/health` + `/api/*`). EventSource
+cannot set an Authorization header, so clients use the same
+fetch + ReadableStream reader the notifications stream already requires.
+
+Frames (the whole wire contract — JSON, one `data:` line each):
+
+| Frame | Semantics |
+|---|---|
+| `{"type":"hello"}` | once, immediately on open. **"Resync everything"**: a fresh/reconnected watcher refetches its state, then follows frames (whatever landed between the last received frame and the hello is caught by that refetch) |
+| `{"type":"session","sessionId","projectId","kind":"event"\|"status"\|"created","seq?","status?"}` | a session-scoped change. `event` = a row appended to the append-only session log (`seq` = the new row's seq — watchers refetch `GET /sessions/:id` and fold from their last seen seq). `status` = a REAL flip (`status` = the NEW value; a no-op write publishes nothing). `created` = a new session exists (POST /sessions AND delegation children — published at the `createSession` storage choke point; `forkSession` announces its own) |
+| `{"type":"turn","sessionId","frame"}` | the LIVE turn mirror: `frame` is the EXACT `StreamTurnEvent` the initiating socket receives, published pre-serialization (text-delta, thinking-delta, tool-call/tool-result, meta.*, user.queued, error, done, stopped, debug-*, subagent-status…). Published BEFORE the clientGone check — the mirror survives the initiator's own death mid-turn |
+| `{"type":"project","projectId","kind":"created"\|"updated"}` | a project row was created (POST /projects). `updated` is reserved vocabulary — no project-update route exists, and DELETE stays unannounced in v1 |
+| `{"type":"settings","domain","value"}` | a settings domain was PUT; `value` is the persisted object as the domain's GET serves it — secrets NEVER ride the frame (cloud-connector broadcasts `hostKeyPresent`, not the key) |
+
+**NO server-side session filtering** — one global channel; every connected
+client filters frames by `sessionId` locally (deliberate for a single-owner
+sidecar; per-session subscriptions would multiply reconnect complexity for
+zero privacy gain).
+
+Publish points (each at its single choke point):
+`agent-core/src/storage/sessions.ts` (`appendSessionEvent` — the only runtime
+writer into `session_events`, so queue chips and todo/ask flows ride it too;
+`setSessionStatus`; `createSession`), `agent-core/src/routes/sse.ts` (`send()`
+— the turn mirror), `agent-core/src/routes/projects.ts` (POST),
+`agent-core/src/routes/settings.ts` (every domain PUT) + vision
+(`agent-core/src/server.ts`). The bus itself is pure in-memory
+fire-and-forget: subscriber throws are logged + skipped, so a watcher's dead
+socket never propagates into a turn, a route, or a storage helper (the
+notification-bus contract, verbatim — the notification bus itself is
+COMPLETELY untouched).
+
+### GET/PUT /api/v1/settings/appearance — the theme-sync domain (NEW)
+
+- `GET` → `{themeId: nova|bento|midnight|sunset|mono|clay|null, mode:
+  "system"|"light"|"dark"}` — the stored preference, or the default
+  `{themeId: null, mode: "system"}` (null = no server preference — each
+  client falls back to its LOCAL default, the honest pre-R113 behavior).
+  Fail-open on corrupt reads (the desktop-notifications storage pattern).
+- `PUT` takes a partial patch `{themeId?, mode?}` — either field
+  independently optional, `null` themeId clears the server preference;
+  `400 VALIDATION` names the offending field (`body.themeId` / `body.mode`).
+  Persists and BROADCASTS `{"type":"settings","domain":"appearance"}` on the
+  events bus, so the change lands live on every other device.
+- Device tokens are WELCOME here — the phone changing the desktop's theme is
+  a first-class use case (the route is not on the device blocklist; only
+  management-surface domains reject device tokens).
+- Every OTHER settings-domain PUT broadcasts the same settings-frame shape
+  (orchestration / memory / debug / retry / thinking-loop / browser /
+  desktop-notifications / device-link / cloud-connector [secret-free] /
+  appearance / vision) — the cross-device live-settings backbone. Consumers:
+  the desktop maps frames to the exact query keys the settings tabs use
+  (live refetch + apply); the phone refetches open settings screens on a
+  debounced batch.
+
+### GET /api/v1/providers rows gain `configured` (NEW field, additive)
+
+- Every row now carries `configured: boolean` (a custom row OR `keyCount > 0`)
+  beside the pool-aware `hasKey` (`keyCount > 0` — the OLD primary-slot-only
+  `hasKey` read `false` for a provider whose keys all sat in pool slots) and
+  `keyCount` (R92-D, the deduped pool size). All three derive from ONE
+  deduped pool read — they can never disagree.
+- ONE view builder (`toProviderView`) now serves GET /providers,
+  POST /providers (adopt + create), and PATCH /providers/:id — the same
+  truth on every provider view the API emits (the POST/PATCH routes used to
+  hand-build their views with the old primary-only `hasKey`).
+- Consumers: the desktop's Models & Providers tab and the phone's providers
+  screen render configured-first ("Your providers" above the add-a-provider
+  catalog tier); the CLI's display-only reads are unchanged (the field is
+  additive; nobody breaks).

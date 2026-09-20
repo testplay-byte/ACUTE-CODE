@@ -1,8 +1,8 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-20 round-113 -->
 # ACUTE-CODE
 
 Local-first, closed-source multi-agent engineering workbench for Windows
-and Linux.
+and Linux, with a live-synced Android companion.
 **Proprietary — do not publish, do not add an open-source license.**
 
 - Master requirements: `docs/specs/SPEC.md`
@@ -22,6 +22,25 @@ Node sidecar; `shared/` holds domain types; `src-tauri/` is the Rust shell.
 - `pnpm verify` — lint + typecheck + test + build + e2e + license audit (mirrors CI, which also runs `pnpm docs:check` first; the local pre-push gate)
 - `pnpm dev` — Vite dev server on port 5173 (UI only)
 - **Desktop app:** `pnpm build`, then from `src-tauri/`: `cargo run` — debug builds load the embedded `../dist`; at launch the shell spawns `agent-core/dist/main.js`, does the stdout ready-line handshake, and injects provider keys from the OS secure store (Windows Credential Manager; the Linux Secret Service — ADR-0031). A `pnpm tauri` script exists (`package.json`), but the documented path remains build-then-cargo.
+
+## The Android companion (live sync — round-113 state)
+
+A phone pairs to the desktop (Settings → Devices; on the LAN or through the
+cloud relay — `docs/guides/CLOUDFLARE-SETUP.md`) and the two ends stay LIVE
+against each other: a turn started on either device streams to every open
+screen (thinking, tool runs, the caret — `GET /api/v1/events/stream`, the
+events-bus mirror), appearance and settings changes propagate the moment
+they're saved, and session/project lists refresh as things happen.
+
+Navigation is projects-first on both platforms: the desktop's project view
+lists each project's sessions row-by-row (a row opens its session); the
+phone's tabs are home · projects · approvals · dashboard · settings, with a
+project detail screen carrying that project's sessions. The phone's chat
+screen carries the PC composer's controls — operation mode, model selection,
+thinking level, the context ring + breakdown, attach/upload, and @-file
+mentions from the project. Providers list configured-first on both ends
+("Your providers" above the add-a-provider catalog). The events wire
+contract: `docs/architecture/api/IMPLEMENTED-API.md` (the R113 additions).
 
 ## Linux release (round-100; ARM64 since round-101)
 

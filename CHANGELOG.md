@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-109 -->
+<!-- last-reviewed: 2026-09-20 round-113 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,36 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [Unreleased]
+<!-- targets 0.107.0 — the release round renames this section when it tags -->
+
+### Live sync — every device mirrors every other device (the headline)
+- **A turn started anywhere now streams everywhere.** The backend gained an events stream (`GET /api/v1/events/stream`): one subscription per client mirrors every live turn frame — thinking, tool runs, the streaming caret, queue chips — to every other connected screen. Start a chat on the PC and watch it write itself on the phone; send from the phone and the desktop's open transcript goes live. No more switching sessions and back to see what happened.
+- **The mechanics stay honest**: your own stream always wins (a mirrored turn never double-renders), Stop works from either device, sending while another device's turn runs queues the message as designed, and the sidebar spinner runs while ANY device is working.
+- **Appearance and settings changes propagate live.** Flip the theme on the phone and the PC shifts within a moment (and vice versa); every settings save broadcasts to every connected device — open settings screens refetch and apply the new values without a reload.
+- **Lists follow the world**: project and session lists refresh as turns start and finish, session status badges flip the moment a turn begins on the other device, and a reconnect triggers a full resync (nothing lands while you're away that stays hidden when you return).
+
+### Projects-first, space-honest screens (the restructure)
+- **The Sessions screen is gone — by the owner's ruling** ("completely remove it… the project screen relies on the session screen too"). The phone's tabs are now **home · projects · approvals · dashboard · settings**: the Projects tab lists your projects (session counts, live running pulse, quick new-session), and a project opens its own screen with that project's sessions. On the desktop, the dead sessions-screen source is finally deleted and the project view's session rows open their session directly, with an inline New session button.
+- **The giant page headers are gone.** Every desktop screen's Kicker + big-title block was deleted — the screen's real content is its top now — and the phone dropped its large-title tier for one compact header row everywhere.
+
+### The phone's chat screen is a real replica of the PC's
+- **The composer carries every control**: operation mode (full/ask/plan), model selection, thinking level, the context-usage ring with its breakdown sheet, **attach/upload a file**, and **@-mention a file from the project** — plus send/queue/stop with the outbox honoring your per-message choices.
+- **The transcript renders the rich cards**: images and screenshots (with a full-screen viewer), agent questions with numbered options, to-do cards, and sub-agent cards — joining the tool-call and error cards that already existed.
+- **The keyboard never covers the composer** — the safe-area + keyboard-controller fix landed in the session screen.
+
+### Providers: your inventory first
+- The Providers tab no longer greets you with the addable catalog — **"Your providers" (the ones you configured) list first**, with "Add a provider" below as the catalog tier. The server now tells the truth per row (`configured`), and `hasKey` became pool-aware (a provider whose keys all sit in extra key slots no longer reads keyless) — on both the desktop and the phone, and on every create/edit response too.
+
+### The agent's prompt discipline (the research round)
+- **Argument hygiene**: the agent is now explicitly taught to copy paths, ids, and selector values from the outputs that issued them — never invent them, never trust memory (a guessed argument is a wasted call).
+- **Benign exits**: a non-zero exit code is often the answer, not a failure — grep/test/diff exit 1 on "no match"; the agent reads the output before deciding anything failed.
+- **Skills load in a proper envelope**: name + when-to-use description + body, consistently on every surface (the prompt index, search results, and the loaded skill itself) — and the doubled header on built-in skills is fixed. The additions were paid for by retiring five duplicated prompt lines; the prompt's size budget holds.
+
+### For the builders
+- The events wire contract (frames, heartbeat, semantics), the appearance domain, and the providers `configured`/pool-aware `hasKey` fields: `docs/architecture/api/IMPLEMENTED-API.md` (the R113 additions section). The round's full story: `docs/ui-iterations/round-113.md`.
+- Desktop: `src/lib/events-stream.ts` + `src/components/shell/EventStreamStarter.tsx` (the subscription), `src/lib/stream-store.ts` (remote-turn mirroring through the same live reducer), `src/lib/theme-store.ts` (server-backed appearance). Mobile: `mobile/src/features/events.ts` (the stream + debounced refreshes), `mobile/src/features/appearance-sync.ts`, the composer/transcript rebuild in `mobile/src/components/`.
 
 ## [0.106.0] - 2026-09-19 — remote access over the cloud relay (the anywhere-link + the disconnect loop, killed at the root)
 
