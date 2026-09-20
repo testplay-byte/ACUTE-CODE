@@ -9,8 +9,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 version number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
-## [Unreleased]
-<!-- targets 0.107.0 — the release round renames this section when it tags -->
+## [0.107.0] - 2026-09-20 — live sync between every device (the events stream + the Projects-first shells + the phone's chat replica)
 
 ### Live sync — every device mirrors every other device (the headline)
 - **A turn started anywhere now streams everywhere.** The backend gained an events stream (`GET /api/v1/events/stream`): one subscription per client mirrors every live turn frame — thinking, tool runs, the streaming caret, queue chips — to every other connected screen. Start a chat on the PC and watch it write itself on the phone; send from the phone and the desktop's open transcript goes live. No more switching sessions and back to see what happened.
