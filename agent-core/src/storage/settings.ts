@@ -926,9 +926,22 @@ export function setCloudConnectorSettings(
 //        clients map as they can (the desktop may treat "system" as its
 //        local light/dark state; that is a client-side decision).
 //
-//    The setDesktopNotificationsSettings pattern exactly: two rows
-//    (appearance.themeId, appearance.mode), typed accessors, storage-throw
-//    validation as the route's 400 backstop. ─────────────────────────────
+//    ROUND-114 (R114-b): + FOUR chat-density fields, same contract —
+//    missing rows read as defaults (backward compatible: a pre-R114
+//    database GETs the full five-field shape with the new fields at their
+//    defaults, and every partial PUT leaves the others alone):
+//      chatDensity    — "comfortable" | "compact" (default "comfortable").
+//      chatTextSize   — "small" | "medium" | "large" (default "medium").
+//      timestampsMode — "hidden" | "hover" (default "hover" — the current
+//                       desktop behavior: timestamps appear on hover).
+//      toolActivity   — "detailed" | "compact" | "hidden" (default
+//                       "detailed" — full tool cards, the current render).
+//    All four are cosmetic-only render preferences — no turn machinery
+//    reads them; the value IS the news (PUT broadcasts the whole object).
+//
+//    The setDesktopNotificationsSettings pattern exactly: one row per
+//    field (appearance.*), typed accessors, storage-throw validation as
+//    the route's 400 backstop. ─────────────────────────────────────
 
 /** The six shared theme flavor ids (the ids both clients' theme systems use). */
 export const APPEARANCE_THEME_IDS = ["nova", "bento", "midnight", "sunset", "mono", "clay"] as const;
@@ -940,23 +953,75 @@ export const APPEARANCE_MODES = ["system", "light", "dark"] as const;
 
 export type AppearanceMode = (typeof APPEARANCE_MODES)[number];
 
+/** R114-b: chat density — the transcript's vertical rhythm. */
+export const APPEARANCE_CHAT_DENSITIES = ["comfortable", "compact"] as const;
+
+export type AppearanceChatDensity = (typeof APPEARANCE_CHAT_DENSITIES)[number];
+
+/** R114-b: chat text size. */
+export const APPEARANCE_TEXT_SIZES = ["small", "medium", "large"] as const;
+
+export type AppearanceTextSize = (typeof APPEARANCE_TEXT_SIZES)[number];
+
+/** R114-b: message timestamps — always visible or revealed on hover. */
+export const APPEARANCE_TIMESTAMPS_MODES = ["hidden", "hover"] as const;
+
+export type AppearanceTimestampsMode = (typeof APPEARANCE_TIMESTAMPS_MODES)[number];
+
+/** R114-b: tool activity rendering — full cards, one-line summaries, or
+ * nothing (the transcript still shows the turn's text). */
+export const APPEARANCE_TOOL_ACTIVITY = ["detailed", "compact", "hidden"] as const;
+
+export type AppearanceToolActivity = (typeof APPEARANCE_TOOL_ACTIVITY)[number];
+
 export interface AppearanceSettings {
   /** The shared flavor id, or null = no server preference (client default). */
   themeId: AppearanceThemeId | null;
   mode: AppearanceMode;
+  /** R114-b: the transcript's vertical rhythm (default "comfortable"). */
+  chatDensity: AppearanceChatDensity;
+  /** R114-b: the transcript's text size (default "medium"). */
+  chatTextSize: AppearanceTextSize;
+  /** R114-b: message timestamps (default "hover" — the current render). */
+  timestampsMode: AppearanceTimestampsMode;
+  /** R114-b: tool activity cards (default "detailed" — the current render). */
+  toolActivity: AppearanceToolActivity;
 }
 
 export const APPEARANCE_DEFAULTS: AppearanceSettings = {
   themeId: null,
   mode: "system",
+  chatDensity: "comfortable",
+  chatTextSize: "medium",
+  timestampsMode: "hover",
+  toolActivity: "detailed",
 };
 
 const APPEARANCE_THEME_ID_KEY = "appearance.themeId";
 const APPEARANCE_MODE_KEY = "appearance.mode";
+const APPEARANCE_CHAT_DENSITY_KEY = "appearance.chatDensity";
+const APPEARANCE_TEXT_SIZE_KEY = "appearance.chatTextSize";
+const APPEARANCE_TIMESTAMPS_MODE_KEY = "appearance.timestampsMode";
+const APPEARANCE_TOOL_ACTIVITY_KEY = "appearance.toolActivity";
 
 /** Is this value one of the six shared flavor ids? */
 export function isAppearanceThemeId(value: unknown): value is AppearanceThemeId {
   return typeof value === "string" && (APPEARANCE_THEME_IDS as readonly string[]).includes(value);
+}
+
+/** R114-b: the one-enum read helper — a stored value outside the vocabulary
+ * (missing row, corrupt row, a value retired later) reads as the DEFAULT,
+ * the same fail-open read themeId/mode apply: a bad row must never crash a
+ * GET, never force a client into a broken render. */
+function readAppearanceEnum<T extends string>(
+  db: SqliteDatabase,
+  key: string,
+  allowed: readonly T[],
+  fallback: T,
+): T {
+  const raw = readNullableString(db, key);
+  if (raw === null) return fallback;
+  return allowed.find((v) => v === raw) ?? fallback;
 }
 
 export function getAppearanceSettings(db: SqliteDatabase): AppearanceSettings {
@@ -970,6 +1035,12 @@ export function getAppearanceSettings(db: SqliteDatabase): AppearanceSettings {
     // Same fail-open read for the mode: anything but the two non-default
     // literals reads as "system" (the default).
     mode: storedMode === "light" ? "light" : storedMode === "dark" ? "dark" : APPEARANCE_DEFAULTS.mode,
+    // R114-b: the four density fields — missing/corrupt rows read as the
+    // defaults (a pre-R114 database GETs the full five-field shape).
+    chatDensity: readAppearanceEnum(db, APPEARANCE_CHAT_DENSITY_KEY, APPEARANCE_CHAT_DENSITIES, APPEARANCE_DEFAULTS.chatDensity),
+    chatTextSize: readAppearanceEnum(db, APPEARANCE_TEXT_SIZE_KEY, APPEARANCE_TEXT_SIZES, APPEARANCE_DEFAULTS.chatTextSize),
+    timestampsMode: readAppearanceEnum(db, APPEARANCE_TIMESTAMPS_MODE_KEY, APPEARANCE_TIMESTAMPS_MODES, APPEARANCE_DEFAULTS.timestampsMode),
+    toolActivity: readAppearanceEnum(db, APPEARANCE_TOOL_ACTIVITY_KEY, APPEARANCE_TOOL_ACTIVITY, APPEARANCE_DEFAULTS.toolActivity),
   };
 }
 
@@ -999,6 +1070,41 @@ export function setAppearanceSettings(
     db.prepare(
       "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     ).run(APPEARANCE_MODE_KEY, patch.mode);
+  }
+  // R114-b: the four density fields — each validated ONLY when present
+  // (partial patch semantics: an absent field never touches its row), and
+  // each error NAMES its field (the route surfaces it as the 400's message).
+  if (patch.chatDensity !== undefined) {
+    if (typeof patch.chatDensity !== "string" || !(APPEARANCE_CHAT_DENSITIES as readonly string[]).includes(patch.chatDensity)) {
+      throw new Error(`chatDensity must be one of ${APPEARANCE_CHAT_DENSITIES.join(", ")}`);
+    }
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(APPEARANCE_CHAT_DENSITY_KEY, patch.chatDensity);
+  }
+  if (patch.chatTextSize !== undefined) {
+    if (typeof patch.chatTextSize !== "string" || !(APPEARANCE_TEXT_SIZES as readonly string[]).includes(patch.chatTextSize)) {
+      throw new Error(`chatTextSize must be one of ${APPEARANCE_TEXT_SIZES.join(", ")}`);
+    }
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(APPEARANCE_TEXT_SIZE_KEY, patch.chatTextSize);
+  }
+  if (patch.timestampsMode !== undefined) {
+    if (typeof patch.timestampsMode !== "string" || !(APPEARANCE_TIMESTAMPS_MODES as readonly string[]).includes(patch.timestampsMode)) {
+      throw new Error(`timestampsMode must be one of ${APPEARANCE_TIMESTAMPS_MODES.join(", ")}`);
+    }
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(APPEARANCE_TIMESTAMPS_MODE_KEY, patch.timestampsMode);
+  }
+  if (patch.toolActivity !== undefined) {
+    if (typeof patch.toolActivity !== "string" || !(APPEARANCE_TOOL_ACTIVITY as readonly string[]).includes(patch.toolActivity)) {
+      throw new Error(`toolActivity must be one of ${APPEARANCE_TOOL_ACTIVITY.join(", ")}`);
+    }
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(APPEARANCE_TOOL_ACTIVITY_KEY, patch.toolActivity);
   }
   return getAppearanceSettings(db);
 }

@@ -222,6 +222,11 @@ describe("openDatabase", () => {
       // registry the multi-token bearer wall authenticates against (device
       // tokens are stored as SHA-256 hashes; revocation is DELETE).
       { version: 40, name: "0040_mobile_devices.sql" },
+      // ROUND-114 (R114-b, the sync foundation): the server-side session
+      // selected model — sessions.model_provider + sessions.model_id (both
+      // NULL = follow the agent default, the pre-R114 behavior; the
+      // three-tier prepareTurn ladder's middle tier).
+      { version: 41, name: "0041_session_selected_model.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

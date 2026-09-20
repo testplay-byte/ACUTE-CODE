@@ -1047,6 +1047,11 @@ interface PreparedTurn {
    * failures. Never logged, never emitted. */
   keyPool: Array<{ slot: number; key: string }>;
   model: string;
+  /** ROUND-114 (R114-b): the EFFECTIVE provider id (the three-tier ladder —
+   * override → session.selectedModel → agent row; identical to provider.id,
+   * carried separately so the streamed runner's turn.started frame names the
+   * tier-resolved provider without re-deriving it). */
+  providerId: string;
   tools: Awaited<ReturnType<typeof buildProjectTools>> | undefined;
   system: string;
   /** ROUND-50 (R50-c1): the per-send thinking level, threaded to the chat
@@ -1291,15 +1296,38 @@ async function prepareTurn(
   // normalized below, so a send that carried a complete {model, providerId}
   // pair (the picker writes it on EVERY send since R82) could never satisfy
   // it: the dead end. The normalization now runs FIRST and the gate fires only
-  // when the EFFECTIVE pair is incomplete — the send's pair when present, the
-  // agent's otherwise. A half-pair override (model without providerId, or
-  // vice versa) still 409s with the same message: "agent 'X' has no
-  // providerId/model configured" remains TRUE then — the send didn't carry a
-  // complete pair either. A CONFIGURED agent + no override is byte-for-byte
-  // the old behavior (overrideNorm undefined → the agent row decides).
+  // when the EFFECTIVE pair is incomplete. A half-pair override (model without
+  // providerId, or vice versa) still 409s with the same message: "agent 'X'
+  // has no providerId/model configured" remains TRUE then — the send didn't
+  // carry a complete pair either. A CONFIGURED agent + no override is
+  // byte-for-byte the old behavior (overrideNorm undefined → the agent row
+  // decides).
+  //
+  // ROUND-114 (R114-b): a NEW middle tier — the session's SERVER-SIDE selected
+  // model (sessions.model_provider + model_id, migration 0041; PATCH
+  // /sessions/:id { model } sets it). The resolution is now THREE-tier,
+  // strictly in this order: per-send override → session.selectedModel → agent
+  // row. Rationale: the desktop's pick used to live only in localStorage, so
+  // the phone ("Auto"), a fresh browser, and the CLI silently disagreed about
+  // the next turn's model; the session row is now the cross-device truth.
+  // Tier semantics, side by side:
+  //   · a COMPLETE send override wins outright (the one-shot pick — the
+  //     override-first gate R92-B pinned, byte-identical for old callers);
+  //   · a HALF override (model without providerId — the orchestrator's
+  //     subagentModel string arm) contributes its model and falls through
+  //     for the provider (session tier, then the agent row), mirroring how
+  //     the fallback chain already worked between override and agent;
+  //   · no override → session.selectedModel when set (both sides — the
+  //     route only persists complete pairs), else the agent row: an
+  //     absent pair composes byte-identically to the pre-R114 behavior;
+  //   · the incomplete-pair 409 below fires exactly as before when the
+  //     effective pair is still missing a side (e.g. the R91-A NULL agent
+  //     with no session model and no override).
   const modelOverrideNorm = normalizeModelOverride(modelOverride);
-  const effectiveProviderId = modelOverrideNorm?.providerId ?? agent.providerId;
-  const effectiveModelId = modelOverrideNorm?.model ?? agent.model;
+  const effectiveProviderId =
+    modelOverrideNorm?.providerId ?? session.selectedModel?.providerId ?? agent.providerId;
+  const effectiveModelId =
+    modelOverrideNorm?.model ?? session.selectedModel?.model ?? agent.model;
   if (effectiveProviderId === null || effectiveModelId === null) {
     return {
       error: {
@@ -1740,6 +1768,10 @@ async function prepareTurn(
     // (an override model on a NULL agent flows to the chat adapters exactly
     // like a configured agent's default does).
     model: effectiveModelId,
+    // ROUND-114 (R114-b): the EFFECTIVE provider id rides PreparedTurn so
+    // the streamed runner's turn.started frame can name the provider that
+    // will actually serve the call without re-deriving the tier ladder.
+    providerId: effectiveProviderId,
     tools,
     system,
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
@@ -3072,6 +3104,16 @@ export async function runStreamedAgentTurn(
    * message.user event payload and rendered into the model-facing history
    * by assembleHistory. */
   attachments?: MessageAttachment[],
+  /** ROUND-114 (R114-b): emit the opening `turn.started` frame — the EARLY
+   * live-turn signal (user text + resolved model/provider) that flips the
+   * OTHER device into "processing" state and renders the user bubble there
+   * BEFORE the persisted fold refetch. Default OFF: the sse route passes it
+   * TRUE for the POST's own first turn ONLY (queue-continuation turns and
+   * the orchestrator's streamed children already have live context — the
+   * watcher saw user.queued / subagent-status frames; a re-announcement
+   * would be noise, and a child's frame would nest oddly inside the
+   * subagent-event envelope). */
+  emitTurnStarted?: boolean,
 ): Promise<StreamedTurnOutcome> {
   const { db, keyring, chat, chatStream } = deps;
   // ROUND-78 (R78, owner: "General Settings 重试配置"): the per-class
@@ -3133,7 +3175,24 @@ export async function runStreamedAgentTurn(
     content,
   );
   if ("error" in prepared) return prepared.error;
-  const { session, agent, provider, model, tools, system } = prepared;
+  const { session, agent, provider, model, providerId, tools, system } = prepared;
+  // ── ROUND-114 (R114-b): the OPENING frame — turn.started. Emitted the
+  // instant prepareTurn succeeds, BEFORE setSessionStatus/appendSessionEvent
+  // and before any loop-top queue delivery: it MUST be the turn's FIRST
+  // frame. Nothing reached the OTHER device until the first text/tool delta
+  // before this — the desktop's send button never flipped when the phone
+  // sent, and the phone showed nothing while the PC's turn was preparing.
+  // The frame carries the USER text (so a remote client renders the user
+  // bubble immediately, before the persisted fold refetch) and the RESOLVED
+  // effective model + provider (the three-tier ladder's verdict, so a
+  // remote UI can label the live turn honestly instead of "Auto"). It is
+  // NOT persisted (the message.user append below is the durable record) and
+  // rides the route's send() wrapper → the events-bus mirror automatically
+  // (it is a normal emitted frame). The INITIATING client receives it too —
+  // intended and benign: its reducer treats it as the turn's opening frame.
+  if (emitTurnStarted === true) {
+    emit({ type: "turn.started", text: content, model, providerId });
+  }
   // ROUND-92 (R92-D, the owner's multi-key pool with automatic juggling):
   // the turn's key state — identical contract to the sync runner above (see
   // the twin comment there). The STREAMED twist: the swap branch in the

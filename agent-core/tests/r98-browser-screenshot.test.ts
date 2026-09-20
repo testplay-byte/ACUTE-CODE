@@ -242,7 +242,11 @@ describe("R98-G1 (b): the vision-gate SPLIT — capture ungated, describe gated"
         data: { supported: true, region: { x: 10, y: 20, w: 800, h: 600 }, scaleFactor: 1, mode: "native" },
       }),
     });
-    setVisionSettings(db, { mode: "off" });
+    // R114-b: "off" is retired from the type — the stored legacy value
+    // coerces to "main" at READ time (an old client's PUT likewise
+    // coerces at the write boundary), and this session's main model is
+    // unmarked, so the no-vision gate still refuses the describe leg.
+    setVisionSettings(db, { mode: "off" as never });
 
     const bc = tool(tools, "browser_control");
     await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/r98-b", sessionId: "tool-tab-r98-b" });

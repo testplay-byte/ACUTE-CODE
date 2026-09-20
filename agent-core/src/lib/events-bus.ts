@@ -17,9 +17,15 @@
  *   - storage/sessions.ts appendSessionEvent → {type:"session", kind:"event"}
  *   - storage/sessions.ts setSessionStatus   → {type:"session", kind:"status"}
  *   - storage/sessions.ts createSession/forkSession → {type:"session", kind:"created"}
+ *   - storage/sessions.ts updateSessionPermissionMode / updateSessionActiveMode
+ *     / setSessionSelectedModel → {type:"session", kind:"meta"} (R114-b —
+ *     the mode/model live-sync tier: a watcher learns the session's
+ *     operating mode, task posture, or selected model changed the MOMENT
+ *     the durable row lands, instead of on the next unrelated refetch)
  *   - routes/sse.ts send()                   → {type:"turn"} (the LIVE mirror
  *     of EVERY frame the initiating socket receives — text-delta, tool-*,
- *     meta.*, user.queued, error, done, stopped, debug-*, subagent-status…)
+ *     meta.*, turn.started, user.queued, error, done, stopped, debug-*,
+ *     subagent-status…)
  *   - routes/projects.ts POST /projects      → {type:"project"}
  *   - routes/settings.ts every domain PUT    → {type:"settings"}
  *
@@ -51,13 +57,33 @@ export type EventsBusFrame =
   //              running→queued at turn end; status = the NEW value).
   //   "created"— a new session exists (POST /sessions, a delegation child,
   //              a fork) — watchers refresh their session lists.
+  //   "meta"   — ROUND-114 (R114-b): a session-level PREFERENCE changed —
+  //              the operating mode (permissionMode), the task posture
+  //              (activeMode), and/or the selected model (selectedModel).
+  //              One frame per change, written at the storage choke point
+  //              the durable row lands through (updateSessionPermissionMode
+  //              / updateSessionActiveMode / setSessionSelectedModel), so
+  //              the phone + desktop never silently disagree: whichever
+  //              field(s) changed ride the frame; a field is ABSENT when
+  //              this change did not touch it (never undefined — the wire
+  //              stays JSON-clean). Watchers refetch the session row (or
+  //              apply the carried value directly — it IS the new truth).
   | {
       type: "session";
       sessionId: string;
       projectId: string | null;
-      kind: "event" | "status" | "created";
+      kind: "event" | "status" | "created" | "meta";
       seq?: number;
       status?: string;
+      /** R114-b: the session's NEW operating mode ("full"|"ask"|"plan"),
+       *       present only on a permissionMode change. */
+      permissionMode?: string;
+      /** R114-b: the session's NEW task-posture id (null = cleared back to
+       *       the default posture), present only on an activeMode change. */
+      activeMode?: string | null;
+      /** R114-b: the session's NEW selected model pair (null = cleared back
+       *       to the agent default), present only on a selectedModel change. */
+      selectedModel?: { providerId: string; model: string } | null;
     }
   // The LIVE turn mirror: `frame` is the EXACT StreamTurnEvent the
   // initiating client's SSE socket received (published pre-serialization).
@@ -117,6 +143,29 @@ class EventsBus {
       kind,
       ...(details.seq !== undefined ? { seq: details.seq } : {}),
       ...(details.status !== undefined ? { status: details.status } : {}),
+    });
+  }
+
+  /** ROUND-114 (R114-b): a session-level PREFERENCE changed (operating
+   * mode / task posture / selected model). Only the field(s) this change
+   * touched ride the frame — absent keys stay absent on the wire (the
+   * JSON round-trip contract every other frame follows). */
+  publishSessionMetaFrame(
+    sessionId: string,
+    projectId: string | null,
+    changed:
+      | { permissionMode: string }
+      | { activeMode: string | null }
+      | { selectedModel: { providerId: string; model: string } | null },
+  ): void {
+    this.publish({
+      type: "session",
+      sessionId,
+      projectId,
+      kind: "meta",
+      ...("permissionMode" in changed ? { permissionMode: changed.permissionMode } : {}),
+      ...("activeMode" in changed ? { activeMode: changed.activeMode } : {}),
+      ...("selectedModel" in changed ? { selectedModel: changed.selectedModel } : {}),
     });
   }
 

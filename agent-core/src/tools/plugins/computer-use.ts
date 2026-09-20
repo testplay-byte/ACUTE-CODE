@@ -19,19 +19,26 @@
  *     read from the GLOBAL vision settings (R66: Settings → Image
  *     Analysis); mode "separate" describes through the dedicated vision
  *     model (provider+model+key configured independently); "main" through
- *     the turn's model when its row has supports_vision; "off" returns the
- *     raster metadata with an honest vision-disabled note.
+ *     the turn's model when its row has supports_vision. ROUND-114 (R114-b,
+ *     owner directive): "off" is RETIRED — a model marked supportsVision
+ *     MUST be able to see, regardless of any other setting. The relay
+ *     always uses the BEST path it honestly has (separate when fully
+ *     configured, else the main model when marked, with separate-
+ *     unconfigured falling back to main); the refusal is reserved for
+ *     NEITHER path working, and its guidance points at BOTH fixes (mark
+ *     the model in Models & Providers, or configure the separate picker).
  *   · the VISION GATE (R94-E, PART 3): the owner's v0.91.0 report — a
- *     session whose model has NO image understanding (vision off, non-vision
- *     main model, no separate vision provider) kept calling screenshot
- *     anyway; every capture was dead weight (nothing downstream could ever
+ *     session whose model has NO image understanding (non-vision main
+ *     model, no separate vision provider) kept calling screenshot anyway;
+ *     every capture was dead weight (nothing downstream could ever
  *     read it). screenshot/zoom now REFUSE before any capture work unless
- *     sessionHasVisionPath() finds a live path (separate vision model
- *     configured, or main-model vision with supports_vision); the refusal
- *     is the honest, instructive no-image-understanding message steering to
- *     get_app_state / read_dom / read. The browser plugin's screenshot
- *     action rides the SAME gate (browser.ts imports the helper — no
- *     cycle: browser → computer-use is the existing edge).
+ *     sessionHasVisionPath() finds a live path (main-model vision with
+ *     supports_vision — R114-b removed the off gate — or a fully configured
+ *     separate vision model); the refusal is the honest, instructive
+ *     no-image-understanding message steering to get_app_state / read_dom /
+ *     read. The browser plugin's screenshot action rides the SAME gate
+ *     (browser.ts imports the helper — no cycle: browser → computer-use is
+ *     the existing edge).
  *   · the MONITOR: every dispatch records into the session ring (the
  *     owner's mini-window reads GET /computer-use/session); intents also
  *     ride the turn SSE as {type:"computer-use"} envelopes.
@@ -759,6 +766,25 @@ function consentSummary(tool: string, input: Record<string, unknown>): string {
 
 /* ── the vision relay wiring ──────────────────────────────────────────────── */
 
+/**
+ * ROUND-114 (R114-b, owner directive: a model marked supportsVision MUST be
+ * able to see, regardless of any other setting — the old "off" default
+ * becomes "main", the model's own vision). The routing ladder, best path
+ * first, honesty last:
+ *
+ *   1. "separate" FULLY CONFIGURED (provider + modelId) → describeRaster
+ *      against the dedicated pair with the "<providerId>-vision" keyring
+ *      slot (the owner's explicit pick — it wins when it exists; a missing
+ *      KEY still fails honestly at describe time, the pre-R114 behavior).
+ *   2. the MAIN MODEL marked supports_vision → relay the image to the
+ *      turn's own model (mode "main", AND the R114-b fallback when
+ *      "separate" was chosen but is not fully configured — a half-built
+ *      separate picker must not blind a vision-capable session).
+ *   3. NEITHER path works → the honest refusal with guidance pointing at
+ *      BOTH fixes: mark the model's vision capability in Models &
+ *      Providers, or pick a separate vision model in Settings → Image
+ *      Analysis. (The "off" refusal branch is DELETED — there is no off.)
+ */
 async function relayVision(
   db: Parameters<typeof getVisionSettings>[0],
   keyring: import("../../providers/registry.js").ProviderKeyring | undefined,
@@ -767,23 +793,11 @@ async function relayVision(
   instruction: string,
 ): Promise<{ ok: true; text: string; model: string; mode: string; ms: number } | { ok: false; error: string }> {
   const settings = getVisionSettings(db);
-  if (settings.mode === "off") {
-    return {
-      ok: false,
-      error:
-        "vision is OFF — enable it in Settings → Image Analysis (a separate vision model, or main-model vision when the row supports it); the raster metadata above is still usable with coordinates",
-    };
-  }
   if (keyring === undefined) {
     return { ok: false, error: "no keyring in this context — vision unavailable" };
   }
-  if (settings.mode === "separate") {
-    if (settings.provider === null || settings.modelId === null) {
-      return {
-        ok: false,
-        error: "vision mode is 'separate' but the vision provider/model is not configured — set them in Settings → Image Analysis",
-      };
-    }
+  // Tier 1: the owner's explicit separate pick, when it is COMPLETE.
+  if (settings.mode === "separate" && settings.provider !== null && settings.modelId !== null) {
     const result = await describeRaster(
       { db, keyring, visionKeyringId: visionKeyringId(settings.provider) },
       { mode: "separate", providerId: settings.provider, modelId: settings.modelId },
@@ -791,24 +805,41 @@ async function relayVision(
     );
     return "error" in result ? { ok: false, error: result.error } : { ok: true, ...result };
   }
-  // mode === "main": allowed only when the turn's model row supports vision.
-  if (mainModel === undefined) {
-    return { ok: false, error: "main-model vision: no main model in this context" };
+  // Tier 2: the main model's own vision — mode "main", OR the R114-b
+  // fallback from a chosen-but-unconfigured separate picker. The model row
+  // must carry supports_vision (the owner's mark); the raster metadata
+  // alone never substitutes for sight.
+  const mainMarked =
+    mainModel !== undefined &&
+    findModelRow(db, mainModel.providerId, mainModel.modelId)?.supportsVision === true;
+  if (mainMarked && mainModel !== undefined) {
+    const result = await describeRaster(
+      { db, keyring },
+      { mode: "main", providerId: mainModel.providerId, modelId: mainModel.modelId },
+      { imageBase64: pngBase64, instruction },
+    );
+    return "error" in result ? { ok: false, error: result.error } : { ok: true, ...result };
   }
-  const providerId = mainModel.providerId;
-  const model = findModelRow(db, providerId, mainModel.modelId);
-  if (model === undefined || !model.supportsVision) {
-    return {
-      ok: false,
-      error: `the turn's model '${mainModel.modelId}' does not support vision (or its row isn't marked supports_vision) — set a separate vision model in Settings → Image Analysis`,
-    };
-  }
-  const result = await describeRaster(
-    { db, keyring },
-    { mode: "main", providerId, modelId: mainModel.modelId },
-    { imageBase64: pngBase64, instruction },
-  );
-  return "error" in result ? { ok: false, error: result.error } : { ok: true, ...result };
+  // Tier 3: the honest refusal — NEITHER path works. The guidance names
+  // BOTH fixes (mark the model in Models & Providers; pick the separate
+  // vision model in Settings → Image Analysis) so the owner can act from
+  // either surface. When "separate" was chosen but incomplete, the message
+  // says so too (the half-built pick is the proximate cause).
+  const mainModelNote =
+    mainModel === undefined
+      ? "no main model is in this context"
+      : `the turn's model '${mainModel.modelId}' is not marked supports_vision`;
+  const separateNote =
+    settings.mode === "separate"
+      ? " (the separate vision picker is selected but not fully configured, and the main model is not marked vision-capable — no fallback existed)"
+      : "";
+  return {
+    ok: false,
+    error:
+      `this session has no image understanding (${mainModelNote}) — ` +
+      "mark the model's vision capability in Settings → Models & Providers, or configure a separate vision model in Settings → Image Analysis" +
+      separateNote,
+  };
 }
 
 function findModelRow(
@@ -837,17 +868,22 @@ export const NO_VISION_SCREENSHOT_RECOVERY =
 
 /**
  * R94-E (PART 3): does this session have ANY vision path? The two live
- * paths, mirroring relayVision's mode resolution exactly (one vision
+ * paths, mirroring relayVision's R114-b routing ladder EXACTLY (one vision
  * configuration, one honest failure story — R66-2-b):
- *   · "separate" — the dedicated vision provider+model are CONFIGURED
- *     (their key may still be missing — relayVision fails honestly at
+ *   · "separate" FULLY CONFIGURED (provider + modelId) → the dedicated pair
+ *     exists (its key may still be missing — relayVision fails honestly at
  *     describe time with vision_no_key; the gate is about the path EXISTING,
  *     not about the credential);
- *   · "main" — the turn's model row has supports_vision.
- * "off", or any settings-read failure → false (fail-closed: a broken read
- * is NOT a vision path). Exported for the browser plugin's screenshot gate
- * (browser.ts already imports relayVision from here — same edge, no cycle)
- * and for the plugin tests.
+ *   · the MAIN MODEL's row has supports_vision — mode "main", AND the
+ *     R114-b fallback when "separate" was chosen but is not fully
+ *     configured (a half-built separate picker must not blind a
+ *     vision-capable session; a marked model MUST be able to see).
+ * ROUND-114 (R114-b): the "off" gate is GONE — getVisionSettings coerces a
+ * stored "off" to "main" (see storage/vision.ts), so the ladder above is
+ * the whole truth. Any settings-read failure → false (fail-closed: a
+ * broken read is NOT a vision path). Exported for the browser plugin's
+ * screenshot gate (browser.ts already imports relayVision from here — same
+ * edge, no cycle) and for the plugin tests.
  */
 export function sessionHasVisionPath(
   db: Parameters<typeof getVisionSettings>[0],
@@ -855,13 +891,15 @@ export function sessionHasVisionPath(
 ): boolean {
   try {
     const settings = getVisionSettings(db);
-    if (settings.mode === "separate") {
-      return settings.provider !== null && settings.modelId !== null;
+    // Tier 1: the owner's explicit separate pick, when it is COMPLETE.
+    if (settings.mode === "separate" && settings.provider !== null && settings.modelId !== null) {
+      return true;
     }
-    if (settings.mode === "main") {
-      if (mainModel === undefined) return false;
+    // Tier 2: the main model's own vision (mode "main", OR the fallback
+    // from an incomplete separate pick — mirrors relayVision tier for tier).
+    if (mainModel !== undefined) {
       const row = findModelRow(db, mainModel.providerId, mainModel.modelId);
-      return row !== undefined && row.supportsVision;
+      if (row !== undefined && row.supportsVision) return true;
     }
     return false;
   } catch {

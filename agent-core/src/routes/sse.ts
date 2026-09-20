@@ -435,6 +435,13 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
       let recoveryAttempted = false;
       let currentContent = content;
       let currentAttachments = composer.value.attachments;
+      // ROUND-114 (R114-b): the opening turn.started frame fires ONCE per
+      // POST/stream call — the FIRST runStreamedAgentTurn below passes true;
+      // queue-continuation turns keep watching through the frames they
+      // already have (user.queued chips + meta.queue_continue), so no
+      // re-announcement. Flipped false the moment the first call returns
+      // into the loop (the outcome branches below `continue` back around).
+      let firstStreamedCall = true;
       // ROUND-82: currentModelOverride is declared above the try (the
       // debug-analyst phase reads the LAST turn's override through it).
       // (while(true) — the loop's exits are the outcome branches below;
@@ -449,7 +456,11 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
           abort.signal,
           composer.value.thinkingLevel,
           currentAttachments,
+          // R114-b: the early live-turn frame (user text + resolved model) —
+          // only the POST's own first turn announces itself.
+          firstStreamedCall,
         );
+        firstStreamedCall = false;
         if (outcome.ok) {
           // ROUND-42: ALWAYS publish task_complete. The R40 didWork gate
           // (only tool-using turns) left the owner's conversational test

@@ -15,11 +15,23 @@
  * the moment the durable row lands. The publishes are fire-and-forget
  * (the bus never throws into a caller) and need NO extra state: the row
  * being written IS the news.
+ * ROUND-114 (R114-b): the PREFERENCE setters join them —
+ * updateSessionPermissionMode / updateSessionActiveMode /
+ * setSessionSelectedModel publish {kind:"meta"} frames (the mode/model
+ * live-sync tier) through the same choke-point discipline.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { MessageAttachment, PermissionMode, RunMode, SessionStatus, UsageRecord } from "shared";
 import { getEventsBus } from "../lib/events-bus.js";
+
+/** ROUND-114 (R114-b): the session's server-side selected model pair — the
+ * tier between the per-send override and the agent row. null = follow the
+ * agent default (every pre-0041 row; the honest "Auto"). */
+export interface SessionSelectedModel {
+  providerId: string;
+  model: string;
+}
 
 export type SqliteDatabase = Database.Database;
 
@@ -64,6 +76,16 @@ export interface Session {
    * duplicate/cap gates refuse against it. Written ONCE through
    * createSession's SessionInput.taskId (migration 0028). */
   taskId: string | null;
+  /** ROUND-114 (R114-b): the session's SERVER-SIDE selected model — the
+   * persistent tier between the per-send override and the agent row
+   * (columns model_provider + model_id, migration 0041; both NULL = follow
+   * the agent default — the pre-R114 behavior every existing session keeps).
+   * Set/cleared through PATCH /sessions/:id { model } (validated at the
+   * route: complete pair, known+configured provider, a models row or catalog
+   * entry match); prepareTurn resolves turns as per-send override →
+   * session.selectedModel → agent row. The desktop's localStorage pick and
+   * the phone's "Auto" both converge on THIS row — the cross-device truth. */
+  selectedModel: SessionSelectedModel | null;
 }
 
 export interface SessionInput {
@@ -129,6 +151,11 @@ interface SessionRow {
   /** ROUND-79 (R79-a): nullable since migration 0028; the fallback keeps
    * hand-opened pre-0028 databases readable (null = unaddressed child). */
   delegate_task_id?: string | null;
+  /** ROUND-114 (R114-b): nullable since migration 0041; the fallback keeps
+   * hand-opened pre-0041 databases readable (null = follow the agent
+   * default). */
+  model_provider?: string | null;
+  model_id?: string | null;
 }
 
 interface EventRow {
@@ -180,6 +207,16 @@ function toSession(row: SessionRow): Session {
     // garbage/empty delegate_task_id reads as null (an unaddressed child;
     // resume then falls back to session-id/code resolution honestly).
     taskId: typeof row.delegate_task_id === "string" && row.delegate_task_id !== "" ? row.delegate_task_id : null,
+    // ROUND-114 (R114-b): the selected-model pair — BOTH sides must be a
+    // non-empty string to count (the route only ever persists complete
+    // pairs, so a half-written row is corruption: fail-open to null = the
+    // agent default, the pre-R114 behavior — a garbage row must never
+    // break a turn).
+    selectedModel:
+      typeof row.model_provider === "string" && row.model_provider !== "" &&
+      typeof row.model_id === "string" && row.model_id !== ""
+        ? { providerId: row.model_provider, model: row.model_id }
+        : null,
   };
 }
 
@@ -220,6 +257,10 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
     // delegate_task_id) — set ONLY by the orchestrator's delegation path
     // after its own validation (charset/duplicate/cap); null = unaddressed.
     taskId: input.taskId ?? null,
+    // ROUND-114 (R114-b): sessions START modelless (both columns NULL =
+    // follow the agent default — the pre-R114 behavior); selection happens
+    // through PATCH /sessions/:id { model }.
+    selectedModel: null,
   };
   // ROUND-75 (R75) + ROUND-79 (R79-a): active_mode and delegate_task_id join
   // the INSERT ONLY when the caller set them (delegation children copying
@@ -532,6 +573,11 @@ export function updateSessionTitle(db: SqliteDatabase, id: string, title: string
  * /sessions/:id/permissions route) validate the value against the 4 known
  * modes BEFORE calling — this function trusts its argument and only handles
  * the unknown-id case (undefined). Returns the updated session row.
+ * ROUND-114 (R114-b): the events-bus META publish point — the change is
+ * announced the moment the durable row lands ({type:"session",
+ * kind:"meta", permissionMode}), so the OTHER device's composer flips live
+ * instead of on the next unrelated refetch (the storage choke point: BOTH
+ * PATCH routes and any future writer ride this one hook).
  */
 export function updateSessionPermissionMode(
   db: SqliteDatabase,
@@ -543,6 +589,9 @@ export function updateSessionPermissionMode(
   db.prepare(
     "UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?",
   ).run(mode, new Date().toISOString(), id);
+  // R114-b: fire-and-forget (the bus never throws into a caller); the
+  // UPDATE has already run on this same synchronous connection.
+  getEventsBus().publishSessionMetaFrame(id, existing.projectId, { permissionMode: mode });
   return getSession(db, id);
 }
 
@@ -556,6 +605,9 @@ export function updateSessionPermissionMode(
  * posture; idempotent — clearing a modeless session is a no-op write).
  * Returns the updated session row. The updated_at bump mirrors the
  * permission-mode setter: a posture change is a session-level event.
+ * ROUND-114 (R114-b): the events-bus META publish point — every activeMode
+ * change (PATCH, switch_mode, even prepareTurn's stale-mode clear) rides
+ * ONE {type:"session", kind:"meta", activeMode} frame at the choke point.
  */
 export function updateSessionActiveMode(
   db: SqliteDatabase,
@@ -569,6 +621,38 @@ export function updateSessionActiveMode(
     new Date().toISOString(),
     id,
   );
+  getEventsBus().publishSessionMetaFrame(id, existing.projectId, { activeMode });
+  return getSession(db, id);
+}
+
+/**
+ * ROUND-114 (R114-b): set or clear the session's SERVER-SIDE selected model
+ * (columns model_provider + model_id, migration 0041). The ROUTE validates
+ * before calling — a complete pair naming a known+configured provider whose
+ * model matches a models row or catalog entry, or null to clear back to the
+ * agent default — so this function trusts its argument and only handles the
+ * unknown-id case (undefined). A null argument clears BOTH columns (the
+ * pair is never persisted half-written). Also the events-bus META publish
+ * point: {type:"session", kind:"meta", selectedModel} the moment the row
+ * lands — the phone's "Auto" and the desktop's picker converge on this
+ * frame instead of silently disagreeing. Returns the updated session row.
+ */
+export function setSessionSelectedModel(
+  db: SqliteDatabase,
+  id: string,
+  selectedModel: SessionSelectedModel | null,
+): Session | undefined {
+  const existing = getSession(db, id);
+  if (existing === undefined) return undefined;
+  db.prepare(
+    "UPDATE sessions SET model_provider = ?, model_id = ?, updated_at = ? WHERE id = ?",
+  ).run(
+    selectedModel?.providerId ?? null,
+    selectedModel?.model ?? null,
+    new Date().toISOString(),
+    id,
+  );
+  getEventsBus().publishSessionMetaFrame(id, existing.projectId, { selectedModel });
   return getSession(db, id);
 }
 
@@ -1151,6 +1235,12 @@ export function forkSession(db: SqliteDatabase, sessionId: string): Session | un
     // the fork inherits the posture the source was running, and its guide
     // rides the fork's system prompt from turn one.
     activeMode: original.activeMode,
+    // ROUND-114 (R114-b): the selected model is deliberately NOT carried
+    // over — the fork keeps the posture (guidance) but starts fresh on the
+    // model tier, exactly like usage (the R44-c “counters start at zero”
+    // rule): the copy's first turn follows the AGENT default until the
+    // owner picks on the fork itself. Both columns stay NULL.
+    selectedModel: null,
   };
   const copy = db.transaction((srcId: string) => {
     db.prepare(

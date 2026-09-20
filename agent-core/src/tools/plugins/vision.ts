@@ -10,9 +10,13 @@
  * one honest failure story.
  *
  * Honest by construction — the tool NEVER throws:
- *   · vision off            → ok:false "image analysis is off — configure
- *                             the vision model in Settings → Image Analysis"
- *   · separate unconfigured → the same honest refusal shape
+ *   · ROUND-114 (R114-b): "off" is RETIRED — the relay always uses the
+ *     BEST path it honestly has (the fully-configured separate vision
+ *     model, else the main model when its row is marked supports_vision,
+ *     with a chosen-but-unconfigured separate picker falling back to
+ *     main). The refusal is reserved for NEITHER path working, and its
+ *     guidance points at BOTH fixes (mark the model in Models & Providers,
+ *     or pick the separate vision model in Settings → Image Analysis)
  *   · missing/oversized/wrong-extension file, bad URL, HTTP failure,
  *     non-image response → ok:false with the exact reason
  *
@@ -20,8 +24,8 @@
  * model already reached through the sandboxed filesystem/web surfaces; the
  * only egress is the image bytes + instruction to the CONFIGURED vision
  * model). Registered for EVERY turn with a database (unlike computer use
- * there is no master switch — the OFF mode's honest refusal IS the switch,
- * so the model can always ASK and be told the truth). Bare/test builds
+ * there is no master switch — the honest refusal IS the switch, so the
+ * model can always ASK and be told the truth). Bare/test builds
  * (no toolDeps.db) and the declaration catalog (db:null) get NOTHING —
  * the fail-closed convention of the computer-use plugin.
  */
@@ -163,7 +167,7 @@ export const visionPlugin: PluginDefinition = {
       {
         name: "analyze_image",
         description:
-          "Describe ANY image — a local file (png/jpg/jpeg/webp/gif/bmp, ≤8MB, relative paths resolve against the project root) or an http(s) URL (≤8MB) — through the configured vision model. Image attachments from chat are saved into the project at attachments/<name> — analyze them with the path EXACTLY as rendered in the user message ('saved in the project at <path>'), never a guessed one. Use it whenever you need to SEE image content: screenshots the user mentions, figures/diagrams in the project, web images. Vision off or unconfigured returns an honest refusal pointing at Settings → Image Analysis.",
+          "Describe ANY image — a local file (png/jpg/jpeg/webp/gif/bmp, ≤8MB, relative paths resolve against the project root) or an http(s) URL (≤8MB) — through the configured vision model. Image attachments from chat are saved into the project at attachments/<name> — analyze them with the path EXACTLY as rendered in the user message ('saved in the project at <path>'), never a guessed one. Use it whenever you need to SEE image content: screenshots the user mentions, figures/diagrams in the project, web images. A session with no vision path (main model unmarked and no separate vision model configured) returns an honest refusal pointing at Models & Providers or Settings → Image Analysis.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
@@ -213,9 +217,11 @@ export const visionPlugin: PluginDefinition = {
               detail: `${(url as string).trim()} (${remote.bytes} bytes, ${remote.contentType})`,
             };
           }
-          // 2. Relay through the GLOBAL vision settings (relayVision: off →
-          //    honest refusal; separate → the dedicated model; main → the
-          //    turn's model when its row supports vision).
+          // 2. Relay through the GLOBAL vision settings (relayVision's
+          //    R114-b routing ladder: the fully-configured separate vision
+          //    model, else the turn's main model when marked supports_vision,
+          //    with separate-unconfigured falling back to main; the honest
+          //    refusal names both fixes).
           const vision = await relayVision(
             toolDeps.db,
             toolDeps.keyring,

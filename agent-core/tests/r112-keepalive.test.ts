@@ -245,10 +245,19 @@ describe("R112-a: the turn stream's SSE heartbeat", () => {
       body = new LiveBody(response.stream());
 
       // THE LIVE-BATTERY FLUSH: the leading `: ping` is on the wire the
-      // instant the route runs — before the model's first token.
-      await settle(() => body.pingCount() === 1);
-      expect(body.body()).toBe(": ping\n\n");
-      expect(body.dataFrames()).toHaveLength(0);
+      // instant the route runs — before the model's first token. R114-b
+      // adds the turn's OPENING data frame right behind it: turn.started
+      // (the early live-turn announcement — user text + the resolved
+      // model), so the OTHER device learns the turn exists before the
+      // first token. The ping is still FIRST on the wire, and while the
+      // gated model keeps thinking NOTHING further flows.
+      await settle(
+        () => body.pingCount() === 1 && body.dataFrames().some((f) => f.type === "turn.started"),
+      );
+      expect(body.body().startsWith(": ping\n\n")).toBe(true);
+      expect(body.dataFrames()).toEqual([
+        { type: "turn.started", text: "the slow turn", model: "test/r112-1", providerId: "openrouter" },
+      ]);
 
       // 9.999 s later: still exactly the leading ping (the cadence is 10 s,
       // not "as fast as possible" — a chatty heartbeat would itself look

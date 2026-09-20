@@ -350,7 +350,17 @@ describe("R113-a: the events stream frames", () => {
       expect(body.dataFrames()[2]).toEqual({
         type: "settings",
         domain: "appearance",
-        value: { themeId: "clay", mode: "dark" },
+        // R114-b: the domain's full five-field shape rides the frame (the
+        // four chat-density fields at their defaults — the PUT touched only
+        // themeId/mode).
+        value: {
+          themeId: "clay",
+          mode: "dark",
+          chatDensity: "comfortable",
+          chatTextSize: "medium",
+          timestampsMode: "hover",
+          toolActivity: "detailed",
+        },
       });
 
       // END-TO-END (b): POST /sessions → the storage choke point's

@@ -35,7 +35,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { rmSync, readdirSync, statSync, existsSync, unlinkSync, readFileSync, createWriteStream } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
@@ -67,7 +67,41 @@ function releaseBodyForCard(raw: unknown): string {
   return `${raw.slice(0, RELEASE_BODY_CAP)}${RELEASE_BODY_TRUNCATION_MARKER}`;
 }
 
-// ── R91-E: the IN-APP UPDATER's download state ─────────────────────────────
+// ── ROUND-114 (R114-b): the FILESYSTEM BROWSE surface ──────────────────
+// GET /system/fs/browse?path=<abs>&hidden=<0|1> — the phone's New Project
+// folder picker. A paired phone is a view+input medium with config rights
+// (the R109 ruling): browsing the machine's directory NAMES to pick a
+// project root is exactly the “view + input” surface, so the route is
+// deliberately NOT on the device-token blocklist (only /api/v1/system/reset
+// is blocked under /system/*). Never lists file CONTENTS — names, types,
+// paths only; dotfiles skipped unless hidden=1; hard-capped at 400 entries
+// per response (a directory with thousands of files answers fast and the
+// picker paginates by descending into subdirectories instead).
+
+/** R114-b: the per-response entry cap (dirs+files combined, post-sort). */
+const FS_BROWSE_MAX_ENTRIES = 400;
+
+/** R114-b: one browsed entry — name, absolute path, and whether it is a
+ * directory. No size, no mtime, no contents: the picker needs nothing else
+ * and the response stays cheap over a phone link. */
+interface FsBrowseEntry {
+  name: string;
+  path: string;
+  dir: boolean;
+}
+
+/** The reply to a fs-browse failure — the OS's own message, never a
+ * guessed one (the honest 404/400 contract the whole API follows). */
+function fsError(
+  reply: import("fastify").FastifyReply,
+  status: number,
+  code: string,
+  message: string,
+): unknown {
+  return reply.code(status).send(errorBody(code, message));
+}
+
+// ── R91-E: the IN-APP UPDATER's download state ──────────────────────────
 // The owner: "there was no inbuilt update system… I can update the application
 // from within the app itself rather than going anywhere." The download
 // streams HERE (the sidecar can attach the launcher's PAT to raise GitHub's
@@ -636,6 +670,82 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
     updateDownload.version = null;
     updateDownload.error = null;
     return reply.code(200).send({ ok: true, status: "idle" });
+  });
+
+  // ── ROUND-114 (R114-b): the FILESYSTEM BROWSE route (see the module-level
+  // comment for the trust-model reasoning — reachable with a DEVICE token;
+  // never lists file contents). GET /system/fs/browse?path=<abs>&hidden=<0|1>
+  //   → 200 { path, parent, entries: [{name, path, dir}], truncated }
+  //     · path omitted/blank → the user's HOME directory (os.homedir());
+  //     · entries: DIRECTORIES first, then files, each alphabetical;
+  //     · dotfiles skipped unless hidden=1;
+  //     · hard cap 400 entries per response — beyond it the response is
+  //       truncated and carries truncated: true (always present as a
+  //       boolean so the picker can branch without "in" checks);
+  //     · parent = the browsed directory's parent (null at a filesystem
+  //       root, where dirname(path) === path — the picker hides Up).
+  //   → 404 non-existent path (the OS's ENOENT message rides along);
+  //   → 400 unreadable/not-a-directory (the OS's message rides along).
+  scope.get("/system/fs/browse", async (request, reply) => {
+    const query = request.query as Record<string, string | undefined>;
+    const rawPath = typeof query.path === "string" ? query.path.trim() : "";
+    const target = rawPath === "" ? homedir() : rawPath;
+    const includeHidden = query.hidden === "1" || query.hidden === "true";
+
+    // (a) The directory must EXIST and be a directory — statSync's own
+    // message rides the honest error (ENOENT → 404; everything else,
+    // EACCES included → 400).
+    let statResult;
+    try {
+      statResult = statSync(target);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const isMissing = (error as NodeJS.ErrnoException).code === "ENOENT";
+      return fsError(
+        reply,
+        isMissing ? 404 : 400,
+        isMissing ? "NOT_FOUND" : "VALIDATION",
+        `cannot browse '${target}': ${message}`,
+      );
+    }
+    if (!statResult.isDirectory()) {
+      return fsError(reply, 400, "VALIDATION", `'${target}' is not a directory`);
+    }
+
+    // (b) Read the entries (names + dir flags only — withFileTypes spares
+    // one stat per entry). An unreadable directory is the honest 400 with
+    // the OS's message, never a 500.
+    let dirents;
+    try {
+      dirents = readdirSync(target, { withFileTypes: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return fsError(reply, 400, "VALIDATION", `cannot read '${target}': ${message}`);
+    }
+
+    // (c) Filter → shape → sort: dotfiles skipped unless hidden=1; then
+    // directories first, files after, each alphabetical (the plain string
+    // comparison — deterministic across machines, unlike locale collation).
+    const entries: FsBrowseEntry[] = dirents
+      .filter((d) => includeHidden || !d.name.startsWith("."))
+      .map((d) => ({ name: d.name, path: join(target, d.name), dir: d.isDirectory() }))
+      .sort((a, b) =>
+        a.dir === b.dir ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.dir ? -1 : 1,
+      );
+
+    // (d) The hard cap — 400 entries max, honestly flagged.
+    const truncated = entries.length > FS_BROWSE_MAX_ENTRIES;
+    const capped = truncated ? entries.slice(0, FS_BROWSE_MAX_ENTRIES) : entries;
+
+    // (e) The parent for the picker's Up affordance (null at a filesystem
+    // root — dirname("/") === "/", dirname("C:\\") === "C:\\").
+    const parentDir = dirname(target);
+    return reply.code(200).send({
+      path: target,
+      parent: parentDir === target ? null : parentDir,
+      entries: capped,
+      truncated,
+    });
   });
 
   scope.post("/system/reset", async () => {

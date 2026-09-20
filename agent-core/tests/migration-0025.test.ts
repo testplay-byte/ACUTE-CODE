@@ -8,7 +8,9 @@
 // Scope under test:
 //   · Fresh database: NO legacy rows → the three INSERT…SELECT statements
 //     insert nothing (guarded selects), bookkeeping + audit rows are
-//     written, and getVisionSettings defaults to off/null/null.
+//     written, and getVisionSettings defaults to null/null with mode
+//     "main" (R114-b: "off" is retired — the default became "main" and a
+//     stored "off" reads as "main").
 //   · Seed-from-old: a pre-0025 database carrying computerUse.vision.*
 //     rows → reopen seeds the vision.* rows verbatim (legacy rows kept).
 //   · Idempotent on reopen; INSERT OR IGNORE respects a vision.* row the
@@ -72,8 +74,10 @@ describe("migration 0025 (vision settings split)", () => {
     expect(row(db, "vision.mode")).toBeUndefined();
     expect(row(db, "vision.provider")).toBeUndefined();
     expect(row(db, "vision.modelId")).toBeUndefined();
-    // The typed accessor defaults safely.
-    expect(getVisionSettings(db)).toEqual({ mode: "off", provider: null, modelId: null });
+    // The typed accessor defaults safely (R114-b: the default mode is
+    // "main" — the retired "off"'s replacement; a stored "off" likewise
+    // reads as "main", pinned in r114-sync-wave.test.ts).
+    expect(getVisionSettings(db)).toEqual({ mode: "main", provider: null, modelId: null });
 
     // Bookkeeping + audit trail (the 0021/0022/0023/0024 convention).
     expect(db.prepare("SELECT version FROM schema_migrations WHERE version = 25").get()).toBeDefined();

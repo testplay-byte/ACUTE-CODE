@@ -1779,16 +1779,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       // POST /vision/test — a tiny 1×1 transparent PNG through the CURRENT
       // settings (separate mode only, honestly): "main" mode has no model to
       // aim at without a live turn (the relay resolves the TURN's model), so
-      // it answers the honest error instead of guessing; off answers the
-      // honest off error. {ok, description?, model?, error?}.
+      // it answers the honest error instead of guessing. {ok, description?,
+      // model?, error?}. ROUND-114 (R114-b): the legacy "off" branch is DEAD
+      // CODE now (getVisionSettings coerces a stored "off" to "main") and is
+      // removed — the route's behavior is otherwise untouched.
       scope.post("/vision/test", async () => {
         // A 1×1 transparent PNG (the smallest honest probe image).
         const TEST_PNG_BASE64 =
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
         const settings = getVisionSettings(db);
-        if (settings.mode === "off") {
-          return { ok: false, error: "image analysis is OFF — pick a mode above first" };
-        }
         if (settings.mode === "main") {
           return {
             ok: false,

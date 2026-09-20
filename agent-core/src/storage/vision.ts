@@ -13,11 +13,18 @@
  * Keys (the `settings` table, migration 0001 — same access pattern as
  * storage/computer-use.ts / settings.ts):
  *
- *   vision.mode      — "off" | "separate" | "main" (default "off").
+ *   vision.mode      — "main" | "separate" (default "main").
  *                      "separate" = the dedicated vision model
  *                      (provider+modelId+key, configured completely
- *                      independently); "main" = use the turn's main model
+ *                      independently); "main" = the turn's main model
  *                      when its row has supports_vision = 1.
+ *                      ROUND-114 (R114-b, owner directive): the legacy
+ *                      "off" value is RETIRED — a model marked
+ *                      supportsVision MUST be able to see, regardless of
+ *                      any other setting. Read-time coercion: a stored
+ *                      "off" (or any unknown value) reads as "main" (the
+ *                      model's own vision); the write side accepts a legacy
+ *                      "off" and coerces it to "main" for wire compat.
  *   vision.provider  — provider id for the separate vision model (any
  *                      provider row; the vision KEY rides the keyring slot
  *                      ACUTE_PROVIDER_<ID>_VISION via the pseudo-provider
@@ -42,7 +49,10 @@
  */
 import type { SqliteDatabase } from "./db.js";
 
-export type VisionMode = "off" | "separate" | "main";
+/** ROUND-114 (R114-b): "off" is RETIRED. The mode is the routing choice
+ * between the turn's OWN model (marked supports_vision — the default, the
+ * old "off"'s replacement) and the DEDICATED vision model. */
+export type VisionMode = "main" | "separate";
 
 export interface VisionSettings {
   mode: VisionMode;
@@ -51,7 +61,7 @@ export interface VisionSettings {
 }
 
 export const VISION_SETTINGS_DEFAULTS: VisionSettings = {
-  mode: "off",
+  mode: "main",
   provider: null,
   modelId: null,
 };
@@ -65,7 +75,7 @@ const LEGACY_MODE_KEY = "computerUse.vision.mode";
 const LEGACY_PROVIDER_KEY = "computerUse.vision.provider";
 const LEGACY_MODEL_KEY = "computerUse.vision.modelId";
 
-const VISION_MODE_VALUES: readonly VisionMode[] = ["off", "separate", "main"];
+const VISION_MODE_VALUES: readonly VisionMode[] = ["main", "separate"];
 const PROVIDER_ID_RE = /^[a-z0-9_-]+$/;
 
 function readRow(db: SqliteDatabase, key: string): string | undefined {
@@ -96,6 +106,12 @@ function readNullable(db: SqliteDatabase, key: string): string | null {
 /**
  * Read the global vision settings. Defaults safely when rows are missing;
  * the LAZY MIGRATION above applies when only the legacy R61 keys exist.
+ * ROUND-114 (R114-b): READ COERCION — a stored "off" (the pre-R114 default,
+ * still sitting in real databases) or any unknown value reads as "main"
+ * (readEnum's fallback): the old "off" behavior is exactly what the new
+ * "main" provides for an UNMARKED model (the honest refusal), while a
+ * MARKED model now sees — the owner's directive. No migration rewrites the
+ * rows; the coercion is stable and idempotent forever.
  */
 export function getVisionSettings(db: SqliteDatabase): VisionSettings {
   const lazySeed =
@@ -133,16 +149,25 @@ export interface VisionSettingsPatch {
  * Validated partial patch (the storage-is-the-boundary convention). The
  * writes ALWAYS land on the NEW vision.* keys — a legacy computerUse.vision.*
  * reader stops being consulted the moment `vision.mode` exists.
+ * ROUND-114 (R114-b): a legacy "off" value is ACCEPTED and coerced to
+ * "main" (wire compat — an old client PUTting the value it stored gets the
+ * new semantics, never a 400); anything else outside main|separate throws.
  */
 export function setVisionSettings(
   db: SqliteDatabase,
   patch: VisionSettingsPatch,
 ): VisionSettings {
   if (patch.mode !== undefined) {
-    if (!VISION_MODE_VALUES.includes(patch.mode)) {
+    // R114-b: the retired "off" coerces to "main" (its replacement). The
+    // comparison runs through a plain string — an old client PUTs the value
+    // it stored, and the type system cannot see that runtime history.
+    const requested = patch.mode as string;
+    const mode: VisionMode | undefined =
+      requested === "off" ? "main" : VISION_MODE_VALUES.find((v) => v === requested);
+    if (mode === undefined) {
       throw new Error(`mode must be one of ${VISION_MODE_VALUES.join(" | ")}`);
     }
-    upsert(db, MODE_KEY, patch.mode);
+    upsert(db, MODE_KEY, mode);
   }
   if (patch.provider !== undefined) {
     if (patch.provider === null || patch.provider === "") {

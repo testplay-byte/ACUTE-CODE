@@ -19,6 +19,12 @@
  *   5. THE FAMILY RULE — a sibling domain PUT (memory) broadcasts too: the
  *      R113 contract is EVERY settings domain PUT fans out, not just the
  *      new one.
+ *
+ * ROUND-114 (R114-b): the domain grew from two fields to FIVE
+ * (chatDensity / chatTextSize / timestampsMode / toolActivity — the
+ * chat-density tier). This suite's pins were updated to the full shape by
+ * composing over the defaults below (the four-field vocabulary + partial
+ * PUT + broadcast pins themselves live in r114-sync-wave.test.ts).
  */
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -37,6 +43,18 @@ import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { buildServer } from "../src/server";
 
 const TOKEN = "test-token-r113appearance";
+
+/** R114-b: the domain's full five-field default — every expectation below
+ * composes over it (the R113 pins stay two-field-shaped in intent; the
+ * three density fields ride at their defaults unless a test sets them). */
+const FULL_DEFAULTS = {
+  themeId: null,
+  mode: "system",
+  chatDensity: "comfortable",
+  chatTextSize: "medium",
+  timestampsMode: "hover",
+  toolActivity: "detailed",
+};
 
 let tempDir = "";
 let db: SqliteDatabase;
@@ -88,36 +106,36 @@ function collectFrames(): { frames: EventsBusFrame[]; unsubscribe: () => void } 
 
 describe("R113-a: appearance settings storage", () => {
   it("reads the default when nothing is stored", () => {
-    expect(getAppearanceSettings(db)).toEqual({ themeId: null, mode: "system" });
-    expect(APPEARANCE_DEFAULTS).toEqual({ themeId: null, mode: "system" });
+    expect(getAppearanceSettings(db)).toEqual(FULL_DEFAULTS);
+    expect(APPEARANCE_DEFAULTS).toEqual(FULL_DEFAULTS);
   });
 
   it("round-trips both fields and partial patches leave the other alone", () => {
     setAppearanceSettings(db, { themeId: "sunset", mode: "dark" });
-    expect(getAppearanceSettings(db)).toEqual({ themeId: "sunset", mode: "dark" });
+    expect(getAppearanceSettings(db)).toEqual({ ...FULL_DEFAULTS, themeId: "sunset", mode: "dark" });
     setAppearanceSettings(db, { mode: "light" });
-    expect(getAppearanceSettings(db)).toEqual({ themeId: "sunset", mode: "light" });
+    expect(getAppearanceSettings(db)).toEqual({ ...FULL_DEFAULTS, themeId: "sunset", mode: "light" });
     setAppearanceSettings(db, { themeId: "bento" });
-    expect(getAppearanceSettings(db)).toEqual({ themeId: "bento", mode: "light" });
+    expect(getAppearanceSettings(db)).toEqual({ ...FULL_DEFAULTS, themeId: "bento", mode: "light" });
   });
 
   it("clears the theme preference with null (absent row reads back as null)", () => {
     setAppearanceSettings(db, { themeId: "mono" });
     setAppearanceSettings(db, { themeId: null });
-    expect(getAppearanceSettings(db)).toEqual({ themeId: null, mode: "system" });
+    expect(getAppearanceSettings(db)).toEqual(FULL_DEFAULTS);
   });
 
   it("rejects values outside the vocabularies (the route's 400 backstop)", () => {
     expect(() => setAppearanceSettings(db, { themeId: "windows-95" as never })).toThrow(/themeId/);
     expect(() => setAppearanceSettings(db, { mode: "sepia" as never })).toThrow(/mode/);
     // Nothing partial was persisted by the rejected patches above.
-    expect(getAppearanceSettings(db)).toEqual({ themeId: null, mode: "system" });
+    expect(getAppearanceSettings(db)).toEqual(FULL_DEFAULTS);
   });
 
   it("degrades fail-open on corrupt stored rows", () => {
     db.prepare("INSERT INTO settings (key, value) VALUES ('appearance.themeId', 'retired-flavor')").run();
     db.prepare("INSERT INTO settings (key, value) VALUES ('appearance.mode', 'sepia')").run();
-    expect(getAppearanceSettings(db)).toEqual({ themeId: null, mode: "system" });
+    expect(getAppearanceSettings(db)).toEqual(FULL_DEFAULTS);
   });
 });
 
@@ -127,7 +145,7 @@ describe("R113-a: GET/PUT /settings/appearance", () => {
   it("GET serves the default", async () => {
     const response = await authInject({ method: "GET", url: "/api/v1/settings/appearance" });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ themeId: null, mode: "system" });
+    expect(response.json()).toEqual(FULL_DEFAULTS);
   });
 
   it("PUT persists a valid patch and returns the updated object", async () => {
@@ -137,11 +155,11 @@ describe("R113-a: GET/PUT /settings/appearance", () => {
       payload: { themeId: "clay", mode: "dark" },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ themeId: "clay", mode: "dark" });
+    expect(response.json()).toEqual({ ...FULL_DEFAULTS, themeId: "clay", mode: "dark" });
     // Persisted — a fresh GET (and the raw storage accessor) agree.
     const get = await authInject({ method: "GET", url: "/api/v1/settings/appearance" });
-    expect(get.json()).toEqual({ themeId: "clay", mode: "dark" });
-    expect(getAppearanceSettings(db)).toEqual({ themeId: "clay", mode: "dark" });
+    expect(get.json()).toEqual({ ...FULL_DEFAULTS, themeId: "clay", mode: "dark" });
+    expect(getAppearanceSettings(db)).toEqual({ ...FULL_DEFAULTS, themeId: "clay", mode: "dark" });
   });
 
   it("PUT null themeId clears the server preference", async () => {
@@ -152,7 +170,7 @@ describe("R113-a: GET/PUT /settings/appearance", () => {
       payload: { themeId: null },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ themeId: null, mode: "system" });
+    expect(response.json()).toEqual(FULL_DEFAULTS);
   });
 
   it("PUT with an unknown themeId 400s naming the field", async () => {
@@ -166,7 +184,7 @@ describe("R113-a: GET/PUT /settings/appearance", () => {
       error: { code: "VALIDATION", details: { field: "body.themeId" } },
     });
     // Nothing persisted.
-    expect(getAppearanceSettings(db)).toEqual({ themeId: null, mode: "system" });
+    expect(getAppearanceSettings(db)).toEqual(FULL_DEFAULTS);
   });
 
   it("PUT with an invalid mode 400s naming the field", async () => {
@@ -179,7 +197,7 @@ describe("R113-a: GET/PUT /settings/appearance", () => {
     expect(response.json()).toMatchObject({
       error: { code: "VALIDATION", details: { field: "body.mode" } },
     });
-    expect(getAppearanceSettings(db)).toEqual({ themeId: null, mode: "system" });
+    expect(getAppearanceSettings(db)).toEqual(FULL_DEFAULTS);
   });
 
   it("PUT broadcasts {type:'settings',domain:'appearance'} on the events bus; a 400 broadcasts nothing", async () => {
@@ -203,7 +221,7 @@ describe("R113-a: GET/PUT /settings/appearance", () => {
         {
           type: "settings",
           domain: "appearance",
-          value: { themeId: "midnight", mode: "light" },
+          value: { ...FULL_DEFAULTS, themeId: "midnight", mode: "light" },
         },
       ]);
     } finally {

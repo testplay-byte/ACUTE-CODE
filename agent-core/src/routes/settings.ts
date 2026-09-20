@@ -44,6 +44,12 @@ import {
   getRetrySettings,
   getThinkingLoopSettings,
   isAppearanceThemeId,
+  // ROUND-114 (R114-b): the appearance domain's four new chat-density
+  // vocabularies (the PUT route's name-the-field validation).
+  APPEARANCE_CHAT_DENSITIES,
+  APPEARANCE_TEXT_SIZES,
+  APPEARANCE_TIMESTAMPS_MODES,
+  APPEARANCE_TOOL_ACTIVITY,
   setAppearanceSettings,
   setBrowserSettings,
   setCloudConnectorSettings,
@@ -54,9 +60,13 @@ import {
   setOrchestrationSettings,
   setRetrySettings,
   setThinkingLoopSettings,
+  type AppearanceChatDensity,
   type AppearanceMode,
   type AppearanceSettings,
+  type AppearanceTextSize,
   type AppearanceThemeId,
+  type AppearanceTimestampsMode,
+  type AppearanceToolActivity,
 } from "../storage/settings.js";
 import { errorBody } from "./helpers.js";
 import {
@@ -688,15 +698,16 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
 
   // ── ROUND-113 (R113-a, the backend event fan-out round): the APPEARANCE
   // settings domain — the theme-sync backbone. GET answers the stored
-  // preference or the default {themeId: null, mode: "system"} (null = no
-  // server preference — each client falls back to its LOCAL default, the
-  // honest pre-R113 behavior); PUT accepts a partial {themeId?, mode?}
-  // patch, validates (the six shared flavor ids or null; the three-mode
-  // enum), persists, and BROADCASTS {type:"settings",domain:"appearance"}
-  // on the events bus so the change lands live on every other device.
-  // Device tokens are WELCOME here — the phone changing the desktop's
-  // theme is a first-class use case (the route is not on the device
-  // blocklist; only management-surface domains reject device tokens).
+  // preference or the default {themeId: null, mode: "system", ...} (null =
+  // no server preference — each client falls back to its LOCAL default, the
+  // honest pre-R113 behavior); PUT accepts a partial patch, validates (the
+  // six shared flavor ids or null; the enum vocabularies — R114-b adds
+  // chatDensity / chatTextSize / timestampsMode / toolActivity), persists,
+  // and BROADCASTS {type:"settings",domain:"appearance"} on the events bus
+  // so the change lands live on every other device. Device tokens are
+  // WELCOME here — the phone changing the desktop's theme is a first-class
+  // use case (the route is not on the device blocklist; only
+  // management-surface domains reject device tokens).
 
   scope.get("/settings/appearance", async () => {
     return getAppearanceSettings(db);
@@ -735,6 +746,49 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         errorBody("VALIDATION", "body.mode must be one of system, light, dark", { field: "body.mode" }),
       );
     }
+    // ROUND-114 (R114-b): the four chat-density fields — same honest
+    // name-the-field validation, one guard each (an absent field = untouched
+    // partial-patch semantics; the storage throw is the backstop).
+    if (
+      raw.chatDensity !== undefined &&
+      (typeof raw.chatDensity !== "string" || !APPEARANCE_CHAT_DENSITIES.includes(raw.chatDensity as AppearanceChatDensity))
+    ) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", `body.chatDensity must be one of ${APPEARANCE_CHAT_DENSITIES.join(", ")}`, {
+          field: "body.chatDensity",
+        }),
+      );
+    }
+    if (
+      raw.chatTextSize !== undefined &&
+      (typeof raw.chatTextSize !== "string" || !APPEARANCE_TEXT_SIZES.includes(raw.chatTextSize as AppearanceTextSize))
+    ) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", `body.chatTextSize must be one of ${APPEARANCE_TEXT_SIZES.join(", ")}`, {
+          field: "body.chatTextSize",
+        }),
+      );
+    }
+    if (
+      raw.timestampsMode !== undefined &&
+      (typeof raw.timestampsMode !== "string" || !APPEARANCE_TIMESTAMPS_MODES.includes(raw.timestampsMode as AppearanceTimestampsMode))
+    ) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", `body.timestampsMode must be one of ${APPEARANCE_TIMESTAMPS_MODES.join(", ")}`, {
+          field: "body.timestampsMode",
+        }),
+      );
+    }
+    if (
+      raw.toolActivity !== undefined &&
+      (typeof raw.toolActivity !== "string" || !APPEARANCE_TOOL_ACTIVITY.includes(raw.toolActivity as AppearanceToolActivity))
+    ) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", `body.toolActivity must be one of ${APPEARANCE_TOOL_ACTIVITY.join(", ")}`, {
+          field: "body.toolActivity",
+        }),
+      );
+    }
     // The guards above returned 400 for anything else, so the casts are
     // safe — the browser domain's `as` pattern.
     const patch: Partial<AppearanceSettings> = {};
@@ -743,6 +797,19 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
     }
     if (raw.mode !== undefined) {
       patch.mode = raw.mode as AppearanceMode;
+    }
+    // R114-b: the four density fields join the patch (validated above).
+    if (raw.chatDensity !== undefined) {
+      patch.chatDensity = raw.chatDensity as AppearanceChatDensity;
+    }
+    if (raw.chatTextSize !== undefined) {
+      patch.chatTextSize = raw.chatTextSize as AppearanceTextSize;
+    }
+    if (raw.timestampsMode !== undefined) {
+      patch.timestampsMode = raw.timestampsMode as AppearanceTimestampsMode;
+    }
+    if (raw.toolActivity !== undefined) {
+      patch.toolActivity = raw.toolActivity as AppearanceToolActivity;
     }
     try {
       const updated = setAppearanceSettings(db, patch);

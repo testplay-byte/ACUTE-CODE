@@ -9,8 +9,10 @@
  * Honesty under test:
  *   · fail-closed without toolDeps/db (bare builds + the declaration
  *     catalog); registered with a db — REGARDLESS of computer-use's master
- *     switch and regardless of vision mode (the OFF refusal IS the switch).
- *   · vision OFF → the honest refusal pointing at Settings → Image Analysis.
+ *     switch (the honest refusal IS the switch).
+ *   · no vision path → the honest refusal pointing at BOTH surfaces
+ *     (R114-b: "off" is retired — mark the model in Models & Providers,
+ *     or configure the separate picker in Settings → Image Analysis).
  *   · separate configured → the relay's description rides the output
  *     (fetch stubbed: the image download AND the provider POST).
  *   · missing file / wrong extension / oversized file / bad URL / both
@@ -150,23 +152,26 @@ describe("ROUND-66 (R66-2-b): analyze_image honesty (never throws)", () => {
     expect((JSON.parse(result.output) as { error: string }).error).toContain("over 8MB");
   });
 
-  it("vision OFF (the default) → the honest Settings → Image Analysis refusal", async () => {
+  it("R114-b: no vision path (default main, no main model in context) → the honest two-surface refusal", async () => {
     writeFileSync(join(tempDir, "tiny.png"), PNG_BYTES);
     const analyze = await buildTools();
     const result = await analyze.execute({ path: "tiny.png" }, { root: tempDir });
     expect(result.ok).toBe(false);
     const parsed = JSON.parse(result.output) as { error: string };
-    expect(parsed.error).toContain("vision is OFF");
+    // R114-b retired "off" — the refusal names BOTH fixes (mark the model
+    // in Models & Providers, or configure the separate picker).
+    expect(parsed.error).toContain("no image understanding");
+    expect(parsed.error).toContain("Settings → Models & Providers");
     expect(parsed.error).toContain("Settings → Image Analysis");
   });
 
-  it("separate mode but provider/model unconfigured → the honest unconfigured refusal", async () => {
+  it("R114-b: separate mode chosen but not fully configured (and no marked main) → the honest refusal says why no fallback happened", async () => {
     writeFileSync(join(tempDir, "tiny.png"), PNG_BYTES);
     setVisionSettings(db, { mode: "separate" });
     const analyze = await buildTools();
     const result = await analyze.execute({ path: "tiny.png" }, { root: tempDir });
     expect(result.ok).toBe(false);
-    expect((JSON.parse(result.output) as { error: string }).error).toContain("not configured");
+    expect((JSON.parse(result.output) as { error: string }).error).toContain("not fully configured");
   });
 
   it("bad URL scheme → refused before any request", async () => {

@@ -35,7 +35,11 @@ import {
 } from "../agents/runtime.js";
 import { measureToolSchemaTokens } from "../tools/index.js";
 import { resolveProvider } from "../providers/registry.js";
-import { providerExists } from "../storage/providers.js";
+import { getProviderRecord, providerExists } from "../storage/providers.js";
+// ROUND-114 (R114-b): the selected-model pair's validation reads the
+// provider row (exists + baseUrl configured) and the models table + catalog
+// (the pair must name something real — the same surface the pickers list).
+import { findModelByProviderAndModelId, getCatalogModel } from "../storage/models.js";
 import { getProject } from "../storage/projects.js";
 import {
   appendQueuedMessage,
@@ -51,6 +55,8 @@ import {
   listSubAgents,
   revertSession,
   searchSessions,
+  setSessionSelectedModel,
+  type SessionSelectedModel,
   updateSessionActiveMode,
   updateSessionPermissionMode,
   updateSessionTitle,
@@ -102,6 +108,75 @@ const TERMINAL_SESSION_STATUSES: readonly SessionStatus[] = ["completed", "faile
 /** Server-side cap on a single attachment's text (128KB head — the same
  * slice POST /attachments/read would have produced). */
 const MAX_ATTACHMENT_TEXT_CHARS = 128 * 1024;
+
+/**
+ * ROUND-114 (R114-b): read + validate the PATCH body's OPTIONAL `model`
+ * field — the session's server-side selected model (the tier between the
+ * per-send override and the agent row). Shared by BOTH PATCH routes
+ * (/sessions/:id and /sessions/:id/permissions — the composer flips mode and
+ * model in one breath, so both surfaces accept the pair). Absent → untouched;
+ * null → CLEAR (back to the agent default); an object → must be a COMPLETE
+ * {providerId, model} pair naming a KNOWN+CONFIGURED provider (a row with a
+ * baseUrl — the send-time gates then police enabled/key honestly, exactly
+ * like an agent row referencing them) and a model that matches a models row
+ * for that provider OR a catalog entry (the same surface the pickers list —
+ * never a string the picker could not have produced). A wrong shape gets the
+ * honest early 400 naming body.model, BEFORE any write runs.
+ */
+export function readSessionModelPatch(
+  db: SqliteDatabase,
+  raw: Record<string, unknown>,
+  reply: FastifyReply,
+): { ok: true; value: SessionSelectedModel | null | undefined } | { ok: false } {
+  if (!("model" in raw)) return { ok: true, value: undefined };
+  const value = raw.model;
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    reply.code(400).send(
+      errorBody(
+        "VALIDATION",
+        "model must be { providerId, model } or null (clear back to the agent default)",
+        { field: "body.model" },
+      ),
+    );
+    return { ok: false };
+  }
+  const item = value as Record<string, unknown>;
+  const providerId = typeof item.providerId === "string" ? item.providerId.trim() : "";
+  const model = typeof item.model === "string" ? item.model.trim() : "";
+  if (providerId === "" || model === "") {
+    reply.code(400).send(
+      errorBody("VALIDATION", "model must carry BOTH providerId and model (a complete pair)", {
+        field: "body.model",
+      }),
+    );
+    return { ok: false };
+  }
+  if (!providerExists(db, providerId) || getProviderRecord(db, providerId)?.baseUrl == null) {
+    reply.code(400).send(
+      errorBody(
+        "VALIDATION",
+        `model.providerId '${providerId}' is not a configured provider (no row with a baseUrl)`,
+        { field: "body.model.providerId" },
+      ),
+    );
+    return { ok: false };
+  }
+  if (
+    findModelByProviderAndModelId(db, providerId, model) === undefined &&
+    getCatalogModel(model) === undefined
+  ) {
+    reply.code(400).send(
+      errorBody(
+        "VALIDATION",
+        `model '${model}' is not a known model on provider '${providerId}' (no models row and no catalog entry)`,
+        { field: "body.model.model" },
+      ),
+    );
+    return { ok: false };
+  }
+  return { ok: true, value: { providerId, model } };
+}
 
 export interface ComposerSendFields {
   thinkingLevel?: ThinkingLevel;
@@ -346,19 +421,25 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
     };
   });
   // PATCH /sessions/:id (round-33, owner request: renameable sessions).
-  // Body: { title?: string, activeMode?: string | null } — each field is
-  // independently optional (absent = untouched). ROUND-73 (R73-b): the
-  // activeMode field — the user-side mode switch (the composer picker's
-  // R73-c wave and the /mode slash will PATCH exactly like this):
+  // Body: { title?: string, activeMode?: string | null, model?: {providerId,
+  // model} | null } — each field is independently optional (absent =
+  // untouched). ROUND-73 (R73-b): the activeMode field — the user-side mode
+  // switch (the composer picker's R73-c wave and the /mode slash will PATCH
+  // exactly like this):
   //   · absent → untouched;
   //   · null → CLEAR the active task mode (default posture);
   //   · string → must resolve against the session's project
   //     (resolveEffectiveModes; a projectless session resolves the
   //     builtins only) — an unknown id is a 400 VALIDATION carrying the
   //     available ids, the same honesty the switch_mode tool returns.
+  // ROUND-114 (R114-b): the model field — the session's server-side selected
+  // model (readSessionModelPatch validates; null clears back to the agent
+  // default). Every setter publishes its events-bus meta frame at the
+  // storage choke point, so the OTHER device's composer follows live.
   // Enforcement is at TURN time: prepareTurn resolves the id to the mode
   // record and threads its body into the ACTIVE TASK MODE prompt
-  // section (a vanished custom mode is cleared with an honest note).
+  // section (a vanished custom mode is cleared with an honest note), and
+  // resolves the model per-send override → session.selectedModel → agent.
   scope.patch("/sessions/:id", async (request, reply) => {
     const { id } = request.params as Record<string, string>;
     const body: unknown = request.body;
@@ -370,6 +451,10 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
     const raw = body as Record<string, unknown>;
     const hasTitle = "title" in raw;
     const hasActiveMode = "activeMode" in raw;
+    // ROUND-114 (R114-b): the optional selected-model pair (absent = untouched).
+    const modelPatch = readSessionModelPatch(db, raw, reply);
+    if (!modelPatch.ok) return reply;
+    const hasModel = modelPatch.value !== undefined;
     if (hasTitle) {
       if (typeof raw.title !== "string") {
         return reply.code(400).send(
@@ -384,9 +469,9 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
         );
       }
     }
-    if (!hasTitle && !hasActiveMode) {
+    if (!hasTitle && !hasActiveMode && !hasModel) {
       return reply.code(400).send(
-        errorBody("VALIDATION", "body must include title and/or activeMode", { field: "body" }),
+        errorBody("VALIDATION", "body must include title, activeMode, and/or model", { field: "body" }),
       );
     }
     const session = getSession(db, id);
@@ -437,19 +522,32 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
       // response (they hit the same row — the second re-reads the first).
       updated = afterMode ?? updated;
     }
+    // ROUND-114 (R114-b): persist the selected-model pair (validated above —
+    // complete, known+configured provider, models-row/catalog match). The
+    // {kind:"meta", selectedModel} events-bus frame fires inside the storage
+    // setter; the response is the fresh row whichever setter ran last.
+    if (hasModel) {
+      const afterModel = setSessionSelectedModel(db, id, modelPatch.value ?? null);
+      updated = afterModel ?? updated;
+    }
     if (updated === undefined) {
       return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
     }
     return reply.code(200).send(updated);
   });
   // ── ROUND-50 (R50-c1): the composer's permission-mode switcher ─────────
-  // PATCH /sessions/:id/permissions — body { mode } with mode ∈
+  // PATCH /sessions/:id/permissions — body { mode, model? } with mode ∈
   // full|ask|plan|editor (400 VALIDATION otherwise). Persists on the
   // session row (migration 0020) and returns the updated session in the
   // SAME shape as GET /sessions/:id ({...session, events, lastSeq}).
-  // Enforcement happens at TURN time (runtime.ts prepareTurn tool-set
-  // restriction + approvals.ts ask-tier widening) — switching mid-session
-  // applies to the NEXT turn.
+  // ROUND-114 (R114-b): the OPTIONAL model field — the composer flips mode
+  // and model in one breath, so this surface accepts the selected-model pair
+  // too (readSessionModelPatch validates; the same contract PATCH
+  // /sessions/:id applies). Enforcement happens at TURN time (runtime.ts
+  // prepareTurn tool-set restriction + approvals.ts ask-tier widening) —
+  // switching mid-session applies to the NEXT turn. Both setters publish
+  // their events-bus meta frames at the storage choke point (the phone's
+  // composer follows the flip live).
   scope.patch("/sessions/:id/permissions", async (request, reply) => {
     const { id } = request.params as Record<string, string>;
     const body: unknown = request.body;
@@ -459,6 +557,10 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
         .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
     }
     const raw = body as Record<string, unknown>;
+    // ROUND-114 (R114-b): validate the pair BEFORE the mode check runs any
+    // write (a bad model never switches the mode as a side effect).
+    const modelPatch = readSessionModelPatch(db, raw, reply);
+    if (!modelPatch.ok) return reply;
     if (
       typeof raw.mode !== "string" ||
       !PERMISSION_MODES.includes(raw.mode as PermissionMode)
@@ -480,8 +582,18 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
     if (updated === undefined) {
       return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
     }
+    // ROUND-114 (R114-b): the selected-model pair rides the SAME route — the
+    // fresh row from whichever setter ran last is the response either way.
+    const afterModel =
+      modelPatch.value !== undefined
+        ? setSessionSelectedModel(db, id, modelPatch.value)
+        : undefined;
+    const final = afterModel ?? updated;
+    if (final === undefined) {
+      return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+    }
     return reply.code(200).send({
-      ...updated,
+      ...final,
       events: listSessionEvents(db, id),
       lastSeq: lastSessionSeq(db, id),
     });
@@ -524,15 +636,19 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
     // window/pricing lookups key on the provider that will actually
     // serve the next send. Unknown ids fall back to the agent's (the
     // meter never 400s; a bad id simply meters the default).
+    // ROUND-114 (R114-b): the SAME three-tier fallback prepareTurn resolves
+    // — query pair (the live per-send pick) → session.selectedModel → agent
+    // row — so the meter's effective-model line is the pair the next send
+    // (without its own override) would actually run on.
     const queryProviderId =
       typeof query.providerId === "string" && query.providerId.trim() !== ""
         ? query.providerId.trim()
         : undefined;
-    const providerId = queryProviderId ?? agent.providerId;
+    const providerId = queryProviderId ?? session.selectedModel?.providerId ?? agent.providerId;
     const model =
       typeof query.model === "string" && query.model.trim() !== ""
         ? query.model.trim()
-        : agent.model;
+        : (session.selectedModel?.model ?? agent.model);
     // ROUND-92 (R92-B): the EFFECTIVE-PAIR gate — the same reorder prepareTurn
     // got. The old gate checked the AGENT ROW before the ?providerId/?model
     // params were read, so a session whose agent was reset to NULL/NULL
