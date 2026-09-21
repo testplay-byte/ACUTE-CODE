@@ -117,6 +117,42 @@ expression + two idempotent feeds.
   language — the copy vocabulary aligned, the orphaned theme-picker deleted,
   dead helpers tombstoned, stale comments corrected.
 
+### The release (v0.109.0 — first tag failed, re-issued by R115-r)
+
+The first `v0.109.0` tag (c99e07b) was pushed with the round declared
+shipped, but the **Mobile APK run 35535853130 died in ~10 seconds at
+`npm ci`**: R115-a's lockfile regeneration had dropped 13 React Native
+toolchain entries (`@react-native/babel-preset`, `jest-preset`, the
+`metro-*` family, `expo-linking`, the babel peer plugins) and flipped 75
+`devOptional`→`dev` flags — while every local gate stayed green, because
+the sandbox's pre-installed `node_modules` masked the out-of-sync lock
+(the runner installs from the lockfile only). The draft release sat
+unpublished with 6 assets and no APK; `/releases/latest` still answered
+v0.108.0. The release was not done.
+
+**R115-r (442b29c) repaired and re-issued it**: the lockfile restored
+from the proven v0.108.0 base (1368395) with the four QR-photo deps
+re-added — a six-entry additive diff (`expo-image-manipulator` +
+`jpeg-js` + `jsqr` + `upng-js` and their `expo-image-loader`/`pako`
+transitives), proven by `npm ci --dry-run` in a clean room, a real
+clean-room `npm ci`, `tsc` clean, **24 suites / 500 tests** green, and
+the 7-file version gate. The stale draft (392567240) was deleted, the
+tag deleted on remote AND locally (a lingering local tag silently
+re-pushes the old commit), and `v0.109.0` re-created at 442b29c.
+
+**The end state, verified:** main runs green (CI 35550797554, Mobile APK
+35550797480 — `npm ci` + jest + prebuild + gradle all green on the fixed
+lock) · tag runs green (Release 35551965986, Mobile APK 35551966018) ·
+fresh draft 392648426 carried **7/7 assets** · PUBLISHED
+(`draft:false`, `make_latest:"true"`, body = the 0.109.0 CHANGELOG
+section) · `/releases/latest` → **v0.109.0** · the APK content-checked
+over HTTP: zip central directory **1240 files**,
+`assets/index.android.bundle` (Hermes) PRESENT, **3 dex**,
+`lib/arm64-v8a/` ONLY. The shipping runbook gained the standing guards
+(MAINTENANCE.md §g: the pre-tag mobile lock-sync proof 2c, the
+both-workflows/7-assets watch 4–5, the publish + end-state verification
+6/6b) so the class of failure cannot recur silently.
+
 ### Deferred with reasons (the standing queue)
 
 - The accordion + keyboard + sheet fixes need one DEVICE pass (the Yoga and
