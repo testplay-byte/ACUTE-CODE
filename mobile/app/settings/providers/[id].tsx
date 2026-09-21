@@ -7,16 +7,23 @@
  * poolInfo's `abcd…wxyz` masking is the only read), and MODELS — THE SAVED
  * ROWS ONLY (GET /providers/:id/models-config, the DB truth the owner asked
  * for — never the live catalog): each row's capability chips (vision/
- * thinking/hidden) and a tap → the model actions sheet (test / edit / hide /
+ * thinking/hidden) + the quiet FACTS line (context · pricing · max output)
+ * and a tap → the model actions sheet (a 2×2 GRID — test / edit / hide /
  * delete), plus the add-model flow (from the live catalog with static-catalog
  * prefill, or custom). Server validation surfaces inline everywhere.
  *
  * R115-O — the surgical UX pass: the model actions sheet reads as ONE
- * hierarchy (Test primary → Edit / Hide-Show quiet with icons → Delete last
- * in danger), the edit-model sheet breathes (fields spacing.lg apart, Save
- * busy, Cancel quiet), and the header's Rename / Test actions carry icons on
- * 46px targets (the shared ActionRow). Feature logic + sheets + testIDs are
- * untouched.
+ * hierarchy, the edit-model sheet breathes, the header's Rename / Test
+ * actions carry icons on 46px targets. R116-j — the owner's verdicts
+ * #40-#43: the broken layout fixed (the model title line never wraps —
+ * chips sit inline, overflow drops; the identity card breathes on single
+ * lines), the model menu is the 2×2 action grid, the edit sheet owns the
+ * FULL R87 field set (sizing + the pricing trio incl. cache read + the
+ * input/output capability chips — the Thinking toggle is GONE: reasoning
+ * and tool use are detected automatically), the preload race is fixed
+ * (hydrate keyed on the model identity, §1.9), and every test call waits
+ * 35s with an honest class-based failure line (§1.8 — never the blanket
+ * "the host dropped").
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -51,6 +58,7 @@ import { Sheet } from "@/components/sheet";
 import { ErrorState, LoadingState, SkeletonList } from "@/components/list-state";
 import {
   Badge,
+  Chip,
   ChromeButton,
   ClayCard,
   ClayInput,
@@ -73,6 +81,7 @@ import {
 } from "@/design/tokens";
 import { SPRING } from "@/design/motion";
 import { selectionHaptic, successHaptic, warningHaptic } from "@/design/haptics";
+import { formatTokens } from "@/features/context-meter";
 import {
   addProviderModel,
   catalogEntriesFromStatic,
@@ -96,6 +105,7 @@ import {
   setProviderKey,
   testModel,
   testProvider,
+  testTransportFailureMessage,
   updateModel,
   updateProvider,
   type CatalogModelEntry,
@@ -301,7 +311,9 @@ export default function ProviderDetailScreen() {
         });
       }
     } catch (err) {
-      setTestNote({ kind: "error", text: "the host dropped during the test" });
+      // R116-j (§1.8): the class-based one-liner — never the blanket
+      // "the host dropped during the test".
+      setTestNote({ kind: "error", text: testTransportFailureMessage(err) });
       mobWarn("config", "provider test transport failure", {
         message: err instanceof Error ? err.message : String(err),
       });
@@ -433,7 +445,7 @@ export default function ProviderDetailScreen() {
                   <TypeMono numberOfLines={1} style={styles.identityMono}>
                     {provider.baseUrl}
                   </TypeMono>
-                  <TypeMicro>
+                  <TypeMicro numberOfLines={1}>
                     {provider.apiFormat !== undefined && provider.apiFormat !== ""
                       ? `${provider.kind} · ${provider.apiFormat}`
                       : provider.kind}
@@ -578,8 +590,8 @@ export default function ProviderDetailScreen() {
           ) : models.length === 0 ? (
             <ClayCard>
               <View style={styles.emptyPad}>
-                <TypeCaption>
-                  no models saved yet — add one from the catalog or a custom id.
+                <TypeCaption numberOfLines={1}>
+                  no models saved yet — add one below.
                 </TypeCaption>
               </View>
             </ClayCard>
@@ -696,6 +708,10 @@ function SavedModelRow({ model, onPress }: { model: ModelRecord; onPress: () => 
     <PressableCard onPress={onPress} accessibilityLabel={`Model ${label}`}>
       <View style={[styles.modelRowInner, chips.hidden ? styles.modelRowHidden : null]}>
         <View style={styles.rowText}>
+          {/* R116-j (verdict #40): NO flexWrap — the one-line title keeps its
+              line, the chips sit inline after it, and chips that don't fit
+              drop off the clipped edge (the actions sheet shows everything
+              anyway — this row is the at-a-glance read, not the record). */}
           <View style={styles.modelTitleLine}>
             <TypeBodyStrong numberOfLines={1} style={styles.rowTitle}>
               {label}
@@ -703,13 +719,13 @@ function SavedModelRow({ model, onPress }: { model: ModelRecord; onPress: () => 
             {chips.vision ? (
               <View style={[styles.capChip, { backgroundColor: tokens.pillBg }]}>
                 <Eye size={11} color={tokens.accent2} strokeWidth={2.4} />
-                <TypeMicro style={{ color: tokens.textSecondary }}>vision</TypeMicro>
+                <TypeMicro numberOfLines={1} style={{ color: tokens.textSecondary }}>vision</TypeMicro>
               </View>
             ) : null}
             {chips.thinking ? (
               <View style={[styles.capChip, { backgroundColor: tokens.pillBg }]}>
                 <Brain size={11} color={tokens.accent2} strokeWidth={2.4} />
-                <TypeMicro style={{ color: tokens.textSecondary }}>thinking</TypeMicro>
+                <TypeMicro numberOfLines={1} style={{ color: tokens.textSecondary }}>thinking</TypeMicro>
               </View>
             ) : null}
             {chips.hidden ? <Badge tone="neutral">hidden</Badge> : null}
@@ -717,10 +733,29 @@ function SavedModelRow({ model, onPress }: { model: ModelRecord; onPress: () => 
           <TypeMono numberOfLines={1} style={styles.modelIdMono}>
             {model.modelId}
           </TypeMono>
+          {/* The quiet FACTS line (verdict #40: "models not detailed") — the
+              sizing/pricing numbers that are SET, honest "— ctx" when
+              unknown; never a fabricated 0. */}
+          <TypeMono numberOfLines={1} style={[styles.modelIdMono, { color: tokens.textTertiary }]}>
+            {modelFactsLine(model)}
+          </TypeMono>
         </View>
       </View>
     </PressableCard>
   );
+}
+
+/** The model row's facts line: "131k ctx · $0.14 in · $0.60 out · 8k max
+ * out" — context always (unknown → "—"), prices and max output only when
+ * set (the PC's honest-omission discipline). Pure. */
+function modelFactsLine(model: ModelRecord): string {
+  const parts: string[] = [
+    `${model.contextWindow === null ? "—" : formatTokens(model.contextWindow)} ctx`,
+  ];
+  if (model.inputPricePerMtok !== null) parts.push(`$${model.inputPricePerMtok} in`);
+  if (model.outputPricePerMtok !== null) parts.push(`$${model.outputPricePerMtok} out`);
+  if (model.maxOutputTokens !== null) parts.push(`${formatTokens(model.maxOutputTokens)} max out`);
+  return parts.join(" · ");
 }
 
 // ── the rename sheet (name + base URL — both PATCHable) ─────────────────────
@@ -743,13 +778,14 @@ function RenameProviderSheet({
   const [error, setError] = useState<string | null>(null);
 
   // Hydrate on the OPEN EDGE only — a mid-rename refetch (another device's
-  // write) must never clobber what's typed.
+  // write) must never clobber what's typed. Deps are deliberately [open]
+  // (the provider prop's fresh values are read on every open).
   useEffect(() => {
     if (!open) return;
     setName(provider.name);
     setBaseUrl(provider.baseUrl);
     setError(null);
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const onSave = useCallback(async () => {
     if (busy) return;
@@ -1109,9 +1145,13 @@ function ModelActionsSheet({
           message: outcome.error.message,
         });
       }
-    } catch {
-      setTestNote({ kind: "error", text: "the host dropped during the test" });
-      mobWarn("config", "model test threw");
+    } catch (err) {
+      // R116-j (§1.8): the class-based one-liner — never the blanket
+      // "the host dropped during the test".
+      setTestNote({ kind: "error", text: testTransportFailureMessage(err) });
+      mobWarn("config", "model test threw", {
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setTesting(false);
     }
@@ -1184,52 +1224,73 @@ function ModelActionsSheet({
     <Sheet open={open} onClose={onClose} title={label} testID="model-actions-sheet">
       {shown !== null ? (
         <View style={styles.fieldGap}>
+          {/* The head's mono blocks — ONE line each (verdict #40). */}
           <View style={styles.sheetHeadMono}>
             <TypeMono numberOfLines={1} style={styles.modelIdMono}>
               {shown.modelId}
             </TypeMono>
-            <TypeMicro style={{ color: tokens.textTertiary }}>{providerId}</TypeMicro>
+            <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+              {providerId}
+            </TypeMicro>
           </View>
 
-          {/* 1 — Test, the ONE primary: the real completion probe
-              (busy → ok+latency / fail). */}
-          <ChromeButton
-            onPress={() => void runTest()}
-            disabled={testing}
-            accessibilityLabel={testing ? "Testing the model" : "Test the model"}
-          >
-            {testing ? "testing…" : "Test the model"}
-          </ChromeButton>
-          {testNote !== null ? <NoteLine note={testNote} /> : null}
+          {/* R116-j (verdict #41 / components.md "Sheets"): the four actions
+              as a 2×2 GRID of equal tiles — Test / Edit on the first row,
+              Hide / Delete below it (Delete last, in the danger tint). The
+              note lines span the FULL width BELOW the grid. */}
+          <View style={styles.actionGrid}>
+            <View style={styles.actionGridRow}>
+              <ActionTile
+                testID="model-action-test"
+                icon={FlaskConical}
+                label={testing ? "testing…" : "Test model"}
+                busy={testing}
+                disabled={testing}
+                onPress={() => void runTest()}
+                accessibilityLabel={testing ? "Testing the model" : "Test the model"}
+              />
+              <ActionTile
+                testID="model-action-edit"
+                icon={PencilLine}
+                label="Edit model"
+                onPress={() => onEdit(shown)}
+                accessibilityLabel="Edit the model"
+              />
+            </View>
+            <View style={styles.actionGridRow}>
+              <ActionTile
+                testID="model-action-hide"
+                icon={shown.hidden ? Eye : EyeOff}
+                label={hiding ? "saving…" : shown.hidden ? "Show model" : "Hide model"}
+                busy={hiding}
+                disabled={hiding}
+                onPress={() => void toggleHidden()}
+                accessibilityLabel={
+                  shown.hidden
+                    ? "Show the model in the chat picker"
+                    : "Hide the model from the chat picker"
+                }
+              />
+              <ActionTile
+                testID="model-action-delete"
+                icon={Trash2}
+                label="Delete model"
+                tone="danger"
+                onPress={() => setConfirmingDelete(true)}
+                accessibilityLabel="Delete the model"
+              />
+            </View>
+          </View>
 
-          {/* 2 — the quiet pair: edit (hands off to the edit sheet), then
-              visibility (one tap, the sheet stays open — the chips update). */}
-          <ActionRow
-            icon={PencilLine}
-            label="Edit model"
-            onPress={() => onEdit(shown)}
-            accessibilityLabel="Edit the model"
-          />
-          <ActionRow
-            icon={shown.hidden ? Eye : EyeOff}
-            label={
-              hiding ? "saving…" : shown.hidden ? "Show in the chat picker" : "Hide from the chat picker"
-            }
-            busy={hiding}
-            disabled={hiding}
-            onPress={() => void toggleHidden()}
-            accessibilityLabel={
-              shown.hidden ? "Show the model in the chat picker" : "Hide the model from the chat picker"
-            }
-          />
+          {testNote !== null ? <NoteLine note={testNote} /> : null}
           {hideNote !== null ? <NoteLine note={hideNote} /> : null}
 
-          {/* 3 — Delete, LAST and danger — the confirm step lives inline
-              (never a one-tap loss). */}
+          {/* Delete's confirm step lives inline BELOW the grid (never a
+              one-tap loss) — the tiles stay for context. */}
           {confirmingDelete ? (
             <View style={[styles.confirmBox, { borderColor: tokens.danger }]}>
-              <TypeBodyStrong>{`Delete ${label}?`}</TypeBodyStrong>
-              <TypeCaption style={{ color: tokens.textSecondary }}>
+              <TypeBodyStrong numberOfLines={1}>{`Delete ${label}?`}</TypeBodyStrong>
+              <TypeCaption numberOfLines={1} style={{ color: tokens.textSecondary }}>
                 This removes it from every picker.
               </TypeCaption>
               {deleteError !== null ? (
@@ -1255,18 +1316,70 @@ function ModelActionsSheet({
                 </QuietButton>
               </View>
             </View>
-          ) : (
-            <ActionRow
-              tone="danger"
-              icon={Trash2}
-              label="Delete model"
-              onPress={() => setConfirmingDelete(true)}
-              accessibilityLabel="Delete the model"
-            />
-          )}
+          ) : null}
         </View>
       ) : null}
     </Sheet>
+  );
+}
+
+// ── ActionTile — the grid tile (R116-j, verdict #41) ────────────────────────
+//
+// The model menu's 2×2 spelling: an equal square-ish tile (icon over a
+// 2-word label, minHeight 84, RADIUS_INPUT, hairline border) — a PEER grid,
+// never a vertical stack of rows. `busy` swaps the icon for the spinner
+// (the Test tile's probe + the Hide tile's save); tone="danger" is the
+// destructive hue. The header's Rename/Test pair keeps the horizontal
+// ActionRow grammar — this tile owns the action menu.
+
+function ActionTile({
+  icon: Icon,
+  label,
+  onPress,
+  disabled = false,
+  busy = false,
+  tone = "neutral",
+  testID,
+  accessibilityLabel,
+}: {
+  icon: React.ComponentType<{ size?: number; color?: string; strokeWidth?: number }>;
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  busy?: boolean;
+  tone?: "neutral" | "danger";
+  testID?: string;
+  accessibilityLabel?: string;
+}) {
+  const { tokens } = useTheme();
+  const fg = tone === "danger" ? tokens.danger : tokens.textSecondary;
+  const border = tone === "danger" ? tokens.danger : tokens.borderStrong;
+  return (
+    <Pressable
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={{ disabled: disabled || busy, busy }}
+      disabled={disabled || busy}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.actionTile,
+        {
+          borderColor: border,
+          backgroundColor: pressed ? tokens.subtle : "transparent",
+          opacity: disabled ? 0.6 : 1,
+        },
+      ]}
+    >
+      {busy ? (
+        <ActivityIndicator size="small" color={fg} />
+      ) : (
+        <Icon size={20} color={fg} strokeWidth={2.2} />
+      )}
+      <Text style={{ color: fg, fontSize: TYPE_BODY, fontFamily: fontFamily.semibold }} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -1283,7 +1396,7 @@ function testResultNote(result: ModelTestResult): ActionNote {
   return { kind: "error", text: `failed — ${result.reason ?? "the provider refused"}` };
 }
 
-// ── the edit-model sheet (PATCH — only the fields the sheet owns) ───────────
+// ── the edit-model sheet (PATCH — the full R87 field set, R116-j) ────────────
 
 function EditModelSheet({
   open,
@@ -1299,21 +1412,28 @@ function EditModelSheet({
 }) {
   const { tokens } = useTheme();
   const [shown, setShown] = useState<ModelRecord | null>(null);
-  useEffect(() => {
-    if (model !== null) setShown(model);
-  }, [model]);
   const [draft, setDraft] = useState<ModelFormDraft>(() => blankDraft());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Hydrate the draft ONLY on the open edge — a mid-edit refetch (another
-  // device's write moving the epoch) must never clobber what's typed.
+  // R116-j (§1.9 — THE PRELOAD RACE FIX): the hydrate is keyed on the model
+  // IDENTITY, not the [open] edge alone — `open` and `model` arrive in the
+  // SAME commit (the actions sheet's Edit tile hands both over at once), so
+  // the draft populates the same commit-cycle the sheet opens; the old
+  // [open]-only effect ran against the stale shown === null and opened a
+  // BLANK form. The open-edge discipline holds: hydrate on open + model-id
+  // change — a background refetch while open (a fresh object, SAME id)
+  // never clobbers what's typed.
+  const hydrateId = model?.id ?? null;
   useEffect(() => {
-    if (open && shown !== null) {
-      setDraft(modelDraftFromRecord(shown));
+    if (open && model !== null) {
+      setShown(model);
+      setDraft(modelDraftFromRecord(model));
       setError(null);
     }
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+    // `model` is read when the effect runs; `hydrateId` — the record's
+    // identity, never the object — is the dependency (see above).
+  }, [open, hydrateId]);
 
   const patch = useCallback((next: Partial<ModelFormDraft>) => {
     setDraft((prev) => ({ ...prev, ...next }));
@@ -1322,17 +1442,11 @@ function EditModelSheet({
   const onSave = useCallback(async () => {
     if (busy || shown === null) return;
     // Validate the numerics first — the per-field message shows inline.
-    for (const [field, raw] of [
-      ["Context window", draft.contextWindow],
-      ["Input price", draft.inputPricePerMtok],
-      ["Output price", draft.outputPricePerMtok],
-    ] as const) {
-      const parse = parseModelNumericField(field, raw);
-      if (!parse.ok) {
-        setError(parse.message);
-        void warningHaptic();
-        return;
-      }
+    const numericError = firstNumericError(draft);
+    if (numericError !== null) {
+      setError(numericError);
+      void warningHaptic();
+      return;
     }
     setBusy(true);
     setError(null);
@@ -1364,16 +1478,84 @@ function EditModelSheet({
   return (
     <Sheet open={open} onClose={onClose} title="Edit model" testID="edit-model-sheet" maxHeightFraction={0.86}>
       {shown !== null ? (
-        /* R115-O — the form's generous rhythm: fields spacing.lg apart
+        /* R115-O — the form's generous rhythm: sections spacing.lg apart
            (the cluttered-form donts), Save busy, Cancel quiet beneath. */
         <View style={styles.editFormGap}>
-        {/* modelId is IDENTITY on PATCH — read-only, shown as the mono truth. */}
-        <View style={styles.fieldWrap}>
-          <TypeCaption style={styles.fieldLabel}>Model id (read-only)</TypeCaption>
-          <View style={[styles.readOnlyMono, { borderColor: tokens.borderSubtle, backgroundColor: tokens.inputBg }]}>
-            <TypeMono numberOfLines={1}>{draft.modelId}</TypeMono>
+          {/* modelId is IDENTITY on PATCH — read-only, shown as the mono truth. */}
+          <View style={styles.fieldWrap}>
+            <TypeCaption style={styles.fieldLabel} numberOfLines={1}>
+              Model id (read-only)
+            </TypeCaption>
+            <View style={[styles.readOnlyMono, { borderColor: tokens.borderSubtle, backgroundColor: tokens.inputBg }]}>
+              <TypeMono numberOfLines={1}>{draft.modelId}</TypeMono>
+            </View>
           </View>
+
+          <ModelFormSections draft={draft} patch={patch} />
+
+          {/* R116-j — the live preview strip: the draft's key numbers, ONE
+              mono line above Save (the PC dialog's R89-C4 summary). */}
+          <View style={[styles.previewStrip, { backgroundColor: tokens.subtle }]}>
+            <TypeMono
+              numberOfLines={1}
+              style={[styles.modelIdMono, { color: tokens.textTertiary }]}
+              testID="edit-model-preview"
+            >
+              {modelDraftPreview(draft)}
+            </TypeMono>
+          </View>
+
+          {error !== null ? (
+            <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+              {error}
+            </TypeCaption>
+          ) : null}
+          <ChromeButton
+            onPress={() => void onSave()}
+            disabled={busy}
+            accessibilityLabel={busy ? "Saving the model" : "Save the model"}
+          >
+            {busy ? "saving…" : "Save model"}
+          </ChromeButton>
+          <QuietButton onPress={onClose} disabled={busy}>
+            Cancel
+          </QuietButton>
         </View>
+      ) : null}
+    </Sheet>
+  );
+}
+
+// ── the shared model-form sections (R116-j) ─────────────────────────────────
+//
+// The edit + add sheets render the SAME form — the PC's one configure
+// dialog ported across both entry points (verdict #43: the full R87 field
+// set — Identity, Sizing, the Pricing trio incl. cache read, the INPUT and
+// OUTPUT capability chips, and the hidden toggle). The "Thinking" toggle is
+// DELETED: the PC has none — "reasoning and tool use are detected
+// automatically" — so the sheet never configures supportsThinking (absent
+// on PATCH = the detected value keeps). Cap chips flip true ↔ false; an
+// untouched null round-trips as null (unknown stays unknown — never a
+// guessed boolean). Text input is locked ON (every chat model accepts
+// text); text output renders ON until turned off (the chat-completions
+// default). supportsTools has NO chip (detected at runtime) — it rides the
+// draft for the lossless round-trip only.
+
+function ModelFormSections({
+  draft,
+  patch,
+}: {
+  draft: ModelFormDraft;
+  patch: (next: Partial<ModelFormDraft>) => void;
+}) {
+  const { tokens } = useTheme();
+  return (
+    <>
+      {/* Identity — the human name + the parameter-size label. */}
+      <View style={styles.formSection}>
+        <TypeCaption style={styles.fieldLabel} numberOfLines={1}>
+          Identity
+        </TypeCaption>
         <ClayInput
           label="Display name"
           value={draft.displayName}
@@ -1384,14 +1566,46 @@ function EditModelSheet({
           caption="blank = the humanized model id"
         />
         <ClayInput
+          label="Size label"
+          value={draft.sizeLabel}
+          onChangeText={(text) => patch({ sizeLabel: text })}
+          autoCapitalize="none"
+          autoCorrect={false}
+          accessibilityLabel="Size label"
+          caption="parameter size, e.g. 70B — blank = unspecified"
+        />
+      </View>
+
+      {/* Sizing — the context window + the max output budget. */}
+      <View style={styles.formSection}>
+        <TypeCaption style={styles.fieldLabel} numberOfLines={1}>
+          Sizing
+        </TypeCaption>
+        <ClayInput
           label="Context window"
           mono
           value={draft.contextWindow}
           onChangeText={(text) => patch({ contextWindow: text })}
           keyboardType="number-pad"
           accessibilityLabel="Context window"
-          caption="tokens — blank clears to unknown"
+          caption="tokens — blank = unknown"
         />
+        <ClayInput
+          label="Max output tokens"
+          mono
+          value={draft.maxOutputTokens}
+          onChangeText={(text) => patch({ maxOutputTokens: text })}
+          keyboardType="number-pad"
+          accessibilityLabel="Max output tokens"
+          caption="tokens — blank = unknown"
+        />
+      </View>
+
+      {/* Pricing — the USD-per-Mtok trio (cache read included). */}
+      <View style={styles.formSection}>
+        <TypeCaption style={styles.fieldLabel} numberOfLines={1}>
+          Pricing
+        </TypeCaption>
         <ClayInput
           label="Input price / Mtok"
           mono
@@ -1399,7 +1613,7 @@ function EditModelSheet({
           onChangeText={(text) => patch({ inputPricePerMtok: text })}
           keyboardType="decimal-pad"
           accessibilityLabel="Input price per million tokens"
-          caption="USD — blank clears to unknown"
+          caption="USD — blank = unknown"
         />
         <ClayInput
           label="Output price / Mtok"
@@ -1408,72 +1622,160 @@ function EditModelSheet({
           onChangeText={(text) => patch({ outputPricePerMtok: text })}
           keyboardType="decimal-pad"
           accessibilityLabel="Output price per million tokens"
-          caption="USD — blank clears to unknown"
+          caption="USD — blank = unknown"
         />
+        <ClayInput
+          label="Cache read / Mtok"
+          mono
+          value={draft.inputPriceCachedPerMtok}
+          onChangeText={(text) => patch({ inputPriceCachedPerMtok: text })}
+          keyboardType="decimal-pad"
+          accessibilityLabel="Cache read price per million tokens"
+          caption="USD — blank = unknown"
+        />
+      </View>
 
-        {/* The capability toggles — the vision flag prominent (the owner's
-            R61 ask: "Accepts image inputs; vision works whenever this is on"). */}
-        <View style={[styles.toggleCard, { borderColor: tokens.borderSubtle }]}>
-          <View style={styles.toggleRow}>
-            <View style={styles.rowText}>
-              <View style={styles.toggleTitleLine}>
-                <Eye size={15} color={tokens.accent} strokeWidth={2.2} />
-                <TypeBodyStrong>Accepts image inputs</TypeBodyStrong>
-              </View>
-              <TypeCaption>vision works whenever this is on</TypeCaption>
-            </View>
-            <ClaySwitch
-              value={draft.supportsVision}
-              onValueChange={(next) => patch({ supportsVision: next })}
-              label="Accepts image inputs toggle"
-            />
-          </View>
-          <View style={styles.toggleRow}>
-            <View style={styles.rowText}>
-              <View style={styles.toggleTitleLine}>
-                <Brain size={15} color={tokens.accent} strokeWidth={2.2} />
-                <TypeBodyStrong>Thinking</TypeBodyStrong>
-              </View>
-              <TypeCaption>reasoning-style extended thinking</TypeCaption>
-            </View>
-            <ClaySwitch
-              value={draft.supportsThinking}
-              onValueChange={(next) => patch({ supportsThinking: next })}
-              label="Thinking toggle"
-            />
-          </View>
-          <View style={styles.toggleRow}>
-            <View style={styles.rowText}>
-              <TypeBodyStrong>Hide from the chat picker</TypeBodyStrong>
-              <TypeCaption>hidden models stay out of pickers</TypeCaption>
-            </View>
-            <ClaySwitch
-              value={draft.hidden}
-              onValueChange={(next) => patch({ hidden: next })}
-              label="Hidden toggle"
-            />
-          </View>
+      {/* INPUT capabilities — chip toggles; Text locked ON. */}
+      <View style={styles.formSection}>
+        <TypeCaption style={styles.fieldLabel} numberOfLines={1}>
+          Input capabilities
+        </TypeCaption>
+        <View style={styles.capRow}>
+          <Chip selected testID="model-cap-text-in">
+            Text
+          </Chip>
+          <Chip
+            selected={draft.supportsVision}
+            onPress={() => patch({ supportsVision: !draft.supportsVision })}
+            testID="model-cap-images-in"
+          >
+            Images
+          </Chip>
+          <Chip
+            selected={draft.supportsVideo === true}
+            onPress={() => patch({ supportsVideo: draft.supportsVideo === true ? false : true })}
+            testID="model-cap-video-in"
+          >
+            Video
+          </Chip>
+          <Chip
+            selected={draft.supportsPdf === true}
+            onPress={() => patch({ supportsPdf: draft.supportsPdf === true ? false : true })}
+            testID="model-cap-pdf-in"
+          >
+            PDF
+          </Chip>
+          <Chip
+            selected={draft.supportsAudio === true}
+            onPress={() => patch({ supportsAudio: draft.supportsAudio === true ? false : true })}
+            testID="model-cap-audio-in"
+          >
+            Audio
+          </Chip>
         </View>
+        <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+          text is always accepted — every chat model
+        </TypeMicro>
+      </View>
 
-        {error !== null ? (
-          <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
-            {error}
-          </TypeCaption>
-        ) : null}
-        <ChromeButton
-          onPress={() => void onSave()}
-          disabled={busy}
-          accessibilityLabel={busy ? "Saving the model" : "Save the model"}
-        >
-          {busy ? "saving…" : "Save model"}
-        </ChromeButton>
-        <QuietButton onPress={onClose} disabled={busy}>
-          Cancel
-        </QuietButton>
+      {/* OUTPUT capabilities — chip toggles (text out defaults ON). */}
+      <View style={styles.formSection}>
+        <TypeCaption style={styles.fieldLabel} numberOfLines={1}>
+          Output capabilities
+        </TypeCaption>
+        <View style={styles.capRow}>
+          <Chip
+            selected={draft.supportsTextOutput !== false}
+            onPress={() =>
+              patch({ supportsTextOutput: draft.supportsTextOutput !== false ? false : true })
+            }
+            testID="model-cap-text-out"
+          >
+            Text out
+          </Chip>
+          <Chip
+            selected={draft.supportsImageOutput === true}
+            onPress={() =>
+              patch({ supportsImageOutput: draft.supportsImageOutput === true ? false : true })
+            }
+            testID="model-cap-images-out"
+          >
+            Images out
+          </Chip>
+          <Chip
+            selected={draft.supportsVideoOutput === true}
+            onPress={() =>
+              patch({ supportsVideoOutput: draft.supportsVideoOutput === true ? false : true })
+            }
+            testID="model-cap-video-out"
+          >
+            Video out
+          </Chip>
+          <Chip
+            selected={draft.supportsAudioOutput === true}
+            onPress={() =>
+              patch({ supportsAudioOutput: draft.supportsAudioOutput === true ? false : true })
+            }
+            testID="model-cap-audio-out"
+          >
+            Audio out
+          </Chip>
         </View>
-      ) : null}
-    </Sheet>
+        <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+          reasoning and tool use are detected automatically
+        </TypeMicro>
+      </View>
+
+      {/* Hide from the chat picker — the one behavioral toggle that stays. */}
+      <View style={[styles.toggleCard, { borderColor: tokens.borderSubtle }]}>
+        <View style={styles.toggleRow}>
+          <View style={styles.rowText}>
+            <TypeBodyStrong numberOfLines={1}>Hide from the chat picker</TypeBodyStrong>
+            <TypeCaption numberOfLines={1}>hidden models stay out of pickers</TypeCaption>
+          </View>
+          <ClaySwitch
+            value={draft.hidden}
+            onValueChange={(next) => patch({ hidden: next })}
+            label="Hidden toggle"
+          />
+        </View>
+      </View>
+    </>
   );
+}
+
+/** The per-field validation the model sheets share — the first malformed
+ * numeric's inline message, or null when every field parses. Pure. */
+function firstNumericError(draft: ModelFormDraft): string | null {
+  for (const [field, raw] of [
+    ["Context window", draft.contextWindow],
+    ["Max output tokens", draft.maxOutputTokens],
+    ["Input price", draft.inputPricePerMtok],
+    ["Output price", draft.outputPricePerMtok],
+    ["Cache read price", draft.inputPriceCachedPerMtok],
+  ] as const) {
+    const parse = parseModelNumericField(field, raw);
+    if (!parse.ok) return parse.message;
+  }
+  return null;
+}
+
+/** The sheets' live preview strip — the draft's key numbers on ONE mono
+ * line (unknown → "—", never a fabricated 0). Pure. */
+function modelDraftPreview(draft: ModelFormDraft): string {
+  const num = (raw: string): number | null => {
+    const parse = parseModelNumericField("preview", raw);
+    return parse.ok ? parse.value : null;
+  };
+  const tok = (v: number | null): string => (v === null ? "—" : formatTokens(v));
+  const price = (v: number | null): string => (v === null ? "—" : `$${v}`);
+  return [
+    `ctx ${tok(num(draft.contextWindow))}`,
+    `max out ${tok(num(draft.maxOutputTokens))}`,
+    `in ${price(num(draft.inputPricePerMtok))}`,
+    `out ${price(num(draft.outputPricePerMtok))}`,
+    `cache ${price(num(draft.inputPriceCachedPerMtok))}`,
+  ].join(" · ");
 }
 
 // ── the add-model sheet (from the live catalog w/ static prefill, or custom) ─
@@ -1575,17 +1877,13 @@ function AddModelSheet({
 
   const onSave = useCallback(async () => {
     if (busy || draft === null) return;
-    for (const [field, raw] of [
-      ["Context window", draft.contextWindow],
-      ["Input price", draft.inputPricePerMtok],
-      ["Output price", draft.outputPricePerMtok],
-    ] as const) {
-      const parse = parseModelNumericField(field, raw);
-      if (!parse.ok) {
-        setError(parse.message);
-        void warningHaptic();
-        return;
-      }
+    // R116-j: the shared per-field validation — the same message the edit
+    // sheet shows, incl. the new sizing/cache fields.
+    const numericError = firstNumericError(draft);
+    if (numericError !== null) {
+      setError(numericError);
+      void warningHaptic();
+      return;
     }
     const body = modelAddBody(draft);
     if (body === null) {
@@ -1659,7 +1957,7 @@ function AddModelSheet({
                   accessibilityLabel="Search catalog models"
                 />
                 {catalogSource !== null ? (
-                  <TypeMicro style={{ color: tokens.textTertiary }}>
+                  <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
                     {catalogSource === "live"
                       ? "live catalog from the provider"
                       : "static catalog — the live listing was empty or unreachable"}
@@ -1667,10 +1965,8 @@ function AddModelSheet({
                 ) : null}
                 <View style={styles.catalogList}>
                   {addable === null ? null : addable.length === 0 ? (
-                    <TypeCaption style={{ color: tokens.textTertiary, paddingVertical: spacing.md }}>
-                      {entries.length === 0
-                        ? "the catalog is empty — switch to Custom and type the model id."
-                        : "everything the catalog offers is already saved (or filtered out)."}
+                    <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary, paddingVertical: spacing.md }}>
+                      {entries.length === 0 ? "the catalog is empty — use Custom." : "everything it offers is already saved."}
                     </TypeCaption>
                   ) : (
                     addable.slice(0, 60).map((entry) => (
@@ -1699,7 +1995,7 @@ function AddModelSheet({
                     ))
                   )}
                   {addable !== null && addable.length > 60 ? (
-                    <TypeMicro style={{ color: tokens.textTertiary, paddingVertical: spacing.xs }}>
+                    <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary, paddingVertical: spacing.xs }}>
                       {`showing the first 60 of ${addable.length} — search to narrow`}
                     </TypeMicro>
                   ) : null}
@@ -1709,8 +2005,8 @@ function AddModelSheet({
           </View>
         ) : (
           // Custom mode without a draft yet — the seed row opens the blank form.
-          <TypeCaption style={{ color: tokens.textSecondary }}>
-            type the exact model id the provider expects — everything else is optional.
+          <TypeCaption style={{ color: tokens.textSecondary }} numberOfLines={1}>
+            type the exact model id the provider expects.
           </TypeCaption>
         )}
 
@@ -1721,12 +2017,16 @@ function AddModelSheet({
             mode === "custom" ? (
               <SeedCustomDraft onSeed={() => setDraft(blankDraft())} />
             ) : (
-              <TypeMicro style={{ color: tokens.textTertiary, paddingTop: spacing.xs }}>
+              <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary, paddingTop: spacing.xs }}>
                 tap a catalog entry to prefill the form for review
               </TypeMicro>
             )
           ) : (
             <>
+              {/* R116-j: the add sheet renders the SAME form grammar as the
+                  edit sheet (the PC's one configure dialog) — the catalog
+                  tap prefills sizing/pricing/vision for review, every cap
+                  is editable before the save. */}
               <ClayInput
                 label="Model id"
                 mono
@@ -1737,97 +2037,30 @@ function AddModelSheet({
                 accessibilityLabel="Model id"
                 caption="the exact id sent to the provider"
               />
-                <ClayInput
-                  label="Display name"
-                  value={draft.displayName}
-                  onChangeText={(text) => patch({ displayName: text })}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  accessibilityLabel="Display name"
-                  caption="blank = the humanized model id"
-                />
-                <ClayInput
-                  label="Context window"
-                  mono
-                  value={draft.contextWindow}
-                  onChangeText={(text) => patch({ contextWindow: text })}
-                  keyboardType="number-pad"
-                  accessibilityLabel="Context window"
-                  caption="tokens — blank leaves it unknown"
-                />
-                <ClayInput
-                  label="Input price / Mtok"
-                  mono
-                  value={draft.inputPricePerMtok}
-                  onChangeText={(text) => patch({ inputPricePerMtok: text })}
-                  keyboardType="decimal-pad"
-                  accessibilityLabel="Input price per million tokens"
-                  caption="USD — blank leaves it unknown"
-                />
-                <ClayInput
-                  label="Output price / Mtok"
-                  mono
-                  value={draft.outputPricePerMtok}
-                  onChangeText={(text) => patch({ outputPricePerMtok: text })}
-                  keyboardType="decimal-pad"
-                  accessibilityLabel="Output price per million tokens"
-                  caption="USD — blank leaves it unknown"
-                />
-                <View style={[styles.toggleCard, { borderColor: tokens.borderSubtle }]}>
-                  <View style={styles.toggleRow}>
-                    <View style={styles.rowText}>
-                      <View style={styles.toggleTitleLine}>
-                        <Eye size={15} color={tokens.accent} strokeWidth={2.2} />
-                        <TypeBodyStrong>Accepts image inputs</TypeBodyStrong>
-                      </View>
-                      <TypeCaption>vision works whenever this is on</TypeCaption>
-                    </View>
-                    <ClaySwitch
-                      value={draft.supportsVision}
-                      onValueChange={(next) => patch({ supportsVision: next })}
-                      label="Accepts image inputs toggle"
-                    />
-                  </View>
-                  <View style={styles.toggleRow}>
-                    <View style={styles.rowText}>
-                      <View style={styles.toggleTitleLine}>
-                        <Brain size={15} color={tokens.accent} strokeWidth={2.2} />
-                        <TypeBodyStrong>Thinking</TypeBodyStrong>
-                      </View>
-                      <TypeCaption>reasoning-style extended thinking</TypeCaption>
-                    </View>
-                    <ClaySwitch
-                      value={draft.supportsThinking}
-                      onValueChange={(next) => patch({ supportsThinking: next })}
-                      label="Thinking toggle"
-                    />
-                  </View>
-                  <View style={styles.toggleRow}>
-                    <View style={styles.rowText}>
-                      <TypeBodyStrong>Hide from the chat picker</TypeBodyStrong>
-                      <TypeCaption>hidden models stay out of pickers</TypeCaption>
-                    </View>
-                    <ClaySwitch
-                      value={draft.hidden}
-                      onValueChange={(next) => patch({ hidden: next })}
-                      label="Hidden toggle"
-                    />
-                  </View>
-                </View>
-                {error !== null ? (
-                  <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
-                    {error}
-                  </TypeCaption>
-                ) : null}
-                <ChromeButton
-                  onPress={() => void onSave()}
-                  disabled={busy}
-                  accessibilityLabel={busy ? "Saving the model" : "Save the model"}
+              <ModelFormSections draft={draft} patch={patch} />
+              <View style={[styles.previewStrip, { backgroundColor: tokens.subtle }]}>
+                <TypeMono
+                  numberOfLines={1}
+                  style={[styles.modelIdMono, { color: tokens.textTertiary }]}
+                  testID="add-model-preview"
                 >
-                  {busy ? "saving…" : "Save model"}
-                </ChromeButton>
-              </>
-            )}
+                  {modelDraftPreview(draft)}
+                </TypeMono>
+              </View>
+              {error !== null ? (
+                <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+                  {error}
+                </TypeCaption>
+              ) : null}
+              <ChromeButton
+                onPress={() => void onSave()}
+                disabled={busy}
+                accessibilityLabel={busy ? "Saving the model" : "Save the model"}
+              >
+                {busy ? "saving…" : "Save model"}
+              </ChromeButton>
+            </>
+          )}
         </View>
       </View>
     </Sheet>
@@ -1855,15 +2088,27 @@ function SeedCustomDraft({ onSeed }: { onSeed: () => void }) {
   );
 }
 
+/** The custom-mode seed (R116-j: the full field set — text output defaults
+ * ON, the chat-completions contract; every other cap starts unknown). */
 function blankDraft(): ModelFormDraft {
   return {
     modelId: "",
     displayName: "",
+    sizeLabel: "",
     contextWindow: "",
+    maxOutputTokens: "",
     inputPricePerMtok: "",
     outputPricePerMtok: "",
+    inputPriceCachedPerMtok: "",
     supportsVision: false,
-    supportsThinking: false,
+    supportsTools: null,
+    supportsAudio: null,
+    supportsVideo: null,
+    supportsPdf: null,
+    supportsTextOutput: true,
+    supportsImageOutput: null,
+    supportsVideoOutput: null,
+    supportsAudioOutput: null,
     hidden: false,
   };
 }
@@ -2061,7 +2306,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  identityText: { flex: 1, gap: 3 },
+  // R116-j (verdict #40): the identity card breathes — the three single-line
+  // rows get one more pixel of air between them.
+  identityText: { flex: 1, gap: 4 },
   identityToggleWrap: { alignItems: "flex-end" },
   identityMono: { fontSize: 11, lineHeight: 15 },
   identityActions: { gap: spacing.md, alignItems: "flex-start" },
@@ -2122,7 +2369,10 @@ const styles = StyleSheet.create({
     minHeight: 64,
   },
   modelRowHidden: { opacity: 0.55 },
-  modelTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" },
+  // R116-j (verdict #40): NO flexWrap — the chips sit inline after the
+  // one-line title; overflow: "hidden" drops the chips that don't fit (the
+  // actions sheet shows everything anyway).
+  modelTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm, overflow: "hidden" },
   modelIdMono: { fontSize: 11, lineHeight: 15 },
   capChip: {
     flexDirection: "row",
@@ -2172,7 +2422,31 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     minHeight: 56,
   },
-  toggleTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  // R116-j: the model menu's 2×2 grid — two explicit rows of equal tiles
+  // (deterministic halves, never a wrap guess).
+  actionGrid: { gap: spacing.md },
+  actionGridRow: { flexDirection: "row", gap: spacing.md },
+  actionTile: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    minHeight: 84,
+    borderRadius: RADIUS_INPUT,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing.sm,
+  },
+  // The shared model form's section: label + fields, breathing room inside.
+  formSection: { gap: spacing.md },
+  // The capability chip rows (chips wrap by design — the single-line law
+  // scopes to descriptions/captions, not chip groups).
+  capRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  // The one-line mono preview strip above Save.
+  previewStrip: {
+    borderRadius: RADIUS_INPUT,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
   sheetHeadMono: { gap: 2 },
   confirmBox: {
     borderWidth: StyleSheet.hairlineWidth,

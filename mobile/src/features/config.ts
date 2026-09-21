@@ -69,6 +69,16 @@ export interface ModelRecord {
   supportsThinking: boolean | null;
   supportsVision: boolean | null;
   supportsTools: boolean | null;
+  /** R116-j: the R82/R87 tri-state capability columns the wire has always
+   * returned (storage/models.ts toModel) — the edit sheet finally owns
+   * them. null = unknown (never set), false = off, true = on. */
+  supportsAudio: boolean | null;
+  supportsVideo: boolean | null;
+  supportsPdf: boolean | null;
+  supportsTextOutput: boolean | null;
+  supportsImageOutput: boolean | null;
+  supportsVideoOutput: boolean | null;
+  supportsAudioOutput: boolean | null;
   sizeLabel: string | null;
   reasoningSupport: { supported: boolean; efforts: string[]; defaultEffort?: string } | null;
   hidden: boolean;
@@ -598,12 +608,21 @@ export function addProviderModel(
   body: {
     modelId: string;
     displayName?: string;
-    contextWindow?: number | null;
-    maxOutputTokens?: number | null;
-    inputPricePerMtok?: number | null;
-    outputPricePerMtok?: number | null;
+    sizeLabel?: string;
+    contextWindow?: number;
+    maxOutputTokens?: number;
+    inputPricePerMtok?: number;
+    inputPriceCachedPerMtok?: number;
+    outputPricePerMtok?: number;
     supportsVision?: boolean;
-    supportsThinking?: boolean;
+    supportsTools?: boolean | null;
+    supportsAudio?: boolean | null;
+    supportsVideo?: boolean | null;
+    supportsPdf?: boolean | null;
+    supportsTextOutput?: boolean | null;
+    supportsImageOutput?: boolean | null;
+    supportsVideoOutput?: boolean | null;
+    supportsAudioOutput?: boolean | null;
     hidden?: boolean;
   },
 ): Promise<ApiOutcome<ModelRecord>> {
@@ -612,6 +631,14 @@ export function addProviderModel(
     bodyText: JSON.stringify(body),
   });
 }
+
+/** R116-j (§1.8): the phone's wait for a model/provider TEST call. The
+ * server probes a model for up to 30s (agent-core registry.ts
+ * MODEL_TEST_TIMEOUT_MS — "reasoning models are slow to first token"), but
+ * acute-net's default callTimeout is 15s — the exchange aborted mid-probe
+ * and every honest failure read as "the host dropped". 35s = the server's
+ * full budget + travel. */
+const MODEL_TEST_CALL_TIMEOUT_MS = 35_000;
 
 /** POST /models/:id/test — the per-model probe. {slot} scopes the key used
  * (the R47-b pool contract); omitted = the primary. */
@@ -623,6 +650,7 @@ export function testModel(
   return apiJson<ModelTestResult>(sender, `/models/${encodeURIComponent(id)}/test`, {
     method: "POST",
     bodyText: JSON.stringify(body),
+    timeoutMs: MODEL_TEST_CALL_TIMEOUT_MS,
   });
 }
 
@@ -634,15 +662,34 @@ export function deleteModel(sender: ApiSender, id: string): Promise<ApiOutcome<n
 // ── models: the R114-f pure sheet math ──────────────────────────────────────
 
 /** The add/edit sheet's draft — numerics live as STRINGS so an empty input
- * can mean "unknown" (null) rather than 0 (the desktop dialog's contract). */
+ * can mean "unknown" (null) rather than 0 (the desktop dialog's contract).
+ * R116-j (verdict #43): the full R87 field set — sizing (context + max
+ * output), the pricing trio (in/out/cache-read), the size label, and the
+ * input/output capability toggles. supportsThinking is GONE: the PC has no
+ * thinking toggle ("reasoning and tool use are detected automatically") —
+ * the wire field stays, the phone just never configures it (absent = the
+ * stored/detected value keeps). supportsTools rides for the round-trip
+ * only — no chip owns it (the app detects tool use at runtime). */
 export interface ModelFormDraft {
   modelId: string;
   displayName: string;
+  sizeLabel: string;
   contextWindow: string;
+  maxOutputTokens: string;
   inputPricePerMtok: string;
   outputPricePerMtok: string;
+  inputPriceCachedPerMtok: string;
   supportsVision: boolean;
-  supportsThinking: boolean;
+  /** Tri-state: null = unknown, false = off, true = on (chips flip the
+   * value between true/false; an untouched null round-trips as null). */
+  supportsTools: boolean | null;
+  supportsAudio: boolean | null;
+  supportsVideo: boolean | null;
+  supportsPdf: boolean | null;
+  supportsTextOutput: boolean | null;
+  supportsImageOutput: boolean | null;
+  supportsVideoOutput: boolean | null;
+  supportsAudioOutput: boolean | null;
   hidden: boolean;
 }
 
@@ -675,35 +722,68 @@ export function parseModelNumericField(field: string, raw: string): ModelNumeric
  * The add sheet's POST body. modelId blank after trim → null (the sheet
  * refuses before the route 400s). Blank numerics are OMITTED (the server's
  * insert defaults + catalog lookups decide — never a fabricated 0); the
- * capability booleans ride verbatim (the sheet owns them). displayName is
- * omitted when blank (the route stores the modelId as the name). Pure.
+ * capability flags ride verbatim (the sheet owns them — tri-state nulls
+ * included, the route's boolean-or-null contract); supportsThinking is
+ * NEVER sent (detected server-side; absent keeps/derives the stored
+ * value). displayName and sizeLabel are omitted when blank (the route
+ * stores the modelId as the name / leaves the label unspecified). Pure.
  */
 export function modelAddBody(
   draft: ModelFormDraft,
 ): {
   modelId: string;
   displayName?: string;
+  sizeLabel?: string;
   contextWindow?: number;
+  maxOutputTokens?: number;
   inputPricePerMtok?: number;
+  inputPriceCachedPerMtok?: number;
   outputPricePerMtok?: number;
   supportsVision: boolean;
-  supportsThinking: boolean;
+  supportsTools: boolean | null;
+  supportsAudio: boolean | null;
+  supportsVideo: boolean | null;
+  supportsPdf: boolean | null;
+  supportsTextOutput: boolean | null;
+  supportsImageOutput: boolean | null;
+  supportsVideoOutput: boolean | null;
+  supportsAudioOutput: boolean | null;
   hidden: boolean;
 } | null {
   const modelId = draft.modelId.trim();
   if (modelId === "") return null;
   const contextWindow = parseModelNumericField("Context window", draft.contextWindow);
+  const maxOutputTokens = parseModelNumericField("Max output tokens", draft.maxOutputTokens);
   const inputPrice = parseModelNumericField("Input price", draft.inputPricePerMtok);
   const outputPrice = parseModelNumericField("Output price", draft.outputPricePerMtok);
-  if (!contextWindow.ok || !inputPrice.ok || !outputPrice.ok) return null;
+  const cachePrice = parseModelNumericField("Cache read price", draft.inputPriceCachedPerMtok);
+  if (
+    !contextWindow.ok ||
+    !maxOutputTokens.ok ||
+    !inputPrice.ok ||
+    !outputPrice.ok ||
+    !cachePrice.ok
+  ) {
+    return null;
+  }
   return {
     modelId,
     ...(draft.displayName.trim() === "" ? {} : { displayName: draft.displayName.trim() }),
+    ...(draft.sizeLabel.trim() === "" ? {} : { sizeLabel: draft.sizeLabel.trim() }),
     ...(contextWindow.value === null ? {} : { contextWindow: contextWindow.value }),
+    ...(maxOutputTokens.value === null ? {} : { maxOutputTokens: maxOutputTokens.value }),
     ...(inputPrice.value === null ? {} : { inputPricePerMtok: inputPrice.value }),
     ...(outputPrice.value === null ? {} : { outputPricePerMtok: outputPrice.value }),
+    ...(cachePrice.value === null ? {} : { inputPriceCachedPerMtok: cachePrice.value }),
     supportsVision: draft.supportsVision,
-    supportsThinking: draft.supportsThinking,
+    supportsTools: draft.supportsTools,
+    supportsAudio: draft.supportsAudio,
+    supportsVideo: draft.supportsVideo,
+    supportsPdf: draft.supportsPdf,
+    supportsTextOutput: draft.supportsTextOutput,
+    supportsImageOutput: draft.supportsImageOutput,
+    supportsVideoOutput: draft.supportsVideoOutput,
+    supportsAudioOutput: draft.supportsAudioOutput,
     hidden: draft.hidden,
   };
 }
@@ -711,50 +791,87 @@ export function modelAddBody(
 /**
  * The edit sheet's PATCH body — the fields the sheet OWNS, nothing else (the
  * spec's tri-state discipline: caps the sheet does not touch are never
- * sent). displayName always rides (blank = "no custom name" — the pickers
+ * sent — supportsThinking is deliberately absent, the detected value
+ * keeps). displayName always rides (blank = "no custom name" — the pickers
  * fall back to the modelId); blank numerics ride as NULL (the R50-d
- * clear-to-unknown contract — the desktop dialog's semantics). modelId is
+ * clear-to-unknown contract — the desktop dialog's semantics); blank
+ * sizeLabel rides as NULL (unspecified); the capability flags ride verbatim
+ * (untouched nulls round-trip as null — unknown stays unknown). modelId is
  * identity: read-only on the sheet, absent here. Pure.
  */
 export function modelEditBody(
   draft: ModelFormDraft,
 ): {
   displayName: string;
+  sizeLabel: string | null;
   contextWindow: number | null;
+  maxOutputTokens: number | null;
   inputPricePerMtok: number | null;
   outputPricePerMtok: number | null;
+  inputPriceCachedPerMtok: number | null;
   supportsVision: boolean;
-  supportsThinking: boolean;
+  supportsTools: boolean | null;
+  supportsAudio: boolean | null;
+  supportsVideo: boolean | null;
+  supportsPdf: boolean | null;
+  supportsTextOutput: boolean | null;
+  supportsImageOutput: boolean | null;
+  supportsVideoOutput: boolean | null;
+  supportsAudioOutput: boolean | null;
   hidden: boolean;
 } {
   const contextWindow = parseModelNumericField("Context window", draft.contextWindow);
+  const maxOutputTokens = parseModelNumericField("Max output tokens", draft.maxOutputTokens);
   const inputPrice = parseModelNumericField("Input price", draft.inputPricePerMtok);
   const outputPrice = parseModelNumericField("Output price", draft.outputPricePerMtok);
+  const cachePrice = parseModelNumericField("Cache read price", draft.inputPriceCachedPerMtok);
   // The caller validates first (the sheet shows the per-field error); a
   // malformed value that reaches here reads as null — never a fabricated 0.
   const num = (parse: ModelNumericParse): number | null => (parse.ok ? parse.value : null);
   return {
     displayName: draft.displayName.trim(),
+    sizeLabel: draft.sizeLabel.trim() === "" ? null : draft.sizeLabel.trim(),
     contextWindow: num(contextWindow),
+    maxOutputTokens: num(maxOutputTokens),
     inputPricePerMtok: num(inputPrice),
     outputPricePerMtok: num(outputPrice),
+    inputPriceCachedPerMtok: num(cachePrice),
     supportsVision: draft.supportsVision,
-    supportsThinking: draft.supportsThinking,
+    supportsTools: draft.supportsTools,
+    supportsAudio: draft.supportsAudio,
+    supportsVideo: draft.supportsVideo,
+    supportsPdf: draft.supportsPdf,
+    supportsTextOutput: draft.supportsTextOutput,
+    supportsImageOutput: draft.supportsImageOutput,
+    supportsVideoOutput: draft.supportsVideoOutput,
+    supportsAudioOutput: draft.supportsAudioOutput,
     hidden: draft.hidden,
   };
 }
 
-/** Hydrate the edit sheet off a saved row (numerics → strings, "" = null). */
+/** Hydrate the edit sheet off a saved row (numerics → strings, "" = null).
+ * R116-j: the full R87 field set round-trips — untouched tri-state caps
+ * keep their stored unknown (null), never a guessed boolean. */
 export function modelDraftFromRecord(record: ModelRecord): ModelFormDraft {
   const num = (v: number | null): string => (v === null ? "" : String(v));
   return {
     modelId: record.modelId,
     displayName: record.displayName ?? "",
+    sizeLabel: record.sizeLabel ?? "",
     contextWindow: num(record.contextWindow),
+    maxOutputTokens: num(record.maxOutputTokens),
     inputPricePerMtok: num(record.inputPricePerMtok),
     outputPricePerMtok: num(record.outputPricePerMtok),
+    inputPriceCachedPerMtok: num(record.inputPriceCachedPerMtok),
     supportsVision: record.supportsVision === true,
-    supportsThinking: record.supportsThinking === true,
+    supportsTools: record.supportsTools,
+    supportsAudio: record.supportsAudio,
+    supportsVideo: record.supportsVideo,
+    supportsPdf: record.supportsPdf,
+    supportsTextOutput: record.supportsTextOutput,
+    supportsImageOutput: record.supportsImageOutput,
+    supportsVideoOutput: record.supportsVideoOutput,
+    supportsAudioOutput: record.supportsAudioOutput,
     hidden: record.hidden,
   };
 }
@@ -804,7 +921,9 @@ export function cleanModelName(modelId: string): string {
  * the LIVE entry owns the id + display name (the provider's own naming —
  * but an entry whose "name" is just the id falls to the static catalog's
  * displayName, then the humanized last segment); the STATIC catalog row
- * fills context/pricing/vision when the id matches (OpenRouter ids). Pure.
+ * fills the sizing pair + the pricing trio (cache read included) + vision
+ * when the id matches (OpenRouter ids). Text output defaults ON (the
+ * chat-completions contract); every other cap starts unknown (null). Pure.
  */
 export function catalogPrefillFor(
   entry: Pick<ModelSummary, "id" | "name">,
@@ -819,11 +938,22 @@ export function catalogPrefillFor(
   return {
     modelId: entry.id,
     displayName,
+    sizeLabel: "",
     contextWindow: num(meta?.contextWindow),
+    maxOutputTokens: num(meta?.maxOutputTokens),
     inputPricePerMtok: num(meta?.inputPricePerMtok),
     outputPricePerMtok: num(meta?.outputPricePerMtok),
+    inputPriceCachedPerMtok: num(meta?.inputPriceCachedPerMtok),
     supportsVision: meta?.supportsVision ?? false,
-    supportsThinking: false,
+    supportsTools: null,
+    supportsAudio: null,
+    supportsVideo: null,
+    supportsPdf: null,
+    // Unknown text output renders ON (the chat-completions default).
+    supportsTextOutput: true,
+    supportsImageOutput: null,
+    supportsVideoOutput: null,
+    supportsAudioOutput: null,
     hidden: false,
   };
 }
@@ -883,12 +1013,22 @@ export function updateModel(
   id: string,
   body: {
     displayName?: string;
+    sizeLabel?: string | null;
     contextWindow?: number | null;
     maxOutputTokens?: number | null;
     inputPricePerMtok?: number | null;
+    inputPriceCachedPerMtok?: number | null;
     outputPricePerMtok?: number | null;
     supportsVision?: boolean;
     supportsThinking?: boolean;
+    supportsTools?: boolean | null;
+    supportsAudio?: boolean | null;
+    supportsVideo?: boolean | null;
+    supportsPdf?: boolean | null;
+    supportsTextOutput?: boolean | null;
+    supportsImageOutput?: boolean | null;
+    supportsVideoOutput?: boolean | null;
+    supportsAudioOutput?: boolean | null;
     hidden?: boolean;
   },
 ): Promise<ApiOutcome<ModelRecord>> {
@@ -906,8 +1046,52 @@ export function testProvider(
   return apiJson<{ ok: boolean; latencyMs?: number; message?: string }>(
     sender,
     `/providers/${encodeURIComponent(id)}/test`,
-    { method: "POST", bodyText: JSON.stringify(body) },
+    // R116-j (§1.8): the 35s test-call budget — the server's own probe can
+    // outlive the 15s acute-net default (see MODEL_TEST_CALL_TIMEOUT_MS).
+    { method: "POST", bodyText: JSON.stringify(body), timeoutMs: MODEL_TEST_CALL_TIMEOUT_MS },
   );
+}
+
+// ── R116-j: the honest test-failure copy (§1.8) ──────────────────────────
+
+/** The scrubbed raw message tail — whitespace collapsed, capped so a
+ * stack-shaped novel never wraps the note line. Pure. */
+function scrubTransportMessage(message: string): string {
+  const collapsed = message.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) return "";
+  return collapsed.length > 120 ? `${collapsed.slice(0, 117)}…` : collapsed;
+}
+
+/**
+ * R116-j (verdict #42 / §1.8): the one-liner a TEST call's catch shows —
+ * never the blanket "the host dropped during the test". The transport
+ * error's CLASS owns the message: an unreachable/canceled link (incl. the
+ * NotConnectedError the manager throws when the link already fell) says so
+ * plainly; a timeout-shaped "network" failure (SocketTimeoutException
+ * arrives classified "network") names the 30s reasoning-model reality;
+ * everything else surfaces the REAL scrubbed message (a tls/bad-argument/
+ * unknown error names its own cause). A message-less failure reads as
+ * unreachable (NetError's own fallback message makes this rare). Pure.
+ */
+export function testTransportFailureMessage(err: unknown): string {
+  const kind =
+    typeof err === "object" && err !== null && "kind" in err && typeof (err as { kind: unknown }).kind === "string"
+      ? ((err as { kind: string }).kind as string)
+      : null;
+  const rawMessage = err instanceof Error ? err.message : "";
+  const scrubbed = scrubTransportMessage(rawMessage);
+  // NotConnectedError is name-checked (not imported) — config.ts stays pure
+  // (the connection module drags the RN storage stack into the graph).
+  const isNotConnected = err instanceof Error && err.name === "NotConnectedError";
+  const unreachable =
+    kind === "network" || kind === "canceled" || isNotConnected || scrubbed === "";
+  if (unreachable) {
+    if (/timeout|timed[\s_-]*out/i.test(rawMessage)) {
+      return "The test timed out — reasoning models can take 30s.";
+    }
+    return "Couldn't reach the desktop — try again.";
+  }
+  return `The test failed — ${scrubbed}`;
 }
 
 // ── prompts ─────────────────────────────────────────────────────────────────

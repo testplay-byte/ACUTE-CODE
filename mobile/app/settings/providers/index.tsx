@@ -1,27 +1,30 @@
 /**
  * Providers — the configured-first inventory (R114-f rework): "Your
  * providers" (the SERVER's `configured` bit — custom row OR any held key,
- * pool-aware) as full rows (name, kind badge, the honest key-count chip,
- * enabled state) pushing to the detail page; "Add a provider" COLLAPSED
- * behind ONE prominent half-width action (R115-O — the owner: "by default
- * shows all options — instead ONE option to click then the others
- * appear"): tapping it reveals the unconfigured seeded presets as compact
- * add-rows + the CUSTOM PROVIDER row (the house 30ms stagger ≈ the ~200ms
- * reveal) — tapping it again collapses. The custom row opens the create
- * sheet (name + base URL + api format + the first key); server validation
- * surfaces inline exactly like the New Project sheet. Live: the settings
- * epoch reloads the tiers while the screen is open (another device's key
- * save flips a row's tier the moment the server does).
+ * pool-aware) as full rows pushing to the detail page; "Add a provider"
+ * COLLAPSED behind ONE prominent full-width row action (R115-O — the owner:
+ * "by default shows all options — instead ONE option to click then the
+ * others appear"): tapping it reveals the unconfigured seeded presets as
+ * compact add-rows + the CUSTOM PROVIDER row (the house 30ms stagger ≈ the
+ * ~200ms reveal) — tapping it again collapses. The custom row opens the
+ * create sheet (name + base URL + api format + the first key); server
+ * validation surfaces inline exactly like the New Project sheet. Live: the
+ * settings epoch reloads the tiers while the screen is open (another
+ * device's key save flips a row's tier the moment the server does).
  *
  * R113-e — the events-bus live reload; R114-f — the phone OWNS its
  * inventory (create included), the tiers re-derived off the fresh rows;
  * R115-O — the add-list collapse + the row polish (one meta line per
- * row, the two-line discipline).
+ * row, the two-line discipline); R116-j — the owner's verdict #39: the
+ * row is a COLORED identity (the provider's name-hash hue — the same
+ * palette as model colors, never the neutral key glyph) over the MODELS
+ * count (the baseUrl/key-count machine truth is gone — donts #35), and
+ * the add action is a full-width peer row, not a quiet half-chip.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, RefreshControl, StyleSheet, View } from "react-native";
-import { ChevronRight, KeyRound, Plus } from "lucide-react-native";
+import { ChevronRight, Plus, Server } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { Sheet } from "@/components/sheet";
@@ -36,14 +39,15 @@ import {
   TypeBodyStrong,
   TypeCaption,
   TypeMicro,
-  TypeMono,
 } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
-import { RADIUS_INPUT, spacing, TOUCH_TARGET } from "@/design/tokens";
+import { getContrastText, mixHex, RADIUS_CHIP, RADIUS_INPUT, spacing } from "@/design/tokens";
+import { modelColor } from "@/design/model-colors";
 import { selectionHaptic, successHaptic, warningHaptic } from "@/design/haptics";
 import {
   createCustomProvider,
   customProviderBody,
+  fetchConfiguredModels,
   fetchProviders,
   setProviderKey,
   splitProviders,
@@ -72,6 +76,10 @@ export default function ProvidersScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [customSheetOpen, setCustomSheetOpen] = useState(false);
+  // R116-j (verdict #39): the per-provider MODELS count — grouped by
+  // providerId off ONE fetchConfiguredModels call. null = not loaded yet
+  // (the row's meta line renders the honest "—", never a fabricated 0).
+  const [modelCounts, setModelCounts] = useState<Map<string, number> | null>(null);
   // R115-O: the add-list reveal — collapsed by default (ONE prominent
   // action instead of the always-on preset wall); toggling re-mounts the
   // rows so the stagger entrance replays on every reveal.
@@ -88,16 +96,35 @@ export default function ProvidersScreen() {
   const load = useCallback(async () => {
     if (!connected) return;
     try {
-      const outcome = await fetchProviders(getLinkManager());
-      if (outcome.ok) {
-        setProviders(outcome.data.providers);
+      // R116-j: the list + the models counts ride ONE parallel load — the
+      // rows' meta line lands with the rows (a failed count call leaves
+      // the honest "—", the list itself still lives).
+      const [providersOutcome, modelsOutcome] = await Promise.all([
+        fetchProviders(getLinkManager()),
+        fetchConfiguredModels(getLinkManager()),
+      ]);
+      if (providersOutcome.ok) {
+        setProviders(providersOutcome.data.providers);
         setLoadError(null);
-        mobLog("config", "providers loaded", { count: outcome.data.providers.length });
+        mobLog("config", "providers loaded", { count: providersOutcome.data.providers.length });
       } else {
-        setLoadError(outcome.error.message);
+        setLoadError(providersOutcome.error.message);
         mobWarn("config", "providers load failed", {
-          status: outcome.error.status,
-          message: outcome.error.message,
+          status: providersOutcome.error.status,
+          message: providersOutcome.error.message,
+        });
+      }
+      if (modelsOutcome.ok) {
+        const counts = new Map<string, number>();
+        for (const model of modelsOutcome.data.models) {
+          counts.set(model.providerId, (counts.get(model.providerId) ?? 0) + 1);
+        }
+        setModelCounts(counts);
+      } else {
+        setModelCounts(null);
+        mobWarn("config", "provider model counts failed", {
+          status: modelsOutcome.error.status,
+          message: modelsOutcome.error.message,
         });
       }
     } catch (err) {
@@ -167,23 +194,28 @@ export default function ProvidersScreen() {
           {tiers.configured.length === 0 ? (
             // The honest empty line — the presets below are a catalog, not
             // an inventory; never pretend "no providers" when they exist.
-            <TypeCaption style={[styles.tierEmpty, { color: tokens.textTertiary }]}>
+            <TypeCaption style={[styles.tierEmpty, { color: tokens.textTertiary }]} numberOfLines={1}>
               none configured yet — add a key to your first provider below.
             </TypeCaption>
           ) : (
             tiers.configured.map((provider, index) => (
-              <ProviderRowCard key={provider.id} provider={provider} index={index} />
+              <ProviderRowCard
+                key={provider.id}
+                provider={provider}
+                index={index}
+                modelsCount={modelCounts?.get(provider.id) ?? null}
+              />
             ))
           )}
 
           {/* ── GROUP 2 — "Add a provider" COLLAPSED behind ONE prominent
-              half-width action (R115-O): the presets + the custom row
-              reveal below it on the house stagger (~200ms for the preset
-              wall); tapping the action again collapses. The custom row
-              stays reachable even with every preset configured — the owner
-              can always add another endpoint. Tapping a preset pushes to
-              its page — the key pool there is where the key lands (the
-              desktop's R113-d rule, kept). */}
+              FULL-WIDTH row action (R115-O + R116-j): the presets + the
+              custom row reveal below it on the house stagger (~200ms for
+              the preset wall); tapping the action again collapses. The
+              custom row stays reachable even with every preset configured
+              — the owner can always add another endpoint. Tapping a preset
+              pushes to its page — the key pool there is where the key lands
+              (the desktop's R113-d rule, kept). */}
           <View style={[styles.tierDivider, { borderBottomColor: tokens.borderSubtle }]} />
           <AddProviderAction
             open={addOpen}
@@ -214,9 +246,23 @@ export default function ProvidersScreen() {
 
 // ── the configured row — the full inventory card ────────────────────────────
 
-function ProviderRowCard({ provider, index }: { provider: ProviderRow; index: number }) {
+function ProviderRowCard({
+  provider,
+  index,
+  modelsCount,
+}: {
+  provider: ProviderRow;
+  index: number;
+  /** The provider's saved-model count (null = not loaded — the honest "—"). */
+  modelsCount: number | null;
+}) {
   const { tokens } = useTheme();
   const router = useRouter();
+  // R116-j (components.md "Provider identity"): the stable name-hash hue —
+  // the same palette as model colors, resolved once per row. The icon ink
+  // is the tile's own contrast answer (white on the saturated light hues,
+  // near-black on the pastel dark hues) — never a neutral glyph.
+  const tileColor = modelColor(provider.name, tokens.isDark);
   return (
     <PressableCard
       enterIndex={Math.min(index, 12)}
@@ -224,25 +270,25 @@ function ProviderRowCard({ provider, index }: { provider: ProviderRow; index: nu
       accessibilityLabel={`Provider ${provider.name}`}
     >
       <View style={styles.rowInner}>
-        <View style={[styles.rowIcon, { backgroundColor: tokens.subtleHover }]}>
-          <KeyRound size={20} color={tokens.accent} strokeWidth={2.2} />
+        <View style={[styles.rowIcon, { backgroundColor: tileColor }]}>
+          <Server size={20} color={getContrastText(tileColor)} strokeWidth={2.2} />
         </View>
         <View style={styles.rowText}>
           <View style={styles.rowTitleLine}>
             <TypeBodyStrong numberOfLines={1} style={styles.rowTitle}>
               {provider.name}
             </TypeBodyStrong>
-            <Badge tone={provider.keyCount > 0 ? "accent" : "neutral"}>
-              {provider.keyCount > 0 ? `${provider.keyCount} key${provider.keyCount === 1 ? "" : "s"}` : "no key"}
-            </Badge>
             {provider.enabled ? null : <Badge tone="neutral">off</Badge>}
           </View>
           {/* ONE meta line (the two-line discipline — the archetype's row
-              law): the machine truth, the kind riding its tail so the row
-              never stacks a third line. */}
-          <TypeMono numberOfLines={1} style={styles.rowBaseUrl}>
-            {`${provider.baseUrl} · ${provider.kind}`}
-          </TypeMono>
+              law): the MODELS count, the owner's at-a-glance number. "—"
+              while the count call is in flight or failed — never a
+              fabricated 0 (donts #35: no baseUrl, no key counts). */}
+          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+            {modelsCount === null
+              ? "—"
+              : `${modelsCount} model${modelsCount === 1 ? "" : "s"}`}
+          </TypeMicro>
         </View>
         <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
       </View>
@@ -303,16 +349,21 @@ function CustomProviderRow({ onPress, index }: { onPress: () => void; index: num
   );
 }
 
-// ── the add-provider action — ONE prominent row, half width ─────────────────
+// ── the add-provider action — ONE prominent FULL-WIDTH row ─────────────────
 
-/** The section's single resting affordance (the projects list's "New
- *  project" spelling: half width, icon + label, quiet outline — no
- *  description, no chevron). Collapsed it is the ONLY add affordance on
- *  screen; tapping reveals the presets + the custom row below it (the
- *  accordion grammar — children expand under the tapped row); tapping it
- *  again collapses them. */
+/** The section's single resting affordance (R116-j, verdict #39: "clearer
+ *  add"): a proper peer of the list rows — full-width, 52px tall, the
+ *  accent-tinted outline carrying the affordance, icon + label (no
+ *  chevron, no description — the reveal speaks for itself). Collapsed it
+ *  is the ONLY add affordance on screen; tapping reveals the presets +
+ *  the custom row below it (the accordion grammar — children expand under
+ *  the tapped row); tapping it again collapses them. */
 function AddProviderAction({ open, onPress }: { open: boolean; onPress: () => void }) {
   const { tokens } = useTheme();
+  // The outlined accent tint — the accent softened onto the card surface
+  // (a full-strength accent border would shout; the tint reads as "this
+  // row is the action").
+  const accentTint = mixHex(tokens.accent, tokens.card, 0.55);
   return (
     <Pressable
       testID="providers-add-toggle"
@@ -323,13 +374,17 @@ function AddProviderAction({ open, onPress }: { open: boolean; onPress: () => vo
       style={({ pressed }) => [
         styles.addAction,
         {
-          borderColor: pressed ? tokens.borderStrong : tokens.border,
+          borderColor: pressed ? tokens.accent : accentTint,
           backgroundColor: pressed ? tokens.subtle : "transparent",
         },
       ]}
     >
-      <Plus size={20} color={tokens.accent} strokeWidth={2.2} />
-      <TypeBodyStrong style={{ color: tokens.textSecondary }}>Add a provider</TypeBodyStrong>
+      <View style={[styles.addActionIcon, { backgroundColor: tokens.subtleHover }]}>
+        <Plus size={20} color={tokens.accent} strokeWidth={2.2} />
+      </View>
+      <TypeBodyStrong numberOfLines={1} style={styles.addActionLabel}>
+        Add a provider
+      </TypeBodyStrong>
     </Pressable>
   );
 }
@@ -539,14 +594,13 @@ const styles = StyleSheet.create({
   rowIcon: {
     width: 44,
     height: 44,
-    borderRadius: 15,
+    borderRadius: RADIUS_CHIP,
     alignItems: "center",
     justifyContent: "center",
   },
   rowText: { flex: 1, gap: 3 },
   rowTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  rowTitle: { flex: 1 },
-  rowBaseUrl: { fontSize: 11, lineHeight: 15 },
+  rowTitle: { flexShrink: 1 },
   addRowInner: {
     flexDirection: "row",
     alignItems: "center",
@@ -568,15 +622,21 @@ const styles = StyleSheet.create({
   addAction: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-    width: "48%",
-    alignSelf: "flex-start",
+    gap: spacing.md,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: RADIUS_INPUT,
-    minHeight: TOUCH_TARGET + 2,
+    minHeight: 52,
     paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
   },
+  addActionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  addActionLabel: { flex: 1 },
   fieldGap: { gap: spacing.md },
   fieldWrap: { gap: spacing.xs },
   fieldLabel: { textTransform: "uppercase", letterSpacing: 0.8 },

@@ -39,6 +39,8 @@ import {
   setProviderKey,
   splitProviders,
   testModel,
+  testProvider,
+  testTransportFailureMessage,
   updateModel,
   type CatalogModelEntry,
   type ModelFormDraft,
@@ -198,6 +200,13 @@ function makeModelRecord(overrides: Partial<ModelRecord> = {}): ModelRecord {
     supportsThinking: false,
     supportsVision: false,
     supportsTools: null,
+    supportsAudio: null,
+    supportsVideo: null,
+    supportsPdf: null,
+    supportsTextOutput: null,
+    supportsImageOutput: null,
+    supportsVideoOutput: null,
+    supportsAudioOutput: null,
     sizeLabel: null,
     reasoningSupport: null,
     hidden: false,
@@ -210,11 +219,21 @@ function makeDraft(overrides: Partial<ModelFormDraft> = {}): ModelFormDraft {
   return {
     modelId: "z-ai/glm-4.7",
     displayName: "",
+    sizeLabel: "",
     contextWindow: "",
+    maxOutputTokens: "",
     inputPricePerMtok: "",
     outputPricePerMtok: "",
+    inputPriceCachedPerMtok: "",
     supportsVision: false,
-    supportsThinking: false,
+    supportsTools: null,
+    supportsAudio: null,
+    supportsVideo: null,
+    supportsPdf: null,
+    supportsTextOutput: true,
+    supportsImageOutput: null,
+    supportsVideoOutput: null,
+    supportsAudioOutput: null,
     hidden: false,
     ...overrides,
   };
@@ -565,6 +584,37 @@ describe("testModel — the wire call", () => {
     await testModel(sender, "mdl_1", { slot: 3 });
     expect(JSON.parse(String(calls[0]?.init?.bodyText))).toEqual({ slot: 3 });
   });
+
+  it("rides the 35s test-call budget (R116-j §1.8 — the server probes up to 30s; the 15s default aborted the exchange)", async () => {
+    const { sender, calls } = makeRouteSender([
+      {
+        path: "/api/v1/models/mdl_1/test",
+        method: "POST",
+        status: 200,
+        bodyText: JSON.stringify({ ok: true, latencyMs: 1, providerId: "openrouter", model: "m", checks: { http: true, auth: true, modelAccepted: true, nonEmptyContent: true } }),
+      },
+    ]);
+    await testModel(sender, "mdl_1", {});
+    expect(calls[0]?.init?.timeoutMs).toBe(35_000);
+  });
+});
+
+describe("testProvider — the wire call", () => {
+  it("POSTs /api/v1/providers/:id/test with {slot} AND the 35s test-call budget (the slot probe rides the same client)", async () => {
+    const { sender, calls } = makeRouteSender([
+      {
+        path: "/api/v1/providers/openrouter/test",
+        method: "POST",
+        status: 200,
+        bodyText: JSON.stringify({ ok: true, latencyMs: 210, message: "pong" }),
+      },
+    ]);
+    const outcome = await testProvider(sender, "openrouter", { slot: 2 });
+    expect(outcome.ok && outcome.data.ok).toBe(true);
+    expect(calls[0]?.path).toBe("/api/v1/providers/openrouter/test");
+    expect(JSON.parse(String(calls[0]?.init?.bodyText))).toEqual({ slot: 2 });
+    expect(calls[0]?.init?.timeoutMs).toBe(35_000);
+  });
 });
 
 describe("deleteModel — the wire call", () => {
@@ -602,33 +652,70 @@ describe("parseModelNumericField", () => {
 });
 
 describe("modelAddBody — blank numerics are OMITTED (never a fabricated 0)", () => {
-  it("a full draft carries the numbers + the capability booleans verbatim", () => {
+  it("a full draft carries the numbers + the size label + the capability flags verbatim (tri-state nulls ride)", () => {
     expect(
-      modelAddBody(makeDraft({ displayName: "GLM 4.7", contextWindow: "200000", inputPricePerMtok: "0.1", outputPricePerMtok: "0.6", supportsVision: true })),
+      modelAddBody(
+        makeDraft({
+          displayName: "GLM 4.7",
+          sizeLabel: "70B",
+          contextWindow: "200000",
+          maxOutputTokens: "32768",
+          inputPricePerMtok: "0.1",
+          outputPricePerMtok: "0.6",
+          inputPriceCachedPerMtok: "0.02",
+          supportsVision: true,
+          supportsAudio: true,
+          supportsTextOutput: false,
+        }),
+      ),
     ).toEqual({
       modelId: "z-ai/glm-4.7",
       displayName: "GLM 4.7",
+      sizeLabel: "70B",
       contextWindow: 200000,
+      maxOutputTokens: 32768,
       inputPricePerMtok: 0.1,
+      inputPriceCachedPerMtok: 0.02,
       outputPricePerMtok: 0.6,
       supportsVision: true,
-      supportsThinking: false,
+      supportsTools: null,
+      supportsAudio: true,
+      supportsVideo: null,
+      supportsPdf: null,
+      supportsTextOutput: false,
+      supportsImageOutput: null,
+      supportsVideoOutput: null,
+      supportsAudioOutput: null,
       hidden: false,
     });
   });
 
-  it("blank displayName and blank numerics are omitted — the server's insert defaults decide", () => {
-    expect(modelAddBody(makeDraft({ supportsThinking: true }))).toEqual({
+  it("blank displayName/sizeLabel/numerics are omitted — the server's insert defaults decide", () => {
+    expect(modelAddBody(makeDraft({ supportsVideo: true }))).toEqual({
       modelId: "z-ai/glm-4.7",
       supportsVision: false,
-      supportsThinking: true,
+      supportsTools: null,
+      supportsAudio: null,
+      supportsVideo: true,
+      supportsPdf: null,
+      supportsTextOutput: true,
+      supportsImageOutput: null,
+      supportsVideoOutput: null,
+      supportsAudioOutput: null,
       hidden: false,
     });
   });
 
-  it("a blank model id is an honest null; a malformed numeric is too (the sheet validates first)", () => {
+  it("supportsThinking NEVER rides (R116-j — reasoning is detected server-side; absent keeps/derives the value)", () => {
+    const body = modelAddBody(makeDraft());
+    expect(body !== null && "supportsThinking" in body).toBe(false);
+  });
+
+  it("a blank model id is an honest null; a malformed numeric (incl. the new fields) is too (the sheet validates first)", () => {
     expect(modelAddBody(makeDraft({ modelId: "   " }))).toBeNull();
     expect(modelAddBody(makeDraft({ contextWindow: "soon" }))).toBeNull();
+    expect(modelAddBody(makeDraft({ maxOutputTokens: "lots" }))).toBeNull();
+    expect(modelAddBody(makeDraft({ inputPriceCachedPerMtok: "cheap" }))).toBeNull();
   });
 
   it("the model id is trimmed", () => {
@@ -637,42 +724,128 @@ describe("modelAddBody — blank numerics are OMITTED (never a fabricated 0)", (
 });
 
 describe("modelEditBody — blank numerics ride as NULL (the clear-to-unknown contract)", () => {
-  it("carries ONLY the sheet-owned fields — modelId (identity) never rides", () => {
-    expect(
-      modelEditBody(makeDraft({ displayName: "  GLM 4.7  ", contextWindow: "200000", inputPricePerMtok: "0.1", outputPricePerMtok: "0.6", supportsVision: true, hidden: true })),
-    ).toEqual({
+  it("carries ONLY the sheet-owned fields — modelId (identity) and supportsThinking (detected) never ride", () => {
+    const body = modelEditBody(
+      makeDraft({
+        displayName: "  GLM 4.7  ",
+        sizeLabel: " 70B ",
+        contextWindow: "200000",
+        maxOutputTokens: "32768",
+        inputPricePerMtok: "0.1",
+        outputPricePerMtok: "0.6",
+        inputPriceCachedPerMtok: "0.02",
+        supportsVision: true,
+        supportsAudio: true,
+        supportsTextOutput: false,
+        hidden: true,
+      }),
+    );
+    expect(body).toEqual({
       displayName: "GLM 4.7",
+      sizeLabel: "70B",
       contextWindow: 200000,
+      maxOutputTokens: 32768,
       inputPricePerMtok: 0.1,
       outputPricePerMtok: 0.6,
+      inputPriceCachedPerMtok: 0.02,
       supportsVision: true,
-      supportsThinking: false,
+      supportsTools: null,
+      supportsAudio: true,
+      supportsVideo: null,
+      supportsPdf: null,
+      supportsTextOutput: false,
+      supportsImageOutput: null,
+      supportsVideoOutput: null,
+      supportsAudioOutput: null,
       hidden: true,
     });
-    expect("modelId" in modelEditBody(makeDraft())).toBe(false);
+    expect("modelId" in body).toBe(false);
+    expect("supportsThinking" in body).toBe(false);
   });
 
-  it("blank numerics → null (clears to unknown); blank displayName → \"\" (no custom name)", () => {
-    const body = modelEditBody(makeDraft());
+  it("blank numerics → null (clears to unknown); blank displayName → \"\" (no custom name); blank sizeLabel → null (unspecified)", () => {
+    const body = modelEditBody(makeDraft({ supportsTextOutput: null }));
     expect(body.contextWindow).toBeNull();
+    expect(body.maxOutputTokens).toBeNull();
     expect(body.inputPricePerMtok).toBeNull();
     expect(body.outputPricePerMtok).toBeNull();
+    expect(body.inputPriceCachedPerMtok).toBeNull();
     expect(body.displayName).toBe("");
+    expect(body.sizeLabel).toBeNull();
+    expect(body.supportsTextOutput).toBeNull();
+  });
+
+  it("the untouched tri-state caps round-trip their stored value — unknown stays unknown, never a guessed boolean", () => {
+    const body = modelEditBody(
+      makeDraft({ supportsTools: true, supportsPdf: false, supportsImageOutput: null }),
+    );
+    expect(body.supportsTools).toBe(true);
+    expect(body.supportsPdf).toBe(false);
+    expect(body.supportsImageOutput).toBeNull();
   });
 });
 
-describe("modelDraftFromRecord — the edit sheet's hydration", () => {
-  it("nulls become blank strings; the capability booleans carry", () => {
-    expect(modelDraftFromRecord(makeModelRecord({ contextWindow: 128000, inputPricePerMtok: 0.2, supportsVision: true, hidden: true }))).toEqual({
-      modelId: "z-ai/glm-4.7",
-      displayName: "",
-      contextWindow: "128000",
-      inputPricePerMtok: "0.2",
-      outputPricePerMtok: "",
+describe("modelDraftFromRecord — the edit sheet's hydration (the FULL R87 field set)", () => {
+  it("round-trips a FULL record — numerics → strings, nulls preserved, lossless through the PATCH body", () => {
+    const record = makeModelRecord({
+      displayName: "GLM 4.7",
+      sizeLabel: "70B MoE",
+      contextWindow: 131072,
+      maxOutputTokens: 8192,
+      inputPricePerMtok: 0.14,
+      inputPriceCachedPerMtok: 0.014,
+      outputPricePerMtok: 0.6,
       supportsVision: true,
-      supportsThinking: false,
+      supportsTools: true,
+      supportsAudio: false,
+      supportsVideo: true,
+      supportsPdf: null,
+      supportsTextOutput: true,
+      supportsImageOutput: false,
+      supportsVideoOutput: null,
+      supportsAudioOutput: null,
       hidden: true,
     });
+    const draft = modelDraftFromRecord(record);
+    expect(draft).toEqual({
+      modelId: "z-ai/glm-4.7",
+      displayName: "GLM 4.7",
+      sizeLabel: "70B MoE",
+      contextWindow: "131072",
+      maxOutputTokens: "8192",
+      inputPricePerMtok: "0.14",
+      inputPriceCachedPerMtok: "0.014",
+      outputPricePerMtok: "0.6",
+      supportsVision: true,
+      supportsTools: true,
+      supportsAudio: false,
+      supportsVideo: true,
+      supportsPdf: null,
+      supportsTextOutput: true,
+      supportsImageOutput: false,
+      supportsVideoOutput: null,
+      supportsAudioOutput: null,
+      hidden: true,
+    });
+    // the round-trip is LOSSLESS through the edit body: the set stays set,
+    // the unknown stays unknown.
+    const body = modelEditBody(draft);
+    expect(body.supportsTools).toBe(true);
+    expect(body.supportsPdf).toBeNull();
+    expect(body.sizeLabel).toBe("70B MoE");
+    expect(body.inputPriceCachedPerMtok).toBe(0.014);
+  });
+
+  it("nulls become blank strings; an unknown vision reads OFF; supportsThinking never enters the draft", () => {
+    const draft = modelDraftFromRecord(makeModelRecord());
+    expect(draft.displayName).toBe("");
+    expect(draft.sizeLabel).toBe("");
+    expect(draft.contextWindow).toBe("");
+    expect(draft.maxOutputTokens).toBe("");
+    expect(draft.inputPriceCachedPerMtok).toBe("");
+    expect(draft.supportsVision).toBe(false);
+    expect(draft.supportsTextOutput).toBeNull();
+    expect("supportsThinking" in draft).toBe(false);
   });
 });
 
@@ -713,15 +886,25 @@ describe("cleanModelName — the humanized last segment (the desktop twin)", () 
 describe("catalogPrefillFor — the catalog → form prefill", () => {
   const staticCatalog = [makeCatalogEntry(), makeCatalogEntry({ modelId: "vendor/other", displayName: "Other", supportsVision: false })];
 
-  it("the LIVE name wins when it differs from the id; the static row fills context/pricing/vision", () => {
+  it("the LIVE name wins when it differs from the id; the static row fills sizing + the pricing trio + vision", () => {
     expect(catalogPrefillFor({ id: "z-ai/glm-4.7", name: "GLM 4.7 (live)" }, staticCatalog)).toEqual({
       modelId: "z-ai/glm-4.7",
       displayName: "GLM 4.7 (live)",
+      sizeLabel: "",
       contextWindow: "200000",
+      maxOutputTokens: "32768",
       inputPricePerMtok: "0.1",
+      inputPriceCachedPerMtok: "",
       outputPricePerMtok: "0.6",
       supportsVision: true,
-      supportsThinking: false,
+      supportsTools: null,
+      supportsAudio: null,
+      supportsVideo: null,
+      supportsPdf: null,
+      supportsTextOutput: true,
+      supportsImageOutput: null,
+      supportsVideoOutput: null,
+      supportsAudioOutput: null,
       hidden: false,
     });
   });
@@ -732,15 +915,25 @@ describe("catalogPrefillFor — the catalog → form prefill", () => {
     expect(catalogPrefillFor({ id: "unknown/model-9", name: "unknown/model-9" }, staticCatalog).displayName).toBe("Model 9");
   });
 
-  it("an id the static catalog does not know prefills blanks + vision false (honest defaults)", () => {
+  it("an id the static catalog does not know prefills blanks + vision false; text output still defaults ON", () => {
     expect(catalogPrefillFor({ id: "nim/custom-1", name: "Custom One" }, staticCatalog)).toEqual({
       modelId: "nim/custom-1",
       displayName: "Custom One",
+      sizeLabel: "",
       contextWindow: "",
+      maxOutputTokens: "",
       inputPricePerMtok: "",
+      inputPriceCachedPerMtok: "",
       outputPricePerMtok: "",
       supportsVision: false,
-      supportsThinking: false,
+      supportsTools: null,
+      supportsAudio: null,
+      supportsVideo: null,
+      supportsPdf: null,
+      supportsTextOutput: true,
+      supportsImageOutput: null,
+      supportsVideoOutput: null,
+      supportsAudioOutput: null,
       hidden: false,
     });
   });
@@ -772,5 +965,66 @@ describe("catalogEntriesFromStatic — the fallback list shape", () => {
       { id: "z-ai/glm-4.7", name: "GLM 4.7" },
       { id: "v/x", name: "X" },
     ]);
+  });
+});
+
+// ── the honest test-failure copy (R116-j §1.8) ──────────────────────────────
+
+/** A structural NetError stand-in (the real class lives in the native
+ * module — kind + message is all the mapper reads). */
+function netError(kind: string, message: string): Error {
+  return Object.assign(new Error(message), { kind });
+}
+
+describe("testTransportFailureMessage — the class-based one-liner", () => {
+  it("network kind + a timeout-shaped message → the 30s reasoning-model reality", () => {
+    expect(testTransportFailureMessage(netError("network", "timeout"))).toBe(
+      "The test timed out — reasoning models can take 30s.",
+    );
+    expect(testTransportFailureMessage(netError("network", "Read timed out"))).toBe(
+      "The test timed out — reasoning models can take 30s.",
+    );
+    expect(testTransportFailureMessage(netError("network", "connect timed out"))).toBe(
+      "The test timed out — reasoning models can take 30s.",
+    );
+  });
+
+  it("network kind otherwise → the plain unreachable retry line", () => {
+    expect(testTransportFailureMessage(netError("network", "Failed to connect to /192.168.1.4:8443"))).toBe(
+      "Couldn't reach the desktop — try again.",
+    );
+  });
+
+  it("a canceled exchange reads as unreachable (retry-shaped)", () => {
+    expect(testTransportFailureMessage(netError("canceled", "call was canceled"))).toBe(
+      "Couldn't reach the desktop — try again.",
+    );
+  });
+
+  it("NotConnectedError (the link already fell) → the unreachable retry line", () => {
+    const err = new Error("not connected to the host");
+    err.name = "NotConnectedError";
+    expect(testTransportFailureMessage(err)).toBe("Couldn't reach the desktop — try again.");
+  });
+
+  it("every other class surfaces the REAL message — never the blanket host-dropped line", () => {
+    expect(testTransportFailureMessage(netError("tls", "certificate mismatch"))).toBe(
+      "The test failed — certificate mismatch",
+    );
+    expect(testTransportFailureMessage(netError("unknown", "boom"))).toBe("The test failed — boom");
+    expect(testTransportFailureMessage(new Error("bridge went away"))).toBe(
+      "The test failed — bridge went away",
+    );
+  });
+
+  it("a message-less failure reads as unreachable; a novel is scrubbed to one line", () => {
+    expect(testTransportFailureMessage(netError("network", ""))).toBe(
+      "Couldn't reach the desktop — try again.",
+    );
+    const novel = testTransportFailureMessage(netError("unknown", `${"x".repeat(300)}`));
+    expect(novel.startsWith("The test failed — ")).toBe(true);
+    expect(novel.length).toBeLessThan(140);
+    const collapsed = testTransportFailureMessage(netError("unknown", "line\n  broken   tail"));
+    expect(collapsed).toBe("The test failed — line broken tail");
   });
 });
