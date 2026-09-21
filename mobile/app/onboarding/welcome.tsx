@@ -9,11 +9,20 @@
  * tagline fade-in-up, the cards stagger in, and the footer essay is
  * DELETED: the gap between the cards and the flat CTA is intentional
  * breathing room, not a slot waiting to be filled.
+ *
+ * R116-c (the single-line law + the raised CTA): every line on the screen
+ * clamps to ONE line — the tagline, the card titles, the card captions
+ * (donts #31; the tail ellipsis is the fallback, wrapping is a defect) —
+ * and the CTA gains presence (56 tall, RADIUS_BAR pill, a trailing
+ * ArrowRight; clayShadow2 only, never glow) and moves UP: it rides
+ * directly under the cards instead of space-between-pinning to the
+ * footer, so hero + cards + CTA read as one column and the space below
+ * breathes.
  */
 
 import { useRouter } from "expo-router";
 import { useEffect } from "react";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Animated, {
   useAnimatedStyle,
@@ -24,7 +33,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { Bell, MessageSquareText, ShieldCheck, Smartphone } from "lucide-react-native";
+import { ArrowRight, Bell, MessageSquareText, ShieldCheck, Smartphone } from "lucide-react-native";
 import {
   ChromeButton,
   FadeInUp,
@@ -35,7 +44,16 @@ import {
   TypeDisplay,
 } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
-import { RADIUS_INPUT, RADIUS_TILE, TILE_HERO, TILE_ROW, spacing } from "@/design/tokens";
+import {
+  RADIUS_BAR,
+  RADIUS_INPUT,
+  RADIUS_TILE,
+  TILE_HERO,
+  TILE_ROW,
+  TYPE_BODY,
+  fontFamily,
+  spacing,
+} from "@/design/tokens";
 import {
   ENTRANCE_SCALE_FROM,
   IDLE_FLOAT_DELTA,
@@ -56,17 +74,17 @@ export default function WelcomeScreen() {
     {
       icon: MessageSquareText,
       title: "Work from anywhere",
-      body: "Every project and session, live from your pocket.",
+      body: "Every project and session, live.",
     },
     {
       icon: ShieldCheck,
       title: "Approve from your pocket",
-      body: "Permission asks land here, one tap to answer.",
+      body: "Permission asks, one tap to answer.",
     },
     {
       icon: Bell,
       title: "Know the moment it matters",
-      body: "Finished tasks and failures arrive live.",
+      body: "Finished tasks and failures, live.",
     },
   ];
 
@@ -120,7 +138,7 @@ export default function WelcomeScreen() {
             <TypeDisplay style={styles.title}>ACUTE</TypeDisplay>
           </FadeInUp>
           <FadeInUp index={2}>
-            <TypeBody style={[styles.tagline, { color: tokens.textTertiary }]}>
+            <TypeBody style={[styles.tagline, { color: tokens.textTertiary }]} numberOfLines={1}>
               The companion for your desktop agent.
             </TypeBody>
           </FadeInUp>
@@ -136,8 +154,8 @@ export default function WelcomeScreen() {
                     <Icon size={20} color={tokens.accent} strokeWidth={2.2} />
                   </View>
                   <View style={styles.rowText}>
-                    <TypeBodyStrong>{row.title}</TypeBodyStrong>
-                    <TypeCaption>{row.body}</TypeCaption>
+                    <TypeBodyStrong numberOfLines={1}>{row.title}</TypeBodyStrong>
+                    <TypeCaption numberOfLines={1}>{row.body}</TypeCaption>
                   </View>
                 </View>
               </PressableCard>
@@ -146,19 +164,26 @@ export default function WelcomeScreen() {
         </View>
 
         {/* R115: the "YOUR DESKTOP DOES ALL THE WORK…" kicker is deleted —
-            the flex space-between leaves deliberate breathing room between
-            the cards and the CTA (onboarding.md screen 1). */}
-        <View style={styles.footer}>
-          <FadeInUp index={CTA_STAGGER}>
-            <ChromeButton
-              flat
-              testID="welcome-get-started"
-              onPress={() => router.push("/onboarding/permissions")}
-            >
-              Get started
-            </ChromeButton>
-          </FadeInUp>
-        </View>
+            and R116-c raised the CTA: it rides directly under the cards
+            (the raised grammar), so hero + cards + CTA are one column and
+            the remaining space breathes below (no footer pinning). */}
+        <FadeInUp index={CTA_STAGGER} style={styles.ctaWrap}>
+          <ChromeButton
+            flat
+            testID="welcome-get-started"
+            onPress={() => router.push("/onboarding/permissions")}
+            style={styles.cta}
+            accessibilityLabel="Get started"
+          >
+            {/* The label row: text + trailing arrow, one 8px gutter. The
+                inner Text copies ChromeButton's label recipe verbatim —
+                styles do not inherit across the inline View boundary. */}
+            <View style={styles.ctaRow}>
+              <Text style={[styles.ctaLabel, { color: tokens.accentText }]}>Get started</Text>
+              <ArrowRight size={20} color={tokens.accentText} strokeWidth={2.2} />
+            </View>
+          </ChromeButton>
+        </FadeInUp>
       </View>
     </SafeAreaView>
   );
@@ -166,7 +191,7 @@ export default function WelcomeScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  body: { flex: 1, padding: spacing.lg, gap: spacing.xxl, justifyContent: "space-between" },
+  body: { flex: 1, padding: spacing.lg, paddingBottom: spacing.xl },
   hero: { alignItems: "center", gap: spacing.md, paddingTop: spacing.xxxl },
   logoTile: {
     width: TILE_HERO,
@@ -178,8 +203,10 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   title: { letterSpacing: 1.5 },
-  tagline: { textAlign: "center", maxWidth: 260 },
-  rows: { gap: spacing.md },
+  // 320: the tagline's honest one-line budget at TypeBody on a 360dp screen
+  // (the string measures ~300px — the 260 cap was a wrap defect, donts #31).
+  tagline: { textAlign: "center", maxWidth: 320 },
+  rows: { gap: spacing.md, marginTop: spacing.xxl },
   rowInner: { flexDirection: "row", gap: spacing.md, padding: spacing.lg, alignItems: "center" },
   rowIcon: {
     width: TILE_ROW,
@@ -189,5 +216,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   rowText: { flex: 1, gap: spacing.xs },
-  footer: { paddingBottom: spacing.xl },
+  ctaWrap: { marginTop: spacing.xl },
+  cta: { minHeight: 56, borderRadius: RADIUS_BAR },
+  ctaRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  ctaLabel: { fontSize: TYPE_BODY, fontFamily: fontFamily.bold, letterSpacing: 0.2 },
 });

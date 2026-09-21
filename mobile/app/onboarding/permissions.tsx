@@ -9,6 +9,11 @@
  * Check, Skip slides out (width + opacity, then unmounts), THEN Continue
  * enters. Internet access is a normal permission Android grants silently;
  * push notifications arrive with the Firebase round.
+ *
+ * R116-c: the flex ladder rebalanced (0.9 / 0.35 / 1) so the BUTTONS land
+ * just below the vertical middle (~55% down a tall screen — the owner's
+ * "near the middle, not the bottom" verdict) and the tagline clamps to
+ * one line (donts #31). The granted sequence is untouched.
  */
 
 import { useCameraPermissions } from "expo-camera";
@@ -133,8 +138,9 @@ export default function PermissionsScreen() {
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: tokens.bg }]} edges={["top", "left", "right"]}>
       <View style={styles.body}>
-        {/* The 0.9/1 flex spacers hold the icon+title cluster slightly
-            ABOVE the vertical middle (the Minimal-Center archetype). */}
+        {/* The 0.9/0.35/1 flex ladder (R116-c): the icon+title cluster sits
+            slightly ABOVE the vertical middle, the buttons land just below
+            the middle line, and the rest breathes at the bottom. */}
         <View style={styles.spacerTop} />
         <View style={styles.hero}>
           <Animated.View
@@ -152,12 +158,15 @@ export default function PermissionsScreen() {
             <TypeDisplay style={styles.title}>Camera access</TypeDisplay>
           </FadeInUp>
           <FadeInUp index={2}>
-            <TypeBody style={[styles.tagline, { color: denied ? tokens.warning : tokens.textTertiary }]}>
+            <TypeBody
+              style={[styles.tagline, { color: denied ? tokens.warning : tokens.textTertiary }]}
+              numberOfLines={1}
+            >
               {denied ? "Camera blocked — you can type the code instead." : "Scan your desktop's pairing code."}
             </TypeBody>
           </FadeInUp>
         </View>
-        <View style={styles.spacerBottom} />
+        <View style={styles.spacerMid} />
 
         <View style={styles.footer}>
           {granted ? (
@@ -193,6 +202,7 @@ export default function PermissionsScreen() {
             </FadeInUp>
           ) : null}
         </View>
+        <View style={styles.spacerBottom} />
       </View>
     </SafeAreaView>
   );
@@ -202,6 +212,7 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   body: { flex: 1, padding: spacing.lg },
   spacerTop: { flex: 0.9 },
+  spacerMid: { flex: 0.35 },
   spacerBottom: { flex: 1 },
   hero: { alignItems: "center", gap: spacing.md },
   iconTile: {
@@ -223,6 +234,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   title: { textAlign: "center" },
-  tagline: { textAlign: "center", maxWidth: 300 },
+  // No width cap: the granted line (232px at TypeBody) fits any screen; the
+  // longer denied line stays one line via the clamp, tailing off only on
+  // 360dp-class screens (donts #31 — never wraps).
+  tagline: { textAlign: "center" },
   footer: { gap: spacing.md, paddingBottom: spacing.xl },
 });

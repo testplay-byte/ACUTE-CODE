@@ -5,10 +5,18 @@
  *
  * R115-D — the UNPAIRED branch is the Minimal-Center archetype
  * (screen-archetypes.md §1 / onboarding.md "Post-wizard Connect screen"):
- * the animated desktop↔phone SVG moment (the ONE infinite-but-calm pulse,
- * motion.md §4.3) + the two options via the shared PairOptionsPair. No back
- * chevron, no notification bell, no header — as a root screen it is
- * chrome-free (the wizard's welcome/permissions idiom).
+ * the animated desktop↔phone SVG moment + the two options via the shared
+ * PairOptionsPair. No back chevron, no notification bell, no header — as a
+ * root screen it is chrome-free (the wizard's welcome/permissions idiom).
+ *
+ * R116-c — the unpaired branch becomes the BROKEN-LINK moment (the owner's
+ * verdict #5): "Currently not connected" over the drifting pair — the two
+ * clay chips drift ±4px apart and back on a calm ~2.8s loop while the dashed
+ * link's middle gap widens in sync, one shared progress value driving all of
+ * it (motion.md §4.9), the stroke subdued tertiary to read "no link" — and
+ * the TWO option cards are replaced by ONE primary "Connect to PC" button
+ * (donts #39) raised directly under the hero, opening the scanner. Manual
+ * entry lives inside the scanner now, not on this screen.
  *
  * Host linked → the current connection (identity + live status + retry),
  * "pair a different desktop" (scan again replaces the link), and the
@@ -21,19 +29,20 @@
 
 import { useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Svg, { Line } from "react-native-svg";
 import Animated, {
   Easing,
   useAnimatedProps,
+  useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
   withRepeat,
+  withSequence,
   withTiming,
 } from "react-native-reanimated";
 import {
-  Keyboard,
   Monitor,
   MonitorSmartphone,
   RefreshCw,
@@ -43,8 +52,8 @@ import {
 } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { timeAgo } from "@/components/host-card";
-import { PairOptionsPair } from "@/components/pair-options";
 import {
+  ChromeButton,
   ClayCard,
   FadeInUp,
   PressableCard,
@@ -55,57 +64,87 @@ import {
   TypeMicro,
 } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
-import { LINK_LOOP_MS } from "@/design/motion";
 import {
+  RADIUS_BAR,
   RADIUS_CHIP,
   RADIUS_TILE,
   TILE_HERO,
   TILE_OPTION,
+  TYPE_BODY,
+  fontFamily,
   spacing,
 } from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 
-/** The dashed link line's pattern: 8 on, 8 off (the offset travels by exactly
- *  one period per loop — a seamless wrap, never a visible seam). */
+/** The dashed link line's pattern: 8 on, 8 off. */
 const DASH = 8;
 const GAP = 8;
-const DASH_PERIOD = DASH + GAP;
 /** The line's span between the two chips. */
 const LINK_SPAN = spacing.xxxl * 2;
 
-/** The reanimated-driven SVG line (strokeDashoffset rides a shared value). */
+/** The broken-link drift (motion.md §4.9): the two chips drift ±4px apart
+ * and back on a calm ~2.8s loop while the dashed line's middle gap widens
+ * in sync — ONE shared progress value (0→1→0) drives every moving part. */
+const DRIFT_PX = 4;
+/** One leg of the drift loop (ms): out 1400, back 1400 (~2.8s period). */
+const DRIFT_LEG_MS = 1400;
+/** The dashed line's center gap at rest → at full drift (px): a normal dash
+ * gap grows to a clearly-broken void. */
+const LINK_GAP_MIN = 8;
+const LINK_GAP_MAX = 24;
+
+/** The reanimated-driven SVG line (x1/x2 ride a shared value). */
 const AnimatedLine = Animated.createAnimatedComponent(Line);
 
 /**
- * The connect hero — two clay chips (desktop + this phone) joined by the
- * traveling dashed link line: infinite but CALM (motion.md §4.3 — the dash
- * offset travels a ~1.6s loop, sine-eased so it surges and rests instead of
- * conveyor-linear; no scale thrash). Reduced motion renders the resting
- * dashed line.
+ * The broken-link hero — two clay chips (desktop + this phone) facing each
+ * other across a dashed link that reads as BROKEN (motion.md §4.9): the
+ * chips drift apart and back while the two dash segments' middle gap
+ * widens and closes in sync, all on one shared drift value, sine-eased so
+ * it surges and rests. The stroke is the subdued tertiary tone, never the
+ * accent — there is no link. Reduced motion holds the static broken pose
+ * (gap wide, chips apart).
  */
 function ConnectPairHero() {
   const { tokens } = useTheme();
   const reduced = useReducedMotion();
-  const dash = useSharedValue(0);
+  const drift = useSharedValue(0);
 
   useEffect(() => {
     if (reduced) {
-      dash.value = 0;
+      drift.value = 1;
       return;
     }
-    dash.value = withRepeat(
-      withTiming(-DASH_PERIOD, { duration: LINK_LOOP_MS, easing: Easing.inOut(Easing.sin) }),
+    drift.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: DRIFT_LEG_MS, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0, { duration: DRIFT_LEG_MS, easing: Easing.inOut(Easing.sin) }),
+      ),
       -1,
       false,
     );
-  }, [reduced, dash]);
+  }, [reduced, drift]);
 
-  const linkProps = useAnimatedProps(() => ({ strokeDashoffset: dash.value }));
+  // One shared progress value → the chips' ±4px drift…
+  const desktopStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: -DRIFT_PX * drift.value }],
+  }));
+  const phoneStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: DRIFT_PX * drift.value }],
+  }));
+  // …and the widening middle gap: each dash segment yields half the gap's
+  // travel (8px → 24px between them) — pure arithmetic on the shared value.
+  const leftProps = useAnimatedProps(() => ({
+    x2: LINK_SPAN / 2 - LINK_GAP_MIN / 2 - (drift.value * (LINK_GAP_MAX - LINK_GAP_MIN)) / 2,
+  }));
+  const rightProps = useAnimatedProps(() => ({
+    x1: LINK_SPAN / 2 + LINK_GAP_MIN / 2 + (drift.value * (LINK_GAP_MAX - LINK_GAP_MIN)) / 2,
+  }));
 
   return (
-    <View style={styles.heroPair} accessibilityLabel="A desktop and this phone, linked">
-      <View
+    <View style={styles.heroPair} accessibilityLabel="A desktop and this phone, not connected">
+      <Animated.View
         style={[
           styles.heroChipDesktop,
           {
@@ -113,25 +152,36 @@ function ConnectPairHero() {
             borderTopColor: tokens.clayTopEdge,
             boxShadow: tokens.clayShadow2,
           },
+          desktopStyle,
         ]}
       >
         <Monitor size={28} color={tokens.accent} strokeWidth={2.2} />
-      </View>
+      </Animated.View>
       <Svg width={LINK_SPAN} height={spacing.md}>
         <AnimatedLine
           x1={0}
           y1={spacing.md / 2}
-          x2={LINK_SPAN}
+          x2={LINK_SPAN / 2 - LINK_GAP_MIN / 2}
           y2={spacing.md / 2}
-          stroke={tokens.accent}
+          stroke={tokens.textTertiary}
           strokeWidth={2}
           strokeDasharray={`${DASH} ${GAP}`}
           strokeLinecap="round"
-          opacity={0.85}
-          animatedProps={linkProps}
+          animatedProps={leftProps}
+        />
+        <AnimatedLine
+          x1={LINK_SPAN / 2 + LINK_GAP_MIN / 2}
+          y1={spacing.md / 2}
+          x2={LINK_SPAN}
+          y2={spacing.md / 2}
+          stroke={tokens.textTertiary}
+          strokeWidth={2}
+          strokeDasharray={`${DASH} ${GAP}`}
+          strokeLinecap="round"
+          animatedProps={rightProps}
         />
       </Svg>
-      <View
+      <Animated.View
         style={[
           styles.heroChipPhone,
           {
@@ -139,10 +189,11 @@ function ConnectPairHero() {
             borderTopColor: tokens.clayTopEdge,
             boxShadow: tokens.clayShadow2,
           },
+          phoneStyle,
         ]}
       >
         <Smartphone size={20} color={tokens.accent} strokeWidth={2.2} />
-      </View>
+      </Animated.View>
     </View>
   );
 }
@@ -168,7 +219,7 @@ export default function ConnectHubScreen() {
   const connected = status === "connected";
 
   if (host === null) {
-    // ── no host yet: Minimal-Center — the animated pair + the two options ──
+    // ── no host yet: the BROKEN-LINK moment + ONE primary action (R116-c) ──
     return (
       <SafeAreaView style={[styles.root, { backgroundColor: tokens.bg }]} edges={["top", "left", "right"]}>
         <View style={styles.centerBody}>
@@ -178,29 +229,36 @@ export default function ConnectHubScreen() {
               <ConnectPairHero />
             </FadeInUp>
             <FadeInUp index={1}>
-              <TypeDisplay style={styles.title}>Connect to PC</TypeDisplay>
+              <TypeDisplay style={styles.title}>Currently not connected</TypeDisplay>
+            </FadeInUp>
+            <FadeInUp index={2}>
+              <TypeCaption style={[styles.tagline, { color: tokens.textTertiary }]} numberOfLines={1}>
+                Pair with your desktop to begin.
+              </TypeCaption>
             </FadeInUp>
           </View>
+          {/* The ONE primary button (donts #39 — two option cards where one
+              button carries the intent is a reject), raised directly under
+              the hero on the welcome grammar; manual entry lives inside the
+              scanner, not here. */}
+          <FadeInUp index={3} style={styles.ctaWrap}>
+            <ChromeButton
+              flat
+              testID="hub-connect"
+              onPress={() => router.push("/connect/scan")}
+              style={styles.cta}
+              accessibilityLabel="Connect to PC"
+            >
+              {/* The label row: leading scanner glyph + text, one 8px gutter.
+                  The inner Text copies ChromeButton's label recipe verbatim —
+                  styles do not inherit across the inline View boundary. */}
+              <View style={styles.ctaRow}>
+                <ScanLine size={20} color={tokens.accentText} strokeWidth={2.2} />
+                <Text style={[styles.ctaLabel, { color: tokens.accentText }]}>Connect to PC</Text>
+              </View>
+            </ChromeButton>
+          </FadeInUp>
           <View style={styles.spacerBottom} />
-          <PairOptionsPair
-            start={2}
-            options={[
-              {
-                icon: ScanLine,
-                label: "Scan the QR code",
-                description: "From the desktop's Link a device screen.",
-                onPress: () => router.push("/connect/scan"),
-                testID: "hub-scan",
-              },
-              {
-                icon: Keyboard,
-                label: "Enter the values manually",
-                description: "Address and PIN, no camera needed.",
-                onPress: () => router.push("/connect/manual"),
-                testID: "hub-manual",
-              },
-            ]}
-          />
           <View style={styles.bottomBreath} />
         </View>
       </SafeAreaView>
@@ -278,7 +336,8 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   centerBody: { flex: 1, padding: spacing.lg },
   // The 0.9/1 flex spacers hold the hero slightly ABOVE the vertical middle
-  // (the Minimal-Center archetype); the options sit below the middle line.
+  // (the Minimal-Center archetype); the CTA rides directly under the hero
+  // (R116-c's raised grammar) and the rest breathes below.
   spacerTop: { flex: 0.9 },
   spacerBottom: { flex: 1 },
   hero: { alignItems: "center", gap: spacing.xl },
@@ -300,7 +359,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   title: { textAlign: "center" },
+  tagline: { textAlign: "center" },
   bottomBreath: { height: spacing.xxl },
+  ctaWrap: { marginTop: spacing.xl },
+  cta: { minHeight: 56, borderRadius: RADIUS_BAR },
+  ctaRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  ctaLabel: { fontSize: TYPE_BODY, fontFamily: fontFamily.bold, letterSpacing: 0.2 },
   cardPad: { padding: spacing.lg, gap: spacing.md },
   optionInner: { flexDirection: "row", gap: spacing.md, padding: spacing.lg, alignItems: "center" },
   optionIcon: {

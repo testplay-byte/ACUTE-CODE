@@ -5,6 +5,11 @@
  * lives here once. A PressableCard carrying a 48×48 r16 icon chip + a
  * TypeBodyStrong label + ONE-line TypeCaption description — tokenized,
  * staggered on the standard entrance, nothing else (onboarding.md screen 3).
+ *
+ * R116-c (the single-line law, donts #31): the label AND the description
+ * clamp to one line here, hard-set — the law is global now, every consumer
+ * (the wizard's connect step) wants it, and RN's default ellipsize for a
+ * clamped Text is "tail". Wrapping is a defect, not a layout accident.
  */
 
 import type { LucideIcon } from "lucide-react-native";
@@ -55,8 +60,8 @@ export function PairOptionCard({
           <Icon size={24} color={tokens.accent} strokeWidth={2.2} />
         </View>
         <View style={styles.text}>
-          <TypeBodyStrong>{label}</TypeBodyStrong>
-          <TypeCaption>{description}</TypeCaption>
+          <TypeBodyStrong numberOfLines={1}>{label}</TypeBodyStrong>
+          <TypeCaption numberOfLines={1}>{description}</TypeCaption>
         </View>
       </View>
     </PressableCard>
