@@ -64,6 +64,25 @@
  * User/assistant items carry `ts` (the timestampsMode pref), the tool items
  * carry toolCallId/inputRaw, and SessionRow carries the server-side
  * selectedModel (PATCH {model} + the meta frame's live sync).
+ *
+ * ROUND-117 (R117-d2 — the mobile multi-agent parity leg): the phone now
+ * folds the `subagent-event` ENVELOPES the parent's stream mirrors (the
+ * child's live raw stream — orchestrator.ts's wrappedEmit wraps every child
+ * frame as {type:"subagent-event", sessionId: <child>, parentSessionId,
+ * inner: <the child's own StreamTurnEvent>}; sse.ts's send() mirrors them to
+ * the events bus like every other frame, so BOTH the own stream and the
+ * remote mirror carry them). The child's thinking/text/tool deltas
+ * accumulate on an IN-PLACE `subagentLive` map on the live turn (keyed by
+ * child session id — the SubAgentCard's live data source: text appends,
+ * tool calls count, thinking flags, a last-activity word + a freshness
+ * stamp), and the subagent-status frames create/reset those entries (the
+ * PC's stream-store reset rule: a "running" frame clears the accumulators —
+ * a retry re-starts the child). The map is ADDITIVE machinery — no new
+ * TranscriptItem kind; the card reads it. Plus the sub-agent control
+ * routes (POST /sessions/:id/stop on the CHILD directly — R52-b — and
+ * POST /sessions/:parent/subagents/:child/retry — ADR-0022's resume) and
+ * the honest error fold (turn.error's additive errorClass/attempts fields
+ * since R43/R75 — the error card's class chip + attempts line).
  */
 
 import { apiJson, type ApiOutcome, type ApiSender, type SseSender } from "./api";
@@ -258,7 +277,20 @@ export type TranscriptItem =
       model: string | null;
     }
   | { kind: "meta"; key: string; text: string }
-  | { kind: "error"; key: string; code: string; message: string }
+  | {
+      kind: "error";
+      key: string;
+      code: string;
+      message: string;
+      /** R117-d2 — the provider-error class, when one was classified (the
+       * turn.error payload's additive field since R43/R71; the live error
+       * frame's details carry it too). null/absent = no chip renders. */
+      errorClass?: string | null;
+      /** R117-d2 — the total attempts when the transient retry ladder ran
+       * (the turn.error payload's additive field since R75; 1 = no ladder).
+       * The card renders the attempts line only when > 1. */
+      attempts?: number | null;
+    }
   | { kind: "debug"; key: string; content: string; live: boolean };
 
 // ── small pure helpers ──────────────────────────────────────────────────────
@@ -508,7 +540,21 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
       case "turn.error": {
         const code = readString(payload, "code") ?? "ERROR";
         const message = readString(payload, "message") ?? "the turn failed";
-        items.push({ kind: "error", key: `e${event.seq}`, code, message });
+        // R117-d2 — the honesty fields the payload has carried since
+        // R43/R75 (additive): the classified provider-error class + the
+        // retry ladder's exhausted attempt count. Absent/malformed → null
+        // (the card renders neither chip; never a guess).
+        items.push({
+          kind: "error",
+          key: `e${event.seq}`,
+          code,
+          message,
+          errorClass: readString(payload, "errorClass"),
+          attempts:
+            typeof payload.attempts === "number" && Number.isFinite(payload.attempts)
+              ? payload.attempts
+              : null,
+        });
         break;
       }
       case "turn.warning": {
@@ -686,6 +732,18 @@ export type StreamTurnFrame =
       detail?: string;
     }
   | {
+      /** R117-d2 — the child's LIVE raw stream mirrored onto the parent's
+       * channel (orchestrator.ts's wrappedEmit): `sessionId` is the CHILD,
+       * `inner` the child's own StreamTurnEvent (text-delta/thinking-delta/
+       * tool-call/tool-result/…). The phone accumulates the inner deltas on
+       * the live turn's `subagentLive` map — the frames NEVER land as
+       * transcript items (mobile-scale mirror of the PC's stream-store). */
+      type: "subagent-event";
+      sessionId: string;
+      parentSessionId: string;
+      inner: unknown;
+    }
+  | {
       type: "agent-question";
       sessionId: string;
       questionId: string;
@@ -740,6 +798,45 @@ export function isTerminalFrameType(type: string): boolean {
 
 export type LivePhase = "idle" | "streaming" | "stopping";
 
+/**
+ * R117-d2 — ONE LIVE SUB-AGENT's accumulated stream state: the SubAgentCard's
+ * live data source (the mobile-scale mirror of the PC's stream-store
+ * SubAgentLiveEntry). An entry is BORN from a `subagent-status` frame (the
+ * only frame family that knows the child's role/task/parent) and then
+ * accumulates the child's inner deltas off `subagent-event` envelopes:
+ *   · text       — inner text-delta frames append (streamed `delta` tokens,
+ *                  the sync path's per-step `text` snapshots — both shapes
+ *                  ride the same frame type, exactly as the PC reads them)
+ *   · thinking   — inner thinking-delta frames append (the card's
+ *                  "thinking…" flag derives from it)
+ *   · toolCalls  — inner tool-call frames count (the current attempt)
+ *   · lastActivity — the latest tool step's one-line summary
+ *   · updatedAtMs  — the last frame that touched this child (freshness)
+ * RESET RULE (the PC's own): a `subagent-status` frame with status
+ * "running" clears the accumulators — a retry re-starts the child, so the
+ * live view starts fresh; a terminal status keeps the frozen tail (the
+ * card bridges the settle while the rehydrate lands).
+ */
+export interface SubAgentLiveEntry {
+  childSessionId: string;
+  /** The delegating PARENT session (the retry route's first path segment). */
+  parentSessionId: string;
+  /** The latest subagent-status frame's verdict (raw wire vocabulary). */
+  status: string;
+  /** The child's live text so far (inner text-delta frames append). */
+  text: string;
+  /** The child's live thinking so far (inner thinking-delta frames append). */
+  thinking: string;
+  /** Count of inner tool-call frames in the CURRENT attempt. */
+  toolCalls: number;
+  /** Human one-line summary of the child's latest tool step (null before
+   * the first tool frame). */
+  lastActivity: string | null;
+  /** Wall-clock ms of the last frame that touched this child (the reducer's
+   * own `now` — pure + testable, like every other stamp here). */
+  updatedAtMs: number;
+}
+
 export interface LiveTurn {
   phase: LivePhase;
   /** The transcript (persisted base + live items appended in order). */
@@ -754,8 +851,25 @@ export interface LiveTurn {
   model: string | null;
   /** Set when a terminal frame arrived — the screen closes + rehydrates. */
   terminal: "done" | "stopped" | "error" | null;
-  /** The error frame's payload when terminal === "error". */
-  error: { code: string; message: string } | null;
+  /** The error frame's payload when terminal === "error". R117-d2: the
+   * payload now carries the honesty fields the wire rides in `details`
+   * (errorClass/attempts — the error card's class chip + attempts line). */
+  error: TurnErrorLive | null;
+  /** R117-d2 — the LIVE SUB-AGENT map, keyed by CHILD session id (absent
+   * until the first subagent-status frame — additive state, never an item
+   * kind; the SubAgentCard reads its entry for the live render + the
+   * Stop/Retry affordances). */
+  subagentLive?: Record<string, SubAgentLiveEntry>;
+}
+
+/** R117-d2 — the live error frame's payload: code + message + the honesty
+ * fields the route's `details` object carries (errorClass/attempts, both
+ * additive — absent on validation refusals + older sidecars). */
+export interface TurnErrorLive {
+  code: string;
+  message: string;
+  errorClass?: string | null;
+  attempts?: number | null;
 }
 
 /** Cap on the live assistant's delta chunks — beyond it the oldest chunks
@@ -783,6 +897,65 @@ export function appendToolInputRaw(prev: string | null, delta: string): string {
   if (base.length >= MAX_TOOL_INPUT_RAW) return base;
   const next = base + delta;
   return next.length > MAX_TOOL_INPUT_RAW ? next.slice(0, MAX_TOOL_INPUT_RAW) : next;
+}
+
+/** R117-d2 — the last-activity word's length cap (the PC's own 72 — one
+ * quiet line, never a wall). */
+const SUBAGENT_ACTIVITY_CAP = 72;
+
+/**
+ * R117-d2 — human one-line summary of the child's latest tool step (the
+ * SubAgentCard's live activity line — the PC's summarizeToolActivity twin):
+ * a tool-call names the call + its args; a tool-result names the call + its
+ * ✓/✗ verdict + output excerpt. Pure; exported for the tests.
+ */
+export function summarizeSubAgentToolActivity(
+  inner: Record<string, unknown>,
+  kind: "tool-call" | "tool-result",
+): string {
+  const toolName = typeof inner.toolName === "string" ? inner.toolName : "tool";
+  if (kind === "tool-call") {
+    const args = typeof inner.argsSummary === "string" ? inner.argsSummary.trim() : "";
+    return `${toolName}${args !== "" ? ` ${args}` : ""}`.slice(0, SUBAGENT_ACTIVITY_CAP);
+  }
+  const out = typeof inner.outputSummary === "string" ? inner.outputSummary.trim() : "";
+  const mark = inner.ok === true ? "✓" : "✗";
+  return out !== ""
+    ? `${toolName} ${mark} ${out}`.slice(0, SUBAGENT_ACTIVITY_CAP)
+    : `${toolName} ${mark}`;
+}
+
+/**
+ * R117-d2 — upsert one child's LIVE entry off a `subagent-status` frame (the
+ * entry's only birth + reset path): status/parent always from the frame, the
+ * accumulators RESET on a fresh "running" (the retry re-start rule — the
+ * PC's stream-store semantics verbatim) and carried otherwise (the frozen
+ * tail bridges the settle while the rehydrate lands). Pure.
+ */
+export function upsertSubAgentLiveEntry(
+  map: Record<string, SubAgentLiveEntry> | undefined,
+  frame: {
+    childSessionId: string;
+    parentSessionId: string;
+    status: string;
+    now: number;
+  },
+): Record<string, SubAgentLiveEntry> {
+  const prev = map?.[frame.childSessionId];
+  const restarted = frame.status === "running";
+  return {
+    ...(map ?? {}),
+    [frame.childSessionId]: {
+      childSessionId: frame.childSessionId,
+      parentSessionId: frame.parentSessionId,
+      status: frame.status,
+      text: restarted ? "" : prev?.text ?? "",
+      thinking: restarted ? "" : prev?.thinking ?? "",
+      toolCalls: restarted ? 0 : prev?.toolCalls ?? 0,
+      lastActivity: prev?.lastActivity ?? null,
+      updatedAtMs: frame.now,
+    },
+  };
 }
 
 /**
@@ -1172,6 +1345,11 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
       // parent's persisted log carries no per-transition events, so the
       // rehydrate folds the delegate_task tool cards instead (the desktop's
       // own honesty limit, mirrored).
+      // R117-d2: the SAME frame family also upserts the child's LIVE entry on
+      // the turn's subagentLive map (the card's live data source — see
+      // SubAgentLiveEntry). The card upsert + the map upsert share one
+      // frame because the status frame is the ONLY place the child's
+      // role/task/parent ride the wire.
       flushAssistant();
       const childSessionId = typeof frame.sessionId === "string" ? frame.sessionId : "";
       const role = typeof frame.role === "string" ? frame.role : "sub-agent";
@@ -1197,6 +1375,72 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
       } else {
         items.push(card);
       }
+      if (childSessionId !== "") {
+        next.subagentLive = upsertSubAgentLiveEntry(next.subagentLive, {
+          childSessionId,
+          parentSessionId: typeof frame.parentSessionId === "string" ? frame.parentSessionId : "",
+          status,
+          now,
+        });
+      }
+      break;
+    }
+    case "subagent-event": {
+      // R117-d2 — the child's LIVE raw stream, mirrored onto the parent's
+      // channel as {type:"subagent-event", sessionId: <child>,
+      // parentSessionId, inner}. MOBILE SCALE of the PC's stream-store
+      // handling: the inner deltas accumulate on the child's LIVE entry
+      // (text appends, thinking appends, tool calls count, the latest tool
+      // step becomes the last-activity word) — never a transcript item.
+      // An envelope for a child with NO live entry drops (the PC's own
+      // prev-undefined guard: the entry is born from a status frame, and
+      // deltas for an unknown child would have nowhere honest to land).
+      // Inner approvals/finish/meta frames fall through untouched: the
+      // approvals INBOX (GET /approvals lists child approvals too) owns the
+      // decision surface on mobile, and the terminal statuses ride the
+      // next subagent-status frame anyway.
+      const childSessionId = typeof frame.sessionId === "string" ? frame.sessionId : "";
+      const prevMap = next.subagentLive;
+      const prev = childSessionId !== "" ? prevMap?.[childSessionId] : undefined;
+      if (childSessionId === "" || prevMap === undefined || prev === undefined) break;
+      const inner = isRecord(frame.inner) ? frame.inner : null;
+      if (inner === null) break; // malformed envelope — never a guess
+      const innerType = typeof inner.type === "string" ? inner.type : "";
+      let text = prev.text;
+      let thinking = prev.thinking;
+      let toolCalls = prev.toolCalls;
+      let lastActivity = prev.lastActivity;
+      if (innerType === "text-delta") {
+        // Streamed children send token-level `delta`s; the sync path sends
+        // per-step snapshots as `text` — accumulate whichever the frame
+        // carries (the PC's exact twin).
+        const chunk =
+          typeof inner.delta === "string"
+            ? inner.delta
+            : typeof inner.text === "string"
+              ? inner.text
+              : "";
+        if (chunk !== "") text = prev.text + chunk;
+      } else if (innerType === "thinking-delta") {
+        const delta = typeof inner.delta === "string" ? inner.delta : "";
+        if (delta !== "") thinking = prev.thinking + delta;
+      } else if (innerType === "tool-call") {
+        toolCalls = prev.toolCalls + 1;
+        lastActivity = summarizeSubAgentToolActivity(inner, "tool-call");
+      } else if (innerType === "tool-result") {
+        lastActivity = summarizeSubAgentToolActivity(inner, "tool-result");
+      }
+      next.subagentLive = {
+        ...prevMap,
+        [childSessionId]: {
+          ...prev,
+          text,
+          thinking,
+          toolCalls,
+          lastActivity,
+          updatedAtMs: now,
+        },
+      };
       break;
     }
     case "todo-updated": {
@@ -1365,9 +1609,22 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
     case "error": {
       next.phase = "idle";
       next.terminal = "error";
+      // R117-d2 — the honesty fields the route's `details` object rides
+      // (additive: errorClass since the R71 classification, attempts since
+      // the R75 ladder; both absent on validation refusals + older
+      // sidecars — the card renders neither chip then).
+      const details = isRecord(frame.details) ? frame.details : null;
       next.error = {
         code: typeof frame.code === "string" ? frame.code : "ERROR",
         message: typeof frame.message === "string" ? frame.message : "the turn failed",
+        errorClass:
+          details !== null && typeof details.errorClass === "string"
+            ? details.errorClass
+            : null,
+        attempts:
+          details !== null && typeof details.attempts === "number" && Number.isFinite(details.attempts)
+            ? details.attempts
+            : null,
       };
       // R116-m — the failed rung: the turn's OWN user card (the last one
       // still in flight — "sending" or "sent") flips to "failed" while the
@@ -1390,6 +1647,8 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
         key: liveItemKey(now, `err${items.length}`),
         code: next.error.code,
         message: next.error.message,
+        errorClass: next.error.errorClass ?? null,
+        attempts: next.error.attempts ?? null,
       });
       break;
     }
@@ -1728,7 +1987,10 @@ export function openTurnStream(
 }
 
 /** POST stop — the running turn aborts server-side; the stream's own
- * {type:"stopped"} frame (or the rehydrate) confirms it. */
+ * {type:"stopped"} frame (or the rehydrate) confirms it. R117-d2: the SAME
+ * route stops a registered SUB-AGENT child directly (R52-b — the child's own
+ * turn-registry entry aborts, the parent turn continues and gets the honest
+ * "stopped by the owner" report; the SubAgentCard's Stop affordance rides it). */
 export async function postStop(
   sender: ApiSender,
   sessionId: string,
@@ -1736,6 +1998,27 @@ export async function postStop(
   return apiJson<{ ok: boolean; stopped: boolean }>(
     sender,
     `/sessions/${encodeURIComponent(sessionId)}/stop`,
+    { method: "POST", bodyText: "{}" },
+  );
+}
+
+/**
+ * R117-d2 — POST /sessions/:parent/subagents/:child/retry — the SubAgentCard's
+ * Retry affordance (ADR-0022's resume: the child re-runs from its own event
+ * log, re-acquiring a concurrency slot). The parent id is the LIVE entry's
+ * own parentSessionId (the subagent-status frame's), the child the card's.
+ * 200 → the retried child's queued/running status frames follow on the
+ * stream; 404 = unknown child under that parent; 409 = already running;
+ * 502 = the provider refused the re-run (the honest failure note).
+ */
+export async function postSubAgentRetry(
+  sender: ApiSender,
+  parentSessionId: string,
+  childSessionId: string,
+): Promise<ApiOutcome<{ ok: boolean; message: string }>> {
+  return apiJson<{ ok: boolean; message: string }>(
+    sender,
+    `/sessions/${encodeURIComponent(parentSessionId)}/subagents/${encodeURIComponent(childSessionId)}/retry`,
     { method: "POST", bodyText: "{}" },
   );
 }

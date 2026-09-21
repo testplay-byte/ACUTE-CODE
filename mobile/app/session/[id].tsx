@@ -115,6 +115,16 @@
  * "Retrying automatically…" micro line under the error card is the owner's
  * proof the screen is not dead — and the back chevron gains the CHIP grammar
  * (donts #41: 44px target, subtle fill, hairline border, RADIUS_CHIP).
+ *
+ * ROUND-117 (R117-d2 — the mobile multi-agent parity leg): the transcript's
+ * live sub-agent map rides down to the cards (live?.subagentLive → the
+ * SubAgentCard's live rule + last-activity line + Stop/Retry affordances —
+ * the applyLiveFrame reducer owns every mutation), and the error cards' Retry
+ * is a screen-owned callback (onRetryFailedTurn): the failed turn's user
+ * message — the last user item BEFORE the error card in chat order — re-sends
+ * through the normal send path (onSend), exactly the PC panel's binding. A
+ * live turn refuses honestly at the tap (the stream route's own 409 would
+ * say it later; the quiet error line says it now).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -799,6 +809,46 @@ export default function SessionScreen() {
   // running mode all read this one truth.
   const turnLive = liveRunning || remoteRunning;
 
+  // ── R117-d2 — the error cards' Retry (the screen owns the re-send) ─────────
+
+  /** The failed turn's user message: the LAST user item BEFORE the error
+   * card in chat order (displayItems is oldest → newest; the inverted
+   * list's `data` is the reverse — read the memo, never the list). Null
+   * when no user message precedes the card — never a guess. */
+  const retryContentForError = useCallback(
+    (errorKey: string): string | null => {
+      const idx = displayItems.findIndex((it) => it.key === errorKey);
+      if (idx === -1) return null;
+      for (let i = idx - 1; i >= 0; i -= 1) {
+        const it = displayItems[i];
+        if (it !== undefined && it.kind === "user") return it.content;
+      }
+      return null;
+    },
+    [displayItems],
+  );
+
+  /** The error card's Retry: re-send the failed turn's user message as a NEW
+   * turn through the normal send path (the PC's onRetry contract — the card
+   * calls, the screen binds the message). A live turn refuses honestly at
+   * the tap; an unresolvable card says so too — both through the quiet
+   * error line the composer already owns. */
+  const onRetryFailedTurn = useCallback(
+    (errorKey: string): void => {
+      if (turnLive) {
+        setError("a turn is already running — retry once it finishes");
+        return;
+      }
+      const content = retryContentForError(errorKey);
+      if (content === null || content.trim() === "") {
+        setError("couldn't find the message to retry");
+        return;
+      }
+      onSend(content, {});
+    },
+    [turnLive, retryContentForError, onSend],
+  );
+
   // The composer's slice of the sheet state (R116-l: the kebab's menu is the
   // separate `menuOpen` boolean, so `sheet` is now PURELY the composer's six
   // values and passes straight through), and the referentially guarded
@@ -1020,6 +1070,10 @@ export default function SessionScreen() {
                 item={item}
                 onApprovalDecide={() => router.navigate("/approvals")}
                 onAnswerQuestion={onAnswerQuestion}
+                subagentLive={live?.subagentLive}
+                onRetryError={
+                  item.kind === "error" ? () => onRetryFailedTurn(item.key) : undefined
+                }
               />
             )}
             ItemSeparatorComponent={ItemSeparator}

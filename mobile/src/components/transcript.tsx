@@ -43,14 +43,30 @@
  *     error card is compact: one-line code head + the message clamped to 3
  *     lines with the expand grammar behind it).
  *
+ * ROUND-117 (R117-d2 — the multi-agent parity leg): the SubAgentCard grows
+ * up — a LIVE leg while the child streams (a 2px BREATHING accent rule at
+ * the card's top + a single last-activity line off the live turn's
+ * subagentLive map: the latest tool step, the thinking flag, the tool-call
+ * count), a STOP affordance while it runs (POST /sessions/:childId/stop on
+ * the CHILD directly — R52-b), and a RETRY affordance once it failed or
+ * was stopped (POST /sessions/:parent/subagents/:child/retry — ADR-0022's
+ * resume-from-the-event-log); both are single-line decision rows with
+ * honest busy states + failure notes, OUTSIDE the tap-to-open region. The
+ * ErrorCard gains the PC's honesty set where the wire already carries the
+ * data — the errorClass chip + the attempts line ("after N attempts" — the
+ * wire rides the exhausted count), Copy details (the platform clipboard),
+ * and Retry (a callback prop — the SCREEN owns the re-send). The cards stay
+ * COMPACT (R116-m grammar): the richness is in the LINES, not the size.
+ *
  * One renderer for BOTH sources — the persisted fold and the live stream
  * produce the same TranscriptItem union (features/sessions.ts — the data
  * model's status rung is this wave's only addition there).
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
+import * as Clipboard from "expo-clipboard";
 import Animated, {
   useAnimatedStyle,
   useReducedMotion,
@@ -60,8 +76,9 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { BookOpenText, Check, ChevronDown, ChevronUp, CircleAlert, CircleX, Clock, FileCode2, ImageIcon, SquareTerminal, Wrench } from "lucide-react-native";
+import { BookOpenText, Check, ChevronDown, ChevronUp, CircleAlert, CircleX, Clock, Copy, FileCode2, ImageIcon, RefreshCw, Square, SquareTerminal, Wrench } from "lucide-react-native";
 import { useTheme, useChatPrefs } from "@/design/theme";
+import { decisionHaptic, selectionHaptic, warningHaptic } from "@/design/haptics";
 import { Badge, FadeInUp, Skeleton, TypeBody, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
 import { MarkdownText } from "@/components/markdown-text";
 import { ImageViewer } from "@/components/image-viewer";
@@ -97,8 +114,13 @@ import {
   TYPE_BODY,
   TYPE_CAPTION,
 } from "@/design/tokens";
-import { subagentStatusLabel } from "@/features/sessions";
-import type { AttachmentView, TranscriptItem, UserDeliveryStatus } from "@/features/sessions";
+import { postStop, postSubAgentRetry, subagentStatusLabel } from "@/features/sessions";
+import type {
+  AttachmentView,
+  SubAgentLiveEntry,
+  TranscriptItem,
+  UserDeliveryStatus,
+} from "@/features/sessions";
 
 // ── local drawing constants (chat.md's own geometry — the file's class) ─────
 
@@ -119,6 +141,11 @@ const ERROR_MESSAGE_EXPAND_CHARS = 180;
 /** The offset between the delivered double-check's two checks (the back one
  * rides 3px under the front — chat.md's R116 amendment). */
 const TICK_DOUBLE_OFFSET = 3;
+/** R117-d2 — the sub-agent card's live accent rule + the copied-word flip's
+ * quiet dwell (ms): the live caret's own 550ms rhythm and the PC's ~1.2s
+ * "Copied" window, widened a beat for the smaller type. */
+const SUBAGENT_LIVE_LEG_MS = 550;
+const COPY_STATE_DWELL_MS = 1_600;
 
 // ── the list ────────────────────────────────────────────────────────────────
 
@@ -134,10 +161,16 @@ export function TranscriptList({
   items,
   onApprovalDecide,
   onAnswerQuestion,
+  subagentLive,
+  onRetryError,
 }: {
   items: TranscriptItem[];
   onApprovalDecide?: (approvalId: string) => void;
   onAnswerQuestion?: QuestionAnswerFn;
+  /** R117-d2 — the live sub-agent map (the SubAgentCard's live data source). */
+  subagentLive?: Record<string, SubAgentLiveEntry>;
+  /** R117-d2 — the error card's Retry (the screen owns the re-send). */
+  onRetryError?: () => void;
 }) {
   return (
     <View style={styles.list} accessibilityLabel="Conversation transcript">
@@ -147,6 +180,8 @@ export function TranscriptList({
           item={item}
           onApprovalDecide={onApprovalDecide}
           onAnswerQuestion={onAnswerQuestion}
+          subagentLive={subagentLive}
+          onRetryError={onRetryError}
         />
       ))}
     </View>
@@ -158,10 +193,19 @@ export function TranscriptItemView({
   item,
   onApprovalDecide,
   onAnswerQuestion,
+  subagentLive,
+  onRetryError,
 }: {
   item: TranscriptItem;
   onApprovalDecide?: (approvalId: string) => void;
   onAnswerQuestion?: QuestionAnswerFn;
+  /** R117-d2 — the live sub-agent map (the SubAgentCard's live data source).
+   * Absent on a settled transcript (no live overlay) — the card renders its
+   * quiet settled shape. */
+  subagentLive?: Record<string, SubAgentLiveEntry>;
+  /** R117-d2 — the error card's Retry (zero-arg: the SCREEN binds the failed
+   * turn's user message before calling — the PC's own contract). */
+  onRetryError?: () => void;
 }) {
   switch (item.kind) {
     case "user":
@@ -185,7 +229,7 @@ export function TranscriptItemView({
     case "todo":
       return <TodoCard item={item} />;
     case "subagent":
-      return <SubAgentCard item={item} />;
+      return <SubAgentCard item={item} live={subagentLive?.[item.childSessionId]} />;
     case "image":
       return <ImageTile item={item} />;
     case "thinking":
@@ -193,7 +237,15 @@ export function TranscriptItemView({
     case "meta":
       return <MetaLine text={item.text} />;
     case "error":
-      return <ErrorCard code={item.code} message={item.message} />;
+      return (
+        <ErrorCard
+          code={item.code}
+          message={item.message}
+          errorClass={item.errorClass ?? null}
+          attempts={item.attempts ?? null}
+          onRetry={onRetryError}
+        />
+      );
     case "debug":
       return <DebugBlock content={item.content} live={item.live} />;
   }
@@ -1573,18 +1625,134 @@ function TodoCard({ item }: { item: TranscriptItem & { kind: "todo" } }) {
 
 // ── the sub-agent card (live frames — tap opens the child transcript) ──────
 
-function SubAgentCard({ item }: { item: TranscriptItem & { kind: "subagent" } }) {
+/**
+ * R117-d2 — the card grows up (the mobile multi-agent parity leg):
+ *   · LIVE — while the child streams, a 2px BREATHING accent rule rides the
+ *     card's top (the header live-line's own rhythm) and ONE last-activity
+ *     line names what the child is doing right now (the subagentLive
+ *     entry's word: the latest tool step, else the thinking flag, else
+ *     "writing…"/"waiting…" — with the current attempt's tool-call count).
+ *   · STOP — a single danger decision row while the child runs
+ *     (POST /sessions/:childId/stop on the CHILD directly, R52-b: the
+ *     parent turn continues); optimistic busy ("Stopping…") that holds
+ *     until the terminal status frame settles the card, exactly the PC
+ *     panel's own semantics.
+ *   · RETRY — a single accent decision row once the child failed or was
+ *     stopped (POST /sessions/:parent/subagents/:child/retry — the event
+ *     log IS the resume point); the retried child's queued/running frames
+ *     flip the card back to its live shape.
+ * Both rows sit OUTSIDE the tap-to-open region (a decision is not a
+ * navigation — the ToolCard/TodoCard grammar of a pressable head over a
+ * plain body), carry honest busy states + failure notes, and fire the
+ * decision haptic on tap.
+ */
+function SubAgentCard({
+  item,
+  live,
+}: {
+  item: TranscriptItem & { kind: "subagent" };
+  /** R117-d2 — the child's LIVE entry (the screen passes the live turn's
+   * subagentLive map; undefined on a settled transcript — no live overlay). */
+  live?: SubAgentLiveEntry;
+}) {
   const { tokens } = useTheme();
   const prefs = useChatPrefs();
   const router = useRouter();
   const running = item.status === "running" || item.status === "queued";
   const failed = item.status === "failed";
   const tone = failed ? tokens.danger : running ? tokens.running : tokens.success;
+
+  // ── the LIVE leg: the breathing rule + the last-activity word ─────────────
+  const liveAttached = running && live !== undefined;
+  const activityWord =
+    live === undefined
+      ? null
+      : live.lastActivity !== null
+        ? live.lastActivity
+        : live.thinking !== "" && live.text === ""
+          ? "thinking…"
+          : live.text !== ""
+            ? "writing its reply…"
+            : "waiting for its first response";
+  const activityLine =
+    activityWord === null || live === undefined
+      ? null
+      : live.toolCalls > 0
+        ? `${activityWord} · ${live.toolCalls} call${live.toolCalls === 1 ? "" : "s"}`
+        : activityWord;
+
+  // ── STOP (R52-b: the route aborts the child's OWN turn registration) ──────
+  // Optimistic, the PC panel's exact semantics: the row flips to "Stopping…"
+  // immediately and the terminal subagent-status frame settles the card; the
+  // busy state clears only on a refusal (the honest note) or the settle.
+  const [stopSent, setStopSent] = useState(false);
+  const [stopNote, setStopNote] = useState<string | null>(null);
+  const stopping = stopSent && running;
+  const doStop = (): void => {
+    if (stopSent) return;
+    void decisionHaptic();
+    setStopSent(true);
+    setStopNote(null);
+    void postStop(getLinkManager(), item.childSessionId)
+      .then((outcome) => {
+        if (!outcome.ok) {
+          setStopNote(`couldn't stop — ${outcome.error.message}`);
+          setStopSent(false);
+        }
+        // ok → the failed status frame (detail "stopped by the owner") lands
+        // on the stream and settles the card; the busy state holds until it
+        // does (the effect below clears it on the flip).
+      })
+      .catch(() => {
+        setStopNote("couldn't stop — the host is offline");
+        setStopSent(false);
+      });
+  };
+
+  // ── RETRY (ADR-0022: the event log is the resume point) ───────────────────
+  const [retrying, setRetrying] = useState(false);
+  const [retryNote, setRetryNote] = useState<string | null>(null);
+  const doRetry = (): void => {
+    if (retrying) return;
+    const parentId = live?.parentSessionId ?? null;
+    if (parentId === null || parentId === "") {
+      setRetryNote("couldn't retry — the parent session is unknown");
+      return;
+    }
+    void decisionHaptic();
+    setRetrying(true);
+    setRetryNote(null);
+    void postSubAgentRetry(getLinkManager(), parentId, item.childSessionId)
+      .then((outcome) => {
+        if (!outcome.ok) {
+          setRetryNote(`couldn't retry — ${outcome.error.message}`);
+          setRetrying(false);
+        }
+        // ok → retryChild's own first status frame (running) lands on the
+        // stream and flips the card back to its live shape; the busy state
+        // holds until it does (the effect above spends it on the flip).
+      })
+      .catch(() => {
+        setRetryNote("couldn't retry — the host is offline");
+        setRetrying(false);
+      });
+  };
+
+  // The child's live status settles the optimistic busy states: a fresh
+  // attempt (queued/running — a retry took; retryChild's own first frame)
+  // spends the retrying state, and a settle (completed/failed — the stop's
+  // terminal frame) spends the stopping state. The rows re-derive from the
+  // real status either way.
+  useEffect(() => {
+    if (item.status === "running" || item.status === "queued") {
+      setRetrying(false);
+    } else {
+      setStopSent(false);
+    }
+  }, [item.status]);
+
   return (
-    <Pressable
-      accessibilityLabel={`Sub-agent ${item.role}${item.code !== null ? ` ${item.code}` : ""} — ${item.status}. ${item.task}. Open its transcript.`}
-      accessibilityRole="button"
-      onPress={() => router.push(`/session/${item.childSessionId}`)}
+    <View
       style={[
         styles.toolCard,
         {
@@ -1596,35 +1764,135 @@ function SubAgentCard({ item }: { item: TranscriptItem & { kind: "subagent" } })
         },
       ]}
     >
-      <View style={styles.toolHead}>
-        <View style={[styles.subagentBadge, { backgroundColor: tone }]}>
-          {failed ? (
-            <CircleX size={12} color="#FFFFFF" strokeWidth={2.4} />
-          ) : (
-            <Check size={12} color="#FFFFFF" strokeWidth={3} />
-          )}
+      {liveAttached && <SubAgentLiveLine color={tokens.accent} />}
+      <Pressable
+        accessibilityLabel={`Sub-agent ${item.role}${item.code !== null ? ` ${item.code}` : ""} — ${item.status}. ${item.task}. Open its transcript.`}
+        accessibilityRole="button"
+        onPress={() => router.push(`/session/${item.childSessionId}`)}
+        style={styles.subagentPressBody}
+      >
+        <View style={styles.toolHead}>
+          <View style={[styles.subagentBadge, { backgroundColor: tone }]}>
+            {failed ? (
+              <CircleX size={12} color="#FFFFFF" strokeWidth={2.4} />
+            ) : (
+              <Check size={12} color="#FFFFFF" strokeWidth={3} />
+            )}
+          </View>
+          <TypeMono style={{ color: tokens.text, fontFamily: fontFamily.monoMedium, flex: 1 }} numberOfLines={1}>
+            {item.role}
+            {item.code !== null ? ` ${item.code}` : ""}
+          </TypeMono>
+          <Badge tone={failed ? "danger" : running ? "running" : "success"}>{subagentStatusLabel(item.status)}</Badge>
         </View>
-        <TypeMono style={{ color: tokens.text, fontFamily: fontFamily.monoMedium, flex: 1 }} numberOfLines={1}>
-          {item.role}
-          {item.code !== null ? ` ${item.code}` : ""}
-        </TypeMono>
-        <Badge tone={failed ? "danger" : running ? "running" : "success"}>{subagentStatusLabel(item.status)}</Badge>
-      </View>
-      <TypeBody style={{ color: tokens.textSecondary }} numberOfLines={2}>
-        {item.task !== "" ? item.task : "sub-agent task"}
-      </TypeBody>
-      {item.model !== null && (
-        <TypeMono style={{ color: tokens.textTertiary, fontSize: 10.5 }} numberOfLines={1}>
-          {item.model}
-        </TypeMono>
+        <TypeBody style={{ color: tokens.textSecondary }} numberOfLines={2}>
+          {item.task !== "" ? item.task : "sub-agent task"}
+        </TypeBody>
+        {item.model !== null && (
+          <TypeMono style={{ color: tokens.textTertiary, fontSize: 10.5 }} numberOfLines={1}>
+            {item.model}
+          </TypeMono>
+        )}
+        {failed && item.detail !== null && (
+          <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
+            {item.detail}
+          </TypeCaption>
+        )}
+        {activityLine !== null && (
+          <TypeCaption
+            style={{ color: tokens.textTertiary }}
+            numberOfLines={1}
+            testID="subagent-live-activity"
+          >
+            {activityLine}
+          </TypeCaption>
+        )}
+        <TypeCaption style={{ color: tokens.textTertiary }}>tap to open its transcript →</TypeCaption>
+      </Pressable>
+      {running && (
+        <Pressable
+          accessibilityLabel={stopping ? "Stopping the sub-agent" : "Stop this sub-agent — the parent turn continues"}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: stopping }}
+          disabled={stopping}
+          onPress={doStop}
+          style={styles.subagentActionRow}
+          testID="subagent-stop"
+        >
+          <Square size={11} color={tokens.danger} strokeWidth={2.2} />
+          <TypeCaption
+            style={{ color: tokens.danger, fontFamily: fontFamily.bold }}
+            numberOfLines={1}
+          >
+            {stopping ? "Stopping…" : "Stop"}
+          </TypeCaption>
+          <TypeCaption style={{ color: tokens.textTertiary, flex: 1 }} numberOfLines={1}>
+            the parent turn continues
+          </TypeCaption>
+        </Pressable>
       )}
-      {failed && item.detail !== null && (
-        <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
-          {item.detail}
+      {stopNote !== null && (
+        <TypeCaption style={{ color: tokens.danger }} numberOfLines={2}>
+          {stopNote}
         </TypeCaption>
       )}
-      <TypeCaption style={{ color: tokens.textTertiary }}>tap to open its transcript →</TypeCaption>
-    </Pressable>
+      {failed && (
+        <Pressable
+          accessibilityLabel={retrying ? "Retrying the sub-agent" : "Retry the sub-agent — it resumes from where it stopped"}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: retrying }}
+          disabled={retrying}
+          onPress={doRetry}
+          style={styles.subagentActionRow}
+          testID="subagent-retry"
+        >
+          <RefreshCw size={11} color={tokens.accent} strokeWidth={2.2} />
+          <TypeCaption
+            style={{ color: tokens.accent, fontFamily: fontFamily.bold }}
+            numberOfLines={1}
+          >
+            {retrying ? "Retrying…" : "Retry"}
+          </TypeCaption>
+          <TypeCaption style={{ color: tokens.textTertiary, flex: 1 }} numberOfLines={1}>
+            resumes from where it stopped
+          </TypeCaption>
+        </Pressable>
+      )}
+      {retryNote !== null && (
+        <TypeCaption style={{ color: tokens.danger }} numberOfLines={2}>
+          {retryNote}
+        </TypeCaption>
+      )}
+    </View>
+  );
+}
+
+/**
+ * R117-d2 — the card's LIVE rule: a 2px accent line riding the card's top,
+ * breathing while the child streams (the live caret's own rhythm — motion.md
+ * §3, opacity 0.25↔1; reduced motion snaps it solid — §5). The style's
+ * negative margin mounts it flush above the head row.
+ */
+function SubAgentLiveLine({ color }: { color: string }) {
+  const reduced = useReducedMotion();
+  const opacity = useSharedValue(1);
+  useEffect(() => {
+    if (reduced) {
+      opacity.value = 1;
+      return;
+    }
+    opacity.value = withRepeat(
+      withSequence(withTiming(0.25, { duration: SUBAGENT_LIVE_LEG_MS }), withTiming(1, { duration: SUBAGENT_LIVE_LEG_MS })),
+      -1,
+      false,
+    );
+  }, [opacity, reduced]);
+  const animated = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return (
+    <Animated.View
+      accessibilityLabel="the sub-agent is streaming"
+      style={[animated, styles.subagentLiveLine, { backgroundColor: color }]}
+    />
   );
 }
 
@@ -1776,13 +2044,79 @@ function MetaLine({ text }: { text: string }) {
  * plausibly exceeds the clamp — more than 3 newlines, or long enough to
  * tail-truncate (~180 chars ≈ 3 body lines) — a message that fits never
  * offers a dead toggle.
+ *
+ * R117-d2 — the PC's honesty set, wherever the wire already carries the data
+ * (the turn.error payload + the live error frame's details have ridden these
+ * fields since R43/R71/R75): the errorClass chip (a quiet danger chip, the
+ * class spelled with spaces), the attempts line ("after N attempts" — the
+ * wire carries the retry ladder's exhausted COUNT, never a pair), a
+ * Copy-details row (code + class + attempts + message to the platform
+ * clipboard — expo-clipboard, manual.tsx's own carrier — with a quiet
+ * "Copied" dwell), and a Retry row wired to the screen's callback (the
+ * screen re-sends the failed turn's user message through the normal send
+ * path; absent callback → no row, exactly the PC's optional-onRetry). The
+ * card stays COMPACT — the richness is in the LINES, not the size.
  */
-function ErrorCard({ code, message }: { code: string; message: string }) {
+function ErrorCard({
+  code,
+  message,
+  errorClass,
+  attempts,
+  onRetry,
+}: {
+  code: string;
+  message: string;
+  /** The classified provider-error class (null = none rode the wire). */
+  errorClass?: string | null;
+  /** The retry ladder's exhausted attempt count (rendered only when > 1). */
+  attempts?: number | null;
+  /** Zero-arg — the SCREEN binds the failed turn's user message. */
+  onRetry?: () => void;
+}) {
   const { tokens } = useTheme();
   const prefs = useChatPrefs();
   const [expanded, setExpanded] = useState(false);
   const expandable =
     message.split("\n").length > ERROR_MESSAGE_CLAMP_LINES || message.length > ERROR_MESSAGE_EXPAND_CHARS;
+  const cls = errorClass ?? null;
+  const attemptCount =
+    attempts !== null && attempts !== undefined && attempts > 1 ? attempts : null;
+  // The copied-dwell's reset timer — cleared on unmount (a late setState on
+  // a dead card is noise, never a crash, but the cleanup is free).
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copyResetRef.current !== null) clearTimeout(copyResetRef.current);
+    };
+  }, []);
+  const detailsText = [
+    "Generation failed",
+    `Code: ${code}`,
+    ...(cls !== null ? [`Class: ${cls}`] : []),
+    ...(attemptCount !== null ? [`Attempts: ${attemptCount}`] : []),
+    `Error: ${message}`,
+  ].join("\n");
+  const onCopy = (): void => {
+    void Clipboard.setStringAsync(detailsText)
+      .then((ok) => {
+        if (ok) {
+          setCopyState("copied");
+          void selectionHaptic();
+        } else {
+          setCopyState("failed");
+          void warningHaptic();
+        }
+        if (copyResetRef.current !== null) clearTimeout(copyResetRef.current);
+        copyResetRef.current = setTimeout(() => setCopyState("idle"), COPY_STATE_DWELL_MS);
+      })
+      .catch(() => {
+        setCopyState("failed");
+        void warningHaptic();
+        if (copyResetRef.current !== null) clearTimeout(copyResetRef.current);
+        copyResetRef.current = setTimeout(() => setCopyState("idle"), COPY_STATE_DWELL_MS);
+      });
+  };
   const head = (
     <View style={styles.toolHead}>
       <TypeMono
@@ -1825,12 +2159,72 @@ function ErrorCard({ code, message }: { code: string; message: string }) {
       ) : (
         head
       )}
+      {(cls !== null || attemptCount !== null) && (
+        <View style={styles.errorChipsRow}>
+          {cls !== null && (
+            <View
+              accessibilityLabel={`provider error class ${cls}`}
+              style={[styles.errorChip, { backgroundColor: mixHex(tokens.card, tokens.danger, 0.12) }]}
+              testID="error-class-chip"
+            >
+              <TypeMono style={{ color: tokens.danger, fontSize: 10 }} numberOfLines={1}>
+                {cls.replace(/_/g, " ")}
+              </TypeMono>
+            </View>
+          )}
+          {attemptCount !== null && (
+            <View
+              accessibilityLabel={`after ${attemptCount} attempts`}
+              style={[styles.errorChip, { backgroundColor: tokens.subtle }]}
+              testID="error-attempts"
+            >
+              <TypeMono style={{ color: tokens.textSecondary, fontSize: 10 }} numberOfLines={1}>
+                after {attemptCount} attempt{attemptCount === 1 ? "" : "s"}
+              </TypeMono>
+            </View>
+          )}
+        </View>
+      )}
       <TypeBody
         style={{ color: tokens.textSecondary }}
         numberOfLines={expanded ? undefined : ERROR_MESSAGE_CLAMP_LINES}
       >
         {message}
       </TypeBody>
+      <View style={styles.errorActionsRow}>
+        <Pressable
+          accessibilityLabel="Copy the error details"
+          accessibilityRole="button"
+          onPress={onCopy}
+          style={styles.errorAction}
+          testID="error-copy"
+        >
+          <Copy size={12} color={tokens.textSecondary} strokeWidth={2.1} />
+          <TypeCaption
+            style={{
+              color: copyState === "copied" ? tokens.accent : tokens.textSecondary,
+              fontFamily: fontFamily.semibold,
+            }}
+            numberOfLines={1}
+          >
+            {copyState === "copied" ? "Copied" : copyState === "failed" ? "couldn't copy" : "Copy details"}
+          </TypeCaption>
+        </Pressable>
+        {onRetry !== undefined && (
+          <Pressable
+            accessibilityLabel="Retry the failed message"
+            accessibilityRole="button"
+            onPress={onRetry}
+            style={styles.errorAction}
+            testID="error-retry"
+          >
+            <RefreshCw size={12} color={tokens.danger} strokeWidth={2.1} />
+            <TypeCaption style={{ color: tokens.danger, fontFamily: fontFamily.bold }} numberOfLines={1}>
+              Retry
+            </TypeCaption>
+          </Pressable>
+        )}
+      </View>
     </View>
   );
 }
@@ -2139,6 +2533,58 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     alignItems: "center",
     justifyContent: "center",
+  },
+  /** R117-d2 — the card's LIVE rule: 2px full-width accent, breathing while
+   * the child streams (the header live-line's own geometry). The negative
+   * bottom margin cancels the card's row gap so the rule sits flush above
+   * the head — flipping the state moves the card's content by exactly its
+   * own 2px. */
+  subagentLiveLine: {
+    height: 2,
+    borderRadius: 1,
+    marginBottom: -spacing.sm,
+  },
+  /** R117-d2 — the tap-to-open region's own column gap (the card's gap now
+   * separates the region from the action rows, so the region carries its
+   * own). */
+  subagentPressBody: {
+    gap: spacing.sm,
+  },
+  /** R117-d2 — the Stop/Retry decision rows: ONE line (icon + bold verdict +
+   * a tertiary tail), the 44px touch-target law, never inside the
+   * tap-to-open region. */
+  subagentActionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    minHeight: 44,
+  },
+  /** R117-d2 — the error card's honesty chips row (class + attempts): the
+   * quiet chip grammar — small tinted pills, never badges. */
+  errorChipsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    flexWrap: "wrap",
+  },
+  errorChip: {
+    borderRadius: RADIUS_PILL,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    alignSelf: "flex-start",
+  },
+  /** R117-d2 — the error card's action row: Copy details + Retry side by
+   * side, each the 44px law, quiet text buttons (icon + caption). */
+  errorActionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.lg,
+  },
+  errorAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    minHeight: 44,
   },
   imageWrapRow: {
     alignSelf: "flex-start",

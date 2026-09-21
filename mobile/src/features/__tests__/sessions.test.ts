@@ -35,6 +35,7 @@ import {
   postQueue,
   postResolveQuestion,
   postStop,
+  postSubAgentRetry,
   queueBody,
   rebaseRemoteTurn,
   reduceRemoteTurnFrame,
@@ -1334,5 +1335,283 @@ describe("sessions — message timestamps ride the fold (R114-d)", () => {
     // Live cards: beginLiveTurn stamps the turn-time ISO.
     const turn = beginLiveTurn([], "go", 5_000);
     expect(turn.items[0]?.kind === "user" && turn.items[0].ts).toBe("1970-01-01T00:00:05.000Z");
+  });
+});
+
+// ── R117-d2: the live sub-agent stream + the honest error fold ──────────────
+
+describe("sessions — the live sub-agent stream (R117-d2)", () => {
+  /** One subagent-status frame for child_1 (the entry's only birth path). */
+  const statusFrame = (status: string) => ({
+    type: "subagent-status",
+    sessionId: "child_1",
+    parentSessionId: "sess_parent",
+    status,
+    task: "research the relay",
+    role: "researcher",
+    code: "A1B2",
+    model: "z-ai/glm-5.2:free",
+  });
+  /** One subagent-event envelope for child_1 (the child's inner frame rides
+   * `inner` — the runtime also stamps the child's sessionId inside). */
+  const eventFrame = (inner: Record<string, unknown>) => ({
+    type: "subagent-event",
+    sessionId: "child_1",
+    parentSessionId: "sess_parent",
+    inner: { sessionId: "child_1", ...inner },
+  });
+
+  it("a status frame BIRTHS the live entry (the map's shape) beside the card", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    expect(turn.subagentLive).toBeUndefined(); // absent until the first frame
+    turn = applyLiveFrame(turn, statusFrame("queued"), NOW + 1);
+    const entry = turn.subagentLive?.["child_1"];
+    expect(entry).toBeDefined();
+    expect(entry?.childSessionId).toBe("child_1");
+    expect(entry?.parentSessionId).toBe("sess_parent");
+    expect(entry?.status).toBe("queued");
+    expect(entry?.text).toBe("");
+    expect(entry?.thinking).toBe("");
+    expect(entry?.toolCalls).toBe(0);
+    expect(entry?.lastActivity).toBeNull();
+    expect(entry?.updatedAtMs).toBe(NOW + 1);
+    // the card is the SAME frame's other half — ONE card, no new item kinds
+    expect(turn.items.filter((item) => item.kind === "subagent")).toHaveLength(1);
+  });
+
+  it("inner deltas accumulate: thinking flags, text appends (streamed `delta` AND the sync path's `text`), the stamp moves", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, statusFrame("running"), NOW + 1);
+    turn = applyLiveFrame(turn, eventFrame({ type: "thinking-delta", delta: "plan" }), NOW + 2);
+    turn = applyLiveFrame(turn, eventFrame({ type: "thinking-delta", delta: " more" }), NOW + 3);
+    turn = applyLiveFrame(turn, eventFrame({ type: "text-delta", delta: "Hello" }), NOW + 4);
+    // the SYNC path's step snapshots ride the same frame type as `text`
+    turn = applyLiveFrame(turn, eventFrame({ type: "text-delta", text: " world" }), NOW + 5);
+    const entry = turn.subagentLive?.["child_1"];
+    expect(entry?.thinking).toBe("plan more");
+    expect(entry?.text).toBe("Hello world");
+    expect(entry?.updatedAtMs).toBe(NOW + 5);
+    // the deltas NEVER land as items — the optimistic user card + the ONE
+    // status card are the whole transcript
+    expect(turn.items).toHaveLength(2);
+  });
+
+  it("tool-call frames count + become the last-activity word; tool-results settle it with the ✓/✗ verdict (results never count)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, statusFrame("running"), NOW + 1);
+    turn = applyLiveFrame(
+      turn,
+      eventFrame({ type: "tool-call", toolName: "read_file", argsSummary: "path: src/a.ts" }),
+      NOW + 2,
+    );
+    turn = applyLiveFrame(
+      turn,
+      eventFrame({ type: "tool-call", toolName: "edit_file", argsSummary: "path: src/b.ts" }),
+      NOW + 3,
+    );
+    expect(turn.subagentLive?.["child_1"]?.toolCalls).toBe(2);
+    expect(turn.subagentLive?.["child_1"]?.lastActivity).toBe("edit_file path: src/b.ts");
+    turn = applyLiveFrame(
+      turn,
+      eventFrame({ type: "tool-result", toolName: "read_file", ok: true, outputSummary: "42 lines" }),
+      NOW + 4,
+    );
+    expect(turn.subagentLive?.["child_1"]?.lastActivity).toBe("read_file ✓ 42 lines");
+    expect(turn.subagentLive?.["child_1"]?.toolCalls).toBe(2);
+    turn = applyLiveFrame(
+      turn,
+      eventFrame({ type: "tool-result", toolName: "edit_file", ok: false }),
+      NOW + 5,
+    );
+    expect(turn.subagentLive?.["child_1"]?.lastActivity).toBe("edit_file ✗");
+  });
+
+  it("a running status frame RESETS the accumulators (a retry re-starts the child); a terminal frame keeps the frozen tail", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, statusFrame("running"), NOW + 1);
+    turn = applyLiveFrame(turn, eventFrame({ type: "text-delta", delta: "partial" }), NOW + 2);
+    turn = applyLiveFrame(turn, eventFrame({ type: "thinking-delta", delta: "hmm" }), NOW + 3);
+    turn = applyLiveFrame(
+      turn,
+      eventFrame({ type: "tool-call", toolName: "read_file", argsSummary: "path: a" }),
+      NOW + 4,
+    );
+    // completed → the frozen tail rides (the settle bridge while the
+    // rehydrate lands)
+    turn = applyLiveFrame(turn, statusFrame("completed"), NOW + 5);
+    expect(turn.subagentLive?.["child_1"]?.status).toBe("completed");
+    expect(turn.subagentLive?.["child_1"]?.text).toBe("partial");
+    expect(turn.subagentLive?.["child_1"]?.toolCalls).toBe(1);
+    // a fresh running (the owner's Retry took) → cleared, the PC's rule
+    turn = applyLiveFrame(turn, statusFrame("running"), NOW + 6);
+    expect(turn.subagentLive?.["child_1"]?.text).toBe("");
+    expect(turn.subagentLive?.["child_1"]?.thinking).toBe("");
+    expect(turn.subagentLive?.["child_1"]?.toolCalls).toBe(0);
+    // lastActivity CARRIES across status frames (the PC's own semantics)
+    expect(turn.subagentLive?.["child_1"]?.lastActivity).toBe("read_file path: a");
+  });
+
+  it("envelopes for an UNKNOWN child drop (no entry, no mutation) — the PC's guard; malformed inner/ids drop too", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(
+      turn,
+      {
+        type: "subagent-event",
+        sessionId: "ghost",
+        parentSessionId: "sess_parent",
+        inner: { type: "text-delta", delta: "boo" },
+      },
+      NOW + 1,
+    );
+    expect(turn.subagentLive).toBeUndefined();
+    turn = applyLiveFrame(turn, statusFrame("running"), NOW + 2);
+    // malformed inner (not a record)
+    turn = applyLiveFrame(
+      turn,
+      { type: "subagent-event", sessionId: "child_1", parentSessionId: "sess_parent", inner: "junk" },
+      NOW + 3,
+    );
+    // missing child sessionId
+    turn = applyLiveFrame(
+      turn,
+      {
+        type: "subagent-event",
+        sessionId: "",
+        parentSessionId: "sess_parent",
+        inner: { type: "text-delta", delta: "x" },
+      },
+      NOW + 4,
+    );
+    // an inner frame the phone doesn't fold (finish) — falls through quietly
+    turn = applyLiveFrame(
+      turn,
+      {
+        type: "subagent-event",
+        sessionId: "child_1",
+        parentSessionId: "sess_parent",
+        inner: { type: "finish", usage: { inputTokens: 5, outputTokens: 2 } },
+      },
+      NOW + 5,
+    );
+    expect(turn.subagentLive?.["child_1"]?.text).toBe("");
+    expect(turn.subagentLive?.["child_1"]?.toolCalls).toBe(0);
+    expect(turn.items.filter((item) => item.kind === "subagent")).toHaveLength(1);
+  });
+
+  it("two children keep SEPARATE entries (the map is keyed by child session id)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, statusFrame("running"), NOW + 1);
+    turn = applyLiveFrame(
+      turn,
+      {
+        type: "subagent-status",
+        sessionId: "child_2",
+        parentSessionId: "sess_parent",
+        status: "running",
+        task: "write tests",
+        role: "coder",
+      },
+      NOW + 2,
+    );
+    turn = applyLiveFrame(turn, eventFrame({ type: "text-delta", delta: "one" }), NOW + 3);
+    turn = applyLiveFrame(
+      turn,
+      {
+        type: "subagent-event",
+        sessionId: "child_2",
+        parentSessionId: "sess_parent",
+        inner: { type: "text-delta", delta: "two" },
+      },
+      NOW + 4,
+    );
+    expect(turn.subagentLive?.["child_1"]?.text).toBe("one");
+    expect(turn.subagentLive?.["child_2"]?.text).toBe("two");
+    expect(Object.keys(turn.subagentLive ?? {})).toHaveLength(2);
+  });
+});
+
+describe("sessions — the honest error fold (R117-d2)", () => {
+  it("the persisted turn.error fold reads errorClass + attempts (additive; absent/malformed → null)", () => {
+    const items = foldSessionEvents([
+      event(1, "message.user", { content: "go" }),
+      event(2, "turn.error", {
+        code: "PROVIDER_ERROR",
+        message: "the key was rejected",
+        model: "z-ai/glm-5.2:free",
+        providerId: "z-ai",
+        providerError: "raw provider text",
+        userSeq: 1,
+        errorClass: "rate_limit",
+        attempts: 3,
+      }),
+      event(3, "turn.error", { code: "NO_OUTPUT", message: "blank", attempts: "not-a-number" }),
+    ]);
+    const errors = items.filter((item) => item.kind === "error");
+    expect(errors).toHaveLength(2);
+    const rich = errors[0];
+    expect(rich?.kind === "error" && rich.errorClass).toBe("rate_limit");
+    expect(rich?.kind === "error" && rich.attempts).toBe(3);
+    const bare = errors[1];
+    expect(bare?.kind === "error" && bare.errorClass).toBeNull();
+    expect(bare?.kind === "error" && bare.attempts).toBeNull(); // never a guess
+  });
+
+  it("the LIVE error frame carries the honesty fields off its details object (both live + the card)", () => {
+    const errored = applyLiveFrame(
+      beginLiveTurn([], "go", NOW),
+      {
+        type: "error",
+        status: 502,
+        code: "PROVIDER_ERROR",
+        message: "quota spent",
+        details: { errorClass: "rate_limit", attempts: 6, queuedKept: 2 },
+      },
+      NOW + 1,
+    );
+    expect(errored.error?.errorClass).toBe("rate_limit");
+    expect(errored.error?.attempts).toBe(6);
+    const card = errored.items[errored.items.length - 1];
+    expect(card?.kind === "error" && card.errorClass).toBe("rate_limit");
+    expect(card?.kind === "error" && card.attempts).toBe(6);
+    // a frame with NO details renders neither field (older sidecars)
+    const bare = applyLiveFrame(
+      beginLiveTurn([], "go", NOW),
+      { type: "error", status: 502, code: "PROVIDER_ERROR", message: "boom" },
+      NOW + 1,
+    );
+    expect(bare.error?.errorClass).toBeNull();
+    expect(bare.error?.attempts).toBeNull();
+  });
+});
+
+describe("sessions — the sub-agent control routes (R117-d2)", () => {
+  it("POSTs the retry on the parent/child route with the exact body (and stop on a CHILD is the same route family)", async () => {
+    const { sender, calls } = makeApiSender(() => ({
+      status: 200,
+      bodyText: JSON.stringify({ ok: true, message: "re-delegated", stopped: true }),
+    }));
+    const retry = await postSubAgentRetry(sender, "sess_parent", "child_1");
+    expect(retry.ok && retry.data.message).toBe("re-delegated");
+    expect(calls[0]?.path).toBe("/api/v1/sessions/sess_parent/subagents/child_1/retry");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(calls[0]?.init.bodyText).toBe("{}");
+    // R52-b: the SAME postStop the SubAgentCard's Stop affordance rides — on
+    // the CHILD id directly (the route stops registered children).
+    const stop = await postStop(sender, "child_1");
+    expect(stop.ok && stop.data.stopped).toBe(true);
+    expect(calls[1]?.path).toBe("/api/v1/sessions/child_1/stop");
+    expect(calls[1]?.init.method).toBe("POST");
+  });
+
+  it("carries the retry's honest 409/502 refusals as error outcomes", async () => {
+    const { sender } = makeApiSender((path) =>
+      path.endsWith("/retry")
+        ? { status: 409, bodyText: JSON.stringify({ error: { code: "CONFLICT", message: "sub-agent child_1 is already running" } }) }
+        : { status: 200, bodyText: "{}" },
+    );
+    const outcome = await postSubAgentRetry(sender, "sess_parent", "child_1");
+    expect(outcome.ok).toBe(false);
+    expect(!outcome.ok && outcome.error.code).toBe("CONFLICT");
+    expect(!outcome.ok && outcome.error.message).toContain("already running");
   });
 });
