@@ -9,7 +9,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
-## [Unreleased] — 0.110.0 — the polish round (pairing that works by hand, the scanner reborn, the dashboard that finally shows everything)
+## [0.110.0] — 2026-09-21 — the polish round (pairing that works by hand, the scanner reborn, the dashboard that finally shows everything)
 
 ### Pairing, fixed where it hurt
 - **Manual entry pairing now works.** Typing (or pasting) the address + PIN used to fail with "could not reach the host" on every LAN desktop — the QR secretly carried the certificate fingerprint that made the connection trustable, and the typed form didn't. The desktop's **Copy pairing text now includes the fingerprint**, and the phone's paste flow fills it automatically; if you still hit a certificate error, the phone says what's actually wrong instead of telling you to unpair.
