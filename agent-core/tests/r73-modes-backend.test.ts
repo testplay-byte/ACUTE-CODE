@@ -193,7 +193,7 @@ describe("R73-b D1: the registry + the two composed sections", () => {
     // unified mode picker; the postures are the agent's own choice now).
     expect(prompt).toContain("## OPERATING POSTURES (self-select with switch_mode)");
     expect(prompt).toContain(
-      "Skills carry methodology you read with read_skill; a POSTURE is the working discipline for a class of work — while active, its guide below governs how you approach the task. Analyze each request, pick the matching posture yourself, and switch as the task's shape changes (nothing auto-activates). Postures are guidance, not permissions — the owner's operating mode (Full Access / Ask / Plan) sets what you may do.",
+      "Skills carry methodology you read with read_skill; a posture is the working discipline for a class of work — while active, its guide below governs how you approach the task. Analyze each request, pick the matching posture yourself, and switch as the task's shape changes (nothing auto-activates). Postures are guidance, not permissions — the owner's operating mode (Full Access / Ask / Plan) sets what you may do.",
     );
     expect(prompt).toContain("- plan: Plan — Use when the user says 'plan this', 'write a spec' — the deliverable is a decision-ready specification, not code.");
     expect(prompt).toContain("- debug: Debug — Use when the user says 'fix this bug', 'why does this fail' — the cause is unknown; reproduce before theorizing.");
@@ -214,7 +214,7 @@ describe("R73-b D1: the registry + the two composed sections", () => {
       modeHints: [{ modeId: "debug", score: 12 }],
     });
     expect(prompt).toContain(
-      'Task signal: this request looks like the **debug** posture — consider switch_mode { mode: "debug" } FIRST.',
+      'Task signal: this request looks like the **debug** posture — consider switch_mode { mode: "debug" } first.',
     );
   });
 
@@ -228,7 +228,7 @@ describe("R73-b D1: the registry + the two composed sections", () => {
       ],
     });
     expect(prompt).toContain(
-      "Task signal: this request looks like the **debug** posture (and possibly **plan**) — consider switch_mode FIRST.",
+      "Task signal: this request looks like the **debug** posture (and possibly **plan**) — consider switch_mode first.",
     );
   });
 
@@ -254,7 +254,7 @@ describe("R73-b D1: the registry + the two composed sections", () => {
     // note says the posture was SELF-SELECTED (guidance, not permission).
     expect(prompt).toContain("## ACTIVE POSTURE — Plan (plan)");
     expect(prompt).toContain(
-      'This posture is ACTIVE for this session (selected by you with switch_mode — guidance, not a permission change). Follow it for the rest of the task. Clear with switch_mode { mode: "none" }.',
+      'This posture is active for this session (selected by you with switch_mode — guidance, not a permission change). Follow it for the rest of the task. Clear with switch_mode { mode: "none" }.',
     );
     // The body rides verbatim, every line of it.
     for (const line of body.split("\n")) expect(prompt).toContain(line);
@@ -971,7 +971,7 @@ describe("R73-b D6: prepareTurn threading (both turn paths)", () => {
     expect(system).toContain("- plan: Plan — ");
     expect(system).toContain("- refactor: Refactor — ");
     expect(system).toMatch(
-      /^Task signal: this request looks like the \*\*debug\*\* posture(?: \(and possibly \*\*[a-z-]+\*\*\))? — consider switch_mode(?: \{ mode: "debug" \})? FIRST\.$/m,
+      /^Task signal: this request looks like the \*\*debug\*\* posture(?: \(and possibly \*\*[a-z-]+\*\*\))? — consider switch_mode(?: \{ mode: "debug" \})? first\.$/m,
     );
     // No mode auto-activated: no ACTIVE POSTURE section on a modeless session.
     expect(system).not.toContain("## ACTIVE POSTURE");

@@ -1375,28 +1375,34 @@ describe("browser_control — the R66 wall probe on navigate / read", () => {
 describe("browser_control — the R67-E description contract (read_dom-first, per-session tabs, native-bridge honesty)", () => {
   it("teaches the read_dom-first workflow, the per-session default target, and the honest web-dev-mode limit", async () => {
     const tools = await buildTools(tempDir);
-    const bc = (tools as unknown as Record<string, { description?: string }>)["browser_control"];
+    const bc = (tools as unknown as Record<string, { description?: string; inputSchema?: unknown }>)["browser_control"];
     expect(bc?.description).toBeDefined();
     const description = bc?.description ?? "";
-    // read_dom FIRST, then act on the returned selectors + positions.
-    expect(description).toContain("call it FIRST");
-    expect(description).toContain("x/y/w/h position");
+    // R117-c (C1): the ~7.7K one-paragraph description became a ~1.3K policy
+    // head; the per-action parameter detail (x/y/w/h, pacing, form
+    // submission, per-action mode limits) rides the inputSchema now — the
+    // schema's serialized text is pinned alongside the head.
+    const schemaText = JSON.stringify(bc?.inputSchema ?? {});
+    // read_dom first, then act on the returned selectors + positions.
+    expect(description).toContain("read_dom first on every new page");
+    expect(description).toContain("selectors, positions, pageState");
+    expect(schemaText).toContain("x/y/w/h");
     // R89-E: the visible human-like input contract.
-    expect(description).toContain("SEARCH FIRST");
+    expect(description).toContain("search first");
     expect(description).toContain("word-by-word");
-    expect(description).toContain("~150 WPM");
-    // Per-session tabs: omit sessionId → THIS chat session's own tab.
-    expect(description).toContain("THIS chat session's own tab");
+    expect(schemaText).toContain("a ~1s beat after the focusing click"); // the pacing detail's surviving form
+    // Per-session tabs: omit sessionId → this chat session's own tab.
+    expect(description).toContain("this chat session's own tab");
     expect(description).not.toContain("defaults to the tab the user is currently viewing");
     // get_state is scoped to this session's tab.
     expect(description).not.toContain("EVERY open tab");
-    expect(description).toContain("this chat session's tab");
-    // The honest native-bridge note (web dev mode fails fast).
-    expect(description).toContain("native bridge");
-    expect(description).toContain("fail fast");
+    expect(schemaText).toContain("this chat session's tab");
+    // The honest web-dev-mode limit (R117-c: the bridge-dependent actions
+    // carry "native desktop mode only" — the old fail-fast note's successor).
+    expect(schemaText).toContain("native desktop mode only");
     // The R66 form-submission teaching stays (submit:true / Enter).
     expect(description).toContain("type with submit:true");
-    expect(description).toContain("native form submission");
+    expect(schemaText).toContain("native form submission");
   });
 });
 
@@ -1708,13 +1714,15 @@ describe("browser_control — R93-B3 read_dom pageState (the SPA section tracker
   it("the read_dom description teaches the check-pageState-after-clicking-a-section workflow", async () => {
     const tools = await buildTools(tempDir);
     const bc = tool(tools, "browser_control");
-    const description = String((bc as unknown as { description?: string }).description ?? "");
-    expect(description).toContain("SPA SECTION tracker");
-    expect(description).toContain("CHECK pageState");
-    expect(description).toContain("click the section again");
+    // R117-c (C1): the per-action read_dom/click detail rides the
+    // inputSchema's action description now (the tool description is the
+    // policy head).
+    const schemaText = JSON.stringify((bc as unknown as { inputSchema?: unknown }).inputSchema ?? {});
+    expect(schemaText).toContain("pageState: the URL hash/query + the aria-selected/aria-current tab");
+    expect(schemaText).toContain("after clicking a section or tab you can re-read and confirm it stuck");
     // The click action teaches the focus hint + the hover-first sequence.
-    expect(description).toContain("hovers first (menus arm)");
-    expect(description).toContain("where focus moved");
+    expect(schemaText).toContain("hovers");
+    expect(schemaText).toContain("where focus moved");
   });
 });
 

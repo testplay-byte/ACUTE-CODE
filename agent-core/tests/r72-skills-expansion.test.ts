@@ -528,7 +528,7 @@ describe("R72-b D4: the six new descriptions ride the prompt SKILLS section verb
 
     const section = buildSectionText(promptCtx(builtins), "skills") ?? "";
     expect(section).toContain("## SKILLS (load with read_skill, search with search_skills)");
-    expect(section).toContain("call read_skill with its name FIRST");
+    expect(section).toContain("call read_skill with its name first");
     for (const skill of builtins) {
       expect(section).toContain(`- **${skill.name}** — ${skill.description}`);
     }
@@ -544,6 +544,6 @@ describe("R72-b D4: the six new descriptions ride the prompt SKILLS section verb
     expect(section).toContain("'write a spec'");
     expect(section).toContain("'make it faster'");
     // The reload affordance still rides the section (R70-c D6).
-    expect(section).toContain("A skill body that appears truncated after context compaction can be RELOADED: call read_skill again.");
+    expect(section).toContain("A skill body that appears truncated after context compaction can be reloaded: call read_skill again.");
   });
 });

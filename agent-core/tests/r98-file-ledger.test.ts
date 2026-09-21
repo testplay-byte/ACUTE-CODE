@@ -177,8 +177,8 @@ describe("R98-F2: the FILE EDITING tiered rule (the prompt re-pin)", () => {
 
   it("rule 1 is the honest TIER: read before the FIRST edit; a successful edit IS the confirmation — edit the SAME file directly; re-read only on warning/failure/high-stakes", () => {
     const prompt = buildProjectSystemPrompt(ctx);
-    expect(prompt).toContain("**Read before the FIRST edit**");
-    expect(prompt).toContain("the response IS the confirmation — edit the SAME file again directly");
+    expect(prompt).toContain("**Read before the first edit**");
+    expect(prompt).toContain("the response is the confirmation — edit the same file again directly");
     // R107-a (F8): old rule 6's high-stakes risk list merged into rule 1 —
     // the tier now names all three re-read triggers in one place.
     expect(prompt).toContain("Re-read only when a tool warns the file changed on disk, an edit fails, or the change is high-stakes (complex edit, critical file)");

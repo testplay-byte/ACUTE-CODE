@@ -373,7 +373,7 @@ describe("R98-E2: the STRONG task-hint phrasing (deterministic — keyed on the 
     // prepareTurn threads the computed hints into the ctx — the same shape.
     const strong = buildProjectSystemPrompt({ ...ctxFor(skills), taskHints: hints });
     expect(strong).toContain(
-      "Task signal: this request STRONGLY matches **strong-skill** — read it BEFORE starting (read_skill with that name) and follow it for the rest of the task.",
+      "Task signal: this request strongly matches **strong-skill** — read it before starting (read_skill with that name) and follow it for the rest of the task.",
     );
 
     // 'this bug' = 2-word phrase = 10 + token hits — BELOW the 15 floor.
@@ -385,9 +385,9 @@ describe("R98-E2: the STRONG task-hint phrasing (deterministic — keyed on the 
       taskHints: [{ skillName: "weak-skill", score: weakHints[0]?.score ?? 0 }],
     });
     expect(weak).toContain(
-      "Task signal: this request looks like it matches **weak-skill** — consider calling read_skill with that name FIRST and following it for the rest of the task.",
+      "Task signal: this request looks like it matches **weak-skill** — consider calling read_skill with that name first and following it for the rest of the task.",
     );
-    expect(weak).not.toContain("STRONGLY matches");
+    expect(weak).not.toContain("strongly matches");
   });
 
   it("the two-hint STRONG variant keeps the '(and possibly …)' parenthetical", () => {
@@ -399,7 +399,7 @@ describe("R98-E2: the STRONG task-hint phrasing (deterministic — keyed on the 
       ],
     });
     expect(prompt).toContain(
-      "Task signal: this request STRONGLY matches **strong-skill** (and possibly **second**) — read it BEFORE starting (read_skill with that name) and follow it for the rest of the task.",
+      "Task signal: this request strongly matches **strong-skill** (and possibly **second**) — read it before starting (read_skill with that name) and follow it for the rest of the task.",
     );
   });
 });

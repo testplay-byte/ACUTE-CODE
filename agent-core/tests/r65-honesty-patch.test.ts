@@ -76,7 +76,7 @@ describe("SURFACE BOUNDARY (R65 — the hallucination guard)", () => {
     // The boundary line sits INSIDE the computer-use section (before the
     // next section header) and names the other surface + both directions.
     const rest = composed.slice(cu);
-    expect(rest.indexOf("SURFACE BOUNDARY (R65)")).toBeGreaterThan(-1);
+    expect(rest.indexOf("**Surface boundary:**")).toBeGreaterThan(-1);
     expect(rest.slice(0, rest.indexOf("## DEBUG MODE") === -1 ? rest.length : rest.indexOf("## DEBUG MODE"))).toContain(
       "browser_control cannot open or touch the user's real browsers/apps",
     );
@@ -88,9 +88,9 @@ describe("SURFACE BOUNDARY (R65 — the hallucination guard)", () => {
     expect(bp).toBeGreaterThan(-1);
     // ROUND-66: the browser section grew (the high-level page actions +
     // form-submission + bot-wall discipline) — the window is 4_500 now so
-    // the SURFACE BOUNDARY line at the section's end stays covered.
+    // the surface-boundary line at the section's end stays covered.
     const rest = composed.slice(bp, bp + 4_500);
-    expect(rest).toContain("SURFACE BOUNDARY (R65)");
+    expect(rest).toContain("**Surface boundary:**");
     expect(rest).toContain("NEVER opens the user's real browsers");
     expect(rest).toContain('say "in the embedded browser panel" when that is where it happened');
   });

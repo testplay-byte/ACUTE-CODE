@@ -27,7 +27,8 @@
  *        audit), MCP's "don't retry in a loop" tail retired (the RECOVERY
  *        PROTOCOL owns retry doctrine).
  *   P4 — the SIZE BUDGET holds WITHOUT a bump: the default full-tools
- *        composition stays ≤ 24,000 chars (r71 D6's bound, unchanged) and
+ *        composition stays ≤ 24,200 chars (r71 D6's bound, re-pinned by
+ *        R117-c) and
  *        ≥ 23,000 (the additions are real content, not a gutting).
  *   P5 — the SKILLS ENVELOPE: read_skill's main-body output opens with
  *        "# Skill: <name>" + "> <description>" (the Agent-Skills shape —
@@ -147,16 +148,16 @@ function projectRootWith(skills: Record<string, string>): string {
 describe("R113-f P1: TOOL USE gains the ARGUMENT HYGIENE rule", () => {
   it("the rule composes in the TOOL USE rules block, right after MOST SPECIFIC", () => {
     const section = buildSectionText(ctxFor(), "tool-use") ?? "";
-    expect(section).toContain("- ARGUMENTS COME FROM OBSERVED DATA:");
+    expect(section).toContain("- **Arguments come from observed data:**");
     expect(section).toContain("never invent a value, never trust memory of an earlier output (ids expire, files move)");
     expect(section).toContain("A guessed argument is a wasted call.");
-    // Position: the rule names WHICH value goes into the tool MOST SPECIFIC
-    // picked — it rides directly after that line.
+    // Position: the rule names WHICH value goes into the tool the most-specific
+    // line picked — it rides directly after that line.
     const idx = (needle: string) => section.indexOf(needle);
-    expect(idx("Pick the MOST SPECIFIC tool for the job")).toBeGreaterThan(-1);
-    expect(idx("- ARGUMENTS COME FROM OBSERVED DATA:")).toBeGreaterThan(idx("Pick the MOST SPECIFIC tool for the job"));
+    expect(idx("Pick the most specific tool for the job")).toBeGreaterThan(-1);
+    expect(idx("- **Arguments come from observed data:**")).toBeGreaterThan(idx("Pick the most specific tool for the job"));
     expect(idx("- NEVER fabricate or embellish a tool result")).toBeGreaterThan(
-      idx("- ARGUMENTS COME FROM OBSERVED DATA:"),
+      idx("- **Arguments come from observed data:**"),
     );
   });
 
@@ -166,14 +167,14 @@ describe("R113-f P1: TOOL USE gains the ARGUMENT HYGIENE rule", () => {
       rootPath: join(tempDir, "never-exists"),
       toolNames: ["read_file", "search_code"],
     });
-    expect(bare).toContain("- ARGUMENTS COME FROM OBSERVED DATA:");
+    expect(bare).toContain("- **Arguments come from observed data:**");
   });
 
   it("composes with the honesty doctrine it extends (READ errors + never fabricate stay intact)", () => {
     const section = buildSectionText(ctxFor(), "tool-use") ?? "";
-    expect(section).toContain("READ tool errors fully before reacting");
+    expect(section).toContain("**Read tool errors fully before reacting:**");
     expect(section).toContain("NEVER fabricate or embellish a tool result");
-    expect(section).toContain("A failed, timed-out, or partial call IS the data");
+    expect(section).toContain("A failed, timed-out, or partial call is the data");
   });
 });
 
@@ -184,11 +185,11 @@ describe("R113-f P1: TOOL USE gains the ARGUMENT HYGIENE rule", () => {
 describe("R113-f P2: TERMINAL gains the benign-exit rule", () => {
   it("the rule composes in the TERMINAL section (grep/test/diff exit 1 on no-match)", () => {
     const section = buildSectionText(ctxFor(), "terminal") ?? "";
-    expect(section).toContain("- A NON-ZERO exit is often the ANSWER, not a failure:");
+    expect(section).toContain("- A non-zero exit is often the answer, not a failure:");
     expect(section).toContain("grep / test / diff exit 1 on no-match by design");
     expect(section).toContain("read the output before deciding anything failed");
     // Position: directly under the section's role line.
-    expect(section.indexOf("- A NON-ZERO exit")).toBeGreaterThan(section.indexOf("- Use run_command for builds"));
+    expect(section.indexOf("- A non-zero exit")).toBeGreaterThan(section.indexOf("- Use run_command for builds"));
   });
 
   it("tool-gated honestly: no run_command in the vocabulary → no benign-exit line", () => {
@@ -196,7 +197,7 @@ describe("R113-f P2: TERMINAL gains the benign-exit rule", () => {
       ...ctxFor(),
       toolNames: ctxFor().toolNames.filter((t) => t !== "run_command"),
     });
-    expect(noCmd).not.toContain("A NON-ZERO exit is often the ANSWER");
+    expect(noCmd).not.toContain("A non-zero exit is often the answer");
     expect(noCmd).not.toContain("## TERMINAL");
   });
 });
@@ -227,7 +228,7 @@ describe("R113-f P3: the dedup retirements", () => {
   it("CODE NAVIGATION: the list_dir line retired; search_symbols + ALWAYS-search survive", () => {
     const section = buildSectionText(ctxFor(), "code-navigation") ?? "";
     expect(section).not.toContain("Use list_dir to explore folder structure");
-    expect(section).toContain("try it BEFORE search_code when hunting a definition");
+    expect(section).toContain("try it before search_code when hunting a definition");
     expect(section).toContain("- ALWAYS search before assuming a file exists or doesn't exist.");
   });
 
@@ -237,7 +238,7 @@ describe("R113-f P3: the dedup retirements", () => {
     expect(composed).not.toContain("don't retry in a loop");
     // The owning doctrine survives.
     const recovery = buildSectionText(ctxFor(), "recovery") ?? "";
-    expect(recovery).toContain("IDENTICAL RETRIES: at most 2");
+    expect(recovery).toContain("**Identical retries:** at most 2.");
     expect(recovery).toContain("never retry blind");
   });
 
@@ -254,13 +255,15 @@ describe("R113-f P3: the dedup retirements", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R113-f P4: the 24,000 budget holds without a bump", () => {
-  it("the DEFAULT full-tools composition stays ≤ 24,000 and ≥ 23,000 chars", () => {
-    // r71 D6's bound, UNCHANGED by this round: the two new rules (+~420
-    // gross) were paid for by the P3 dedup (~-310), landing the default
-    // composition at 23,871 measured chars (23,765 at R107-a). The floor
-    // keeps the retirements honest — the additions survived as content.
+  it("the DEFAULT full-tools composition stays ≤ 24,200 and ≥ 23,000 chars", () => {
+    // r71 D6's bound, re-pinned by R117-c (the prompt-engineering pass):
+    // the calibrated spellings + the <project_memory>/<todo_list>/
+    // <background_tasks> fences grew the composition ~+216 net over the
+    // R113-f measured 23,871 (23,765 at R107-a) — measured 24,087 after
+    // the rework. The floor keeps the retirements honest — the additions
+    // survived as content.
     const composed = buildProjectSystemPrompt(ctxFor());
-    expect(composed.length).toBeLessThanOrEqual(24_000);
+    expect(composed.length).toBeLessThanOrEqual(24_200);
     expect(composed.length).toBeGreaterThanOrEqual(23_000);
   });
 });

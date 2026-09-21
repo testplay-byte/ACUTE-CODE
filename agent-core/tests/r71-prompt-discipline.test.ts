@@ -175,7 +175,7 @@ describe("D1: the four karpathy mantras + binary self-tests", () => {
 
   it("the surgical rules: orphan asymmetry + the 200/50 rewrite rule", () => {
     const text = section();
-    expect(text).toContain("Remove imports YOUR change orphaned");
+    expect(text).toContain("Remove imports your change orphaned");
     expect(text).toContain("never delete pre-existing dead code unless asked");
     expect(text).toContain("If you wrote 200 lines and 50 would do, rewrite");
     expect(text).toContain("No \"might be useful later\" abstractions");
@@ -280,7 +280,7 @@ describe("D3: verification receipts + confidence tags + anti-question-padding", 
 
   it("receipts: the exact command + exit status / key output line; assertions without receipts are not verification", () => {
     const text = comm();
-    expect(text).toContain("the VERIFICATION receipts (the exact command you ran + its exit status or key output line");
+    expect(text).toContain("the verification receipts (the exact command you ran + its exit status or key output line");
     expect(text).toContain("\"pnpm test → 2165 passed\"");
     expect(text).toContain("An assertion without a receipt is not verification.");
   });
@@ -297,11 +297,11 @@ describe("D3: verification receipts + confidence tags + anti-question-padding", 
 
   it("anti-question-padding: no question unless genuinely blocked; if blocked, state exactly what you need", () => {
     const text = comm();
-    expect(text).toContain("Do NOT end a reply with a question unless you are genuinely blocked");
+    expect(text).toContain("Do not end a reply with a question unless you are genuinely blocked");
     expect(text).toContain("say exactly what you need (\"I need the DB password\" / \"two valid interpretations: A or B\")");
     // The pre-R71 concise contract survives (R70-c D5 pins, re-checked here).
-    expect(text).toContain("CONCISE BY DEFAULT");
-    expect(text).toContain("state WHAT you did (the files touched)");
+    expect(text).toContain("**Concise by default:** chat answers stay under ~4 lines");
+    expect(text).toContain("state what you did (the files touched)");
     expect(text).toContain("Cite code locations as path:line (e.g. src/app.ts:42)");
   });
 });
@@ -311,14 +311,14 @@ describe("D3: verification receipts + confidence tags + anti-question-padding", 
 describe("D4: sub-agent scope + no-polling discipline", () => {
   it("the discipline lines compose in the SUB-AGENTS section (delegate_task-gated)", () => {
     const sub = buildSectionText(ctxFor(), "sub-agents") ?? "";
-    expect(sub).toContain("SCOPE DISCIPLINE: the sub-agent reads the delegation brief and delivers only its scope");
+    expect(sub).toContain("**Scope discipline:** the sub-agent reads the delegation brief and delivers only its scope");
     expect(sub).toContain("do not duplicate that work yourself");
     expect(sub).toContain(
       "Delegation results arrive as tool results — do NOT sleep, wait, or poll for a sub-agent (job_status exists only for explicitly-backgrounded shell jobs)",
     );
     // The pre-existing delegation contract survives.
-    expect(sub).toContain("SELF-CONTAINED TASKS");
-    expect(sub).toContain("PARALLELISM");
+    expect(sub).toContain("**Self-contained tasks:**");
+    expect(sub).toContain("**Parallelism:**");
   });
 
   it("honest gating: an allowlist without delegate_task never sees the discipline lines", () => {
@@ -388,7 +388,7 @@ describe("PLAN mode: every discipline surface composes (read-only vocabulary)", 
     // D3 — receipts + the confidence line + anti-question (COMMUNICATION is unconditional).
     expect(composed).toContain("An assertion without a receipt is not verification.");
     expect(composed).toContain("High = all claims verified by receipts");
-    expect(composed).toContain("Do NOT end a reply with a question unless you are genuinely blocked");
+    expect(composed).toContain("Do not end a reply with a question unless you are genuinely blocked");
     // D4 — sub-agent discipline (plan mode HAS delegate_task).
     expect(composed).toContain("delivers only its scope");
     expect(composed).toContain("do NOT sleep, wait, or poll for a sub-agent");
@@ -425,7 +425,7 @@ describe("D6: the size budget (the hard bound + the section window)", () => {
     // unbounded growth (the budget discipline itself is R71's point) and
     // the floor below keeps the additions honest content, not a gutting.
     const composed = buildProjectSystemPrompt(ctxFor());
-    expect(composed.length).toBeLessThanOrEqual(24_000);
+    expect(composed.length).toBeLessThanOrEqual(24_500); // R117-c: the volatile fences added ~100 chars; recalibrated
     expect(composed.length).toBeGreaterThan(15_000); // the R71 delta is real content, not a gutting
   });
 

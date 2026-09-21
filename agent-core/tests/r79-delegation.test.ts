@@ -691,8 +691,8 @@ describe("R79-a: the BACKGROUND TASKS reminder", () => {
     expect(withTasks).toContain("## BACKGROUND TASKS");
     expect(withTasks).toContain('{"resume":"<task_id>"}');
     expect(withTasks).toContain("- alpha (role: coder, code: AAAA): running — 3m in, 1/4 todos");
-    expect(withTasks).toContain("- beta (role: researcher, code: BBBB): COMPLETED — resume to read its final report");
-    expect(withTasks).toContain("- gamma (role: reviewer, code: CCCC): FAILED (quota burnt) — resume to retry it from where it stopped");
+    expect(withTasks).toContain("- beta (role: researcher, code: BBBB): completed — resume to read its final report");
+    expect(withTasks).toContain("- gamma (role: reviewer, code: CCCC): failed (quota burnt) — resume to retry it from where it stopped");
     expect(withTasks).toContain("- delta (role: tester, code: DDDD): queued — waiting for a concurrency slot");
     expect(withTasks).toContain("…and 2 more");
     // Absent → no section (byte-identity is the golden fixture's job; this
@@ -781,7 +781,7 @@ describe("R79-a: the BACKGROUND TASKS reminder", () => {
     expect(first.ok).toBe(true);
     expect(captured.system).toContain("## BACKGROUND TASKS");
     expect(captured.system).toContain("- wired (role: researcher");
-    expect(captured.system).toContain("COMPLETED — resume to read its final report");
+    expect(captured.system).toContain("completed — resume to read its final report");
 
     // Collect via resumeTask, then the NEXT turn's prompt no longer lists it.
     const resume = await orchestrator.resumeTask(

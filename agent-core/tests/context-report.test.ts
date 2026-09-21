@@ -576,12 +576,12 @@ describe("prompt efficiency rework (ROUND-51 R51-d, consolidated ROUND-70 R70-c)
     expect(full).not.toContain("## TASK PLANNING");
     expect(full).not.toContain("## TODO TRACKING");
     // The efficiency teachings live in EXPLORE/ACT now.
-    expect(full).toContain("independent discovery calls BATCHED in parallel");
+    expect(full).toContain("independent discovery calls batched in parallel");
     expect(full).toContain("Do not re-explore between steps or re-read files already in context");
-    expect(full).toContain("the FEWEST steps that genuinely complete the work");
+    expect(full).toContain("the fewest steps that genuinely complete the work");
     // The PLAN phase absorbed the todo guidance (todo_write-gated below).
-    expect(full).toContain("tasks with 3+ steps get a todo_write list UP FRONT");
-    expect(full).toContain("update after EACH sub-task (never batch completions)");
+    expect(full).toContain("tasks with 3+ steps get a todo_write list up front");
+    expect(full).toContain("update after each sub-task (never batch completions)");
     expect(full).toContain("a snapshot, not a delta");
     // VERIFY absorbed the 3+ file edits adversarial-review affordance.
     expect(full).toContain("for 3+ file edits, consider a delegate_task adversarial review");
@@ -594,10 +594,10 @@ describe("prompt efficiency rework (ROUND-51 R51-d, consolidated ROUND-70 R70-c)
 
   it("the PLAN todo lines are todo_write-gated (the old todo-tracking gate, kept)", () => {
     const noTodo = buildProjectSystemPrompt({ ...ctx, toolNames: ctx.toolNames.filter((t) => t !== "todo_write") });
-    expect(noTodo).not.toContain("tasks with 3+ steps get a todo_write list UP FRONT");
+    expect(noTodo).not.toContain("tasks with 3+ steps get a todo_write list up front");
     expect(noTodo).toContain("1. PLAN");
     const withTodo = buildProjectSystemPrompt(ctx);
-    expect(withTodo).toContain("tasks with 3+ steps get a todo_write list UP FRONT");
+    expect(withTodo).toContain("tasks with 3+ steps get a todo_write list up front");
   });
 
   it("the mandatory read-back verify is GONE — smart verification replaces it in BOTH the loop and FILE EDITING", () => {
@@ -623,23 +623,24 @@ describe("prompt efficiency rework (ROUND-51 R51-d, consolidated ROUND-70 R70-c)
     // The maxTurns injection survives (Round-28 WS-F contract: the model is
     // told its real cap)…
     // R99-G re-pin: the line opens with a capital U after the dash and — the
-    // numbers-audit point — now carries "a limit to keep working within,
-    // never a target to fill" (the owner's "hard numbers become targets").
+    // numbers-audit point — now carries "limits to keep working within,
+    // never targets to fill" (the owner's "hard numbers become targets").
     expect(full).toContain("Up to 30 tool round-trips per iteration");
-    expect(full).toContain("never a target to fill");
+    expect(full).toContain("never targets to fill");
     // …framed as fewest-steps, with the anti-lazy-stop clause intact…
-    expect(full).toContain("FEWEST steps that genuinely complete and verify the work, not step count for its own sake");
+    expect(full).toContain("the fewest steps that genuinely complete the work; every call must earn its place");
     expect(full).toContain("so is stopping early on a multi-step task");
     // …and the outer-iteration cap is named honestly (R70-c D2), as a
     // LIMIT — never a target (R99-G's hard-numbers fix; conscious re-pin
-    // of the old "keep working within them" phrasing).
-    expect(full).toContain("5 outer iterations exist — a limit to keep working within, never a target to fill");
+    // of the old "keep working within them" phrasing; R117-c recalibrated
+    // the spelling).
+    expect(full).toContain("5 outer iterations — limits to keep working within, never targets to fill");
   });
 
   it("batching is taught everywhere it must be (TOOL USE rule, EXPLORE phase)", () => {
     const full = buildProjectSystemPrompt(ctx);
     // TOOL USE: independent calls batch; dependent calls wait.
-    expect(full).toContain("BATCHED into ONE message");
+    expect(full).toContain("batched into one message");
     expect(full).not.toContain("ONE tool per message");
     // EXPLORE is the batched-discovery teaching (the lean 4-turn example was
     // folded into the phases — the old example turns 5–7 never return).
@@ -652,16 +653,16 @@ describe("prompt efficiency rework (ROUND-51 R51-d, consolidated ROUND-70 R70-c)
   it("regression pins: conversational rule, multi-turn completion, research loop, delegate parallelism all intact", () => {
     const full = buildProjectSystemPrompt(ctx);
     // Round-33: no tools for chat.
-    expect(full).toContain("CONVERSATIONAL REQUESTS ARE DIFFERENT (round-33)");
-    expect(full).toContain("reply directly and naturally WITHOUT calling any tools");
+    expect(full).toContain("CONVERSATIONAL REQUESTS ARE DIFFERENT: if the user's message needs no work on the project");
+    expect(full).toContain("reply directly and naturally without calling any tools");
     // The multi-turn completion directive (no stopping after one call).
     expect(full).toContain("## AGENTIC LOOP — MULTI-TURN COMPLETION");
-    expect(full).toContain("DO NOT summarize and stop after one tool call");
+    expect(full).toContain("do not summarize and stop after one tool call");
     // R107-a (F16): the R28-era research special case retired from the
     // loop (the loop's own phases + todo tracking carry the posture);
     // pinned GONE so it cannot silently return.
     expect(full).not.toContain("research → save findings to a file → research the next sub-topic → append → repeat");
     // The parallel delegate_task guidance.
-    expect(full).toContain("call delegate_task MULTIPLE TIMES in ONE message to run sub-agents concurrently");
+    expect(full).toContain("call delegate_task multiple times in one message to run sub-agents concurrently");
   });
 });

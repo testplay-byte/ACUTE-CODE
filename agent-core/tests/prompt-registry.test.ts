@@ -15,7 +15,7 @@
  *      ignore+diagnose, the 8000-char cap + honest marker, `_order.txt`
  *      parsing with unknown/duplicate tolerance, unreadable entries.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -49,19 +49,15 @@ const GOLDEN_ROOT = "/tmp/acute-r61-golden-root";
 const FULL_CTX = {
   projectName: "GoldenProject",
   rootPath: GOLDEN_ROOT,
-  // ROUND-73 (R73-b): the toolNames list is FROZEN to the golden fixture's
-  // exact vocabulary (previously [...TOOL_NAMES, "mcp__demo__echo"], which
-  // silently tracked TOOL_NAMES — every vocabulary round would have rewritten
-  // the golden's TOOL USE line and forced a regeneration; the fixture's md5
-  // is the PIN). New tool vocabulary (R73's switch_mode) joins the LIVE turn
-  // path and the MODES_CTX completeness ctx below — never this fixture.
-  toolNames: [
-    "list_dir", "read_file", "write_file", "edit_file", "create_dir", "delete_file",
-    "search_files", "search_code", "git_status", "git_diff", "git_log", "run_command",
-    "todo_write", "web_fetch", "web_search", "index_project", "delegate_task",
-    "browser_control", "memory_save", "memory_recall", "memory_list",
-    "job_status", "job_stop", "read_skill", "analyze_image", "mcp__demo__echo",
-  ],
+  // ROUND-117 (R117-c, A6 — the fresh-golden re-pin): the toolNames list
+  // now tracks the LIVE vocabulary ([...TOOL_NAMES, "mcp__demo__echo"]) —
+  // the R73-era freeze (an R61-era tool set that silently missed
+  // search_symbols/ask_user/session_recall/switch_mode/search_skills) was
+  // the audit's "golden frozen at an R61-era tool set" finding. The new
+  // fixtures/prompt-golden-r117.txt is regenerated against THIS list; the
+  // R61-era fixtures/prompt-golden-r61.txt stays in fixtures/ as history
+  // (pinned below — never consumed as a live byte-identity anchor again).
+  toolNames: [...TOOL_NAMES, "mcp__demo__echo"],
   customRules: "Always write tests first.",
   maxTurns: 37,
   maxOuterLoops: 5,
@@ -442,7 +438,25 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // owns retry doctrine). NOTHING else moved. Default-composition delta:
     // 23,765 → 23,871 chars — the 24,000 budget holds without a bump; the
     // skills-surface twin (the read_skill envelope) changes no prompt bytes.
-    const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r61.txt"), "utf8").replace(/\r\n/g, "\n");
+    //
+    // Re-pinned in R117-c (deliberately — the prompt-engineering pass; see
+    // prompts.ts's ROUND-117 header) as a NEW fixture —
+    // fixtures/prompt-golden-r117.txt — against the LIVE tool vocabulary
+    // (the R61-era list above became [...TOOL_NAMES, "mcp__demo__echo"]).
+    // The verified diff (git diff, read before regenerating — never blind)
+    // covers: the round-tag strip (every "(R\d+)"/"(round-N)" tag left the
+    // model-facing text), the caps calibration (bullet labels → bold
+    // sentence-case; mid-sentence shouts → plain; NEVER/ALWAYS/STOP + the
+    // formal vocabularies stay), the "## BUDGETS" line replacing the loop's
+    // budget bullet, FILE EDITING RULES renumbered 1-7 (rule 8 → 7), the
+    // confidence-line if/else split, the <project_memory> fences around
+    // both scopes' digests (+ the honest empty-state lines inside them),
+    // the ALWAYS-ON preamble's audience-mixed tail retired, the live-vocab
+    // TOOL USE descriptions block (search_symbols/ask_user/session_recall/
+    // search_skills lines now compose), and the ask_user INTAKE variant.
+    // The old fixtures/prompt-golden-r61.txt stays as HISTORY — pinned
+    // below as present-on-disk, never byte-compared again.
+    const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r117.txt"), "utf8").replace(/\r\n/g, "\n");
     const composed = buildProjectSystemPrompt(FULL_CTX).replace(/\r\n/g, "\n");
     expect(composed).toBe(golden);
   });
@@ -455,7 +469,22 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // then the BYTE-IDENTITY pin above holds the new composition. Without
     // the env var this is a no-op (normal runs never touch the fixture).
     if (process.env.UPDATE_GOLDEN !== "1") return;
-    writeFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r61.txt"), buildProjectSystemPrompt(FULL_CTX));
+    writeFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r117.txt"), buildProjectSystemPrompt(FULL_CTX));
+  });
+
+  it("R117-c: the R61-era golden stays in fixtures/ as HISTORY — superseded by prompt-golden-r117.txt, never byte-compared again", () => {
+    // The re-pin precedent (R67/R68/R70/R71/R81/R94/R96/R98/R99/R113)
+    // regenerated ONE fixture in place; R117-c deliberately forks the name
+    // so the history survives (the audit's archaeology: the fixture is the
+    // record of what the prompt WAS at each era). The old file is pinned
+    // present-on-disk so it cannot be silently deleted; only the r117
+    // fixture is a live byte-identity anchor.
+    expect(existsSync(join(import.meta.dirname, "fixtures", "prompt-golden-r61.txt"))).toBe(true);
+    const history = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r61.txt"), "utf8").replace(/\r\n/g, "\n");
+    // It is the R61-era composition: it still carries the round-tags the
+    // R117-c strip removed — the marker that proves it is history, not live.
+    expect(history).toContain("(round-33)");
+    expect(history).toContain("(R67)");
   });
 });
 
@@ -475,13 +504,13 @@ describe("ROUND-67 (R67-E): browser discipline, tab-walk, attachments", () => {
     // the R67 per-session-tab + bridge teaching survives, folded into the
     // intro line + the DRIVE line.
     const rest = composed.slice(bp, bp + 5_000);
-    expect(rest).toContain("THIS chat session's OWN tab");
+    expect(rest).toContain("this chat session's own tab");
     expect(rest).toContain("get_state lists only this session's tab");
-    expect(rest).toContain("DRIVE THE PANEL ONLY WITH browser_control (R67)");
-    expect(rest).toContain("NEVER computer-use tools (left_click, scroll, type, mouse_move, screenshot)");
+    expect(rest).toContain("Drive the panel only with browser_control");
+    expect(rest).toContain("never computer-use tools (left_click, scroll, type, mouse_move, screenshot)");
     expect(rest).toContain('never show "agent is using your computer"');
     // The (b) workflow: read_dom → the returned selector paths → click/type.
-    expect(rest).toContain("read_dom first, then click / type the SELECTOR PATHS it returns");
+    expect(rest).toContain("read_dom first, then click / type the selector paths it returns");
     expect(rest).toContain("press_key Enter submits the focused form");
     // The R66 claims the R67 reality retired are GONE.
     expect(rest).not.toContain("every open tab, which tab is active");
@@ -498,9 +527,9 @@ describe("ROUND-67 (R67-E): browser discipline, tab-walk, attachments", () => {
     const cu = composed.indexOf("## COMPUTER USE (desktop control)");
     expect(cu).toBeGreaterThan(-1);
     const rest = composed.slice(cu, cu + 3_600);
-    expect(rest).toContain("TAB-WALK DISCOVERY (R67)");
+    expect(rest).toContain("Tab-walk discovery");
     expect(rest).toContain('press key "tab"');
-    expect(rest).toContain("names the FOCUSED element");
+    expect(rest).toContain("names the focused element");
   });
 
   it("the tool-use rules teach the image-attachment path contract — analyze_image-gated", () => {
@@ -508,7 +537,7 @@ describe("ROUND-67 (R67-E): browser discipline, tab-walk, attachments", () => {
     const tu = composed.indexOf("## TOOL USE");
     expect(tu).toBeGreaterThan(-1);
     const rest = composed.slice(tu, tu + 3_000);
-    expect(rest).toContain("IMAGE ATTACHMENTS (R67)");
+    expect(rest).toContain("Image attachments");
     expect(rest).toContain('"saved in the project at <path>"');
     expect(rest).toContain('analyze_image with path "<path>"');
     // The gate: an allowlist without analyze_image never sees the rule.
@@ -516,7 +545,7 @@ describe("ROUND-67 (R67-E): browser discipline, tab-walk, attachments", () => {
       ...FULL_CTX,
       toolNames: FULL_CTX.toolNames.filter((n) => n !== "analyze_image"),
     });
-    expect(noVision).not.toContain("IMAGE ATTACHMENTS (R67)");
+    expect(noVision).not.toContain("Image attachments");
     expect(noVision).toContain("## TOOL USE");
   });
 });
@@ -536,13 +565,13 @@ describe("ROUND-68 (R68-C): the computer-use discipline lines", () => {
     const cu = composed.indexOf("## COMPUTER USE (desktop control)");
     expect(cu).toBeGreaterThan(-1);
     const rest = composed.slice(cu, cu + 4_200);
-    expect(rest).toContain("BROWSER CONTENT IS SEARCHABLE (R68)");
+    expect(rest).toContain("Browser content is searchable");
     expect(rest).toContain("find_elements {appRef, query:'Wikipedia'}");
     expect(rest).toContain("the web tree is activated automatically before every walk");
-    expect(rest).toContain("element targets are the PRIMARY path for browser content");
+    expect(rest).toContain("element targets are the primary path for browser content");
     // R70-c: middle_click guidance moved to the skill body — retired here.
     // The R68 zoom-crop verification teaching is RETIRED by R69's receipts.
-    expect(rest).not.toContain("CHAIN DISCIPLINE (R68)");
+    expect(rest).not.toContain("Chain discipline (R68)");
     expect(rest).not.toContain("a small zoom region crop of the one control");
   });
 
@@ -550,7 +579,7 @@ describe("ROUND-68 (R68-C): the computer-use discipline lines", () => {
     const composed = buildProjectSystemPrompt(FULL_CTX);
     const cu = composed.indexOf("## COMPUTER USE (desktop control)");
     const rest = composed.slice(cu, cu + 4_200);
-    expect(rest).toContain("ACTIVATE their target app automatically");
+    expect(rest).toContain("activate their target app automatically");
     expect(rest).toContain("a mismatch refusal means the activation itself failed");
     expect(rest).toContain("frontmost_pid_mismatch → the auto-activation failed");
     // The old manual-recovery parenthetical is retired.
@@ -560,8 +589,8 @@ describe("ROUND-68 (R68-C): the computer-use discipline lines", () => {
   it("the lines are computer-use-gated (the section composes only when the master switch is on)", () => {
     const off = buildProjectSystemPrompt({ ...FULL_CTX, computerUse: { enabled: false, posture: "act" as const } });
     expect(off).not.toContain("## COMPUTER USE (desktop control)");
-    expect(off).not.toContain("CHAIN DISCIPLINE (R69)");
-    expect(off).not.toContain("BROWSER CONTENT IS SEARCHABLE (R68)");
+    expect(off).not.toContain("Chain discipline");
+    expect(off).not.toContain("Browser content is searchable");
   });
 });
 
@@ -576,9 +605,9 @@ describe("ROUND-69 (4-c-2): the auto-observation chain discipline", () => {
     const composed = buildProjectSystemPrompt(FULL_CTX);
     const cu = composed.indexOf("## COMPUTER USE (desktop control)");
     const rest = composed.slice(cu, cu + 4_600);
-    expect(rest).toContain("CHAIN DISCIPLINE (R69)");
-    expect(rest).toContain("every ACTION receipt carries an observation");
-    expect(rest).toContain("Do NOT screenshot or zoom after acting");
+    expect(rest).toContain("Chain discipline");
+    expect(rest).toContain("every action receipt carries an observation");
+    expect(rest).toContain("Do not screenshot or zoom after acting");
     expect(rest).toContain("read the receipt's observation instead");
   });
 
@@ -586,7 +615,7 @@ describe("ROUND-69 (4-c-2): the auto-observation chain discipline", () => {
     const composed = buildProjectSystemPrompt(FULL_CTX);
     const cu = composed.indexOf("## COMPUTER USE (desktop control)");
     const rest = composed.slice(cu, cu + 4_600);
-    expect(rest).toContain("screen is UNCHANGED");
+    expect(rest).toContain("screen is unchanged");
     expect(rest).toContain("may not have registered");
     expect(rest).toContain("check focusedElementName");
     expect(rest).toContain("Element-first beats coordinate guessing");
@@ -664,8 +693,8 @@ describe("ROUND-99 (R99-G): the loop's PHASE 0 — REQUEST INTAKE", () => {
     expect(loop).toContain("(a) restate the goal in one line");
     expect(loop).toContain("(b) list what you already know vs. what you must find out");
     expect(loop).toContain("never a silent guess");
-    expect(loop).toContain("check the SKILLS index (when one exists) — a matching skill is read BEFORE planning");
-    expect(loop).toContain("(d) name what is OUT of scope — what you will NOT touch");
+    expect(loop).toContain("check the SKILLS index (when one exists) — a matching skill is read before planning");
+    expect(loop).toContain("(d) name what is out of scope — what you will not touch");
     expect(loop).toContain("(e) only then write the plan");
     // The five phase numbers survive untouched (the existing pins' anchor).
     for (const phase of ["1. PLAN", "2. EXPLORE", "3. ACT", "4. VERIFY", "5. FINISH"]) {
@@ -674,16 +703,19 @@ describe("ROUND-99 (R99-G): the loop's PHASE 0 — REQUEST INTAKE", () => {
   });
 
   it("the ask_user variant moves the clarify clause INTO INTAKE (both vocabularies pinned)", () => {
-    // FULL_CTX's frozen vocab has no ask_user → the prose fallback.
-    const bare = buildSectionText(FULL_CTX, "agentic-loop") ?? "";
-    expect(bare).toContain("missing context gets a clarifying question OR an explicit assumption");
-    // MODES_CTX tracks the LIVE TOOL_NAMES (ask_user present) → the tool form.
-    const withAsk = buildSectionText(MODES_CTX, "agentic-loop") ?? "";
-    expect(withAsk).toContain("gets ask_user EARLY (batched questions, options where enumerable) or an explicit stated assumption");
+    // R117-c: FULL_CTX now tracks the LIVE vocabulary (ask_user present) →
+    // the tool form; the prose fallback is pinned on an ask_user-less ctx.
+    const withAsk = buildSectionText(FULL_CTX, "agentic-loop") ?? "";
+    expect(withAsk).toContain("gets ask_user early (batched questions, options where enumerable) or an explicit stated assumption");
+    const bare = buildSectionText(
+      { ...FULL_CTX, toolNames: FULL_CTX.toolNames.filter((n) => n !== "ask_user") },
+      "agentic-loop",
+    ) ?? "";
+    expect(bare).toContain("missing context gets a clarifying question or an explicit assumption");
     // PLAN itself no longer carries the clarify clause in EITHER variant —
     // INTAKE owns it (one home for the clarify-early doctrine).
     expect(bare).not.toContain("ask ONE clarifying question");
-    expect(withAsk).toContain("1. PLAN — tasks with 3+ steps get a todo_write list UP FRONT");
+    expect(withAsk).toContain("1. PLAN — tasks with 3+ steps get a todo_write list up front");
   });
 });
 
@@ -738,7 +770,7 @@ describe("ROUND-99 (R99-G): the TOOL USE core-vocabulary descriptions block", ()
 describe("ROUND-99 (R99-G): the subagent REPORT CONTRACT + confidence tags + memory WHEN", () => {
   it("every delegated task ends with the five-field report — \"none\", never silence", () => {
     const sub = buildSectionText(FULL_CTX, "sub-agents") ?? "";
-    expect(sub).toContain("REPORT CONTRACT");
+    expect(sub).toContain("Report contract");
     expect(sub).toContain("RESULT (done/blocked/failed, one line)");
     expect(sub).toContain("FILES TOUCHED (paths + what changed)");
     expect(sub).toContain("FINDINGS (facts the parent needs)");
@@ -750,7 +782,9 @@ describe("ROUND-99 (R99-G): the subagent REPORT CONTRACT + confidence tags + mem
   it("COMMUNICATION: the confidence line earns its keep — because + raising-it + no-line-when-verified (R107-a F6: ONE vocabulary, the textual form)", () => {
     const comm = buildSectionText(FULL_CTX, "communication") ?? "";
     expect(comm).toContain("Confidence: high|medium|low — because <the specific reason>; raising it needs <the concrete next step>");
-    expect(comm).toContain("Verified-working answers need no line");
+    // R117-c (A9): the contract's two rules are now explicit if/else lines —
+    // the WHEN rule no longer hides inside the shape rule's tail.
+    expect(comm).toContain("If every claim is verified by receipts, no confidence line is needed; if any claim rests on inference or is unverified, the line is required.");
     // The levels' definitions folded into the line (the emoji set retired —
     // a second vocabulary in one line, and the glyphs landed raw on the
     // CLI/phone channels).
@@ -760,39 +794,39 @@ describe("ROUND-99 (R99-G): the subagent REPORT CONTRACT + confidence tags + mem
     expect(comm).not.toContain("🟢"); // the emoji vocabulary is GONE
     expect(comm).toContain("one line of devil's advocate — the strongest counter-argument to what you just did");
     // R107-a (F3): the channel-honesty line (desktop/terminal/phone).
-    expect(comm).toContain("structure must survive PLAIN TEXT");
+    expect(comm).toContain("structure must survive plain text");
   });
 
   it("project-memory: the SAVE/RECALL/NEVER WHEN block (memory-tools-gated)", () => {
     const withMemory = buildSectionText(FULL_CTX, "project-memory") ?? "";
-    expect(withMemory).toContain("WHEN to use the memory tools");
-    expect(withMemory).toContain("- SAVE when you discover something DURABLE the next session needs");
+    expect(withMemory).toContain("When to use the memory tools");
+    expect(withMemory).toContain("- **Save** when you discover something durable the next session needs");
     expect(withMemory).toContain("project conventions, the owner's confirmed preferences, environment gotchas, decisions with their reasons");
     expect(withMemory).toContain("Save at the moment of discovery: batch saves at turn-end get lost");
-    expect(withMemory).toContain("- RECALL at the start of a task whose topic matches a memory — search before re-deriving");
+    expect(withMemory).toContain("- **Recall** at the start of a task whose topic matches a memory — search before re-deriving");
     expect(withMemory).toContain("- NEVER save: secrets or keys, per-session state, raw transcripts, anything the file ledger or git already records");
     // The gate: no memory TOOLS in vocab → the digest narration only.
     const noTools = buildSectionText({ ...FULL_CTX, toolNames: ["read_file"] }, "project-memory") ?? "";
     expect(noTools).toContain("## Project memory (persisted across sessions)");
-    expect(noTools).not.toContain("WHEN to use the memory tools");
+    expect(noTools).not.toContain("When to use the memory tools");
   });
 
   it("the merged COMPLETION DISCIPLINE carries the precision lines (the retired section's survivors)", () => {
     const merged = buildSectionText(FULL_CTX, "completion-discipline") ?? "";
     // The R96-D ending contract survives…
-    expect(merged).toContain("END WITH THE LINE: Task complete.");
+    expect(merged).toContain("end with the line: Task complete.");
     expect(merged).toContain("NEVER pad finished work");
     expect(merged).toContain("NEVER restart finished work");
     // …and the R96-D precision lines fold in under their label, with the
     // LANDING/RIGHT aphorism folded into the DONE line.
     expect(merged).toContain("Precision (target before you read):");
-    expect(merged).toContain("TARGET THE FILE FIRST");
-    expect(merged).toContain("READ ONLY WHAT THE TASK NEEDS");
-    expect(merged).toContain("EDITS USE EXACT ANCHORS from the CURRENT content");
+    expect(merged).toContain("Target the file first");
+    expect(merged).toContain("Read only what the task needs");
+    expect(merged).toContain("Edits use exact anchors** from the current content");
     expect(merged).toContain("one character off is a miss");
-    expect(merged).toContain('"CHANGE X TO Y IN FILE F"');
+    expect(merged).toContain('"Change X to Y in file F"');
     expect(merged).toContain("never analyze the whole project (or a whole HTML file) when one file and one string are named");
-    expect(merged).toContain("a change LANDING is not a change being RIGHT");
+    expect(merged).toContain("a change landing is not a change being right");
     // The fourth-copy verify line is GONE (its doctrine lives in the loop's
     // VERIFY phase + DONE-means-VERIFIED + file-editing smart verification).
     expect(merged).not.toContain("AFTER EDITING, VERIFY: re-read the changed range");

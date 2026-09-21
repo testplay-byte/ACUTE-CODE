@@ -150,9 +150,12 @@ const COMPLETION_SIGNAL =
 
 /** ROUND-96 (R96-B): the ONE todos-continuation's user-role message — rides
  * the pendingNudge machinery (in-memory only, never persisted; the next
- * provider call ends user-last by construction). */
+ * provider call ends user-last by construction).
+ * ROUND-117 (R117-c, A9): the ending phrase aligns with the completion
+ * contract — one spelling ("the line: Task complete."), matching the
+ * COMPLETION DISCIPLINE / COMPLETION_SIGNAL contract the main prompt pins. */
 const TODOS_CONTINUATION_NUDGE =
-  "Your todo list still has incomplete items. Continue the task and complete the remaining work now — call the tools you need. When everything is done, reply with a short final summary.";
+  "Your todo list still has incomplete items. Continue the task and complete the remaining work now — call the tools you need. When everything is done, reply with a short final summary ending with the line: Task complete.";
 
 /** ROUND-96 (R96-B): the belt-and-suspenders SHAPE nudge — appended at the
  * assembly boundary whenever the outgoing messages end assistant-role, so

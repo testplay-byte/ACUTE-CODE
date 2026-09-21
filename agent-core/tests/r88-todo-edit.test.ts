@@ -146,7 +146,7 @@ describe("R88 CURRENT TODO LIST — the prompt section", () => {
       todoList: snap,
     });
     expect(system).toContain("## CURRENT TODO LIST");
-    expect(system).toContain("The OWNER edited this list");
+    expect(system).toContain("The owner edited this list");
     expect(system).toContain("- [x] First");
     expect(system).toContain("- [~] Second");
     expect(system).toContain("- [ ] Third");
@@ -162,7 +162,7 @@ describe("R88 CURRENT TODO LIST — the prompt section", () => {
       todoList: { todos: [{ content: "Agent's task", status: "pending" }], source: "agent" },
     });
     expect(agentSystem).toContain("## CURRENT TODO LIST");
-    expect(agentSystem).not.toContain("The OWNER edited this list");
+    expect(agentSystem).not.toContain("The owner edited this list");
     expect(agentSystem).toContain("- [ ] Agent's task");
 
     const clearedSystem = buildProjectSystemPrompt({

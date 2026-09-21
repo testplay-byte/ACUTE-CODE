@@ -181,20 +181,20 @@ describe("R96-D P1: the new prompt sections compose in order", () => {
   it("BATCH DISCIPLINE teaches the owner's batching directive (content pins)", () => {
     const text = composed();
     // The owner: "It will run multiple commands in a single go… batch commands."
-    expect(text).toContain("issue them ALL in ONE response");
+    expect(text).toContain("issue them all in one response");
     // ROUND-99 (R99-G, conscious re-pin): DEPENDENT CALLS WAIT merged into
     // the BATCH INDEPENDENT CALLS bullet — the sequencing rule survives as
     // the bullet's tail clause (the standalone bullet form is gone).
-    expect(text).toContain("a call that needs a previous result WAITS for it");
-    expect(text).toContain("CHAIN SHELL COMMANDS");
+    expect(text).toContain("a call that needs a previous result waits for it");
+    expect(text).toContain("**Chain shell commands:**");
     expect(text).toContain("`a && b`");
-    expect(text).toContain("ONE-CALL-ONE-WAIT IS THE ANTI-PATTERN");
+    expect(text).toContain("**One-call-one-wait is the anti-pattern:**");
   });
 
   it("COMPLETION DISCIPLINE teaches the explicit ending contract", () => {
     const text = composed();
     // The exact phrase runtime's COMPLETION_SIGNAL regex recognizes.
-    expect(text).toContain("END WITH THE LINE: Task complete.");
+    expect(text).toContain("end with the line: Task complete.");
     expect(text).toContain("NEVER pad finished work");
     expect(text).toContain("NEVER restart finished work");
   });
@@ -205,18 +205,18 @@ describe("R96-D P1: the new prompt sections compose in order", () => {
     // ROUND-99 (R99-G): the lines compose inside completion-discipline now
     // — the section was merged there; every load-bearing phrase survives.
     const merged = buildSectionText(promptCtx([]), "completion-discipline") ?? "";
-    expect(merged).toContain("TARGET THE FILE FIRST");
-    expect(merged).toContain("READ ONLY WHAT THE TASK NEEDS");
-    expect(merged).toContain("EDITS USE EXACT ANCHORS from the CURRENT content");
+    expect(merged).toContain("**Target the file first:**");
+    expect(merged).toContain("**Read only what the task needs:**");
+    expect(merged).toContain("**Edits use exact anchors** from the current content");
     expect(merged).toContain("one character off is a miss");
-    expect(merged).toContain('"CHANGE X TO Y IN FILE F"');
+    expect(merged).toContain('"Change X to Y in file F"');
     expect(merged).toContain("never analyze the whole project (or a whole HTML file) when one file and one string are named");
   });
 
   it("the loop's VERIFY phase gained on-disk verification; FINISH names the completion line", () => {
     const text = composed();
-    expect(text).toContain("verify the change ON DISK before claiming done");
-    expect(text).toContain("for VISUAL changes, screenshot via the browser tools and look at the result");
+    expect(text).toContain("verify the change on disk before claiming done");
+    expect(text).toContain("for visual changes, screenshot via the browser tools and look at the result");
     expect(text).toContain('end with the explicit completion line: Task complete. (see COMPLETION DISCIPLINE below)');
   });
 });
@@ -229,7 +229,7 @@ describe("R96-D P2: the SKILLS section budget", () => {
   it("the header names BOTH tools and the intro points at search_skills", () => {
     const section = buildSectionText(promptCtx([{ name: "demo", description: "A demo skill." }]), "skills") ?? "";
     expect(section).toContain("## SKILLS (load with read_skill, search with search_skills)");
-    expect(section).toContain("call read_skill with its name FIRST");
+    expect(section).toContain("call read_skill with its name first");
     expect(section).toContain("call search_skills with a keyword");
     // No overflow on a small set — the note must NOT render.
     expect(section).not.toContain("search_skills to discover them");

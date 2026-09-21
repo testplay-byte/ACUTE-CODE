@@ -109,7 +109,7 @@ describe("R98-E1: storage/prompt-overrides.ts (the writer)", () => {
 
     const prompt = buildProjectSystemPrompt(ctxFor(projectRoot));
     expect(prompt).toContain("R98E1-MARKER");
-    expect(prompt).not.toContain("- CONCISE BY DEFAULT"); // the built-in body is GONE
+    expect(prompt).not.toContain("- **Concise by default:**"); // the built-in body is GONE
   });
 
   it("readPromptOverride returns the RAW file text (null when absent) — the engine trims at load", () => {
@@ -197,7 +197,7 @@ describe("R98-E1: GET /prompts/sections", () => {
     expect(comm?.bucket).toBe("identity");
     expect(comm?.overrideContent).toBe("## COMMUNICATION (custom)\nR98E1-ROUTE-MARKER");
     // The DEFAULT reference is the built-in composition (what revert restores).
-    expect(comm?.defaultText).toContain("- CONCISE BY DEFAULT");
+    expect(comm?.defaultText).toContain("- **Concise by default:**");
     expect(comm?.defaultText).not.toContain("R98E1-ROUTE-MARKER");
 
     // An unpinned section: no override content, a real default.
@@ -310,7 +310,7 @@ describe("R98-E1: DELETE /prompts/sections/:id", () => {
     expect(readPromptOverride(projectRoot, "communication")).toBeNull();
     expect(buildProjectSystemPrompt(ctxFor(projectRoot))).not.toBe(pristineBefore); // marker gone
     expect(buildProjectSystemPrompt(ctxFor(projectRoot))).not.toContain("R98E1-DELETE-MARKER");
-    expect(buildProjectSystemPrompt(ctxFor(projectRoot))).toContain("- CONCISE BY DEFAULT");
+    expect(buildProjectSystemPrompt(ctxFor(projectRoot))).toContain("- **Concise by default:**");
   });
 
   it("404 for an unregistered root; 400 when projectRoot is missing", async () => {
@@ -347,7 +347,7 @@ describe("R98-E1: GET /prompts/preview", () => {
     const comm = body.sections.find((s) => s.id === "communication");
     expect(comm?.overridden).toBe(true);
     expect(comm?.text).toContain("R98E1-PREVIEW-MARKER");
-    expect(comm?.text).not.toContain("CONCISE BY DEFAULT");
+    expect(comm?.text).not.toContain("Concise by default");
 
     const env = body.sections.find((s) => s.id === "environment");
     expect(env?.overridden).toBe(false);

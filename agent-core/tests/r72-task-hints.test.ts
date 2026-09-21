@@ -223,7 +223,7 @@ describe("R72-a D2: the SKILLS section's advisory line", () => {
   it("one hint → the exact advisory line without the parenthetical", () => {
     const prompt = buildProjectSystemPrompt({ ...base, taskHints: [{ skillName: "debugging", score: 12 }] });
     expect(prompt).toContain(
-      "Task signal: this request looks like it matches **debugging** — consider calling read_skill with that name FIRST and following it for the rest of the task.",
+      "Task signal: this request looks like it matches **debugging** — consider calling read_skill with that name first and following it for the rest of the task.",
     );
   });
 
@@ -236,7 +236,7 @@ describe("R72-a D2: the SKILLS section's advisory line", () => {
       ],
     });
     expect(prompt).toContain(
-      "Task signal: this request looks like it matches **alpha** (and possibly **beta**) — consider calling read_skill with that name FIRST and following it for the rest of the task.",
+      "Task signal: this request looks like it matches **alpha** (and possibly **beta**) — consider calling read_skill with that name first and following it for the rest of the task.",
     );
   });
 
@@ -244,7 +244,7 @@ describe("R72-a D2: the SKILLS section's advisory line", () => {
     const prompt = buildProjectSystemPrompt({ ...base, taskHints: [{ skillName: "alpha", score: 9 }] });
     const idxList = prompt.indexOf("- **alpha** — does alpha things");
     const idxSignal = prompt.indexOf("Task signal:");
-    const idxReload = prompt.indexOf("can be RELOADED");
+    const idxReload = prompt.indexOf("can be reloaded");
     expect(idxList).toBeGreaterThan(-1);
     expect(idxSignal).toBeGreaterThan(idxList);
     expect(idxReload).toBeGreaterThan(idxSignal);
@@ -262,7 +262,7 @@ describe("R72-a D2: the SKILLS section's advisory line", () => {
     const line = prompt.split("\n").find((l) => l.startsWith("Task signal:"));
     expect(line).toBeDefined();
     expect(line).toBe(
-      "Task signal: this request looks like it matches **alpha** (and possibly **beta**) — consider calling read_skill with that name FIRST and following it for the rest of the task.",
+      "Task signal: this request looks like it matches **alpha** (and possibly **beta**) — consider calling read_skill with that name first and following it for the rest of the task.",
     );
   });
 
@@ -363,7 +363,7 @@ describe("R72-a D3: both turn paths carry the advisory line (prepareTurn wiring)
     expect(system).toContain("## SKILLS (load with read_skill, search with search_skills)");
     expect(system).toContain("**debugging**");
     expect(system).toContain(
-      "Task signal: this request looks like it matches **debugging** — consider calling read_skill with that name FIRST and following it for the rest of the task.",
+      "Task signal: this request looks like it matches **debugging** — consider calling read_skill with that name first and following it for the rest of the task.",
     );
   });
 
@@ -381,7 +381,7 @@ describe("R72-a D3: both turn paths carry the advisory line (prepareTurn wiring)
     // the first name is pinned: 'this bug' + defect tokens make debugging
     // the phrase-driven top match for the canonical defect message.
     expect(system).toMatch(
-      /^Task signal: this request looks like it matches \*\*debugging\*\*(?: \(and possibly \*\*[a-z0-9-]+\*\*\))? — consider calling read_skill with that name FIRST and following it for the rest of the task\.$/m,
+      /^Task signal: this request looks like it matches \*\*debugging\*\*(?: \(and possibly \*\*[a-z0-9-]+\*\*\))? — consider calling read_skill with that name first and following it for the rest of the task\.$/m,
     );
   });
 
@@ -390,7 +390,7 @@ describe("R72-a D3: both turn paths carry the advisory line (prepareTurn wiring)
     const system = await runSyncTurnAndCaptureSystem(sessionId, "my test keeps failing, fix this bug");
     expect(system).toContain("**debugging**");
     expect(system).toContain(
-      "Task signal: this request looks like it matches **debugging** — consider calling read_skill with that name FIRST and following it for the rest of the task.",
+      "Task signal: this request looks like it matches **debugging** — consider calling read_skill with that name first and following it for the rest of the task.",
     );
   });
 
@@ -414,14 +414,14 @@ describe("R72-a D3: both turn paths carry the advisory line (prepareTurn wiring)
     // in the skill's description ('open Notepad' + 'type into that window')
     // → score ≥ 30, far above STRONG_TASK_HINT_SCORE (15) — this is exactly
     // the STRONG-match case the round's phrasing upgrade targets, so the
-    // line now carries the "read it BEFORE starting" wording (prompts.ts
+    // line now carries the "read it before starting" wording (prompts.ts
     // R98-E2). The scorer itself (computeTaskHints) is untouched.
     setComputerUseSettings(db, { enabled: true });
     const onSession = newSession(["computer-use"]);
     const onSystem = await runStreamedTurnAndCaptureSystem(onSession, "open Notepad and type into that window");
     expect(onSystem).toContain("## SKILLS (load with read_skill, search with search_skills)");
     expect(onSystem).toContain(
-      "Task signal: this request STRONGLY matches **computer-use** — read it BEFORE starting (read_skill with that name) and follow it for the rest of the task.",
+      "Task signal: this request strongly matches **computer-use** — read it before starting (read_skill with that name) and follow it for the rest of the task.",
     );
   });
 

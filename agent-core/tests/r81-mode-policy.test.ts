@@ -263,7 +263,7 @@ describe("R81: turn integration (prepareTurn)", () => {
     // The posture rides as GUIDANCE: the R81 heading + the discipline prose
     // (the ENFORCED/owner-pin paragraphs are gone).
     expect(system).toContain("## ACTIVE POSTURE — Review (review)");
-    expect(system).toContain("Discipline, not permission (R81)");
+    expect(system).toContain("Discipline, not permission:");
     expect(system).not.toContain("ENFORCED, not advisory");
   });
 
@@ -290,7 +290,7 @@ describe("R81: turn integration (prepareTurn)", () => {
     expect(toolNames).toContain("run_command");
     // The posture body still carries the read-only DISCIPLINE in prose.
     expect(system).toContain("## ACTIVE POSTURE — Plan (plan)");
-    expect(system).toContain("Discipline, not permission (R81)");
+    expect(system).toContain("Discipline, not permission:");
   });
 
   it("a DEBUG posture under full permission KEEPS the full mutating toolset (the fix needs it)", async () => {

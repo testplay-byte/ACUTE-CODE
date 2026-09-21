@@ -104,14 +104,14 @@ describe("R98-F3: the prompt lines (code navigation + codebase awareness)", () =
   it("CODE NAVIGATION teaches search_symbols BEFORE search_code when hunting a definition", () => {
     const prompt = buildProjectSystemPrompt(ctx);
     const nav = prompt.slice(prompt.indexOf("## CODE NAVIGATION"), prompt.indexOf("## PRECISION DISCIPLINE"));
-    expect(nav).toContain("Use search_symbols to find WHERE a symbol is DEFINED");
-    expect(nav).toContain("try it BEFORE search_code when hunting a definition");
+    expect(nav).toContain("Use search_symbols to find where a symbol is defined");
+    expect(nav).toContain("try it before search_code when hunting a definition");
   });
 
   it("CODEBASE AWARENESS carries the auto-index truth + the honest search split (the fabricated 'search_code queries the index' line is GONE)", () => {
     const prompt = buildProjectSystemPrompt(ctx);
     const aware = prompt.slice(prompt.indexOf("## CODEBASE AWARENESS"), prompt.indexOf("### Project index"));
-    expect(aware).toContain("The index refreshes AUTOMATICALLY");
+    expect(aware).toContain("The index refreshes automatically");
     expect(aware).toContain("missing/stale >10 min");
     expect(aware).toContain("use search_symbols to query the symbol index (name-prefix + kind filter");
     expect(aware).toContain("the index first when hunting definitions.");

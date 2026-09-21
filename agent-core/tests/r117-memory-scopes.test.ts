@@ -604,7 +604,7 @@ describe("the composed memory prompt (workspace above project)", () => {
       prompt.indexOf("## Project memory (persisted across sessions)"),
     );
     // The episodic RECALL line (session_recall is in vocab).
-    expect(prompt).toContain("session_recall to check what PAST SESSIONS");
+    expect(prompt).toContain("session_recall to check what past sessions");
   });
 
   it("is honest per tier: workspace rows + an empty project tier says 'No memories saved for this project yet'; both empty says 'No memories saved yet'", () => {

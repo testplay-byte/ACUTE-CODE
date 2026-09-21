@@ -106,11 +106,11 @@ describe("D1: the ENVIRONMENT section renders the turn's real machine state", ()
     expect(envIdx).toBeGreaterThan(-1);
     const rest = composed.slice(envIdx, envIdx + 600);
     expect(rest).toContain("- OS: Linux (release 6.5.0-r70c); shell: /bin/sh — run_command runs commands through that shell.");
-    expect(rest).toContain("- Working directory: /tmp/acute-r70c-never-exists (ALL paths must be relative to this)");
+    expect(rest).toContain("- Working directory: /tmp/acute-r70c-never-exists (all paths must be relative to this)");
     expect(rest).toContain("- Current date: 2026-06-11 (Thursday)");
-    expect(rest).toContain("- Git: branch main, dirty — uncommitted changes present (the USER's work: NEVER revert or discard them)");
+    expect(rest).toContain("- Git: branch main, dirty — uncommitted changes present (the user's work: NEVER revert or discard them)");
     // R107-a (F11): the duplicate relative-path line retired — the working-
-    // directory line above already carries "ALL paths must be relative to
+    // directory line above already carries "all paths must be relative to
     // this"; the out-of-root line stays.
     expect(rest).not.toContain("Never use absolute paths — always relative to the project root");
     expect(rest).toContain("Never access files outside the project root");
@@ -129,7 +129,7 @@ describe("D1: the ENVIRONMENT section renders the turn's real machine state", ()
     const legacy = buildProjectSystemPrompt(ctxFor({ environment: undefined }));
     const envIdx = legacy.indexOf("## ENVIRONMENT");
     const rest = legacy.slice(envIdx, envIdx + 300);
-    expect(rest).toContain("- Working directory: /tmp/acute-r70c-never-exists (ALL paths must be relative to this)");
+    expect(rest).toContain("- Working directory: /tmp/acute-r70c-never-exists (all paths must be relative to this)");
     expect(rest).not.toContain("- OS:");
     expect(rest).not.toContain("- Current date:");
     expect(rest).not.toContain("- Git:");
@@ -142,7 +142,7 @@ describe("D1: the TERMINAL section is OS-aware", () => {
 
   it("Linux/macOS env → POSIX syntax ONLY (no start /B)", () => {
     const term = terminalSection(ctxFor({ environment: { ...BASE_ENV, osPlatform: "Linux", shell: "/bin/sh" } }));
-    expect(term).toContain("SERVERS / LONG-RUNNING PROCESSES");
+    expect(term).toContain("**Servers / long-running processes:**");
     expect(term).toContain("`<cmd> > <log> 2>&1 &` (POSIX shell syntax; the shell is /bin/sh)");
     expect(term).not.toContain("start /B");
     // The background-job contract still matches exec.ts (launch detached →
@@ -244,8 +244,9 @@ describe("D1: prepareTurn grounds the live turn (git probe never blocks)", () =>
   it("the AGENTIC LOOP's outer-iteration line reflects the agent default", async () => {
     const system = await captureSystem(tempRoot(), 4);
     // ROUND-99 (R99-G, conscious re-pin): the cap line now names itself a
-    // LIMIT — never a target (the hard-numbers audit).
-    expect(system).toContain("outer iterations exist — a limit to keep working within, never a target to fill");
+    // LIMIT — never a target (the hard-numbers audit). R117-c calibrated
+    // spelling: "limits … never targets".
+    expect(system).toContain("outer iterations — limits to keep working within, never targets to fill");
   });
 });
 
@@ -262,7 +263,7 @@ describe("D2: the four-way overlap is ONE section", () => {
 
   it("the default maxOuterLoops is 5 when the ctx omits it", () => {
     const composed = buildProjectSystemPrompt(ctxFor({ maxOuterLoops: undefined }));
-    expect(composed).toContain("5 outer iterations exist — a limit to keep working within, never a target to fill");
+    expect(composed).toContain("5 outer iterations — limits to keep working within, never targets to fill");
   });
 });
 
@@ -453,7 +454,7 @@ describe("D3: @file imports (the AGENTS/CLAUDE bridge)", () => {
     const crIdx = composed.indexOf("## PROJECT RULES");
     const rest = composed.slice(crIdx, crIdx + 800);
     expect(rest).toContain("AGENTS.md, CLAUDE.md, .acute/rules/*.md, .acuterules, AGENTS.override.md, CLAUDE.local.md");
-    expect(rest).toContain("later entries are MORE specific and authoritative");
+    expect(rest).toContain("later entries are more specific and authoritative");
     expect(rest).toContain("# AGENTS.md:");
     expect(rest).toContain("Use pnpm.");
   });
@@ -465,13 +466,13 @@ describe("D4: the FILE EDITING rules", () => {
   it("the line-number-prefix rule (R70-a's read_file format meets edit anchors)", () => {
     const composed = buildProjectSystemPrompt(ctxFor());
     expect(composed).toContain("**Line numbers are not content**");
-    expect(composed).toContain("The prefix is NOT file content — edit_file oldString/newString anchors must be the RAW text of the line.");
+    expect(composed).toContain("The prefix is not file content — edit_file oldString/newString anchors must be the raw text of the line.");
   });
 
   it("prefer-editing + the full rule ladder", () => {
     const composed = buildProjectSystemPrompt(ctxFor());
     expect(composed).toContain("**Prefer editing**");
-    expect(composed).toContain("ALWAYS prefer editing an existing file over creating a new one — create new files only when genuinely required");
+    expect(composed).toContain("Always prefer editing an existing file over creating a new one — create new files only when genuinely required");
     // R107-a (F8): "**Smart verification**" (old rule 6) retired — its risk
     // list merged into rule 1; the ladder is now 6 rules.
     expect(composed).not.toContain("**Smart verification**");
@@ -522,12 +523,12 @@ describe("D5: the COMMUNICATION contract", () => {
     // version of the same R70-c shape, not a weakening.
     const composed = buildProjectSystemPrompt(ctxFor());
     const comm = buildSectionText(ctxFor(), "communication") ?? "";
-    expect(comm).toContain("CONCISE BY DEFAULT");
+    expect(comm).toContain("**Concise by default:**");
     expect(comm).toContain("under ~4 lines unless the user asks for detail");
     expect(comm).toContain('Zero preamble ("I\'ll now…"), zero postamble ("Let me know if…")');
     expect(comm).toContain("Cite code locations as path:line (e.g. src/app.ts:42)");
     expect(comm).toContain(
-      'state WHAT you did (the files touched), the VERIFICATION receipts (the exact command you ran + its exit status or key output line',
+      'state what you did (the files touched), the verification receipts (the exact command you ran + its exit status or key output line',
     );
     expect(comm).toContain("An assertion without a receipt is not verification.");
     // The formatting rules survive.
@@ -553,10 +554,10 @@ describe("D6: browser-panel + computer-use trims", () => {
     expect(bp.length).toBeLessThan(2_900);
     expect(bp.length).toBeGreaterThan(1_200); // the discipline survived
     // The kept contract pieces.
-    expect(bp).toContain("read_dom first, then click / type the SELECTOR PATHS it returns");
-    expect(bp).toContain("FORMS (R66): typing alone never submits");
-    expect(bp).toContain("BOT WALLS (R66)");
-    expect(bp).toContain("SURFACE BOUNDARY (R65)");
+    expect(bp).toContain("read_dom first, then click / type the selector paths it returns");
+    expect(bp).toContain("**Forms:** typing alone never submits");
+    expect(bp).toContain("**Bot walls:**");
+    expect(bp).toContain("**Surface boundary:**");
     for (const action of ["navigate", "read_dom", "set_viewport", "wait_for_verification", "get_state", "press_key", "screenshot", "eval"]) {
       expect(bp).toContain(action); // the vocabulary summary
     }
@@ -565,9 +566,9 @@ describe("D6: browser-panel + computer-use trims", () => {
     // compressed to names + the five non-obvious roles + the schema
     // pointer — wait/sequence keep their one-phrase roles.
     expect(bp).toContain("wait,");
-    expect(bp).toContain("sequence (multi-step chain in ONE call)");
-    expect(bp).toContain("NAVIGATION SETTLES");
-    expect(bp).toContain("verify the element you need EXISTS before interacting");
+    expect(bp).toContain("sequence (multi-step chain in one call)");
+    expect(bp).toContain("**Navigation settles:**");
+    expect(bp).toContain("verify the element you need exists before interacting");
     // The schema pointer replaced the inline parameter echo.
     expect(bp).toContain("Full parameters live in the browser_control schema.");
     // The craft pointer is the closing line.
@@ -586,22 +587,22 @@ describe("D6: browser-panel + computer-use trims", () => {
     // intro. Still below the pre-R70 3,898 the trim mandate exists for.
     expect(cu.length).toBeLessThan(3_450);
     expect(cu.length).toBeGreaterThan(2_000); // the safety lines survived
-    expect(cu).toContain("CHAIN DISCIPLINE (R69)");
-    expect(cu).toContain("Do NOT screenshot or zoom after acting");
+    expect(cu).toContain("**Chain discipline:**");
+    expect(cu).toContain("Do not screenshot or zoom after acting");
     expect(cu).toContain("Element-first beats coordinate guessing");
-    expect(cu).toContain("SURFACE BOUNDARY (R65)");
+    expect(cu).toContain("**Surface boundary:**");
     // R94-G: the window actor — exact identity targeting + window_action
     // as the one window-state tool + the app_ref re-resolution rule.
-    expect(cu).toContain("identify windows by EXACT title/pid from list_apps / windows_overview");
+    expect(cu).toContain("identify windows by exact title/pid from list_apps / windows_overview");
     expect(cu).toContain("window_action (minimize/maximize/restore/focus/close; target:'foreground'");
     expect(cu).toContain("a dead app_ref → re-resolve it from list_apps");
-    expect(cu).toContain("two identical failures = CHANGE STRATEGY");
+    expect(cu).toContain("two identical failures = change strategy");
     expect(cu.trimEnd().endsWith('read_skill "computer-use".')).toBe(true);
   });
 
   it("the observe posture line still composes", () => {
     const cu = buildSectionText(ctxFor({ computerUse: { enabled: true, posture: "observe" } }), "computer-use") ?? "";
-    expect(cu).toContain("CURRENT POSTURE: OBSERVE-ONLY");
+    expect(cu).toContain("Current posture: observe-only");
   });
 
   it("the SKILLS section teaches the reload affordance (no contradiction with the pointers)", () => {
@@ -611,6 +612,6 @@ describe("D6: browser-panel + computer-use trims", () => {
     ) ?? "";
     expect(skills).toContain("## SKILLS (load with read_skill, search with search_skills)");
     expect(skills).toContain("**browser-use** — Drive the embedded browser panel.");
-    expect(skills).toContain("A skill body that appears truncated after context compaction can be RELOADED: call read_skill again.");
+    expect(skills).toContain("A skill body that appears truncated after context compaction can be reloaded: call read_skill again.");
   });
 });

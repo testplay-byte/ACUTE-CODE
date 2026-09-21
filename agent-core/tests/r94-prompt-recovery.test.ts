@@ -90,9 +90,9 @@ describe("R94-G: the RECOVERY PROTOCOL section", () => {
     });
     expect(bare).toContain("## RECOVERY PROTOCOL (tool failures)");
     // The core rules survive the minimal composition.
-    expect(bare).toContain("RE-OBSERVE BEFORE RETRYING");
-    expect(bare).toContain("CHANGE STRATEGY");
-    expect(bare).toContain("NEVER ABANDON THE TASK");
+    expect(bare).toContain("**Re-observe before retrying:**");
+    expect(bare).toContain("change strategy");
+    expect(bare).toContain("**Never abandon the task**");
   });
 
   it("composes immediately after the agentic-loop, whose failure rule points at it", () => {
@@ -106,8 +106,8 @@ describe("R94-G: the RECOVERY PROTOCOL section", () => {
 
   it("rule 1 — RE-OBSERVE before retrying, with BOTH surfaces' observation tools", () => {
     const recovery = buildSectionText(ctxFor(), "recovery") ?? "";
-    expect(recovery).toContain("RE-OBSERVE BEFORE RETRYING");
-    expect(recovery).toContain("read the CURRENT state first");
+    expect(recovery).toContain("**Re-observe before retrying:**");
+    expect(recovery).toContain("read the current state first");
     // Browser: get_state/read_dom; desktop: get_app_state/list_apps.
     expect(recovery).toContain("browser: get_state/read_dom");
     expect(recovery).toContain("desktop: get_app_state/list_apps");
@@ -116,8 +116,8 @@ describe("R94-G: the RECOVERY PROTOCOL section", () => {
 
   it("rule 2 — at most 2 identical retries, then CHANGE STRATEGY via a different path", () => {
     const recovery = buildSectionText(ctxFor(), "recovery") ?? "";
-    expect(recovery).toContain("IDENTICAL RETRIES: at most 2");
-    expect(recovery).toContain("fails the same way twice, CHANGE STRATEGY");
+    expect(recovery).toContain("**Identical retries:** at most 2.");
+    expect(recovery).toContain("fails the same way twice, change strategy");
     // The strategy menu: selector, action, or a different path (eval
     // fallback, another element, keyboard instead of mouse).
     expect(recovery).toContain("eval as the fallback");
@@ -126,20 +126,20 @@ describe("R94-G: the RECOVERY PROTOCOL section", () => {
 
   it("rule 3 — tool error recovery hints are followed EXACTLY ONCE", () => {
     const recovery = buildSectionText(ctxFor(), "recovery") ?? "";
-    expect(recovery).toContain("when a tool error names a recovery, follow it EXACTLY ONCE");
+    expect(recovery).toContain("when a tool error names a recovery, follow it exactly once");
     expect(recovery).toContain("if the hint's fix also fails, change strategy");
   });
 
   it("rule 4 — refused/blocked results are BELIEVED, not immediately repeated", () => {
     const recovery = buildSectionText(ctxFor(), "recovery") ?? "";
-    expect(recovery).toContain("REFUSALS ARE REAL");
+    expect(recovery).toContain("**Refusals are real:**");
     expect(recovery).toContain("refused or blocked");
     expect(recovery).toContain("do not immediately repeat the call");
   });
 
   it("rule 5 — let the world settle: wait, never race a loading page, wait_for_verification for walls", () => {
     const recovery = buildSectionText(ctxFor(), "recovery") ?? "";
-    expect(recovery).toContain("LET THE WORLD SETTLE");
+    expect(recovery).toContain("**Let the world settle:**");
     expect(recovery).toContain("browser wait / desktop wait; sequence waits automatically");
     expect(recovery).toContain("never race a loading page");
     expect(recovery).toContain("wait_for_verification, never a retry loop");
@@ -147,7 +147,7 @@ describe("R94-G: the RECOVERY PROTOCOL section", () => {
 
   it("rule 6 — never abandon the task; honest progress + the stop condition", () => {
     const recovery = buildSectionText(ctxFor(), "recovery") ?? "";
-    expect(recovery).toContain("NEVER ABANDON THE TASK on tool failures");
+    expect(recovery).toContain("**Never abandon the task** on tool failures");
     expect(recovery).toContain("report progress honestly and continue with a changed approach");
     expect(recovery).toContain("say what was tried and what is needed");
   });
@@ -159,7 +159,7 @@ describe("R94-G: the RECOVERY PROTOCOL section", () => {
     writeFileSync(join(dir, "recovery.md"), "## RECOVERY PROTOCOL (project override)\nR94G-MARKER-RECOVERY\nStay calm.", "utf8");
     const replaced = buildProjectSystemPrompt(ctxFor({ rootPath: root }));
     expect(replaced).toContain("R94G-MARKER-RECOVERY");
-    expect(replaced).not.toContain("RE-OBSERVE BEFORE RETRYING");
+    expect(replaced).not.toContain("**Re-observe before retrying:**");
     // Neighbors survive untouched.
     expect(replaced).toContain("## AGENTIC LOOP — MULTI-TURN COMPLETION");
     expect(replaced).toContain("## ENGINEERING DISCIPLINE");
@@ -190,9 +190,9 @@ describe("R94-G: CAPABILITIES — the hasVisionPath line", () => {
     const cap = composed.indexOf("## CAPABILITIES");
     expect(cap).toBeGreaterThan(-1);
     const rest = composed.slice(cap, cap + 700);
-    expect(rest).toContain("IMAGE UNDERSTANDING: NONE in this session");
+    expect(rest).toContain("**Image understanding:** none in this session");
     expect(rest).toContain("NEVER call screenshot, zoom, or any image-analysis tool");
-    expect(rest).toContain("they cannot help you and will be REFUSED");
+    expect(rest).toContain("they cannot help you and will be refused");
     // The perception alternatives — browser AND desktop, the real tool names.
     expect(rest).toContain("browser read_dom/read/source");
     expect(rest).toContain("desktop get_app_state/find_elements/get_tree");
@@ -208,18 +208,18 @@ describe("R94-G: CAPABILITIES — the hasVisionPath line", () => {
   it("vision present → the short converse MAY line (no refusal doctrine)", () => {
     const composed = buildProjectSystemPrompt(ctxFor({ hasVisionPath: true }));
     const rest = composed.slice(composed.indexOf("## CAPABILITIES"), composed.indexOf("## CAPABILITIES") + 700);
-    expect(rest).toContain("IMAGE UNDERSTANDING: available");
-    expect(rest).toContain("you MAY analyze images");
-    expect(rest).toContain("when the VISUAL LAYOUT itself is the question");
+    expect(rest).toContain("**Image understanding:** available");
+    expect(rest).toContain("you may analyze images");
+    expect(rest).toContain("when the visual layout itself is the question");
     // The no-vision doctrine is GONE in this polarity.
-    expect(rest).not.toContain("NONE in this session");
-    expect(rest).not.toContain("will be REFUSED");
+    expect(rest).not.toContain("none in this session");
+    expect(rest).not.toContain("will be refused");
   });
 
   it("absent hasVisionPath → NO section at all (pre-R94 callers compose byte-identically)", () => {
     const composed = buildProjectSystemPrompt(ctxFor());
     expect(composed).not.toContain("## CAPABILITIES");
-    expect(composed).not.toContain("IMAGE UNDERSTANDING");
+    expect(composed).not.toContain("**Image understanding:**");
   });
 
   it("honest gating: no image-capable tool in the toolset → no section (the line is never noise)", () => {
@@ -237,18 +237,18 @@ describe("R94-G: CAPABILITIES — the hasVisionPath line", () => {
       ...ctxFor({ hasVisionPath: false }),
       toolNames: ["browser_control", "read_file"],
     });
-    expect(justBrowser).toContain("IMAGE UNDERSTANDING: NONE in this session");
+    expect(justBrowser).toContain("**Image understanding:** none in this session");
     const justAnalyze = buildProjectSystemPrompt({
       ...ctxFor({ hasVisionPath: false }),
       toolNames: ["analyze_image", "read_file"],
     });
-    expect(justAnalyze).toContain("IMAGE UNDERSTANDING: NONE in this session");
+    expect(justAnalyze).toContain("**Image understanding:** none in this session");
     const justComputerUse = buildProjectSystemPrompt({
       ...ctxFor({ hasVisionPath: false }),
       toolNames: ["read_file"],
       computerUse: { enabled: true, posture: "act" },
     });
-    expect(justComputerUse).toContain("IMAGE UNDERSTANDING: NONE in this session");
+    expect(justComputerUse).toContain("**Image understanding:** none in this session");
   });
 
   it("the golden fixture byte-pins the no-vision line (FULL_CTX carries hasVisionPath:false)", () => {
@@ -298,6 +298,6 @@ describe("R94-G: CAPABILITIES — the hasVisionPath line", () => {
       debugMode: true,
     });
     expect(golden).toContain("## CAPABILITIES");
-    expect(golden).toContain("IMAGE UNDERSTANDING: NONE in this session");
+    expect(golden).toContain("**Image understanding:** none in this session");
   });
 });
