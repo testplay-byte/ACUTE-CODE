@@ -13,6 +13,12 @@
  * Countdown hits 0 → the actions area is REPLACED by the warning state card
  * ("The window closed — rescan the QR code") — never a dead Pair button.
  *
+ * R116-D — the identity card grows a HOST NAME tier at the top when the QR
+ * carried the desktop's machineLabel (verdict #14: "Confirm-host should
+ * show the PC's name" — pairing.ts carries it additively now); and the
+ * FailureCard renders pair-flow's honest manual-LAN TLS guidance (§1.1)
+ * instead of the mismatch wording for that one case.
+ *
  * On Pair: the FULL-SCREEN pairing moment (motion.md §4.4) — the content
  * crossfades out (150ms), two clay chips (desktop + phone) spring together
  * and merge, the desktop's word-pair name types in (TypeTitle), ~1.4s,
@@ -78,6 +84,7 @@ import { hostStore } from "@/link/host-store";
 import {
   candidateFromManual,
   candidateFromQr,
+  MANUAL_TLS_GUIDANCE,
   pairWithHost,
   type PairFailure,
 } from "@/link/pair-flow";
@@ -245,8 +252,20 @@ export default function ConfirmScreen() {
           <FadeInUp index={0}>
             <ClayCard elevated>
               <View style={styles.identityPad}>
-                {/* ADDRESS — its own tier */}
-                <View style={styles.tier}>
+                {/* HOST NAME — its own tier, at the TOP (R116-D, verdict #14):
+                    the desktop's word-pair name rides the QR payload
+                    additively; manual pre-claims render nothing here. */}
+                {machineLabel !== null ? (
+                  <View style={styles.tier}>
+                    <TypeMicro style={styles.tierLabel}>Desktop</TypeMicro>
+                    <TypeBodyStrong numberOfLines={1} testID="confirm-host-name">
+                      {machineLabel}
+                    </TypeBodyStrong>
+                  </View>
+                ) : null}
+
+                {/* ADDRESS — its own tier (divided under the host name) */}
+                <View style={machineLabel !== null ? [styles.tier, styles.tierDivided] : styles.tier}>
                   <TypeMicro style={styles.tierLabel}>Address</TypeMicro>
                   <TypeMono numberOfLines={1} style={styles.addressMono}>
                     {addrs[0] ?? "the desktop"}
@@ -595,7 +614,12 @@ function FailureCard({ failure }: { failure: PairFailure }) {
       : failure.kind === "window-closed"
         ? "The window closed — rescan the QR code"
         : failure.kind === "tls"
-          ? "Certificate mismatch — re-pair from the desktop's QR"
+          ? // R116-D (§1.1): a manual-LAN tls failure carries the honest TOFU
+            // guidance from pair-flow — render it; every other tls failure
+            // keeps the pinned mismatch wording.
+            failure.message === MANUAL_TLS_GUIDANCE
+            ? failure.message
+            : "Certificate mismatch — re-pair from the desktop's QR"
           : failure.kind === "wrong-host"
             ? "A different machine answered — check the address"
             : failure.message;

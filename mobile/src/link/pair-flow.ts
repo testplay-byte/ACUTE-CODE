@@ -23,6 +23,14 @@
  * machineId, probed AFTER every stored address (the owner's "local OR
  * internet, automatic" ruling). The claim response's relay, when it carries
  * one, WINS over the QR's (the desktop is the authority on its own relay).
+ *
+ * R116-D (round-116 §1.1 — THE round's #1 bug, the phone-side half): a
+ * MANUAL LAN form without a fingerprint probes with pinSha256 null, so the
+ * desktop's self-signed cert fails standard-CA verification and surfaces as
+ * a "tls" failure. That verdict used to carry the misleading "certificate
+ * no longer matches" re-pair message — for that candidate it is a LIE: this
+ * phone simply never saved the cert. The tls mapping is now manual-aware
+ * (`manualTlsGuidance`); every existing message for the QR path is unchanged.
  */
 
 import { baseUrlFor, pinFor, type HttpResponse, type NetTransport } from "./net";
@@ -98,6 +106,29 @@ interface ClaimResponseBody {
 }
 
 const CLAIM_PATH = "/api/v1/mobile/pair/claim";
+
+// ── the manual-TLS honest guidance (R116-D, round-116 §1.1) ──────────────────
+
+/**
+ * The manual-LAN TLS guidance — one line, copy.md vocabulary. A manual LAN
+ * pairing without the fingerprint can NEVER verify the desktop's self-signed
+ * cert (there is nothing saved to trust); the honest fix is the QR (or the
+ * full pairing text, which carries the fingerprint — R116-E adds it to the
+ * desktop's "Copy pairing text"). The QR path's tls message is untouched.
+ */
+export const MANUAL_TLS_GUIDANCE =
+  "This desktop's certificate isn't saved on this phone — scan the QR code, or paste the full pairing text (it includes the fingerprint).";
+
+/**
+ * Pure: the guidance applies EXACTLY when the candidate is a MANUAL LAN form
+ * with no fingerprint (candidateFromManual "lan", certFP null — TOFU at
+ * claim). QR/tunnel/pin-only candidates return null (their tls failures keep
+ * the existing messages).
+ */
+export function manualTlsGuidance(candidate: PairCandidate): string | null {
+  if (candidate.kind === "lan" && candidate.certFP === null) return MANUAL_TLS_GUIDANCE;
+  return null;
+}
 
 function netErrorMessage(err: { message?: string }, fallback: string): string {
   return typeof err.message === "string" && err.message !== "" ? err.message : fallback;
@@ -236,7 +267,9 @@ export async function pairWithHost(
       ok: false,
       error: {
         kind: "tls",
-        message:
+        // R116-D: a manual-LAN TOFU probe dying at the handshake is NOT a
+        // mismatch — this phone never saved the cert. One honest line.
+        message: manualTlsGuidance(input) ??
           "the host's certificate no longer matches the one saved on this phone — unpair and re-pair from the desktop's QR code",
       },
     };
@@ -282,7 +315,8 @@ export async function pairWithHost(
         ok: false,
         error: {
           kind: "tls",
-          message:
+          // R116-D: same manual-aware mapping at the claim rung.
+          message: manualTlsGuidance(input) ??
             "the host's certificate no longer matches the one saved on this phone — unpair and re-pair from the desktop's QR code",
         },
       };

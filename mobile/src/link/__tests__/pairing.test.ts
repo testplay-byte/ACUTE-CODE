@@ -235,6 +235,48 @@ describe("parsePairingPayload — the optional relay", () => {
   });
 });
 
+// ── the optional machineLabel field (R116-D, round-116 §1.2) ───────────────
+
+describe("parsePairingPayload — the optional machineLabel", () => {
+  it("round-trips the desktop's word-pair name", () => {
+    const result = parsePairingPayload(validQr({ machineLabel: "Confused Coconut" }), NOW);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.machineLabel).toBe("Confused Coconut");
+    // The core contract fields are untouched by the label's presence.
+    expect(result.value.pin).toBe("12345678");
+    expect(result.value.relay).toBeNull();
+  });
+
+  it("trims a padded label (the desktop's wire spelling may carry whitespace)", () => {
+    const result = parsePairingPayload(validQr({ machineLabel: "  Brave Otter  " }), NOW);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.machineLabel).toBe("Brave Otter");
+  });
+
+  it("absent / null / empty / non-string machineLabel reads as null (never fatal)", () => {
+    for (const label of [undefined, null, "", "   ", 42, { name: "x" }] as unknown[]) {
+      const result = parsePairingPayload(validQr({ machineLabel: label }), NOW);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.machineLabel).toBeNull();
+    }
+  });
+
+  it("machineLabel is a KNOWN field while unknown extras are STILL ignored (forward-compat holds)", () => {
+    const result = parsePairingPayload(
+      validQr({ machineLabel: "Brave Otter", futureField: "whatever", another: { nested: true } }),
+      NOW,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.machineLabel).toBe("Brave Otter");
+    expect((result.value as unknown as Record<string, unknown>).futureField).toBeUndefined();
+    expect((result.value as unknown as Record<string, unknown>).another).toBeUndefined();
+  });
+});
+
 describe("parseRelayUrl", () => {
   it("null/undefined/non-string read as null (absent)", () => {
     expect(parseRelayUrl(undefined)).toBeNull();

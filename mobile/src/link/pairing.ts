@@ -13,6 +13,12 @@
  * (never a silent drop). Unknown EXTRA fields are ignored (forward-compat:
  * future desktops may add fields without breaking older phones).
  *
+ * R116-D: `machineLabel` (the desktop's word-pair name, "Confused Coconut")
+ * graduated from ignored-extra to KNOWN-optional — the QR's payload now
+ * carries it through to the confirm screen (the owner's verdict #14: the
+ * confirm card should show the PC's name). Every OTHER unknown field stays
+ * ignored (the forward-compat contract holds).
+ *
  * Every malformed case surfaces as a TYPED error (never a thrown string), so
  * the pairing screen can render an honest, specific message. Manual entry
  * accepts the three fallback forms (R3 §4: a full URL must work TODAY so a
@@ -39,6 +45,11 @@ export interface PairingPayload {
    *  The phone appends `/api/v1/…` exactly like any base URL; it rides
    *  standard CA verification (never the TOFU pin). */
   relay: string | null;
+  /** OPTIONAL (R116-D): the desktop's word-pair name ("Confused Coconut") —
+   *  carried when the QR has one so the confirm screen can show the PC's
+   *  name and the pairing moment can type it in; null when absent. A KNOWN
+   *  optional field — unknown OTHER fields are still ignored. */
+  machineLabel?: string | null;
 }
 
 export type PairingParseError =
@@ -179,6 +190,15 @@ export function parsePairingPayload(text: string, now: number = Date.now()): Pai
   }
   const relay = parseRelayUrl(raw.relay);
 
+  // machineLabel (R116-D): now a KNOWN optional field — present + a non-empty
+  // string ⇒ carried (trimmed); anything else ⇒ null. scan.tsx re-stringifies
+  // the parsed value, so this is what rides the route params to the confirm
+  // screen's identity tier + the pairing moment's typed name.
+  const machineLabel =
+    typeof raw.machineLabel === "string" && raw.machineLabel.trim() !== ""
+      ? raw.machineLabel.trim()
+      : null;
+
   // Unknown EXTRA fields are deliberately ignored (forward-compat: the
   // desktop may grow fields; only the ones above are contract).
   return {
@@ -193,6 +213,7 @@ export function parsePairingPayload(text: string, now: number = Date.now()): Pai
       ttl,
       expiresAt,
       relay,
+      machineLabel,
     },
   };
 }

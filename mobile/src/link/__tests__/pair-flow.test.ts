@@ -12,6 +12,8 @@ import {
   candidateFromManual,
   candidateFromQr,
   ladderFor,
+  manualTlsGuidance,
+  MANUAL_TLS_GUIDANCE,
   pairWithHost,
   type PairCandidate,
 } from "../pair-flow";
@@ -311,6 +313,97 @@ describe("pairWithHost — honest error mappings", () => {
     if (result.ok) return;
     expect(result.error.kind).toBe("bad-response");
     expect(result.error.message).toContain("save");
+  });
+});
+
+// ── the manual-LAN TLS guidance (R116-D, round-116 §1.1) ────────────────────
+
+describe("pairWithHost — the manual-LAN TLS guidance (R116-D)", () => {
+  function manualLanNoFp(): PairCandidate {
+    return candidateFromManual({
+      kind: "lan",
+      host: "192.168.1.4",
+      port: 53411,
+      certFP: null,
+      pin: "87654321",
+    });
+  }
+
+  it("manual LAN without a fingerprint + a probe-time tls failure → the honest TOFU guidance", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    net.failHealth("tls", "CertificateException: certificate not trusted");
+    const result = await pairWithHost(manualLanNoFp(), deps(net, store));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe("tls");
+    expect(result.error.message).toBe(MANUAL_TLS_GUIDANCE);
+    expect(result.error.message).toContain("scan the QR code");
+    expect(result.error.message).toContain("paste the full pairing text");
+    expect(store.calls).not.toContain("savePairing");
+  });
+
+  it("manual LAN without a fingerprint + a claim-time tls failure → the same guidance (the claim rung pins identically)", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    net.failClaim("tls", "CertificateException");
+    const result = await pairWithHost(manualLanNoFp(), deps(net, store));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe("tls");
+    expect(result.error.message).toBe(MANUAL_TLS_GUIDANCE);
+  });
+
+  it("manual LAN WITH a fingerprint keeps the mismatch message (a real pin was rejected)", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    net.failHealth("tls", "fingerprint mismatch");
+    const candidate = candidateFromManual({
+      kind: "lan",
+      host: "192.168.1.4",
+      port: 53411,
+      certFP: CERT_FP,
+      pin: "87654321",
+    });
+    const result = await pairWithHost(candidate, deps(net, store));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe("tls");
+    expect(result.error.message).toContain("no longer matches");
+    expect(result.error.message).not.toContain("paste the full pairing text");
+  });
+
+  it("the QR path's tls message is UNCHANGED (the pinned re-pair wording)", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    net.failHealth("tls", "fingerprint mismatch");
+    const result = await pairWithHost(qrCandidate(), deps(net, store));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe("tls");
+    expect(result.error.message).toBe(
+      "the host's certificate no longer matches the one saved on this phone — unpair and re-pair from the desktop's QR code",
+    );
+  });
+
+  it("manualTlsGuidance is pure + exact (only the fingerprintless manual LAN form)", () => {
+    expect(manualTlsGuidance(manualLanNoFp())).toBe(MANUAL_TLS_GUIDANCE);
+    expect(
+      manualTlsGuidance(
+        candidateFromManual({
+          kind: "lan",
+          host: "192.168.1.4",
+          port: 53411,
+          certFP: CERT_FP,
+          pin: "87654321",
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      manualTlsGuidance(candidateFromManual({ kind: "tunnel", url: "https://abc.example.com", pin: "87654321" })),
+    ).toBeNull();
+    expect(manualTlsGuidance(candidateFromManual({ kind: "pin-only", pin: "87654321" }))).toBeNull();
+    expect(manualTlsGuidance(qrCandidate())).toBeNull();
   });
 });
 
