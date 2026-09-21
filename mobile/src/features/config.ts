@@ -160,6 +160,134 @@ export interface UsageStats {
   generatedAt: string;
 }
 
+// ── detailed usage (R116-g: GET /usage/detailed — the whole-history drill-
+// down; typed 1:1 with agent-core storage/usage.ts so the wire is the
+// contract, ids/titles/roles raw — this link is the private bearer loopback) ──
+
+/** Token triplet shared by every detailed-usage aggregate. */
+export interface DetailedUsageTokens {
+  input: number;
+  output: number;
+  cached: number;
+}
+
+/** One tool's call volume + failure count (from session_events tool.use). */
+export interface DetailedUsageToolCall {
+  tool: string;
+  count: number;
+  failures: number;
+}
+
+/** Per-model aggregate (usage_events grouped by session × model, re-summed). */
+export interface DetailedUsageModel {
+  model: string;
+  calls: number;
+  tokens: DetailedUsageTokens;
+  costUsd: number;
+  /** The real SDK-call count ("requests" fields count TURNS/rows — R83). */
+  providerCalls: number;
+  /** False when every pricing row that served this model is unknown on both
+   * sides — the honest "$0.00 (unpriced)" flag (R83). */
+  costKnown: boolean;
+}
+
+/** One provider key-pool slot's whole-history usage rollup (R64-e). */
+export interface DetailedUsageKey {
+  providerId: string;
+  /** 0 = primary key; N ≥ 2 = pool slot N. */
+  keySlot: number;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  /** ISO ts of the slot's latest recorded call (MAX(ts)). */
+  lastUsedAt: string;
+}
+
+/** A chat session (or a sub-agent child) row in the projects drill-down. */
+export interface DetailedUsageSession {
+  id: string;
+  title: string;
+  status: string;
+  /** Dominant model (highest input+output tokens across its usage rows). */
+  model: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number;
+  tokens: DetailedUsageTokens;
+  costUsd: number;
+  requests: number;
+  /** The real SDK-call count ("requests" above = turns — R83). */
+  providerCalls: number;
+  toolCalls: DetailedUsageToolCall[];
+  toolCallCount: number;
+  /** How many sub-agent children this session delegated (parent rows). */
+  subagentCount: number;
+  /** True when the row is a delegate_task child (parent_session_id set). */
+  isSubagent: boolean;
+  /** The delegating parent session's id (null for main sessions). */
+  parentId: string | null;
+  /** The delegated role (planner/researcher/coder/…), null on main sessions. */
+  role: string | null;
+}
+
+export interface DetailedUsageProject {
+  id: string;
+  name: string;
+  color: string;
+  /** True for the synthetic "Unassigned sessions" bucket (no project row). */
+  synthetic: boolean;
+  /** Main (non-sub-agent) session count — what the section header shows. */
+  sessionCount: number;
+  firstActivity: string | null;
+  lastActivity: string | null;
+  totals: {
+    sessions: number;
+    subagents: number;
+    toolCalls: number;
+    requests: number;
+    costUsd: number;
+    tokens: DetailedUsageTokens;
+  };
+  toolCalls: DetailedUsageToolCall[];
+  /** Sub-agent-only rollup nested inside the project totals. */
+  subagents: {
+    count: number;
+    toolCalls: number;
+    requests: number;
+    tokens: DetailedUsageTokens;
+    costUsd: number;
+  };
+  models: DetailedUsageModel[];
+  /** Main + sub-agent children, newest-first (children nest by parentId). */
+  sessions: DetailedUsageSession[];
+}
+
+export interface DetailedUsageTotals {
+  projects: number;
+  sessions: number;
+  subagentSessions: number;
+  toolCalls: number;
+  requests: number;
+  /** The real SDK-call count ("requests" above = turns — R83). */
+  providerCalls: number;
+  tokens: DetailedUsageTokens;
+  costUsd: number;
+}
+
+export interface DetailedUsage {
+  /** Windowed, zero-filled, ascending (getUsageSummary's series). */
+  days: UsageDayBucket[];
+  /** Whole-history rollups — the drill-down's totals/leaderboards. */
+  totals: DetailedUsageTotals;
+  tools: DetailedUsageToolCall[];
+  models: DetailedUsageModel[];
+  /** Per-key (provider × pool slot) rollups, cost-desc (R64-e). */
+  keys: DetailedUsageKey[];
+  projects: DetailedUsageProject[];
+  generatedAt: string;
+}
+
 export interface SessionCreateResponse {
   id: string;
   projectId: string | null;
@@ -878,4 +1006,14 @@ export function fetchUsageSummary(sender: ApiSender, days = 14): Promise<ApiOutc
 
 export function fetchUsageStats(sender: ApiSender, months = 1): Promise<ApiOutcome<UsageStats>> {
   return apiJson<UsageStats>(sender, `/usage/stats?months=${months}`);
+}
+
+/**
+ * R116-g: the whole-history drill-down (agent-core storage/usage.ts
+ * getDetailedUsage). `days` scopes ONLY the zero-filled activity series
+ * (1–90, validated server-side); totals/tools/models/keys/projects are
+ * WHOLE-HISTORY — the dashboard labels those sections "all time" honestly.
+ */
+export function fetchDetailedUsage(sender: ApiSender, days = 30): Promise<ApiOutcome<DetailedUsage>> {
+  return apiJson<DetailedUsage>(sender, `/usage/detailed?days=${days}`);
 }

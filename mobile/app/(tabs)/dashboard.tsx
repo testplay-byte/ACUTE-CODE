@@ -1,47 +1,57 @@
 /**
- * Dashboard v4 (R109-c; R113-e — the compact header; R114-c — the
- * color-coded, complete-info redesign + the header-free root; R115-N — the
- * donut + activity round) — the owner's "see the dashboard, the stats, the
- * usage" screen. Everything renders from the desktop's EXISTING /usage
- * routes (features/config.ts, typed 1:1):
+ * Dashboard v5 (R109-c; R113-e; R114-c; R115-N the donut round; R116-g —
+ * the DYNAMIC redo) — the owner's "see the dashboard, the stats, the usage"
+ * screen. Round-116 verdicts #27-#34: everything the owner asked for was
+ * already on the wire — /usage/detailed serves totals, a tool leaderboard
+ * with per-tool failures, per-model stats, API-key rollups, and
+ * project→session drill-downs; this screen now calls it and renders it.
  *
- *   window 14d/30d → fetchUsageSummary(14|30)  — the daily chart + totals,
- *                     PLUS fetchUsageStats(1) alongside (always) for the
- *                     model ring + the health block
- *   window 3mo     → fetchUsageStats(3)         — its series is daily, so it
- *                     carries the chart AND the ring AND the health
+ * THE LOAD (features/config.ts, typed 1:1):
+ *   window 14d/30d → fetchUsageSummary(14|30) + fetchUsageStats(1) alongside
+ *                    (always — the models ring's own calendar window)
+ *   window 3mo     → fetchUsageStats(3) — its series is daily, so it carries
+ *                    the chart AND the ring
+ *   every window   → fetchDetailedUsage(14|30|90) — the whole-history
+ *                    drill-down (tools/keys/projects + the all-time counts);
+ *                    its `days` param scopes ONLY its activity series, and
+ *                    the screen reuses the PRIMARY window's day buckets for
+ *                    the grid instead (one window, one truth)
  *
- * Layout (top → bottom): the window chips, the totals hero (4 ClayCards in
- * a 2×2 grid, each with its TONED ICON CHIP — accent tokens, green
- * requests, amber cost, violet peak — color rides on the chip, never the
- * card), THE CHART — a hand-built react-native-svg STACKED bar chart (the
- * ONLY chart surface; no external chart libraries): input tokens in the
- * terracotta accent, output tokens stacked above in the sage second hue,
- * 3 quiet dashed gridlines + the max-value scale label, the peak day
- * highlighted, first/last date axis labels, tap a bar for that day's
- * inline detail — TOP MODELS as the DONUT + LEGEND (R115-N: the PC's
- * ModelDonut port, src/components/chart-donut.tsx — the ring carries every
- * model's token share, the leaderboard rows fold INTO the legend rows, the
- * center hole carries the top model + its share, tapping a legend row
- * spotlights its segment with the mutual 1-vs-0.55 highlight), the ACTIVITY
- * table (R115-N: requests, turn errors, tool failures, the peak day — one
- * compact row per metric with a proportional sparkbar in the metric's hue,
- * mono values right-aligned), and the health block (turn errors + tool
- * failures, each with the total-count chip). Pull-to-refresh + honest
- * loading skeletons/offline/error/empty states, gated on connected.
+ * LAYOUT (top → bottom): the window chips, THE OVERVIEW CAROUSEL — a
+ * horizontal snap FlatList of stat cards (Total/Input/Output tokens,
+ * Requests, Tool calls, Cost, Projects, Sessions; big mono numbers, toned
+ * icon chips; windowed cards carry the window label, whole-history cards
+ * say "all time" — the honesty law), THE CHART — the hand-built
+ * react-native-svg stacked bar chart (input terracotta / output sage, dashed
+ * gridlines, the peak highlighted, tap a bar for its day), THE ACTIVITY GRID
+ * — a GitHub-style 7-row × N-week intensity grid over the same day buckets
+ * (the accent blended toward the card in four quartile steps; tap a cell
+ * drives the SHARED day spotlight), MODELS — the donut + top-6 legend (the
+ * PC's 12-hue NAME-HASH color contract, src/design/model-colors.ts) plus a
+ * per-model carousel (in/out split, calls, cost, provider), TOOLS — the
+ * whole-history leaderboard (rank + count + a failures chip only when a
+ * tool actually failed + a proportional sparkbar; replaces the old Activity
+ * table + Health blocks, round-116 #33), KEYS — the per-key rollups
+ * (providerId mono, slot, requests/tokens/cost, last-used), PROJECTS — the
+ * drill-down rows with the inline sessions accordion (the projects-screen
+ * grammar), and the footer clock.
  *
- * MOTION (motion.md §4.6, R115-N): the bars GROW from the baseline on every
- * data load — each column withTiming 350ms, staggered 12ms, keyed on the
- * dataset's identity so window switches re-trigger it — and the donut SWEEPS
- * its arcs in (withTiming 500ms). Both run once per load and never loop.
+ * MOTION (motion.md §4.6, kept from R115-N): the bars GROW from the baseline
+ * on every data load — each column withTiming 350ms, staggered 12ms, keyed
+ * on the dataset's identity — and the donut SWEEPS its arcs in (500ms). The
+ * page's dynamism is INTERACTION (snap carousels, the tappable grid/chart,
+ * the spring accordions), never looping decoration; reduced motion is
+ * honored everywhere (snaps instead of springs).
  *
- * formatTokens + formatUsd are the pure number helpers, EXPORTED from this
- * file for tests later.
+ * The pure number helpers (formatTokens/formatUsd/formatCount/shortDate/
+ * formatClock) live in components/usage-cards.tsx now — one spelling shared
+ * with the section components.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import {
+  FlatList,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -57,8 +67,33 @@ import Animated, {
   withDelay,
   withTiming,
 } from "react-native-reanimated";
-import { Coins, DollarSign, TrendingUp, Zap } from "lucide-react-native";
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Coins,
+  DollarSign,
+  Folder,
+  MessageSquare,
+  Wrench,
+  Zap,
+} from "lucide-react-native";
+import type { LucideIcon } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
+import {
+  ActivityGrid,
+  CAROUSEL_GUTTER,
+  formatClock,
+  formatCount,
+  formatTokens,
+  formatUsd,
+  KeyStatRow,
+  ModelCarouselCard,
+  ProjectUsageRow,
+  shortDate,
+  StatCarouselCard,
+  ToolLeaderboardRow,
+  type UsageDayRow,
+} from "@/components/usage-cards";
 import {
   DONUT_DIM_OPACITY,
   DonutChart,
@@ -68,7 +103,6 @@ import {
 } from "@/components/chart-donut";
 import { ErrorState, LoadingState, SkeletonList } from "@/components/list-state";
 import {
-  Badge,
   Chip,
   ClayCard,
   SectionHeader,
@@ -78,6 +112,7 @@ import {
   TypeMono,
   TypeTitle,
 } from "@/design/primitives";
+import { modelColor } from "@/design/model-colors";
 import { selectionHaptic } from "@/design/haptics";
 import { CHART_BAR_GROW_MS, CHART_BAR_STAGGER_MS } from "@/design/motion";
 import { useTheme } from "@/design/theme";
@@ -85,80 +120,23 @@ import {
   CHART_HUES,
   chartHue,
   mixHex,
-  modelHue,
   RADIUS_CARD,
   RADIUS_INPUT,
   spacing,
 } from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
+import type { ApiOutcome } from "@/features/api";
 import {
+  fetchDetailedUsage,
   fetchUsageStats,
   fetchUsageSummary,
+  type DetailedUsage,
   type UsageStats,
   type UsageStatsModel,
   type UsageSummary,
 } from "@/features/config";
 import { mobLog, mobWarn } from "@/lib/log";
-
-// ── the pure number helpers (exported for tests later) ──────────────────────
-
-/** 999 → "999" · 1234 → "1.2k" · 3_400_000 → "3.4M" · 2_100_000_000 → "2.1B". */
-export function formatTokens(value: number): string {
-  if (!Number.isFinite(value)) return "—";
-  const abs = Math.abs(value);
-  if (abs < 1000) return String(Math.round(value));
-  const units: ReadonlyArray<readonly [number, string]> = [
-    [1_000_000_000, "B"],
-    [1_000_000, "M"],
-    [1_000, "k"],
-  ];
-  for (const [size, suffix] of units) {
-    if (abs >= size) {
-      const scaled = value / size;
-      const text =
-        Math.abs(scaled) >= 100 ? String(Math.round(scaled)) : String(Math.round(scaled * 10) / 10);
-      return `${text}${suffix}`;
-    }
-  }
-  return String(value);
-}
-
-/** "$0.0000" for dust → "$0.500" → "$1.23" — 2 decimals once it matters, 4 when it doesn't. */
-export function formatUsd(value: number): string {
-  if (!Number.isFinite(value)) return "—";
-  const abs = Math.abs(value);
-  if (abs === 0) return "$0.00";
-  if (abs >= 1) return `$${value.toFixed(2)}`;
-  if (abs >= 0.01) return `$${value.toFixed(3)}`;
-  return `$${value.toFixed(4)}`;
-}
-
-/** 1234 → "1,234" (deterministic en-US grouping). */
-function formatCount(value: number): string {
-  if (!Number.isFinite(value)) return "—";
-  return Math.round(value).toLocaleString("en-US");
-}
-
-/** "2026-09-01" → "Sep 1" — parsed calendar-LOCAL, never timezone-shifted. */
-function shortDate(date: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(date);
-  if (m !== null) {
-    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    });
-  }
-  const t = new Date(date).getTime();
-  return Number.isNaN(t) ? date : new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-/** ISO → "3:42 PM" (the generated-at footer's clock). */
-function formatClock(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return iso;
-  return new Date(t).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-}
 
 // ── the window selector ─────────────────────────────────────────────────────
 
@@ -170,20 +148,19 @@ const WINDOWS: ReadonlyArray<{ key: WindowKey; label: string }> = [
   { key: "3mo", label: "3 months" },
 ];
 
-// ── the day bucket (the chart's unified row) ────────────────────────────────
-
 /**
- * One chart bar. Summary windows fill every field; the 3-month stats series
- * carries totals only — the nulls keep the tap-through detail honest.
+ * The detailed drill-down's `days` per window — the route validates 1–90, so
+ * the 3-month window maps to 90 (the param scopes only that response's own
+ * activity series; the whole-history sections are windowless by contract).
  */
-interface DayBucket {
-  date: string;
-  tokens: number;
-  inputTokens: number | null;
-  outputTokens: number | null;
-  requests: number | null;
-  costUsd: number | null;
-}
+const DETAILED_DAYS: Record<WindowKey, number> = { "14d": 14, "30d": 30, "3mo": 90 };
+
+/** The carousel card's share of the content column (the next card's edge peeks). */
+const CAROUSEL_CARD_FRACTION = 0.78;
+/** The carousel card's width ceiling — tablet-class screens don't balloon the cards. */
+const CAROUSEL_CARD_MAX = 312;
+/** The tool leaderboard's visible rows before the honest "+N more" line. */
+const TOOL_ROWS_CAP = 8;
 
 // ── the chart (react-native-svg, the only chart surface) ────────────────────
 
@@ -418,7 +395,7 @@ function UsageChart({
   onSelect,
   dataKey,
 }: {
-  days: DayBucket[];
+  days: UsageDayRow[];
   width: number;
   selected: number | null;
   onSelect: (index: number | null) => void;
@@ -585,7 +562,7 @@ function UsageChart({
 }
 
 /** The tapped day's inline detail — "Sep 12 · 1.2M in / 340k out · 18 requests · $0.42". */
-function DayDetailLine({ day }: { day: DayBucket }) {
+function DayDetailLine({ day }: { day: UsageDayRow }) {
   const datePart = shortDate(day.date);
   if (day.inputTokens !== null && day.outputTokens !== null) {
     const parts = [`${formatTokens(day.inputTokens)} in / ${formatTokens(day.outputTokens)} out`];
@@ -597,38 +574,15 @@ function DayDetailLine({ day }: { day: DayBucket }) {
   return <TypeCaption>{`${datePart} · ${formatTokens(day.tokens)} tokens`}</TypeCaption>;
 }
 
-// ── the totals hero tiles ───────────────────────────────────────────────────
-
-/** The tile's colored icon chip — DESIGN.md's law: color rides on the
- * ICON (and its quiet tinted chip), NEVER on the resting card itself. */
-function StatTile({
-  label,
-  value,
-  caption,
-  icon: Icon,
-  hue,
-}: {
-  label: string;
-  value: string;
-  caption?: string;
-  icon: typeof Coins;
-  hue: string;
-}) {
+/** The section's honest empty — one line, centered in the card. */
+function QuietLine({ children }: { children: string }) {
   const { tokens } = useTheme();
   return (
-    <ClayCard style={styles.statTile}>
-      <View style={styles.statPad}>
-        <View style={styles.statHead}>
-          <View
-            style={[styles.statChip, { backgroundColor: mixHex(tokens.card, hue, 0.14) }]}
-            accessibilityLabel={`${label} indicator`}
-          >
-            <Icon size={15} color={hue} strokeWidth={2.2} />
-          </View>
-          <TypeMicro style={[styles.statLabel, { color: tokens.textTertiary }]}>{label}</TypeMicro>
-        </View>
-        <TypeTitle numberOfLines={1}>{value}</TypeTitle>
-        {caption !== undefined ? <TypeMicro style={{ color: tokens.textTertiary }}>{caption}</TypeMicro> : null}
+    <ClayCard>
+      <View style={styles.emptyPad}>
+        <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary, textAlign: "center" }}>
+          {children}
+        </TypeCaption>
       </View>
     </ClayCard>
   );
@@ -637,12 +591,13 @@ function StatTile({
 // ── the model legend (the leaderboard folded into the donut card) ───────────
 
 /**
- * One legend row — the R115-N fold of the old ModelRow: the RANK hue carries
- * the row (dot + the donut's own segment), the head line reads model · share
- * · tokens (mono, right-aligned tabular columns), and the cost·calls caption
- * keeps the leaderboard's truth. Tapping spotlights that model's segment on
- * the ring (the PC's MUTUAL highlight: this row + its arc at 1, everything
- * else dimmed to DONUT_DIM_OPACITY); tapping it again clears.
+ * One legend row — the R115-N fold of the old ModelRow: the NAME-HASH hue
+ * carries the row (dot + the donut's own segment — the PC's color contract,
+ * R116-g), the head line reads model · share · tokens (mono, right-aligned
+ * tabular columns), and the cost·calls caption keeps the leaderboard's
+ * truth. Tapping spotlights that model's segment on the ring (the PC's
+ * MUTUAL highlight: this row + its arc at 1, everything else dimmed to
+ * DONUT_DIM_OPACITY); tapping it again clears.
  */
 function ModelLegendRow({
   model,
@@ -660,7 +615,7 @@ function ModelLegendRow({
   onToggle: () => void;
 }) {
   const { tokens } = useTheme();
-  const hue = modelHue(rank, tokens.isDark);
+  const hue = modelColor(model.model, tokens.isDark);
   const pct = Math.round(share * 100);
   return (
     <Pressable
@@ -694,61 +649,13 @@ function ModelLegendRow({
   );
 }
 
-// ── the health block ────────────────────────────────────────────────────────
-
-function HealthCard({
-  title,
-  tone,
-  items,
-}: {
-  title: string;
-  tone: "danger" | "warning";
-  items: { name: string; count: number }[];
-}) {
-  const { tokens } = useTheme();
-  const top = items.slice(0, 5);
-  // R114-c — the total-count mini stat chip: the block's headline number
-  // (trivially the sum of the per-name counts), next to the title.
-  const total = items.reduce((sum, item) => sum + item.count, 0);
-  return (
-    <ClayCard>
-      <View style={styles.healthPad}>
-        <View style={styles.healthHead}>
-          <TypeMicro style={[styles.statLabel, { color: tokens.textTertiary, flex: 1 }]}>{title}</TypeMicro>
-          {total > 0 ? <Badge tone={tone}>{formatCount(total)}</Badge> : null}
-        </View>
-        {top.length === 0 ? (
-          <TypeCaption style={{ color: tokens.textTertiary }}>
-            {`no ${title.toLowerCase()} in the window`}
-          </TypeCaption>
-        ) : (
-          top.map((item) => (
-            <View key={item.name} style={styles.healthRow}>
-              <TypeMono numberOfLines={1} style={styles.healthName}>
-                {item.name}
-              </TypeMono>
-              <Badge tone={tone}>{formatCount(item.count)}</Badge>
-            </View>
-          ))
-        )}
-      </View>
-    </ClayCard>
-  );
-}
-
 // ── the loading skeleton ────────────────────────────────────────────────────
 
 function DashboardSkeleton() {
   return (
     <View style={styles.skeletonWrap}>
-      <View style={styles.gridRow}>
-        <Skeleton style={styles.statSkeleton} />
-        <Skeleton style={styles.statSkeleton} />
-      </View>
-      <View style={styles.gridRow}>
-        <Skeleton style={styles.statSkeleton} />
-        <Skeleton style={styles.statSkeleton} />
-      </View>
+      {/* Shaped like the content: the carousel's first card, the chart, rows. */}
+      <Skeleton style={styles.carouselSkeleton} />
       <Skeleton style={styles.chartSkeleton} />
       <SkeletonList rows={3} rowHeight={64} />
     </View>
@@ -756,6 +663,16 @@ function DashboardSkeleton() {
 }
 
 // ── the screen ──────────────────────────────────────────────────────────────
+
+/** One overview-carousel card spec (the statCards memo's row). */
+interface StatCardSpec {
+  key: string;
+  label: string;
+  value: string;
+  caption: string;
+  icon: LucideIcon;
+  hue: string;
+}
 
 export default function DashboardScreen() {
   const { tokens } = useTheme();
@@ -766,45 +683,78 @@ export default function DashboardScreen() {
   const [windowKey, setWindowKey] = useState<WindowKey>("14d");
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [stats, setStats] = useState<UsageStats | null>(null);
-  /** True when the auxiliary stats(1) fetch failed — the quiet degradation flag. */
+  /** True if the auxiliary stats(1) fetch failed — the quiet degradation flag. */
   const [statsMissing, setStatsMissing] = useState(false);
+  /** The whole-history drill-down (R116-g) — tools/keys/projects + all-time counts. */
+  const [detailed, setDetailed] = useState<DetailedUsage | null>(null);
+  /** True when the detailed fetch failed — its sections degrade honestly. */
+  const [detailedMissing, setDetailedMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   /** The donut/legend's spotlight — a legend row's rank, or null for none. */
   const [highlightedModel, setHighlightedModel] = useState<number | null>(null);
+  /** The projects drill-down's inline expansion (one row open at a time). */
+  const [expandedProject, setExpandedProject] = useState<string | null>(null);
   /** Guards against a stale window's load landing after a newer one started. */
   const loadSeq = useRef(0);
+
+  // The detailed fetch's landing — whole-history sections ride it; a failure
+  // degrades THOSE sections quietly (the window's own data still renders).
+  const takeDetailed = useCallback((outcome: ApiOutcome<DetailedUsage>) => {
+    if (outcome.ok) {
+      setDetailed(outcome.data);
+      setDetailedMissing(false);
+      mobLog("dashboard", "detailed usage loaded", {
+        tools: outcome.data.tools.length,
+        keys: outcome.data.keys.length,
+        projects: outcome.data.projects.length,
+      });
+    } else {
+      setDetailed(null);
+      setDetailedMissing(true);
+      mobWarn("dashboard", "detailed usage unavailable", {
+        status: outcome.error.status,
+        code: outcome.error.code,
+      });
+    }
+  }, []);
 
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
     const link = getLinkManager();
     try {
       if (windowKey === "3mo") {
-        const outcome = await fetchUsageStats(link, 3);
+        const [statsOut, detailedOut] = await Promise.all([
+          fetchUsageStats(link, 3),
+          fetchDetailedUsage(link, DETAILED_DAYS[windowKey]),
+        ]);
         if (seq !== loadSeq.current) return;
-        if (outcome.ok) {
-          setStats(outcome.data);
+        if (statsOut.ok) {
+          setStats(statsOut.data);
           setSummary(null);
           setStatsMissing(false);
           setError(null);
           mobLog("dashboard", "stats loaded", {
             months: 3,
-            days: outcome.data.series.length,
-            models: outcome.data.models.length,
+            days: statsOut.data.series.length,
+            models: statsOut.data.models.length,
           });
         } else {
-          setError(outcome.error.message);
-          mobWarn("dashboard", "stats failed", { status: outcome.error.status, code: outcome.error.code });
+          setError(statsOut.error.message);
+          mobWarn("dashboard", "stats failed", { status: statsOut.error.status, code: statsOut.error.code });
         }
+        takeDetailed(detailedOut);
       } else {
         const dayCount = windowKey === "14d" ? 14 : 30;
         // Summary carries the window; stats(1) ALWAYS rides alongside for the
-        // model leaderboard + health (the R109-c contract).
-        const [summaryOut, statsOut] = await Promise.all([
+        // model leaderboard (the R109-c contract); detailed(14|30) brings the
+        // whole-history drill-down (R116-g).
+        const [summaryOut, statsOut, detailedOut] = await Promise.all([
           fetchUsageSummary(link, dayCount),
           fetchUsageStats(link, 1),
+          fetchDetailedUsage(link, DETAILED_DAYS[windowKey]),
         ]);
         if (seq !== loadSeq.current) return;
         if (summaryOut.ok) {
@@ -820,11 +770,12 @@ export default function DashboardScreen() {
           setStatsMissing(false);
           mobLog("dashboard", "model stats loaded", { models: statsOut.data.models.length });
         } else {
-          // The window itself is fine — leaderboard + health degrade quietly.
+          // The window itself is fine — leaderboard + carousel degrade quietly.
           setStats(null);
           setStatsMissing(true);
           mobWarn("dashboard", "model stats unavailable", { status: statsOut.error.status, code: statsOut.error.code });
         }
+        takeDetailed(detailedOut);
       }
     } catch (err) {
       if (seq !== loadSeq.current) return;
@@ -836,7 +787,7 @@ export default function DashboardScreen() {
         setRefreshing(false);
       }
     }
-  }, [windowKey]);
+  }, [windowKey, takeDetailed]);
 
   // Load on mount, on link (re)connect, and on every window switch.
   useEffect(() => {
@@ -855,9 +806,12 @@ export default function DashboardScreen() {
       setSummary(null);
       setStats(null);
       setStatsMissing(false);
+      setDetailed(null);
+      setDetailedMissing(false);
       setError(null);
       setSelectedDay(null);
       setHighlightedModel(null);
+      setExpandedProject(null);
       setLoading(true);
     },
     [windowKey],
@@ -865,7 +819,7 @@ export default function DashboardScreen() {
 
   // ── derived ──
 
-  const days = useMemo<DayBucket[]>(() => {
+  const days = useMemo<UsageDayRow[]>(() => {
     if (windowKey === "3mo") {
       if (stats === null) return [];
       return stats.series.map((point) => ({
@@ -889,11 +843,20 @@ export default function DashboardScreen() {
   }, [windowKey, summary, stats]);
 
   const totals = useMemo(() => {
-    const empty = { totalTokens: 0, requests: 0, costUsd: 0, peak: { date: null as string | null, tokens: 0 } };
+    const empty = {
+      totalTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      requests: 0,
+      costUsd: 0,
+      peak: { date: null as string | null, tokens: 0 },
+    };
     if (windowKey === "3mo") {
       if (stats === null) return empty;
       return {
         totalTokens: stats.totals.totalTokens,
+        inputTokens: stats.totals.inputTokens,
+        outputTokens: stats.totals.outputTokens,
         requests: stats.totals.requests,
         costUsd: stats.totals.costUsd,
         peak: stats.peak,
@@ -911,6 +874,8 @@ export default function DashboardScreen() {
     }
     return {
       totalTokens: summary.totals.inputTokens + summary.totals.outputTokens,
+      inputTokens: summary.totals.inputTokens,
+      outputTokens: summary.totals.outputTokens,
       requests: summary.totals.requests,
       costUsd: summary.totals.costUsd,
       peak: { date: peakDate, tokens: peakTokens },
@@ -929,10 +894,10 @@ export default function DashboardScreen() {
   const totalModelTokens = models.reduce((sum, model) => sum + model.tokens, 0);
   const donutSegmentsInput = useMemo<DonutSegment[]>(
     () =>
-      models.map((model, index) => ({
+      models.map((model) => ({
         label: model.model,
         value: model.tokens,
-        hue: modelHue(index, tokens.isDark),
+        hue: modelColor(model.model, tokens.isDark),
       })),
     [models, tokens.isDark],
   );
@@ -959,46 +924,109 @@ export default function DashboardScreen() {
     setHighlightedModel((current) => (current === index ? null : index));
   }, []);
 
-  // The Activity table — one row per metric the loaded data honestly
-  // carries (nothing fabricated): requests + the peak day ride the SELECTED
-  // window's totals (summary for 14d/30d, stats for 3mo); turn errors + tool
-  // failures ride the stats response's health block (stats(1)'s month for
-  // the 14d/30d windows — the same R109-c contract the ring + Health use —
-  // and stats(3) for 3mo), so those two rows simply don't render when the
-  // stats fetch degraded (the Health section below says why).
-  const activityRows = useMemo(() => {
-    const rows: { label: string; display: string; value: number; hue: string }[] = [
-      { label: "Requests", display: formatCount(totals.requests), value: totals.requests, hue: tokens.success },
-    ];
-    if (stats !== null) {
-      const turnErrors = stats.health.turnErrors.reduce((sum, item) => sum + item.count, 0);
-      const toolFailures = stats.health.toolFailures.reduce((sum, item) => sum + item.count, 0);
-      rows.push(
-        { label: "Turn errors", display: formatCount(turnErrors), value: turnErrors, hue: tokens.danger },
-        { label: "Tool failures", display: formatCount(toolFailures), value: toolFailures, hue: tokens.warning },
-      );
-    }
-    if (totals.peak.date !== null) {
-      rows.push({
-        label: `Peak day ${shortDate(totals.peak.date)}`,
-        display: formatTokens(totals.peak.tokens),
-        value: totals.peak.tokens,
-        hue: chartHue(CHART_HUES.peak, tokens.isDark),
-      });
-    }
-    // The sparkbars scale to the table's own max — a proportional read of
-    // the metrics against each other (the ring's track discipline).
-    const max = rows.reduce((m, row) => Math.max(m, row.value), 0);
-    return rows.map((row) => ({
-      ...row,
-      fraction: max > 0 ? Math.min(100, Math.round((row.value / max) * 100)) : 0,
-    }));
-  }, [totals, stats, tokens]);
+  // The overview carousel's cards (verdict #27): windowed totals from
+  // summary/stats as today; tool calls / projects / sessions are
+  // WHOLE-HISTORY counts from the detailed rollup — captioned "all time".
+  const windowLabel = `last ${WINDOWS.find((w) => w.key === windowKey)?.label ?? ""}`;
+  // The models ride the stats response's own calendar window (stats(1) for
+  // the 14d/30d chips — the R109-c contract), so the section says THAT.
+  const modelsWindowLabel = windowKey === "3mo" ? "last 3 months" : "last month";
 
-  const health = stats?.health ?? { turnErrors: [], toolFailures: [] };
-  const primaryLoaded = windowKey === "3mo" ? stats !== null : summary !== null;
-  const generatedAt =
-    windowKey === "3mo" ? stats?.generatedAt : (summary?.generatedAt ?? stats?.generatedAt);
+  const statCards = useMemo<StatCardSpec[]>(() => {
+    const inHue = chartHue(CHART_HUES.input, tokens.isDark);
+    const outHue = chartHue(CHART_HUES.output, tokens.isDark);
+    const peakHue = chartHue(CHART_HUES.peak, tokens.isDark);
+    const detailedCount = (value: number): string => (detailed !== null ? formatCount(value) : "—");
+    return [
+      {
+        key: "tokens",
+        label: "Total tokens",
+        value: formatTokens(totals.totalTokens),
+        caption: windowLabel,
+        icon: Coins,
+        hue: inHue,
+      },
+      {
+        key: "input",
+        label: "Input tokens",
+        value: formatTokens(totals.inputTokens),
+        caption: windowLabel,
+        icon: ArrowDownToLine,
+        hue: inHue,
+      },
+      {
+        key: "output",
+        label: "Output tokens",
+        value: formatTokens(totals.outputTokens),
+        caption: windowLabel,
+        icon: ArrowUpFromLine,
+        hue: outHue,
+      },
+      {
+        key: "requests",
+        label: "Requests",
+        value: formatCount(totals.requests),
+        caption: windowLabel,
+        icon: Zap,
+        hue: tokens.success,
+      },
+      {
+        key: "toolcalls",
+        label: "Tool calls",
+        value: detailedCount(detailed?.totals.toolCalls ?? 0),
+        caption: "all time",
+        icon: Wrench,
+        hue: tokens.warning,
+      },
+      {
+        key: "cost",
+        label: "Cost",
+        value: formatUsd(totals.costUsd),
+        caption: windowLabel,
+        icon: DollarSign,
+        hue: tokens.warning,
+      },
+      {
+        key: "projects",
+        label: "Projects",
+        value: detailedCount(detailed?.totals.projects ?? 0),
+        caption: "all time",
+        icon: Folder,
+        hue: peakHue,
+      },
+      {
+        key: "sessions",
+        label: "Sessions",
+        value: detailedCount(detailed?.totals.sessions ?? 0),
+        caption: "all time",
+        icon: MessageSquare,
+        hue: tokens.accent2,
+      },
+    ];
+  }, [totals, detailed, windowLabel, tokens]);
+
+  // The tool leaderboard (verdict #29) — detailed.tools is already count-desc
+  // server-side; sorted defensively, capped, sparkbars scaled to its own max.
+  const toolBoard = useMemo(() => {
+    if (detailed === null) return null;
+    const sorted = [...detailed.tools].sort((a, b) => b.count - a.count || a.tool.localeCompare(b.tool));
+    const max = sorted.length > 0 ? sorted[0].count : 0;
+    return {
+      rows: sorted.slice(0, TOOL_ROWS_CAP).map((tool, index) => ({
+        rank: index + 1,
+        tool: tool.tool,
+        count: tool.count,
+        failures: tool.failures,
+        fraction: max > 0 ? Math.min(100, Math.round((tool.count / max) * 100)) : 0,
+      })),
+      hidden: Math.max(0, sorted.length - TOOL_ROWS_CAP),
+    };
+  }, [detailed]);
+
+  const toggleProject = useCallback((id: string) => {
+    void selectionHaptic();
+    setExpandedProject((current) => (current === id ? null : id));
+  }, []);
 
   // Default the inline detail to the peak day (the tallest bar) — the caption
   // lands with content instead of a hint.
@@ -1019,6 +1047,30 @@ export default function DashboardScreen() {
   const gutter = spacing.lg;
   const chartWidth = Math.max(120, Math.floor(windowWidth - gutter * 2 - spacing.md * 2));
 
+  // The carousels' shared snap grammar: fixed card width + gutter, the next
+  // card's edge peeking in the column, getItemLayout trivial (fixed width).
+  const carouselCardWidth = Math.min(
+    CAROUSEL_CARD_MAX,
+    Math.round((windowWidth - gutter * 2) * CAROUSEL_CARD_FRACTION),
+  );
+  const carouselSnap = carouselCardWidth + CAROUSEL_GUTTER;
+  const statItemLayout = useCallback(
+    (_data: ArrayLike<StatCardSpec> | null | undefined, index: number) => ({
+      length: carouselSnap,
+      offset: carouselSnap * index,
+      index,
+    }),
+    [carouselSnap],
+  );
+  const modelItemLayout = useCallback(
+    (_data: ArrayLike<UsageStatsModel> | null | undefined, index: number) => ({
+      length: carouselSnap,
+      offset: carouselSnap * index,
+      index,
+    }),
+    [carouselSnap],
+  );
+
   const refreshControl = (
     <RefreshControl
       refreshing={refreshing}
@@ -1032,10 +1084,15 @@ export default function DashboardScreen() {
     />
   );
 
+  const detailedUnavailableLine = "usage details unavailable — pull to retry";
+  const primaryLoaded = windowKey === "3mo" ? stats !== null : summary !== null;
+  const generatedAt =
+    windowKey === "3mo" ? stats?.generatedAt : (summary?.generatedAt ?? stats?.generatedAt);
+
   return (
     <ScreenScaffold title="Dashboard" refreshControl={refreshControl} chrome={false}>
       {status === "unpaired" ? (
-        <ErrorState title="No host linked" caption="Pair this phone to see usage, tokens, costs, and health." />
+        <ErrorState title="No host linked" caption="Pair this phone to see usage, tokens, costs, and tools." />
       ) : !connected && !primaryLoaded ? (
         status === "probing" ? (
           <LoadingState caption="connecting to the host…" />
@@ -1084,48 +1141,38 @@ export default function DashboardScreen() {
                 </TypeCaption>
               ) : null}
 
-              {/* ── the totals hero — toned icon chips: accent tokens, green
-                  requests, amber cost, violet peak (color on the chip only) ── */}
-              <View style={styles.gridRow}>
-                <StatTile
-                  label="Total tokens"
-                  value={formatTokens(totals.totalTokens)}
-                  icon={Coins}
-                  hue={chartHue(CHART_HUES.input, tokens.isDark)}
-                />
-                <StatTile
-                  label="Requests"
-                  value={formatCount(totals.requests)}
-                  icon={Zap}
-                  hue={tokens.success}
-                />
-              </View>
-              <View style={styles.gridRow}>
-                <StatTile
-                  label="Cost"
-                  value={formatUsd(totals.costUsd)}
-                  icon={DollarSign}
-                  hue={tokens.warning}
-                />
-                <StatTile
-                  label="Peak day"
-                  value={totals.peak.date !== null ? shortDate(totals.peak.date) : "—"}
-                  caption={totals.peak.tokens > 0 ? `${formatTokens(totals.peak.tokens)} tokens` : "no usage yet"}
-                  icon={TrendingUp}
-                  hue={chartHue(CHART_HUES.peak, tokens.isDark)}
-                />
-              </View>
+              {/* ── the overview carousel (verdicts #27 + #34) — horizontal
+                  snap cards; windowed cards carry the window label, the
+                  whole-history counts say "all time" (the honesty law) ── */}
+              <FlatList
+                testID="dashboard-carousel"
+                horizontal
+                data={statCards}
+                keyExtractor={(item) => item.key}
+                renderItem={({ item }) => (
+                  <View style={{ marginRight: CAROUSEL_GUTTER }}>
+                    <StatCarouselCard
+                      testID={`dashboard-stat-${item.key}`}
+                      label={item.label}
+                      value={item.value}
+                      caption={item.caption}
+                      icon={item.icon}
+                      hue={item.hue}
+                      width={carouselCardWidth}
+                    />
+                  </View>
+                )}
+                getItemLayout={statItemLayout}
+                snapToInterval={carouselSnap}
+                decelerationRate="fast"
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ paddingRight: spacing.lg }}
+              />
 
-              {/* ── the chart ── */}
+              {/* ── the daily tokens chart (verdict #28 — kept) ── */}
               <SectionHeader>Daily tokens</SectionHeader>
               {days.length === 0 ? (
-                <ClayCard>
-                  <View style={styles.quietPad}>
-                    <TypeCaption style={{ color: tokens.textTertiary }}>
-                      no usage recorded in this window yet
-                    </TypeCaption>
-                  </View>
-                </ClayCard>
+                <QuietLine>no usage recorded in this window yet</QuietLine>
               ) : (
                 <ClayCard>
                   <View style={styles.chartPad}>
@@ -1147,119 +1194,171 @@ export default function DashboardScreen() {
                 </ClayCard>
               )}
 
-              {/* ── top models — the DONUT + LEGEND (R115-N: the leaderboard
-                  rows fold into the legend; the ring carries the shares, so
-                  the old 3px per-row track is gone — it would duplicate the
-                  ring) ── */}
-              <SectionHeader>Top models</SectionHeader>
-              {stats === null ? (
-                <ClayCard>
-                  <View style={styles.quietPad}>
-                    <TypeCaption style={{ color: tokens.textTertiary }}>
-                      {statsMissing
-                        ? "model stats are unavailable right now — pull to retry"
-                        : "no model usage in this window yet"}
-                    </TypeCaption>
-                  </View>
-                </ClayCard>
-              ) : totalModelTokens === 0 ? (
-                <ClayCard>
-                  <View style={styles.quietPad}>
-                    <TypeCaption style={{ color: tokens.textTertiary }}>no model usage in this window yet</TypeCaption>
-                  </View>
-                </ClayCard>
+              {/* ── the GitHub-style activity grid (verdict #30) — the same
+                  day buckets, intensity by quartile; a tap drives the SHARED
+                  day spotlight (the chart's bar + both detail lines) ── */}
+              <SectionHeader>Activity</SectionHeader>
+              {days.length === 0 ? (
+                <QuietLine>no usage recorded in this window yet</QuietLine>
               ) : (
                 <ClayCard>
-                  <View style={styles.donutPad}>
-                    <View style={styles.donutRow}>
-                      <DonutChart
-                        testID="dashboard-donut"
-                        segments={donutSegmentsInput}
-                        dataKey={donutKey}
-                        highlighted={highlightedModel}
-                        trackColor={tokens.borderSubtle}
-                        accessibilityLabel={`model usage donut — top model ${shortModelName(models[0].model)} at ${Math.round((modelShares[0] ?? 0) * 100)}% of tokens`}
-                        center={
-                          <View style={styles.donutCenterWrap}>
-                            <TypeMono numberOfLines={1} style={styles.donutCenterName}>
-                              {shortModelName(models[0].model)}
-                            </TypeMono>
-                            <TypeTitle numberOfLines={1} style={styles.donutCenterPct}>
-                              {`${Math.round((modelShares[0] ?? 0) * 100)}%`}
-                            </TypeTitle>
-                          </View>
-                        }
-                      />
+                  <View style={styles.chartPad}>
+                    <ActivityGrid
+                      days={days}
+                      width={chartWidth}
+                      selected={selectedDay}
+                      onSelect={setSelectedDay}
+                    />
+                    <View style={styles.dayDetailWrap}>
+                      {selectedDay !== null && selectedDay < days.length ? (
+                        <DayDetailLine day={days[selectedDay]} />
+                      ) : (
+                        <TypeCaption style={{ color: tokens.textTertiary }}>tap a day for its detail</TypeCaption>
+                      )}
                     </View>
-                    <View style={styles.legendList}>
-                      {topModels.map((model, index) => (
-                        <ModelLegendRow
-                          key={model.model}
-                          model={model}
-                          share={modelShares[index] ?? 0}
-                          rank={index}
-                          highlighted={highlightedModel === index}
-                          dimmed={highlightedModel !== null && highlightedModel !== index}
-                          onToggle={() => toggleHighlight(index)}
+                  </View>
+                </ClayCard>
+              )}
+
+              {/* ── models (verdict #31) — the donut + legend (top 6) with the
+                  PC's name-hash colors, then the per-model carousel. The
+                  stats response's own calendar window is the honest label ── */}
+              <SectionHeader>{`Models · ${modelsWindowLabel}`}</SectionHeader>
+              {stats === null ? (
+                <QuietLine>
+                  {statsMissing
+                    ? "model stats unavailable — pull to retry"
+                    : "no model usage in this window yet"}
+                </QuietLine>
+              ) : totalModelTokens === 0 ? (
+                <QuietLine>no model usage in this window yet</QuietLine>
+              ) : (
+                <>
+                  <ClayCard>
+                    <View style={styles.donutPad}>
+                      <View style={styles.donutRow}>
+                        <DonutChart
+                          testID="dashboard-donut"
+                          segments={donutSegmentsInput}
+                          dataKey={donutKey}
+                          highlighted={highlightedModel}
+                          trackColor={tokens.borderSubtle}
+                          accessibilityLabel={`model usage donut — top model ${shortModelName(models[0].model)} at ${Math.round((modelShares[0] ?? 0) * 100)}% of tokens`}
+                          center={
+                            <View style={styles.donutCenterWrap}>
+                              <TypeMono numberOfLines={1} style={styles.donutCenterName}>
+                                {shortModelName(models[0].model)}
+                              </TypeMono>
+                              <TypeTitle numberOfLines={1} style={styles.donutCenterPct}>
+                                {`${Math.round((modelShares[0] ?? 0) * 100)}%`}
+                              </TypeTitle>
+                            </View>
+                          }
+                        />
+                      </View>
+                      <View style={styles.legendList}>
+                        {topModels.map((model, index) => (
+                          <ModelLegendRow
+                            key={model.model}
+                            model={model}
+                            share={modelShares[index] ?? 0}
+                            rank={index}
+                            highlighted={highlightedModel === index}
+                            dimmed={highlightedModel !== null && highlightedModel !== index}
+                            onToggle={() => toggleHighlight(index)}
+                          />
+                        ))}
+                      </View>
+                    </View>
+                  </ClayCard>
+                  <FlatList
+                    testID="dashboard-models-carousel"
+                    horizontal
+                    data={models}
+                    keyExtractor={(item) => item.model}
+                    renderItem={({ item }) => (
+                      <View style={{ marginRight: CAROUSEL_GUTTER }}>
+                        <ModelCarouselCard model={item} width={carouselCardWidth} />
+                      </View>
+                    )}
+                    getItemLayout={modelItemLayout}
+                    snapToInterval={carouselSnap}
+                    decelerationRate="fast"
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={{ paddingRight: spacing.lg }}
+                  />
+                </>
+              )}
+
+              {/* ── the tool leaderboard (verdict #29) — count + failures
+                  COMBINED per tool; replaces the old Activity table + Health
+                  (round-116 #33). Whole-history, labeled ── */}
+              <SectionHeader>Tools · all time</SectionHeader>
+              {toolBoard === null ? (
+                <QuietLine>
+                  {detailedMissing ? detailedUnavailableLine : "no tool calls recorded yet"}
+                </QuietLine>
+              ) : toolBoard.rows.length === 0 ? (
+                <QuietLine>no tool calls recorded yet</QuietLine>
+              ) : (
+                <ClayCard testID="dashboard-tools">
+                  <View style={styles.rowsPad}>
+                    {toolBoard.rows.map((row) => (
+                      <ToolLeaderboardRow key={row.tool} {...row} />
+                    ))}
+                    {toolBoard.hidden > 0 ? (
+                      <TypeMicro style={{ color: tokens.textTertiary }}>+{toolBoard.hidden} more tools</TypeMicro>
+                    ) : null}
+                  </View>
+                </ClayCard>
+              )}
+
+              {/* ── the API key stats (verdict #32) — whole-history rollups;
+                  providerIds stay mono (no extra providers roundtrip — the
+                  machine truth is the honest cheap read) ── */}
+              {detailed !== null && detailed.keys.length > 0 ? (
+                <>
+                  <SectionHeader>Keys · all time</SectionHeader>
+                  <ClayCard testID="dashboard-keys">
+                    <View style={styles.rowsPad}>
+                      {detailed.keys.map((key) => (
+                        <KeyStatRow
+                          key={`${key.providerId}-${key.keySlot}`}
+                          providerId={key.providerId}
+                          keySlot={key.keySlot}
+                          requests={key.requests}
+                          tokensTotal={key.inputTokens + key.outputTokens}
+                          costUsd={key.costUsd}
+                          lastUsedAt={key.lastUsedAt}
                         />
                       ))}
                     </View>
-                  </View>
-                </ClayCard>
-              )}
-
-              {/* ── activity — the window's counts at a glance (R115-N) ── */}
-              <SectionHeader>Activity</SectionHeader>
-              {activityRows.length === 0 ? (
-                <ClayCard>
-                  <View style={styles.quietPad}>
-                    <TypeCaption style={{ color: tokens.textTertiary }}>no usage in this window yet</TypeCaption>
-                  </View>
-                </ClayCard>
-              ) : (
-                <ClayCard testID="dashboard-activity">
-                  <View style={styles.activityPad}>
-                    {activityRows.map((row) => (
-                      <View key={row.label} style={styles.activityRow}>
-                        <TypeCaption numberOfLines={1} style={styles.activityLabel}>
-                          {row.label}
-                        </TypeCaption>
-                        {/* The sparkbar is decorative — the row's label + mono
-                            value already carry the reading. */}
-                        <View
-                          style={[styles.activityTrack, { backgroundColor: tokens.borderSubtle }]}
-                          accessibilityElementsHidden
-                        >
-                          <View
-                            style={[styles.activityFill, { width: `${row.fraction}%`, backgroundColor: row.hue }]}
-                          />
-                        </View>
-                        <TypeMono numberOfLines={1} style={styles.activityValue}>
-                          {row.display}
-                        </TypeMono>
-                      </View>
-                    ))}
-                  </View>
-                </ClayCard>
-              )}
-
-              {/* ── health ── */}
-              <SectionHeader>Health</SectionHeader>
-              {stats === null ? (
-                <ClayCard>
-                  <View style={styles.quietPad}>
-                    <TypeCaption style={{ color: tokens.textTertiary }}>
-                      {statsMissing
-                        ? "health stats are unavailable right now — pull to retry"
-                        : "no usage in this window yet"}
-                    </TypeCaption>
-                  </View>
-                </ClayCard>
-              ) : (
-                <>
-                  <HealthCard title="Turn errors" tone="danger" items={health.turnErrors} />
-                  <HealthCard title="Tool failures" tone="warning" items={health.toolFailures} />
+                  </ClayCard>
                 </>
+              ) : null}
+
+              {/* ── the projects drill-down (verdict #32) — whole-history
+                  rows; tap expands the inline sessions well (the
+                  projects-screen accordion grammar) ── */}
+              <SectionHeader>Projects · all time</SectionHeader>
+              {detailed === null ? (
+                <QuietLine>
+                  {detailedMissing ? detailedUnavailableLine : "no projects with usage yet"}
+                </QuietLine>
+              ) : detailed.projects.length === 0 ? (
+                <QuietLine>no projects with usage yet</QuietLine>
+              ) : (
+                <View style={styles.projectsList} testID="dashboard-projects">
+                  {detailed.projects.map((project) => (
+                    <ProjectUsageRow
+                      key={project.id}
+                      testID={`dashboard-project-${project.id}`}
+                      project={project}
+                      expanded={expandedProject === project.id}
+                      onToggle={() => toggleProject(project.id)}
+                    />
+                  ))}
+                </View>
               )}
 
               {generatedAt !== undefined ? (
@@ -1278,18 +1377,6 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   windowRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   softNotice: { paddingHorizontal: spacing.xs },
-  gridRow: { flexDirection: "row", gap: spacing.md },
-  statTile: { flex: 1, minHeight: 104 },
-  statPad: { padding: spacing.md, gap: spacing.xs },
-  statHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  statChip: {
-    width: 26,
-    height: 26,
-    borderRadius: 9,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  statLabel: { textTransform: "uppercase", letterSpacing: 0.8 },
   scaleRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1304,7 +1391,9 @@ const styles = StyleSheet.create({
   chartPad: { padding: spacing.md, gap: spacing.sm },
   axisRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: spacing.xs },
   dayDetailWrap: { paddingHorizontal: spacing.xs },
-  quietPad: { padding: spacing.lg },
+  emptyPad: { padding: spacing.lg, alignItems: "center" },
+  rowsPad: { padding: spacing.md, gap: spacing.sm },
+  projectsList: { gap: spacing.md },
   // The donut + legend card (R115-N — the leaderboard folded in).
   modelHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
   modelDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
@@ -1327,19 +1416,8 @@ const styles = StyleSheet.create({
   legendTokens: { flexShrink: 0, minWidth: 56, textAlign: "right" },
   // The caption aligns under the model NAME: dot width (10) + head gap (sm).
   legendCaption: { paddingLeft: 10 + spacing.sm },
-  // The activity table (R115-N — metric + sparkbar + mono value).
-  activityPad: { padding: spacing.md, gap: spacing.sm },
-  activityRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 32 },
-  activityLabel: { width: 116, flexShrink: 0 },
-  activityTrack: { flex: 1, height: 4, borderRadius: 2, overflow: "hidden" },
-  activityFill: { height: 4, borderRadius: 2 },
-  activityValue: { flexShrink: 0, minWidth: 56, textAlign: "right" },
-  healthPad: { padding: spacing.md, gap: spacing.sm },
-  healthHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  healthRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 28 },
-  healthName: { flex: 1 },
   footer: { textAlign: "center" },
   skeletonWrap: { gap: spacing.lg },
-  statSkeleton: { flex: 1, height: 104, borderRadius: RADIUS_CARD },
+  carouselSkeleton: { height: 116, borderRadius: RADIUS_CARD },
   chartSkeleton: { height: CHART_HEIGHT + 96, borderRadius: RADIUS_CARD },
 });
