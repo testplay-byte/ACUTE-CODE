@@ -387,7 +387,7 @@ describe("system prompt memory section (ROUND-44 R44-a)", () => {
     toolNames: ["memory_save", "memory_recall", "memory_list"],
   };
 
-  it("injects the digest section only when memories exist", () => {
+  it("injects the digest section only when memories exist (R117-b: a DEFINED-empty digest renders the honest empty line instead)", () => {
     const withMemory = buildProjectSystemPrompt({
       ...baseCtx,
       memoryDigest: "• [fact] sidecar port 5178",
@@ -396,10 +396,19 @@ describe("system prompt memory section (ROUND-44 R44-a)", () => {
     expect(withMemory).toContain("• [fact] sidecar port 5178");
     expect(withMemory).toContain("memory_save");
 
+    // ROUND-117 (R117-b): "" no longer means "skip the section" — the
+    // runtime now flows the empty digest through (the memory surface is ON,
+    // nothing saved yet), and the section renders the honest empty line so
+    // the model KNOWS memory_save exists and can start filling it.
     const without = buildProjectSystemPrompt({ ...baseCtx, memoryDigest: "" });
-    expect(without).not.toContain("Project memory (persisted");
+    expect(without).toContain("## Project memory (persisted across sessions)");
+    expect(without).toContain("No memories saved yet");
+    expect(without).not.toContain("• [");
+    // UNDEFINED (children, memory off, env-absent callers) still composes
+    // no section at all — byte-identical to pre-R117.
     const omitted = buildProjectSystemPrompt({ ...baseCtx });
     expect(omitted).not.toContain("Project memory (persisted");
+    expect(omitted).not.toContain("No memories saved yet");
   });
 });
 
@@ -693,7 +702,9 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
     // the skills-discovery tool to rows whose list includes read_skill) —
     // and, since ROUND-98 (R98-F3), search_symbols (migration 0038 appends
     // the symbol-index query tool to rows whose list includes search_code
-    // — this seed list does).
+    // — this seed list does) — and, since ROUND-117 (R117-b), session_recall
+    // (migration 0042 appends the episodic past-session search to rows whose
+    // list includes memory_recall — this seed list does).
     expect(row("agt_tpl_coder")).toEqual([
       ...JSON.parse(seedTools) as string[],
       "memory_save",
@@ -707,15 +718,18 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
       "ask_user",
       "search_skills",
       "search_symbols",
+      "session_recall",
     ]);
     expect(row("agt_default_nova")).toContain("memory_save");
-    expect(row("agt_default_nova")).toHaveLength(29);
+    expect(row("agt_default_nova")).toHaveLength(30);
     // User-created agents keep their deliberately-authored lists.
     expect(row("agt_mine")).toEqual(JSON.parse(seedTools));
 
-    // The memory table exists with the documented shape + constraints.
+    // The memory table exists with the documented shape + constraints
+    // (ROUND-117 R117-b: migration 0042 rebuilt the table — scope joins the
+    // columns, project_id is nullable — the full chain this test DB runs).
     const cols = (db2.prepare("PRAGMA table_info(memory)").all() as { name: string }[]).map((c) => c.name);
-    expect(cols).toEqual(["id", "project_id", "kind", "content", "source", "created_at", "updated_at"]);
+    expect(cols).toEqual(["id", "project_id", "scope", "kind", "content", "source", "created_at", "updated_at"]);
     expect(() =>
       db2.prepare("INSERT INTO memory (id, project_id, kind, content, source, created_at, updated_at) VALUES ('m','p','rumor','x','agent','t','t')").run(),
     ).toThrow(/CHECK constraint failed/);
@@ -730,14 +744,15 @@ describe("migration 0015 (memory table + tool allowlist append)", () => {
     // Idempotent on reopen (no duplicate appends — 21 memory-era tools + the
     // two ROUND-52 job tools + the R61 read_skill migration 0023 + the R66
     // analyze_image migration 0026 + the R73-b switch_mode migration 0027
-    // appended to this run_command template row).
+    // appended to this run_command template row + the R117-b session_recall
+    // migration 0042).
     db2.close();
     const again = openDatabase(path);
     expect(
       JSON.parse(
         (again.prepare("SELECT allowed_tools FROM agents WHERE id = 'agt_tpl_coder'").get() as { allowed_tools: string }).allowed_tools,
       ) as string[],
-    ).toHaveLength(29); // R96: +search_skills (0036); R98-F3: +search_symbols (0038)
+    ).toHaveLength(30); // R96: +search_skills (0036); R98-F3: +search_symbols (0038); R117-b: +session_recall (0042)
     again.close();
   });
 

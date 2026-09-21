@@ -77,6 +77,9 @@ export const TOOL_CATALOG = [
   "memory_save",
   "memory_recall",
   "memory_list",
+  // ROUND-117 (R117-b): the episodic search over this project's past
+  // sessions (session_recall) — the memory family's fourth tool.
+  "session_recall",
   // ROUND-52 (R52-a): background-job supervision (run_command's detached
   // launches — poll with job_status, clean up with job_stop).
   "job_status",
@@ -2629,10 +2632,13 @@ export async function streamTerminalSession(
 }
 
 /** ROUND-44 (R44-a): one saved project memory — durable knowledge the agent
- * persisted via its memory_save tool (kinded so the UI groups + colors). */
+ * persisted via its memory_save tool (kinded so the UI groups + colors).
+ * ROUND-117 (R117-b): `scope` joins the row ('project' | 'workspace') and
+ * `projectId` is NULL on workspace rows (the cross-project tier). */
 export interface ProjectMemory {
   id: string;
-  projectId: string;
+  projectId: string | null;
+  scope: "project" | "workspace";
   kind: "fact" | "decision" | "preference" | "note";
   content: string;
   source: string;
@@ -2706,6 +2712,45 @@ export async function updateProjectMemory(
     `/projects/${projectId}/memory/${memoryId}`,
     { method: "PUT", json: patch },
   );
+  return body.memory;
+}
+
+/* ── ROUND-117 (R117-b): the WORKSPACE memory tier — the cross-project
+ * scope (GET/POST/PUT/DELETE /memory/workspace), the Memory panel's
+ * "Workspace" side. Same grammar as the project family; rows carry scope
+ * "workspace" + projectId null + source "owner". */
+
+/** GET /memory/workspace — the workspace tier's listing (newest first). */
+export async function listWorkspaceMemory(): Promise<ProjectMemory[]> {
+  const body = await request<{ memories: ProjectMemory[] }>("/memory/workspace");
+  return body.memories;
+}
+
+/** DELETE /memory/workspace/:memoryId — prune one workspace memory. */
+export async function deleteWorkspaceMemory(memoryId: string): Promise<void> {
+  await request<{ ok: boolean }>(`/memory/workspace/${memoryId}`, { method: "DELETE" });
+}
+
+/** POST /memory/workspace — the add-memory form's workspace save
+ * (same dedup semantics as the project POST). */
+export async function createWorkspaceMemory(
+  input: CreateProjectMemoryInput,
+): Promise<CreateProjectMemoryResult> {
+  return request<CreateProjectMemoryResult>("/memory/workspace", {
+    method: "POST",
+    json: input,
+  });
+}
+
+/** PUT /memory/workspace/:memoryId — the per-row edit (partial patch). */
+export async function updateWorkspaceMemory(
+  memoryId: string,
+  patch: UpdateProjectMemoryPatch,
+): Promise<ProjectMemory> {
+  const body = await request<{ memory: ProjectMemory }>(`/memory/workspace/${memoryId}`, {
+    method: "PUT",
+    json: patch,
+  });
   return body.memory;
 }
 

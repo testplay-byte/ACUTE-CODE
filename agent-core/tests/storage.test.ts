@@ -227,6 +227,11 @@ describe("openDatabase", () => {
       // NULL = follow the agent default, the pre-R114 behavior; the
       // three-tier prepareTurn ladder's middle tier).
       { version: 41, name: "0041_session_selected_model.sql" },
+      // ROUND-117 (R117-b): the WORKSPACE memory scope — the memory table
+      // rebuilt with scope ('project'|'workspace', project_id nullable) +
+      // session_recall appended to template/default allowlists carrying
+      // memory_recall (the episodic companion rule).
+      { version: 42, name: "0042_memory_scopes.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });
@@ -276,6 +281,10 @@ describe("template seeding", () => {
           "memory_save",
           "memory_recall",
           "memory_list",
+          // ROUND-117 (R117-b): the episodic sibling — session_recall (the
+          // past-session search; seeded via TOOL_NAMES, existing DBs get it
+          // appended by migration 0042's memory_recall companion rule).
+          "session_recall",
           // ROUND-52 (R52-a): the background-job supervision tools (seeded
           // via TOOL_NAMES — companions of run_command above).
           "job_status",

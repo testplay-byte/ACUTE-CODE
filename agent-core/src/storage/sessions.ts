@@ -1183,24 +1183,94 @@ export function recordUsage(
  * come back in the same shape as listSessions, newest-updated first, deduped
  * (a session with N matching events still appears once).
  */
-export function searchSessions(db: SqliteDatabase, q: string, limit = 50): Session[] {
+export function searchSessions(
+  db: SqliteDatabase,
+  q: string,
+  limit = 50,
+  opts?: { excludeSessionId?: string; projectId?: string },
+): Session[] {
   const needle = q.trim();
   if (needle === "") return [];
   // Escape LIKE wildcards so a literal "%"/"_" in the query means itself.
   const escaped = needle.replace(/[\\%_]/g, (c) => `\\${c}`);
   const pattern = `%${escaped}%`;
+  // ROUND-117 (R117-b): the optional PROJECT scoping + current-session
+  // exclusion ride as bind params (never string-interpolated) — the
+  // session_recall tool passes both; the REST search surface passes neither
+  // and keeps the ROUND-44-c contract byte-identical. (R117-b2 fix: the
+  // optional guards use NAMED params — better-sqlite3 treats ?NNN as named
+  // and refuses mixed positional binding, so the whole statement binds one
+  // object.)
   const rows = db
     .prepare(
       `SELECT DISTINCT s.*
          FROM sessions s
          LEFT JOIN session_events e ON e.session_id = s.id
         WHERE s.parent_session_id IS NULL
-          AND (s.title LIKE ? ESCAPE '\\' OR e.payload LIKE ? ESCAPE '\\')
+          AND (@exclude = '' OR s.id != @exclude)
+          AND (@project = '' OR s.project_id = @project)
+          AND (s.title LIKE @pattern ESCAPE '\\' OR e.payload LIKE @pattern ESCAPE '\\')
         ORDER BY s.updated_at DESC, s.id DESC
-        LIMIT ?`,
+        LIMIT @limit`,
     )
-    .all(pattern, pattern, limit) as SessionRow[];
+    .all({
+      exclude: opts?.excludeSessionId ?? "",
+      project: opts?.projectId ?? "",
+      pattern,
+      limit,
+    }) as SessionRow[];
   return rows.map(toSession);
+}
+
+/**
+ * ROUND-117 (R117-b): has this session seen a user turn yet? One indexed
+ * LIMIT 1 probe over the event log — the memory_policy 'on-start' gate
+ * (runtime.ts prepareTurn) calls it BEFORE the turn's own message.user
+ * event is appended (both turn runners append after prepareTurn), so "no
+ * prior user message" is exactly "this is the session's first turn".
+ */
+export function sessionHasUserTurn(db: SqliteDatabase, sessionId: string): boolean {
+  const row = db
+    .prepare(
+      "SELECT 1 AS hit FROM session_events WHERE session_id = ? AND type = 'message.user' LIMIT 1",
+    )
+    .get(sessionId) as { hit: number } | undefined;
+  return row !== undefined;
+}
+
+/**
+ * ROUND-117 (R117-b, the turn-end honesty counter): how many memories this
+ * session has produced — successful `memory_save` tool calls (the model's
+ * channel) + `context.compact` events (each compaction persists a session
+ * summary row into project memory — agents/compaction.ts). Two COUNTs over
+ * the session's event log, json_extract on the payload column (better-sqlite3
+ * ships SQLite with JSON1 core). The runtime appends the `memory.saved`
+ * event carrying this count at each successful turn end; a future UI wave
+ * renders it ("memories saved this session").
+ */
+export function countSessionMemorySaves(
+  db: SqliteDatabase,
+  sessionId: string,
+): { agentSaved: number; systemSaved: number } {
+  const agentSaved = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM session_events
+          WHERE session_id = ? AND type = 'tool.use'
+            AND json_extract(payload, '$.toolName') = 'memory_save'
+            AND json_extract(payload, '$.ok') = 1`,
+      )
+      .get(sessionId) as { n: number }
+  ).n;
+  const systemSaved = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM session_events
+          WHERE session_id = ? AND type = 'context.compact'`,
+      )
+      .get(sessionId) as { n: number }
+  ).n;
+  return { agentSaved, systemSaved };
 }
 
 /**

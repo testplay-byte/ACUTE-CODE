@@ -299,6 +299,40 @@ describe("PromptsTab (ROUND-99 R99-F — the project-wide system prompt redesign
     expect(screen.getByRole("button", { name: "Select section skills" }).getAttribute("aria-current")).toBeNull();
   });
 
+  // ── ROUND-117 (R117-b): the LIVE-MEMORY override warning. The
+  // project-memory section's built-in text carries the live memory digest
+  // every turn; an override replaces that injection wholesale — the pane now
+  // SAYS so, warning-tinted, only for an overridden project-memory. ─────────
+  it("R117-b: an overridden project-memory shows the live-memory warning; other overridden sections do not", async () => {
+    // The registry picture with project-memory OVERRIDDEN (the fixture's
+    // project-memory row is the ABSENT conditional — patch it to the
+    // overridden shape the real GET reports once an override file exists).
+    vi.mocked(fetchPromptSections).mockImplementation(async (root: string) => {
+      const report = sectionsFor(root, ["skills"]);
+      const idx = report.sections.findIndex((s) => s.id === "project-memory");
+      report.sections[idx] = {
+        ...report.sections[idx],
+        present: true,
+        overridden: true,
+        overrideContent: "Custom memory section.",
+      };
+      report.overridden = ["skills", "project-memory"];
+      return report;
+    });
+    renderWithProviders(<PromptsTab />);
+
+    // The default selection (skills, overridden) carries NO warning.
+    await screen.findByLabelText("Edit the override for skills");
+    expect(screen.queryByTestId("prompt-memory-override-warning")).toBeNull();
+
+    // Selecting the OVERRIDDEN project-memory row shows the warning pill.
+    fireEvent.click(screen.getByRole("button", { name: "Select section project-memory" }));
+    expect(await screen.findByTestId("prompt-memory-override-warning")).toBeTruthy();
+    expect(screen.getByTestId("prompt-memory-override-warning").textContent).toContain(
+      "An override replaces the live memory injection",
+    );
+  });
+
   it("the editor flow: select → edit → Save PUTs the EXACT payload and the GET refetches", async () => {
     renderWithProviders(<PromptsTab />);
     await screen.findByTestId("prompt-status-identity");

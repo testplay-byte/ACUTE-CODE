@@ -26,11 +26,17 @@ import { getProject } from "../storage/projects.js";
 // right-sidebar Memory tab. Saves happen via the memory_save tool.
 // ROUND-98 (R98-F1): + the REST write side (POST/PUT) for the panel's
 // add/edit flows — same storage validation, same dedup semantics.
+// ROUND-117 (R117-b): + the WORKSPACE tier — the cross-project scope
+// (memory rows with scope 'workspace' + project_id NULL) exposed as a
+// top-level route family mirroring the project pair, so the Memory panel's
+// "Workspace" side and any future client can curate the owner's global
+// facts. Same validation grammar, same dedup, same source "owner".
 import {
   MAX_MEMORY_CONTENT_CHARS,
   MEMORY_KINDS,
   deleteMemory,
   listMemories,
+  listWorkspaceMemories,
   saveMemoryWithDedup,
   updateMemory,
 } from "../storage/memory.js";
@@ -54,6 +60,83 @@ function normalizeKind(raw: unknown, blankIsAbsent: boolean): { kind?: string; e
     return { error: `kind must be one of ${MEMORY_KINDS.join(" | ")} (got '${raw}')` };
   }
   return { kind: trimmed };
+}
+
+/* ── ROUND-117 (R117-b): the shared body parsers (the project + workspace
+ * route families validate IDENTICALLY — the helpers below are the R98-F1
+ * inline checks extracted verbatim, in the same order, producing the same
+ * status/message/field; the project routes' pinned 400s are unchanged). */
+
+/** A 4xx the route layer renders (the errorBody shape + the status). */
+interface Body4xx {
+  status: 400;
+  code: "VALIDATION";
+  message: string;
+  field: string;
+}
+
+/** The create-body parser ({kind?, content} — blank kind absent, trimmed
+ * non-empty content ≤ the table cap). */
+function parseMemoryCreateBody(body: unknown): { kind?: string; content?: string; error?: Body4xx } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { error: { status: 400, code: "VALIDATION", message: "body must be a JSON object", field: "body" } };
+  }
+  const raw = body as Record<string, unknown>;
+  const kindCheck = normalizeKind(raw.kind, true);
+  if (kindCheck.error !== undefined) {
+    return { error: { status: 400, code: "VALIDATION", message: kindCheck.error, field: "body.kind" } };
+  }
+  // The table's cap is measured on the TRIMMED content (the storage path
+  // trims first) — the route mirrors it so the two validations agree.
+  const content = typeof raw.content === "string" ? raw.content.trim() : "";
+  if (content === "") {
+    return { error: { status: 400, code: "VALIDATION", message: "content must be a non-empty string", field: "body.content" } };
+  }
+  if (content.length > MAX_MEMORY_CONTENT_CHARS) {
+    return { error: { status: 400, code: "VALIDATION", message: `content must be at most ${MAX_MEMORY_CONTENT_CHARS} characters`, field: "body.content" } };
+  }
+  return { kind: kindCheck.kind, content };
+}
+
+/** The partial-patch parser ({content?, kind?} — at least one; null reads as
+ * "not provided", the ratings `note` grammar). */
+function parseMemoryPatchBody(body: unknown): { content?: string; kind?: string; error?: Body4xx } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { error: { status: 400, code: "VALIDATION", message: "body must be a JSON object", field: "body" } };
+  }
+  const raw = body as Record<string, unknown>;
+  // null reads as "not provided" — the empty patch check has to use the same
+  // reading or {content: null} would slip through as a no-op bump.
+  const hasContent = raw.content !== undefined && raw.content !== null;
+  const hasKind = raw.kind !== undefined && raw.kind !== null;
+  if (!hasContent && !hasKind) {
+    return { error: { status: 400, code: "VALIDATION", message: "provide at least one of content or kind", field: "body" } };
+  }
+  let content: string | undefined;
+  if (hasContent) {
+    if (typeof raw.content !== "string") {
+      return { error: { status: 400, code: "VALIDATION", message: "content must be a non-empty string", field: "body.content" } };
+    }
+    content = raw.content.trim();
+    if (content === "") {
+      return { error: { status: 400, code: "VALIDATION", message: "content must be a non-empty string", field: "body.content" } };
+    }
+    if (content.length > MAX_MEMORY_CONTENT_CHARS) {
+      return { error: { status: 400, code: "VALIDATION", message: `content must be at most ${MAX_MEMORY_CONTENT_CHARS} characters`, field: "body.content" } };
+    }
+  }
+  const kindCheck = normalizeKind(raw.kind, false);
+  if (kindCheck.error !== undefined) {
+    return { error: { status: 400, code: "VALIDATION", message: kindCheck.error, field: "body.kind" } };
+  }
+  return { content, kind: kindCheck.kind };
+}
+
+/** Render one parsed-body error (the shared 4xx renderer; the narrowed
+ * reply shape from routes/prompts.ts's requireProject). */
+type RejectableReply = { code: (status: number) => { send: (body: unknown) => unknown } };
+function sendBodyError(reply: RejectableReply, error: Body4xx): unknown {
+  return reply.code(error.status).send(errorBody(error.code, error.message, { field: error.field }));
 }
 
 export function registerMemoryRoutes(scope: FastifyInstance, ctx: RouteContext): void {
@@ -95,48 +178,20 @@ export function registerMemoryRoutes(scope: FastifyInstance, ctx: RouteContext):
   // same project) rides saveMemoryWithDedup's refresh path: 200 +
   // {deduplicated: true} + the bumped row instead of a twin insert (201).
   // The row is sourced "owner" — the agent's own saves stay "agent".
+  // (R117-b: the body checks moved into parseMemoryCreateBody — shared with
+  // the workspace POST below, byte-identical outcomes.)
   scope.post("/projects/:id/memory", async (request, reply) => {
     const { id } = request.params as Record<string, string>;
     const project = getProject(db, id);
     if (project === undefined) {
       return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
     }
-    const body: unknown = request.body;
-    if (typeof body !== "object" || body === null || Array.isArray(body)) {
-      return reply
-        .code(400)
-        .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
-    }
-    const raw = body as Record<string, unknown>;
-    const kindCheck = normalizeKind(raw.kind, true);
-    if (kindCheck.error !== undefined) {
-      return reply
-        .code(400)
-        .send(errorBody("VALIDATION", kindCheck.error, { field: "body.kind" }));
-    }
-    // The table's cap is measured on the TRIMMED content (the storage path
-    // trims first) — the route mirrors it so the two validations agree.
-    const content = typeof raw.content === "string" ? raw.content.trim() : "";
-    if (content === "") {
-      return reply.code(400).send(
-        errorBody("VALIDATION", "content must be a non-empty string", {
-          field: "body.content",
-        }),
-      );
-    }
-    if (content.length > MAX_MEMORY_CONTENT_CHARS) {
-      return reply.code(400).send(
-        errorBody(
-          "VALIDATION",
-          `content must be at most ${MAX_MEMORY_CONTENT_CHARS} characters`,
-          { field: "body.content" },
-        ),
-      );
-    }
+    const parsed = parseMemoryCreateBody(request.body);
+    if (parsed.error !== undefined) return sendBodyError(reply, parsed.error);
     const result = saveMemoryWithDedup(db, {
       projectId: id,
-      kind: kindCheck.kind,
-      content,
+      kind: parsed.kind,
+      content: parsed.content as string,
       source: "owner",
     });
     return reply.code(result.deduplicated ? 200 : 201).send({
@@ -152,65 +207,65 @@ export function registerMemoryRoutes(scope: FastifyInstance, ctx: RouteContext):
   // the edited row ranks like a fresh save. No importance field: the
   // memory table's importance model IS the kind weight (0015 + KIND_WEIGHT)
   // — see updateMemory's docblock.
+  // (R117-b: the body checks moved into parseMemoryPatchBody — shared with
+  // the workspace PUT below, byte-identical outcomes.)
   scope.put("/projects/:id/memory/:memoryId", async (request, reply) => {
     const { id, memoryId } = request.params as Record<string, string>;
     const project = getProject(db, id);
     if (project === undefined) {
       return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
     }
-    const body: unknown = request.body;
-    if (typeof body !== "object" || body === null || Array.isArray(body)) {
-      return reply
-        .code(400)
-        .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
-    }
-    const raw = body as Record<string, unknown>;
-    // null reads as "not provided" (the ratings `note` grammar) — the empty
-    // patch check has to use the same reading or {content: null} would slip
-    // through as a no-op bump of updated_at.
-    const hasContent = raw.content !== undefined && raw.content !== null;
-    const hasKind = raw.kind !== undefined && raw.kind !== null;
-    if (!hasContent && !hasKind) {
-      return reply.code(400).send(
-        errorBody("VALIDATION", "provide at least one of content or kind", { field: "body" }),
-      );
-    }
-    let content: string | undefined;
-    if (hasContent) {
-      if (typeof raw.content !== "string") {
-        return reply.code(400).send(
-          errorBody("VALIDATION", "content must be a non-empty string", {
-            field: "body.content",
-          }),
-        );
-      }
-      content = raw.content.trim();
-      if (content === "") {
-        return reply.code(400).send(
-          errorBody("VALIDATION", "content must be a non-empty string", {
-            field: "body.content",
-          }),
-        );
-      }
-      if (content.length > MAX_MEMORY_CONTENT_CHARS) {
-        return reply.code(400).send(
-          errorBody(
-            "VALIDATION",
-            `content must be at most ${MAX_MEMORY_CONTENT_CHARS} characters`,
-            { field: "body.content" },
-          ),
-        );
-      }
-    }
-    const kindCheck = normalizeKind(raw.kind, false);
-    if (kindCheck.error !== undefined) {
-      return reply
-        .code(400)
-        .send(errorBody("VALIDATION", kindCheck.error, { field: "body.kind" }));
-    }
+    const parsed = parseMemoryPatchBody(request.body);
+    if (parsed.error !== undefined) return sendBodyError(reply, parsed.error);
     // The route has validated everything updateMemory checks, so its
     // thrown errors are defensive-only here (never reached through REST).
-    const result = updateMemory(db, memoryId, { content, kind: kindCheck.kind });
+    const result = updateMemory(db, memoryId, { content: parsed.content, kind: parsed.kind });
+    if (!result.ok) {
+      return reply.code(404).send(errorBody("NOT_FOUND", result.error));
+    }
+    return { memory: result.item };
+  });
+
+  // ── ROUND-117 (R117-b): the WORKSPACE tier — the cross-project scope's
+  // top-level route family, mirroring the project pair (GET/POST + the
+  // DELETE/PUT the Memory panel's CRUD needs). No project to 404 on: the
+  // tier IS the address. Rows carry scope 'workspace' + project_id NULL +
+  // source "owner" (the owner's curated global facts; the agent's
+  // memory_save channel stays project-scoped by design this wave).
+  scope.get("/memory/workspace", async () => {
+    return { memories: listWorkspaceMemories(db, 100) };
+  });
+
+  scope.delete("/memory/workspace/:memoryId", async (request, reply) => {
+    const { memoryId } = request.params as Record<string, string>;
+    const result = deleteMemory(db, memoryId);
+    if (!result.ok) {
+      return reply.code(404).send(errorBody("NOT_FOUND", result.error));
+    }
+    return { ok: true };
+  });
+
+  scope.post("/memory/workspace", async (request, reply) => {
+    const parsed = parseMemoryCreateBody(request.body);
+    if (parsed.error !== undefined) return sendBodyError(reply, parsed.error);
+    const result = saveMemoryWithDedup(db, {
+      projectId: null,
+      scope: "workspace",
+      kind: parsed.kind,
+      content: parsed.content as string,
+      source: "owner",
+    });
+    return reply.code(result.deduplicated ? 200 : 201).send({
+      memory: result.item,
+      deduplicated: result.deduplicated,
+    });
+  });
+
+  scope.put("/memory/workspace/:memoryId", async (request, reply) => {
+    const { memoryId } = request.params as Record<string, string>;
+    const parsed = parseMemoryPatchBody(request.body);
+    if (parsed.error !== undefined) return sendBodyError(reply, parsed.error);
+    const result = updateMemory(db, memoryId, { content: parsed.content, kind: parsed.kind });
     if (!result.ok) {
       return reply.code(404).send(errorBody("NOT_FOUND", result.error));
     }

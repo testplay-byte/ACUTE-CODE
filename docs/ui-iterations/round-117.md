@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-117 -->
+<!-- last-reviewed: 2026-09-21 round-117 -->
 
 # Round 117 — the system round (memory that remembers, prompts re-engineered, robust orchestration, an honest transcript)
 

@@ -66,6 +66,12 @@ function stubOneShot(sseChunks: readonly string[]): Post[] {
       if (target.includes("/api/v1/agents")) {
         return new Response(JSON.stringify({ agents: [AGENT_ROW] }), { status: 200 });
       }
+      // R117-b: createSession now consults GET /projects (the cwd binding).
+      // No registered projects → the session stays projectless, exactly the
+      // pre-R117 behavior these pins describe.
+      if (target.includes("/api/v1/projects") && (init?.method ?? "GET") === "GET") {
+        return new Response(JSON.stringify({ projects: [] }), { status: 200 });
+      }
       if (target.endsWith("/api/v1/sessions") && init?.method === "POST") {
         return new Response(JSON.stringify(SESSION_ROW), { status: 202 });
       }

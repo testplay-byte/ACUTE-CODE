@@ -114,6 +114,13 @@ export interface ToolDeps {
    * system prompt carries no memory digest. Undefined = enabled (default),
    * so existing call sites (tests, older paths) keep the tools. */
   memoryEnabled?: boolean;
+  /** ROUND-117 (R117-b): the session's AGENT's memory policy
+   * (agents.memory_policy — 'none' | 'on-start' | 'every-turn'), forwarded
+   * by runtime.ts prepareTurn. 'none' drops the whole memory tool family
+   * (the honest tool-drop — the plugin gates on it exactly like the master
+   * switch above); the digest-injection half of the policy is gated in
+   * prepareTurn itself. Undefined = no restriction (tests, older paths). */
+  memoryPolicy?: import("shared").MemoryPolicy;
   /** ROUND-50 (R50-c1): the session's permission mode (full/ask/plan/
    * editor), forwarded by runtime.ts prepareTurn. The tool-set RESTRICTIONS
    * (plan/editor) are applied to the allowlist BEFORE buildProjectTools

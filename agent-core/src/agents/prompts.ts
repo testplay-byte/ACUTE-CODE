@@ -172,9 +172,18 @@ export interface PromptContext {
    * knows the project's file/symbol structure without list_dir/read_file. */
   indexSummary?: import("../storage/index.js").IndexSummary;
   /** ROUND-44 (R44-a): the project memory digest — newest saved
-   * facts/decisions/preferences, pre-formatted by memoryDigest(). Injected
-   * only when non-empty (a project with no memories gets no section). */
+   * facts/decisions/preferences, pre-formatted by memoryDigest().
+   * ROUND-117 (R117-b): DEFINED-but-empty ("") now means "the memory
+   * surface is ON for this turn but nothing is saved yet" — the section
+   * renders the honest "No memories saved yet" line (the model learns the
+   * surface exists); undefined still composes no section at all (children,
+   * memory off, env-absent callers). */
   memoryDigest?: string;
+  /** ROUND-117 (R117-b): the WORKSPACE digest — the owner's cross-project
+   * facts (storage/memory.ts workspaceMemoryDigest), rendered as the
+   * "## Workspace memory" block ABOVE the project block under the same
+   * presence semantics as memoryDigest. */
+  memoryWorkspaceDigest?: string;
   /** ROUND-50 (R50-c1): the session's permission mode (the composer's
    * Full Access / Ask / Plan / Editor switcher). When set, a short
    * "## PERMISSION MODE" section describes the active posture to the model
@@ -520,6 +529,9 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   if (has("delegate_task")) tools("- delegate_task: runs a self-contained subtask in a child agent.");
   if (has("memory_save")) tools("- memory_save: persists a durable project fact.");
   if (has("memory_recall")) tools("- memory_recall: searches project memory beyond the digest.");
+  // ROUND-117 (R117-b): the episodic leg — past-session search joins the
+  // memory family's one-liners.
+  if (has("session_recall")) tools("- session_recall: searches this project's past sessions.");
   if (has("read_skill")) tools("- read_skill: loads a skill's body on demand.");
   if (has("ask_user")) tools("- ask_user: asks the owner one mid-task question.");
   if (has("browser_control")) tools("- browser_control: drives the embedded browser panel.");
@@ -1444,11 +1456,39 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // between sessions. The digest below is the newest slice of the project's
   // persistent memory (memoryDigest is small + whole-line capped — cheap to
   // inject every turn); memory_recall digs beyond the cap.
-  if (ctx.memoryDigest !== undefined && ctx.memoryDigest !== "") {
+  //
+  // ROUND-117 (R117-b): the SCOPE LADDER + the honest empties. The section
+  // now composes when EITHER digest is DEFINED (the runtime sets both under
+  // the memory gates — master switch, main session, the agent's
+  // memory_policy) — and renders the WORKSPACE tier ("## Workspace memory",
+  // the owner's cross-project facts, curated via REST) ABOVE the project
+  // tier. "" on both tiers (a gated-on session with zero memories of either
+  // scope) renders the honest "No memories saved yet" line instead of
+  // nothing, so the model KNOWS the memory surface exists and can start
+  // filling it. Callers that pass NEITHER field (children, memory off,
+  // env-absent tests/context meter) compose no section — byte-identical to
+  // pre-R117.
+  if (ctx.memoryDigest !== undefined || ctx.memoryWorkspaceDigest !== undefined) {
     beginSection("project-memory");
+    const workspace = ctx.memoryWorkspaceDigest ?? "";
+    const project = ctx.memoryDigest ?? "";
+    if (workspace !== "") {
+      mem("## Workspace memory");
+      mem("Cross-project facts — the owner's durable identity, preferences, and environment truths. They apply HERE too, in every project:");
+      mem(workspace);
+      mem("");
+    }
     mem("## Project memory (persisted across sessions)");
-    mem("Durable facts, decisions, and preferences saved for THIS project (newest first):");
-    mem(ctx.memoryDigest);
+    if (project !== "") {
+      mem("Durable facts, decisions, and preferences saved for THIS project (newest first):");
+      mem(project);
+    } else if (workspace !== "") {
+      // Workspace rows exist but this project has none yet — still honest
+      // about the project tier's state without the full empty line.
+      mem("No memories saved for this project yet — use memory_save when you discover durable facts.");
+    } else {
+      mem("No memories saved yet — use memory_save when you discover durable facts.");
+    }
     // ROUND-99 (R99-G): the WHEN block — the owner's flaw: "No guidance on
     // where to use memory save and memory recall." The R98-F1 save-discipline
     // line grew into the three-line decision rule: SAVE at the moment of
@@ -1457,10 +1497,17 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // ledger or git. Gated on the memory TOOLS being in vocab (save OR
     // recall — a recall-only session still gets the block; the digest-only
     // narration above stays the section's head).
+    // ROUND-117 (R117-b): the RECALL line gains the EPISODIC half —
+    // session_recall searches this project's PAST SESSIONS, so "what did we
+    // already do about X" is a lookup, not a blank stare.
     if (ctx.toolNames.includes("memory_save") || ctx.toolNames.includes("memory_recall")) {
       mem("Treat these as standing knowledge: they survive across sessions. WHEN to use the memory tools:");
       mem("- SAVE when you discover something DURABLE the next session needs — project conventions, the owner's confirmed preferences, environment gotchas, decisions with their reasons. Save at the moment of discovery: batch saves at turn-end get lost.");
-      mem("- RECALL at the start of a task whose topic matches a memory — search before re-deriving.");
+      mem(
+        ctx.toolNames.includes("session_recall")
+          ? "- RECALL at the start of a task whose topic matches a memory — search before re-deriving — and use session_recall to check what PAST SESSIONS already did with the topic before re-researching it."
+          : "- RECALL at the start of a task whose topic matches a memory — search before re-deriving.",
+      );
       mem("- NEVER save: secrets or keys, per-session state, raw transcripts, anything the file ledger or git already records.");
     }
     mem("");

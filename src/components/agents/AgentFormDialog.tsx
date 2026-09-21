@@ -15,6 +15,17 @@ import { Badge, Button, Field, inputClass } from "../ui/controls";
 const MEMORY_POLICIES: MemoryPolicy[] = ["none", "on-start", "every-turn"];
 
 /**
+ * ROUND-117 (R117-b): the policy's honest captions — the flag is LIVE now
+ * (runtime.ts gates the digest + the memory tools on it), so the labels say
+ * what each value actually does instead of the raw enum token.
+ */
+const MEMORY_POLICY_LABELS: Record<MemoryPolicy, string> = {
+  none: "Never",
+  "on-start": "On first turn only",
+  "every-turn": "Every turn",
+};
+
+/**
  * ROUND-93 (R93-A8): the small uppercase section label that groups the form
  * into scannable blocks (Identity / Model / Behavior / Capabilities /
  * Advanced) — the app's existing section visual language (see
@@ -386,7 +397,10 @@ export function AgentFormDialog({
                 placeholder="You write precise, minimal diffs…"
               />
             </Field>
-            <Field label="Memory policy">
+            <Field
+              label="Memory policy"
+              hint="Governs the memory digest injection + the memory tools (R117-b)"
+            >
               <select
                 className={inputClass}
                 value={form.memoryPolicy}
@@ -394,7 +408,7 @@ export function AgentFormDialog({
               >
                 {MEMORY_POLICIES.map((m) => (
                   <option key={m} value={m}>
-                    {m}
+                    {MEMORY_POLICY_LABELS[m]}
                   </option>
                 ))}
               </select>

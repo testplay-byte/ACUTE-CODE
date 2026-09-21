@@ -3,10 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
   createProjectMemory,
+  createWorkspaceMemory,
   deleteProjectMemory,
+  deleteWorkspaceMemory,
   fetchMemorySettings,
   listProjectMemory,
+  listWorkspaceMemory,
   updateProjectMemory,
+  updateWorkspaceMemory,
 } from "../../lib/api";
 import { MemoryPanel } from "./MemoryPanel";
 import type { RightSidebarTab } from "../../lib/right-sidebar-store";
@@ -14,7 +18,8 @@ import { renderWithProviders, resetTestState } from "../../test-utils";
 
 // The panel is a VIEW over the memory REST surface — the api module is
 // mocked exactly as the real sidecar shapes it (GET listing + DELETE, and
-// since R98-F1 the write side: POST create + PUT update).
+// since R98-F1 the write side: POST create + PUT update — and since R117-b
+// the WORKSPACE tier's four siblings behind the segmented scope switch).
 vi.mock("../../lib/api", () => ({
   listProjectMemory: vi.fn(),
   deleteProjectMemory: vi.fn().mockResolvedValue(undefined),
@@ -26,6 +31,14 @@ vi.mock("../../lib/api", () => ({
   updateProjectMemory: vi.fn().mockResolvedValue({ id: "mem_1" }),
   // ROUND-49: the memory master switch — default ON (no OFF notice).
   fetchMemorySettings: vi.fn().mockResolvedValue({ enabled: true }),
+  // R117-b: the workspace tier's CRUD siblings.
+  listWorkspaceMemory: vi.fn(),
+  deleteWorkspaceMemory: vi.fn().mockResolvedValue(undefined),
+  createWorkspaceMemory: vi.fn().mockResolvedValue({
+    memory: { id: "mem_ws_new", deduplicated: false },
+    deduplicated: false,
+  }),
+  updateWorkspaceMemory: vi.fn().mockResolvedValue({ id: "mem_ws_1" }),
 }));
 
 afterEach(cleanup);
@@ -37,13 +50,25 @@ beforeEach(() => {
   vi.mocked(createProjectMemory)
     .mockReset()
     .mockResolvedValue({
-      memory: { id: "mem_new", projectId: "prj_1", kind: "note", content: "", source: "owner", createdAt: now(), updatedAt: now() },
+      memory: { id: "mem_new", projectId: "prj_1", scope: "project", kind: "note", content: "", source: "owner", createdAt: now(), updatedAt: now() },
       deduplicated: false,
     });
   vi.mocked(updateProjectMemory)
     .mockReset()
-    .mockResolvedValue({ id: "mem_1", projectId: "prj_1", kind: "fact", content: "", source: "agent", createdAt: now(), updatedAt: now() });
+    .mockResolvedValue({ id: "mem_1", projectId: "prj_1", scope: "project", kind: "fact", content: "", source: "agent", createdAt: now(), updatedAt: now() });
   vi.mocked(fetchMemorySettings).mockReset().mockResolvedValue({ enabled: true });
+  // R117-b: the workspace siblings reset to the same defaults.
+  vi.mocked(listWorkspaceMemory).mockReset().mockResolvedValue([]);
+  vi.mocked(deleteWorkspaceMemory).mockReset().mockResolvedValue(undefined);
+  vi.mocked(createWorkspaceMemory)
+    .mockReset()
+    .mockResolvedValue({
+      memory: { id: "mem_ws_new", projectId: null, scope: "workspace", kind: "note", content: "", source: "owner", createdAt: now(), updatedAt: now() },
+      deduplicated: false,
+    });
+  vi.mocked(updateWorkspaceMemory)
+    .mockReset()
+    .mockResolvedValue({ id: "mem_ws_1", projectId: null, scope: "workspace", kind: "fact", content: "", source: "owner", createdAt: now(), updatedAt: now() });
 });
 
 const now = () => new Date().toISOString();
@@ -64,9 +89,30 @@ function memFactory(m: {
   return {
     id: m.id,
     projectId: "prj_1",
+    scope: "project" as const,
     kind: m.kind,
     content: m.content,
     source: "agent",
+    createdAt: m.updatedAt ?? now(),
+    updatedAt: m.updatedAt ?? now(),
+  };
+}
+
+/** R117-b: a WORKSPACE-tier row (scope 'workspace', projectId null — the
+ * cross-project facts the segmented switch's other side browses). */
+function wsFactory(m: {
+  id: string;
+  kind: "fact" | "decision" | "preference" | "note";
+  content: string;
+  updatedAt?: string;
+}) {
+  return {
+    id: m.id,
+    projectId: null,
+    scope: "workspace" as const,
+    kind: m.kind,
+    content: m.content,
+    source: "owner",
     createdAt: m.updatedAt ?? now(),
     updatedAt: m.updatedAt ?? now(),
   };
@@ -255,5 +301,71 @@ describe("MemoryPanel (ROUND-44 R44-a)", () => {
     expect(updateProjectMemory).toHaveBeenCalledTimes(1); // only the first row's PUT
     // The row renders its ORIGINAL content again (the draft was abandoned).
     expect(await screen.findByText("keep me untouched")).toBeTruthy();
+  });
+
+  // ── ROUND-117 (R117-b): the SCOPE LADDER — the segmented switch over the
+  // two memory tiers (Workspace | This project). Pins: the default tier is
+  // the project's, switching fetches the WORKSPACE listing, the CRUD routes
+  // the ACTIVE tier, and the empty/footer copy is scope-honest. ──────────
+  it("R117-b: the segmented switch defaults to the project tier; 'Workspace' swaps the listing + CRUD + copy; switching back restores the project tier", async () => {
+    vi.mocked(listProjectMemory).mockResolvedValue([
+      memFactory({ id: "mem_p1", kind: "fact", content: "The sidecar runs on port 5178." }),
+    ]);
+    vi.mocked(listWorkspaceMemory).mockResolvedValue([
+      wsFactory({ id: "mem_w1", kind: "preference", content: "The owner prefers terse replies." }),
+    ]);
+    renderWithProviders(<MemoryPanel projectId="prj_1" tab={tab} />);
+
+    // Default: the project tier — both segments render, the project row shows,
+    // the workspace listing is NEVER fetched.
+    expect(await screen.findByText("The sidecar runs on port 5178.")).toBeTruthy();
+    expect(screen.getByTestId("memory-scope-project").textContent).toContain("This project");
+    expect(screen.getByTestId("memory-scope-workspace").textContent).toContain("Workspace");
+    expect(screen.getByText("Auto-loaded into every agent turn")).toBeTruthy(); // the project footer
+    expect(listWorkspaceMemory).not.toHaveBeenCalled();
+
+    // Switch to the WORKSPACE tier: its listing + row + honest copy.
+    fireEvent.click(screen.getByTestId("memory-scope-workspace"));
+    expect(await screen.findByText("The owner prefers terse replies.")).toBeTruthy();
+    await waitFor(() => expect(listWorkspaceMemory).toHaveBeenCalled());
+    expect(screen.getByText("Injected into every project's agent turns")).toBeTruthy();
+    expect(screen.queryByText("The sidecar runs on port 5178.")).toBeNull(); // the project row is gone
+
+    // The workspace delete routes the workspace API (no project id).
+    fireEvent.click(screen.getByRole("button", { name: /Delete memory: The owner prefers terse replies/i }));
+    await waitFor(() => expect(deleteWorkspaceMemory).toHaveBeenCalledWith("mem_w1"));
+    expect(deleteProjectMemory).not.toHaveBeenCalled();
+
+    // The workspace add form routes createWorkspaceMemory (no project id).
+    fireEvent.click(screen.getByTestId("memory-add-toggle"));
+    fireEvent.change(screen.getByTestId("memory-add-content"), {
+      target: { value: "The owner's machine is called acutebox." },
+    });
+    fireEvent.click(screen.getByTestId("memory-add-save"));
+    await waitFor(() =>
+      expect(createWorkspaceMemory).toHaveBeenCalledWith({
+        kind: "note",
+        content: "The owner's machine is called acutebox.",
+      }),
+    );
+    expect(createProjectMemory).not.toHaveBeenCalled();
+
+    // Back to the project tier: its listing returns (and the workspace row is
+    // gone).
+    fireEvent.click(screen.getByTestId("memory-scope-project"));
+    expect(await screen.findByText("The sidecar runs on port 5178.")).toBeTruthy();
+    expect(screen.queryByText("The owner prefers terse replies.")).toBeNull();
+  });
+
+  it("R117-b: the workspace tier's EMPTY state is scope-honest ('No workspace memories yet' + the cross-project hint)", async () => {
+    renderWithProviders(<MemoryPanel projectId="prj_1" tab={tab} />);
+    expect(await screen.findByText("No memories yet")).toBeTruthy(); // the project tier's empty
+
+    fireEvent.click(screen.getByTestId("memory-scope-workspace"));
+    expect(await screen.findByText("No workspace memories yet")).toBeTruthy();
+    expect(
+      screen.getByText(/Cross-project facts — your identity, preferences, and environment truths/),
+    ).toBeTruthy();
+    expect(screen.queryByText("No memories yet")).toBeNull(); // the project empty is gone
   });
 });

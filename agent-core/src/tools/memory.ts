@@ -17,9 +17,17 @@
  * The newest memories are ALSO auto-injected into the system prompt via
  * memoryDigest (agents/prompts.ts) — the tools are for saving and for
  * digging deeper than the digest's cap.
+ *
+ * ROUND-117 (R117-b): session_recall — the EPISODIC leg. Past sessions are
+ * searchable in the UI only (ROUND-44-c searchSessions); this tool exposes
+ * the same search to the MODEL, so "what did we do about X last week" is a
+ * tool call instead of a blank stare. Same project gate as the memory_*
+ * family: episodic recall searches THIS project's past sessions; a
+ * projectless session gets the honest refusal (the CLI's projectless
+ * world included — the R117-b CLI binding closes most of that gap).
  */
 import type Database from "better-sqlite3";
-import { getSession } from "../storage/sessions.js";
+import { getSession, searchSessions } from "../storage/sessions.js";
 import {
   MAX_MEMORY_CONTENT_CHARS,
   listMemories,
@@ -163,5 +171,95 @@ export function memoryListTool(
   return {
     ok: true,
     output: `${items.length} memor${items.length === 1 ? "y" : "ies"} (newest first):\n${items.map(formatMemory).join("\n")}`,
+  };
+}
+
+/* ── ROUND-117 (R117-b): session_recall — the episodic search ────────────── */
+
+/** Cap on one session snippet (chars) — a taste of the match, not the
+ * transcript; the session id + title carry the pointer. */
+const SESSION_SNIPPET_CHARS = 200;
+
+/** Cap on returned sessions (the tool's `limit`, default 5). */
+const MAX_SESSION_RECALL_RESULTS = 10;
+
+/**
+ * A ~200-char snippet for one matched session: the first event payload that
+ * contains the needle (case-insensitive), windowed around the match with
+ * run whitespace collapsed; when only the TITLE matched, the title is the
+ * snippet. ONE bounded indexed probe per result session (payload LIKE with
+ * escaped wildcards — the searchSessions grammar).
+ */
+function sessionSnippet(
+  db: MemoryToolDeps["db"],
+  sessionId: string,
+  title: string,
+  needle: string,
+): string {
+  const escaped = needle.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const pattern = `%${escaped}%`;
+  const row = db
+    .prepare(
+      `SELECT payload FROM session_events
+        WHERE session_id = ? AND payload LIKE ? ESCAPE '\\'
+        ORDER BY seq LIMIT 1`,
+    )
+    .get(sessionId, pattern) as { payload: string } | undefined;
+  const source = row?.payload ?? title;
+  const at = source.toLowerCase().indexOf(needle.toLowerCase());
+  if (at < 0) return source.slice(0, SESSION_SNIPPET_CHARS);
+  const start = Math.max(0, at - Math.floor(SESSION_SNIPPET_CHARS / 3));
+  const raw = source.slice(start, start + SESSION_SNIPPET_CHARS);
+  const collapsed = raw.replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "…" : ""}${collapsed}${start + SESSION_SNIPPET_CHARS < source.length ? "…" : ""}`;
+}
+
+/**
+ * session_recall — model-facing search over PAST SESSIONS of this project
+ * (titles + event payloads, the ROUND-44-c searchSessions grammar; the
+ * CURRENT session is excluded — it is not "past"). Each hit renders
+ * `id · "title" · last activity YYYY-MM-DD · "…200-char snippet…"`.
+ * Bounded: limit defaults to 5, caps at 10 (a research pointer, not a
+ * transcript dump). Projectless sessions get the honest no-project refusal
+ * — the same gate as the memory_* family.
+ */
+export function sessionRecallTool(
+  deps: MemoryToolDeps | undefined,
+  query: unknown,
+  limit: unknown,
+): MemoryToolResult {
+  if (!deps) return { ok: false, output: "memory unavailable in this context" };
+  const projectId = resolveProjectId(deps);
+  if (projectId === null) {
+    return {
+      ok: false,
+      output: "episodic recall is project-scoped and this session has no bound project",
+    };
+  }
+  const q = typeof query === "string" ? query.trim() : "";
+  if (q === "") {
+    return { ok: false, output: "session_recall needs a non-empty 'query' (a topic, file name, or error text to find in past sessions)" };
+  }
+  const requested =
+    typeof limit === "number" && Number.isFinite(limit) && limit > 0
+      ? Math.min(MAX_SESSION_RECALL_RESULTS, Math.floor(limit))
+      : 5;
+  // Project-scoped + current-session-excluded in SQL (searchSessions' R117-b
+  // opts) — the window the model sees is exactly this project's past work.
+  const hits = searchSessions(deps.db, q, requested, {
+    excludeSessionId: deps.sessionId,
+    projectId,
+  });
+  if (hits.length === 0) {
+    return { ok: true, output: `no past sessions in this project match '${q}'` };
+  }
+  const lines = hits.map((s) => {
+    const day = s.updatedAt.slice(0, 10);
+    const title = s.title ?? "(untitled)";
+    return `- ${s.id} · "${title}" · last activity ${day} · "${sessionSnippet(deps.db, s.id, title, q)}"`;
+  });
+  return {
+    ok: true,
+    output: `${hits.length} past session${hits.length === 1 ? "" : "s"} in this project matching '${q}' (newest activity first):\n${lines.join("\n")}`,
   };
 }

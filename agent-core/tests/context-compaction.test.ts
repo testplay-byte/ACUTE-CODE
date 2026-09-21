@@ -24,6 +24,11 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { appendSessionEvent, createSession, listSessionEvents } from "../src/storage/sessions";
+// ROUND-117 (R117-b): the episodic bridge's collaborators — the project the
+// session binds to, the memory tier the summary lands in, the master switch.
+import { createProject } from "../src/storage/projects";
+import { listMemories, listWorkspaceMemories } from "../src/storage/memory";
+import { setMemorySettings } from "../src/storage/settings";
 import {
   applyCompaction,
   assembleWithCompaction,
@@ -238,15 +243,17 @@ describe("planCompaction", () => {
 
 /* ── assembleWithCompaction (end-to-end with a fake ChatFn) ───────────────── */
 
-describe("assembleWithCompaction", () => {
-  function seedOverflowingSession(sessionId: string): void {
-    // 6 pairs ≈ 740 tokens > 400 available (user ≈ 71, assistant ≈ 53 each).
-    for (let i = 0; i < 6; i++) {
-      addMessage(sessionId, "message.user", `user message number ${i} — ${"context ".repeat(25)}`);
-      addMessage(sessionId, "message.assistant", `assistant message number ${i} — ${"work ".repeat(30)}`);
-    }
+/** 6 pairs ≈ 740 tokens > 400 available (user ≈ 71, assistant ≈ 53 each) —
+ * hoisted to file scope since R117-b (the compaction→memory bridge tests
+ * below seed their own overflowing project-bound sessions with it). */
+function seedOverflowingSession(sessionId: string): void {
+  for (let i = 0; i < 6; i++) {
+    addMessage(sessionId, "message.user", `user message number ${i} — ${"context ".repeat(25)}`);
+    addMessage(sessionId, "message.assistant", `assistant message number ${i} — ${"work ".repeat(30)}`);
   }
+}
 
+describe("assembleWithCompaction", () => {
   const deps = (chat: ChatFn) => ({
     db: db as Database.Database,
     sessionId: "",
@@ -366,5 +373,111 @@ describe("assembleWithCompaction", () => {
     const outcome = await assembleWithCompaction(assembleHistory(db, sid), TIGHT_BUDGET, { ...deps(chat), sessionId: sid });
     expect(outcome.compacted).toBe(false);
     expect(outcome.messages[0].content).toContain("[Earlier conversation was trimmed");
+  });
+});
+
+/* ── ROUND-117 (R117-b): compaction → memory — the episodic bridge ───────── */
+
+describe("ROUND-117 (R117-b): compaction persists the summary into project memory", () => {
+  // The same deps shape the assembleWithCompaction block above uses.
+  const deps = (chat: ChatFn) => ({
+    db: db as Database.Database,
+    sessionId: "",
+    chat,
+    provider: { id: "prov_openrouter", baseUrl: null, apiFormat: "chat-completions" },
+    apiKey: "test-key",
+    model: "test/model",
+  });
+
+  // A project-bound session helper (the bridge only writes for sessions with
+  // a bound project — the projectless newSession() above stays the default
+  // for every pre-R117 test in this file).
+  function newProjectSession(projectId: string, title: string): string {
+    return createSession(db, { agentId: "agt_default_nova", mode: "single", projectId, title }).id;
+  }
+
+  it("an over-budget compaction writes a 'Session summary (title): …' note (kind note, source system, ≤400-char slice) into the project's memory", async () => {
+    const project = createProject(db, { name: "Bridge", rootPath: join(dir, "bridge-root") });
+    const sid = newProjectSession(project.id, "Bridge session");
+    seedOverflowingSession(sid);
+    const { chat } = fakeChat();
+    const outcome = await assembleWithCompaction(assembleHistory(db, sid), TIGHT_BUDGET, { ...deps(chat), sessionId: sid });
+    expect(outcome.compacted).toBe(true);
+
+    const memories = listMemories(db, project.id);
+    expect(memories).toHaveLength(1);
+    expect(memories[0]).toMatchObject({
+      projectId: project.id,
+      scope: "project",
+      kind: "note",
+      source: "system", // the deterministic writer, distinguishable from agent/owner saves
+    });
+    const prefix = "Session summary (Bridge session): ";
+    expect(memories[0].content.startsWith(prefix)).toBe(true);
+    expect(memories[0].content.slice(prefix.length)).toContain("the agent built feature X");
+    // The slice is a POINTER + a taste (the full summary stays in the event log).
+    expect(memories[0].content.length).toBeLessThanOrEqual(prefix.length + 400);
+
+    // A LONG summary is sliced to the 400-char cap.
+    const longProject = createProject(db, { name: "Bridge Long", rootPath: join(dir, "bridge-long-root") });
+    const sid2 = newProjectSession(longProject.id, "Long session");
+    seedOverflowingSession(sid2);
+    const longSummary = "L".repeat(600);
+    const { chat: longChat } = fakeChat(longSummary);
+    await assembleWithCompaction(assembleHistory(db, sid2), TIGHT_BUDGET, { ...deps(longChat), sessionId: sid2 });
+    const longMemories = listMemories(db, longProject.id);
+    expect(longMemories).toHaveLength(1);
+    expect(longMemories[0].content.length).toBe("Session summary (Long session): ".length + 400);
+  });
+
+  it("skips honestly: a projectless session or a disabled memory master switch writes NO memory row (the compaction itself still succeeds)", async () => {
+    // Projectless (the pre-R117 CLI world): compaction works, no memory write.
+    const projectless = newSession();
+    seedOverflowingSession(projectless);
+    const { chat } = fakeChat();
+    const outcome = await assembleWithCompaction(assembleHistory(db, projectless), TIGHT_BUDGET, { ...deps(chat), sessionId: projectless });
+    expect(outcome.compacted).toBe(true);
+
+    // Memory OFF: same — best-effort, never a compaction failure mode.
+    const project = createProject(db, { name: "Bridge Off", rootPath: join(dir, "bridge-off-root") });
+    setMemorySettings(db, { enabled: false });
+    const offSession = newProjectSession(project.id, "Off session");
+    seedOverflowingSession(offSession);
+    const offOutcome = await assembleWithCompaction(assembleHistory(db, offSession), TIGHT_BUDGET, { ...deps(chat), sessionId: offSession });
+    expect(offOutcome.compacted).toBe(true);
+
+    // Nothing landed anywhere (both scopes empty).
+    expect(listMemories(db, project.id)).toHaveLength(0);
+    expect(listWorkspaceMemories(db)).toHaveLength(0);
+  });
+
+  it("dedup: identical summary text (same session title) REFRESHES the row — re-compact does not duplicate; different text adds a second row", async () => {
+    const project = createProject(db, { name: "Bridge Dedup", rootPath: join(dir, "bridge-dedup-root") });
+    // Two sessions with the SAME title + the same canned summary → ONE row.
+    const sidA = newProjectSession(project.id, "Twin session");
+    seedOverflowingSession(sidA);
+    const { chat } = fakeChat();
+    await assembleWithCompaction(assembleHistory(db, sidA), TIGHT_BUDGET, { ...deps(chat), sessionId: sidA });
+    const sidB = newProjectSession(project.id, "Twin session");
+    seedOverflowingSession(sidB);
+    await assembleWithCompaction(assembleHistory(db, sidB), TIGHT_BUDGET, { ...deps(chat), sessionId: sidB });
+    expect(listMemories(db, project.id)).toHaveLength(1); // refreshed, not duplicated
+
+    // A re-compact of the SAME session producing DIFFERENT text (round-2
+    // folds the old summary) adds a second, distinct row.
+    const sidC = newProjectSession(project.id, "Round two session");
+    seedOverflowingSession(sidC);
+    const { chat: roundChat } = fakeChat("DIFFERENT: the round-two summary covers new ground.");
+    await assembleWithCompaction(assembleHistory(db, sidC), TIGHT_BUDGET, { ...deps(roundChat), sessionId: sidC });
+    // Overflow again → a NEW compaction over the (already compacted) log.
+    for (let i = 10; i < 16; i++) {
+      addMessage(sidC, "message.user", `later user message ${i} — ${"more context ".repeat(25)}`);
+      addMessage(sidC, "message.assistant", `later assistant message ${i} — ${"more work ".repeat(30)}`);
+    }
+    await assembleWithCompaction(assembleHistory(db, sidC), TIGHT_BUDGET, { ...deps(roundChat), sessionId: sidC });
+    const memories = listMemories(db, project.id);
+    expect(memories.length).toBe(2);
+    expect(memories.some((m) => m.content.includes("DIFFERENT: the round-two summary"))).toBe(true);
+    expect(memories.every((m) => m.source === "system")).toBe(true);
   });
 });

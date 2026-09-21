@@ -29,8 +29,10 @@
  *     quality upgrade, never a new failure mode.
  */
 import type Database from "better-sqlite3";
-import { appendSessionEvent, listSessionEvents, recordUsage, type SessionEvent } from "../storage/sessions.js";
+import { appendSessionEvent, getSession, listSessionEvents, recordUsage, type SessionEvent } from "../storage/sessions.js";
 import { lookupPricing } from "../storage/models.js";
+import { getMemorySettings } from "../storage/settings.js";
+import { saveMemoryWithDedup } from "../storage/memory.js";
 import { assembleWithinBudget, estimateMessageTokens, type ContextBudget } from "../context.js";
 import type { ChatFn, ChatTurnMessage } from "./chat.js";
 
@@ -56,6 +58,47 @@ export interface CompactionPayload {
  * readers that don't know the type skip it — the UI event filters only
  * render known types, so no frontend change is required). */
 export const COMPACTION_EVENT_TYPE = "context.compact";
+
+/** How much of a compact summary rides into the persisted memory row (the
+ * task's 400-char slice — a memory is a POINTER + a taste, not a second
+ * copy of the summary; the full summary stays in the session's own event
+ * log). */
+const MEMORY_SUMMARY_SLICE_CHARS = 400;
+
+/**
+ * ROUND-117 (R117-b): COMPACTION → MEMORY — the episodic bridge. When a
+ * compaction summarizes a session's head, the summary is ALSO persisted
+ * into the project's memory (kind 'note', source 'system', content
+ * "Session summary ({session title}): {first 400 chars}") so FUTURE
+ * sessions start knowing what past sessions did — this is the honest,
+ * deterministic auto-memory-formation step (no extra LLM call; the summary
+ * was already paid for). Dedup rides saveMemoryWithDedup: a re-compact
+ * producing identical summary text REFRESHES the existing row instead of
+ * inserting a twin. Best-effort by construction (every failure path is a
+ * no-op — a memory write can never fail the compaction itself). Skips
+ * honestly when the session has no bound project or the memory master
+ * switch is off (nothing to write to, nowhere to recall from).
+ */
+function persistCompactionSummaryToMemory(
+  db: Database.Database,
+  sessionId: string,
+  summary: string,
+): void {
+  try {
+    const session = getSession(db, sessionId);
+    if (session?.projectId === null || session === undefined) return;
+    if (!getMemorySettings(db).enabled) return;
+    const title = session.title ?? "Untitled session";
+    saveMemoryWithDedup(db, {
+      projectId: session.projectId,
+      kind: "note",
+      content: `Session summary (${title}): ${summary.slice(0, MEMORY_SUMMARY_SLICE_CHARS)}`,
+      source: "system",
+    });
+  } catch {
+    // Best-effort — never a compaction failure mode (the round-46 contract).
+  }
+}
 
 /** Find the newest context.compact payload in the event log (or null). A
  * malformed payload (empty summary / non-positive throughSeq) is treated as
@@ -299,6 +342,10 @@ export async function assembleWithCompaction(
     agentId: null,
     payload: { ...compact },
   });
+  // ROUND-117 (R117-b): the episodic bridge — the summary that just landed
+  // in the event log also lands in the project's MEMORY (see
+  // persistCompactionSummaryToMemory above).
+  persistCompactionSummaryToMemory(deps.db, deps.sessionId, summary);
 
   return { messages: finalMessages.map(({ role, content }) => ({ role, content })), compacted: true, detail: compact };
 }

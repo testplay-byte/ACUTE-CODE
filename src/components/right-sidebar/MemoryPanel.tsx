@@ -1,13 +1,17 @@
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { Brain, LoaderCircle, Pencil, Plus, RefreshCw, Trash2, Zap } from "lucide-react";
+import { Brain, Globe, LoaderCircle, Pencil, Plus, RefreshCw, Trash2, Zap } from "lucide-react";
 import {
   createProjectMemory,
+  createWorkspaceMemory,
   deleteProjectMemory,
+  deleteWorkspaceMemory,
   fetchMemorySettings,
   listProjectMemory,
+  listWorkspaceMemory,
   updateProjectMemory,
+  updateWorkspaceMemory,
   type CreateProjectMemoryInput,
   type ProjectMemory,
   type UpdateProjectMemoryPatch,
@@ -45,8 +49,23 @@ import { ClampedText } from "../shared/ClampedText";
  * server-side), so the kind picker IS the importance control. Saves while
  * the master switch is OFF are allowed (like deletes — the rows sit dormant
  * and rejoin the digest when re-enabled).
+ *
+ * ROUND-117 (R117-b): the SCOPE LADDER — a segmented switch (Workspace |
+ * This project) over the two memory tiers. The workspace tier (cross-project
+ * facts: the owner's identity/preferences/environment truths, curated via
+ * /memory/workspace) rides ABOVE the project tier in every main-session
+ * digest; the project tier is unchanged. CRUD works for BOTH scopes through
+ * the same form/row grammar — only the fetch/mutate functions switch.
  */
 const KIND_ORDER: ProjectMemory["kind"][] = ["fact", "decision", "preference", "note"];
+
+/** The two tiers the panel can browse (R117-b's segmented switch). */
+type MemoryScope = "workspace" | "project";
+
+const SCOPE_LABELS: Record<MemoryScope, string> = {
+  workspace: "Workspace",
+  project: "This project",
+};
 
 /** Kind chip colors — documented exceptions like SubAgentPanel's ROLE_COLORS:
  * they carry kind meaning across every theme/mode (fact = data blue,
@@ -65,14 +84,27 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
   const [deleteError, setDeleteError] = useState<string | null>(null);
   // R98-F1: the add-memory form's mount toggle (one form at the list's top).
   const [adding, setAdding] = useState(false);
+  // R117-b: the active tier — "project" (this panel's project) or
+  // "workspace" (the cross-project scope). Default stays the project tier
+  // (the pre-R117 view); switching resets the add form.
+  const [scope, setScope] = useState<MemoryScope>("project");
 
+  // R117-b: the listing keys/functions switch with the tier; the shape and
+  // the polling cadence stay identical (both tiers are the same REST
+  // grammar over different scopes).
+  const queryKey = scope === "project" ? ["project-memory", projectId] : ["workspace-memory"];
   const memoryQuery = useQuery({
-    queryKey: ["project-memory", projectId],
-    queryFn: () => listProjectMemory(projectId),
+    queryKey,
+    queryFn: () => (scope === "project" ? listProjectMemory(projectId) : listWorkspaceMemory()),
     staleTime: 2_000,
     refetchInterval: 5_000,
   });
   const memories = memoryQuery.data ?? [];
+  // R117-b: mutations invalidate ONLY the active tier's key (the scopes are
+  // separate rows — a workspace write can never change a project listing).
+  const invalidateScope = () => {
+    void queryClient.invalidateQueries({ queryKey });
+  };
 
   // ROUND-49: the memory master switch (Settings → Functionality, R98-I1's
   // rename of the advanced tab's label — the URL id stays "advanced"). While
@@ -94,8 +126,14 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
     setDeletingId(memoryId);
     setDeleteError(null);
     try {
-      await deleteProjectMemory(projectId, memoryId);
-      await queryClient.invalidateQueries({ queryKey: ["project-memory", projectId] });
+      // R117-b: the delete routes the ACTIVE tier (same row grammar, the
+      // workspace delete needs no project id).
+      if (scope === "project") {
+        await deleteProjectMemory(projectId, memoryId);
+      } else {
+        await deleteWorkspaceMemory(memoryId);
+      }
+      await invalidateScope();
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : "Delete failed");
     } finally {
@@ -104,17 +142,26 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
   };
 
   // R98-F1: the add form's save — the form owns its pending/error state (the
-  // row-level grammar below); the panel owns the invalidation.
+  // row-level grammar below); the panel owns the invalidation. R117-b: the
+  // save routes the ACTIVE tier.
   const doCreate = async (input: CreateProjectMemoryInput) => {
-    await createProjectMemory(projectId, input);
-    await queryClient.invalidateQueries({ queryKey: ["project-memory", projectId] });
+    if (scope === "project") {
+      await createProjectMemory(projectId, input);
+    } else {
+      await createWorkspaceMemory(input);
+    }
+    await invalidateScope();
   };
 
   // R98-F1: the per-row edit's save — same split (row owns state, panel owns
-  // the invalidation).
+  // the invalidation). R117-b: the patch routes the ACTIVE tier.
   const doUpdate = async (memoryId: string, patch: UpdateProjectMemoryPatch) => {
-    await updateProjectMemory(projectId, memoryId, patch);
-    await queryClient.invalidateQueries({ queryKey: ["project-memory", projectId] });
+    if (scope === "project") {
+      await updateProjectMemory(projectId, memoryId, patch);
+    } else {
+      await updateWorkspaceMemory(memoryId, patch);
+    }
+    await invalidateScope();
   };
 
   return (
@@ -125,8 +172,39 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
         style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle }}
       >
         <Brain size={13} style={{ color: styles.accent }} className="shrink-0" />
-        <div className="flex-1 min-w-0 truncate text-[12px] font-semibold" style={{ color: styles.text }}>
-          Project memory
+        {/* R117-b: the SCOPE SWITCH — the panel's two tiers. The segmented
+            control sits where the old "Project memory" title was (the
+            switch IS the title now); the quiet-pill grammar (10px mono,
+            subtle bg, the active side accented) is the session header's
+            status-chip family. */}
+        <div
+          className="flex-1 min-w-0 flex items-center gap-0.5 rounded-lg p-0.5"
+          style={{ background: withAlpha(styles.textTertiary, 0.08) }}
+          role="tablist"
+          aria-label="Memory scope"
+        >
+          {(Object.keys(SCOPE_LABELS) as MemoryScope[]).map((s) => (
+            <button
+              key={s}
+              role="tab"
+              aria-selected={scope === s}
+              data-testid={`memory-scope-${s}`}
+              onClick={() => {
+                if (scope === s) return;
+                setScope(s);
+                setAdding(false);
+                setDeleteError(null);
+              }}
+              className="h-5 px-1.5 rounded-md text-[10px] font-medium truncate transition-colors"
+              style={{
+                background: scope === s ? styles.card : "transparent",
+                color: scope === s ? styles.text : styles.textTertiary,
+              }}
+            >
+              {s === "workspace" ? <Globe size={9} className="inline mr-0.5 -mt-0.5" /> : null}
+              {SCOPE_LABELS[s]}
+            </button>
+          ))}
         </div>
         <span
           className="shrink-0 text-[10px] font-mono font-medium uppercase px-1.5 py-0.5 rounded-md"
@@ -192,7 +270,7 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
               style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.08), border: `1px solid ${withAlpha(SEMANTIC_COLORS.danger, 0.3)}` }}
             >
               <div className="flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
-                Couldn&apos;t load project memory
+                {scope === "project" ? "Couldn't load project memory" : "Couldn't load workspace memory"}
               </div>
               <div className="text-[11px]" style={{ color: styles.textSecondary }}>
                 {memoryQuery.error instanceof Error ? memoryQuery.error.message : "The sidecar didn't answer."}
@@ -218,10 +296,12 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
                 <Brain size={18} />
               </div>
               <div className="text-[12px] font-medium" style={{ color: styles.textSecondary }}>
-                No memories yet
+                {scope === "project" ? "No memories yet" : "No workspace memories yet"}
               </div>
               <div className="text-[11px] mt-1.5 leading-[1.55]" style={{ color: styles.textTertiary }}>
-                The agent saves durable project knowledge here via memory_save — facts, decisions, preferences.
+                {scope === "project"
+                  ? "The agent saves durable project knowledge here via memory_save — facts, decisions, preferences."
+                  : "Cross-project facts — your identity, preferences, and environment truths. Agents see them in every project's memory digest."}
               </div>
             </div>
           </div>
@@ -274,13 +354,17 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
         )}
       </div>
 
-      {/* ── Footer hint: why this panel matters ── */}
+      {/* ── Footer hint: why this panel matters (scope-honest since R117-b) ── */}
       <div
         className="shrink-0 flex items-center gap-1.5 px-3 h-7 border-t text-[10px]"
         style={{ borderColor: styles.border, color: styles.textTertiary, background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle }}
       >
         <Zap size={10} style={{ color: styles.accent }} className="shrink-0" />
-        <span className="truncate">Auto-loaded into every agent turn</span>
+        <span className="truncate">
+          {scope === "project"
+            ? "Auto-loaded into every agent turn"
+            : "Injected into every project's agent turns"}
+        </span>
       </div>
     </div>
   );

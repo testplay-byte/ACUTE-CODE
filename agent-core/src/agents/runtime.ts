@@ -7,6 +7,7 @@
  * message.assistant (with per-reply usage+ms stats) → usage_events row.
  */
 import type {
+  MemoryPolicy,
   MessageAttachment,
   ModelReasoningSupport,
   PermissionMode,
@@ -45,6 +46,10 @@ import {
   listSessionEvents,
   listUndeliveredQueuedMessages,
   maybeAutoTitleSession,
+  // ROUND-117 (R117-b): the memory-policy 'on-start' first-turn probe + the
+  // turn-end "memories saved this session" counter.
+  sessionHasUserTurn,
+  countSessionMemorySaves,
   recordUsage,
   setSessionStatus,
   touchSession,
@@ -91,7 +96,7 @@ import { getIndexSummary } from "../storage/index.js";
 // fire-and-forget background refresh for the codebase symbol index.
 import { maybeAutoIndexProject } from "../storage/auto-index.js";
 // ROUND-44 (R44-a): the project memory digest for prompt injection.
-import { memoryDigest } from "../storage/memory.js";
+import { memoryDigest, workspaceMemoryDigest } from "../storage/memory.js";
 // R105-C: the provider lessons write (rate-limit reason telemetry).
 import { recordProviderLesson } from "../storage/provider-lessons.js";
 // ROUND-49: the memory master switch (Settings → Advanced).
@@ -1031,6 +1036,50 @@ export function persistTurnError(
   return event.ts;
 }
 
+/**
+ * ROUND-117 (R117-b) — the turn-end MEMORY CAPTURE step. The root fix for
+ * "memory formation is voluntary": the honest, deterministic version of
+ * auto-capture, run in the same terminal path that persists the turn's
+ * success (usage row + status reset + auto-title). It makes NO LLM call and
+ * invents nothing:
+ *
+ *   · The DURABLE writers are elsewhere and event-driven — compaction
+ *     summaries persist into project memory at compaction time
+ *     (agents/compaction.ts, the episodic bridge) and the model's own
+ *     memory_save calls need no help.
+ *   · There is NO session-close event in the event vocabulary (sessions rest
+ *     at `queued`, open for the next message) — so the "session digest line
+ *     when a session with ≥N tool calls ends" is deliberately NOT persisted:
+ *     no hook exists to hang it on, and a fabricated one is not honest.
+ *     Compaction is the session-summary channel that actually exists.
+ *   · What THIS step owns is the honesty counter: how many memories the
+ *     session has produced so far (successful memory_save tool calls +
+ *     compaction-summary rows), appended as a `memory.saved` event
+ *     {saved, agentSaved, systemSaved} — a future UI wave renders
+ *     "memories saved this session"; unknown event types are skipped by
+ *     every existing reader (the context.compact precedent), so no UI change
+ *     rides this wave.
+ *
+ * Gated like the digest: a bound project + the master switch + the agent's
+ * policy != 'none'. Zero saves → no event (a zero-count row is noise).
+ */
+function captureTurnEndMemory(
+  db: SqliteDatabase,
+  args: { sessionId: string; agentId: string; projectId: string | null; memoryPolicy: MemoryPolicy },
+): void {
+  if (args.projectId === null) return;
+  if (args.memoryPolicy === "none") return;
+  if (!getMemorySettings(db).enabled) return;
+  const { agentSaved, systemSaved } = countSessionMemorySaves(db, args.sessionId);
+  const saved = agentSaved + systemSaved;
+  if (saved === 0) return;
+  appendSessionEvent(db, args.sessionId, {
+    type: "memory.saved",
+    agentId: args.agentId,
+    payload: { saved, agentSaved, systemSaved },
+  });
+}
+
 /** Everything a turn needs after validation (shared by sync + streamed). */
 interface PreparedTurn {
   session: NonNullable<ReturnType<typeof getSession>>;
@@ -1454,6 +1503,27 @@ async function prepareTurn(
   // when the memory master switch (Settings → Advanced) is on.
   const isChild = session.parentSessionId !== null;
   const memoryEnabled = getMemorySettings(db).enabled;
+  // ROUND-117 (R117-b): the dead flag comes ALIVE — agents.memory_policy
+  // now governs digest injection (and the memory_* tool registration — the
+  // policy rides toolDeps below; the memory plugin drops its whole family
+  // on 'none', the honest tool-drop exactly like the master switch):
+  //   · 'none'       → no digest, no memory tools, for that agent's sessions;
+  //   · 'on-start'   → the digest flows ONLY on the session's FIRST turn
+  //                    (sessionHasUserTurn: both turn runners append the
+  //                    turn's message.user event AFTER prepareTurn, so "no
+  //                    prior user event" IS "this is the first turn" — no
+  //                    extra session flag needed);
+  //   · 'every-turn' → every turn (the pre-R117 behavior, the CREATE default).
+  // The policy can only NARROW the master switch's on-state; a disabled
+  // memory system stays fully dark regardless of policy.
+  const memoryPolicy: MemoryPolicy = agent.memoryPolicy;
+  const memoryDigestOn =
+    memoryEnabled &&
+    !isChild &&
+    session.projectId !== null &&
+    memoryPolicy !== "none" &&
+    (memoryPolicy === "every-turn" ||
+      (memoryPolicy === "on-start" && !sessionHasUserTurn(db, session.id)));
   // ROUND-50 (R50-c1): the depth feeds the shared sessionToolAllowList
   // helper below (children at/beyond the delegation cap lose delegate_task).
   const depth = delegationDepth(db, session.id);
@@ -1510,6 +1580,10 @@ async function prepareTurn(
     // ROUND-49: the memory master switch rides the deps so buildProjectTools
     // can drop the memory_* tools entirely when the system is off.
     memoryEnabled,
+    // ROUND-117 (R117-b): the agent's memory policy rides the deps so the
+    // memory plugin can drop the whole family on 'none' (the honest
+    // tool-drop — see the memoryDigestOn block above for the digest half).
+    memoryPolicy,
     // ROUND-50 (R50-c1): the permission mode rides the deps so the approval
     // gates can widen ("full" auto-approves ask-tier decisions; the
     // denylist-supreme refusals stay hard in every mode — approvals.ts).
@@ -1667,16 +1741,30 @@ async function prepareTurn(
         // has been indexed) so the agent has codebase awareness without
         // needing list_dir + read_file every turn.
         indexSummary: session.projectId !== null ? getIndexSummary(db, session.projectId) ?? undefined : undefined,
-        // ROUND-44 (R44-a) → ROUND-49: inject the newest project memories so
-        // the agent starts every turn knowing the project's durable
-        // knowledge — but ONLY in MAIN sessions while the memory master
-        // switch is on. Sub-agent children run with independent context (no
-        // digest), and a disabled memory system injects nothing anywhere.
-        // Empty digest (no memories yet) → undefined → no prompt section.
+        // ROUND-44 (R44-a) → ROUND-49 → ROUND-117 (R117-b): inject the newest
+        // project memories so the agent starts its turn knowing the project's
+        // durable knowledge — but ONLY in MAIN sessions while the memory
+        // master switch is on AND the agent's memory_policy allows THIS turn
+        // (memoryDigestOn above: 'none' never, 'on-start' first turn only,
+        // 'every-turn' always). Sub-agent children run with independent
+        // context (no digest), and a disabled memory system injects nothing
+        // anywhere. The digest strings flow even when EMPTY ("" — no saved
+        // memories): prompts.ts then renders the honest "No memories saved
+        // yet" line so the model KNOWS the memory surface exists; the
+        // undefined cases above (gates closed) compose no section at all.
+        // The digest budget scales with richness (memory.ts digestBudget:
+        // 1,500 chars at ≤30 rows, 3,000 beyond).
         memoryDigest:
-          memoryEnabled && !isChild && session.projectId !== null
-            ? memoryDigest(db, session.projectId) || undefined
+          memoryDigestOn && session.projectId !== null
+            ? memoryDigest(db, session.projectId)
             : undefined,
+        // ROUND-117 (R117-b): the WORKSPACE digest — the cross-project tier
+        // (the owner's identity/preferences/environment truths, curated via
+        // REST). Composes ABOVE the project digest under the SAME gates
+        // (prompts.ts renders "## Workspace memory" over "## Project
+        // memory"); "" when the tier is empty (the honest-empty line still
+        // renders when BOTH tiers are empty).
+        memoryWorkspaceDigest: memoryDigestOn ? workspaceMemoryDigest(db) : undefined,
         // ROUND-50 (R50-c1): narrate the active permission mode (full/plan/
         // editor; "ask" stays silent — the default posture is already
         // narrated by the TERMINAL/WEB ACCESS sections). The toolNames list
@@ -3064,6 +3152,14 @@ export async function runSingleAgentTurn(
   // (owner: sessions should rename after the first interaction, like the
   // reference repos). No-op once the title is no longer the default.
   maybeAutoTitleSession(db, session.id);
+  // ROUND-117 (R117-b): the turn-end memory capture step (same terminal
+  // path as the usage row + status reset above — see captureTurnEndMemory).
+  captureTurnEndMemory(db, {
+    sessionId: session.id,
+    agentId: agent.id,
+    projectId: session.projectId,
+    memoryPolicy: agent.memoryPolicy,
+  });
   logTurnEnd(session.id, true, Date.now() - syncStartedAt, totalInputTokens, totalOutputTokens);
 
   return {
@@ -4712,6 +4808,14 @@ export async function runStreamedAgentTurn(
   // rule as the sync path — owner directive: sessions rename after the
   // first interaction).
   maybeAutoTitleSession(db, session.id);
+  // ROUND-117 (R117-b): the turn-end memory capture step (the streamed
+  // twin's terminal path — same step as the sync runner above).
+  captureTurnEndMemory(db, {
+    sessionId: session.id,
+    agentId: agent.id,
+    projectId: session.projectId,
+    memoryPolicy: agent.memoryPolicy,
+  });
   logTurnEnd(session.id, true, ms, totalInputTokens, totalOutputTokens);
 
   return {

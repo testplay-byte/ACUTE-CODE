@@ -158,18 +158,21 @@ describe("ROUND-52 (R52-f): the plugin registry", () => {
     const names = Object.keys(all);
     // ROUND-98 (R98-F3): the 22 base tools + search_symbols (the symbol-index
     // query leg — the search plugin's fourth tool, always registered like
-    // index_project; deps gate at EXECUTE time) = 23. delegate_task still
+    // index_project; deps gate at EXECUTE time) = 23 — and ROUND-117
+    // (R117-b): + session_recall (the memory plugin's episodic fourth tool,
+    // always registered like its siblings) = 24. delegate_task still
     // needs deps (absent here).
-    expect(names.length).toBe(23);
+    expect(names.length).toBe(24);
     expect(names).toContain("run_command");
     expect(names).toContain("job_status");
     expect(names).toContain("search_symbols");
+    expect(names).toContain("session_recall");
 
     const two = await buildProjectTools(tempDir, ["read_file", "job_stop"]);
     expect(Object.keys(two).sort()).toEqual(["job_stop", "read_file"]);
 
     const empty = await buildProjectTools(tempDir, []);
-    expect(Object.keys(empty).length).toBe(23);
+    expect(Object.keys(empty).length).toBe(24);
 
     const none = await buildProjectTools(tempDir, ["__none__"]);
     expect(Object.keys(none)).toHaveLength(0);

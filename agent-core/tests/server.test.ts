@@ -236,7 +236,9 @@ describe("agents CRUD", () => {
       model: null,
       visionModel: null,
       allowedTools: [],
-      memoryPolicy: "none",
+      // R117-b: the CREATE default flipped from the never-real 'none' to
+      // 'every-turn' (the behavior every agent had while the flag was dead).
+      memoryPolicy: "every-turn",
       skills: [],
       maxTurns: 80,
       maxOuterLoops: 5,

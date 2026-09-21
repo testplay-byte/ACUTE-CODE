@@ -285,46 +285,55 @@ Response `204`. Errors: `404` · `409 CONFLICT` (referenced by a running session
 
 Request: `{"name": "Coder (fast)"}` (optional override; default `"<name> (copy)"`). Response `201` → new agent (`isTemplate: false`, `version: 1`). Errors: `404`.
 
-### 4.7 Memory notes (F8) — user-editable, markdown on disk + SQLite index
+### 4.7 Memory (F8) — the REAL surface (R117-b) + the roadmap
 
-Memory notes are bounded markdown files on disk (`%APPDATA%\acute-code\memories\<agentId>\MEMORY.md` / `USER.md`) — the **source of truth** — mirrored into the `memory_entries` SQLite + FTS5 index (ARCHITECTURE §3.3, §5.1). Each agent has one `memory` note and one `user` note in v1, with stable ids (`mem_…`).
+**Status correction (R117-b):** the Hermes-style per-agent markdown notes below
+(§4.8–§4.11 as originally drafted — `MEMORY.md`/`USER.md` on disk, `memory_entries` +
+FTS5, `/agents/{id}/memory` endpoints) were **never implemented**. They remain the
+documented ROADMAP for a future per-agent tier; no code exists for them today
+(the R117 memory audit proved zero consumers).
 
-**Permission carve-out:** these are *user-initiated* edits — they **bypass the approval modal but are always audit-logged** (`category: "memory"`, `decision: "approved"`, `reason: "user-initiated"`; §7.3). Agent-initiated memory writes during a session still pass the approval gate (ARCHITECTURE §3.3 `memory/`). An edit updates the index synchronously but never mutates a running session's frozen memory snapshot — it takes effect next session.
+**What exists (since R117-b):** the `memory` table with TWO scopes —
 
-### 4.8 `GET /agents/{id}/memory`
+- **Project memory**: rows scoped to a project (`GET/POST/PUT/DELETE
+  /projects/{id}/memory`), the agent-facing `memory_save` / `memory_recall` /
+  `memory_list` tools, and the per-turn digest (## Project memory).
+- **Workspace memory**: rows scoped to no project (`scope='workspace'`,
+  `project_id NULL`) — cross-project truths about the owner/environment — via the
+  `GET/POST/PUT/DELETE /memory/workspace` family (R117-b), its own digest
+  (## Workspace memory), composed ABOVE the project digest for main-session turns.
+- **`agents.memoryPolicy`** (`"none" | "on-start" | "every-turn"`, default
+  `every-turn`) is LIVE since R117-b: `none` drops the digest AND the memory tool
+  family for that agent's sessions; `on-start` injects the digest on the session's
+  first turn only.
+- **Automatic formation (R117-b):** compaction summaries are persisted into project
+  memory (`kind='note'`, `source='system'`, deduped) — the episodic bridge; the
+  turn-end `memory.saved` event counts new memories.
+- **`session_recall`** (R117-b): the episodic tool — model-facing search over past
+  sessions of the project (titles + event payloads).
+- CLI sessions bind to a project when the cwd matches a registered project root
+  (or `--project <path>` explicitly); memory works on the CLI surface from R117-b.
 
-Response `200`:
+The full implemented wire detail lives in `IMPLEMENTED-API.md` (the R117 additions
+section). The markdown-note tier below stays as the roadmap shape.
 
-```json
-{ "notes": [
-  { "id": "mem_m1", "kind": "memory",
-    "path": "C:\\Users\\…\\acute-code\\memories\\agt_c1\\MEMORY.md",
-    "chars": 2140, "updatedAt": "…" },
-  { "id": "mem_u1", "kind": "user",
-    "path": "C:\\Users\\…\\acute-code\\memories\\agt_c1\\USER.md",
-    "chars": 980, "updatedAt": "…" }
-] }
-```
+### 4.8 ROADMAP: `GET /agents/{id}/memory` (per-agent markdown notes)
 
-Errors: `404`.
+Not implemented. Planned shape: one `MEMORY.md` + one `USER.md` per agent under
+`%APPDATA%/acute-code/memories/<agentId>/`, mirrored into SQLite + FTS5.
 
-### 4.9 `GET /agents/{id}/memory/{noteId}`
+### 4.9 ROADMAP: `GET /agents/{id}/memory/{noteId}`
 
-Response `200` → note object **plus** `"markdown": "<full file text>"`. Errors: `404` (agent or note).
+Not implemented (see §4.8).
 
-### 4.10 `PUT /agents/{id}/memory/{noteId}` — create/update (upsert)
+### 4.10 ROADMAP: `PUT /agents/{id}/memory/{noteId}` — create/update (upsert)
 
-Request:
+Not implemented (see §4.8). `memoryPolicy` itself IS live (§4.7); the per-note char
+budgets (`memory.memoryCharLimit` / `memory.userCharLimit`) are not.
 
-```json
-{ "markdown": "# Coder memory\n- prefers vitest, minimal diffs…" }
-```
+### 4.11 ROADMAP: `DELETE /agents/{id}/memory/{noteId}`
 
-`memoryPolicy` is the canonical `@acute/shared` string union `"none" | "on-start" | "every-turn"`. Char budgets come from Settings (§10.1), not per-agent policy: `memory` notes ≤ `memory.memoryCharLimit`, `user` notes ≤ `memory.userCharLimit`. Response `200` → note object (audit-logged per §4.7). Errors: `400 VALIDATION` · `404` (agent) · `422 VALIDATION` (`markdown` exceeds the note's budget).
-
-### 4.11 `DELETE /agents/{id}/memory/{noteId}`
-
-Removes the file and its `memory_entries` row. Response `204`. Errors: `404`. Same carve-out as §4.10 (no modal, audit-logged).
+Not implemented (see §4.8).
 
 ---
 

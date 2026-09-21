@@ -37,6 +37,11 @@ import {
   writePromptOverride,
 } from "../storage/prompt-overrides.js";
 import { resolveEffectiveSkills } from "../storage/skills-files.js";
+// ROUND-117 (R117-b): the real memory digests for the representative ctx —
+// the Prompts tab's preview stops reporting the project-memory section as
+// "absent" for memory-rich projects.
+import { memoryDigest, workspaceMemoryDigest } from "../storage/memory.js";
+import { getMemorySettings } from "../storage/settings.js";
 
 /** Resolve a registered project by its root path — the write-side guard. */
 function projectByRoot(db: SqliteDatabase, rootPath: string): Project | undefined {
@@ -47,18 +52,35 @@ function projectByRoot(db: SqliteDatabase, rootPath: string): Project | undefine
  * The REPRESENTATIVE composition ctx for inspection routes — the CLI's
  * `prompt:sections` shape (scripts/acute.mjs representativeCtx): the FULL
  * default tool set (every tool-gated section present), the project's real
- * custom rules, no permission-mode/memory digest (those report absent, as
- * they would in an unconfigured session) — PLUS the project's EFFECTIVE
+ * custom rules, no permission-mode narration (that reports absent, as it
+ * would in an unconfigured session) — PLUS the project's EFFECTIVE
  * skills, so the SKILLS and ALWAYS-ON SKILLS sections preview truthfully
- * (the pinned bodies included — that is the preview's whole point). A real
- * session with a narrower allowlist composes fewer sections; the UI says so.
+ * (the pinned bodies included — that is the preview's whole point), AND —
+ * since ROUND-117 (R117-b) — the project's REAL memory digests (project +
+ * workspace), so the PROJECT MEMORY section previews the live truth
+ * instead of reporting "absent" for memory-rich projects. The digests ride
+ * the master switch (a disabled memory system composes none anywhere);
+ * the empty-memory case renders the honest "No memories saved yet" line —
+ * exactly what a gated-on session's model would see. A real session with a
+ * narrower allowlist composes fewer sections; the UI says so.
  */
 function representativePromptCtx(db: SqliteDatabase, project: Project): PromptContext {
+  // R117-b: the REAL memory digests (project + workspace) — the preview's
+  // project-memory section stops saying "absent". Gated on the master
+  // switch, exactly like prepareTurn's injection (a 'none'-policy or
+  // off-switch install previews what it actually composes: nothing).
+  const memoryOn = getMemorySettings(db).enabled;
   return {
     projectName: project.name || basename(project.rootPath),
     rootPath: project.rootPath,
     toolNames: [...TOOL_NAMES],
     customRules: readCustomRules(project.rootPath),
+    ...(memoryOn
+      ? {
+          memoryDigest: memoryDigest(db, project.id),
+          memoryWorkspaceDigest: workspaceMemoryDigest(db),
+        }
+      : {}),
     skills: resolveEffectiveSkills(db, {
       projectRoot: project.rootPath,
       projectScope: project.id,

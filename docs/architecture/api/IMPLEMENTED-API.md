@@ -2761,3 +2761,63 @@ the session row. Consumers: the phone's `applySessionMetaPatch`
 lists reads mode/model) and the desktop's immediate
 `["session"]+["sessions"]` invalidation (no debounce — a preference
 patch is one tiny row write).
+
+## ROUND-117 additions (the memory round — R117-b)
+
+### The memory scopes (migration 0042)
+
+The `memory` table is rebuilt with a `scope` column
+(`CHECK (scope IN ('project','workspace'))`, default `'project'` — every
+legacy row carries over as project memory) and a nullable `project_id`
+(workspace rows carry `NULL`). Indexes: the legacy
+`(project_id, updated_at DESC)` plus a partial workspace
+`(updated_at DESC) WHERE scope='workspace'`. Template/default agent
+allowlists that already carried `memory_recall` gain `session_recall`
+(curation-respecting — user agents are never widened).
+
+### The workspace memory REST family
+
+`GET /memory/workspace` (cap 100, newest-first) · `POST /memory/workspace`
+(`{content, kind?}`, dedup-aware — mirrors the project POST) ·
+`PUT /memory/workspace/:memoryId` · `DELETE /memory/workspace/:memoryId`.
+Bearer-wall + validation envelope identical to the project family. The
+Memory panel renders both tiers behind a segmented switch.
+
+### The composed digest + the policy
+
+Main-session turns now compose **two labeled sections** when both scopes
+have rows: `## Workspace memory` (cross-project truths) above
+`## Project memory`. `agents.memory_policy` is LIVE: `none` → no digest
+AND the memory tool family is dropped for that agent's sessions;
+`on-start` → the digest rides the session's FIRST turn only;
+`every-turn` (default) → every turn. The master `memory.enabled` switch
+still governs absolutely (policy can only narrow ON). The digest budget
+steps with content richness (1,500 chars; 3,000 when >30 rows) and a
+zero-memory project renders the honest "No memories saved yet" line.
+
+### session_recall (the episodic tool)
+
+`session_recall {query, limit?}` — model-facing search over PAST
+sessions of the session's project (`searchSessions` LIKE over titles +
+event payloads), returning id + title + last-activity + a 200-char
+snippet. Projectless sessions get the honest no-project refusal.
+Registered in the memory family; rides the same allowlist curation.
+
+### Automatic formation
+
+Compaction runs persist their summary into project memory (`kind=note`,
+`source=system`, deduped — the episodic bridge: future sessions start
+knowing what past sessions did). A turn-end `memory.saved` event counts
+new memories of either source. The Prompts-tab preview now passes a
+real digest (no more "absent" for memory-rich projects) and warns when
+a `project-memory` section override is active (an override replaces the
+live injection).
+
+### CLI project binding
+
+CLI session creation resolves the project: `--project <path>` (exact
+root match; a miss stays projectless with an honest stderr note) or the
+cwd match against registered roots (exactly ONE match binds; zero or
+many stay projectless). The projects list is advisory — any fetch
+failure degrades to projectless. Memory + session_recall work on the
+CLI surface from R117-b.

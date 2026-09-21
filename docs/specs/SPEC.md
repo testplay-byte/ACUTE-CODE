@@ -84,7 +84,7 @@ Live per-session and historical: tokens (input/output), estimated cost, request 
 
 ### F8 — Sessions, history, memory & skills
 - Full per-session, per-agent transcripts; session history browsable.
-- Persistent per-agent memory: markdown memory notes on disk + indexed in SQLite, user-editable, injected into context per the agent's memory policy (Hermes-inspired).
+- Persistent memory, TWO live scopes (R117-b): PROJECT memory (per-project facts/decisions/preferences, `memory_save`/`memory_recall`/`memory_list` + the per-turn digest) and WORKSPACE memory (cross-project truths via `/memory/workspace`), injected per the agent's `memory_policy` (none/on-start/every-turn); compaction summaries auto-persist as project memory; `session_recall` searches past sessions. (The Hermes-style per-agent markdown notes originally drafted here remain ROADMAP — see API.md §4.8-4.11.)
 - **Skills (basic, in v1 per owner decision):** a skill is a folder with a `SKILL.md` (instructions, optionally frontmatter metadata) plus optional scripts/resources. Skills live in global and per-project locations, are user-editable, and are enabled per agent; enabled skills are injected into that agent's context per its policy. No marketplace, no sync — files on disk only.
 
 ### F9 — UI screens

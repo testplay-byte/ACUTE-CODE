@@ -18,6 +18,17 @@
  *     note) × recency decay instead of pure newest-first.
  *   - save: exact-duplicate content (case-insensitive) bumps updated_at
  *     instead of inserting a twin row.
+ *
+ * ROUND-117 (R117-b): the SCOPE tier. The table gains `scope`
+ * ('project' | 'workspace', migration 0042; workspace rows carry
+ * project_id NULL) — the workspace tier holds CROSS-PROJECT facts (the
+ * owner's identity/preferences/environment truths) written through the REST
+ * surface (GET/POST/PUT/DELETE /memory/workspace) and injected into every
+ * main-session prompt ABOVE the project digest (agents/prompts.ts composes
+ * the two labeled blocks). Every save/list/search/digest entry point takes
+ * a scope: the PROJECT spellings keep their pre-R117 signatures verbatim
+ * (callers unchanged), the WORKSPACE spellings are new siblings, and the
+ * shared core is keyed by MemoryScopeRef.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -29,13 +40,26 @@ export type MemoryKind = "fact" | "decision" | "preference" | "note";
 
 export const MEMORY_KINDS: readonly MemoryKind[] = ["fact", "decision", "preference", "note"];
 
+/** ROUND-117 (R117-b): which tier a memory belongs to (mirrors the 0042
+ * CHECK constraint). 'project' = scoped to one project's root; 'workspace'
+ * = the cross-project tier (project_id NULL). */
+export type MemoryScope = "project" | "workspace";
+
+/** The scope discriminator every storage entry point resolves to: a project
+ * reference (id required) or the single global workspace tier. */
+export type MemoryScopeRef =
+  | { scope: "project"; projectId: string }
+  | { scope: "workspace" };
+
 /** Hard cap on a single memory's content (kept well under prompt budgets). */
 export const MAX_MEMORY_CONTENT_CHARS = 4_000;
 
-/** Memory row as served by the API. */
+/** Memory row as served by the API. `projectId` is NULL on workspace rows
+ * (migration 0042 made the column nullable for exactly that case). */
 export interface MemoryItem {
   id: string;
-  projectId: string;
+  projectId: string | null;
+  scope: MemoryScope;
   kind: MemoryKind;
   content: string;
   source: string;
@@ -44,7 +68,12 @@ export interface MemoryItem {
 }
 
 export interface MemoryInput {
-  projectId: string;
+  /** Owning project id — REQUIRED for project scope, ignored (stored NULL)
+   * for workspace scope. */
+  projectId: string | null;
+  /** ROUND-117 (R117-b): the tier this row belongs to (default 'project' —
+   * the pre-R117 behavior). */
+  scope?: MemoryScope;
   kind?: string;
   content: string;
   /** Who saved it ('agent' for tool calls; the API layer can pass others). */
@@ -53,7 +82,8 @@ export interface MemoryInput {
 
 interface MemoryRow {
   id: string;
-  project_id: string;
+  project_id: string | null;
+  scope: MemoryScope;
   kind: MemoryKind;
   content: string;
   source: string;
@@ -65,12 +95,30 @@ function toMemory(row: MemoryRow): MemoryItem {
   return {
     id: row.id,
     projectId: row.project_id,
+    scope: row.scope,
     kind: row.kind,
     content: row.content,
     source: row.source,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/** Normalize a MemoryInput into the scope ref + the stored project_id
+ * (NULL for workspace rows — the scope owns the truth, a stray projectId
+ * on a workspace save is ignored rather than honored). */
+function resolveScope(input: MemoryInput): { ref: MemoryScopeRef; projectId: string | null } {
+  if (input.scope === "workspace") return { ref: { scope: "workspace" }, projectId: null };
+  const projectId = typeof input.projectId === "string" ? input.projectId.trim() : "";
+  return { ref: { scope: "project", projectId }, projectId };
+}
+
+/** WHERE fragment + bind params for one scope ref (the shared core's only
+ * scope-aware piece — every query below composes it). */
+function scopeFilter(ref: MemoryScopeRef): { where: string; params: unknown[] } {
+  return ref.scope === "workspace"
+    ? { where: "scope = 'workspace'", params: [] }
+    : { where: "scope = 'project' AND project_id = ?", params: [ref.projectId] };
 }
 
 /* ── ROUND-46 (memory v2): scoring primitives ───────────────────────────── */
@@ -121,14 +169,19 @@ interface ScoredMemory {
   score: number;
 }
 
-/** Fetch up to `cap` rows of one project (with rowid for stable tie-breaks). */
-function fetchProjectMemories(db: SqliteDatabase, projectId: string, cap: number): Array<MemoryRow & { rowid: number }> {
+/** Fetch up to `cap` rows of one scope (with rowid for stable tie-breaks). */
+function fetchScopeMemories(
+  db: SqliteDatabase,
+  ref: MemoryScopeRef,
+  cap: number,
+): Array<MemoryRow & { rowid: number }> {
+  const filter = scopeFilter(ref);
   return db
     .prepare(
-      `SELECT rowid, * FROM memory WHERE project_id = ?
+      `SELECT rowid, * FROM memory WHERE ${filter.where}
        ORDER BY updated_at DESC, rowid DESC LIMIT ?`,
     )
-    .all(projectId, cap) as Array<MemoryRow & { rowid: number }>;
+    .all(...filter.params, cap) as Array<MemoryRow & { rowid: number }>;
 }
 
 /**
@@ -168,13 +221,15 @@ function parseKind(kind: string | undefined): MemoryKind {
 }
 
 /**
- * Insert one memory row — ROUND-46 v2: exact-duplicate content (same project,
+ * Insert one memory row — ROUND-46 v2: exact-duplicate content (same scope,
  * case-insensitive trimmed match) BUMPS the existing row's updated_at (and
  * refreshes kind/source) instead of inserting a twin; agents re-saving the
- * same convention no longer pollute recall results. Throws on validation
- * failure (unknown kind, empty content after trimming, content over
- * MAX_MEMORY_CONTENT_CHARS) — callers translate into their own error surface
- * (tools: ok:false; routes: 4xx).
+ * same convention no longer pollute recall results. ROUND-117 (R117-b): the
+ * dedup key is the SCOPE — a project row and a workspace row with identical
+ * content are two different memories. Throws on validation failure (unknown
+ * kind, empty content after trimming, content over MAX_MEMORY_CONTENT_CHARS,
+ * project scope without a projectId) — callers translate into their own
+ * error surface (tools: ok:false; routes: 4xx).
  */
 export interface SaveMemoryResult {
   item: MemoryItem;
@@ -183,8 +238,10 @@ export interface SaveMemoryResult {
 }
 
 export function saveMemoryWithDedup(db: SqliteDatabase, input: MemoryInput): SaveMemoryResult {
-  const projectId = input.projectId.trim();
-  if (projectId === "") throw new Error("memory requires a non-empty projectId");
+  const { ref, projectId } = resolveScope(input);
+  if (ref.scope === "project" && (typeof projectId !== "string" || projectId === "")) {
+    throw new Error("memory requires a non-empty projectId");
+  }
   const kind = parseKind(input.kind);
   const content = input.content.trim();
   if (content === "") throw new Error("memory content must be a non-empty string");
@@ -196,11 +253,12 @@ export function saveMemoryWithDedup(db: SqliteDatabase, input: MemoryInput): Sav
   const source = (input.source ?? "agent").trim() || "agent";
   const now = new Date().toISOString();
 
+  const filter = scopeFilter(ref);
   const existing = db
     .prepare(
-      "SELECT rowid, * FROM memory WHERE project_id = ? AND LOWER(content) = LOWER(?) LIMIT 1",
+      `SELECT rowid, * FROM memory WHERE ${filter.where} AND LOWER(content) = LOWER(?) LIMIT 1`,
     )
-    .get(projectId, content) as (MemoryRow & { rowid: number }) | undefined;
+    .get(...filter.params, content) as (MemoryRow & { rowid: number }) | undefined;
   if (existing) {
     db.prepare("UPDATE memory SET kind = ?, source = ?, updated_at = ? WHERE rowid = ?").run(
       kind,
@@ -217,6 +275,7 @@ export function saveMemoryWithDedup(db: SqliteDatabase, input: MemoryInput): Sav
   const memory: MemoryItem = {
     id: `mem_${randomUUID()}`,
     projectId,
+    scope: ref.scope,
     kind,
     content,
     source,
@@ -224,8 +283,8 @@ export function saveMemoryWithDedup(db: SqliteDatabase, input: MemoryInput): Sav
     updatedAt: now,
   };
   db.prepare(
-    `INSERT INTO memory (id, project_id, kind, content, source, created_at, updated_at)
-     VALUES (@id, @projectId, @kind, @content, @source, @createdAt, @updatedAt)`,
+    `INSERT INTO memory (id, project_id, scope, kind, content, source, created_at, updated_at)
+     VALUES (@id, @projectId, @scope, @kind, @content, @source, @createdAt, @updatedAt)`,
   ).run(memory);
   return { item: memory, deduplicated: false };
 }
@@ -239,21 +298,32 @@ export function saveMemory(db: SqliteDatabase, input: MemoryInput): MemoryItem {
  * same-millisecond ties in INSERTION order (agents can save several memories
  * in one burst) — id DESC would tie-break randomly on uuids. */
 export function listMemories(db: SqliteDatabase, projectId: string, limit = 100): MemoryItem[] {
+  return listScopeMemories(db, { scope: "project", projectId }, limit);
+}
+
+/** ROUND-117 (R117-b): newest-first listing of the WORKSPACE tier (the
+ * cross-project facts the owner curates via REST). */
+export function listWorkspaceMemories(db: SqliteDatabase, limit = 100): MemoryItem[] {
+  return listScopeMemories(db, { scope: "workspace" }, limit);
+}
+
+function listScopeMemories(db: SqliteDatabase, ref: MemoryScopeRef, limit: number): MemoryItem[] {
+  const filter = scopeFilter(ref);
   const rows = db
     .prepare(
-      `SELECT * FROM memory WHERE project_id = ?
+      `SELECT * FROM memory WHERE ${filter.where}
        ORDER BY updated_at DESC, rowid DESC LIMIT ?`,
     )
-    .all(projectId, Math.max(1, Math.min(500, Math.floor(limit)))) as MemoryRow[];
+    .all(...filter.params, Math.max(1, Math.min(500, Math.floor(limit)))) as MemoryRow[];
   return rows.map(toMemory);
 }
 
 /** Round-46 v2 note: the SQL LIKE pattern helper is gone — ranking is pure
- * in-memory token scoring now; the bounded project fetch above is the only
+ * in-memory token scoring now; the bounded scope fetch above is the only
  * query the search path needs. */
 
 /**
- * ROUND-46 v2: relevance-ranked search. The project's rows (bounded to 500,
+ * ROUND-46 v2: relevance-ranked search. The scope's rows (bounded to 500,
  * same window the digest sees) are scored in memory: content token overlap
  * dominates, full-substring gets a bonus, kind-token matches stay findable,
  * importance×recency breaks ties. Zero-score rows are dropped. Newest-first
@@ -266,15 +336,34 @@ export function searchMemories(
   query: string,
   limit = 12,
 ): MemoryItem[] {
+  return searchScopeMemories(db, { scope: "project", projectId }, query, limit);
+}
+
+/** ROUND-117 (R117-b): the workspace twin of searchMemories (same scoring
+ * core, the cross-project tier). */
+export function searchWorkspaceMemories(
+  db: SqliteDatabase,
+  query: string,
+  limit = 12,
+): MemoryItem[] {
+  return searchScopeMemories(db, { scope: "workspace" }, query, limit);
+}
+
+function searchScopeMemories(
+  db: SqliteDatabase,
+  ref: MemoryScopeRef,
+  query: string,
+  limit: number,
+): MemoryItem[] {
   const needle = query.trim();
   const cap = Math.max(1, Math.min(50, Math.floor(limit)));
-  if (needle === "") return listMemories(db, projectId, cap);
+  if (needle === "") return listScopeMemories(db, ref, cap);
   const queryTokens = tokenizeText(needle, true);
   const fullQueryLower = needle.toLowerCase();
-  if (queryTokens.length === 0) return listMemories(db, projectId, cap);
+  if (queryTokens.length === 0) return listScopeMemories(db, ref, cap);
   const now = new Date();
   const scored: ScoredMemory[] = [];
-  for (const row of fetchProjectMemories(db, projectId, 500)) {
+  for (const row of fetchScopeMemories(db, ref, 500)) {
     const item = toMemory(row);
     const score = scoreMemory(queryTokens, fullQueryLower, item, now);
     if (score > 0) scored.push({ item, rowid: row.rowid, score });
@@ -283,7 +372,8 @@ export function searchMemories(
   return scored.slice(0, cap).map((s) => s.item);
 }
 
-/** Delete one memory by id. `{ ok: false, error }` when the id is unknown. */
+/** Delete one memory by id (either scope — the id is global). `{ ok: false,
+ * error }` when the id is unknown. */
 export function deleteMemory(
   db: SqliteDatabase,
   id: string,
@@ -309,14 +399,14 @@ export interface UpdateMemoryPatch {
 /**
  * ROUND-98 (R98-F1, the owner: "implement our proper memory functionality"):
  * partial-edit one memory row — the REST PUT behind the Memory panel's
- * per-row edit (content fixes + kind moves). Bumps updated_at so an edited
- * row ranks like a fresh save (recency decay + newest-first listing).
- * Validation is the SAME code path as save (throws the same readable
- * errors); unknown id returns `{ ok: false, error }` — the deleteMemory
- * convention. Note: the memory table has NO importance column (0015) — the
- * kind weight IS the importance model (decision > fact > preference >
- * note, KIND_WEIGHT below), so there is deliberately no importance field
- * to patch.
+ * per-row edit (content fixes + kind moves; works for EITHER scope — the
+ * id addresses the row). Bumps updated_at so an edited row ranks like a
+ * fresh save (recency decay + newest-first listing). Validation is the SAME
+ * code path as save (throws the same readable errors); unknown id returns
+ * `{ ok: false, error }` — the deleteMemory convention. Note: the memory
+ * table has NO importance column (0015) — the kind weight IS the importance
+ * model (decision > fact > preference > note, KIND_WEIGHT below), so there
+ * is deliberately no importance field to patch.
  */
 export function updateMemory(
   db: SqliteDatabase,
@@ -348,19 +438,48 @@ export function updateMemory(
   return { ok: true, item: { ...toMemory(row), kind, content, updatedAt: now } };
 }
 
+/* ── ROUND-117 (R117-b): the digest + its richness-scaled budget ─────────── */
+
+/**
+ * The digest budget's step function (R117-b deliverable 5): 1,500 chars
+ * when the tier holds few rows (the pre-R117 cap, unchanged), 3,000 when it
+ * holds more than 30 — a rich memory base earns a richer slice instead of
+ * silently darkening everything past the cap. Simple, deterministic, and
+ * applied per scope (a workspace tier with few rows keeps the small
+ * budget even when the project tier is rich, and vice versa).
+ */
+export function digestBudget(rowCount: number): number {
+  return rowCount > 30 ? 3_000 : 1_500;
+}
+
 /**
  * Compact ranked digest for system-prompt injection (ROUND-46 v2): rows are
  * ordered by importance (kind weight) × recency decay — a durable recent
  * DECISION outranks a stale note — then formatted as "• [kind] content"
- * lines concatenated until `maxChars` is reached. Whole-line granularity —
+ * lines concatenated until the budget is reached. Whole-line granularity —
  * a line that would overflow the cap is dropped cleanly (the model can
  * memory_recall the rest), and a SINGLE line longer than the cap is
- * hard-sliced with an ellipsis. Returns "" when the project has no
- * memories (callers skip the prompt section entirely).
+ * hard-sliced with an ellipsis. Returns "" when the scope has no memories.
+ *
+ * ROUND-117 (R117-b): an OMITTED `maxChars` now resolves through
+ * digestBudget(row count) — few rows keep the 1,500 default (byte-identical
+ * to pre-R117), >30 rows widen to 3,000. An EXPLICIT maxChars still wins
+ * (the tests' tiny-budget pins and any future caller keep full control).
  */
-export function memoryDigest(db: SqliteDatabase, projectId: string, maxChars = 1_500): string {
+export function memoryDigest(db: SqliteDatabase, projectId: string, maxChars?: number): string {
+  return scopeDigest(db, { scope: "project", projectId }, maxChars);
+}
+
+/** ROUND-117 (R117-b): the WORKSPACE digest — the cross-project tier's
+ * ranked slice, same core and same budget step as the project digest. */
+export function workspaceMemoryDigest(db: SqliteDatabase, maxChars?: number): string {
+  return scopeDigest(db, { scope: "workspace" }, maxChars);
+}
+
+function scopeDigest(db: SqliteDatabase, ref: MemoryScopeRef, maxChars?: number): string {
   const now = new Date();
-  const rows = fetchProjectMemories(db, projectId, 500);
+  const rows = fetchScopeMemories(db, ref, 500);
+  const budget = maxChars ?? digestBudget(rows.length);
   const ranked = rows
     .map((row) => ({ row, rank: KIND_WEIGHT[row.kind] * recencyMultiplier(row.updated_at, now) }))
     .sort(
@@ -373,7 +492,7 @@ export function memoryDigest(db: SqliteDatabase, projectId: string, maxChars = 1
     const line = `• [${row.kind}] ${row.content}`;
     // +1 for the "\n" separator that join() will insert before this line.
     const cost = line.length + (lines.length > 0 ? 1 : 0);
-    if (total + cost <= maxChars) {
+    if (total + cost <= budget) {
       lines.push(line);
       total += cost;
       continue;
@@ -381,8 +500,8 @@ export function memoryDigest(db: SqliteDatabase, projectId: string, maxChars = 1
     // Cap reached: drop this and every later line — unless nothing fit yet
     // (a single memory longer than the whole digest budget gets one slice).
     if (lines.length === 0) {
-      lines.push(`${line.slice(0, Math.max(1, maxChars - 1))}…`);
-      total = maxChars;
+      lines.push(`${line.slice(0, Math.max(1, budget - 1))}…`);
+      total = budget;
     }
     break;
   }

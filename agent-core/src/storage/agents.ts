@@ -54,6 +54,13 @@ export const TOOL_NAMES = [
   "memory_save",
   "memory_recall",
   "memory_list",
+  // ROUND-117 (R117-b): the EPISODIC leg — session_recall searches this
+  // project's PAST sessions (titles + transcript text) so the model can
+  // answer "what did we already do about X". Same family as the memory_*
+  // tools; migration 0042 appends it to template/default allowlists that
+  // already list memory_recall (a memory-recalling agent can recall past
+  // sessions — the 0038 companion rule).
+  "session_recall",
   // ROUND-52 (R52-a): background-job supervision — run_command resolves
   // detached launches (start /B …, `… &`, nohup …) immediately with a job
   // id; job_status polls what the process is doing (alive/output/log tail),
@@ -223,7 +230,12 @@ const CREATE_DEFAULTS = {
   model: null,
   visionModel: null,
   allowedTools: [] as string[],
-  memoryPolicy: "none" as MemoryPolicy,
+  // ROUND-117 (R117-b): "every-turn" — the behavior every agent had while
+  // the flag was dead (digest each turn). The pre-R117 default 'none' was
+  // never a real choice; wiring the policy made it one, so the CREATE
+  // default now matches the shipped behavior instead of silently stripping
+  // memory from every policy-less POST /agents row.
+  memoryPolicy: "every-turn" as MemoryPolicy,
   skills: [] as string[],
   maxTurns: 80,
   maxOuterLoops: 5,

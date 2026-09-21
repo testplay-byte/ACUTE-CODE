@@ -749,6 +749,24 @@ function PromptWorkArea({
                   lines={2}
                   style={{ color: styles.textSecondary, fontSize: 11, lineHeight: 1.5 }}
                 />
+                {/* R117-b: the LIVE-MEMORY warning — the project-memory
+                        section is the one whose built-in text carries the
+                        live memory digest every turn; an override replaces
+                        that injection wholesale (the owner taking
+                        responsibility, the R59-F engine's rule). One line,
+                        warning-tinted, only when an override exists. */}
+                {selected.id === "project-memory" && selected.overridden ? (
+                  <p
+                    data-testid="prompt-memory-override-warning"
+                    className="w-fit rounded-full px-2 py-0.5 text-[10px] font-medium"
+                    style={{
+                      background: withAlpha(SEMANTIC_COLORS.warning, 0.1),
+                      color: SEMANTIC_COLORS.warning,
+                    }}
+                  >
+                    An override replaces the live memory injection
+                  </p>
+                ) : null}
               </div>
               <div className="p-3.5">
                 <SectionEditor
