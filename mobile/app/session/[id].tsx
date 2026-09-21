@@ -96,15 +96,25 @@
  * the thin 2px accent line BREATHING under the bar (reanimated opacity
  * pulse, the live caret's rhythm).
  *
- * The kebab opens the "Session options" sheet — the session's controls,
- * one row each with its CURRENT value (Operating mode · Model · Thinking ·
- * Context, + "Stop this turn" while a turn is live). THE SHEET STATE IS
- * LIFTED HERE (R115-I): this screen owns the open sheet ("kebab" or one of
- * the composer's sheets), the composer renders every sheet's CONTENT
- * controlled through sheet/onSheetChange and reports its live control
- * values through onControlsSnapshot — the composer's control pill row is
- * deleted (chat.md §Composer: exactly three controls — attach, input,
- * send/stop). The task-mode picker is GONE from mobile (round-115 verdict).
+ * ROUND-116 (R116-l — the anchored kebab dropdown + the honest couldn't-open
+ * recovery): the kebab no longer opens a bottom sheet — it opens the
+ * ANCHORED DROPDOWN (components.md §Dropdown menus, motion.md §4.8) below
+ * the control, springing in on the house spring and dismissing on a
+ * scrim-less tap-outside. The rows carry their LIVE values (Mode · Model ·
+ * Thinking · Context, + "Stop this turn" while a turn is live) and each
+ * routes to the composer's MATCHING sheet through the same controlled-sheet
+ * API — the dropdown closes first, its 120ms exit fading under the sheet's
+ * rise. THE SHEET STATE stays split (R115-I discipline): the kebab's menu is
+ * its own `menuOpen` boolean now, the composer's sheets stay in `sheet`; the
+ * composer renders every sheet's CONTENT controlled through
+ * sheet/onSheetChange and reports its live control values through
+ * onControlsSnapshot. The task-mode picker stays GONE (round-115 verdict).
+ *
+ * Also R116-l: while the screen sits in the couldn't-open state
+ * (detail === null && error !== null), a quiet 5s poll rehydrates — the
+ * "Retrying automatically…" micro line under the error card is the owner's
+ * proof the screen is not dead — and the back chevron gains the CHIP grammar
+ * (donts #41: 44px target, subtle fill, hairline border, RADIUS_CHIP).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -126,17 +136,17 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { ChevronLeft, ChevronRight, Ellipsis, Square } from "lucide-react-native";
+import { ChevronLeft, Ellipsis } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { Composer, type ComposerControlsSnapshot, type ComposerMode, type ComposerSheet } from "@/components/composer";
+import { HeaderDropdown } from "@/components/header-dropdown";
 import { LetterAvatar } from "@/components/letter-avatar";
-import { Sheet } from "@/components/sheet";
 import { TranscriptItemView } from "@/components/transcript";
 import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
-import { FadeInUp, TypeBodyStrong, TypeCaption } from "@/design/primitives";
+import { TypeBodyStrong, TypeCaption, TypeMicro } from "@/design/primitives";
 import { useChatPrefs, useTheme } from "@/design/theme";
 import { SPRING } from "@/design/motion";
-import { RADIUS_INPUT, spacing, TOUCH_TARGET } from "@/design/tokens";
+import { RADIUS_CHIP, spacing, TOUCH_TARGET } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { getLinkManager } from "@/link/runtime";
 import type { SseStream } from "@/link/connection";
@@ -181,15 +191,21 @@ const RUNNING_POLL_MS = 3_000;
  * appends log rows continuously — one trailing refetch after the burst. */
 const REMOTE_REHYDRATE_MS = 800;
 
+/** R116-l — the couldn't-open auto-retry's quiet cadence (owner verdict #53:
+ * "Retrying" must actually retry; the link's own backoff ladder probes the
+ * transport, so rehydrate is the screen's whole job here). */
+const AUTO_RETRY_MS = 5_000;
+
 /** The breathing live line's one leg (ms) — the live caret's own rhythm
  * (motion.md §3: opacity 0.25↔1, 550ms each way). Local to this file, the
  * tab-bar's breathe-constants precedent. */
 const LIVE_LINE_LEG_MS = 550;
 
-/** R115-I — the session screen's open sheet: the kebab menu OR one of the
- * composer's sheets (the screen owns the state; the composer renders the
- * content). null = closed. */
-type SessionSheet = "kebab" | ComposerSheet | null;
+/** R115-I → R116-l — the session screen's open COMPOSER sheet (the screen
+ * owns the state; the composer renders the content). The kebab's menu is its
+ * own `menuOpen` boolean (the anchored dropdown is not a sheet). null =
+ * closed. */
+type SessionSheet = ComposerSheet | null;
 
 export default function SessionScreen() {
   const { tokens } = useTheme();
@@ -207,17 +223,22 @@ export default function SessionScreen() {
   const [outboxEntries, setOutboxEntries] = useState<OutboxEntry[]>([]);
   const [appActive, setAppActive] = useState(AppState.currentState === "active");
 
-  // ── R115-I — the identity bar + the kebab sheet's state ──────────────────
+  // ── R115-I/R116-l — the identity bar + the kebab dropdown's state ──────────
 
   /** The registry's projects, fetched once per mount (cached like every
    * other screen) — the identity bar's project row. */
   const [projects, setProjects] = useState<ProjectRow[] | null>(null);
-  /** The open sheet (the kebab menu or one of the composer's). */
+  /** The open composer sheet (mode/model/thinking/context ride the kebab's
+   * rows; attach/files open from the composer's own paperclip). */
   const [sheet, setSheet] = useState<SessionSheet>(null);
-  /** The composer's live control values (the kebab's Model/Thinking/Context
-   * rows); the honest pre-report defaults show until the first snapshot. */
+  /** R116-l — the kebab's ANCHORED DROPDOWN (a menu, not a sheet). */
+  const [menuOpen, setMenuOpen] = useState(false);
+  /** The composer's live control values (the dropdown's Model/Thinking/
+   * Context rows); the honest pre-report defaults show until the first
+   * snapshot — the model ladder's floor is "—" (R116-l: the "Agent default"
+   * rung is retired, donts #36). */
   const [controls, setControls] = useState<ComposerControlsSnapshot>({
-    modelLabel: "Agent default",
+    modelLabel: "—",
     thinkingLabel: "Default",
     ctxPct: null,
   });
@@ -370,6 +391,24 @@ export default function SessionScreen() {
     }, RUNNING_POLL_MS);
     return () => clearInterval(timer);
   }, [appActive, detail, live, rehydrate]);
+
+  // ── R116-l — the couldn't-open AUTO-RETRY (owner verdict #53) ─────────────
+  // While the screen sits in the couldn't-open state (detail === null &&
+  // error !== null), a quiet 5s poll calls rehydrate() — the "Retrying
+  // automatically…" micro line under the error card is the visible half.
+  // rehydrate is the screen's WHOLE job here: the link manager's own backoff
+  // ladder keeps probing the transport, and a recovered host flips the state
+  // to the transcript (setError(null) + setDetail clear this interval on the
+  // next render); unmount and the error-clear both stop it. No retryNow() of
+  // our own — the ladder already owns the probe cadence.
+
+  useEffect(() => {
+    if (detail !== null || error === null) return;
+    const timer = setInterval(() => {
+      void rehydrate();
+    }, AUTO_RETRY_MS);
+    return () => clearInterval(timer);
+  }, [detail, error, rehydrate]);
 
   // ── the events subscription (R113-e — the phone goes live) ────────────────
 
@@ -749,18 +788,18 @@ export default function SessionScreen() {
         : sessionStatusLabel(detail.status);
   const headerFallbackLetter =
     detail !== null ? sessionTitle(detail).trim().charAt(0).toUpperCase() : "A";
-  // The kebab's Operating-mode row reads the same source the old pill did.
+  // The dropdown's Mode row reads the same source the old pill did.
   const kebabModeLabel = modeOption(detail?.permissionMode ?? "ask").label;
 
   // A turn runs somewhere (own stream, own overlay, or the row's running
-  // status) — the breathing line + the kebab's Stop row + the composer's
+  // status) — the breathing line + the dropdown's Stop row + the composer's
   // running mode all read this one truth.
   const turnLive = liveRunning || remoteRunning;
 
-  // The composer's slice of the sheet state (the kebab is THIS screen's;
-  // the six composer sheets pass straight through), and the referentially
-  // guarded snapshot receiver (a value-identical report re-renders nothing).
-  const composerSheet = sheet === "kebab" ? null : sheet;
+  // The composer's slice of the sheet state (R116-l: the kebab's menu is the
+  // separate `menuOpen` boolean, so `sheet` is now PURELY the composer's six
+  // values and passes straight through), and the referentially guarded
+  // snapshot receiver (a value-identical report re-renders nothing).
   const setComposerSheet = useCallback((next: ComposerSheet | null): void => {
     setSheet(next);
   }, []);
@@ -873,7 +912,7 @@ export default function SessionScreen() {
     // dock exactly where the header row used to sit, inside the top
     // safe-area inset the SafeAreaView already owns.
     <ScreenScaffold title="Session" scroll={false} chrome={false}>
-      {/* ── THE IDENTITY BAR (R115-I — chat.md §Header): [back chevron 44px]
+      {/* ── THE IDENTITY BAR (R115-I — chat.md §Header): [back CHIP 44px]
           · [the project's LetterAvatar 36px] · [project name over the
           session's own name] · [the kebab ⋮ 44px]. Status words are OUT — a
           running turn shows as the breathing accent line under the bar. */}
@@ -883,7 +922,12 @@ export default function SessionScreen() {
           accessibilityRole="button"
           hitSlop={12}
           onPress={() => router.back()}
-          style={styles.headerTarget}
+          style={[
+            styles.headerTarget,
+            styles.backChip,
+            { backgroundColor: tokens.subtle, borderColor: tokens.borderSubtle },
+          ]}
+          testID="session-back"
         >
           <ChevronLeft size={26} color={tokens.text} strokeWidth={2} />
         </Pressable>
@@ -910,7 +954,7 @@ export default function SessionScreen() {
           accessibilityLabel="Session options"
           accessibilityRole="button"
           hitSlop={8}
-          onPress={() => setSheet("kebab")}
+          onPress={() => setMenuOpen((prev) => !prev)}
           style={styles.headerTarget}
           testID="session-kebab"
         >
@@ -925,8 +969,8 @@ export default function SessionScreen() {
           screen lives). The only thing that moves is the dock's own animated
           paddingBottom (dockStyle — max(insetsBottom, kbHeight)); the whole
           composer — offline/outbox/note rows, the @-picker popup, chips, the
-          input row with its attach circle — rides INSIDE it, and the inverted
-          FlatList above (flex:1) reflows on its own. The list keeps
+          input bar with its in-bar paperclip — rides INSIDE it, and the
+          inverted FlatList above (flex:1) reflows on its own. The list keeps
           keyboardShouldPersistTaps="handled" so a transcript tap while the
           keys are up never dismiss-focus-then-refocus jarringly. */}
       <View style={styles.body}>
@@ -945,6 +989,16 @@ export default function SessionScreen() {
                 getLinkManager().retryNow();
               }}
             />
+            {/* R116-l — the auto-retry's quiet tell (verdict #53): the 5s poll
+                above is already rehydrating; the micro line says so so the
+                owner never wonders whether the screen is dead. */}
+            <TypeMicro
+              style={{ color: tokens.textTertiary, marginTop: spacing.sm }}
+              numberOfLines={1}
+              testID="session-auto-retry"
+            >
+              Retrying automatically…
+            </TypeMicro>
           </View>
         ) : data.length === 0 ? (
           <View style={styles.centerWrap}>
@@ -993,7 +1047,7 @@ export default function SessionScreen() {
             projectId={detail?.projectId ?? null}
             permissionMode={detail?.permissionMode ?? "ask"}
             selectedModel={detail?.selectedModel ?? null}
-            sheet={composerSheet}
+            sheet={sheet}
             onSheetChange={setComposerSheet}
             onControlsSnapshot={onControlsSnapshot}
             onPermissionModeChange={onPermissionModeChange}
@@ -1007,52 +1061,76 @@ export default function SessionScreen() {
         </Animated.View>
       </View>
 
-      {/* ── THE KEBAB SHEET (R115-I — chat.md §Header): the session's
-          controls, one row each with its CURRENT value right-aligned + a
-          chevron; tapping a row closes this sheet and opens the composer's
-          matching sub-sheet — the simplest honest handoff (both ride the
-          fixed Sheet primitive, so the swap reads as one sheet trading for
-          the next, the kebab's exit playing under the sub-sheet's rise).
-          The rows stagger in on the house entrance grammar. */}
-      <Sheet
-        open={sheet === "kebab"}
-        onClose={() => setSheet(null)}
-        title="Session options"
-        testID="session-options-sheet"
-      >
-        <FadeInUp index={0}>
-          <KebabRow label="Operating mode" value={kebabModeLabel} onPress={() => setSheet("mode")} />
-        </FadeInUp>
-        <FadeInUp index={1}>
-          <KebabRow label="Model" value={controls.modelLabel} onPress={() => setSheet("model")} />
-        </FadeInUp>
-        <FadeInUp index={2}>
-          <KebabRow
-            label="Thinking"
-            value={controls.thinkingLabel}
-            onPress={() => setSheet("thinking")}
-          />
-        </FadeInUp>
-        <FadeInUp index={3}>
-          <KebabRow
-            label="Context"
-            value={controls.ctxPct !== null ? `${controls.ctxPct}%` : "—"}
-            onPress={() => setSheet("context")}
-          />
-        </FadeInUp>
-        {turnLive ? (
-          <FadeInUp index={4}>
-            <KebabRow
-              label="Stop this turn"
-              danger
-              onPress={() => {
-                setSheet(null);
-                onStop();
-              }}
-            />
-          </FadeInUp>
-        ) : null}
-      </Sheet>
+      {/* ── THE KEBAB DROPDOWN (R116-l — components.md §Dropdown menus,
+          motion.md §4.8): the anchored menu replaces the bottom sheet. The
+          layer is the absolutely-positioned anchor aligned to the header
+          row's right/bottom (top: the 56px row's bottom edge, full width
+          below it, pointerEvents box-none so a closed/empty layer never
+          steals a touch); HeaderDropdown fills it with the tap-outside
+          catcher + the top-right panel. Each row carries its LIVE value and
+          routes to the composer's MATCHING sheet through the same
+          controlled-sheet API — the dropdown closes first, its 120ms exit
+          fading under the sheet's rise. The Stop row rides only while a
+          turn is live. */}
+      <View pointerEvents="box-none" style={styles.menuLayer}>
+        <HeaderDropdown
+          open={menuOpen}
+          onClose={() => setMenuOpen(false)}
+          title="Session options"
+          testID="session-dropdown"
+          items={[
+            {
+              key: "mode",
+              label: "Mode",
+              value: kebabModeLabel,
+              onPress: () => {
+                setMenuOpen(false);
+                setSheet("mode");
+              },
+            },
+            {
+              key: "model",
+              label: "Model",
+              value: controls.modelLabel,
+              onPress: () => {
+                setMenuOpen(false);
+                setSheet("model");
+              },
+            },
+            {
+              key: "thinking",
+              label: "Thinking",
+              value: controls.thinkingLabel,
+              onPress: () => {
+                setMenuOpen(false);
+                setSheet("thinking");
+              },
+            },
+            {
+              key: "context",
+              label: "Context",
+              value: controls.ctxPct !== null ? `${controls.ctxPct}%` : "—",
+              onPress: () => {
+                setMenuOpen(false);
+                setSheet("context");
+              },
+            },
+            ...(turnLive
+              ? [
+                  {
+                    key: "stop",
+                    label: "Stop this turn",
+                    danger: true,
+                    onPress: () => {
+                      setMenuOpen(false);
+                      onStop();
+                    },
+                  },
+                ]
+              : []),
+          ]}
+        />
+      </View>
     </ScreenScaffold>
   );
 }
@@ -1139,55 +1217,6 @@ function LiveHeaderLine({ live }: { live: boolean }) {
   return <Animated.View style={[styles.liveLine, style, { backgroundColor: tokens.accent }]} />;
 }
 
-/** One kebab-sheet row — label + CURRENT value right-aligned + chevron (the
- * danger arm carries the stop affordance instead). The SheetRow geometry
- * (44px+ target, hairline border, quiet press) restated for the screen's
- * own sheet. */
-function KebabRow({
-  label,
-  value,
-  onPress,
-  danger = false,
-}: {
-  label: string;
-  value?: string;
-  onPress: () => void;
-  danger?: boolean;
-}) {
-  const { tokens } = useTheme();
-  return (
-    <Pressable
-      accessibilityLabel={value !== undefined ? `${label} — ${value}` : label}
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.kebabRow,
-        {
-          backgroundColor: pressed ? tokens.subtleHover : "transparent",
-          borderColor: danger ? tokens.danger : tokens.borderSubtle,
-        },
-      ]}
-    >
-      <TypeBodyStrong
-        style={{ flex: 1, color: danger ? tokens.danger : tokens.text }}
-        numberOfLines={1}
-      >
-        {label}
-      </TypeBodyStrong>
-      {value !== undefined ? (
-        <TypeCaption style={{ color: tokens.textSecondary }} numberOfLines={1}>
-          {value}
-        </TypeCaption>
-      ) : null}
-      {danger ? (
-        <Square size={13} color={tokens.danger} strokeWidth={2.4} fill={tokens.danger} />
-      ) : (
-        <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
-      )}
-    </Pressable>
-  );
-}
-
 /** The display chips for a send's overrides (the optimistic user card + the
  * pending outbox rows) — the wire's MessageAttachment display fields. */
 function overrideAttachmentViews(overrides: SendOverrides): AttachmentView[] | null {
@@ -1221,6 +1250,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  /** R116-l — the back CHIP (donts #41): the 44px target gains a subtle fill
+   * + hairline border + the chip radius — the scaffold back-chip's exact
+   * grammar (fill/border colors ride the theme tokens, inline). */
+  backChip: {
+    borderRadius: RADIUS_CHIP,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   headerIdentity: {
     flex: 1,
     gap: 1,
@@ -1232,16 +1268,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  // ── R115-I — the kebab sheet's rows (the composer SheetRow geometry).
-  kebabRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    minHeight: TOUCH_TARGET + 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: RADIUS_INPUT,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
+  /** R116-l — the kebab dropdown's anchor layer: everything below the 56px
+   * identity bar, box-none so the closed (empty) layer never blocks the
+   * transcript/dock beneath it — the menu panel floats at its top-right
+   * (inside HeaderDropdown), the tap-outside catcher fills the rest. */
+  menuLayer: {
+    position: "absolute",
+    top: 56,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   centerWrap: {
     flex: 1,
