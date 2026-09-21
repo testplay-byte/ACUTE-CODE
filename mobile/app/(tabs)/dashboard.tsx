@@ -1187,7 +1187,11 @@ export default function DashboardScreen() {
                       {selectedDay !== null && selectedDay < days.length ? (
                         <DayDetailLine day={days[selectedDay]} />
                       ) : (
-                        <TypeCaption style={{ color: tokens.textTertiary }}>tap a day for its detail</TypeCaption>
+                        // R116-n — the single-line law (donts #31): the
+                        // chart's own hint line gains the clamp too.
+                        <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary }}>
+                          tap a day for its detail
+                        </TypeCaption>
                       )}
                     </View>
                   </View>
@@ -1213,7 +1217,11 @@ export default function DashboardScreen() {
                       {selectedDay !== null && selectedDay < days.length ? (
                         <DayDetailLine day={days[selectedDay]} />
                       ) : (
-                        <TypeCaption style={{ color: tokens.textTertiary }}>tap a day for its detail</TypeCaption>
+                        // R116-n — the single-line law (donts #31), applied
+                        // to the grid's twin of the chart's hint line.
+                        <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary }}>
+                          tap a day for its detail
+                        </TypeCaption>
                       )}
                     </View>
                   </View>
@@ -1307,7 +1315,11 @@ export default function DashboardScreen() {
                       <ToolLeaderboardRow key={row.tool} {...row} />
                     ))}
                     {toolBoard.hidden > 0 ? (
-                      <TypeMicro style={{ color: tokens.textTertiary }}>+{toolBoard.hidden} more tools</TypeMicro>
+                      // R116-n — the clamp the "+N more sessions" idiom
+                      // carries everywhere else (one spelling).
+                      <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+                        +{toolBoard.hidden} more tools
+                      </TypeMicro>
                     ) : null}
                   </View>
                 </ClayCard>

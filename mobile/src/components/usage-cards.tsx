@@ -651,12 +651,20 @@ export function ProjectUsageRow({
       <UsageAccordion open={expanded}>
         <View style={[styles.projectWell, { borderTopColor: tokens.borderSubtle }]}>
           {visible.length === 0 ? (
-            <TypeCaption style={{ color: tokens.textTertiary }}>no sessions recorded yet</TypeCaption>
+            // R116-n — the single-line law (donts #31), the dashboard's
+            // QuietLine spelling: the well's honest empty clamps.
+            <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary }}>
+              no sessions recorded yet
+            </TypeCaption>
           ) : (
             visible.map((session) => <UsageSessionRow key={session.id} session={session} />)
           )}
           {hidden > 0 ? (
-            <TypeMicro style={{ color: tokens.textTertiary }}>+{hidden} more sessions</TypeMicro>
+            // R116-n — the clamp the projects screen's own "+N more sessions"
+            // row carries (one spelling of the idiom across the two wells).
+            <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+              +{hidden} more sessions
+            </TypeMicro>
           ) : null}
           {project.subagents.count > 0 ? (
             <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>

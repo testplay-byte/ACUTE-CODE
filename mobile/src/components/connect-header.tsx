@@ -45,7 +45,9 @@ export function ConnectHeader({ title, backTestID }: ConnectHeaderProps) {
         style={[styles.backChip, { backgroundColor: tokens.subtle, borderColor: tokens.borderSubtle }]}
         testID={backTestID}
       >
-        <ChevronLeft size={24} color={tokens.text} strokeWidth={2} />
+        {/* R116-n — 26/2: the scaffold + session header's exact glyph (this
+            chip claimed the "exact grammar" and shipped a 24 — the drift). */}
+        <ChevronLeft size={26} color={tokens.text} strokeWidth={2} />
       </Pressable>
       {/* The ABSOLUTELY centered title: spans the whole row so it centers over
           the SCREEN, not the space beside the chip; pointerEvents none keeps

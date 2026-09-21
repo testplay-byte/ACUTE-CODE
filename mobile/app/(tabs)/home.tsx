@@ -293,7 +293,25 @@ export default function HomeScreen() {
                       ) : (
                         // No project (or not in the registry fold) — the
                         // honest neutral identity, never a guessed letter.
-                        <View style={[styles.neutralTile, { backgroundColor: tokens.subtleHover }]}>
+                        // R116-n — the neutral tile joins the round-116
+                        // avatar law (components.md: identity avatars are
+                        // never plain circles): the session header's
+                        // NeutralAvatar grammar — rounded-square clay on the
+                        // subtle fill. Wave K left this tile to the next
+                        // wave owning home's rows; this audit is that wave.
+                        <View
+                          style={[
+                            styles.neutralTile,
+                            {
+                              backgroundColor: tokens.subtle,
+                              borderTopWidth: StyleSheet.hairlineWidth,
+                              borderTopColor: tokens.clayTopEdge,
+                              borderWidth: StyleSheet.hairlineWidth,
+                              borderColor: tokens.border,
+                              boxShadow: tokens.clayShadowSm,
+                            },
+                          ]}
+                        >
                           <FolderGit2 size={20} color={tokens.textTertiary} strokeWidth={2.2} />
                         </View>
                       )}
@@ -444,7 +462,9 @@ const styles = StyleSheet.create({
   neutralTile: {
     width: TILE_ROW,
     height: TILE_ROW,
-    borderRadius: TILE_ROW / 2,
+    // R116-n — rounded-square (r≈38%, the LetterAvatar/NeutralAvatar
+    // geometry), never the circle the avatar amendment retired.
+    borderRadius: Math.round(TILE_ROW * 0.38),
     alignItems: "center",
     justifyContent: "center",
   },

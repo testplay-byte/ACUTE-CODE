@@ -396,7 +396,14 @@ export const CHART_HUES = {
   output: { light: "#6F9E90", dark: "#8FBFAD" },
   /** The peak-day tile's violet-ish 4th stat hue. */
   peak: { light: "#7C6A9E", dark: "#9C8CC2" },
-  /** Per-model leaderboard hues, assigned BY RANK (rank 0 = first). */
+  /** Per-model leaderboard hues, assigned BY RANK (rank 0 = first).
+   *
+   *  R116-n — DEAD (tombstoned, not deleted): zero consumers since R116-g
+   *  moved every model surface to the PC's 12-hue NAME-HASH palette
+   *  (src/design/model-colors.ts — one spelling across the dashboard,
+   *  the per-model cards, and the providers list). Only modelHue() (below,
+   *  equally dead) reads this array. A future wave that owns tokens.ts
+   *  may delete both; nothing else references them. */
   models: [
     { light: "#C4653F", dark: "#D98A63" }, // 1 — terracotta
     { light: "#6F9E90", dark: "#8FBFAD" }, // 2 — sage teal
@@ -412,7 +419,13 @@ export function chartHue(hue: ChartHue, isDark: boolean): string {
   return isDark ? hue.dark : hue.light;
 }
 
-/** The model leaderboard's rank hue (rank 0 = the busiest model). */
+/** The model leaderboard's rank hue (rank 0 = the busiest model).
+ *
+ *  R116-n — DEAD (tombstoned, not deleted): superseded by
+ *  `modelColor(name, isDark)` in src/design/model-colors.ts (R116-g — the
+ *  PC's stable name-hash palette; rank hues made the same model change
+ *  color with its ranking). Zero callers remain; kept only because this
+ *  file is shared and a tokens-owning wave should do the deletion. */
 export function modelHue(rank: number, isDark: boolean): string {
   const hue = CHART_HUES.models[rank % CHART_HUES.models.length];
   return isDark ? hue.dark : hue.light;
