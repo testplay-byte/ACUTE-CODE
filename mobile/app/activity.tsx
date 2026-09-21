@@ -1,14 +1,22 @@
 /**
- * Activity v2 (R109-c) — the notifications history (pushed from the bell).
- * The feed is LIVE: useActivityFeed rides the activity store, which the
- * streaming controller (GET /notifications/stream SSE) pushes into — rows
- * appear at the top the moment the desktop publishes them, no refresh
- * needed. Pull-to-refresh re-reads GET /notifications for the honest page.
+ * Activity v3 (R109-c, R116-f) — the notifications history (pushed from
+ * the bell). The feed is LIVE: useActivityFeed rides the activity store,
+ * which the streaming controller (GET /notifications/stream SSE) pushes
+ * into — rows appear at the top the moment the desktop publishes them, no
+ * refresh needed. Pull-to-refresh re-reads GET /notifications for the
+ * honest page.
  *
  * Rows group by calendar day (Today / Yesterday / date captions). Unread =
  * the accent dot + "new" + full-ink title; read = quiet. Tapping a row
  * marks it read (optimistic, fire-and-forget) and pushes its session
  * transcript when the notification carries one.
+ *
+ * R116-f (§1.4 — the mark-all-read desync): "Mark all read" now tells the
+ * truth — the call is disabled-aware while in flight, a failure (HTTP error
+ * OR a thrown transport failure) shows ONE warning note that clears itself
+ * after ~3s, and the button disappears only because the store's unread is
+ * genuinely 0 (the store reconciles the ring, so the count and the rows
+ * can never disagree).
  */
 
 import { useRouter } from "expo-router";
@@ -53,6 +61,10 @@ function kindTone(kind: string): "danger" | "accent" | "neutral" {
   return "neutral";
 }
 
+/** How long the mark-all-read failure note stays up (ms) — the manual-paste
+ * note's ~3s idiom (R116-d2), the clock resetting per attempt. */
+const MARK_FAIL_NOTE_MS = 3_000;
+
 // ── the day grouping (calendar-local) ────────────────────────────────────────
 
 interface DayGroup {
@@ -95,6 +107,18 @@ export default function ActivityScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [booted, setBooted] = useState(false);
 
+  // The mark-all-read leg (R116-f §1.4): in-flight awareness + the honest
+  // failure note. failSeq is a counter (not a boolean) so a REPEATED failure
+  // restarts the auto-clear clock — the effect below re-arms per bump.
+  const [marking, setMarking] = useState(false);
+  const [failSeq, setFailSeq] = useState(0);
+
+  useEffect(() => {
+    if (failSeq === 0) return;
+    const t = setTimeout(() => setFailSeq(0), MARK_FAIL_NOTE_MS);
+    return () => clearTimeout(t);
+  }, [failSeq]);
+
   // The first page read — the store may already hold the live stream's rows.
   useEffect(() => {
     void feedRef.current
@@ -116,11 +140,29 @@ export default function ActivityScreen() {
   }, []);
 
   const onMarkAllRead = useCallback(() => {
-    void feedRef.current.markAllRead().then((ok) => {
-      if (ok) mobLog("activity-screen", "all marked read");
-      else mobWarn("activity-screen", "mark all read failed");
-    });
-  }, []);
+    if (marking) return;
+    setMarking(true);
+    // R116-f §1.4: BOTH failure shapes are honest to the user — an HTTP
+    // error answers {ok:false}, a dead transport REJECTS (apiJson propagates
+    // NetError). Either way one warning note shows and clears itself; the
+    // store is only touched on success, so the button disappears strictly
+    // because unread is genuinely 0.
+    void feedRef.current
+      .markAllRead()
+      .then((ok) => {
+        if (ok) {
+          mobLog("activity-screen", "all marked read");
+        } else {
+          mobWarn("activity-screen", "mark all read failed");
+          setFailSeq((n) => n + 1);
+        }
+      })
+      .catch(() => {
+        mobWarn("activity-screen", "mark all read threw");
+        setFailSeq((n) => n + 1);
+      })
+      .finally(() => setMarking(false));
+  }, [marking]);
 
   const onTap = useCallback((n: NotificationRow) => {
     if (n.read === 0) {
@@ -183,7 +225,20 @@ export default function ActivityScreen() {
               {`${state.unread} unread${state.streamLive ? " · live" : ""}`}
             </TypeMicro>
           </View>
-          <QuietButton onPress={onMarkAllRead}>Mark all read</QuietButton>
+          <QuietButton onPress={onMarkAllRead} disabled={marking}>
+            Mark all read
+          </QuietButton>
+        </View>
+      ) : null}
+
+      {/* The honest failure note (R116-f §1.4): one warning line + dot,
+          clearing itself after ~3s. */}
+      {failSeq > 0 ? (
+        <View style={styles.failNote} testID="activity-mark-fail">
+          <StatusDot color={tokens.warning} size={7} />
+          <TypeCaption numberOfLines={1} style={{ color: tokens.warning }}>
+            Couldn't reach the desktop — try again.
+          </TypeCaption>
         </View>
       ) : null}
 
@@ -265,6 +320,7 @@ function NotificationCard({ n, index, onTap }: { n: NotificationRow; index: numb
 const styles = StyleSheet.create({
   unreadRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.md },
   liveCluster: { flexDirection: "row", alignItems: "center", gap: spacing.xs + 2 },
+  failNote: { flexDirection: "row", alignItems: "center", gap: spacing.xs + 2, paddingVertical: spacing.xs },
   group: { gap: spacing.md },
   groupLabel: { textTransform: "uppercase", letterSpacing: 0.8, paddingHorizontal: spacing.xs },
   rowPad: { padding: spacing.lg, gap: spacing.sm, minHeight: 68 },

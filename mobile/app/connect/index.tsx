@@ -18,13 +18,18 @@
  * (donts #39) raised directly under the hero, opening the scanner. Manual
  * entry lives inside the scanner now, not on this screen.
  *
- * Host linked → the current connection (identity + live status + retry),
- * "pair a different desktop" (scan again replaces the link), and the
- * disconnect action lives in the host-management page it links to. The hub
- * is a ROOT screen — after onboarding (and after every replace() landing)
- * there is nothing behind it, so the back chevron only renders when the
- * root stack can actually pop (e.g. pushed from the connection pill inside
- * the tabs).
+ * Host linked (R116-f — the owner's verdict #23): a proper CONNECTION page.
+ * The hero card leads with WHO — the desktop's word-pair name BIG — over the
+ * pinned status vocabulary ("Live" / "Looking for the host…" / "Offline",
+ * one line) and the honest "last seen {timeAgo}" micro line. Below it ONE
+ * "This connection" section holds the two management rows, each ONE
+ * measured line (donts #1/#31 — the option-body essays are dead; the
+ * desktop-revokes detail lives on the host details page's disconnect
+ * alert). Navigation targets + the retry behavior are byte-identical to the
+ * pre-R116-f branch. The hub is a ROOT screen — after onboarding (and after
+ * every replace() landing) there is nothing behind it, so the back chevron
+ * only renders when the root stack can actually pop (e.g. pushed from the
+ * connection pill inside the tabs).
  */
 
 import { useRouter } from "expo-router";
@@ -44,7 +49,6 @@ import Animated, {
 } from "react-native-reanimated";
 import {
   Monitor,
-  MonitorSmartphone,
   RefreshCw,
   ScanLine,
   Smartphone,
@@ -58,7 +62,10 @@ import {
   FadeInUp,
   PressableCard,
   QuietButton,
+  SectionHeader,
+  StatusDot,
   TypeBody,
+  TypeBodyStrong,
   TypeCaption,
   TypeDisplay,
   TypeMicro,
@@ -265,47 +272,54 @@ export default function ConnectHubScreen() {
     );
   }
 
-  // ── host linked: the current connection + the management paths ──
+  // ── host linked (R116-f): the CONNECTION page — the hero grammar + the
+  //     one "This connection" section. ──
   return (
     <ScreenScaffold title="Connect" back={canPopRoot} noPill>
+      {/* The hero: WHO — the word-pair name BIG — over the pinned status
+          vocabulary (single line) + the honest last-seen micro line. The
+          retry behavior is byte-identical: one quiet icon button, only
+          while the link isn't live. */}
       <ClayCard elevated>
-        <View style={styles.cardPad}>
-          <View style={styles.hostRow}>
-            <View style={[styles.hostIcon, { backgroundColor: tokens.subtleHover }]}>
-              <MonitorSmartphone size={22} color={tokens.accent} strokeWidth={2.2} />
-            </View>
-            <View style={styles.hostText}>
-              <TypeBody>{host.hostLabel}</TypeBody>
-              <TypeCaption>
-                {connected
-                  ? `connected · desktop v${live?.version ?? "?"}`
-                  : status === "probing"
-                    ? "looking for the host…"
-                    : "host offline — retrying"}
-              </TypeCaption>
-            </View>
+        <View style={styles.heroPad}>
+          <View style={styles.heroTop}>
+            <TypeDisplay numberOfLines={1} style={styles.heroName} testID="hub-host-name">
+              {host.hostLabel}
+            </TypeDisplay>
             {!connected ? (
               <QuietButton onPress={() => getLinkManager().retryNow()} tone="neutral">
                 <RefreshCw size={16} color={tokens.textSecondary} strokeWidth={2.2} />
               </QuietButton>
             ) : null}
           </View>
-          <TypeCaption style={styles.lastSeen}>
-            last seen {lastSeen === null ? "never" : timeAgo(lastSeen)} · paired{" "}
-            {timeAgo(host.pairedAt)} ago
-          </TypeCaption>
+          <View style={styles.heroStatus}>
+            <StatusDot
+              color={
+                connected ? tokens.success : status === "probing" ? tokens.warning : tokens.danger
+              }
+              pulse={status === "probing"}
+            />
+            <TypeBodyStrong numberOfLines={1}>
+              {connected ? "Live" : status === "probing" ? "Looking for the host…" : "Offline"}
+            </TypeBodyStrong>
+          </View>
+          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+            {`last seen ${lastSeen === null ? "never" : timeAgo(lastSeen)}${
+              live !== null ? ` · desktop v${live.version}` : ""
+            }`}
+          </TypeMicro>
         </View>
       </ClayCard>
 
+      {/* The one management section — both rows, ONE measured line each. */}
+      <SectionHeader>This connection</SectionHeader>
       <PressableCard onPress={() => router.push("/settings/host")}>
         <OptionRow
           icon={<Unplug size={22} color={tokens.textSecondary} strokeWidth={2.2} />}
           title="Manage this connection"
-          body="Identity, addresses, diagnostics, replay the wizard, or disconnect completely."
+          body="Details, diagnostics, and the disconnect."
         />
       </PressableCard>
-
-      <TypeMicro style={styles.kicker}>PAIR A DIFFERENT DESKTOP</TypeMicro>
       <PressableCard
         onPress={() => router.push("/connect/scan")}
         accessibilityLabel="Scan to pair a different desktop"
@@ -313,7 +327,7 @@ export default function ConnectHubScreen() {
         <OptionRow
           icon={<ScanLine size={22} color={tokens.accent} strokeWidth={2.2} />}
           title="Scan a new pairing code"
-          body="Replaces this link — the desktop keeps its own list, revoke this phone there if you leave it."
+          body="Replaces this phone's link."
         />
       </PressableCard>
     </ScreenScaffold>
@@ -325,8 +339,12 @@ function OptionRow({ icon, title, body }: { icon: React.ReactNode; title: string
     <View style={styles.optionInner}>
       <View style={styles.optionIcon}>{icon}</View>
       <View style={styles.optionText}>
-        <TypeBody>{title}</TypeBody>
-        <TypeCaption style={styles.optionBody}>{body}</TypeCaption>
+        <TypeBody numberOfLines={1}>{title}</TypeBody>
+        {/* The single-line law (donts #1/#31): one measured line, never an
+            essay — the revoked-desktop detail lives on the host page. */}
+        <TypeCaption numberOfLines={1} style={styles.optionBody}>
+          {body}
+        </TypeCaption>
       </View>
     </View>
   );
@@ -365,7 +383,12 @@ const styles = StyleSheet.create({
   cta: { minHeight: 56, borderRadius: RADIUS_BAR },
   ctaRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   ctaLabel: { fontSize: TYPE_BODY, fontFamily: fontFamily.bold, letterSpacing: 0.2 },
-  cardPad: { padding: spacing.lg, gap: spacing.md },
+  // The host-linked hero (R116-f): the word-pair name BIG + the pinned
+  // status line + the last-seen micro line.
+  heroPad: { padding: spacing.lg, gap: spacing.sm },
+  heroTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  heroName: { flex: 1 },
+  heroStatus: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   optionInner: { flexDirection: "row", gap: spacing.md, padding: spacing.lg, alignItems: "center" },
   optionIcon: {
     width: 48,
@@ -376,15 +399,4 @@ const styles = StyleSheet.create({
   },
   optionText: { flex: 1, gap: 2 },
   optionBody: { lineHeight: 18 },
-  hostRow: { flexDirection: "row", gap: spacing.md, alignItems: "center" },
-  hostIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 15,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  hostText: { flex: 1, gap: 2 },
-  lastSeen: { marginTop: spacing.xs },
-  kicker: { marginTop: spacing.xs },
 });

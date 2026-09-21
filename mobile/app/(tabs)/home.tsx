@@ -22,8 +22,14 @@
  *     off the events epochs (hello + debounced session batches + project
  *     frames — the projects.tsx pattern). Empty → the section simply
  *     doesn't render (no empty state — quiet is the honest default).
- *   · RECENT ACTIVITY — the 4-row preview (read-state dot, title, timeAgo)
- *     + "see all"; the one-liner empty state.
+ *   · RECENT ACTIVITY (R116-f — verdict #21: "too minimal, not clickable,
+ *     lacks color") — the 4-row preview, each row a 44px-min Pressable:
+ *     leading kind glyph (error→CircleAlert in danger, approval→Bell in
+ *     accent, anything else→CircleCheck in the quiet tertiary) beside the
+ *     unread accent dot (read rows lose the dot), title + one body line
+ *     (n.body, or the kind word when the body is empty) + the time
+ *     right-aligned. Tap → the notification's session when it carries one,
+ *     else the activity history. + "see all"; the one-liner empty state.
  *
  * DELETED FOREVER (R115-f): the Appearance section + ThemeDots (the theme
  * lives in settings now), the Quick actions 2×2 grid, the unpaired
@@ -32,9 +38,16 @@
  */
 
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bell, ChevronRight, FolderGit2, MonitorSmartphone } from "lucide-react-native";
-import { StyleSheet, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import {
+  Bell,
+  ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  FolderGit2,
+  MonitorSmartphone,
+} from "lucide-react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { LetterAvatar } from "@/components/letter-avatar";
 import { timeAgo } from "@/components/host-card";
@@ -49,7 +62,7 @@ import {
   TypeMicro,
 } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
-import { spacing, TILE_ROW } from "@/design/tokens";
+import { RADIUS_INPUT, spacing, TILE_ROW } from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import { useActivityFeed, useUnread } from "@/features/activity";
@@ -71,6 +84,26 @@ const RUNNING_PREVIEW = 4;
 
 /** How many notification rows the recent preview renders. */
 const RECENT_PREVIEW = 4;
+
+/** The recent rows' leading kind glyphs (R116-f): error→alert, approval→
+ * bell, anything else (task/session/…)→check — the colored detail the
+ * owner asked for, at the 16px "small icon" scale. */
+const KIND_GLYPHS: Record<string, ComponentType<{ size?: number; color?: string; strokeWidth?: number }>> = {
+  error: CircleAlert,
+  approval: Bell,
+};
+
+function kindGlyph(kind: string) {
+  return KIND_GLYPHS[kind] ?? CircleCheck;
+}
+
+/** The notification kinds' words (the activity screen's badge vocabulary). */
+const KIND_WORDS: Record<string, string> = {
+  task: "task",
+  approval: "approval",
+  session: "session",
+  error: "error",
+};
 
 export default function HomeScreen() {
   const { tokens } = useTheme();
@@ -299,19 +332,60 @@ export default function HomeScreen() {
               <View style={styles.recentPad}>
                 {activityState.latest.slice(0, RECENT_PREVIEW).map((n, i) => {
                   const ts = new Date(n.ts).getTime();
+                  const when = Number.isNaN(ts) ? "" : timeAgo(ts);
+                  const unread = n.read === 0;
+                  const KindGlyph = kindGlyph(n.kind);
+                  const kindHue =
+                    n.kind === "error"
+                      ? tokens.danger
+                      : n.kind === "approval"
+                        ? tokens.accent
+                        : tokens.textTertiary;
                   return (
-                    <View key={n.id} style={styles.recentRow} testID={`home-recent-${i}`}>
-                      <StatusDot
-                        color={n.read === 0 ? tokens.accent : tokens.textTertiary}
-                        size={7}
-                      />
+                    <Pressable
+                      key={n.id}
+                      onPress={() =>
+                        router.push(
+                          n.sessionId !== null && n.sessionId !== "" ? `/session/${n.sessionId}` : "/activity",
+                        )
+                      }
+                      accessibilityRole="button"
+                      accessibilityLabel={`${n.title}${when !== "" ? `, ${when}` : ""}${unread ? ", unread" : ""}`}
+                      testID={`home-recent-${i}`}
+                      style={({ pressed }) => [
+                        styles.recentRow,
+                        pressed ? { backgroundColor: tokens.subtleHover } : null,
+                      ]}
+                    >
+                      {/* The lead: the kind glyph beside the unread dot — the
+                          dot renders ONLY while unread (the glyph owns the
+                          row's identity now; the fixed-width slot keeps the
+                          text column aligned across read + unread rows). */}
+                      <View style={styles.recentLead}>
+                        <KindGlyph size={16} color={kindHue} strokeWidth={2.2} />
+                        {unread ? (
+                          <StatusDot color={tokens.accent} size={7} />
+                        ) : (
+                          <View style={styles.recentDotSpace} />
+                        )}
+                      </View>
                       <View style={styles.recentText}>
-                        <TypeCaption numberOfLines={1}>{n.title}</TypeCaption>
-                        <TypeMicro numberOfLines={1}>
-                          {Number.isNaN(ts) ? "" : timeAgo(ts)}
+                        <TypeBodyStrong
+                          numberOfLines={1}
+                          style={{ color: unread ? tokens.text : tokens.textSecondary }}
+                        >
+                          {n.title}
+                        </TypeBodyStrong>
+                        <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+                          {n.body !== "" ? n.body : (KIND_WORDS[n.kind] ?? n.kind)}
                         </TypeMicro>
                       </View>
-                    </View>
+                      {when !== "" ? (
+                        <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+                          {when}
+                        </TypeMicro>
+                      ) : null}
+                    </Pressable>
                   );
                 })}
               </View>
@@ -375,8 +449,22 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   recentPad: { padding: spacing.md, gap: spacing.md },
-  recentRow: { flexDirection: "row", gap: spacing.sm, alignItems: "center" },
-  recentText: { flex: 1, gap: 1 },
+  // The recent-activity row (R116-f): a 44px-min Pressable — [kind glyph +
+  // unread dot] [title + one body line] [time right-aligned]. The row lives
+  // INSIDE the preview card, so the pressed leg is the quiet hover tint
+  // clipped to the input radius.
+  recentRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingRight: spacing.sm,
+    minHeight: 44,
+    borderRadius: RADIUS_INPUT,
+  },
+  recentLead: { flexDirection: "row", alignItems: "center", gap: spacing.xs + 2 },
+  recentDotSpace: { width: 7 },
+  recentText: { flex: 1, gap: 2, minWidth: 0 },
   emptyPad: { padding: spacing.lg },
   unpairedInner: {
     flexDirection: "row",

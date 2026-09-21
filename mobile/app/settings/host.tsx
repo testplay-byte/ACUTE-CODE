@@ -1,14 +1,44 @@
 /**
- * The connection management page: the host's identity card (label, machine
- * id, the certificate fingerprint in its full two-line mono spelling, the
- * address ladder + port, the desktop version, when it was paired), the live
- * status row with the manual retry, the diagnostics card (the last failure
- * message + this app's boot trail — the last 12 [ACUTE-BOOT] stages), and
- * the danger zone: disconnect this desktop (honest copy — the desktop keeps
- * its device list; revoking is a separate desktop-side act).
+ * The connection details page (R116-f — the owner's verdict #23 redo).
+ *
+ * MULTI-PC SEAM (round-116 §4, item 24 — DEFERRED, no code): the phone
+ * stores exactly ONE StoredHost today (host-store.ts) and the
+ * ConnectionManager owns one link; pairing a second desktop REPLACES the
+ * link. The deferred multi-host round lands `hosts: StoredHost[]` + an
+ * ACTIVE-host switcher (device tokens already work multi-desktop
+ * server-side — the desktop's device list already holds N devices). THIS
+ * page's hero — the word-pair name + live status card below — is where the
+ * switcher's surface plugs in: the hero already renders host.hostLabel +
+ * the live status off the single useLink() snapshot, so widening the
+ * snapshot to { hosts, activeHostId } keeps this grammar intact. The
+ * connect hub's hero card carries the same seam (the switcher's primary
+ * landing spot — see connect/index.tsx).
+ *
+ * Layout, top → bottom:
+ *
+ *   · THE HERO — the same grammar as the connect hub's host branch: the
+ *     word-pair name PROMINENT (TypeTitle — not buried in an icon row),
+ *     the pinned status vocabulary single-line ("Live" /
+ *     "Looking for the host…" / "Offline") with the state dot, the honest
+ *     last-seen + version micro line, and the manual retry (byte-identical
+ *     behavior — only while the link isn't live).
+ *   · THIS DESKTOP — the identity card: the machine id, the certificate
+ *     fingerprint in its full two-line mono spelling (split at the colon
+ *     boundary — kept), the address ladder + port, the relay, when it was
+ *     paired. Every long mono value is single-line + ellipsized (the
+ *     single-line law, donts #1/#31).
+ *   · DIAGNOSTICS — the last failure message + this app's boot trail (the
+ *     last 12 [ACUTE-BOOT] stages).
+ *   · THE DANGER ZONE — its own visually-distinct region (verdict #38):
+ *     extra top margin + a hairline divider + the card bordered in the
+ *     danger tint at 30% over a subtle danger wash — the last resort, not
+ *     another card in the stack. The disconnect copy is honest and ONE
+ *     line; the desktop-revokes detail lives in the confirm alert (the
+ *     desktop keeps its device row — revoking is a separate desktop-side
+ *     act).
  */
 
-import { Alert, ScrollView, StyleSheet, View } from "react-native";
+import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { MonitorSmartphone, RefreshCw } from "lucide-react-native";
@@ -17,6 +47,7 @@ import { timeAgo } from "@/components/host-card";
 import {
   Badge,
   ClayCard,
+  Hairline,
   QuietButton,
   SectionHeader,
   StatusDot,
@@ -25,9 +56,10 @@ import {
   TypeCaption,
   TypeMicro,
   TypeMono,
+  TypeTitle,
 } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
-import { spacing } from "@/design/tokens";
+import { fontFamily, mixHex, spacing } from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import { formatCertFP, shortMachineId } from "@/link/pairing";
@@ -91,10 +123,7 @@ export default function HostSettingsScreen() {
               <MonitorSmartphone size={26} color={tokens.accent} strokeWidth={2.2} />
             </View>
             <TypeBodyStrong>No desktop linked</TypeBodyStrong>
-            <TypeCaption>
-              Pair once — scan the desktop's QR code or type the values — and this
-              phone remembers the link for months.
-            </TypeCaption>
+            <TypeCaption numberOfLines={1}>Pair once — this phone remembers the link for months.</TypeCaption>
             <QuietButton onPress={() => router.push("/connect")}>Link a desktop</QuietButton>
           </View>
         </ClayCard>
@@ -104,35 +133,26 @@ export default function HostSettingsScreen() {
 
   const certLines = host.certFP !== null ? splitCertFP(formatCertFP(host.certFP)) : null;
 
+  // The hero's pinned status vocabulary (copy.md) — the same grammar as the
+  // connect hub's host branch, the state dot carrying the semantic hue.
+  const statusWord = connected ? "Live" : status === "probing" ? "Looking for the host…" : "Offline";
+  const statusTone = connected
+    ? tokens.success
+    : status === "probing"
+      ? tokens.warning
+      : tokens.danger;
+
   return (
-    <ScreenScaffold title="Connection" back subtitle={host.hostLabel}>
-      {/* ── the live status row ── */}
+    <ScreenScaffold title="Connection" back>
+      {/* ── the hero: the word-pair name prominent + the live status + the
+          honest last-seen micro line (the retry behavior is byte-identical —
+          one quiet icon button, only while the link isn't live). ── */}
       <ClayCard elevated>
-        <View style={styles.statusPad}>
-          <View style={styles.statusRow}>
-            <StatusDot
-              color={
-                connected
-                  ? tokens.success
-                  : status === "offline"
-                    ? tokens.warning
-                    : tokens.accent
-              }
-              pulse={status === "probing"}
-            />
-            <View style={styles.statusText}>
-              <TypeBodyStrong>
-                {connected
-                  ? "live"
-                  : status === "probing"
-                    ? "looking for the host…"
-                    : "host offline — retrying"}
-              </TypeBodyStrong>
-              <TypeCaption>
-                {`last seen ${lastSeen === null ? "never" : timeAgo(lastSeen)}`}
-                {live !== null ? ` · desktop v${live.version}` : ""}
-              </TypeCaption>
-            </View>
+        <View style={styles.heroPad}>
+          <View style={styles.heroTop}>
+            <TypeTitle numberOfLines={1} style={styles.heroName} testID="host-hero-name">
+              {host.hostLabel}
+            </TypeTitle>
             {!connected ? (
               <QuietButton onPress={() => getLinkManager().retryNow()}>
                 <View style={styles.retryIconRow}>
@@ -141,6 +161,15 @@ export default function HostSettingsScreen() {
               </QuietButton>
             ) : null}
           </View>
+          <View style={styles.heroStatus}>
+            <StatusDot color={statusTone} pulse={status === "probing"} />
+            <TypeBodyStrong numberOfLines={1}>{statusWord}</TypeBodyStrong>
+          </View>
+          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+            {`last seen ${lastSeen === null ? "never" : timeAgo(lastSeen)}${
+              live !== null ? ` · desktop v${live.version}` : ""
+            }`}
+          </TypeMicro>
         </View>
       </ClayCard>
 
@@ -153,14 +182,13 @@ export default function HostSettingsScreen() {
               <MonitorSmartphone size={22} color={tokens.accent} strokeWidth={2.2} />
             </View>
             <View style={styles.identityHeadText}>
-              <TypeBodyStrong>{host.hostLabel}</TypeBodyStrong>
               <TypeMicro>MACHINE {shortMachineId(host.machineId)}</TypeMicro>
             </View>
             <Badge tone={connected ? "success" : "neutral"}>{connected ? "live" : status}</Badge>
           </View>
 
           <View style={[styles.identityRows, { borderTopColor: tokens.borderSubtle }]}>
-            <IdentityMono label="MACHINE ID" lines={[host.machineId]} />
+            <IdentityMono label="MACHINE ID" lines={[host.machineId]} ellipsizeMode="middle" />
             {certLines !== null ? (
               <IdentityMono label="CERT FINGERPRINT" lines={certLines} />
             ) : (
@@ -173,12 +201,10 @@ export default function HostSettingsScreen() {
                 `port ${host.port}`,
               ]}
             />
-            {host.relay !== null ? (
-              <IdentityMono label="CLOUD RELAY (PROBED LAST)" lines={[host.relay]} />
-            ) : null}
+            {host.relay !== null ? <IdentityMono label="CLOUD RELAY (PROBED LAST)" lines={[host.relay]} /> : null}
             <View style={styles.identityRow}>
               <TypeMicro>PAIRED</TypeMicro>
-              <TypeCaption>{timeAgo(host.pairedAt)} ago</TypeCaption>
+              <TypeCaption numberOfLines={1}>{timeAgo(host.pairedAt)} ago</TypeCaption>
             </View>
           </View>
         </View>
@@ -190,7 +216,7 @@ export default function HostSettingsScreen() {
         <View style={styles.diagPad}>
           <View style={styles.diagRow}>
             <TypeMicro>LAST FAILURE</TypeMicro>
-            <TypeCaption>
+            <TypeCaption numberOfLines={1}>
               {lastFailure !== null
                 ? `${lastFailure.kind} · ${lastFailure.message}`
                 : connected
@@ -220,21 +246,29 @@ export default function HostSettingsScreen() {
         </View>
       </ClayCard>
 
-      {/* ── the danger zone ── */}
-      <SectionHeader>Danger zone</SectionHeader>
-      <ClayCard bordered>
-        <View style={styles.dangerPad}>
-          <TypeBodyStrong style={[{ color: tokens.danger }]}>Disconnect this desktop</TypeBodyStrong>
-          <TypeBody style={styles.dangerBody}>
-            Clears the saved link on this phone — every screen falls back to "link a
-            device". The desktop keeps its device list; revoke this phone there too
-            if you want the token dead.
-          </TypeBody>
-          <QuietButton tone="danger" onPress={onDisconnect}>
-            Disconnect this desktop
-          </QuietButton>
-        </View>
-      </ClayCard>
+      {/* ── the danger zone — its own region (verdict #38): extra top
+          margin + a hairline divider + the danger-tinted border/wash, so it
+          reads as the LAST RESORT, not another card in the stack. ── */}
+      <View style={styles.dangerZone}>
+        <Hairline />
+        <SectionHeader>Danger zone</SectionHeader>
+        <ClayCard
+          bordered
+          style={{
+            borderWidth: 1,
+            borderColor: mixHex(tokens.danger, tokens.card, 0.7),
+            backgroundColor: mixHex(tokens.danger, tokens.card, 0.95),
+          }}
+        >
+          <View style={styles.dangerPad}>
+            <TypeBodyStrong style={[{ color: tokens.danger }]}>Disconnect this desktop</TypeBodyStrong>
+            <TypeBody numberOfLines={1}>Clears this phone's saved link.</TypeBody>
+            <QuietButton tone="danger" onPress={onDisconnect}>
+              Disconnect this desktop
+            </QuietButton>
+          </View>
+        </ClayCard>
+      </View>
     </ScreenScaffold>
   );
 }
@@ -251,14 +285,35 @@ function displayAddr(addr: string, port: number): string {
   return /^https?:\/\//i.test(addr) ? addr : `${addr}:${port}`;
 }
 
-function IdentityMono({ label, lines }: { label: string; lines: string[] }) {
+function IdentityMono({
+  label,
+  lines,
+  ellipsizeMode = "tail",
+}: {
+  label: string;
+  lines: string[];
+  ellipsizeMode?: "head" | "middle" | "tail";
+}) {
+  const { tokens } = useTheme();
   return (
     <View style={styles.identityRow}>
       <TypeMicro>{label}</TypeMicro>
       {lines.map((line, i) => (
-        <TypeMono key={i} style={styles.identityMonoLine}>
+        // A raw Text carrying TypeMono's exact recipe (the primitive's prop
+        // surface has no ellipsizeMode — the R116-b scaffold-title
+        // precedent): one line per value, honest truncation for the long
+        // machine truths (the cert fingerprint arrives pre-split — kept).
+        <Text
+          key={i}
+          numberOfLines={1}
+          ellipsizeMode={ellipsizeMode}
+          style={[
+            styles.identityMonoLine,
+            { color: tokens.monoText, fontFamily: fontFamily.mono },
+          ]}
+        >
           {line}
-        </TypeMono>
+        </Text>
       ))}
     </View>
   );
@@ -273,9 +328,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  statusPad: { padding: spacing.lg },
-  statusRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
-  statusText: { flex: 1, gap: 2 },
+  // The hero (R116-f): the word-pair name prominent + the pinned status
+  // line + the last-seen micro line.
+  heroPad: { padding: spacing.lg, gap: spacing.sm },
+  heroTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  heroName: { flex: 1 },
+  heroStatus: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   retryIconRow: { width: 20, height: 20, alignItems: "center", justifyContent: "center" },
   identityPad: { padding: spacing.lg, gap: spacing.md },
   identityHead: { flexDirection: "row", alignItems: "center", gap: spacing.md },
@@ -301,6 +359,9 @@ const styles = StyleSheet.create({
   trailScroll: { maxHeight: 132 },
   trailContent: { padding: spacing.sm, gap: 2 },
   trailLine: { fontSize: 11, lineHeight: 15 },
+  // The danger zone's own region (R116-f, verdict #38): separated from the
+  // card stack by extra top margin + the hairline divider; the card's own
+  // danger tint lands inline (the theme's tokens drive it).
+  dangerZone: { marginTop: spacing.xl, gap: spacing.md },
   dangerPad: { padding: spacing.lg, gap: spacing.md },
-  dangerBody: { lineHeight: 20 },
 });

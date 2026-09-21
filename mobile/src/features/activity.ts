@@ -25,6 +25,13 @@
  * disappear on their own; this side must simply not tear the state down on
  * blips.
  *
+ * R116-f (round-116 §1.4 — the mark-all-read desync): the hello frame sets
+ * the COUNT only, so the rows could sit read:0 while unread===0 (which hid
+ * the button AND early-returned the mutation), and a failed clear-all was
+ * silent. The store now RECONCILES: setUnread flips the ring's flags to
+ * match the count (reconcileUnreadFlags), markAllRead has no unread===0
+ * early-return, and the screen owns the honest failure note.
+ *
  * Pure TS at the core (unit-testable without React Native); the controller
  * takes its environment injected the same way the link manager does.
  */
@@ -103,6 +110,35 @@ export interface ActivityState {
 
 const RING_MAX = 30;
 
+/**
+ * R116-f (round-116 §1.4 — the mark-all-read desync): the SSE hello frame
+ * carries ONLY the unread count, so the ring's row flags are reconciled to
+ * it here, best effort:
+ *
+ *   · count 0     → every row reads read (the ring can never paint an unread
+ *                   dot while the badge says zero — the desync the owner saw);
+ *   · count N > 0 → the NEWEST N rows render unread and everything older
+ *                   reads read. The desktop counts newest-first, so the
+ *                   newest-N guess is the honest one; when N exceeds the
+ *                   ring (max 30) everything we hold renders unread.
+ *
+ * A row already carrying the wanted flag keeps its object identity (a no-op
+ * pass returns the SAME array, so setUnread emits nothing); this never
+ * grows or reorders the ring — it only flips flags.
+ */
+function reconcileUnreadFlags(latest: NotificationRow[], unread: number): NotificationRow[] {
+  let changed = false;
+  const next = latest.map((row, index) => {
+    const wantUnread = unread > 0 && index < unread;
+    if (wantUnread ? row.read === 1 : row.read === 0) {
+      changed = true;
+      return { ...row, read: (wantUnread ? 0 : 1) as 0 | 1 };
+    }
+    return row;
+  });
+  return changed ? next : latest;
+}
+
 export class ActivityStore {
   private state: ActivityState = { unread: 0, latest: [], streamLive: false };
   private listeners = new Set<() => void>();
@@ -123,8 +159,14 @@ export class ActivityStore {
   }
 
   setUnread(unread: number): void {
-    if (this.state.unread === unread) return;
-    this.state = { ...this.state, unread: Math.max(0, unread) };
+    const next = Math.max(0, unread);
+    // R116-f §1.4: the count RECONCILES the ring — after this call the row
+    // flags and the badge can never disagree (the hello frame's count is
+    // the server's truth; see reconcileUnreadFlags for the heuristic). A
+    // true no-op (same count, no flips) stays quiet.
+    const latest = reconcileUnreadFlags(this.state.latest, next);
+    if (this.state.unread === next && latest === this.state.latest) return;
+    this.state = { ...this.state, unread: next, latest };
     this.emit();
   }
 
@@ -165,7 +207,13 @@ export class ActivityStore {
   }
 
   markAllRead(): void {
-    if (this.state.unread === 0) return;
+    // R116-f §1.4: NO unread===0 early-return — the desync fix. The rows can
+    // sit read:0 while unread===0 (a hello that only set the count, a page
+    // whose rows carry stale flags), so the count alone must never gate the
+    // mutation: always flip every row to read:1 and zero the count. A true
+    // no-op (already zero AND every row already read) stays quiet —
+    // subscribers only hear real changes.
+    if (this.state.unread === 0 && this.state.latest.every((n) => n.read === 1)) return;
     this.state = {
       ...this.state,
       unread: 0,
@@ -347,6 +395,10 @@ export function startActivity(): void {
   if (activityStarted) return;
   activityStarted = true;
   activityController.start({ manager: getLinkManager() });
+  // The LAZY require is deliberate (the header's "pure TS at the core"
+  // posture — react-native must not load at module time, only when the app
+  // actually boots the controller); events.ts rides the same seam.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { AppState } = require("react-native") as typeof import("react-native");
   AppState.addEventListener("change", (state) => {
     activityController.setForeground(state === "active");
