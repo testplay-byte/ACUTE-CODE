@@ -1,13 +1,35 @@
-<!-- last-reviewed: 2026-09-20 round-115 -->
+<!-- last-reviewed: 2026-09-21 round-116 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
 the user of the workbench (features, fixes, behavior changes), not for the
 agents that build it. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the versioning
-follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
-version number is single-sourced from the root `package.json`
+follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
+number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [Unreleased] — 0.110.0 — the polish round (pairing that works by hand, the scanner reborn, the dashboard that finally shows everything)
+
+### Pairing, fixed where it hurt
+- **Manual entry pairing now works.** Typing (or pasting) the address + PIN used to fail with "could not reach the host" on every LAN desktop — the QR secretly carried the certificate fingerprint that made the connection trustable, and the typed form didn't. The desktop's **Copy pairing text now includes the fingerprint**, and the phone's paste flow fills it automatically; if you still hit a certificate error, the phone says what's actually wrong instead of telling you to unpair.
+- **The PC's name travels with the code.** Scan the QR and the confirm screen now shows your desktop's word-pair name before you pair — and the pairing moment types it in.
+- **The PC's pairing dialog grew up**: the fullscreen QR now sits ABOVE the dialog (where it always belonged — a stacking bug kept the dialog on top), tapping the big QR returns it to the popup, the desktop's name is the big bold headline, the hand-typing panel scrolls, and the action buttons center.
+
+### The phone
+- **The scanner is rebuilt**: a tall portrait frame with a cinematic black-and-white treatment (the camera decode is untouched), a properly centered title with a calm scanning indicator, and a photo flow that pauses the camera, thinks, and shows its result as a card instead of a flashing caption. Manual entry moved here as a first-class escape.
+- **Manual entry rebuilt**: the PIN renders as two clean groups of four boxes, the paste-failure note fades out on its own, and the whole page breathes.
+- **The first-run and connect screens obey the one-line law** — no description wraps anywhere — and the unpaired home is a single "Connect to PC" button under a broken-link animation.
+- **The bottom bar is WhatsApp-shaped**: each tab is a horizontal chip, and only the selected tab shows its label — it breathes in as you switch. The sheets lost their bounce (and can never flash the background), and every header's title is truly centered with a proper back chip.
+- **The dashboard shows everything**: a swipeable overview (tokens in/out, requests, cost, tool calls, projects, sessions), a GitHub-style activity grid, a tool leaderboard with failure counts combined per tool, model usage in the PC's exact colors with per-model cards, API-key stats, and project drill-downs that expand to their sessions. The old Activity and Health blocks are gone.
+- **The chat screen**: the three-dot menu opens a dropdown beside the header (mode, model, thinking, context — live values), the composer is a rounded pill with the paperclip inside on the right, model picking shows real models only (no more "Agent default") with the PC's actual selection checked, messages carry delivery ticks (sent → received when your desktop starts processing), file edits show their +N/−N line counts, tool failures render as quiet compact cards, and an offline session retries by itself instead of waiting for you.
+- **Projects**: clay rounded-square letter tiles, file paths that keep their meaningful tail, a separated sessions panel with real spacing (no more "open" noise), flush-left rows, a proper New Session button, and the folder picker starts from the last folder you used.
+- **Settings**: providers are colored identities showing model counts (no more base URLs or key counts), the model menu is a 2×2 grid, the edit form covers everything the desktop's does (max output, cache pricing, capability chips), and model tests wait out slow reasoning models (35s) with honest error messages.
+- **Home**: activity rows are tappable with colors and detail, and "Mark all read" actually clears the highlight.
+
+### For the builders
+- No new dependencies, no migrations. The phone's model colors are the PC's palette (stable per model name). `/usage/detailed` — shipped rounds ago, never consumed — is now the dashboard's backbone. The delivery ladder rides the existing `turn.started` frame; nothing new on the wire. The updater findings (Linux restart-into-same-version, the manual Windows flow) are documented and deferred — see `docs/ui-iterations/round-116.md` §4.
+- The full story with every owner verdict itemized: `docs/ui-iterations/round-116.md`.
 
 ## [0.109.0] — 2026-09-20 — the design language round (first-run minimal, the WhatsApp chat, projects that actually expand)
 

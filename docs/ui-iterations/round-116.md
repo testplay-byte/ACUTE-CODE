@@ -260,3 +260,39 @@ Final: the R115-r release discipline end-to-end.
   redesign keeps the seam ready.
 - Device smoke pass (accordion/keyboard/photo-QR), attachment image bytes, the browser
   save-download affordance, PC transcript polish — the standing queue from round 115.
+
+## §5 The wave log (what shipped, per commit)
+
+| Wave | Commit | The work |
+|---|---|---|
+| R116-a | d6f6cc3 | this plan + the design-language amendments (donts #31-41, checklist +9, the scanner/dashboard/chat/tabs/sheet laws) |
+| R116-b | c7f11cf | the shared chrome: SHEET_SPRING 210/30 + clamped + skirted + no-overscroll Sheet; the horizontal selected-only-label tab bar with the 2px-border indicator on TAB_SPRING; true-centered scaffold titles + chip backs + tabBarAware |
+| R116-c | 4741129 | the single-line law in the wizard; the raised 56px CTAs; buttons-to-middle on the camera screen; the unpaired home's broken-link hero + ONE Connect to PC |
+| R116-d | e520a63 | THE manual-pairing TLS fix (phone half) + machineLabel carried + the confirm host tier + the portrait monochrome scanner with the paused photo-flow + the 4+4 PIN boxes + the auto-dismissing paste note (+9 tests) |
+| R116-e | ba87d7e | THE TLS fix (PC half — the pairing text carries the fingerprint, verified parsed) + the portaled fullscreen QR + tap-to-return + the big bold name + the trimmed description + the scrollable manual panel + centered actions |
+| R116-f | b2912cb | pressable colored detailed home activity rows + mark-all-read's three desync legs fixed (+7 tests) + both connection surfaces' heroes + the separated danger zone + the multi-PC seam |
+| R116-g | ed2c278 | the dynamic dashboard: the overview carousel, the GitHub-style grid, the combined tool leaderboard, the PC-exact model colors (name-hash port, +17 tests), per-model cards, key stats, project drilldowns — fetchDetailedUsage wired |
+| R116-h+i | ad4e8d5 | the More hub's honest general block + stats card; appearance's 2px selected borders + the chat-pref rows' right-aligned controls |
+| R116-j | 93e7503 | providers as colored identities over models counts + the full-width add + the 2×2 action grid + the complete edit-model form (caps, cache read, size label; Thinking retired) + the preload-race fix + 35s test patience with honest errors (+11 tests) |
+| R116-k | 727e320 | clay rounded-square avatars + ellipsizeMode head + budget 22 + the separated sessions well + no open badge + flush-left + the New Session button + the remembered default folder |
+| R116-l | 5c57b7c | the anchored kebab dropdown + auto-retry + the back chip + the pill composer with the in-bar paperclip + the picker's real-models-only ladder (+1 test) |
+| R116-m | b8a6277 | the delivery ladder (sending → sent → delivered/failed, +5 tests) + the ticks + the compact tool cards with +N/−N chips + thinking show-all; TodoCard frozen |
+| R116-n-audit | 14c8237 | the 53-file sweep: five single-line misses fixed, the chevron drift, the tombstones, home's running rows joining the avatar law |
+
+## §3-addendum The verification matrix (fresh at the R116 close)
+
+- Mobile: `npx tsc --noEmit` clean (noUnusedLocals on) · `CI=1 npx jest --silent` →
+  **25 suites / 550 tests** all passing (was 24/500 at the R115 close) ·
+  `npx eslint --no-ignore` on every touched file → 0 findings (two pre-existing
+  unknown-rule disables retired by waves J/L).
+- Root (the PC tree — wave E): `tsc -p tsconfig.json --noEmit` clean · root vitest
+  re-verified **4337/4337** (244 files, 15 pre-existing e2e/sidecar skips) with
+  DevicesTab 26/26.
+- agent-core: 2618/2618 carried from the R115 close (no agent-core source file
+  touched this round — routes/storage were only READ).
+- docs:check 255 scanned / 0 stamp failures (3 external URLs flake on the checker's
+  HEAD probes — all answer 200 to GET; environmental, zero URLs added).
+- The final design audit (R116-n-audit): 10 pattern families swept across the whole
+  round diff — the banned words, machine truth, agent-default remnants, FAIL badges,
+  stale testIDs, spinners, hardcoded colors, the single-line law, the copy voice,
+  dead code — 7 surgical fixes, baseline held exactly.
