@@ -24,6 +24,16 @@
  * moved into Home's offline/connecting banner — every other screen already
  * handles staleness through pull-to-refresh + reconnect reloads. Pushed
  * screens (session, settings subpages, connect flows) KEEP their headers.
+ *
+ * R116-b — the round-116 header grammar: the title (+subtitle) is now
+ * ABSOLUTELY centered over the whole header row (donts.md #32 — a title
+ * centered in the space remaining beside the side slots is not centered);
+ * the overlay is pointerEvents-none so the side slots stay tappable, and
+ * the text carries numberOfLines 1 + ellipsizeMode tail + a 72%-of-screen
+ * maxWidth so long titles never collide with the slots. The back button is
+ * a proper CHIP now (donts.md #41): the 44px target gains a subtle fill +
+ * hairline border + the chip radius. `tabBarAware` joins the vocabulary
+ * (opt OUT of the floating bar's inset; default true — today's behavior).
  */
 
 import { Bell, ChevronLeft } from "lucide-react-native";
@@ -34,13 +44,15 @@ import {
   type RefreshControlProps,
   ScrollView,
   StyleSheet,
+  Text,
   View,
+  useWindowDimensions,
 } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { ConnectionPill, TypeCaption, TypeTitle } from "@/design/primitives";
+import { ConnectionPill } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
-import { spacing } from "@/design/tokens";
+import { fontFamily, RADIUS_CHIP, spacing, TYPE_CAPTION, TYPE_TITLE } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { useUnread } from "@/features/activity";
 
@@ -81,6 +93,13 @@ export interface ScreenScaffoldProps {
    * the full row (back chevron etc.).
    */
   chrome?: boolean;
+  /**
+   * R116-b: account for the floating tab bar's bottom inset (default true —
+   * the inset arrives via TabBarInsetContext, 0 outside the tabs host). Pass
+   * false for a tab-hosted screen that deliberately bleeds to the bottom
+   * edge: the bar's inset is ignored (the safe-area floor still applies).
+   */
+  tabBarAware?: boolean;
 }
 
 export function ScreenScaffold({
@@ -95,23 +114,34 @@ export function ScreenScaffold({
   keyboardAware = true,
   noPill = false,
   chrome = true,
+  tabBarAware = true,
 }: ScreenScaffoldProps) {
   const { tokens } = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
   const tabBarInset = useTabBarInset();
   const { status } = useLink();
   const unread = useUnread();
 
   const pillVisible = chrome && !noPill;
 
-  const bottomPad = tabBarInset + bottomInset + Math.max(insets.bottom - tabBarInset, 0);
+  // R116-b — tabBarAware=false opts out of the floating bar's inset (the
+  // safe-area floor still applies); the default is byte-identical to R115.
+  const barInset = tabBarAware ? tabBarInset : 0;
+  const bottomPad = barInset + bottomInset + Math.max(insets.bottom - barInset, 0);
   const Body = scroll ? (keyboardAware ? KeyboardAwareScrollView : ScrollView) : View;
+
+  // R116-b — the centered title's budget: 72% of the screen, so a long title
+  // ellipsizes (tail) instead of colliding with the side slots.
+  const titleMaxWidth = Math.round(windowWidth * 0.72);
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: tokens.bg }]} edges={["top", "left", "right"]}>
       {/* ── the ONE compact header: back | bell · centered title · right · pill ──
-          (R114-c: chrome={false} renders NO row — the tab roots are header-free) */}
+          (R114-c: chrome={false} renders NO row — the tab roots are header-free;
+           R116-b: the title is absolutely centered over the WHOLE row, the back
+           button is a chip, the spacer keeps the right side flush right) */}
       {chrome ? (
         <View style={styles.headerRow}>
           {back ? (
@@ -120,7 +150,12 @@ export function ScreenScaffold({
               accessibilityRole="button"
               hitSlop={12}
               onPress={() => router.back()}
-              style={styles.sideTarget}
+              style={[
+                styles.sideTarget,
+                styles.backChip,
+                { backgroundColor: tokens.subtle, borderColor: tokens.borderSubtle },
+              ]}
+              testID="scaffold-back"
             >
               <ChevronLeft size={26} color={tokens.text} strokeWidth={2} />
             </Pressable>
@@ -143,20 +178,36 @@ export function ScreenScaffold({
               ) : null}
             </Pressable>
           )}
-          <View style={styles.titleWrap}>
-            <TypeTitle style={styles.title} numberOfLines={1}>
-              {title}
-            </TypeTitle>
-            {subtitle ? (
-              <TypeCaption style={styles.subtitle} numberOfLines={1}>
-                {subtitle}
-              </TypeCaption>
-            ) : null}
-          </View>
+          {/* R116-b — the spacer: the title no longer lives in the flex flow,
+              so this keeps the right slot + pill flush right. */}
+          <View style={styles.titleSpacer} />
           {right ? <View style={styles.rightSlot}>{right}</View> : null}
           {pillVisible ? (
             <ConnectionPill status={status} compact onPress={() => router.push("/connect")} />
           ) : null}
+          {/* R116-b — the ABSOLUTELY centered title (donts.md #32): overlays the
+              whole header row, pointerEvents none so the side slots stay
+              tappable; the texts carry numberOfLines 1 + tail ellipsis + a
+              72%-of-screen maxWidth so long titles never collide. The type
+              recipes are TypeTitle/TypeCaption's exact token ladder. */}
+          <View pointerEvents="none" style={styles.titleOverlay}>
+            <Text
+              ellipsizeMode="tail"
+              numberOfLines={1}
+              style={[styles.title, { color: tokens.text, maxWidth: titleMaxWidth }]}
+            >
+              {title}
+            </Text>
+            {subtitle ? (
+              <Text
+                ellipsizeMode="tail"
+                numberOfLines={1}
+                style={[styles.subtitle, { color: tokens.textSecondary, maxWidth: titleMaxWidth }]}
+              >
+                {subtitle}
+              </Text>
+            ) : null}
+          </View>
         </View>
       ) : null}
       <Body
@@ -193,9 +244,46 @@ const styles = StyleSheet.create({
   /** The 44px side target: the back chevron (pushed screens) or the bell
    * (tab roots) — one discipline, one width. */
   sideTarget: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  titleWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
-  title: { textAlign: "center" },
-  subtitle: { textAlign: "center" },
+  /**
+   * R116-b — the back CHIP (donts.md #41): the 44px target gains a subtle
+   * fill + hairline border + the chip radius; the chevron is unchanged.
+   * The fill/border colors ride the theme tokens (inline).
+   */
+  backChip: {
+    borderRadius: RADIUS_CHIP,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  /** R116-b — the flex spacer (the title left the flow to center absolutely). */
+  titleSpacer: { flex: 1 },
+  /**
+   * R116-b — the absolutely centered title: spans the whole header row so
+   * the title centers over the SCREEN, not the space beside the slots.
+   * pointerEvents none (set on the View prop) keeps the slots tappable.
+   */
+  titleOverlay: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  /** TypeTitle's exact recipe (20/700, −0.2 tracking) as a raw Text so the
+   * tail-ellipsis + maxWidth can be pinned directly (R116-b). */
+  title: {
+    textAlign: "center",
+    fontSize: TYPE_TITLE,
+    fontFamily: fontFamily.bold,
+    letterSpacing: -0.2,
+  },
+  /** TypeCaption's exact recipe (12.5/500, 17 leading) — same treatment. */
+  subtitle: {
+    textAlign: "center",
+    fontSize: TYPE_CAPTION,
+    fontFamily: fontFamily.medium,
+    lineHeight: 17,
+  },
   rightSlot: { minWidth: 44, alignItems: "center", justifyContent: "center" },
   unreadDot: {
     position: "absolute",

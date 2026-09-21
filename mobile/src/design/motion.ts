@@ -64,6 +64,34 @@ export const PAIRING_MERGE_MS = 1400;
 /** The pairing content crossfade (motion.md §4.4 — the whole screen swaps, 150ms). */
 export const PAIRING_FADE_MS = 150;
 
+// ── the R116 mechanical springs (motion.md §1 — the over-damped pair) ───────
+
+/**
+ * The SHEET spring — panels: no overshoot, EVER (motion.md §1). Anything that
+ * carries a panel or a large surface rides this config; a bounce that reveals
+ * the page background is a defect, not personality.
+ */
+export const SHEET_SPRING: WithSpringConfig = {
+  stiffness: 210,
+  damping: 30,
+};
+
+/**
+ * The TAB spring — the calm indicator slide (motion.md §1): over-damped so
+ * the selection pill glides to its slot and settles without overshoot.
+ */
+export const TAB_SPRING: WithSpringConfig = {
+  stiffness: 200,
+  damping: 26,
+};
+
+/**
+ * The tab label's expand/collapse timing (motion.md §4.7, ~200ms): the
+ * selected item's label breathes in (maxWidth + opacity) while the previous
+ * one collapses out — the icon never jumps, the reflow stays animated.
+ */
+export const TAB_LABEL_MS = 200;
+
 // ── the R115-N chart entries (motion.md §4.6 — once per data load) ──────────
 
 /** The daily bars' baseline grow (motion.md §4.6: withTiming 350ms, staggered). */
