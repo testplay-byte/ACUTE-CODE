@@ -143,7 +143,9 @@ describe("breadcrumbSegments — the picker's tappable ancestry", () => {
   });
 });
 
-// ── the smart path line (R115-h — the project row's TypeMono meta) ─────────
+// ── the smart path line (R115-h — the project row's TypeMono meta;
+// R116-k — the budget tightened 28 → 22, a mono-12px string the row can
+// actually show alongside its ellipsizeMode="head" clamp) ────────────────
 
 describe("shortRootPath — the project row's folded root path", () => {
   const TABLE: ReadonlyArray<{ rootPath: string; projectName: string; expected: string }> = [
@@ -158,11 +160,12 @@ describe("shortRootPath — the project row's folded root path", () => {
     { rootPath: "/home/z/repos/acute-code", projectName: "acute-code", expected: "/home/z/repos" },
     { rootPath: "/home/z/repos/ACUTE-CODE", projectName: "Acute-Code", expected: "/home/z/repos" },
     // Overflow sheds the leading folders under a "…/" prefix — the TAIL
-    // that fits the 28-char budget is what stays.
+    // that fits the 22-char budget is what stays (the row's head clamp
+    // keeps the surviving tail honest at any residual overflow).
     {
       rootPath: "/home/z/dev/projects/very/deeply/nested/here/now",
       projectName: "proj",
-      expected: "…/deeply/nested/here/now",
+      expected: "…/nested/here/now",
     },
     // Windows drives normalize to "/"; the drive root answers "C:/".
     { rootPath: "C:\\Users\\z\\repos\\dashboard", projectName: "dashboard", expected: "C:/Users/z/repos" },
@@ -171,7 +174,7 @@ describe("shortRootPath — the project row's folded root path", () => {
     {
       rootPath: `/home/z/repos/${"a".repeat(40)}`,
       projectName: "proj",
-      expected: `${"a".repeat(14)}…${"a".repeat(13)}`,
+      expected: `${"a".repeat(11)}…${"a".repeat(10)}`,
     },
   ];
 
@@ -183,7 +186,7 @@ describe("shortRootPath — the project row's folded root path", () => {
   );
 
   it("the budget is callable — a tighter budget sheds more leading folders", () => {
-    // At the default 28 the full tail fits; at 12 only the deepest pair.
+    // At the default 22 the full tail fits; at 12 only the deepest pair.
     expect(shortRootPath("/home/z/repos/acute-code", "acute-code")).toBe("/home/z/repos");
     expect(shortRootPath("/home/z/repos/acute-code", "acute-code", 12)).toBe("…/z/repos");
   });

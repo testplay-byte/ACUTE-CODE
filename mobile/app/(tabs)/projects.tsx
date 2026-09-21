@@ -1,14 +1,19 @@
 /**
  * Projects v5 (R115-h — the round-115 projects tab, rebuilt per
- * docs/design-language/android/): the registry AS THE List archetype.
+ * docs/design-language/android/; R116-k — the owner's v0.109.0 walkthrough
+ * fixes): the registry AS THE List archetype.
  *
  * THE ROW (components.md's row anatomy): [LetterAvatar 40 — the project's
- * own color + first letter] [TypeBodyStrong name + ONE meta line — the
- * smart root path (shortRootPath: TypeMono 12, the trailing project-name
- * segment dropped, "…/"-shed to a 28-char budget)] [trailing: the
- * session-count Badge ("3"; "{n} running" in the running tone while a
- * turn runs) + the chevron — the ONLY affordance; the per-row Plus button
- * is DEAD (donts #3: never a chevron AND an action button on one row)].
+ * own color + first letter on a ROUNDED-SQUARE clay tile (R116-k: the
+ * circle is retired)] [TypeBodyStrong name + ONE meta line — the smart
+ * root path (shortRootPath: mono 12, the trailing project-name segment
+ * dropped, "…/"-shed to a 22-char budget, ellipsizeMode "head" so any
+ * residual overflow dots the FRONT — the tail, the part that identifies
+ * the folder, survives)] [trailing: the session-count Badge ("3"; "{n}
+ * running" in the running tone while a turn runs) — and NOTHING else: the
+ * chevron is DEAD (R116-k, verdict #44), the whole row Pressable is the
+ * expand affordance (donts #3: never a chevron AND an action button on
+ * one row)].
  *
  * THE ACCORDION (R114-c's inline expansion, FIXED R115-h — donts #10, the
  * "dead measurement pattern"): the clip View carries overflow:hidden ONLY
@@ -19,14 +24,19 @@
  * at 0 — the measured height is always real, and it lives in a SHARED
  * VALUE the open-toggle effect reads fresh: a re-measure while open (the
  * "+N more" reveal, a live refetch landing new rows) re-springs the panel
- * to the new height. The chevron keeps its own 180° spring; one row open
- * at a time. The fold's rows keep the honest labels (sessionStatusLabel:
- * queued reads "open", completed "done") + Badge, the "+N more" reveal,
- * and the "New session" row at the end.
+ * to the new height. One row open at a time. THE SESSIONS WELL (R116-k,
+ * verdicts #48/#49/#50/#51): the fold is its own INSET REGION — a
+ * subtle-tinted, hairline-bordered RADIUS_INPUT panel inside the card
+ * (the project row above keeps its own card identity) — with the session
+ * rows FLUSH LEFT (the FOLD_INDENT is dead), xs gaps between them, the
+ * "open" status Badge suppressed (running/done/stopped/failed still
+ * badge), the "+N more" reveal, and the "New session" quiet action button
+ * (the wave-J add-action grammar) closing the well.
  *
  * THE NEW PROJECT ACTION (screen-archetypes §2): at the list's BOTTOM,
- * half width (48%), FolderPlus + "New project" — no description, no
- * chevron, the quiet outline. Its sheet asks ONE question (components.md):
+ * half width (48%), CENTERED (donts #40 — bottom actions never left-hug),
+ * FolderPlus + "New project" — no description, no chevron, the quiet
+ * outline. Its sheet asks ONE question (components.md):
  * WHICH FOLDER — the Name field and the Color swatches are DEAD (donts
  * #18: never ask for derivable data — the name is the folder's basename,
  * the color is the server's own). The folder browser (breadcrumbs + the
@@ -37,6 +47,13 @@
  * folder" (back to browsing) + the separate "Create the project" primary.
  * The old "tap a project to expand…" footnote is DELETED (copy.md — the
  * affordance teaches itself).
+ *
+ * THE DEFAULT FOLDER (R116-k, verdict #52): every open starts from a
+ * REMEMBERED default — the last successfully-created project's parent dir
+ * (AsyncStorage "acute.default-project-dir"; the server home when none
+ * is stored or the stored dir went stale) — and every open RESETS the
+ * browse state: a cancelled sheet never reopens wherever the user left
+ * off.
  *
  * LIVE (R113-e): the events store drives the reloads — hello (the resync)
  * and the debounced session-frame batches bump the epochs this screen keys
@@ -53,6 +70,7 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
+  Text,
   TextInput,
   View,
 } from "react-native";
@@ -62,7 +80,6 @@ import Animated, {
   withSpring,
 } from "react-native-reanimated";
 import {
-  ChevronDown,
   ChevronRight,
   ChevronUp,
   Folder,
@@ -90,7 +107,7 @@ import {
 import { selectionHaptic, successHaptic, warningHaptic } from "@/design/haptics";
 import { useTheme } from "@/design/theme";
 import { SPRING } from "@/design/motion";
-import { RADIUS_INPUT, TILE_ROW, TOUCH_TARGET, fontFamily, spacing } from "@/design/tokens";
+import { RADIUS_INPUT, TOUCH_TARGET, fontFamily, mixHex, spacing } from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import { useEventsEpoch } from "@/features/events";
@@ -113,7 +130,16 @@ import {
   sessionTitle,
   type SessionRow,
 } from "@/features/sessions";
-import { breadcrumbSegments, fetchFsBrowse, shortRootPath, type FsBrowseReply } from "@/features/fs-browse";
+import {
+  breadcrumbSegments,
+  clearDefaultProjectDir,
+  fetchFsBrowse,
+  loadDefaultProjectDir,
+  parentDirOf,
+  saveDefaultProjectDir,
+  shortRootPath,
+  type FsBrowseReply,
+} from "@/features/fs-browse";
 import { mobLog, mobWarn } from "@/lib/log";
 
 /** The client-side fold limit (the sessions route has NO server-side
@@ -122,11 +148,6 @@ const SESSION_FOLD_LIMIT = 200;
 
 /** How many sessions the accordion renders before the "+N more" reveal. */
 const EXPAND_PREVIEW = 8;
-
-/** The fold rows' indent — aligned under the row's label (gutter + the
- * 40px letter avatar + the row gap), so the sessions read as the row's
- * children. */
-const FOLD_INDENT = spacing.lg + TILE_ROW + spacing.md;
 
 export default function ProjectsTab() {
   const { tokens } = useTheme();
@@ -454,15 +475,10 @@ function ProjectRowCard({
 }) {
   const { tokens } = useTheme();
   const running = stats?.running ?? 0;
-  const chevron = useSharedValue(0);
-
-  useEffect(() => {
-    chevron.value = withSpring(expanded ? 1 : 0, SPRING);
-  }, [expanded, chevron]);
-
-  const chevronStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${chevron.value * 180}deg` }],
-  }));
+  // The New-session button's accent tint — wave-J's add-action idiom (the
+  // accent softened onto the card surface; a full-strength accent border
+  // on a full-width row would shout).
+  const newSessionTint = mixHex(tokens.accent, tokens.card, 0.55);
 
   const visible = full ? sessions : sessions.slice(0, EXPAND_PREVIEW);
   const hidden = sessions.length - visible.length;
@@ -471,36 +487,50 @@ function ProjectRowCard({
     <PressableCard
       onPress={onToggle}
       enterIndex={Math.min(index, 12)}
-      accessibilityLabel={`Project ${project.name}${stats !== undefined ? `, ${stats.total} session${stats.total === 1 ? "" : "s"}` : ""}${running > 0 ? `, ${running} running` : ""}${expanded ? ", expanded" : ""}`}
+      accessibilityLabel={`Project ${project.name}${stats !== undefined ? `, ${stats.total} session${stats.total === 1 ? "" : "s"}` : ""}${running > 0 ? `, ${running} running` : ""}${expanded ? ", tap to collapse" : ", tap to expand"}`}
       accessibilityState={{ expanded }}
     >
       <View style={styles.rowInner}>
         <LetterAvatar label={project.name} color={project.color} />
         <View style={styles.rowMain}>
           <TypeBodyStrong numberOfLines={1}>{project.name}</TypeBodyStrong>
-          <TypeMono numberOfLines={1} style={styles.rootPath}>
+          {/* The path line orients by its TAIL — ellipsizeMode "head" dots
+              the FRONT on residual overflow (R116-k, verdict #46: the bare
+              numberOfLines default clamped the END, cutting the part that
+              identifies the folder). TypeMono's prop surface carries no
+              ellipsizeMode, so the mono line renders as a raw Text wearing
+              TypeMono's token styling at 12px. */}
+          <Text
+            numberOfLines={1}
+            ellipsizeMode="head"
+            style={[styles.rootPath, { color: tokens.monoText, fontFamily: fontFamily.mono }]}
+          >
             {shortRootPath(project.rootPath, project.name)}
-          </TypeMono>
+          </Text>
         </View>
         {stats !== undefined ? (
           // The session count as a compact Badge — "3", or "{n} running"
           // in the running tone while a turn runs (the events store keeps
-          // the fold live). Never a text line; never a second affordance.
+          // the fold live). Never a text line; never a second affordance —
+          // and no chevron beside it (R116-k, verdict #44: the whole row
+          // Pressable is the expand affordance).
           <Badge tone={running > 0 ? "running" : "neutral"} style={styles.countBadge}>
             {running > 0 ? `${running} running` : `${stats.total}`}
           </Badge>
         ) : null}
-        <Animated.View style={chevronStyle}>
-          <ChevronDown size={18} color={tokens.textTertiary} strokeWidth={2.2} />
-        </Animated.View>
       </View>
 
-      {/* ── the inline session expansion (R114-c) ── */}
+      {/* ── the inline session expansion (R114-c) — R116-k: the fold is
+          its own INSET REGION (a subtle-tinted, hairline-bordered panel
+          floating inside the card), not a bare top border on the card's
+          tail. ── */}
       <Accordion open={expanded}>
-        <View style={[styles.sessionsWell, { borderTopColor: tokens.borderSubtle }]}>
+        <View
+          style={[styles.sessionsWell, { backgroundColor: tokens.subtle, borderColor: tokens.borderSubtle }]}
+        >
           {visible.length === 0 ? (
             <View style={styles.sessionsEmpty}>
-              <TypeCaption style={{ color: tokens.textTertiary }}>
+              <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary }}>
                 no sessions yet — start one below
               </TypeCaption>
             </View>
@@ -516,17 +546,33 @@ function ProjectRowCard({
               onPress={onRevealAll}
               style={({ pressed }) => [styles.moreRow, { opacity: pressed ? 0.6 : 1 }]}
             >
-              <TypeMicro style={{ color: tokens.textTertiary }}>+{hidden} more sessions</TypeMicro>
+              <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+                +{hidden} more sessions
+              </TypeMicro>
             </Pressable>
           ) : null}
+          {/* The well's closing action (R116-k, verdict #51): a proper
+              quiet BUTTON — full-width, the wave-J add-action's outlined
+              accent tint + press grammar (scale + tint), separated from
+              the session rows above. */}
           <Pressable
             accessibilityLabel={`Start a new session in ${project.name}`}
             accessibilityRole="button"
             onPress={onNewSession}
-            style={({ pressed }) => [styles.newSessionRow, { opacity: pressed ? 0.6 : 1 }]}
+            testID="new-session-row"
+            style={({ pressed }) => [
+              styles.newSessionRow,
+              {
+                borderColor: pressed ? tokens.accent : newSessionTint,
+                backgroundColor: pressed ? tokens.subtleHover : "transparent",
+                transform: [{ scale: pressed ? 0.98 : 1 }],
+              },
+            ]}
           >
             <Plus size={16} color={tokens.accent} strokeWidth={2.4} />
-            <TypeBodyStrong style={{ color: tokens.accent }}>New session</TypeBodyStrong>
+            <TypeBodyStrong numberOfLines={1} style={{ color: tokens.accent }}>
+              New session
+            </TypeBodyStrong>
           </Pressable>
         </View>
       </Accordion>
@@ -540,15 +586,21 @@ function SessionRow({ row, onOpen }: { row: SessionRow; onOpen: () => void }) {
   const { tokens } = useTheme();
   const tone = sessionStatusTone(row.status);
   const running = isTurnRunning(row);
+  const label = sessionStatusLabel(row.status);
   const updatedMs = new Date(row.updatedAt).getTime();
   const updated = Number.isFinite(updatedMs) ? timeAgoShort(updatedMs) : "";
 
   return (
     <Pressable
-      accessibilityLabel={`Session ${sessionTitle(row)}, ${sessionStatusLabel(row.status)}`}
+      accessibilityLabel={`Session ${sessionTitle(row)}, ${label}`}
       accessibilityRole="button"
       onPress={onOpen}
-      style={({ pressed }) => [styles.sessionRow, { backgroundColor: pressed ? tokens.subtle : "transparent" }]}
+      style={({ pressed }) => [
+        styles.sessionRow,
+        // subtleHover — a step ABOVE the well's subtle tint, so the pressed
+        // row still reads on the tinted surface (R116-k).
+        { backgroundColor: pressed ? tokens.subtleHover : "transparent" },
+      ]}
     >
       <View style={styles.sessionMain}>
         <TypeBody numberOfLines={1} style={styles.sessionTitle}>
@@ -562,7 +614,11 @@ function SessionRow({ row, onOpen }: { row: SessionRow; onOpen: () => void }) {
           </TypeMicro>
         </View>
       </View>
-      <Badge tone={running ? "running" : tone}>{sessionStatusLabel(row.status)}</Badge>
+      {/* The status Badge only when it says something (R116-k, verdict
+          #49): an OPEN session carries its title + time — a badge there
+          would read as decoration; running/done/stopped/failed still
+          badge (with the live dot when a turn runs). */}
+      {label === "open" ? null : <Badge tone={running ? "running" : tone}>{label}</Badge>}
     </Pressable>
   );
 }
@@ -612,7 +668,8 @@ function NewProjectSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Blank path = the SERVER's home directory — the browse starts there.
+  // Blank path = the SERVER's home directory — the browse's fallback
+  // start (the remembered default, when one is stored, seeds ahead of it).
   const browseTo = useCallback(async (path?: string) => {
     setBrowseLoading(true);
     setBrowseError(null);
@@ -633,12 +690,53 @@ function NewProjectSheet({
     }
   }, []);
 
-  // The first open browses the server home; every open clears the stale error.
+  // The predetermined start (R116-k, verdict #52): the REMEMBERED default
+  // dir — the last successfully-created project's parent — with the server
+  // home as the fallback when none is stored; a STALE remembered dir
+  // (moved or deleted on the desktop) forgets itself and falls back home
+  // too, so the sheet is never trapped at a dead path.
+  const seedBrowse = useCallback(async () => {
+    setBrowseLoading(true);
+    setBrowseError(null);
+    try {
+      const stored = await loadDefaultProjectDir();
+      if (stored !== null) {
+        const outcome = await fetchFsBrowse(getLinkManager(), stored);
+        if (outcome.ok) {
+          setBrowse(outcome.data);
+          mobLog("fs-browse", "seeded from the remembered default", {
+            path: outcome.data.path,
+            entries: outcome.data.entries.length,
+          });
+          return;
+        }
+        mobWarn("fs-browse", "default dir stale — falling back to the home browse", {
+          status: outcome.error.status,
+        });
+        void clearDefaultProjectDir();
+      }
+      await browseTo();
+    } catch {
+      setBrowseError("the host is offline — browsing resumes when it returns");
+      mobWarn("fs-browse", "threw");
+    } finally {
+      setBrowseLoading(false);
+    }
+  }, [browseTo]);
+
+  // Every open starts FRESH (R116-k): the full browse state resets — a
+  // cancelled sheet never reopens wherever the user left off — and the
+  // browse re-seeds from the predetermined start.
   useEffect(() => {
     if (!open) return;
+    setRoot(null);
+    setManual(false);
+    setManualPath("");
+    setBrowse(null);
+    setBrowseError(null);
     setError(null);
-    if (browse === null) void browseTo();
-  }, [open, browse, browseTo]);
+    void seedBrowse();
+  }, [open, seedBrowse]);
 
   // The folder list — dirs only (this is a FOLDER picker; the route already
   // sorts dirs first, each alphabetical).
@@ -671,11 +769,12 @@ function NewProjectSheet({
       if (outcome.ok) {
         mobLog("projects", "project created", { id: outcome.data.id, name: body.name });
         void successHaptic();
-        // Reset for the next open (the browser re-browses the home dir).
-        setRoot(null);
-        setBrowse(null);
-        setManual(false);
-        setManualPath("");
+        // Remember the created project's PARENT dir as the next sheet's
+        // predetermined start (R116-k) — best-effort; a path with no
+        // parent (a bare root) simply doesn't store.
+        const parent = parentDirOf(outcome.data.rootPath);
+        if (parent !== null) void saveDefaultProjectDir(parent);
+        // The next open's reset + re-seed owns the browse state now.
         onCreated();
       } else {
         mobWarn("projects", "project create failed", {
@@ -1085,7 +1184,7 @@ function NewSessionSheet({
 }
 
 const styles = StyleSheet.create({
-  // ── the project row: [avatar 40] [label + ONE meta line] [badge + chevron] ──
+  // ── the project row: [avatar 40] [label + ONE meta line] [badge] ──
   rowInner: {
     flexDirection: "row",
     alignItems: "center",
@@ -1094,17 +1193,20 @@ const styles = StyleSheet.create({
     minHeight: 68,
   },
   rowMain: { flex: 1, gap: 3 },
-  rootPath: { fontSize: 12 },
+  /** The mono-12 path line — a raw Text (TypeMono's prop surface carries
+   * no ellipsizeMode) wearing TypeMono's token styling at 12px; the color
+   * + mono family ride the inline token pair. */
+  rootPath: { fontSize: 12, lineHeight: 19 },
   countBadge: { alignSelf: "center" },
 
-  // ── the New Project action (the list's bottom — half width, quiet) ──
+  // ── the New Project action (the list's bottom — half width, CENTERED) ──
   newProjectAction: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.sm,
     width: "48%",
-    alignSelf: "flex-start",
+    alignSelf: "center",
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: RADIUS_INPUT,
     minHeight: TOUCH_TARGET + 2,
@@ -1115,16 +1217,27 @@ const styles = StyleSheet.create({
   accordionClip: { overflow: "hidden" },
   /** The ABSOLUTE measurement child — natural height at any clip height. */
   accordionMeasure: { position: "absolute", top: 0, left: 0, right: 0 },
+  /** The fold's INSET REGION (R116-k, verdict #48): its own surface — the
+   * subtle tint + hairline borderSubtle frame (inline token pair),
+   * RADIUS_INPUT corners, sm margins so the frame floats inside the card
+   * (the project row above keeps its own card identity), sm inner padding
+   * + xs gaps so the rows breathe. */
   sessionsWell: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingBottom: spacing.sm,
+    marginTop: spacing.sm,
+    marginHorizontal: spacing.sm,
+    marginBottom: spacing.sm,
+    borderRadius: RADIUS_INPUT,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: spacing.sm,
+    gap: spacing.xs,
   },
   sessionsEmpty: { padding: spacing.md },
   sessionRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
-    paddingLeft: FOLD_INDENT,
+    // FLUSH LEFT (R116-k, verdict #50) — no paddingLeft: the rows sit at
+    // the well's edge; only the right side pads.
     paddingRight: spacing.lg,
     minHeight: 48,
   },
@@ -1132,20 +1245,24 @@ const styles = StyleSheet.create({
   sessionTitle: { fontWeight: "600", fontSize: 14 },
   sessionMeta: { flexDirection: "row", gap: 4, alignItems: "center", flexWrap: "wrap" },
   moreRow: {
-    paddingLeft: FOLD_INDENT,
     paddingRight: spacing.lg,
     paddingVertical: spacing.sm,
     minHeight: 44,
     justifyContent: "center",
   },
+  /** The well's New-session BUTTON (R116-k, verdict #51): full-width,
+   * 48px, RADIUS_INPUT, the accent-tinted outline (wave-J's add-action
+   * grammar) — the tint + pressed colors ride the inline token pair, xs
+   * top margin separates it from the session rows. */
   newSessionRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    paddingLeft: FOLD_INDENT,
-    paddingRight: spacing.lg,
-    paddingVertical: spacing.sm + 2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: RADIUS_INPUT,
     minHeight: 48,
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.xs,
   },
 
   // ── the shared sheet fields (the New Session sheet + the manual path) ──

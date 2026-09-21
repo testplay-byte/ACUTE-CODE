@@ -1066,8 +1066,9 @@ function ItemSeparator() {
 /** The honest fallback identity tile — a NEUTRAL avatar (subtle bg + the
  * session title's first letter, "A" when nothing reads) for a session with
  * no project or one the registry no longer lists. Same geometry as the
- * LetterAvatar it stands in for (36px circle, TypeBodyStrong auto-scaled)
- * but on the neutral surface — never a fabricated project color. */
+ * LetterAvatar it stands in for (36px rounded-square clay tile — R116-k,
+ * the circle is retired — TypeBodyStrong auto-scaled) but on the neutral
+ * surface — never a fabricated project color. */
 function NeutralAvatar({ label }: { label: string }) {
   const { tokens } = useTheme();
   const size = 36;
@@ -1083,7 +1084,14 @@ function NeutralAvatar({ label }: { label: string }) {
           backgroundColor: tokens.subtle,
           width: size,
           height: size,
-          borderRadius: size / 2,
+          borderRadius: Math.round(size * 0.38),
+          // The LetterAvatar's clay treatment on the neutral surface: the
+          // matte top edge over the hairline rim + the small-shadow leg.
+          borderTopWidth: StyleSheet.hairlineWidth,
+          borderTopColor: tokens.clayTopEdge,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: tokens.border,
+          boxShadow: tokens.clayShadowSm,
         },
       ]}
     >

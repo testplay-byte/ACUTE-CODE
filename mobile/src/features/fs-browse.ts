@@ -15,8 +15,16 @@
  * browse starts there. The route never returns file CONTENTS (names + dir
  * flags only), so this client has nothing to be careful about beyond the
  * typed outcome. Injectable sender, apiJson/outcome types — the house
- * pattern (no React Native, no link import).
+ * pattern (no link import, no UI).
+ *
+ * R116-k — the REMEMBERED DEFAULT DIR: the last successfully-created
+ * project's parent dir, persisted through AsyncStorage, seeds every New
+ * Project sheet open (falling back to the server home when none is
+ * stored). Storage is mocked in jest.setup.js, so importing it here never
+ * touches a native bridge from any test.
  */
+
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { apiJson, type ApiOutcome, type ApiSender } from "./api";
 
@@ -81,8 +89,9 @@ export function breadcrumbSegments(path: string): Array<{ label: string; path: s
 
 /**
  * shortRootPath — the smart path line for project rows (R115-h): the root
- * path folded to a display budget (default 28 chars — the TypeMono 12 meta
- * line's comfortable width). The rules, in order:
+ * path folded to a display budget (default 22 chars — a mono-12px string
+ * the row can actually show; R116-k tightened it from 28, which overflowed
+ * the row's width). The rules, in order:
  *   1. separators normalize to "/" and trailing slashes drop;
  *   2. the TRAILING segment drops when it equals the project's name
  *      (case-insensitive) — the row already says the name, the path line
@@ -94,7 +103,7 @@ export function breadcrumbSegments(path: string): Array<{ label: string; path: s
  * The filesystem root answers "/" (a Windows drive root answers "C:/").
  * Pure; never throws.
  */
-export function shortRootPath(rootPath: string, projectName: string, budget = 28): string {
+export function shortRootPath(rootPath: string, projectName: string, budget = 22): string {
   const slashed = rootPath.replace(/\\/g, "/");
   if (slashed === "") return "";
   // A slash-only path IS the filesystem root (never an empty string).
@@ -133,4 +142,60 @@ export function shortRootPath(rootPath: string, projectName: string, budget = 28
   const left = Math.ceil(keep / 2);
   const right = keep - left;
   return `${last.slice(0, left)}…${last.slice(last.length - right)}`;
+}
+
+// ── the remembered default dir (R116-k) ─────────────────────────────────
+
+/** The AsyncStorage key — the last successfully-created project's parent
+ * dir; every New Project sheet open seeds its browse from it. */
+const DEFAULT_PROJECT_DIR_KEY = "acute.default-project-dir";
+
+/** Load the remembered default project dir (null when none is stored or
+ * storage refuses — the sheet falls back to the server home; never a
+ * blocked browse). */
+export async function loadDefaultProjectDir(): Promise<string | null> {
+  try {
+    const raw = await AsyncStorage.getItem(DEFAULT_PROJECT_DIR_KEY);
+    if (raw === null) return null;
+    const trimmed = raw.trim();
+    return trimmed === "" ? null : trimmed;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the remembered default project dir (best-effort — a refused
+ * write never blocks the create; the next open just starts from home). */
+export async function saveDefaultProjectDir(dir: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(DEFAULT_PROJECT_DIR_KEY, dir);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Forget the remembered default (best-effort) — a stale dir the desktop
+ * no longer lists. */
+export async function clearDefaultProjectDir(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(DEFAULT_PROJECT_DIR_KEY);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * The parent directory of an absolute path — the create-success save's
+ * value ("/home/z/repos/acute-code" → "/home/z/repos": the folder the
+ * next project is a sibling of). Windows separators normalize to "/"; a
+ * path with no parent (a bare root) answers null. Pure; never throws.
+ */
+export function parentDirOf(path: string): string | null {
+  const slashed = path.replace(/\\/g, "/");
+  const normalized = slashed.replace(/\/+$/, "");
+  const isAbsolute = normalized.startsWith("/");
+  const parts = normalized.split("/").filter((part) => part !== "");
+  if (parts.length <= 1) return null;
+  parts.pop();
+  return `${isAbsolute ? "/" : ""}${parts.join("/")}`;
 }
