@@ -1,139 +1,181 @@
 /**
- * More — the FIFTH tab (R115-g, the round-115 pinned decision): the hub the
- * settings tab became — a summary + the entries, NOT a settings list (the
- * List archetype, header-free root). Top → bottom:
+ * More — the FIFTH tab (R115-g, the round-115 pinned decision; R116-h —
+ * verdict #26's redo): the QUIET hub. The connection/live-status card, the
+ * Activity row, and the setup-wizard replay are DEAD (the connection hub
+ * owns the link's whole surface now — R116-f; activity reaches through the
+ * tab-root bell + its own screen; the wizard never replays). Top → bottom:
  *
- *   · THE CONNECTION CARD — home's compact live-status row grammar: the
- *     dot (live/probing/offline) + the pinned word ("Live" / "Looking for
- *     the host…" / "Offline") + the one caption line — the word-pair name
- *     + "· desktop v{x}" — → the connection page (/settings/host).
- *     Unpaired (the deep-link case; the gate lands these users on
- *     /connect) renders the honest "No desktop linked" one-liner instead.
- *   · THE ACTIVITY ROW — always present (unlike home's unread-gated
- *     strip): the bell chip + "Activity" + the unread caption → /activity.
+ *   · THE ABOUT CARD — app identity: the Info tile + "ACUTE companion" +
+ *     the version Badge + the build line (mono machine truth:
+ *     "v{version} · expo {SDK}") + the one-line role.
+ *   · THE STATS CARD — the owner's "simple clean stats": Projects /
+ *     Sessions / Running now as quiet label-left / mono-number-right rows.
+ *     ONE parallel load (fetchProjects + fetchSessions's 200 fold — home's
+ *     own idioms) on focus + the sessions epoch; "—" while loading; the
+ *     card hides entirely while unpaired/offline or after a failed load
+ *     (never fabricated counts — the connect hub carries that truth).
  *   · THE SETTINGS ENTRY — the hub's main job, the PROMINENT row: the 44px
  *     Settings2 chip + the one-line inventory caption → /settings (the
- *     management hub, now a PUSHED screen in the settings stack).
- *   · THE ABOUT CARD — app identity: "ACUTE companion" + the version badge
- *     + the one-line role + the setup-wizard replay.
+ *     management hub, a PUSHED screen in the settings stack).
  *
  * Every row staggers in (PressableCard enterIndex / FadeInUp — motion.md §2).
  */
 
-import { useRouter } from "expo-router";
-import { useEffect } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import Constants from "expo-constants";
-import { Bell, ChevronRight, Info, MonitorSmartphone, Settings2 } from "lucide-react-native";
+import { ChevronRight, Info, Settings2 } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import {
   Badge,
   ClayCard,
   FadeInUp,
   PressableCard,
-  QuietButton,
-  StatusDot,
   TypeBody,
   TypeBodyStrong,
   TypeCaption,
+  TypeMono,
 } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
 import { spacing } from "@/design/tokens";
+import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
-import { useUnread } from "@/features/activity";
-import { resetOnboarding } from "@/features/onboarding";
-import { mobLog } from "@/lib/log";
+import { useEventsEpoch } from "@/features/events";
+import { fetchProjects } from "@/features/config";
+import { fetchSessions } from "@/features/sessions";
+import { mobLog, mobWarn } from "@/lib/log";
 
 /** The version the about card shows — the BUILD's own app.json version
  * (embedded by expo-constants), falling back to the R109 release number. */
 const APP_VERSION = Constants.expoConfig?.version ?? "0.105.0";
 
+/** The Expo leg of the build line — Constants' honest offer: the Expo Go
+ * version when running inside Go, null in dev-client/standalone builds
+ * (where the pinned SDK is the truth — package.json's expo ~57). */
+const EXPO_TAG = Constants.expoVersion ?? "SDK 57";
+
+/** The session fold the stats load rides (the same 200 home + projects
+ * ride — "Running now" only ever needs the recent sessions). */
+const SESSION_FOLD_LIMIT = 200;
+
+/** The one-shot stats payload — three honest counts, nothing derived. */
+interface HubStats {
+  projects: number;
+  sessions: number;
+  running: number;
+}
+
 export default function MoreScreen() {
   const { tokens } = useTheme();
   const router = useRouter();
-  const { status, host, live } = useLink();
-  const unread = useUnread();
+  const { status } = useLink();
+
+  // ── the world's counts — null while loading (the honest "—"); a failed
+  // or unpaired load hides the card entirely instead. ──
+  const [stats, setStats] = useState<HubStats | null>(null);
+  const [statsFailed, setStatsFailed] = useState(false);
+
+  // ── the live leg (home's pattern): a debounced session-frame batch moves
+  // the sessions epoch — the running count follows it while this hub is
+  // mounted. The MOUNT value guards the first fetch (focus owns it). ──
+  const sessionsEpoch = useEventsEpoch("sessions");
+  const mountEpoch = useRef(sessionsEpoch);
 
   useEffect(() => {
     mobLog("more", "hub opened", { status });
   }, [status]);
 
-  const connected = status === "connected";
-  const probing = status === "probing";
+  // ONE parallel load — projects (registry length) + sessions (the route's
+  // own `total`, plus the fold for the running filter). Failures are values
+  // AND throws here: either way the card goes quiet (never a fake zero).
+  const loadStats = useCallback(async () => {
+    try {
+      const [projectsOutcome, sessionsOutcome] = await Promise.all([
+        fetchProjects(getLinkManager()),
+        fetchSessions(getLinkManager(), { limit: SESSION_FOLD_LIMIT }),
+      ]);
+      if (!projectsOutcome.ok || !sessionsOutcome.ok) {
+        setStatsFailed(true);
+        mobWarn("more", "stats unavailable", {
+          projects: projectsOutcome.ok ? "ok" : projectsOutcome.error.status,
+          sessions: sessionsOutcome.ok ? "ok" : sessionsOutcome.error.status,
+        });
+        return;
+      }
+      const next: HubStats = {
+        projects: projectsOutcome.data.projects.length,
+        sessions: sessionsOutcome.data.total,
+        running: sessionsOutcome.data.sessions.filter((row) => row.status === "running").length,
+      };
+      setStatsFailed(false);
+      setStats(next);
+      mobLog("more", "stats loaded", {
+        projects: next.projects,
+        sessions: next.sessions,
+        running: next.running,
+      });
+    } catch {
+      setStatsFailed(true);
+      mobWarn("more", "stats threw");
+    }
+  }, []);
 
-  // The connection row's pinned vocabulary (copy.md): "Live" / "Looking
-  // for the host…" / "Offline" — the caption's own "· " leads read the
-  // whole line as "Live · Confused Coconut · desktop v0.108.0".
-  const statusWord = connected ? "Live" : probing ? "Looking for the host…" : "Offline";
+  // Load on (re)focus — every visit refreshes, and a status flip while
+  // focused (the reconnect) re-runs the callback through its deps.
+  useFocusEffect(
+    useCallback(() => {
+      if (status !== "connected") return; // unpaired/offline stay quiet — /connect owns it
+      void loadStats();
+    }, [status, loadStats]),
+  );
+
+  // Refetch when a session batch landed after mount (home's live pattern).
+  useEffect(() => {
+    if (sessionsEpoch === mountEpoch.current) return;
+    if (status !== "connected") return;
+    void loadStats();
+  }, [sessionsEpoch, status, loadStats]);
+
+  // The stats card renders ONLY while connected and not failed — the
+  // honest "—" covers the in-flight first load.
+  const showStats = status === "connected" && !statsFailed;
 
   return (
     <ScreenScaffold title="More" chrome={false}>
-      {/* ── the connection card — the whole link truth in one compact
-          strip; tap → the connection page (which owns retry). ── */}
-      {host === null ? (
-        <PressableCard
-          onPress={() => router.push("/connect")}
-          enterIndex={0}
-          accessibilityLabel="No desktop linked — open the connect screen"
-          testID="more-connection"
-        >
-          <View style={styles.unpairedInner}>
-            <MonitorSmartphone size={20} color={tokens.textTertiary} strokeWidth={2.2} />
-            <TypeBodyStrong>No desktop linked</TypeBodyStrong>
-            <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
-          </View>
-        </PressableCard>
-      ) : (
-        <PressableCard
-          onPress={() => router.push("/settings/host")}
-          enterIndex={0}
-          accessibilityLabel={`${statusWord}, ${host.hostLabel} — open connection settings`}
-          testID="more-connection"
-        >
-          <View style={styles.stripInner}>
-            <StatusDot
-              color={connected ? tokens.success : probing ? tokens.warning : tokens.danger}
-              pulse={probing}
-            />
-            <View style={styles.stripText}>
-              <TypeBodyStrong numberOfLines={1}>{statusWord}</TypeBodyStrong>
-              <TypeCaption numberOfLines={1} style={styles.stripMeta}>
-                {`· ${host.hostLabel}${live !== null ? ` · desktop v${live.version}` : ""}`}
-              </TypeCaption>
+      {/* ── about: app identity — the name, the badge, the build line, the
+          one-line role (R116-h: grown from the old name + badge pair). ── */}
+      <FadeInUp index={0}>
+        <ClayCard testID="more-about">
+          <View style={styles.aboutPad}>
+            <View style={styles.aboutHead}>
+              <View style={[styles.aboutIcon, { backgroundColor: tokens.subtleHover }]}>
+                <Info size={20} color={tokens.accent} strokeWidth={2.2} />
+              </View>
+              <View style={styles.aboutHeadText}>
+                <TypeBodyStrong numberOfLines={1}>ACUTE companion</TypeBodyStrong>
+              </View>
+              <Badge tone="neutral">v{APP_VERSION}</Badge>
             </View>
-            <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
+            <TypeMono numberOfLines={1}>{`v${APP_VERSION} · expo ${EXPO_TAG}`}</TypeMono>
+            <TypeBody numberOfLines={1}>A view + input medium for the agent.</TypeBody>
           </View>
-        </PressableCard>
-      )}
+        </ClayCard>
+      </FadeInUp>
 
-      {/* ── the activity row — always present here (home's strip is
-          unread-gated; the hub keeps the entry), unread only in the
-          caption + the accent dot on the bell chip. ── */}
-      <PressableCard
-        onPress={() => router.push("/activity")}
-        enterIndex={1}
-        accessibilityLabel={`Activity${unread > 0 ? `, ${unread} unread notification${unread === 1 ? "" : "s"}` : ""}`}
-        testID="more-activity"
-      >
-        <View style={styles.stripInner}>
-          <View style={[styles.bellChip, { backgroundColor: tokens.subtleHover }]}>
-            <Bell size={17} color={tokens.accent} strokeWidth={2.2} />
-            {unread > 0 ? (
-              <View
-                style={[styles.bellDot, { backgroundColor: tokens.accent }]}
-                accessibilityLabel={`${unread} unread`}
-              />
-            ) : null}
-          </View>
-          <View style={styles.stripText}>
-            <TypeBodyStrong numberOfLines={1}>Activity</TypeBodyStrong>
-            <TypeCaption numberOfLines={1} style={styles.stripMeta}>
-              {unread > 0 ? `· ${unread} unread` : "· all caught up"}
-            </TypeCaption>
-          </View>
-          <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
-        </View>
-      </PressableCard>
+      {/* ── the simple-stats card — three quiet rows, labels left, the
+          counts right in mono; hidden entirely while unpaired/offline. ── */}
+      {showStats ? (
+        <FadeInUp index={1}>
+          <ClayCard testID="more-stats">
+            <View style={styles.statsPad}>
+              <StatRow label="Projects" value={stats === null ? "—" : String(stats.projects)} />
+              <StatRow label="Sessions" value={stats === null ? "—" : String(stats.sessions)} />
+              <StatRow label="Running now" value={stats === null ? "—" : String(stats.running)} last />
+            </View>
+          </ClayCard>
+        </FadeInUp>
+      ) : null}
 
       {/* ── the settings entry — the hub's main job: the PROMINENT row
           pushing the management hub (the moved settings screen). ── */}
@@ -148,78 +190,38 @@ export default function MoreScreen() {
             <Settings2 size={22} color={tokens.accent} strokeWidth={2.2} />
           </View>
           <View style={styles.settingsText}>
-            <TypeBodyStrong>Settings</TypeBodyStrong>
-            <TypeCaption>Appearance, providers, agents, preferences</TypeCaption>
+            <TypeBodyStrong numberOfLines={1}>Settings</TypeBodyStrong>
+            <TypeCaption numberOfLines={1}>Appearance, providers, agents</TypeCaption>
           </View>
           <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
         </View>
       </PressableCard>
-
-      {/* ── about: app identity + the wizard replay ── */}
-      <FadeInUp index={3}>
-        <ClayCard testID="more-about">
-          <View style={styles.aboutPad}>
-            <View style={styles.aboutHead}>
-              <View style={[styles.aboutIcon, { backgroundColor: tokens.subtleHover }]}>
-                <Info size={20} color={tokens.accent} strokeWidth={2.2} />
-              </View>
-              <View style={styles.aboutHeadText}>
-                <TypeBodyStrong>ACUTE companion</TypeBodyStrong>
-              </View>
-              <Badge tone="neutral">v{APP_VERSION}</Badge>
-            </View>
-            <TypeBody>A view + input medium for the desktop agent.</TypeBody>
-            <QuietButton onPress={() => onReplayWizard(router)}>Replay the setup wizard</QuietButton>
-          </View>
-        </ClayCard>
-      </FadeInUp>
     </ScreenScaffold>
   );
 }
 
-/** The wizard replay: clear the onboarding flag, land on the welcome page. */
-function onReplayWizard(router: ReturnType<typeof useRouter>): void {
-  mobLog("more", "wizard replay requested");
-  void resetOnboarding().then(() => {
-    router.replace("/onboarding/welcome");
-  });
+/** One quiet stats row — the label left, the count right in the mono face
+ *  (machine truth). "—" is the honest in-flight placeholder; a failed or
+ *  unpaired load hides the whole card instead of inventing a number. */
+function StatRow({ label, value, last = false }: { label: string; value: string; last?: boolean }) {
+  const { tokens } = useTheme();
+  return (
+    <View
+      accessibilityLabel={`${label}: ${value}`}
+      style={[
+        styles.statsRow,
+        last ? null : [styles.statsRowDivider, { borderBottomColor: tokens.borderSubtle }],
+      ]}
+    >
+      <TypeBodyStrong numberOfLines={1}>{label}</TypeBodyStrong>
+      <TypeMono numberOfLines={1} style={styles.statsValue}>
+        {value}
+      </TypeMono>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
-  // The compact strip rows (connection + activity — home's grammar): one
-  // line, 52px min.
-  stripInner: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    paddingVertical: spacing.sm + 2,
-    paddingHorizontal: spacing.lg,
-    minHeight: 52,
-  },
-  // The word + "· meta" cluster — no gap: the caption's own "· " lead is
-  // the separator, so the line reads "Live · Confused Coconut".
-  stripText: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    flex: 1,
-    minWidth: 0,
-  },
-  stripMeta: { flexShrink: 1 },
-  bellChip: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  bellDot: {
-    position: "absolute",
-    top: -1,
-    right: -1,
-    minWidth: 10,
-    height: 10,
-    borderRadius: 5,
-  },
   // The prominent settings row: [identity 44] [label + one meta line]
   // [chevron] — taller than the strips (the hub's main job).
   settingsInner: {
@@ -247,12 +249,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   aboutHeadText: { flex: 1, gap: 2 },
-  unpairedInner: {
+  // The stats card: quiet single-line rows, hairline dividers between.
+  statsPad: { padding: spacing.lg },
+  statsRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-    paddingVertical: spacing.lg,
-    minHeight: 64,
+    justifyContent: "space-between",
+    gap: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    minHeight: 44,
   },
+  statsRowDivider: { borderBottomWidth: StyleSheet.hairlineWidth },
+  statsValue: { fontSize: 14 },
 });

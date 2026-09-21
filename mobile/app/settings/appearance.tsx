@@ -12,6 +12,14 @@
  * the same house pattern as the theme/mode controls). The R114 "The clay,
  * up close" preview card is GONE — the owner: "the preview at the bottom
  * is completely unnecessary — remove."
+ *
+ * R116-i (verdicts #36/#37): the mode indicator carries the 2px accent
+ * selection border (donts #34 — a selection border is never hairline),
+ * and the chat rows sit their chips RIGHT-ALIGNED in the label's row —
+ * [label + caption stacked] at the left, the chips vertically centered
+ * against it at the right edge, no dead right space. A row that genuinely
+ * can't fit (three wide chips on a narrow phone) wraps its chips to their
+ * own right-aligned line — never a clipped label.
  */
 
 import { useEffect, useState } from "react";
@@ -130,7 +138,7 @@ export default function AppearanceSettingsScreen() {
       <SectionHeader>Chat</SectionHeader>
       <ClayCard>
         <View style={styles.chatPad}>
-          <ChatPrefRow label="Chat density" caption="message spacing in the transcript">
+          <ChatPrefRow label="Chat density" caption="bubble spacing">
             {DENSITIES.map((option) => (
               <Chip
                 key={option.id}
@@ -147,7 +155,7 @@ export default function AppearanceSettingsScreen() {
               </Chip>
             ))}
           </ChatPrefRow>
-          <ChatPrefRow label="Text size" caption="transcript text size">
+          <ChatPrefRow label="Text size" caption="reading size">
             {TEXT_SIZES.map((option) => (
               <Chip
                 key={option.id}
@@ -164,7 +172,7 @@ export default function AppearanceSettingsScreen() {
               </Chip>
             ))}
           </ChatPrefRow>
-          <ChatPrefRow label="Timestamps" caption="when message times appear">
+          <ChatPrefRow label="Timestamps" caption="when times appear">
             {TIMESTAMPS.map((option) => (
               <Chip
                 key={option.id}
@@ -181,7 +189,7 @@ export default function AppearanceSettingsScreen() {
               </Chip>
             ))}
           </ChatPrefRow>
-          <ChatPrefRow label="Tool activity" caption="how tool calls render" last>
+          <ChatPrefRow label="Tool activity" caption="tool rendering" last>
             {TOOL_ACTIVITY.map((option) => (
               <Chip
                 key={option.id}
@@ -198,8 +206,8 @@ export default function AppearanceSettingsScreen() {
               </Chip>
             ))}
           </ChatPrefRow>
-          <TypeMicro style={{ color: tokens.textTertiary }}>
-            synced to every paired device — the transcript applies them live
+          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+            synced across devices — applied live
           </TypeMicro>
         </View>
       </ClayCard>
@@ -273,10 +281,10 @@ const SEGMENT_TRACK_H = 52;
 /**
  * ONE clay track (pill radius) with three segments and the spring-sliding
  * accent indicator — the tab-bar pill grammar exactly: a subtleHover fill
- * + the accent hairline, one spring (SPRING) slide, the selected label
- * bold accent. The indicator is positioned in INDEX space so the spring
- * runs even before the first layout measurement; reduced motion snaps
- * (motion.md §5).
+ * + the 2px accent border (donts #34 — selection borders are never
+ * hairline), one spring (SPRING) slide, the selected label bold accent.
+ * The indicator is positioned in INDEX space so the spring runs even
+ * before the first layout measurement; reduced motion snaps (motion.md §5).
  */
 function ModeSegmentedControl({
   mode,
@@ -352,11 +360,15 @@ function ModeSegmentedControl({
   );
 }
 
-// ── the chat pref row — label above, the inline chip row below ──────────────
+// ── the chat pref row — label + caption left, chips right in the row ───────
 
-/** One chat-pref row — the label (+ one-line caption) above, the option
- *  chips below (the selected chip carries the accent fill — the same chip
- *  grammar as the sheets). */
+/** One chat-pref row (R116-i — verdict #37): the label + one-line caption
+ *  stacked at the LEFT, the option chips RIGHT-ALIGNED in the same row,
+ *  vertically centered with the label — no dead right space. The head
+ *  wraps only when a row genuinely can't fit (three wide chips on a
+ *  narrow phone): the chips drop to their own right-aligned line
+ *  (marginLeft auto owns that edge), never a clipped label. The selected
+ *  chip carries the accent fill — the same chip grammar as the sheets. */
 function ChatPrefRow({
   label,
   caption,
@@ -372,12 +384,14 @@ function ChatPrefRow({
   return (
     <View
       style={[
-        styles.chatRow,
+        styles.chatRowHead,
         last ? null : [styles.chatRowDivider, { borderBottomColor: tokens.borderSubtle }],
       ]}
     >
-      <View style={styles.chatRowHead}>
-        <TypeBodyStrong style={styles.chatRowLabel}>{label}</TypeBodyStrong>
+      <View style={styles.chatRowText}>
+        <TypeBodyStrong numberOfLines={1} style={styles.chatRowLabel}>
+          {label}
+        </TypeBodyStrong>
         <TypeCaption numberOfLines={1} style={styles.chatRowCaption}>
           {caption}
         </TypeCaption>
@@ -436,7 +450,8 @@ const styles = StyleSheet.create({
     left: SEGMENT_INSET,
     // half-of-height — the pill geometry
     borderRadius: (SEGMENT_TRACK_H - SEGMENT_INSET * 2) / 2,
-    borderWidth: StyleSheet.hairlineWidth,
+    // donts #34 — a selection border is 2px, never hairline
+    borderWidth: 2,
   },
   segSegment: {
     flex: 1,
@@ -446,13 +461,29 @@ const styles = StyleSheet.create({
   },
   // ── chat prefs ──
   chatPad: { padding: spacing.lg, gap: spacing.lg },
-  chatRow: { gap: spacing.sm },
   chatRowDivider: {
     paddingBottom: spacing.lg,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  chatRowHead: { gap: 2 },
+  // R116-i: the one-row anatomy — [label + caption stacked] left, the
+  // chips right-aligned (vertically centered with the label). flexWrap +
+  // the chips' marginLeft auto degrade gracefully: a row that can't fit
+  // drops its chips to their own right-aligned line, never a clip.
+  chatRowHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.md,
+    flexWrap: "wrap",
+  },
+  chatRowText: { gap: 2 },
   chatRowLabel: { fontSize: 15 },
   chatRowCaption: {},
-  chatChips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  chatChips: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    justifyContent: "flex-end",
+    flexWrap: "wrap",
+    marginLeft: "auto",
+  },
 });
