@@ -2,10 +2,11 @@
  * sessions.test.ts — the transcript state machine: the persisted-event fold
  * (user/queued/assistant+thinking/tool/turn.error/approval pairing/unknown
  * types), the live-frame application (deltas, tool cards, queue chips,
- * approvals, terminal frames), the pure helpers, the typed client paths
- * + bodies, and the REMOTE mirror (R113-e — the events-stream frames of
- * ANOTHER device's turn, reduced through the same applyLiveFrame) —
- * injected fakes only, zero React Native.
+ * approvals, terminal frames), the delivery ladder (R116-m — the user
+ * bubble's sending → sent → delivered → failed rungs), the pure helpers,
+ * the typed client paths + bodies, and the REMOTE mirror (R113-e — the
+ * events-stream frames of ANOTHER device's turn, reduced through the same
+ * applyLiveFrame) — injected fakes only, zero React Native.
  */
 
 import { describe, expect, it } from "@jest/globals";
@@ -48,6 +49,7 @@ import {
   type LiveTurn,
   type SessionEventWire,
   type SessionRow,
+  type TranscriptItem,
 } from "../sessions";
 import type { SseStream } from "@/link/connection";
 
@@ -212,6 +214,10 @@ describe("sessions — the persisted event fold", () => {
     const [first, second, third, fourth] = items;
     expect(first.kind === "user" && first.queued).toBe(false);
     expect(second.kind === "user" && second.queued).toBe(true);
+    // R116-m — the fold's delivery rungs: a settled row reads "delivered"
+    // (never undefined for settled rows), a queued row reads "sending".
+    expect(first.kind === "user" && first.status).toBe("delivered");
+    expect(second.kind === "user" && second.status).toBe("sending");
     expect(third.kind === "assistant" && third.thinking).toBe("the user greeted me");
     expect(third.kind === "assistant" && third.model).toBe("glm-5.2");
     expect(fourth.kind === "tool" && fourth.ok).toBe(true);
@@ -391,6 +397,8 @@ describe("sessions — the live turn state machine", () => {
     expect(turn.phase).toBe("streaming");
     expect(turn.items).toHaveLength(1);
     expect(turn.items[0]?.kind === "user" && turn.items[0].content).toBe("go");
+    // R116-m — the ladder's first rung: the optimistic card sends.
+    expect(turn.items[0]?.kind === "user" && turn.items[0].status).toBe("sending");
     expect(turn.terminal).toBeNull();
   });
 
@@ -449,9 +457,14 @@ describe("sessions — the live turn state machine", () => {
     turn = applyLiveFrame(turn, { type: "user.queued", seq: 7, content: "next?", ts: "t" }, NOW + 1);
     const queued = turn.items.find((item) => item.kind === "user" && item.key === "q7");
     expect(queued?.kind === "user" && queued.queued).toBe(true);
+    // R116-m — the queue chip's clock glyph: the message waits (sending).
+    expect(queued?.kind === "user" && queued.status).toBe("sending");
     turn = applyLiveFrame(turn, { type: "queued.delivered", seq: 7, content: "next?", ts: "t" }, NOW + 2);
     const delivered = turn.items.find((item) => item.kind === "user" && item.key === "q7");
     expect(delivered?.kind === "user" && delivered.queued).toBe(false);
+    // R116-m — the delivery rung: the frame flips the chip to delivered (the
+    // same rung the settled fold reads — the rehydrate never jumps).
+    expect(delivered?.kind === "user" && delivered.status).toBe("delivered");
   });
 
   it("approval frames pair live: requested → resolved updates the same card", () => {
@@ -605,6 +618,9 @@ describe("sessions — the live turn state machine", () => {
     expect(errored.error?.message).toBe("the key was rejected");
     const last = errored.items[errored.items.length - 1];
     expect(last?.kind === "error" && last.message).toBe("the key was rejected");
+    // R116-m — the failed rung: the turn's in-flight user card marks failed.
+    const user = errored.items.find((item) => item.kind === "user");
+    expect(user?.kind === "user" && user.status).toBe("failed");
   });
 
   it("tolerates unknown frames: message-carrying ones dim, the rest drop", () => {
@@ -982,6 +998,9 @@ describe("sessions — turn.started (R114-d)", () => {
     const users = turn.items.filter((item) => item.kind === "user");
     expect(users).toHaveLength(1);
     expect(users[0]?.kind === "user" && users[0].content).toBe("go");
+    // R116-m — the ack rung: the PC's first frame flips the optimistic card
+    // from "sending" to "sent" (the single check).
+    expect(users[0]?.kind === "user" && users[0].status).toBe("sent");
   });
 
   it("the OWN stream: assistant cards created AFTER the frame carry the model (the live mono line)", () => {
@@ -1016,6 +1035,9 @@ describe("sessions — turn.started (R114-d)", () => {
     const users = result?.turn.items.filter((item) => item.kind === "user");
     expect(users).toHaveLength(2); // the base's earlier ask + the mirrored card
     expect(users?.[1]?.kind === "user" && users[1].content).toBe("the PC's new ask");
+    // R116-m — the mirrored card is BORN from the ack frame itself: it
+    // enters at the "sent" rung (accepted, processing).
+    expect(users?.[1]?.kind === "user" && users[1].status).toBe("sent");
     // The placeholder math sees only the user card — the placeholder is due.
     expect(thinkingPlaceholderVisible(result?.turn as LiveTurn)).toBe(true);
   });
@@ -1230,6 +1252,72 @@ describe("sessions — the session meta patch (R114-d)", () => {
     expect(shortModelId("glm-4.7")).toBe("glm-4.7");
     expect(shortModelId("openrouter/deepseek/deepseek-chat-v3.1-long")).toBe("deepseek/deepseek-cha…");
     expect(shortModelId("")).toBe("");
+  });
+});
+
+// ── R116-m: the delivery ladder (the user bubble's tick rungs) ──────────────
+
+describe("sessions — the delivery ladder (R116-m)", () => {
+  it("the optimistic card sends; turn.started acks it to sent (the own stream's full climb)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    expect(turn.items[0]?.kind === "user" && turn.items[0].status).toBe("sending");
+    turn = applyLiveFrame(
+      turn,
+      { type: "turn.started", text: "go", model: "glm-4.7", providerId: "z-ai" },
+      NOW + 1,
+    );
+    expect(turn.items[0]?.kind === "user" && turn.items[0].status).toBe("sent");
+  });
+
+  it("the rehydrated fold REPLACES the optimistic card with a settled delivered row (the truth wins)", () => {
+    // The turn ended — the rehydrate's folded log carries the message as a
+    // settled message.user row (the optimistic card is gone wholesale).
+    const settled = foldSessionEvents([event(1, "message.user", { content: "go" })]);
+    const user = settled[0];
+    expect(user?.kind === "user" && user.key).toBe("e1"); // the persisted row owns the slot
+    expect(user?.kind === "user" && user.status).toBe("delivered");
+  });
+
+  it("an unseen queued.delivered seq lands already delivered (the frame is the delivery notice)", () => {
+    const turn = applyLiveFrame(
+      beginLiveTurn([], "go", NOW),
+      { type: "queued.delivered", seq: 9, content: "late", ts: "t" },
+      NOW + 1,
+    );
+    const card = turn.items.find((item) => item.kind === "user" && item.key === "q9");
+    expect(card?.kind === "user" && card.queued).toBe(false);
+    expect(card?.kind === "user" && card.status).toBe("delivered");
+  });
+
+  it("the error frame marks the turn's in-flight card failed — a DELIVERED card never flips, an undefined status stays clean", () => {
+    // A legacy base row (a producer that never picked a rung) + the turn's
+    // own card + a queued message that was already delivered mid-turn.
+    const legacy: TranscriptItem[] = [
+      { kind: "user", key: "e1", content: "old ask", queued: false, attachments: null, ts: null },
+    ];
+    let turn = beginLiveTurn(legacy, "go", NOW);
+    turn = applyLiveFrame(turn, { type: "user.queued", seq: 3, content: "next?", ts: "t" }, NOW + 1);
+    turn = applyLiveFrame(turn, { type: "queued.delivered", seq: 3, content: "next?", ts: "t" }, NOW + 2);
+    turn = applyLiveFrame(
+      turn,
+      { type: "error", status: 500, code: "PROVIDER_ERROR", message: "boom" },
+      NOW + 3,
+    );
+    const own = turn.items.find((item) => item.key === `live-user-${NOW}`);
+    const deliveredMidTurn = turn.items.find((item) => item.key === "q3");
+    const legacyRow = turn.items.find((item) => item.key === "e1");
+    // the turn's own in-flight card (still "sent"/"sending") marks failed
+    expect(own?.kind === "user" && own.status).toBe("failed");
+    // the delivered queued message did NOT fail — its delivery is settled
+    expect(deliveredMidTurn?.kind === "user" && deliveredMidTurn.status).toBe("delivered");
+    // the legacy row without a rung stays undefined (clean history)
+    expect(legacyRow?.kind === "user" && legacyRow.status).toBeUndefined();
+  });
+
+  it("an abandoned stream never marks failed (the turn SURVIVES server-side, R42)", () => {
+    const abandoned = abandonLiveTurn(beginLiveTurn([], "go", NOW));
+    const user = abandoned.items[0];
+    expect(user?.kind === "user" && user.status).toBe("sending"); // honest: unknown, not failed
   });
 });
 

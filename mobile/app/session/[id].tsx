@@ -747,6 +747,9 @@ export default function SessionScreen() {
         queued: true,
         attachments: entry.overrides?.attachments ?? null,
         ts: null,
+        // R116-m — the outbox row's rung: the message waits on THIS phone
+        // for the link (the clock glyph rides the queued badge).
+        status: "sending",
       }));
       items = [...baseItems, ...pending];
     }

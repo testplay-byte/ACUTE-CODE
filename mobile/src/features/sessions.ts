@@ -137,6 +137,19 @@ export interface AttachmentView {
   size?: number;
 }
 
+/**
+ * R116-m — the delivery ladder a user bubble's tick renders (chat.md's
+ * Round-116 amendment; additive — no wire change):
+ *   sending   the optimistic card / a queued or outbox row (clock glyph)
+ *   sent      the PC acked the message (turn.started — single check)
+ *   delivered the message settled into the persisted log / a queued row was
+ *             delivered into a turn (double check, accent)
+ *   failed    the turn's stream died with an error frame (alert glyph)
+ * A user item WITHOUT a status renders NO glyph (rows from producers this
+ * ladder never touched stay clean — the render layer's contract).
+ */
+export type UserDeliveryStatus = "sending" | "sent" | "delivered" | "failed";
+
 /** The per-send override fields the stream route accepts (R113-c) — the
  * desktop composer's exact wire additions. */
 export interface SendOverrides {
@@ -166,6 +179,10 @@ export type TranscriptItem =
        * cards carry the turn-time ISO). null = nothing to render — the
        * timestampsMode pref gates the display, never the data. */
       ts: string | null;
+      /** R116-m: the delivery ladder's rung (the bubble's tick). OPTIONAL —
+       * only the rungs this wave can PROVE set it; undefined renders no
+       * glyph (clean history from any producer that never picked a rung). */
+      status?: UserDeliveryStatus;
     }
   | {
       kind: "assistant";
@@ -429,6 +446,10 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
           queued: false,
           attachments: readAttachmentViews(payload.attachments),
           ts: event.ts,
+          // R116-m — a settled row rebuilt from the wire: the message IS in
+          // the persisted log, so "delivered" is the honest default rung
+          // (history reads delivered, never undefined for settled rows).
+          status: "delivered",
         });
         break;
       }
@@ -442,6 +463,9 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
           queued: true,
           attachments: readAttachmentViews(payload.attachments),
           ts: event.ts,
+          // R116-m — the queued row's badge coexists with the clock glyph:
+          // the message sits in the server-side queue, not yet delivered.
+          status: "sending",
         });
         break;
       }
@@ -783,6 +807,9 @@ export function beginLiveTurn(
         queued: false,
         attachments,
         ts: isoAt(now),
+        // R116-m — the ladder's first rung: the card is optimistic until the
+        // PC's turn.started ack flips it (the clock glyph meanwhile).
+        status: "sending",
       },
     ],
     sentContent: content,
@@ -861,13 +888,18 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
       // waiting for the persisted-fold refetch. On the OWN stream the
       // optimistic card beginLiveTurn pushed is already up (key prefix
       // "live-user-"), so the bubble never doubles.
+      // R116-m — the ack rung: the frame is the PC's FIRST word after
+      // ACCEPTING the message, so the user card it names flips to "sent"
+      // (the single check) whichever branch rendered it.
       const model =
         typeof frame.model === "string" && frame.model.trim() !== "" ? frame.model : null;
       if (model !== null) next.model = model;
       const last = items[items.length - 1];
       const ownOptimistic =
         last !== undefined && last.kind === "user" && last.key.startsWith("live-user-");
-      if (!ownOptimistic) {
+      if (ownOptimistic && last !== undefined && last.kind === "user") {
+        items[items.length - 1] = { ...last, status: "sent" };
+      } else {
         const text = typeof frame.text === "string" ? frame.text : "";
         if (text.trim() !== "") {
           items.push({
@@ -877,6 +909,9 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
             queued: false,
             attachments: null,
             ts: isoAt(now),
+            // The mirrored card is born from the ack frame itself — the
+            // message was accepted, so it enters at the "sent" rung.
+            status: "sent",
           });
         }
       }
@@ -1066,6 +1101,9 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
         queued: true,
         attachments: null,
         ts: typeof frame.ts === "string" ? frame.ts : null,
+        // R116-m — the queue chip's clock glyph: the message waits in the
+        // server-side queue (the badge coexists with the tick).
+        status: "sending",
       });
       break;
     }
@@ -1075,7 +1113,10 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
       const target = items.find((item) => item.kind === "user" && item.key === `q${seq}`);
       if (target !== undefined && target.kind === "user") {
         const index = items.indexOf(target);
-        items[index] = { ...target, content, queued: false };
+        // R116-m — the delivery rung: the queued message was delivered INTO
+        // the agent's turn (the log flips it to message.user — the same
+        // "delivered" the settled fold reads, so the rehydrate never jumps).
+        items[index] = { ...target, content, queued: false, status: "delivered" };
       } else {
         items.push({
           kind: "user",
@@ -1084,6 +1125,9 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
           queued: false,
           attachments: null,
           ts: typeof frame.ts === "string" ? frame.ts : null,
+          // R116-m — an unseen seq lands already delivered (the frame is the
+          // delivery notice itself).
+          status: "delivered",
         });
       }
       break;
@@ -1325,6 +1369,22 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
         code: typeof frame.code === "string" ? frame.code : "ERROR",
         message: typeof frame.message === "string" ? frame.message : "the turn failed",
       };
+      // R116-m — the failed rung: the turn's OWN user card (the last one
+      // still in flight — "sending" or "sent") flips to "failed" while the
+      // overlay lives; the rehydrate that follows swaps in the truth (the
+      // persisted row reads "delivered" — the message DID reach the log;
+      // the error card below carries the turn's failure story). Cards at
+      // any other rung are untouched (a delivered queued message did NOT
+      // fail; an undefined status stays clean — the additive discipline).
+      const inFlight = [...items]
+        .reverse()
+        .find(
+          (item) => item.kind === "user" && (item.status === "sending" || item.status === "sent"),
+        );
+      if (inFlight !== undefined && inFlight.kind === "user") {
+        const index = items.indexOf(inFlight);
+        items[index] = { ...inFlight, status: "failed" };
+      }
       items.push({
         kind: "error",
         key: liveItemKey(now, `err${items.length}`),

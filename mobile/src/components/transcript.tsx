@@ -1,26 +1,34 @@
 /**
- * Transcript v4 (R115-J) — the conversation's message grammar per
- * docs/design-language/android/02-patterns/chat.md §Transcript:
+ * Transcript v5 (R116-m) — the conversation's message grammar per
+ * docs/design-language/android/02-patterns/chat.md §Transcript + its
+ * Round-116 amendments (the delivery ticks + the compact tool cards):
  *
  *   - USER BUBBLE (right, maxWidth 88%): an accent-TINTED clay fill (the
  *     accent mixed ~10% over the card — the PC chat's own bubble math, not a
  *     solid accent slab), r20 with the tighter 16px bottom-right corner (the
  *     WhatsApp tail hint), and the CLOCK INSIDE the bubble's bottom-right
  *     corner (10px tertiary, gated by the timestampsMode pref — never
- *     floating below). Image attachments render as proper rounded thumbnails
- *     (r12, ~64% of the column, aspect-kept) — never tiny chips; other
- *     attachments stay chips under the text.
+ *     floating below) with the DELIVERY TICK beside it (R116-m: sending →
+ *     clock · sent → check · delivered → double check, front accent · failed
+ *     → danger alert + a subtle danger border tint; undefined renders NO
+ *     glyph — clean history). Image attachments render as proper rounded
+ *     thumbnails (r12, ~64% of the column, aspect-kept) — never tiny chips;
+ *     other attachments stay chips under the text.
  *   - ASSISTANT = a document (full width, no bubble): the meta line (model ·
  *     time, mono 10.5 tertiary) sits ABOVE the first content chunk and ONLY
  *     when the turn has content; the collapsible dim thinking card rides
- *     above it; the live caret keeps pulsing after the streaming markdown.
- *   - TOOL CARDS: compact, ONE line per state — the write card's head carries
- *     "Writing {file}… · {n} chars" with the live tail preview below, the
- *     terminal card keeps command + tail + summary, the read-skill family is
- *     ONE slim quiet chip ("Read skill · {name}" + a status check, never a
- *     full view; args only behind manual expand), the generic card stays the
- *     humanized fallback. toolActivity detailed/compact/hidden all still
- *     apply (compact = one collapsed line; hidden folds into meta lines).
+ *     above it (settled cap 20 lines + a "Show all" affordance past the cap);
+ *     the live caret keeps pulsing after the streaming markdown.
+ *   - TOOL CARDS (R116-m compaction, donts #37): the right-side status badge
+ *     column is RETIRED — the head row carries verb + target on ONE line, the
+ *     status rides a small quiet chip only while RUNNING (warning-tinted) or
+ *     FAILED (compact danger chip + the whole card tints danger: border + a
+ *     5% wash); on success there is NO badge — the head line itself carries
+ *     the result (the write card's +A/−B line-count chips, mono 11px, parsed
+ *     from the server's edit summary). toolActivity detailed/compact/hidden
+ *     all still apply (compact = one collapsed line; hidden folds into meta
+ *     lines). The read-skill family stays ONE slim quiet chip; the task-list
+ *     card is FROZEN (the owner's explicit favorite).
  *   - IMAGES: screenshot tiles keep the lazy 240×120 geometry but render
  *     rounded r12 with a quiet border and a SKELETON while loading (never a
  *     spinner); expired keeps its honest line; the full-screen viewer keeps
@@ -31,11 +39,13 @@
  *     that logic is untouched). With the header's breathing accent line this
  *     is the whole "processing" story — no spinner anywhere.
  *   - question / todo / subagent / approval-mini / meta / error / debug
- *     cards keep their logic, restyled to one visual idea per region.
+ *     cards keep their logic, restyled to one visual idea per region (the
+ *     error card is compact: one-line code head + the message clamped to 3
+ *     lines with the expand grammar behind it).
  *
  * One renderer for BOTH sources — the persisted fold and the live stream
  * produce the same TranscriptItem union (features/sessions.ts — the data
- * model is untouched this wave).
+ * model's status rung is this wave's only addition there).
  */
 
 import { useEffect, useState } from "react";
@@ -50,9 +60,9 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { BookOpenText, Check, ChevronDown, ChevronUp, CircleX, FileCode2, ImageIcon, SquareTerminal, Wrench } from "lucide-react-native";
+import { BookOpenText, Check, ChevronDown, ChevronUp, CircleAlert, CircleX, Clock, FileCode2, ImageIcon, SquareTerminal, Wrench } from "lucide-react-native";
 import { useTheme, useChatPrefs } from "@/design/theme";
-import { Badge, FadeInUp, Skeleton, TypeBody, TypeCaption, TypeMono } from "@/design/primitives";
+import { Badge, FadeInUp, Skeleton, TypeBody, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
 import { MarkdownText } from "@/components/markdown-text";
 import { ImageViewer } from "@/components/image-viewer";
 import { getLinkManager } from "@/link/runtime";
@@ -88,7 +98,7 @@ import {
   TYPE_CAPTION,
 } from "@/design/tokens";
 import { subagentStatusLabel } from "@/features/sessions";
-import type { AttachmentView, TranscriptItem } from "@/features/sessions";
+import type { AttachmentView, TranscriptItem, UserDeliveryStatus } from "@/features/sessions";
 
 // ── local drawing constants (chat.md's own geometry — the file's class) ─────
 
@@ -98,6 +108,17 @@ const RADIUS_IMAGE = 12;
 const RADIUS_BUBBLE_TAIL = 16;
 /** One leg of the placeholder's calm ~1.2s breathe + the dots' pulse. */
 const BREATHE_LEG_MS = 600;
+/** chat.md (R116 amendment) — the settled thinking block's clamp before the
+ * "Show all" affordance takes over (live thinking never clamps). */
+const THINKING_SETTLED_CAP = 20;
+/** The error card's collapsed message clamp (3 lines) and the character
+ * budget past which the expand affordance appears (a message that cannot
+ * tail-truncate at 3 lines never offers a dead toggle). */
+const ERROR_MESSAGE_CLAMP_LINES = 3;
+const ERROR_MESSAGE_EXPAND_CHARS = 180;
+/** The offset between the delivered double-check's two checks (the back one
+ * rides 3px under the front — chat.md's R116 amendment). */
+const TICK_DOUBLE_OFFSET = 3;
 
 // ── the list ────────────────────────────────────────────────────────────────
 
@@ -144,7 +165,15 @@ export function TranscriptItemView({
 }) {
   switch (item.kind) {
     case "user":
-      return <UserBubble content={item.content} queued={item.queued} attachments={item.attachments} ts={item.ts} />;
+      return (
+        <UserBubble
+          content={item.content}
+          queued={item.queued}
+          attachments={item.attachments}
+          ts={item.ts}
+          status={item.status}
+        />
+      );
     case "assistant":
       return <AssistantBlock item={item} />;
     case "tool":
@@ -210,16 +239,53 @@ function attachmentImageUri(a: AttachmentView): string | null {
   return /^(data:|file:|content:|https?:)/i.test(p) ? p : null;
 }
 
+/**
+ * R116-m — the delivery tick (chat.md's Round-116 amendment): the glyph
+ * beside the clock — sending renders the clock glyph, sent the single check,
+ * delivered the DOUBLE check (two checks offset 3px, the front one accent),
+ * failed the danger alert. The bubble's caller adds the danger border tint
+ * on the failed rung; an undefined status never reaches here (no glyph —
+ * clean history).
+ */
+function DeliveryTick({ status }: { status: UserDeliveryStatus }) {
+  const { tokens } = useTheme();
+  switch (status) {
+    case "sending":
+      return <Clock size={12} color={tokens.textTertiary} strokeWidth={2.2} />;
+    case "sent":
+      return <Check size={12} color={tokens.textTertiary} strokeWidth={2.4} />;
+    case "delivered":
+      return (
+        <View style={styles.tickDouble}>
+          {/* The back check rides 3px under the front — the front (later
+              sibling) paints on top and carries the accent. */}
+          <Check
+            size={12}
+            color={tokens.textTertiary}
+            strokeWidth={2.4}
+            style={{ marginRight: -TICK_DOUBLE_OFFSET }}
+          />
+          <Check size={12} color={tokens.accent} strokeWidth={2.4} />
+        </View>
+      );
+    case "failed":
+      return <CircleAlert size={12} color={tokens.danger} strokeWidth={2.2} />;
+  }
+}
+
 function UserBubble({
   content,
   queued,
   attachments,
   ts,
+  status,
 }: {
   content: string;
   queued: boolean;
   attachments: AttachmentView[] | null;
   ts: string | null;
+  /** R116-m — the delivery ladder's rung (optional: undefined = no glyph). */
+  status: UserDeliveryStatus | undefined;
 }) {
   const { tokens } = useTheme();
   // R114-d — the chat prefs: density shrinks the bubble's VERTICAL padding;
@@ -233,10 +299,15 @@ function UserBubble({
   // is the PC chat's own bubble math, ported through mixHex.
   const tintedFill = mixHex(tokens.card, tokens.accent, 0.1);
   const tintedEdge = mixHex(tokens.card, tokens.accent, 0.22);
+  // R116-m — the failed rung's subtle danger border tint (the same 22% mix
+  // depth the accent edge uses, danger over card — the fill stays honest).
+  const failedEdge = mixHex(tokens.card, tokens.danger, 0.22);
+  const failed = status === "failed";
   const chipFill = mixHex(tokens.card, tokens.accent, 0.18);
   const chipEdge = mixHex(tokens.card, tokens.accent, 0.32);
   const images = attachments?.filter(isImageAttachment) ?? [];
   const files = attachments?.filter((a) => !isImageAttachment(a)) ?? [];
+  const edge = failed ? failedEdge : queued ? tokens.border : tintedEdge;
   return (
     <View style={styles.userRow}>
       <View
@@ -246,8 +317,8 @@ function UserBubble({
           styles.userBubble,
           {
             backgroundColor: queued ? tokens.card : tintedFill,
-            borderTopColor: queued ? tokens.clayTopEdge : tintedEdge,
-            borderColor: queued ? tokens.border : tintedEdge,
+            borderTopColor: failed ? failedEdge : queued ? tokens.clayTopEdge : tintedEdge,
+            borderColor: edge,
             boxShadow: tokens.clayShadowSm,
             paddingVertical: pad,
           },
@@ -301,10 +372,24 @@ function UserBubble({
           </View>
         )}
         {/* chat.md — the clock lives INSIDE the bubble's bottom-right corner
-            (10px tertiary), never floating below it. */}
-        {clock !== null && (
+            (10px tertiary), never floating below it; R116-m — the delivery
+            tick rides BESIDE it (the timestampsMode pref gates the clock,
+            never the ladder — a status renders its glyph alone when clocks
+            are off, and no status renders no row at all). */}
+        {(clock !== null || status !== undefined) && (
           <View style={styles.userClockRow} testID="transcript-user-clock">
-            <TypeCaption style={{ color: tokens.textTertiary, fontSize: 10 }}>{clock}</TypeCaption>
+            {status !== undefined && (
+              <View
+                accessibilityLabel={`delivery ${status}`}
+                style={styles.userTickSlot}
+                testID="transcript-user-tick"
+              >
+                <DeliveryTick status={status} />
+              </View>
+            )}
+            {clock !== null && (
+              <TypeCaption style={{ color: tokens.textTertiary, fontSize: 10 }}>{clock}</TypeCaption>
+            )}
           </View>
         )}
       </View>
@@ -600,6 +685,12 @@ function PulseDot({ color, size }: { color: string; size: number }) {
 function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
   const { tokens } = useTheme();
   const [open, setOpen] = useState(live);
+  // R116-m — the settled cap raised 14 → 20 + the "Show all" affordance
+  // AT the cap (chat.md's amendment): a settled block longer than the cap
+  // clamps and offers the toggle; live thinking never clamps (it IS the
+  // stream). The toggle flips unlimited on/off — one affordance, both ways.
+  const [showAll, setShowAll] = useState(false);
+  const overCap = !live && text.split("\n").length > THINKING_SETTLED_CAP;
   return (
     <View
       style={[
@@ -628,9 +719,25 @@ function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
         )}
       </Pressable>
       <Reveal open={open}>
-        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={live ? undefined : 14}>
+        <TypeMono
+          style={{ color: tokens.textTertiary }}
+          numberOfLines={live ? undefined : showAll ? undefined : THINKING_SETTLED_CAP}
+        >
           {text}
         </TypeMono>
+        {overCap && (
+          <Pressable
+            accessibilityLabel={showAll ? "Show less of the agent's thinking" : "Show all of the agent's thinking"}
+            accessibilityRole="button"
+            onPress={() => setShowAll((value) => !value)}
+            style={styles.thinkingShowAll}
+            testID="thinking-show-all"
+          >
+            <TypeMicro style={{ color: tokens.accent }} numberOfLines={1}>
+              {showAll ? "Show less" : "Show all"}
+            </TypeMicro>
+          </Pressable>
+        )}
       </Reveal>
     </View>
   );
@@ -674,10 +781,32 @@ function ToolCard({ item }: { item: ToolItem }) {
   return <GenericToolCard item={item} expandable={visibility.expandable} />;
 }
 
-/** The running/ok/FAIL badge every tool row ends with. */
-function ToolStatusBadge({ ok }: { ok: boolean | null }) {
-  if (ok === null) return <Badge tone="warning">running</Badge>;
-  return ok ? <Badge tone="success">ok</Badge> : <Badge tone="danger">FAIL</Badge>;
+/**
+ * R116-m — the head's QUIET status chip (donts #37: the right-side FAIL
+ * text badge column is retired): "running" rides a small warning-tinted
+ * chip only while the call runs, a compact danger chip when it failed —
+ * and NOTHING on success (the result rides the head line itself, never a
+ * badge). One quiet chip, never a shouty column.
+ */
+function ToolStatusChip({ ok }: { ok: boolean | null }) {
+  const { tokens } = useTheme();
+  if (ok === true) return null;
+  if (ok === null) {
+    return (
+      <View style={[styles.statusChip, { backgroundColor: mixHex(tokens.card, tokens.warning, 0.12) }]}>
+        <TypeMono style={{ color: tokens.warning, fontSize: 10, lineHeight: 13 }} numberOfLines={1}>
+          running
+        </TypeMono>
+      </View>
+    );
+  }
+  return (
+    <View style={[styles.statusChip, { backgroundColor: mixHex(tokens.card, tokens.danger, 0.1) }]}>
+      <TypeMono style={{ color: tokens.danger, fontSize: 10, lineHeight: 13 }} numberOfLines={1}>
+        failed
+      </TypeMono>
+    </View>
+  );
 }
 
 /** "run_command" → "run command" (the humanized name the rows lead with). */
@@ -696,6 +825,51 @@ function writePath(item: ToolItem): string | null {
   return item.argsSummary.match(/^path:\s*([^,]+)/)?.[1] ?? null;
 }
 
+/**
+ * R116-m — the settled WRITE card's +A/−B line counts, parsed from the
+ * server's own edit confirmation (agent-core fs-ops.ts editConfirmation):
+ *   "Edited '<path>': 2 replacements, +12 −3 lines"
+ * The minus is U+2212 (−, the REAL server glyph — verified against the
+ * source; an ASCII hyphen never rides this wire), the plus is ASCII, and
+ * the "N replacements, " prefix + " lines" suffix pin the shape so a
+ * lookalike string never lies. Plain writes ("wrote N bytes to '<path>'")
+ * and every failure shape miss the pattern → null → NO chips (the byte
+ * summary line below carries that story) — the PC's toolStatusDetail
+ * twin, honestly tolerant of both output shapes.
+ */
+const EDIT_LINE_DIFF_RE = /(\d+) replacements?, \+(\d+) \u2212(\d+) lines/;
+
+/** The settled card's parsed line delta (null while running / failed / a
+ * plain write — only a parsed edit summary answers). */
+function writeLineDiff(item: ToolItem): { added: number; removed: number } | null {
+  if (item.ok === null || item.outputSummary === null) return null;
+  const match = EDIT_LINE_DIFF_RE.exec(item.outputSummary);
+  if (match === null) return null;
+  return { added: Number(match[2]), removed: Number(match[3]) };
+}
+
+/** The +A/−B count chips (mono 11px, inline in the settled head row): the
+ * added count on a quiet success tint, the removed count on a quiet danger
+ * tint — the PC chat's own diff-chip grammar, ported through mixHex. The
+ * removed label carries the server's own minus glyph (U+2212). */
+function WriteDiffChips({ added, removed }: { added: number; removed: number }) {
+  const { tokens } = useTheme();
+  return (
+    <View style={styles.diffChips}>
+      <View style={[styles.diffChip, { backgroundColor: mixHex(tokens.card, tokens.success, 0.12) }]}>
+        <TypeMono style={{ color: tokens.success, fontSize: 11, lineHeight: 14 }} numberOfLines={1}>
+          {`+${added}`}
+        </TypeMono>
+      </View>
+      <View style={[styles.diffChip, { backgroundColor: mixHex(tokens.card, tokens.danger, 0.1) }]}>
+        <TypeMono style={{ color: tokens.danger, fontSize: 11, lineHeight: 14 }} numberOfLines={1}>
+          {`−${removed}`}
+        </TypeMono>
+      </View>
+    </View>
+  );
+}
+
 /** The one-line summary the collapsed generic row shows. */
 function genericOneLineSummary(item: ToolItem): string {
   if (TERMINAL_TOOLS.has(item.toolName)) {
@@ -711,7 +885,10 @@ function readTargetSegment(item: ToolItem): string {
   return segment.replace(/^[a-zA-Z_]+:\s*/, "").trim();
 }
 
-/** The shared card shell: the clay tile + the density-aware vertical padding. */
+/** The shared card shell: the clay tile + the density-aware vertical
+ * padding. R116-m — a FAILED call tints the WHOLE card danger (donts #37:
+ * the border + a quiet 5% danger wash — the failure reads at a glance,
+ * the details stay behind the expand). */
 function ToolShell({ item, children }: { item: ToolItem; children: React.ReactNode }) {
   const { tokens } = useTheme();
   const prefs = useChatPrefs();
@@ -722,7 +899,7 @@ function ToolShell({ item, children }: { item: ToolItem; children: React.ReactNo
       style={[
         styles.toolCard,
         {
-          backgroundColor: tokens.card,
+          backgroundColor: failed ? mixHex(tokens.card, tokens.danger, 0.05) : tokens.card,
           borderTopColor: tokens.clayTopEdge,
           borderColor: failed ? tokens.danger : tokens.borderSubtle,
           boxShadow: tokens.clayShadowSm,
@@ -736,8 +913,9 @@ function ToolShell({ item, children }: { item: ToolItem; children: React.ReactNo
 }
 
 /** The head row every card leads with: icon + title (mono, one line) +
- * the status badge (+ the chevron while expandable). Tappable as the whole
- * card's expand when `onToggle` is set. */
+ * the optional inline result (the write card's +A/−B chips) + the QUIET
+ * status chip + the chevron while expandable (R116-m — the badge column is
+ * retired). Tappable as the whole card's expand when `onToggle` is set. */
 function ToolHeadRow({
   item,
   icon,
@@ -745,6 +923,7 @@ function ToolHeadRow({
   expanded,
   expandable,
   onToggle,
+  after,
 }: {
   item: ToolItem;
   icon: React.ReactNode;
@@ -752,6 +931,9 @@ function ToolHeadRow({
   expanded: boolean;
   expandable: boolean;
   onToggle?: () => void;
+  /** R116-m — inline content between the title and the status chip (the
+   * settled write card's line-count chips; nothing for every other card). */
+  after?: React.ReactNode;
 }) {
   const { tokens } = useTheme();
   const row = (
@@ -763,7 +945,8 @@ function ToolHeadRow({
       >
         {title}
       </TypeMono>
-      <ToolStatusBadge ok={item.ok} />
+      {after}
+      <ToolStatusChip ok={item.ok} />
       {expandable ? (
         expanded ? (
           <ChevronUp size={15} color={tokens.textTertiary} strokeWidth={2} />
@@ -889,9 +1072,12 @@ function SkillCard({ item, expandable }: { item: ToolItem; expandable: boolean }
 
 /** write_file / edit_file — the WRITE card. The head line IS the state:
  * "Writing {file}… · {n} chars" while the args stream, "Wrote {file}" once
- * settled; the live content tail (the LAST 160 chars of what has arrived)
- * previews below the head while streaming. The preview's source is the
- * tool-input-delta raw the reducer accumulates (R114-d). */
+ * settled — with the edit's +A/−B LINE-COUNT CHIPS inline in the settled
+ * head row (R116-m, mono 11px, the success/danger pair parsed from the
+ * server's own confirmation — see writeLineDiff below); the live content
+ * tail (the LAST 160 chars of what has arrived) previews below the head
+ * while streaming. The preview's source is the tool-input-delta raw the
+ * reducer accumulates (R114-d). */
 function WriteCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
   const { tokens } = useTheme();
   const [expanded, setExpanded] = useState(false);
@@ -911,6 +1097,10 @@ function WriteCard({ item, expandable }: { item: ToolItem; expandable: boolean }
     : path !== null
       ? `${verbDone} ${path}`
       : humanizeToolName(item.toolName);
+  // R116-m — the settled edit's +A/−B chips ride the head line (null while
+  // running, on failures, and for plain writes — the byte summary line
+  // below carries those stories honestly).
+  const diff = writeLineDiff(item);
   // The quiet content tail — the LAST 160 chars of what has arrived (the
   // head lives in the reducer's raw; the tail is what is being typed NOW).
   const tail =
@@ -928,6 +1118,7 @@ function WriteCard({ item, expandable }: { item: ToolItem; expandable: boolean }
         expanded={showDetails}
         expandable={expandable}
         onToggle={expandable ? () => setExpanded((v) => !v) : undefined}
+        after={diff !== null ? <WriteDiffChips added={diff.added} removed={diff.removed} /> : undefined}
       />
       {streaming && tail !== null && (
         <TypeMono
@@ -945,7 +1136,7 @@ function WriteCard({ item, expandable }: { item: ToolItem; expandable: boolean }
         </TypeMono>
       )}
       {!running && item.outputSummary !== null && item.outputSummary !== "" && (
-        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={showDetails ? undefined : 3}>
+        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={showDetails ? undefined : 1}>
           {item.outputSummary}
         </TypeMono>
       )}
@@ -1009,7 +1200,9 @@ function TerminalCard({ item, expandable }: { item: ToolItem; expandable: boolea
         </TypeMono>
       )}
       {item.outputSummary !== null && item.outputSummary !== "" && (
-        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={showDetails ? undefined : 3}>
+        // R116-m — one line when collapsed (the compact mandate); expanded
+        // detail keeps the whole confirmation.
+        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={showDetails ? undefined : 1}>
           {item.outputSummary}
         </TypeMono>
       )}
@@ -1575,9 +1768,38 @@ function MetaLine({ text }: { text: string }) {
   );
 }
 
+/**
+ * R116-m — the COMPACT error card: the danger border + a ONE-LINE head (the
+ * code, mono danger) + the message clamped to 3 lines collapsed, expanded
+ * behind the house's head-tap + chevron grammar (the thinking/debug block's
+ * own affordance). The expand chevron appears ONLY when the message
+ * plausibly exceeds the clamp — more than 3 newlines, or long enough to
+ * tail-truncate (~180 chars ≈ 3 body lines) — a message that fits never
+ * offers a dead toggle.
+ */
 function ErrorCard({ code, message }: { code: string; message: string }) {
   const { tokens } = useTheme();
   const prefs = useChatPrefs();
+  const [expanded, setExpanded] = useState(false);
+  const expandable =
+    message.split("\n").length > ERROR_MESSAGE_CLAMP_LINES || message.length > ERROR_MESSAGE_EXPAND_CHARS;
+  const head = (
+    <View style={styles.toolHead}>
+      <TypeMono
+        style={{ color: tokens.danger, fontFamily: fontFamily.monoMedium, flex: 1 }}
+        numberOfLines={1}
+      >
+        {code}
+      </TypeMono>
+      {expandable ? (
+        expanded ? (
+          <ChevronUp size={15} color={tokens.textTertiary} strokeWidth={2} />
+        ) : (
+          <ChevronDown size={15} color={tokens.textTertiary} strokeWidth={2} />
+        )
+      ) : null}
+    </View>
+  );
   return (
     <View
       accessibilityLabel={`Error: ${message}`}
@@ -1592,10 +1814,23 @@ function ErrorCard({ code, message }: { code: string; message: string }) {
         },
       ]}
     >
-      <View style={styles.toolHead}>
-        <TypeMono style={{ color: tokens.danger, fontFamily: fontFamily.monoMedium }}>{code}</TypeMono>
-      </View>
-      <TypeBody style={{ color: tokens.textSecondary }}>{message}</TypeBody>
+      {expandable ? (
+        <Pressable
+          accessibilityLabel={`${code} error${expanded ? ", expanded" : ""}`}
+          accessibilityRole="button"
+          onPress={() => setExpanded((v) => !v)}
+        >
+          {head}
+        </Pressable>
+      ) : (
+        head
+      )}
+      <TypeBody
+        style={{ color: tokens.textSecondary }}
+        numberOfLines={expanded ? undefined : ERROR_MESSAGE_CLAMP_LINES}
+      >
+        {message}
+      </TypeBody>
     </View>
   );
 }
@@ -1661,10 +1896,26 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     gap: spacing.xs,
   },
-  /** The clock's quiet right-aligned line INSIDE the bubble. */
+  /** The clock's quiet right-aligned line INSIDE the bubble (R116-m — the
+   * delivery tick rides beside the time, 4px apart, center-aligned). */
   userClockRow: {
     flexDirection: "row",
     justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 4,
+  },
+  /** R116-m — the tick glyph's slot (keeps the row's height stable across
+   * the single-icon and the double-check shapes). */
+  userTickSlot: {
+    minHeight: 14,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  /** R116-m — the delivered double-check: two checks in a row, the back one
+   * pulled 3px under the front (the front paints on top, accent). */
+  tickDouble: {
+    flexDirection: "row",
+    alignItems: "center",
   },
   userAttachRow: {
     flexDirection: "row",
@@ -1759,6 +2010,34 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.sm,
     minHeight: 32,
+  },
+  /** R116-m — the head's QUIET status chip (donts #37): a small tinted pill
+   * (fill inline per tone — warning while running, danger when failed);
+   * NEVER a full-width badge column. */
+  statusChip: {
+    borderRadius: RADIUS_PILL,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    alignSelf: "flex-start",
+  },
+  /** R116-m — the settled write card's inline +A/−B pair. */
+  diffChips: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    flexShrink: 0,
+  },
+  diffChip: {
+    borderRadius: RADIUS_PILL,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  /** R116-m — the thinking block's "Show all" affordance (at the settled
+   * cap): the 44px touch-target law on the one interactive row. */
+  thinkingShowAll: {
+    minHeight: 44,
+    justifyContent: "center",
+    alignSelf: "flex-start",
   },
   /** The read-skill family's slim quiet chip (never a full card view). */
   skillWrap: {
