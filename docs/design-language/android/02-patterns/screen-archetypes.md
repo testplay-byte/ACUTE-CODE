@@ -93,3 +93,22 @@ in its own file.
 - Loading = skeletons shaped like the content (never centered spinners on list
   screens); errors = one card, retry action, honest copy.
 - Offline/probing states are one quiet strip, not banners.
+
+## Round-116 amendments (the owner's v0.109.0 walkthrough)
+
+- **The scanner (Archetype: full-screen task):** the viewfinder is PORTRAIT (≈3:4,
+  width = screen − gutters, height = width × 4/3) — never a square. The live preview
+  wears the **monochrome treatment**: a dark scrim + vignette overlay stack
+  (`pointerEvents="none"` — the native barcode decode reads the true frames, never the
+  styled view), white brackets + traveling scan line. Title truly centered; back = the
+  chip chevron; a calm top-of-screen animation (breathing "scanning" indicator).
+  Photo-pick PAUSES the camera, shows a processing state, and presents the result
+  (success or failure) as a formatted result card — never a flashing caption.
+- **Empty/unpaired states carry ONE primary button** (Archetype-1 DNA, restated): the
+  unpaired home shows the broken-link hero + "Currently not connected" + a single
+  "Connect to PC" that opens the scanner directly. Secondary escapes (manual entry)
+  live INSIDE the scanner, not on the home.
+- **The dashboard is DYNAMIC (round-116):** not one vertical scroll — stat carousels
+  (horizontal paging, snap), tappable cards that expand/spotlight, and sectioned
+  horizontal scrollers. Every number is field-provenanced; whole-history sections are
+  labeled "all time" honestly.

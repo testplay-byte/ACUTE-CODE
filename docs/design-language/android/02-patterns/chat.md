@@ -108,3 +108,25 @@ closes. "Agent default" row on top clears overrides. No flat mega-list.
 Full Access / Ask / Plan — three big rows, selected = accent border + check.
 **Task mode section deleted from mobile** (round-115 verdict: it confused the mode
 model; the desktop keeps it).
+
+## Round-116 amendments (the owner's v0.109.0 walkthrough)
+
+- **Delivery ticks:** user bubbles carry the send ladder — `sending` (clock glyph) →
+  `sent` (single check) → `delivered` (double check, accent) when the PC's
+  `turn.started` acks the turn; `failed` (warning glyph + tint) when the send died.
+  Rendered in the bubble's inline clock row. Driven additively by the live machine —
+  no wire change.
+- **The kebab opens an anchored dropdown** (below the control), not a sheet: rows
+  "Mode — {value}", "Model — {value}", "Thinking — {value}", "Context — {pct}"; each
+  routes to its detail surface; Context gets a clean full-height dedicated view.
+- **The model sheet lists real models only** — the "Agent default" row is retired
+  (donts #36); the PC's actual selection (or the context report's effective model)
+  carries the check. Tapping the checked session-selected model clears it.
+- **Tool cards are compact:** one-line heads (verb + target), the status rides a quiet
+  chip — never a right-side FAIL badge column; failures tint the row danger and keep
+  details behind the expand. File edits show `+N` (success) / `−N` (danger) line-count
+  chips parsed from the result summary; terminal commands keep the quiet mono block;
+  thinking is expandable with a show-all affordance past the cap. The Task list card
+  is the owner's explicit favorite — frozen as-is.
+- **The composer input is a pill** (fully rounded when single-line) with the paperclip
+  INSIDE the bar on the right; the send circle stays outside, right.

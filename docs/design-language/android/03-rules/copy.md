@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-20 round-115 -->
+<!-- last-reviewed: 2026-09-21 round-116 -->
 
 # Rules — The Copy Voice
 
@@ -10,11 +10,12 @@ corporate, never lecturing.
 | Banned | Use instead | Why |
 |---|---|---|
 | "remote" (as the product's role) | **"companion"** | The owner banned "remote"; the app is `acute-companion` |
-| "Auto" (as a model state) | "Agent default" | "Auto" invents a concept the desktop doesn't have |
+| "Auto" (as a model state) | the real model's name | "Auto" invents a concept the desktop doesn't have; round-116 also retired the picker's "Agent default" ROW — the picker shows real models only, highlighted by the PC's actual selection |
 | "Pairing window is 120 seconds" | "Valid for {n}s" | Never explain the mechanism when the state shows it |
 | "Your desktop does all the work…" | (delete) | Wizard essays are banned |
 | "Tap a project to expand…" | (delete) | The affordance teaches itself |
-| Multi-sentence descriptions | One line | The Copy-Length Law (`typography.md`) |
+| Multi-sentence descriptions | One line | The Copy-Length Law (`typography.md`) — round-116: also a CODE law (`numberOfLines={1}`), wrapping is a defect |
+| "Manual Entry" / screen-title casing drift | Sentence case titles, truly centered | Round-116: titles center over the whole row, not the leftover space |
 
 ## The one-liner discipline
 

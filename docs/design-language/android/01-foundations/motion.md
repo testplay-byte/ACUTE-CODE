@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-20 round-115 -->
+<!-- last-reviewed: 2026-09-21 round-116 -->
 
 # Foundations — Motion
 
@@ -12,9 +12,19 @@ Android.** One spring owns everything; linear easing is banned; resting UI never
 SPRING = { stiffness: 180, damping: 22 }
 ```
 
-Every spring in the app uses exactly this config (the tab-bar's keyboard hide may ride
-damping 26 — the one sanctioned exception). If it doesn't feel right at 180/22, the
-design is wrong, not the spring.
+Every spring in the app uses exactly this config — **EXCEPT the round-116 mechanical
+springs, which are deliberately over-damped:**
+
+```
+SHEET_SPRING   = { stiffness: 210, damping: 30 }   // panels: no overshoot, ever
+TAB_SPRING     = { stiffness: 200, damping: 26 }   // the tab indicator: calm slide
+```
+
+The house spring (180/22) stays for presses, toggles, entrances — moments where a
+little life is right. Anything that carries a PANEL or a large surface rides the
+over-damped configs; a bounce that reveals the page background is a defect, not
+personality. If it doesn't feel right at these numbers, the design is wrong, not the
+spring.
 
 ## 2. Entrance grammar
 
@@ -58,6 +68,15 @@ design is wrong, not the spring.
    (0.75↔1) while pending > 0.
 6. **Chart entry**: bars grow from baseline (withTiming 350ms, staggered 12ms), donut
    sweep draws its arcs (withTiming 500ms) — once per data load, never looping.
+7. **Tab label morph (round-116)**: the selected tab's label expands (width + opacity,
+   ~200ms timing or TAB_SPRING) while the previous item's label collapses — the icon
+   never moves, only the label breathes in beside it.
+8. **Anchored dropdown (round-116)**: the header menu springs in below its control
+   (scale 0.96→1 + opacity, origin top-right, ~180ms) and dismisses on tap-outside
+   with a 120ms fade. Never a bottom sheet.
+9. **Broken-link idle (round-116, unpaired home)**: the desktop/phone chips drift a few
+   px apart and back (~2.8s period) with the dashed link line's gap widening in sync —
+   calm, looping, the "currently not connected" pulse.
 
 ## 5. What never animates
 

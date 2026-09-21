@@ -53,3 +53,16 @@ Run against every mobile diff before review. A "no" to any question = rework.
 
 - [ ] Worklog appended (Task ID, agent, steps, stage summary).
 - [ ] Docs amended (not silently edited) if the owner's verdicts superseded a rule.
+
+## Round-116 additions
+
+- [ ] Every new/edited description, caption, and option body has `numberOfLines={1}`.
+- [ ] Every "centered" title is absolutely centered over the row (not leftover-space).
+- [ ] Back chevrons ride the chip idiom (44px, subtle fill, hairline border).
+- [ ] Sheets: over-damped entrance, clamped progress, skirted panel, no overscroll.
+- [ ] Tab bar: horizontal chips, label only on selected, 2px indicator border.
+- [ ] Model pickers show real models only — no "Agent default" row.
+- [ ] Tool cards: no right-side FAIL badges; failures are compact danger rows.
+- [ ] Dashboard numbers are field-provenanced; whole-history sections say "all time".
+- [ ] Any mobile package.json/lockfile change → `npm ci --dry-run` proof before tagging
+      (MAINTENANCE.md §g 2c — the v0.109.0 lesson).
