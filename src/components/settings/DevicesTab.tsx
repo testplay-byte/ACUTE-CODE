@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
@@ -51,9 +52,23 @@ import {
  * ROUND-112 (R112-a) adds the remote-access half: §a2's "Remote access
  * (internet)" card (the cloud connector's toggle + relay URL + host key +
  * live status), INDEPENDENT of the local link by the owner's explicit
- * ruling (both ON at once; the phone tries LAN first, relay fallback), and
- * the pairing dialog's "Reachable over the internet via <relay>" hint while
- * the tunnel is connected.
+ * ruling (both ON at once; the phone tries LAN first, relay fallback). The
+ * R112 pairing-dialog "Reachable over the internet via <relay>" hint was
+ * DELETED in ROUND-116 (R116-e, the owner's verdict #16 — too much text
+ * around the QR; the QR payload itself still carries the `relay` field,
+ * which is how the phone actually learns the internet path).
+ *
+ * ROUND-116 (R116-e — the owner's verdicts #15-#20, the PC pairing dialog):
+ * the fullscreen QR magnifier renders through createPortal(…, document.body)
+ * (the §1.3 z-order trap: it used to sit inside AppShell's `relative z-10`
+ * wrapper, where its z-[60] lost to the BODY-level portaled z-50 Radix
+ * dialog) and its big QR is tappable back to the popup; the machineLabel
+ * is the dialog's BIG BOLD hero name; the header description is ONE line;
+ * the manual panel scrolls on its own; the action row centers; and the
+ * copied pairing text now carries the certificate fingerprint — the
+ * manual-LAN TLS fix's PC half (round-116.md §1.1: the phone's
+ * parsePairingText already parses a trailing colon-hex fingerprint, so the
+ * pasted text pins the self-signed cert exactly like the QR does).
  *
  * The wire surface is the R106-S1 sidecar contract (LINKING-PROTOCOL.md §2
  * + §5): GET/PUT /settings/device-link, GET/PUT /settings/cloud-connector,
@@ -259,6 +274,20 @@ function hostOf(relayUrl: string): string {
   } catch {
     return relayUrl;
   }
+}
+
+/** R116-e: the fingerprint's colon-hex spelling for the copied pairing text
+ * — Node's canonical X509Certificate.fingerprint256 form (AA:BB:…, 32
+ * bytes), which is what the sidecar serves and what the phone's
+ * parsePairingText CERT_FP_SEARCH matches anywhere in pasted text. A bare
+ * 64-hex spelling (a hypothetical future sidecar shape) is re-colonized
+ * defensively, so the phone's smart-paste can never silently drop the
+ * certificate pin the manual-LAN TLS fix depends on. */
+function certFpColonHex(certFP: string): string {
+  if (/^[0-9a-fA-F]{64}$/.test(certFP)) {
+    return (certFP.toUpperCase().match(/../g) ?? []).join(":");
+  }
+  return certFP;
 }
 
 /* ── §a2 The remote-access card (ROUND-112 R112-a — the cloud half) ───────── */
@@ -611,13 +640,24 @@ function QrTile({
 
 /**
  * ROUND-115 (R115-E1): the FULLSCREEN pairing code — the magnified QR at
- * arm's length (min(90vh, 90vw)) for holding a phone up to the screen. An
- * inline overlay in this component (NOT inside DialogContent — that shell
- * carries a permanent translate(-50%,-50%) transform, which would become a
- * fixed child's containing block), Esc closes, a click on the backdrop
- * closes, and the code itself swallows clicks (lining a phone up shouldn't
- * dismiss the thing being scanned). z-[60] sits above the dialog's own
- * z-50 content and below the Toaster's z-[100].
+ * arm's length (min(90vh, 90vw)) for holding a phone up to the screen.
+ * ROUND-116 (R116-e, round-116.md §1.3 — THE Z-ORDER TRAP): the overlay now
+ * renders through createPortal(…, document.body). It used to be an inline
+ * sibling of the dialog, i.e. a descendant of AppShell's `relative z-10`
+ * wrapper — and a z-[60] inside that stacking context still LOSES to the
+ * Radix dialog, which portals to body at z-50 (the dialog painted ABOVE the
+ * magnifier, empirically confirmed). At body level z-[60] sits above the
+ * dialog (z-50) and below the Toaster (z-[100], body-level too). A fixed
+ * child of DialogContent was never an option — that shell carries a
+ * permanent translate(-50%,-50%) transform, which would become a fixed
+ * child's containing block — so document.body is the only honest target.
+ *
+ * ROUND-116 (R116-e, verdict #20 — the fullscreen UX): tap-anywhere closes,
+ * INCLUDING a tap on the big QR itself (tapping the code IS tapping the
+ * overlay — lining the phone up and tapping to return are the same action,
+ * so the QR no longer swallows clicks); the "Scan with ACUTE" hint rides
+ * ABOVE the code; and the X is a top-right corner affordance (a 40px
+ * white/80 border chip) instead of stacking under the caption. Esc closes.
  *
  * LAYERING vs the Radix dialog underneath: the pairing dialog is still
  * open behind this overlay, and Radix dismisses on document-level Esc +
@@ -645,43 +685,53 @@ function FullscreenPairQr({ payload, onClose }: { payload: string; onClose: () =
     // is a separate event).
     e.stopPropagation();
   };
-  return (
-    <div
-      data-testid="pair-qr-fullscreen"
-      role="dialog"
-      aria-label="Pairing code — fullscreen"
-      onClick={onClose}
-      onPointerDown={swallowPointer}
-      onMouseDown={swallowPointer}
-      className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-black/90"
-    >
-      {/* R115-p comment fix: bg-black/90 + text-white/75 are THIS overlay's
-          own dim utilities — ui/dialog.tsx's scrim is bg-black/40 and has no
-          white-text leg; the magnifier deliberately dims harder (arm's-length
-          QR needs the dead-black ground). Pure black/white at opacity are
-          opacity utilities, not theme colors — no pipeline needed. */}
+  return typeof document !== "undefined" ? (
+    createPortal(
       <div
-        className="rounded-md overflow-hidden grid place-items-center"
-        style={{ width: QR_FULLSCREEN_SIZE, height: QR_FULLSCREEN_SIZE, background: QR_MODULE_LIGHT }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <QrCanvas payload={payload} />
-      </div>
-      <p className="text-[13px] text-white/75" data-testid="pair-qr-fullscreen-hint">
-        Scan with ACUTE on your phone
-      </p>
-      <button
-        type="button"
+        data-testid="pair-qr-fullscreen"
+        role="dialog"
+        aria-label="Pairing code — fullscreen"
         onClick={onClose}
-        aria-label="Close fullscreen pairing code"
-        title="Close (Esc)"
-        data-testid="pair-qr-fullscreen-close"
-        className="w-8 h-8 rounded-lg grid place-items-center transition-colors hover:bg-white/10 text-white/80"
+        onPointerDown={swallowPointer}
+        onMouseDown={swallowPointer}
+        className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-black/90"
       >
-        <X size={16} />
-      </button>
-    </div>
-  );
+        {/* R115-p comment fix: bg-black/90 + text-white/75 are THIS overlay's
+            own dim utilities — ui/dialog.tsx's scrim is bg-black/40 and has no
+            white-text leg; the magnifier deliberately dims harder (arm's-length
+            QR needs the dead-black ground). Pure black/white at opacity are
+            opacity utilities, not theme colors — no pipeline needed. */}
+        {/* R116-e: the X is a top-right CORNER affordance — a 40px
+            white/80-bordered chip, out of the caption/code column. */}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close fullscreen pairing code"
+          title="Close (Esc)"
+          data-testid="pair-qr-fullscreen-close"
+          className="absolute top-4 right-4 w-10 h-10 rounded-lg border border-white/80 grid place-items-center transition-colors hover:bg-white/10 text-white/80"
+        >
+          <X size={16} />
+        </button>
+        {/* R116-e: the hint rides ABOVE the code — read it BEFORE lifting
+            the phone, not after the scan is already underway. */}
+        <p className="text-[13px] text-white/75" data-testid="pair-qr-fullscreen-hint">
+          Scan with ACUTE on your phone
+        </p>
+        {/* R116-e: the code itself is TAPPABLE — the old stopPropagation is
+            gone, so a click bubbles to the overlay root and returns to the
+            popup form (same action as tap-anywhere). */}
+        <div
+          data-testid="pair-qr-fullscreen-code"
+          className="rounded-md overflow-hidden grid place-items-center"
+          style={{ width: QR_FULLSCREEN_SIZE, height: QR_FULLSCREEN_SIZE, background: QR_MODULE_LIGHT }}
+        >
+          <QrCanvas payload={payload} />
+        </div>
+      </div>,
+      document.body,
+    )
+  ) : null;
 }
 
 /**
@@ -723,17 +773,7 @@ type PairingState =
   | { kind: "linked" }
   | { kind: "error"; message: string };
 
-function PairingDialog({
-  open,
-  onClose,
-  relayHost,
-}: {
-  open: boolean;
-  onClose: () => void;
-  /** ROUND-112: the relay's host while remote access is connected — the
-   * QR dialog's "Reachable over the internet" hint (null = LAN only). */
-  relayHost: string | null;
-}) {
+function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
   const resetAfter = useTimeoutClear();
@@ -833,13 +873,18 @@ function PairingDialog({
   // R112/R115 sidecars).
   const qrPayloadStr = payload !== null ? JSON.stringify(payload) : "";
 
-  // R115-E1 (c): the ONE-LINE pairing text the phone's smart-paste field
-  // consumes — first LAN address + port + the PIN (the QR's ladder picks
-  // the first address too). null = no address reported (the button stays
-  // honest and disabled — the QR + manual blocks carry the truth).
+  // R115-E1 (c) + R116-e (the manual-LAN TLS fix's PC half,
+  // round-116.md §1.1): the ONE-LINE pairing text the phone's smart-paste
+  // field consumes — first LAN address + port + the PIN + the certificate
+  // fingerprint. The trailing colon-hex fp is exactly what the phone's
+  // parsePairingText CERT_FP_SEARCH picks up, so a pasted manual-LAN entry
+  // pins the self-signed cert (Sha256) instead of dying on standard-CA
+  // verification — the QR path's strength, by clipboard. null = no address
+  // reported (the button stays honest and disabled — the QR + manual
+  // blocks carry the truth).
   const pairingText =
     payload !== null && payload.addrs.length > 0
-      ? `${payload.addrs[0]}:${payload.port} · PIN ${payload.pin}`
+      ? `${payload.addrs[0]}:${payload.port} · PIN ${payload.pin} · cert ${certFpColonHex(payload.certFP)}`
       : null;
 
   // R115-E1 (c): copy via the clipboard (the AgentChatPanel CopyButton
@@ -879,7 +924,7 @@ function PairingDialog({
         <DialogContent className="w-[min(480px,92vw)]" aria-describedby={undefined}>
         <DialogHeader
           title="Link a device"
-          description="Scan the code with ACUTE-CODE on your phone — or type the details in by hand. The pairing window is single-use and lasts two minutes."
+          description="Scan with ACUTE on your phone — or type it in by hand."
         />
         {state.kind === "starting" ? (
           <div className="px-5 py-8 text-center" data-testid="pair-starting">
@@ -927,22 +972,33 @@ function PairingDialog({
             </span>
           </div>
         ) : payload !== null ? (
-          <div className="flex flex-col gap-4 px-5 py-4 overflow-y-auto" data-testid="pair-body">
-            {/* R115-E1 (d): the desktop's friendly word-pair name — the
-                machineLabel the sidecar mints once and rides the payload
-                (ADDITIVE: pre-R115 payloads omit it, and this line simply
-                does not render — the header area stays honest). */}
+          // R116-e: min-h-0 flex-1 — the AgentFormDialog scroll hygiene
+          // (the DialogContent flex column caps at max-h-[86vh]; this body
+          // is the flex child that shrinks + scrolls instead of pushing the
+          // actions off-screen when the manual panel grows).
+          <div className="flex flex-col gap-4 px-5 py-4 overflow-y-auto min-h-0 flex-1" data-testid="pair-body">
+            {/* R116-e (verdict #19): the machineLabel is the dialog's HERO —
+                a small "This desktop is" eyebrow ABOVE the BIG BOLD
+                word-pair name (text-2xl/3xl font-bold; the name dominates).
+                ADDITIVE as since R115-E1 (d): pre-R115 payloads omit it and
+                this block simply does not render — the header stays
+                honest). */}
             {payload.machineLabel !== undefined && payload.machineLabel !== "" && (
-              <p
-                className="text-[11px] leading-relaxed text-center"
-                style={{ color: styles.textTertiary }}
+              <div
+                className="flex flex-col items-center gap-1 text-center"
                 data-testid="pair-machine-label"
               >
-                This desktop is{" "}
-                <span className="font-medium" style={{ color: styles.textSecondary }}>
+                <span className="text-[11px] font-medium" style={{ color: styles.textTertiary }}>
+                  This desktop is
+                </span>
+                <span
+                  className="text-2xl sm:text-3xl font-bold leading-tight"
+                  style={{ color: styles.text }}
+                  data-testid="pair-machine-name"
+                >
                   {payload.machineLabel}
                 </span>
-              </p>
+              </div>
             )}
             <div className="flex flex-col items-center gap-2.5">
               <QrTile
@@ -978,23 +1034,18 @@ function PairingDialog({
                   </span>
                 </>
               )}
-              {/* ROUND-112 (R112-a): the cloud hint — present only while the
-                  remote-access tunnel is connected (the QR payload carries
-                  the full relay address; this is the human-readable note). */}
-              {relayHost !== null && !expired && (
-                <p
-                  className="text-[11px] leading-relaxed max-w-[320px] text-center"
-                  style={{ color: SEMANTIC_COLORS.success }}
-                  data-testid="pair-relay-hint"
-                >
-                  Reachable over the internet via {relayHost}
-                </p>
-              )}
+              {/* R112-a's cloud hint ("Reachable over the internet via …")
+                  was DELETED in R116-e (verdict #16) — the QR payload's own
+                  `relay` field is the phone's internet path, and the dialog's
+                  text shrinks to the pairing essentials. */}
             </div>
             {/* The manual fallback (the AboutTab "What's new" disclosure
                 grammar): the address list + port + PIN as selectable text
                 for typing into the phone by hand, plus the full certFP in
-                small mono — what the phone should show when it pins. */}
+                small mono — what the phone should show when it pins.
+                R116-e (verdict #17): the expanded panel carries its OWN
+                bounded scroll (max-h-[240px]) so a long address list can
+                never push the dialog's actions out of reach. */}
             <div
               className="rounded-xl border-[1.5px] overflow-hidden"
               style={{ borderColor: styles.border, background: styles.subtle }}
@@ -1015,7 +1066,7 @@ function PairingDialog({
               </button>
               {manualOpen && (
                 <div
-                  className="px-3 pb-3 flex flex-col gap-2 border-t"
+                  className="px-3 pb-3 flex flex-col gap-2 border-t max-h-[240px] overflow-y-auto"
                   style={{ borderColor: styles.borderSubtle }}
                   data-testid="pair-manual"
                 >
@@ -1078,7 +1129,10 @@ function PairingDialog({
                 </div>
               )}
             </div>
-            <div className="flex items-center gap-2 flex-wrap">
+            {/* R116-e (verdict #18): the action row CENTERS (flex-wrap kept
+                for narrow windows — the pills wrap, the group stays
+                centered). */}
+            <div className="flex items-center gap-2 flex-wrap justify-center">
               <button
                 type="button"
                 onClick={() => void start()}
@@ -1090,10 +1144,12 @@ function PairingDialog({
               >
                 <QrCode size={13} /> Generate new PIN
               </button>
-              {/* R115-E1 (c): the one-line pairing text — `{firstAddr}:{port} ·
-                  PIN {pin}` — for the phone's smart-paste field. Disabled
-                  when no LAN address was reported (nowhere honest to copy);
-                  a missing/refusing clipboard falls back to the manual
+              {/* R115-E1 (c) + R116-e: the one-line pairing text —
+                  `{firstAddr}:{port} · PIN {pin} · cert {colon-hex fp}` —
+                  for the phone's smart-paste field (the fingerprint is the
+                  manual-LAN TLS fix's PC half). Disabled when no LAN
+                  address was reported (nowhere honest to copy); a
+                  missing/refusing clipboard falls back to the manual
                   section + the quiet note below. */}
               <button
                 type="button"
@@ -1101,7 +1157,7 @@ function PairingDialog({
                 disabled={pairingText === null}
                 title={
                   pairingText !== null
-                    ? `Copies “${pairingText}” — paste it into ACUTE on your phone`
+                    ? "Copies the address, PIN, and certificate fingerprint — paste it into ACUTE on your phone"
                     : "No LAN address reported — scan the QR or use the manual details"
                 }
                 className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
@@ -1138,10 +1194,10 @@ function PairingDialog({
         ) : null}
         </DialogContent>
       </Dialog>
-      {/* R115-E1 (b): the fullscreen magnifier — a SIBLING of the dialog (a
-          fixed child of DialogContent would inherit its translate(-50%,-50%)
-          containing block). Gated on `open` too: the linked-autoclose or a
-          dialog close tears the magnifier down with it. */}
+      {/* R115-E1 (b) + R116-e: the fullscreen magnifier — FullscreenPairQr
+          PORTALS ITSELF to document.body (the z-order fix), so its position
+          here is purely lexical. Gated on `open` too: the linked-autoclose
+          or a dialog close tears the magnifier down with it. */}
       {qrFullscreen && open && payload !== null && (
         <FullscreenPairQr payload={qrPayloadStr} onClose={closeQrFullscreen} />
       )}
@@ -1149,7 +1205,7 @@ function PairingDialog({
   );
 }
 
-function LinkDeviceCard({ linksEnabled, relayHost }: { linksEnabled: boolean; relayHost: string | null }) {
+function LinkDeviceCard({ linksEnabled }: { linksEnabled: boolean }) {
   const styles = useThemeStyles();
   const [dialogOpen, setDialogOpen] = useState(false);
   const closeDialog = useCallback(() => setDialogOpen(false), []);
@@ -1188,7 +1244,7 @@ function LinkDeviceCard({ linksEnabled, relayHost }: { linksEnabled: boolean; re
           Device links are off — turn them on above to pair a phone.
         </p>
       )}
-      <PairingDialog open={dialogOpen} onClose={closeDialog} relayHost={relayHost} />
+      <PairingDialog open={dialogOpen} onClose={closeDialog} />
     </SectionCard>
   );
 }
@@ -1377,15 +1433,14 @@ export function DevicesTab() {
   // ROUND-112 (R112-a): the remote-access card's shared read — the ~5 s
   // refetchInterval is the card's status-line poll ("while the card is
   // open" — the tab mounts/unmounts with selection, so the poll lives and
-  // dies with it) AND the pairing dialog's relay hint stays fresh off the
-  // same cache entry.
+  // dies with it). (R116-e: the pairing dialog's relay hint — the OTHER
+  // consumer this comment used to cite — was deleted per verdict #16, so
+  // the card is this read's only consumer now.)
   const cloudQuery = useQuery({
     queryKey: ["cloud-connector-settings"],
     queryFn: fetchCloudConnectorSettings,
     refetchInterval: 5_000,
   });
-  const relayHost =
-    cloudQuery.data?.status.state === "connected" ? hostOf(cloudQuery.data.status.relayUrl) : null;
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4" data-testid="devices-tab">
       <div className="pb-1">
@@ -1407,7 +1462,7 @@ export function DevicesTab() {
         <RemoteAccessCard settings={cloudQuery.data} />
       )}
       <DeviceLinkCard />
-      <LinkDeviceCard linksEnabled={linksEnabled} relayHost={relayHost} />
+      <LinkDeviceCard linksEnabled={linksEnabled} />
       <LinkedDevicesCard />
     </div>
   );

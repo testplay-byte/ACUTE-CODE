@@ -12,8 +12,10 @@
  *       the toggle + relay URL + write-only host key; Save PUTs
  *       {enabled, relayUrl, hostKey?} (untouched key input = hostKey
  *       OMITTED = keep); the live status line reads the polled connector
- *       status (Connected to <host> / Connecting… / Error: …); the pairing
- *       dialog's "Reachable over the internet" hint rides the same cache.
+ *       status (Connected to <host> / Connecting… / Error: …). (R116-e:
+ *       the pairing dialog's "Reachable over the internet" hint — the
+ *       cloud cache's second consumer — was DELETED per verdict #16; the
+ *       suite pins its absence.)
  *  §b · the pairing flow — "Pair a device" (gated on links being ON) calls
  *       POST /mobile/pair/start and opens the dialog: the QR encodes the
  *       EXACT response JSON (one compact object, fields untouched), the
@@ -27,6 +29,17 @@
  *       created; Revoke rides the styled ConfirmDialog → DELETE → refresh
  *       + the success note; empty state; 404 tolerance (the honest message
  *       AND the refresh, so a stale row always leaves).
+ *
+ * ROUND-116 (R116-e — the owner's verdicts #15-#20, the PC pairing dialog):
+ * the fullscreen QR magnifier renders through createPortal(…, document.body)
+ * (round-116.md §1.3 — the z-order trap: AppShell's `relative z-10` wrapper
+ * vs the BODY-level portaled z-50 Radix dialog) and its big QR is tappable
+ * back to the popup; the machineLabel is the dialog's BIG BOLD hero (a small
+ * eyebrow above the text-2xl/3xl font-bold name); the header description is
+ * ONE line; the manual panel carries its own bounded scroll; the action row
+ * centers; and the copied pairing text grows the trailing `· cert <colon-hex
+ * fp>` — the manual-LAN TLS fix's PC half, matching the phone's
+ * parsePairingText CERT_FP_SEARCH exactly.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -360,22 +373,13 @@ describe("DevicesTab §a2: the remote-access card (ROUND-112 R112-a)", () => {
     });
   });
 
-  it("the pairing dialog carries the relay hint ONLY while the tunnel is connected", async () => {
+  it("the pairing dialog carries NO relay hint — R116-e (verdict #16) deleted it, even while the tunnel is connected", async () => {
     enableLinks();
     const payload = pairingPayload(Date.now() + 120_000);
     vi.mocked(startMobilePairing).mockResolvedValue(payload);
 
-    // Disabled → no hint in the dialog.
-    renderWithProviders(<DevicesTab />);
-    await screen.findByTestId("link-status");
-    fireEvent.click(screen.getByTestId("pair-start-button"));
-    await waitFor(() => {
-      expect(screen.getByTestId("pair-pin").textContent).toBe("49301182");
-    });
-    expect(screen.queryByTestId("pair-relay-hint")).toBeNull();
-    cleanup();
-
-    // Connected → the human-readable host hint rides the same cache entry.
+    // The CONNECTED tunnel — the old hint's exact precondition. The cloud
+    // card's own status line still tells the relay truth…
     vi.mocked(fetchCloudConnectorSettings).mockResolvedValue(
       cloudSettingsFactory({
         enabled: true,
@@ -394,11 +398,13 @@ describe("DevicesTab §a2: the remote-access card (ROUND-112 R112-a)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("pair-pin").textContent).toBe("49301182");
     });
-    await waitFor(() => {
-      expect(screen.getByTestId("pair-relay-hint").textContent).toContain(
-        "Reachable over the internet via acute-relay.example.workers.dev",
-      );
-    });
+    expect(screen.getByTestId("remote-status").textContent).toContain(
+      "Connected to acute-relay.example.workers.dev",
+    );
+    // …but the pairing dialog no longer carries the "Reachable over the
+    // internet" line — the QR payload's own `relay` field is the phone's
+    // internet path, and the dialog's text shrinks to the essentials.
+    expect(screen.queryByTestId("pair-relay-hint")).toBeNull();
   });
 });
 
@@ -681,7 +687,10 @@ describe("DevicesTab §c: the linked-devices list", () => {
 // ── §b ROUND-115 (R115-E1): the pairing dialog's round-115 upgrades — the
 //    word-pair machine name line, the copy-pairing-text button (+ its
 //    clipboard-missing fallback), the fullscreen QR magnifier, and the
-//    manual fallback's per-block copy affordances. ──────────────────────────
+//    manual fallback's per-block copy affordances. R116-e re-pins the
+//    three surfaces it reshaped: the machine name is now the BIG BOLD
+//    hero, the copied text carries the cert fingerprint, and the
+//    fullscreen magnifier portals to body with a tappable QR. ────────────
 
 describe("DevicesTab §b R115: the pairing dialog upgrades (ROUND-115 R115-E1)", () => {
   /** The happy-dom clipboard swap (the ChatMarkdown.test.tsx pattern —
@@ -706,19 +715,31 @@ describe("DevicesTab §b R115: the pairing dialog upgrades (ROUND-115 R115-E1)",
     });
   }
 
-  it("the payload's machineLabel renders as the quiet 'This desktop is …' line — absent gracefully on old payloads", async () => {
+  it("the payload's machineLabel is the dialog's BIG BOLD hero — a small eyebrow above the big name; absent gracefully on old payloads", async () => {
     await openDialog({ ...pairingPayload(Date.now() + 120_000), machineLabel: "Confused Coconut" });
-    expect(screen.getByTestId("pair-machine-label").textContent).toBe(
-      "This desktop is Confused Coconut",
-    );
+    // R116-e (verdict #19): the pair-machine-label testID KEPT, now on the
+    // hero BLOCK — the honest framing is a small "This desktop is" eyebrow
+    // ABOVE the big bold word-pair name.
+    const hero = screen.getByTestId("pair-machine-label");
+    expect(hero.textContent).toContain("This desktop is");
+    const eyebrow = hero.firstElementChild as HTMLElement;
+    expect(eyebrow.textContent).toBe("This desktop is");
+    // The name dominates: text-2xl/3xl font-bold, and it renders AFTER
+    // (below) the eyebrow.
+    const name = screen.getByTestId("pair-machine-name");
+    expect(name.textContent).toBe("Confused Coconut");
+    expect(name.className).toContain("font-bold");
+    expect(name.className).toContain("text-2xl");
+    expect(eyebrow.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-    // A pre-R115 payload (no machineLabel) — the line simply does not render.
+    // A pre-R115 payload (no machineLabel) — the hero simply does not render.
     cleanup();
     await openDialog(pairingPayload(Date.now() + 120_000));
     expect(screen.queryByTestId("pair-machine-label")).toBeNull();
+    expect(screen.queryByTestId("pair-machine-name")).toBeNull();
   });
 
-  it("'Copy pairing text' copies `firstAddr:port · PIN pin` and flips to the Copied state", async () => {
+  it("'Copy pairing text' copies `firstAddr:port · PIN pin · cert <colon-hex fp>` (the TLS fix's PC half) and flips to Copied", async () => {
     const write = vi.fn().mockResolvedValue(undefined);
     stubClipboard(write);
     await openDialog(pairingPayload(Date.now() + 120_000));
@@ -726,7 +747,13 @@ describe("DevicesTab §b R115: the pairing dialog upgrades (ROUND-115 R115-E1)",
     const button = screen.getByTestId("pair-copy-text");
     expect(button.textContent).toContain("Copy pairing text");
     fireEvent.click(button);
-    expect(write).toHaveBeenCalledWith("192.168.1.42:45999 · PIN 49301182");
+    // R116-e: the EXACT string — the trailing colon-hex fingerprint is what
+    // the phone's parsePairingText CERT_FP_SEARCH parses anywhere in the
+    // pasted text (the "cert " prefix word rides along harmlessly), so a
+    // pasted manual-LAN entry pins the self-signed cert like the QR does.
+    expect(write).toHaveBeenCalledWith(
+      `192.168.1.42:45999 · PIN 49301182 · cert ${CERT_FP}`,
+    );
     await waitFor(() => {
       expect(screen.getByTestId("pair-copy-text").textContent).toContain("Copied");
     });
@@ -747,24 +774,52 @@ describe("DevicesTab §b R115: the pairing dialog upgrades (ROUND-115 R115-E1)",
     );
   });
 
-  it("clicking the QR opens the fullscreen magnifier; Esc and the X close it (the dialog stays open)", async () => {
+  it("clicking the QR opens the fullscreen magnifier (portaled to body); Esc, the X, and tapping the big QR close it (the dialog stays open)", async () => {
     await openDialog(pairingPayload(Date.now() + 120_000));
 
     // Closed by default.
     expect(screen.queryByTestId("pair-qr-fullscreen")).toBeNull();
     // Click the tile → the magnifier: same payload, the scan hint, the X.
+    // R116-e: the overlay renders through createPortal(…, document.body)
+    // (the §1.3 z-order fix) — it is a direct child of <body>, no longer a
+    // descendant of AppShell's `relative z-10` wrapper under the z-50
+    // portaled Radix dialog.
     fireEvent.click(screen.getByTestId("pair-qr"));
     const fullscreen = screen.getByTestId("pair-qr-fullscreen");
     expect(fullscreen).toBeTruthy();
+    expect(fullscreen.parentElement).toBe(document.body);
     expect(screen.getByTestId("pair-qr-fullscreen-hint").textContent).toBe(
       "Scan with ACUTE on your phone",
     );
+    // The QR canvas is ASYNC (qrcode.toString) — its svg gets its OWN
+    // waitFor, scoped to the code block (the X chip's lucide icon is an
+    // svg too, and it now comes FIRST in the DOM).
+    const codeWrap = screen.getByTestId("pair-qr-fullscreen-code");
     await waitFor(() => {
-      expect(fullscreen.querySelector("svg")).toBeTruthy();
+      expect(codeWrap.querySelector("svg")).toBeTruthy();
     });
+
+    // R116-e structure: the hint rides ABOVE the code, and the X is the
+    // top-right corner affordance (a 40px white/80-bordered chip).
+    const hint = screen.getByTestId("pair-qr-fullscreen-hint");
+    const code = codeWrap.querySelector("svg") as SVGElement;
+    expect(hint.compareDocumentPosition(code) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const closeBtn = screen.getByTestId("pair-qr-fullscreen-close");
+    expect(closeBtn.className).toContain("absolute");
+    expect(closeBtn.className).toContain("w-10");
+    expect(closeBtn.className).toContain("h-10");
+    expect(closeBtn.className).toContain("border-white/80");
+
+    // R116-e: tapping the BIG QR ITSELF returns to the popup form — the
+    // code no longer swallows clicks (tapping the QR IS tapping the
+    // overlay; same action).
+    fireEvent.click(code);
+    expect(screen.queryByTestId("pair-qr-fullscreen")).toBeNull();
+    expect(screen.getByTestId("pair-pin").textContent).toBe("49301182");
 
     // Esc closes the magnifier — AND the pairing dialog itself stays open
     // (the overlay swallows the key before the Radix layer under it).
+    fireEvent.click(screen.getByTestId("pair-qr"));
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByTestId("pair-qr-fullscreen")).toBeNull();
     expect(screen.getByTestId("pair-pin").textContent).toBe("49301182");
