@@ -152,6 +152,14 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
     }
     const raw = body as Record<string, unknown>;
+    // ROUND-117 (R117-d): the boolean gets the memory-domain's explicit
+    // type guard — a non-boolean must 400 (naming the field), never a
+    // silently-ignored no-op 200.
+    if (raw.autoRetry !== undefined && typeof raw.autoRetry !== "boolean") {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body.autoRetry must be a boolean", { field: "body.autoRetry" }));
+    }
     try {
       const updated = setOrchestrationSettings(db, {
         ...(typeof raw.maxParallel === "number" ? { maxParallel: raw.maxParallel } : {}),
@@ -173,6 +181,12 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         ...(typeof raw.childStallTimeoutMs === "number"
           ? { childStallTimeoutMs: raw.childStallTimeoutMs }
           : {}),
+        // ROUND-117 (R117-d): the orchestration retry policy — the master
+        // switch + the per-child bound (validated in settings.ts). The GET
+        // (and the broadcast frame below) serve them automatically — the
+        // storage layer owns the shape.
+        ...(typeof raw.autoRetry === "boolean" ? { autoRetry: raw.autoRetry } : {}),
+        ...(typeof raw.autoRetryMax === "number" ? { autoRetryMax: raw.autoRetryMax } : {}),
       });
       broadcastSettings("orchestration", updated);
       return updated;

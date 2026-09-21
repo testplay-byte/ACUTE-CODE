@@ -12,6 +12,11 @@
  * the BLOCKING behavior verbatim. Dispatch lives in execute; EVERY
  * validation failure returns {ok:false, output} honestly — this tool never
  * throws.
+ *
+ * ROUND-117 (R117-d): the GUIDANCE mode — delegate_task {task_id, guidance}
+ * injects a mid-task course correction into a RUNNING child's queue (the
+ * orchestrator's sendGuidance; the same internal path the queue route
+ * rides). Rejected unless the addressed task is running.
  */
 import { jsonSchema } from "ai";
 // ROUND-84 (R84, Wave 2-c — the 25-file SCC break): the delegation plugin
@@ -30,8 +35,8 @@ import type { PluginDefinition, ToolDefinition } from "../registry.js";
 export const delegationPlugin: PluginDefinition = {
   id: "core-delegation",
   name: "Sub-agent Delegation",
-  version: "1.1.0",
-  description: "delegate_task — parallel self-contained sub-agent runs (ADR-0022); R79: addressable, background, resumable.",
+  version: "1.2.0",
+  description: "delegate_task — parallel self-contained sub-agent runs (ADR-0022); R79: addressable, background, resumable; R117-d: mid-task guidance.",
   category: "delegation",
   createTools: (ctx): ToolDefinition[] => {
     const toolDeps = ctx.toolDeps;
@@ -51,7 +56,7 @@ export const delegationPlugin: PluginDefinition = {
       {
         name: "delegate_task",
         description:
-          "Delegate a self-contained subtask to an independent sub-agent with the same project tools. DEFAULT (task only): BLOCKING — the call waits and returns the sub-agent's final report; multiple delegate_task calls in ONE message run in PARALLEL. task_id: your own address for the delegation (1-64 chars: starts alphanumeric, then A-Za-z0-9._-; unique per session) — needed to resume later. background:true (REQUIRES task_id): fire-and-forget — the call returns IMMEDIATELY with a receipt, the task runs detached, the owner watches its progress in the Sub-agents panel, and its status rides your NEXT turn's system prompt. resume: COLLECT a delegated task by its task_id (or session id or 4-char code) — completed returns the final report; failed retries it from where it stopped. NEVER sleep-poll a background task: delegate_task {\"resume\":\"<task_id>\"} IS the wait (resume blocks until the task is terminal). A misbehaving background task is stopped by the owner from the Sub-agents panel. role: planner|researcher|coder|reviewer|tester (default researcher).",
+          "Delegate a self-contained subtask to an independent sub-agent with the same project tools. DEFAULT (task only): BLOCKING — the call waits and returns the sub-agent's final report; multiple delegate_task calls in ONE message run in PARALLEL. task_id: your own address for the delegation (1-64 chars: starts alphanumeric, then A-Za-z0-9._-; unique per session) — needed to resume later. background:true (REQUIRES task_id): fire-and-forget — the call returns IMMEDIATELY with a receipt, the task runs detached, the owner watches its progress in the Sub-agents panel, and its status rides your NEXT turn's system prompt. resume: COLLECT a delegated task by its task_id (or session id or 4-char code) — completed returns the final report; failed retries it from where it stopped. NEVER sleep-poll a background task: delegate_task {\"resume\":\"<task_id>\"} IS the wait (resume blocks until the task is terminal). guidance: send a mid-task course correction to a RUNNING task (delegate_task {task_id, guidance}) — the text lands in its queue and reaches it at its next step boundary; refused unless the task is running. A misbehaving background task is stopped by the owner from the Sub-agents panel. role: planner|researcher|coder|reviewer|tester (default researcher).",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
@@ -76,6 +81,10 @@ export const delegationPlugin: PluginDefinition = {
               type: "string",
               description: "COLLECT a delegated task: its task_id, child session id, or 4-char code. Waits while it runs, returns the final report on completion, retries it from where it stopped on failure. task/role are ignored on this path.",
             },
+            guidance: {
+              type: "string",
+              description: "Send a mid-task course correction to a RUNNING task, addressed by task_id (also accepts the child session id or 4-char code): the text is queued as the child's next user message and reaches it at its next step boundary — no interruption, its current tool call finishes first. Write it as a direct instruction with the context it needs (it cannot see this conversation). Refused unless the task is running; pair with background:true for a steer-able long task.",
+            },
           },
         }),
         execute: async (input) => {
@@ -91,6 +100,7 @@ export const delegationPlugin: PluginDefinition = {
             const taskId = typeof input.task_id === "string" ? input.task_id.trim() : "";
             const background = input.background === true;
             const resume = typeof input.resume === "string" ? input.resume.trim() : "";
+            const guidance = typeof input.guidance === "string" ? input.guidance.trim() : "";
             const orchestrator =
               // ROUND-84 (R84, Wave 2-c): the ToolDeps seam first (the
               // audit's preferred injection — same pattern as chat/
@@ -123,6 +133,26 @@ export const delegationPlugin: PluginDefinition = {
                 // honest "still running" line when the owner stops the turn).
                 toolDeps.emit,
                 toolDeps.signal,
+              );
+              return { ok: result.ok, output: result.output };
+            }
+            // ── The GUIDANCE path (R117-d): guidance present → a mid-task
+            // course correction for a RUNNING child, addressed by task_id
+            // (the orchestrator also resolves session ids + codes). ──
+            if (guidance !== "") {
+              if (taskId === "") {
+                return {
+                  ok: false,
+                  output:
+                    "guidance requires task_id (the child session id or 4-char code also resolve) — delegate_task {\"task_id\":\"…\",\"guidance\":\"…\"} steers a RUNNING task. " +
+                    "For a task that is not running yet, wait for it (resume) or include the direction in the original task text.",
+                };
+              }
+              const result = await orchestrator.sendGuidance(
+                deps,
+                toolDeps.sessionId,
+                taskId,
+                guidance,
               );
               return { ok: result.ok, output: result.output };
             }
@@ -179,7 +209,7 @@ export const delegationPlugin: PluginDefinition = {
               output: orchestrator.addressableChildrenOutput(
                 toolDeps.db,
                 toolDeps.sessionId,
-                "delegate_task needs a task (delegate), a resume (collect a delegated task), or a task + background for a fire-and-forget run — this call provided none of them.",
+                "delegate_task needs a task (delegate), a resume (collect a delegated task), a task + background for a fire-and-forget run, or a task_id + guidance to steer a running task — this call provided none of them.",
               ),
             };
           } catch (error) {

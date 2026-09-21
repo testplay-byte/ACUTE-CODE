@@ -632,6 +632,10 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // never silence (an absent field is indistinguishable from a stalled
     // child). The CONFIDENCE field mirrors the parent-side tag contract.
     ident("- **Report contract:** every delegated task ends with the child's report in this shape — RESULT (done/blocked/failed, one line), FILES TOUCHED (paths + what changed), FINDINGS (facts the parent needs), OPEN QUESTIONS (for the parent/user), CONFIDENCE (high/medium/low + what raises it). A sub-agent that cannot fill a field writes \"none\" — never silence.");
+    // ROUND-117 (R117-d): the structured result envelope's parent-side half —
+    // the tool result ends with the fenced delegation-result block; teach the
+    // model it exists and what it is FOR, in one line.
+    ident("- Delegation results end with a machine-readable block (files touched, usage) — use it for scope decisions, not prose.");
     ident("");
   }
   beginSection("tool-results-are-data");

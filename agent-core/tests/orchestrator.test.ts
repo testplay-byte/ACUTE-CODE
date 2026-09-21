@@ -360,12 +360,15 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
     const initial = await authInject({ method: "GET", url: "/api/v1/settings/orchestration" });
     expect(initial.statusCode).toBe(200);
     // ROUND-52 (R52-b): the supervisor settings joined the payload.
+    // ROUND-117 (R117-d): the retry policy joined too (additive).
     expect(initial.json()).toEqual({
       maxParallel: 5,
       perKeyLimit: 3,
       subagentModel: null,
       childWatchdogMs: 15_000,
       childStallTimeoutMs: 300_000,
+      autoRetry: true,
+      autoRetryMax: 1,
     });
 
     const updated = await authInject({
@@ -380,6 +383,8 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
       subagentModel: null,
       childWatchdogMs: 15_000,
       childStallTimeoutMs: 300_000,
+      autoRetry: true,
+      autoRetryMax: 1,
     });
 
     const invalid = await authInject({
@@ -402,6 +407,8 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
       subagentModel: null,
       childWatchdogMs: 30_000,
       childStallTimeoutMs: 600_000,
+      autoRetry: true,
+      autoRetryMax: 1,
     });
     const badWatch = await authInject({
       method: "PUT",
@@ -409,6 +416,34 @@ describe("ROUND-36: sub-agent orchestration (ADR-0022)", () => {
       payload: { childWatchdogMs: 1_000 },
     });
     expect(badWatch.statusCode).toBe(400);
+    // ROUND-117 (R117-d): the retry-policy knobs round-trip + validate.
+    const retry = await authInject({
+      method: "PUT",
+      url: "/api/v1/settings/orchestration",
+      payload: { autoRetry: false, autoRetryMax: 2 },
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toEqual({
+      maxParallel: 20,
+      perKeyLimit: 10,
+      subagentModel: null,
+      childWatchdogMs: 30_000,
+      childStallTimeoutMs: 600_000,
+      autoRetry: false,
+      autoRetryMax: 2,
+    });
+    const badRetry = await authInject({
+      method: "PUT",
+      url: "/api/v1/settings/orchestration",
+      payload: { autoRetryMax: 9 },
+    });
+    expect(badRetry.statusCode).toBe(400);
+    const badRetryType = await authInject({
+      method: "PUT",
+      url: "/api/v1/settings/orchestration",
+      payload: { autoRetry: "yes" },
+    });
+    expect(badRetryType.statusCode).toBe(400);
   });
 
   it("ROUND-49: memory settings round-trip via /settings/memory (the master switch)", async () => {

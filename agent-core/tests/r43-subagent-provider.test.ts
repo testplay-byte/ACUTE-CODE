@@ -96,6 +96,9 @@ describe("R43-5: orchestration.subagentModel storage", () => {
       maxParallel: 5,
       perKeyLimit: 3,
       subagentModel: null,
+      // ROUND-117 (R117-d1): the bounded auto-re-delegation knobs.
+      autoRetry: true,
+      autoRetryMax: 1,
       // ROUND-52 (R52-b): the child-supervisor knobs (heartbeat cadence +
       // stall threshold) joined the settings object.
       childWatchdogMs: 15_000,

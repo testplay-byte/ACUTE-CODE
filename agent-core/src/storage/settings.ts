@@ -24,6 +24,22 @@
  *                                 dead provider) → the watchdog aborts the
  *                                 child and reports honestly to the parent
  *                                 (default 5 min, clamp 1 min–60 min).
+ *   orchestration.autoRetry       — ROUND-117 (R117-d): when a child dies
+ *                                 STALLED or with a transient provider
+ *                                 class (network/timeout/rate_limit), the
+ *                                 orchestrator re-delegates it ONCE through
+ *                                 the same retryChild resume path the owner's
+ *                                 Retry button uses (the event log IS the
+ *                                 resume point). Owner-stops and parent-turn
+ *                                 aborts are NEVER auto-retried (a deliberate
+ *                                 stop stays stopped); context_window_exceeded
+ *                                 is excluded (a re-run hits the same wall).
+ *                                 Default true.
+ *   orchestration.autoRetryMax    — ROUND-117 (R117-d): how many automatic
+ *                                 re-delegations a single child may burn
+ *                                 (durable count on the child's log),
+ *                                 integer 0–3, default 1 (once). 0 turns the
+ *                                 bound to zero even when autoRetry is on.
  *
  * ROUND-49 (owner directive: "maybe try giving me a setting in the settings
  * to turn off this memory functionality"):
@@ -60,6 +76,12 @@ export interface OrchestrationSettings {
   subagentModel: SubagentModelRef | null;
   childWatchdogMs: number;
   childStallTimeoutMs: number;
+  /** ROUND-117 (R117-d): the orchestration-level retry master switch — see
+   * the file header. Default true. */
+  autoRetry: boolean;
+  /** ROUND-117 (R117-d): automatic re-delegations per child, 0–3,
+   * default 1. */
+  autoRetryMax: number;
 }
 
 export const ORCHESTRATION_DEFAULTS: OrchestrationSettings = {
@@ -68,6 +90,8 @@ export const ORCHESTRATION_DEFAULTS: OrchestrationSettings = {
   subagentModel: null,
   childWatchdogMs: 15_000,
   childStallTimeoutMs: 300_000,
+  autoRetry: true,
+  autoRetryMax: 1,
 };
 
 const MAX_PARALLEL_KEY = "orchestration.maxParallel";
@@ -75,6 +99,8 @@ const PER_KEY_LIMIT_KEY = "orchestration.perKeyLimit";
 const SUBAGENT_MODEL_KEY = "orchestration.subagentModel";
 const CHILD_WATCHDOG_MS_KEY = "orchestration.childWatchdogMs";
 const CHILD_STALL_TIMEOUT_MS_KEY = "orchestration.childStallTimeoutMs";
+const AUTO_RETRY_KEY = "orchestration.autoRetry";
+const AUTO_RETRY_MAX_KEY = "orchestration.autoRetryMax";
 
 function readNumber(db: SqliteDatabase, key: string, fallback: number, min: number, max: number): number {
   const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
@@ -146,6 +172,10 @@ export function getOrchestrationSettings(db: SqliteDatabase): OrchestrationSetti
       60_000,
       3_600_000,
     ),
+    // ROUND-117 (R117-d): the orchestration retry policy knobs (see the file
+    // header). readBoolean is declared below — function hoisting carries it.
+    autoRetry: readBoolean(db, AUTO_RETRY_KEY, ORCHESTRATION_DEFAULTS.autoRetry),
+    autoRetryMax: readNumber(db, AUTO_RETRY_MAX_KEY, ORCHESTRATION_DEFAULTS.autoRetryMax, 0, 3),
   };
 }
 
@@ -239,6 +269,19 @@ export function setOrchestrationSettings(
       throw new Error("childStallTimeoutMs must be an integer between 60000 and 3600000");
     }
     upsert.run(CHILD_STALL_TIMEOUT_MS_KEY, String(patch.childStallTimeoutMs));
+  }
+  // ROUND-117 (R117-d): the orchestration retry policy knobs.
+  if (patch.autoRetry !== undefined) {
+    if (typeof patch.autoRetry !== "boolean") {
+      throw new Error("autoRetry must be a boolean");
+    }
+    upsert.run(AUTO_RETRY_KEY, String(patch.autoRetry));
+  }
+  if (patch.autoRetryMax !== undefined) {
+    if (!Number.isInteger(patch.autoRetryMax) || patch.autoRetryMax < 0 || patch.autoRetryMax > 3) {
+      throw new Error("autoRetryMax must be an integer between 0 and 3");
+    }
+    upsert.run(AUTO_RETRY_MAX_KEY, String(patch.autoRetryMax));
   }
   return getOrchestrationSettings(db);
 }

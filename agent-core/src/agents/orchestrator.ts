@@ -26,10 +26,28 @@
  *   sessions to `failed`.
  * - Live status: `subagent-status` events emitted through the parent's
  *   stream on every state transition.
+ * - ROUND-117 (R117-d, the robust-orchestration round): three additions.
+ *   (1) AUTO-RETRY: a child that dies STALLED or with a transient provider
+ *   class (network/timeout/rate_limit) is re-delegated through the SAME
+ *   retryChild resume path the owner's Retry button uses — bounded by
+ *   orchestration.autoRetry/autoRetryMax (durable count on the child's log,
+ *   `delegation.autoretry` events), gated by the existing semaphore
+ *   machinery (retryChild re-acquires a slot), and NEVER fired for
+ *   owner-stops, parent-turn aborts, or context_window_exceeded. The
+ *   retried child's tool result + completed status frame carry the honest
+ *   "auto-retried once after {class}" marker; a failing retry is terminal.
+ *   (2) GUIDANCE: sendGuidance (delegate_task {task_id, guidance}) injects
+ *   a user-role message into a RUNNING child's queue through the SAME
+ *   internal path POST /sessions/:id/queue uses (appendQueuedMessage +
+ *   notifyTurn) — the child receives it at its next step boundary.
+ *   (3) THE RESULT ENVELOPE: every completed child's report returns to the
+ *   parent with a compact machine-readable block appended (files touched,
+ *   usage) — see delegationResultEnvelope.
  */
 import type Database from "better-sqlite3";
 import {
   appendDelegationCollected,
+  appendQueuedMessage,
   appendSessionEvent,
   BACKGROUND_TASK_REMINDER_CAP,
   childTerminalText,
@@ -51,8 +69,18 @@ import type { Agent } from "../storage/agents.js";
 import { getActiveRetryWait } from "../lib/retry.js";
 // ROUND-52 (R52-b): the shared turn registry — children register their own
 // AbortController so POST /sessions/:id/stop can stop a sub-agent directly,
-// and the supervisor can abort a stalled one.
-import { registerTurn, unregisterTurn, getTurnStopReason, abortTurn } from "../lib/turn-registry.js";
+// and the supervisor can abort a stalled one. ROUND-117 (R117-d): the
+// guidance path ALSO consults the registry (getTurnController — the same
+// live-turn gate POST /sessions/:id/queue checks) and notifies it
+// (notifyTurn — the queue route's user.queued frame bridge).
+import {
+  registerTurn,
+  unregisterTurn,
+  getTurnStopReason,
+  getTurnController,
+  notifyTurn,
+  abortTurn,
+} from "../lib/turn-registry.js";
 import { getAgent } from "../storage/agents.js";
 import { getOrchestrationSettings } from "../storage/settings.js";
 import { resolveKeyPool, type ProviderKeyring } from "../providers/registry.js";
@@ -123,7 +151,13 @@ const RESUME_POLL_MS = 300;
  * report from the SHARED extraction (childTerminalText: the last non-empty
  * message.assistant — the exact text the Sub-agents panel row shows as
  * `report`, so the tool result and the panel can never disagree). Used by
- * the completed path and the post-retry path of resumeTask. */
+ * the completed path and the post-retry path of resumeTask.
+ * ROUND-117 (R117-d): the output now also carries the honest auto-retry
+ * marker line (when this child was auto-retried) and the machine-readable
+ * RESULT ENVELOPE (delegationResultEnvelope) — appended AFTER the report
+ * text, so the readable report stays first and the panels (which read the
+ * child's own log / the /subagents rows, never this tool result) stay
+ * clean. */
 function collectOutcome(
   db: SqliteDatabase,
   child: SubAgentStatus,
@@ -133,10 +167,205 @@ function collectOutcome(
   if (report === null) {
     return {
       ok: true,
-      output: `${header}\nSub-agent completed, but its log holds no final report text (no non-empty assistant message) — its session is preserved for inspection.`,
+      output:
+        `${header}\nSub-agent completed, but its log holds no final report text (no non-empty assistant message) — its session is preserved for inspection.` +
+        childAutoRetryNote(db, child.id) +
+        `\n\n${delegationResultEnvelope(db, child.id, child.taskId, "")}`,
     };
   }
-  return { ok: true, output: `${header}\nSub-agent completed.\n\n${report}` };
+  return {
+    ok: true,
+    output:
+      `${header}\nSub-agent completed.\n\n${report}` +
+      childAutoRetryNote(db, child.id) +
+      `\n\n${delegationResultEnvelope(db, child.id, child.taskId, report)}`,
+  };
+}
+
+// ── ROUND-117 (R117-d): the auto-retry policy's shared pieces ───────────────
+//
+// The durable bookkeeping event (the R79 delegation.collected pattern, one
+// tier over): a session_events row of NEW type `delegation.autoretry` on the
+// CHILD's log with payload {attempt, class, taskId?}. NOTHING existing reads
+// it as a message — assembleHistory's fold only matches
+// message.user/message.assistant/tool.use, and the UI transcript parsers
+// switch on known types — so it is invisible by construction. It exists so
+// the per-child retry bound survives across turns, resume waits, and
+// sidecar restarts (the count is the truth, not a memory flag).
+
+/** The event type string (named once; the orchestrator + tests share it). */
+export const DELEGATION_AUTORETRY_EVENT = "delegation.autoretry";
+
+/** ROUND-117 (R117-d): append the durable auto-retry marker to the CHILD's
+ * log — {attempt, class} (+ the address when the child carries one). */
+function appendDelegationAutoRetry(
+  db: SqliteDatabase,
+  child: Session,
+  input: { attempt: number; class: string },
+): void {
+  appendSessionEvent(db, child.id, {
+    type: DELEGATION_AUTORETRY_EVENT,
+    agentId: child.agentId,
+    payload: {
+      attempt: input.attempt,
+      class: input.class,
+      ...(child.taskId !== null ? { taskId: child.taskId } : {}),
+    },
+  });
+}
+
+/** ROUND-117 (R117-d): how many automatic re-delegations this child has
+ * burned (the durable count the bound reads). */
+export function childAutoRetryCount(db: SqliteDatabase, childId: string): number {
+  return listSessionEvents(db, childId).filter((e) => e.type === DELEGATION_AUTORETRY_EVENT).length;
+}
+
+/** ROUND-117 (R117-d): the honest marker phrase for a child that was
+ * auto-retried — "" when it never was. The phrase is the contract the
+ * parent model + the panels see: "auto-retried once after {class}". */
+function childAutoRetrySummary(db: SqliteDatabase, childId: string): string {
+  const retries = listSessionEvents(db, childId).filter((e) => e.type === DELEGATION_AUTORETRY_EVENT);
+  if (retries.length === 0) return "";
+  const last = retries[retries.length - 1]!.payload as { class?: unknown };
+  const cls = typeof last.class === "string" ? last.class : "a transient failure";
+  return retries.length === 1
+    ? `auto-retried once after ${cls}`
+    : `auto-retried ${retries.length} times, last after ${cls}`;
+}
+
+/** The summary as a standalone appended line ("" → nothing appended). */
+function childAutoRetryNote(db: SqliteDatabase, childId: string): string {
+  const summary = childAutoRetrySummary(db, childId);
+  return summary === "" ? "" : `\n\n${summary}`;
+}
+
+/**
+ * ROUND-117 (R117-d): WHICH failure classes earn an automatic re-delegation.
+ * A child that dies STALLED (the watchdog kill) or with a transient provider
+ * class (network / timeout / rate_limit — read off the turn outcome's
+ * details.errorClass, the same classification persistTurnError writes to
+ * turn.error) is retryable: the resume path genuinely continues from the
+ * event log, and these classes plausibly heal with time.
+ * NEVER retryable: an owner-stop (a deliberate stop stays stopped — the
+ * owner said stop), a parent-turn abort (the cascade that already means
+ * "stop spending"), context_window_exceeded (a re-run assembles the SAME
+ * oversized history and hits the same wall), and every non-transient
+ * provider class (auth — a re-run burns another key rejection; malformed
+ * responses, request-shape errors — deterministic). Exported for unit tests.
+ */
+export function autoRetryClassOf(
+  stallReport: string | null,
+  stopReason: string | null,
+  outcome: { code: string; details?: Record<string, unknown> },
+): "stalled" | "network" | "timeout" | "rate_limit" | null {
+  // The watchdog's own kill IS the retryable class — checked FIRST so a
+  // stall-aborted outcome (code ABORTED) is still correctly retryable.
+  if (stallReport !== null) return "stalled";
+  // Deliberate stops are never auto-retried.
+  if (stopReason === "owner") return null;
+  if (outcome.code === "ABORTED") return null;
+  if (outcome.code !== "PROVIDER_ERROR") return null;
+  const errorClass = outcome.details?.errorClass;
+  return errorClass === "network" || errorClass === "timeout" || errorClass === "rate_limit"
+    ? errorClass
+    : null;
+}
+
+// ── ROUND-117 (R117-d): the structured RESULT ENVELOPE ──────────────────────
+//
+// The child's terminal report returns to the parent as BOTH the readable
+// text AND machine-parseable fields: after the report, a compact fenced
+// JSON line block. files_touched derives from the child's persisted
+// tool.use events (write_file/edit_file — the argsSummary's `path:` field;
+// raw args are never persisted by design); usage is the child session's
+// usage_events roll-up (the same SUM the /subagents rows carry). The block
+// rides ONLY the tool result / resume return — never the child's own log —
+// so the panels (which read the child's events and the /subagents rows)
+// never render it.
+
+/** The write-family tools whose paths count as "files touched". */
+const FILES_TOUCHED_TOOLS = new Set(["write_file", "edit_file"]);
+/** The envelope's files_touched cap (scope decisions, not a full changelog). */
+export const FILES_TOUCHED_CAP = 20;
+
+/**
+ * ROUND-117 (R117-d): the unique file paths a child's write-family tool
+ * calls touched, in first-touch order, capped at FILES_TOUCHED_CAP.
+ * Best-effort by construction: the persisted argsSummary is the display
+ * string ("path: src/a.ts, content: 1234 chars") — a path containing
+ * ", key: " would truncate at the comma (vanishingly rare; the readable
+ * FILES TOUCHED field in the report itself remains the authored truth).
+ * Exported for unit tests.
+ */
+export function childFilesTouched(db: SqliteDatabase, childId: string): string[] {
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  for (const ev of listSessionEvents(db, childId)) {
+    if (paths.length >= FILES_TOUCHED_CAP) break;
+    if (ev.type !== "tool.use") continue;
+    const payload = ev.payload as { toolName?: unknown; argsSummary?: unknown };
+    if (typeof payload.toolName !== "string" || !FILES_TOUCHED_TOOLS.has(payload.toolName)) continue;
+    if (typeof payload.argsSummary !== "string") continue;
+    const path = filePathFromArgsSummary(payload.argsSummary);
+    if (path === null || seen.has(path)) continue;
+    seen.add(path);
+    paths.push(path);
+  }
+  return paths;
+}
+
+/** The `path: <value>` segment of a write-family argsSummary (chat.ts's
+ * summarizeArgs composes "key: value" pairs joined ", "). */
+function filePathFromArgsSummary(argsSummary: string): string | null {
+  const match = argsSummary.match(/(?:^|, )path: (.+?)(?=, [A-Za-z_]+: |$)/);
+  return match !== null && match[1] !== "" ? match[1] : null;
+}
+
+/** The report's own RESULT verdict (the sub-agent report contract: "RESULT
+ * (done/blocked/failed, one line)"). Falls back to the first standalone
+ * verdict word, then "done" — the run completed; the envelope is advisory
+ * for scope decisions, the readable report stays the truth. */
+function reportVerdict(report: string): "done" | "blocked" | "failed" {
+  const labeled = report.match(/\bRESULT\b[^:\n]{0,40}[:\-—\n]\s*(done|blocked|failed)\b/i);
+  if (labeled !== null) return labeled[1]!.toLowerCase() as "done" | "blocked" | "failed";
+  const bare = report.match(/\b(done|blocked|failed)\b/i);
+  return bare !== null ? (bare[1]!.toLowerCase() as "done" | "blocked" | "failed") : "done";
+}
+
+/**
+ * ROUND-117 (R117-d): the machine-readable result block appended to a
+ * completed child's report —
+ *
+ *   --- delegation-result ---
+ *   {"task_id":"…","result":"done|blocked|failed","files_touched":["path",…],"usage":{"inputTokens":N,"outputTokens":N,"costUsd":X}}
+ *   --- end ---
+ *
+ * Exported for unit tests. `report` is the child's readable final report
+ * (the verdict derives from it); costUsd is rounded to 6 decimals (a SUM of
+ * REALs can carry float noise).
+ */
+export function delegationResultEnvelope(
+  db: SqliteDatabase,
+  childId: string,
+  taskId: string | null,
+  report: string,
+): string {
+  const usage = db
+    .prepare(
+      "SELECT COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o, COALESCE(SUM(cost_usd), 0) AS c FROM usage_events WHERE session_id = ?",
+    )
+    .get(childId) as { i: number; o: number; c: number };
+  const payload = {
+    task_id: taskId,
+    result: reportVerdict(report),
+    files_touched: childFilesTouched(db, childId),
+    usage: {
+      inputTokens: usage.i,
+      outputTokens: usage.o,
+      costUsd: Math.round(usage.c * 1e6) / 1e6,
+    },
+  };
+  return `--- delegation-result ---\n${JSON.stringify(payload)}\n--- end ---`;
 }
 
 /**
@@ -492,6 +721,11 @@ class Orchestrator {
         signal,
       },
     );
+    // ROUND-117 (R117-d): the AUTO-RETRY hook — a failure in a retryable
+    // class (stalled / network / timeout / rate_limit) is re-delegated
+    // through the owner's own retryChild path before the parent ever sees
+    // the failure line. Everything else falls through verbatim.
+    const settled = await this.maybeAutoRetry(deps, parentSessionId, child, result, emit, signal);
     // ROUND-79 (R79-a): a BLOCKING delegation with task_id marks itself
     // COLLECTED at completion — the tool result (report OR failure line)
     // was delivered inline, so the per-turn reminder must never list this
@@ -505,7 +739,7 @@ class Orchestrator {
         childCode: subAgentCode(child.id),
       });
     }
-    return result;
+    return settled;
   }
 
   /**
@@ -592,14 +826,37 @@ class Orchestrator {
       },
     ).then(
       (result) => {
-        // The terminal status frame + the owner notification already rode
-        // the shared path; the REPORT itself stays in the child's log for
-        // resume (nothing delivered it inline anywhere).
-        log("info", "delegation.background.settled", {
-          child: child.id,
-          taskId,
-          ok: result.ok,
-        });
+        // ROUND-117 (R117-d): the AUTO-RETRY hook, detached twin — the
+        // background child gets the same bounded re-delegation a blocking
+        // one does (no caller is waiting, so the retry is where the
+        // robustness pays off most). The emit is the BEST-EFFORT wrapper
+        // (the run outlives the parent's stream); a throwing frame in the
+        // retry must never kill the detached honesty path.
+        const bestEffortEmit =
+          emit === undefined
+            ? undefined
+            : (event: unknown): void => {
+                try {
+                  emit(event);
+                } catch {
+                  /* best-effort — the parent's stream is gone */
+                }
+              };
+        void this.maybeAutoRetry(deps, parentSessionId, child, result, bestEffortEmit, signal)
+          .then((settled) => {
+            // The terminal status frame + the owner notification already
+            // rode the shared path; the REPORT itself stays in the child's
+            // log for resume (nothing delivered it inline anywhere).
+            log("info", "delegation.background.settled", {
+              child: child.id,
+              taskId,
+              ok: settled.ok,
+              autoRetried: settled !== result,
+            });
+          })
+          .catch(() => {
+            /* belt: the retry's own failure path returns honestly */
+          });
       },
       (error) => {
         // DETACHED-FAILURE HONESTY: runChildTurn settles its own failures
@@ -655,6 +912,183 @@ class Orchestrator {
         `Call delegate_task {"resume":"${taskId}"} to WAIT for it and collect its final report.\n` +
         "Its status is listed in your next turn's system prompt — do NOT poll; resume waits.",
       sessionId: child.id,
+    };
+  }
+
+  /**
+   * ROUND-117 (R117-d): the AUTO-RETRY HOOK — both delegation entry points
+   * (blocking + background) call this with a FAILED runChildTurn result.
+   * The gate, in order:
+   *   1. The failure carries a retryable class (runChildTurn's
+   *      autoRetryClassOf — stalled / network / timeout / rate_limit)?
+   *   2. orchestration.autoRetry is on?
+   *   3. The child's durable auto-retry count (delegation.autoretry events
+   *      on ITS log) is under orchestration.autoRetryMax?
+   * Then the retry RESUMES from the event log through the SAME retryChild
+   * path the owner's Retry button (POST /sessions/:id/subagents/:childId/
+   * retry) and the model's resume use — the re-acquisition of a concurrency
+   * slot, the supervision, and the continuation framing are all that
+   * path's, not re-implemented here. autoRetryMax > 1 loops: each failing
+   * retry may fire ANOTHER while ITS OWN failure class stays retryable
+   * (retryChild's failureClass — an owner-stopped or deterministic retry
+   * stops the loop) and budget remains; every iteration's marker is written
+   * BEFORE its retry runs, so even a sidecar crash mid-retry leaves the
+   * count honest. On success the tool result carries the report + the
+   * honest "auto-retried once after {class}" marker + the result envelope;
+   * when the budget is spent the failure line says so and it is TERMINAL.
+   */
+  private async maybeAutoRetry(
+    deps: TurnDeps,
+    parentSessionId: string,
+    child: Session,
+    failed: { ok: boolean; output: string; sessionId: string; autoRetryClass?: string },
+    emit?: (event: unknown) => void,
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; output: string; sessionId: string }> {
+    const { db } = deps;
+    // Success, or a failure outside the retryable classes → verbatim.
+    if (failed.ok !== false || failed.autoRetryClass === undefined) return failed;
+    const { autoRetry, autoRetryMax } = getOrchestrationSettings(db);
+    if (!autoRetry || autoRetryMax < 1) return failed;
+    // The class that justifies the NEXT automatic re-delegation — the
+    // original trigger first, then each retry's own failure class.
+    let triggerClass: string | undefined = failed.autoRetryClass;
+    let lastRetryMessage = "";
+    for (;;) {
+      const prior = childAutoRetryCount(db, child.id);
+      if (prior >= autoRetryMax || triggerClass === undefined) break;
+      // The durable marker — the bound's truth, durable across turns,
+      // resume waits, and sidecar restarts.
+      appendDelegationAutoRetry(db, child, { attempt: prior + 1, class: triggerClass });
+      const note =
+        prior + 1 === 1
+          ? `auto-retried once after ${triggerClass}`
+          : `auto-retried ${prior + 1} times, last after ${triggerClass}`;
+      // The retry itself — the owner's Retry button's exact path. The
+      // completed status frame carries the honest note (the panels see WHY
+      // the child is running again).
+      const retry = await this.retryChild(deps, parentSessionId, child.id, emit, signal, note);
+      if (retry.ok) {
+        // The report + marker + envelope — the SAME collectOutcome shape the
+        // resume path returns (childAutoRetryNote reads the marker events).
+        const refreshed = listSubAgents(db, parentSessionId).find((c) => c.id === child.id);
+        if (refreshed === undefined) {
+          // Defensive only — retryChild just completed THIS child; the row
+          // cannot vanish. The honest minimal line, never a fake report.
+          return {
+            ok: true,
+            output:
+              `[subagent session: ${child.id} | role: ${child.subRole ?? "researcher"}]\nSub-agent completed after the automatic retry (${note}).`,
+            sessionId: child.id,
+          };
+        }
+        return { ...collectOutcome(db, refreshed), sessionId: child.id };
+      }
+      // The retry failed: its OWN class decides whether the loop may fire
+      // again (an owner-stop / deterministic failure ends it here).
+      triggerClass = retry.failureClass;
+      lastRetryMessage = retry.message;
+    }
+    // TERMINAL: the budget is spent (or the last failure was not
+    // retryable) — the honest line says the retries ran and failed, with
+    // the SAME marker phrase the success path carries.
+    const was = childAutoRetrySummary(db, child.id);
+    return {
+      ok: false,
+      output:
+        `${failed.output}\n\n` +
+        `The task was ${was} and the retry ALSO failed — it is terminal for now. ` +
+        `Retry failure: ${lastRetryMessage}\n` +
+        "Its partial progress is preserved in its session — resume it later (delegate_task {\"resume\":\"…\"}), inspect its session, or report the situation to the user; do not keep re-delegating blind.",
+      sessionId: child.id,
+    };
+  }
+
+  /**
+   * ROUND-117 (R117-d): the PARENT→CHILD GUIDANCE channel —
+   * delegate_task {task_id, guidance: "<text>"}. Injects a user-role
+   * message into the RUNNING child's queue through the SAME internal path
+   * POST /sessions/:id/queue rides (appendQueuedMessage + notifyTurn, with
+   * the registry's live-turn gate) — no HTTP self-call. The child receives
+   * the text at its next step boundary (the streamed runner's loop-top /
+   * step-boundary injection; a sync child at its next turn start), as an
+   * ordinary queued user message — no special prompt machinery.
+   *
+   * Resolution among the parent's children mirrors resumeTask (task_id →
+   * session id → 4-char code). Only a RUNNING child with a LIVE registered
+   * turn accepts guidance; every other state refuses honestly.
+   */
+  async sendGuidance(
+    deps: TurnDeps,
+    parentSessionId: string,
+    address: string,
+    guidance: string,
+  ): Promise<{ ok: boolean; output: string }> {
+    const { db } = deps;
+    const trimmed = address.trim();
+    if (trimmed === "") {
+      return {
+        ok: false,
+        output:
+          "guidance needs the child's address — pass the task_id (or child session id / 4-char code) as task_id alongside guidance: delegate_task {\"task_id\":\"…\",\"guidance\":\"…\"}.",
+      };
+    }
+    if (guidance.trim() === "") {
+      return { ok: false, output: "guidance must be a non-empty string (the running sub-agent receives it as its next user message)" };
+    }
+    const children = listSubAgents(db, parentSessionId);
+    const child =
+      children.find((c) => c.taskId !== null && c.taskId === trimmed) ??
+      children.find((c) => c.id === trimmed) ??
+      children.find((c) => c.code === trimmed.toUpperCase());
+    if (child === undefined) {
+      return {
+        ok: false,
+        output: this.addressableChildrenOutput(
+          db,
+          parentSessionId,
+          `No sub-agent of this session matches "${trimmed}" — guidance accepts a task_id, a child session id, or a 4-char code.`,
+        ),
+      };
+    }
+    if (child.status !== "running") {
+      return {
+        ok: false,
+        output:
+          `${child.status} — guidance needs a running task. ` +
+          (child.status === "completed"
+            ? "This one already finished; read its report (delegate_task {\"resume\":\"<task_id>\"}) or re-delegate a new task instead."
+            : child.status === "queued"
+              ? "This one is still waiting for a concurrency slot; it has no live turn to inject into yet."
+              : "Resume it first (delegate_task {\"resume\":\"<task_id>\"}) and send guidance while it runs."),
+      };
+    }
+    // The queue route's live-turn gate: a `running` row with no registered
+    // controller (a crash leftover mid-recovery) cannot take a queued
+    // message that would ever deliver.
+    if (getTurnController(child.id) === undefined) {
+      return {
+        ok: false,
+        output:
+          "running (no live turn) — guidance needs a running task. The sub-agent is marked running but has no live turn registered (it may be mid-recovery); retry in a moment or resume it later.",
+      };
+    }
+    // THE INJECTION — the queue POST's internal path, verbatim: the
+    // message.queued event + the user.queued notify frame (best-effort:
+    // children carry no SSE notify callback, so notifyTurn reports false —
+    // the event log owns the render on the next fold).
+    const queued = appendQueuedMessage(db, child.id, { content: guidance });
+    notifyTurn(child.id, {
+      type: "user.queued",
+      seq: queued.seq,
+      content: guidance,
+      ts: queued.ts,
+    });
+    return {
+      ok: true,
+      output:
+        `[subagent session: ${child.id}${child.taskId !== null ? ` | task_id: ${child.taskId}` : ""} | role: ${child.subRole ?? "researcher"}]\n` +
+        "Guidance queued for the running sub-agent — it receives the message as its next user message at the next step boundary (its current tool call finishes first; no interruption).",
     };
   }
 
@@ -1004,7 +1438,16 @@ class Orchestrator {
        * historical propagate semantics. */
       bestEffortEmit?: boolean;
     },
-  ): Promise<{ ok: boolean; output: string; sessionId: string }> {
+  ): Promise<{
+    ok: boolean;
+    output: string;
+    sessionId: string;
+    /** ROUND-117 (R117-d): present ONLY on a failure in an AUTO-RETRYABLE
+     * class (see autoRetryClassOf) — the caller's hook reads it to decide
+     * whether the delegation machinery re-runs the child before the
+     * parent ever sees the failure line. */
+    autoRetryClass?: "stalled" | "network" | "timeout" | "rate_limit";
+  }> {
     const { db, keyring, chat, chatStream } = deps;
     const { parentSessionId, child, task, role, providerId, signal } = ctx;
     // ROUND-79 (R79-a): BEST-EFFORT emit for background children — every
@@ -1305,9 +1748,14 @@ class Orchestrator {
         });
         // ROUND-39: real newlines (the old `\\n` produced literal "\n" text
         // in the parent's view of the sub-agent's report).
+        // ROUND-117 (R117-d): the RESULT ENVELOPE rides after the report —
+        // the machine-readable half of the deliverable (files touched,
+        // usage) the parent model uses for scope decisions.
         return {
           ok: true,
-          output: `[subagent session: ${child.id} | role: ${role}]\nSub-agent completed.\n\n${outcome.assistantMessage.content}`,
+          output:
+            `[subagent session: ${child.id} | role: ${role}]\nSub-agent completed.\n\n${outcome.assistantMessage.content}` +
+            `\n\n${delegationResultEnvelope(db, child.id, taskId, outcome.assistantMessage.content)}`,
           sessionId: child.id,
         };
       }
@@ -1344,10 +1792,15 @@ class Orchestrator {
           : stopReason === "owner"
             ? `Sub-agent was STOPPED BY THE OWNER mid-task. Its partial progress is preserved in its session (${child.id}). Do NOT re-delegate or continue the stopped work unless the user asks.`
             : `Sub-agent failed: ${outcome.message}`;
+      // ROUND-117 (R117-d): WHICH class this failure carries (for the
+      // caller's auto-retry hook) — computed HERE where the failure's full
+      // context (stall report, stop reason, provider class) is in hand.
+      const autoRetryClass = autoRetryClassOf(stallReport, stopReason, outcome);
       return {
         ok: false,
         output: `[subagent session: ${child.id} | role: ${role}]\n${failureLine}`,
         sessionId: child.id,
+        ...(autoRetryClass !== null ? { autoRetryClass } : {}),
       };
     } finally {
       clearInterval(watchdog);
@@ -1376,7 +1829,13 @@ class Orchestrator {
      * passes none (no parent turn is live — the child's own registration
      * is the stop surface, as it already is for fresh children). */
     signal?: AbortSignal,
-  ): Promise<{ ok: boolean; message: string }> {
+    /** ROUND-117 (R117-d): an optional one-liner the auto-retry path passes
+     * ("auto-retried once after {class}") — rides the COMPLETED status
+     * frame's `detail` so the panels see why the child ran again. Manual
+     * callers (the retry route, resumeTask) pass nothing: their frames are
+     * unchanged. */
+    completedDetail?: string,
+  ): Promise<{ ok: boolean; message: string; failureClass?: string }> {
     const { db, keyring, chat, chatStream } = deps;
     const child = getSession(db, childId);
     if (child === undefined || child.parentSessionId !== parentSessionId) {
@@ -1606,7 +2065,7 @@ class Orchestrator {
           : await runSingleAgentTurn(childDeps, childId, content, modelOverride, wrappedEmit, childAbort.signal);
       if (outcome.ok) {
         setSessionStatus(db, childId, "completed");
-        status("completed");
+        status("completed", completedDetail !== undefined ? { detail: completedDetail } : undefined);
         // ROUND-40: retry-completion also notifies.
         getNotificationBus().publish(db, {
           kind: "subagent_complete",
@@ -1650,7 +2109,16 @@ class Orchestrator {
           : stopReason === "owner"
             ? `Sub-agent was STOPPED BY THE OWNER mid-task. Its partial progress is preserved in its session (${childId}). Do NOT re-delegate or continue the stopped work unless the user asks.`
             : `Sub-agent failed: ${outcome.message}`;
-      return { ok: false, message: failureLine };
+      // ROUND-117 (R117-d): the retry's OWN failure class (the auto-retry
+      // loop's continuation signal — an owner-stopped or deterministic
+      // retry stops the loop; another stall/transient may re-run it while
+      // budget remains).
+      const retryFailureClass = autoRetryClassOf(stallReport, stopReason, outcome);
+      return {
+        ok: false,
+        message: failureLine,
+        ...(retryFailureClass !== null ? { failureClass: retryFailureClass } : {}),
+      };
     } finally {
       // R107-b (F2): the full teardown a fresh delegation gets — watchdog
       // cleared, parent listener removed, registry entry unregistered (then

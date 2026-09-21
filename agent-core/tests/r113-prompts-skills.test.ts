@@ -255,15 +255,18 @@ describe("R113-f P3: the dedup retirements", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R113-f P4: the 24,000 budget holds without a bump", () => {
-  it("the DEFAULT full-tools composition stays ≤ 24,200 and ≥ 23,000 chars", () => {
+  it("the DEFAULT full-tools composition stays ≤ 24,300 and ≥ 23,000 chars", () => {
     // r71 D6's bound, re-pinned by R117-c (the prompt-engineering pass):
     // the calibrated spellings + the <project_memory>/<todo_list>/
     // <background_tasks> fences grew the composition ~+216 net over the
     // R113-f measured 23,871 (23,765 at R107-a) — measured 24,087 after
-    // the rework. The floor keeps the retirements honest — the additions
+    // the rework. Re-pinned again by R117-d (the robust-orchestration
+    // round): the SUB-AGENTS section gained ONE line (the delegation
+    // machine-readable block's scope-decisions teaching) — measured
+    // 24,206. The floor keeps the retirements honest — the additions
     // survived as content.
     const composed = buildProjectSystemPrompt(ctxFor());
-    expect(composed.length).toBeLessThanOrEqual(24_200);
+    expect(composed.length).toBeLessThanOrEqual(24_300);
     expect(composed.length).toBeGreaterThanOrEqual(23_000);
   });
 });
