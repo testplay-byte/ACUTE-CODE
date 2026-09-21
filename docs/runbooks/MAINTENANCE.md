@@ -285,22 +285,57 @@ REQUIRED close-out step, not an afterthought:
    `git diff` — zero content drift; the R53/R54/R75 mass-stamp
    precedent). Note `stamp-all.mjs` only ADDS missing stamps, it never
    bumps existing ones.
+2c. **Mobile lock-sync proof before tagging** (the v0.109.0 lesson):
+   after ANY change to `mobile/package.json` — or anything that
+   regenerates `mobile/package-lock.json` — run `npm ci --dry-run` in
+   `mobile/` and require a clean exit. The runner installs from the
+   LOCKFILE ONLY, while a locally-installed `node_modules/` silently
+   masks an out-of-sync lock: R115-a's regeneration dropped React
+   Native's toolchain entries, every local gate stayed green against the
+   pre-installed tree, and the tag's APK build died at `npm ci` in
+   ~10 seconds. Review the lockfile diff like code: against the last
+   green base it should read as ADDITIVE entries only (the R115-r repair
+   restored the v0.108.0 base and re-added the four new deps — a
+   six-entry diff, dry-run-proven).
 3. Commit + push as usual.
 4. **`git tag vX.Y.Z && git push origin vX.Y.Z`** — this triggers
    `release.yml`: launcher-kit + the Windows installer (with the R57 boot
-   gate) build, then a DRAFT release is opened with both assets.
-5. Watch the workflow run to completion and verify the draft release
-   actually carries `ACUTE-CODE_X.Y.Z_x64-setup.exe` (GitHub API or the web
-   UI). The launcher picks the release by MAX VERSION over the whole list
-   (R74 — drafts included; the owner PAT can see them), so the owner's next
-   `ACUTE.bat` run picks it up immediately even while it is still a draft.
-6. **Publish the draft at close-out** (GitHub API PATCH `draft:false` or the
-   web UI) — the standing step since R69. The R63…R67 close-outs skipped it
-   and their five drafts sat ABOVE every published release in the
+   gate) + the Linux bundles (x64 and ARM64) build, then a DRAFT release
+   is opened with the six desktop assets. The tag ALSO triggers the
+   Mobile APK workflow, whose attach job lands
+   `ACUTE-CODE_X.Y.Z_android-arm64.apk` on the same draft — 7 assets
+   total. **Re-issuing a broken tag** (the v0.109.0 precedent): delete
+   the stale DRAFT release first (the publisher's same-name-same-size
+   skip could otherwise keep assets built from the broken commit), then
+   delete the tag on BOTH the remote and LOCALLY (`git push origin
+   :refs/tags/vX.Y.Z && git tag -d vX.Y.Z` — a lingering local tag
+   silently re-pushes the OLD commit), then re-tag at the fixed commit.
+5. **Watch BOTH tag workflows to green** — `Release` AND `Mobile APK`
+   (query the API, poll to conclusion; golden rule 3) — then verify the
+   draft release actually carries all 7 assets: the six desktop ones
+   plus the APK. A draft with 6 assets means the Mobile APK run FAILED —
+   that is not a shipped release (v0.109.0's first tag sat exactly
+   there, unpublished, while the round was reported as complete). The
+   launcher picks the release by MAX VERSION over the whole list (R74 —
+   drafts included; the owner PAT can see them), so the owner's next
+   `ACUTE.bat` run picks it up immediately even while it is still a
+   draft.
+6. **Publish the draft at close-out** (GitHub API PATCH `draft:false`,
+   `make_latest:"true"`, body = the version's CHANGELOG section, and NO
+   `target_commitish` once the tag exists — the v0.106.0 422 lesson) —
+   the standing step since R69. The R63…R67 close-outs skipped it and
+   their five drafts sat ABOVE every published release in the
    `/releases` list for a week, which is exactly how the owner's app froze
    at 0.67.0 while 0.73.0 was live (the R74 lesson: the picker is now
    immune, but a published release page is still the honest state — sweep
    draft stragglers when you find them).
+6b. **The release is NOT done until the end-state is verified** (the
+   other half of the v0.109.0 lesson): `/releases/latest` answers
+   `vX.Y.Z`, the release page shows 7/7 assets, and the APK passes a
+   content check over ranged HTTP (zip central directory +
+   `assets/index.android.bundle` present + arm64-v8a only — the R103
+   splash-forever lesson). Only then may the round be reported as
+   shipped.
 
 A round that ships a version bump WITHOUT its tag has shipped nothing to the
 desktop.

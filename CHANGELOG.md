@@ -37,6 +37,7 @@ version number is single-sourced from the root `package.json`
 
 ### For the builders
 - New deps (mobile): `jsqr` + `jpeg-js` + `upng-js` + `expo-image-manipulator` (the photo-QR decode pipeline). Wire additions are all additive: `machineLabel` on pair/start + link-info (claim's `machine.name` now the friendly label), `source:"device"` on device-created session frames. No migrations this round.
+- **This tag was re-issued (R115-r)**: the first v0.109.0 tag's Mobile APK build died at `npm ci` — the round's lockfile update had silently dropped React Native's toolchain entries, which the locally-installed `node_modules` masked (every local gate stayed green; CI's clean install did not). The lockfile is restored from the proven v0.108.0 base with the four new deps re-added — a six-entry, additive-only diff, proven by `npm ci --dry-run` plus the full mobile gates — and the shipping runbook gained the mobile lock-sync proof as a standing pre-tag step (MAINTENANCE.md §g 2c).
 - The full story with every owner verdict itemized: `docs/ui-iterations/round-115.md`.
 
 ## [0.108.0] — 2026-09-20 — every menu works, live sync everywhere, the honest transcript
