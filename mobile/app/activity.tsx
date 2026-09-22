@@ -17,6 +17,12 @@
  * after ~3s, and the button disappears only because the store's unread is
  * genuinely 0 (the store reconciles the ring, so the count and the rows
  * can never disagree).
+ *
+ * R118-B (§2.3): the trying state is VISIBLE — the QuietButton carries
+ * `busy={marking}` (the spinner idiom, LANDED W1) so the in-flight leg
+ * reads as work, not a dead button; the POST itself carries bodyText "{}"
+ * (features/activity.ts — the Kotlin module rejects bodyless POSTs before
+ * any socket opens, the owner's "as soon as I clicked" root cause).
  */
 
 import { useRouter } from "expo-router";
@@ -225,7 +231,7 @@ export default function ActivityScreen() {
               {`${state.unread} unread${state.streamLive ? " · live" : ""}`}
             </TypeMicro>
           </View>
-          <QuietButton onPress={onMarkAllRead} disabled={marking}>
+          <QuietButton onPress={onMarkAllRead} disabled={marking} busy={marking}>
             Mark all read
           </QuietButton>
         </View>

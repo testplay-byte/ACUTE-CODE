@@ -347,11 +347,17 @@ export class ActivityController {
     }
   }
 
-  /** Mark one notification read (the row's tap-through). */
+  /** Mark one notification read (the row's tap-through). R118-B: the POST
+   *  carries `bodyText: "{}"` — the Kotlin module's strict body rule rejects
+   *  bodyless POSTs BEFORE any socket opens (AcuteNetModule.kt), which made
+   *  every mark-read die instantly with zero network activity; this was one
+   *  of the app's only two bodyless POST sites (the house pattern:
+   *  sessions.ts's read routes). */
   async markRead(id: string): Promise<boolean> {
     if (!this.env) return false;
     const outcome = await apiJson<{ ok: boolean; unread: number }>(this.env.manager, `/notifications/${id}/read`, {
       method: "POST",
+      bodyText: "{}",
     });
     if (outcome.ok) {
       this.store.markRead(id);
@@ -361,11 +367,14 @@ export class ActivityController {
     return false;
   }
 
-  /** Mark everything read (the bell's clear-all). */
+  /** Mark everything read (the bell's clear-all). R118-B: same bodyText fix
+   *  as markRead — the module rejected the bodyless POST instantly (the
+   *  owner's "as soon as I clicked, it fails" mark-all-read bug). */
   async markAllRead(): Promise<boolean> {
     if (!this.env) return false;
     const outcome = await apiJson<{ ok: boolean; cleared: number }>(this.env.manager, "/notifications/read-all", {
       method: "POST",
+      bodyText: "{}",
     });
     if (outcome.ok) {
       this.store.markAllRead();

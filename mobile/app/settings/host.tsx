@@ -1,18 +1,14 @@
 /**
  * The connection details page (R116-f — the owner's verdict #23 redo).
  *
- * MULTI-PC SEAM (round-116 §4, item 24 — DEFERRED, no code): the phone
- * stores exactly ONE StoredHost today (host-store.ts) and the
- * ConnectionManager owns one link; pairing a second desktop REPLACES the
- * link. The deferred multi-host round lands `hosts: StoredHost[]` + an
- * ACTIVE-host switcher (device tokens already work multi-desktop
- * server-side — the desktop's device list already holds N devices). THIS
- * page's hero — the word-pair name + live status card below — is where the
- * switcher's surface plugs in: the hero already renders host.hostLabel +
- * the live status off the single useLink() snapshot, so widening the
- * snapshot to { hosts, activeHostId } keeps this grammar intact. The
- * connect hub's hero card carries the same seam (the switcher's primary
- * landing spot — see connect/index.tsx).
+ * MULTI-PC — LANDED (R118-B, spec §2.5): the phone now stores a LIST of
+ * desktops (host-store.ts: `acute.host.list` + the active pointer +
+ * per-host tokens) and the connect hub carries the ACTIVE-host switcher
+ * (its "Desktops" section). THIS page manages the ACTIVE host — the hero
+ * renders the active host's word-pair name + live status off the one
+ * useLink() snapshot, the disconnect REMOVES only this desktop (the link
+ * falls to the next stored host, probed fresh — or unpaired when the list
+ * empties).
  *
  * Layout, top → bottom:
  *
@@ -90,19 +86,22 @@ export default function HostSettingsScreen() {
   function onDisconnect() {
     Alert.alert(
       "Disconnect this desktop?",
-      "The saved link is cleared on this phone. The desktop keeps its device row — revoke it there too if you want the token dead.",
+      "This desktop's saved link is cleared on this phone — other linked desktops stay. The desktop keeps its device row — revoke it there too if you want the token dead.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Disconnect",
           style: "destructive",
           onPress: () => {
-            mobLog("settings", "disconnecting host (unpair)");
+            // R118-B: unpair() removes ONLY the active host on a multi-host
+            // store (the link falls to the next stored desktop); the
+            // single-host fakes keep the whole-store clear.
+            mobLog("settings", "disconnecting host (removeHost active)");
             void getLinkManager()
               .unpair()
               .then(() => router.replace("/connect"))
               .catch((err: unknown) => {
-                mobWarn("settings", "unpair failed", {
+                mobWarn("settings", "disconnect failed", {
                   message: err instanceof Error ? err.message : String(err),
                 });
               });
@@ -262,7 +261,7 @@ export default function HostSettingsScreen() {
         >
           <View style={styles.dangerPad}>
             <TypeBodyStrong style={[{ color: tokens.danger }]}>Disconnect this desktop</TypeBodyStrong>
-            <TypeBody numberOfLines={1}>Clears this phone's saved link.</TypeBody>
+            <TypeBody numberOfLines={1}>Removes this desktop from this phone.</TypeBody>
             <QuietButton tone="danger" onPress={onDisconnect}>
               Disconnect this desktop
             </QuietButton>

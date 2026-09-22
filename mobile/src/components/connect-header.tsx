@@ -4,24 +4,25 @@
  * using ScreenScaffold's chrome for this screen — build the row so you
  * control it") instead of the shared scaffold:
  *
- *   · the back button is the CHIP idiom (donts.md #41 — the 44px target with
- *     a subtle fill + hairline border + the chip radius, the R116-b
- *     screen-scaffold back chip's exact grammar);
+ *   · the back button is the SHARED QuietIconButton (R118-B, spec §2.7 —
+ *     the 40px quiet circle, ArrowLeft 22: the same grammar the screen
+ *     scaffold's back slot adopted; the R116-b chevron chip is retired);
  *   · the title is ABSOLUTELY centered over the whole row (donts.md #32 — a
- *     title centered in the space remaining beside the back chip is not
- *     centered), on a pointerEvents="none" overlay so the chip stays
+ *     title centered in the space remaining beside the back button is not
+ *     centered), on a pointerEvents="none" overlay so the button stays
  *     tappable, carrying numberOfLines 1 + a 72%-of-screen maxWidth;
  *   · there is NO right slot — these two screens are single-purpose moments.
  *
- * The row renders inside the caller's body gutter, so the back chip aligns
+ * The row renders inside the caller's body gutter, so the back button aligns
  * with the content below it (the viewfinder / the form fields).
  */
 
-import { ChevronLeft } from "lucide-react-native";
+import { ArrowLeft } from "lucide-react-native";
 import { useRouter } from "expo-router";
-import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { QuietIconButton } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
-import { fontFamily, RADIUS_CHIP, TYPE_TITLE } from "@/design/tokens";
+import { fontFamily, spacing, TYPE_TITLE } from "@/design/tokens";
 
 export interface ConnectHeaderProps {
   /** The absolutely-centered title (numberOfLines 1, tail-ellipsized). */
@@ -37,18 +38,16 @@ export function ConnectHeader({ title, backTestID }: ConnectHeaderProps) {
 
   return (
     <View style={styles.row}>
-      <Pressable
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-        hitSlop={12}
-        onPress={() => router.back()}
-        style={[styles.backChip, { backgroundColor: tokens.subtle, borderColor: tokens.borderSubtle }]}
-        testID={backTestID}
-      >
-        {/* R116-n — 26/2: the scaffold + session header's exact glyph (this
-            chip claimed the "exact grammar" and shipped a 24 — the drift). */}
-        <ChevronLeft size={26} color={tokens.text} strokeWidth={2} />
-      </Pressable>
+      <View style={styles.backWrap}>
+        <QuietIconButton
+          icon={ArrowLeft}
+          iconSize={22}
+          size={40}
+          accessibilityLabel="Go back"
+          onPress={() => router.back()}
+          testID={backTestID}
+        />
+      </View>
       {/* The ABSOLUTELY centered title: spans the whole row so it centers over
           the SCREEN, not the space beside the chip; pointerEvents none keeps
           the chip tappable. TypeTitle's exact recipe as a raw Text (the
@@ -66,17 +65,12 @@ export function ConnectHeader({ title, backTestID }: ConnectHeaderProps) {
 }
 
 const styles = StyleSheet.create({
-  /** The 56px header row (the scaffold's compact grammar). */
-  row: { height: 56, flexDirection: "row", alignItems: "center" },
-  /** The back CHIP (donts #41): 44px target, subtle fill, hairline border. */
-  backChip: {
-    width: 44,
-    height: 44,
-    borderRadius: RADIUS_CHIP,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  /** The 56px header row (the scaffold's compact grammar). R118-B: the row
+   *  carries the 4dp gap so the back button's own 4dp tail margin reads 8dp
+   *  to the title's overlay space (the scaffold's exact arithmetic). */
+  row: { height: 56, flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  /** R118-B — the shared ArrowLeft back button's wrapper (the 4dp tail gap). */
+  backWrap: { marginRight: spacing.xs },
   titleOverlay: {
     position: "absolute",
     left: 0,

@@ -992,3 +992,217 @@ describe("ConnectionManager pairing-side writes", () => {
     expect(statuses).toContain("connected");
   });
 });
+
+// ── R118-B: the multi-host surface (spec §5.5) ──────────────────────────────
+
+describe("ConnectionManager — the R118-B multi-host surface", () => {
+  const MACHINE_ID2 = "dd".repeat(32);
+  const CERT_FP2 = "ee".repeat(32);
+  const TOKEN2 = "ff".repeat(32);
+
+  function makeHostB(): StoredHost {
+    return makeHost({
+      machineId: MACHINE_ID2,
+      certFP: CERT_FP2,
+      hostLabel: "STUDIO-PC",
+      addrs: ["192.168.1.9"],
+    });
+  }
+
+  /** A MULTI-host fake: the list + the active pointer + per-host tokens,
+   *  mirroring hostStore's real contract (upsert/set-active/remove-falls). */
+  function makeMultiStore(
+    hosts: StoredHost[],
+    tokens: Record<string, string>,
+    activeId: string | null,
+  ) {
+    const state = { hosts: [...hosts], tokens: { ...tokens }, activeId };
+    const calls: string[] = [];
+    const store: HostStore = {
+      async readHost() {
+        calls.push("readHost");
+        return (state.hosts.find((h) => h.machineId === state.activeId) ?? null);
+      },
+      async readActiveHost() {
+        calls.push("readActiveHost");
+        return state.hosts.find((h) => h.machineId === state.activeId) ?? null;
+      },
+      async listHosts() {
+        calls.push("listHosts");
+        return [...state.hosts];
+      },
+      async readDeviceToken(machineId) {
+        calls.push("readDeviceToken");
+        const id = machineId ?? state.activeId;
+        return id === null ? null : (state.tokens[id] ?? null);
+      },
+      async setActiveHost(machineId) {
+        calls.push(`setActiveHost:${machineId}`);
+        state.activeId = machineId;
+      },
+      async savePairing(pairing) {
+        calls.push("savePairing");
+        const next = state.hosts.filter((h) => h.machineId !== pairing.host.machineId);
+        state.hosts = [...next, pairing.host];
+        state.tokens[pairing.host.machineId] = pairing.deviceToken;
+        state.activeId = pairing.host.machineId;
+      },
+      async removeHost(machineId) {
+        calls.push(`removeHost:${machineId}`);
+        state.hosts = state.hosts.filter((h) => h.machineId !== machineId);
+        delete state.tokens[machineId];
+        if (state.activeId === machineId) {
+          state.activeId = state.hosts[0]?.machineId ?? null;
+        }
+      },
+      async clear() {
+        calls.push("clear");
+        state.hosts = [];
+        state.tokens = {};
+        state.activeId = null;
+      },
+    };
+    return { store, calls, state };
+  }
+
+  function makeMultiManager() {
+    const net = makeNet();
+    const store = makeMultiStore(
+      [makeHost(), makeHostB()],
+      { [MACHINE_ID]: TOKEN, [MACHINE_ID2]: TOKEN2 },
+      MACHINE_ID,
+    );
+    const trig = makeTriggers();
+    const manager = new ConnectionManager({
+      store: store.store,
+      net: net.net,
+      triggers: trig.triggers,
+      now: () => 1_750_000_000_000,
+    });
+    return { manager, net, store, trig };
+  }
+
+  it("listHosts() answers the store's whole list (the switcher's rows)", async () => {
+    const { manager, store } = makeMultiManager();
+    const list = await manager.listHosts();
+    expect(list.map((h) => h.hostLabel)).toEqual(["OWNER-PC", "STUDIO-PC"]);
+    expect(store.calls).toContain("listHosts");
+  });
+
+  it("switchHost swaps the link: pointer write, teardown, a FRESH probe onto the new desktop", async () => {
+    const { manager, net, store } = makeMultiManager();
+    // Both desktops are healthy; the ladder answer must match the machine.
+    net.setHandler((o) =>
+      o.url.startsWith("https://192.168.1.9") ? ok(healthBody(MACHINE_ID2)) : ok(healthBody()),
+    );
+    await manager.start();
+    await settle();
+    expect(manager.getStatus()).toBe("connected");
+    expect(manager.getHost()?.machineId).toBe(MACHINE_ID);
+    expect(manager.getActiveAddress()).toBe("192.168.1.4");
+
+    const statuses: ConnectionStatus[] = [];
+    manager.subscribe(() => statuses.push(manager.getStatus()));
+    await manager.switchHost(MACHINE_ID2);
+    await settle();
+
+    expect(store.calls).toContain(`setActiveHost:${MACHINE_ID2}`);
+    // Subscribers saw probing → connected (spec §2.5), never a dead jump.
+    expect(statuses).toContain("probing");
+    expect(manager.getStatus()).toBe("connected");
+    expect(manager.getHost()?.machineId).toBe(MACHINE_ID2);
+    expect(manager.getActiveAddress()).toBe("192.168.1.9");
+    expect(net.requests.at(-1)?.url).toBe("https://192.168.1.9:53411/health");
+  });
+
+  it("an in-flight probe for the OLD host never reports onto the new link (the generation bump)", async () => {
+    const store = makeMultiStore(
+      [makeHost(), makeHostB()],
+      { [MACHINE_ID]: TOKEN, [MACHINE_ID2]: TOKEN2 },
+      MACHINE_ID,
+    );
+    const requests: HttpRequestOptions[] = [];
+    const hanging = new Map<string, (res: HttpResponse) => void>();
+    const net: NetTransport = {
+      async request(options) {
+        requests.push(options);
+        if (options.url.startsWith("https://192.168.1.4")) {
+          // Host A's rungs hang until the test releases them.
+          return new Promise<HttpResponse>((resolve) => {
+            hanging.set("A", resolve);
+          });
+        }
+        return ok(healthBody(MACHINE_ID2));
+      },
+      openSse() {
+        throw new Error("unused in this test");
+      },
+    };
+    const manager = new ConnectionManager({
+      store: store.store,
+      net,
+      triggers: makeTriggers().triggers,
+      now: () => 1_750_000_000_000,
+    });
+    await manager.start();
+    await settle();
+    expect(manager.getStatus()).toBe("probing"); // A's probe never answered
+
+    await manager.switchHost(MACHINE_ID2);
+    await settle();
+    expect(manager.getStatus()).toBe("connected");
+    expect(manager.getHost()?.machineId).toBe(MACHINE_ID2);
+    expect(manager.getActiveAddress()).toBe("192.168.1.9");
+
+    // The stale round resolves LATE with A's healthy verdict — the
+    // generation check abandons it: an old host's success must never claim
+    // the new link.
+    hanging.get("A")?.(ok(healthBody()));
+    await settle();
+    expect(manager.getStatus()).toBe("connected");
+    expect(manager.getHost()?.machineId).toBe(MACHINE_ID2);
+    expect(manager.getActiveAddress()).toBe("192.168.1.9");
+  });
+
+  it("a 401 removes ONLY the active host — the survivor takes over, the store is never cleared", async () => {
+    const { manager, net, store } = makeMultiManager();
+    net.setHandler((o) => {
+      if (o.url.endsWith("/health")) {
+        return o.url.startsWith("https://192.168.1.9") ? ok(healthBody(MACHINE_ID2)) : ok(healthBody());
+      }
+      return { status: 401, headers: {}, bodyText: "" }; // the revoked token
+    });
+    await manager.start();
+    await settle();
+    expect(manager.getStatus()).toBe("connected");
+
+    const res = await manager.api("/api/v1/notifications?limit=1");
+    expect(res.ok).toBe(false);
+    await settle(); // unpair() → removeHost(A) → the survivor probes fresh
+
+    expect(store.calls).toContain(`removeHost:${MACHINE_ID}`);
+    expect(store.calls).not.toContain("clear");
+    expect(manager.getStatus()).toBe("connected");
+    expect(manager.getHost()?.machineId).toBe(MACHINE_ID2);
+    // The other desktop survives in the store.
+    expect((await manager.listHosts()).map((h) => h.machineId)).toEqual([MACHINE_ID2]);
+  });
+
+  it("removeHost drops one desktop: the active link falls to the survivor, probed fresh", async () => {
+    const { manager, net, store } = makeMultiManager();
+    net.setHandler((o) =>
+      o.url.startsWith("https://192.168.1.9") ? ok(healthBody(MACHINE_ID2)) : ok(healthBody()),
+    );
+    await manager.start();
+    await settle();
+    expect(manager.getHost()?.machineId).toBe(MACHINE_ID);
+
+    await manager.removeHost(MACHINE_ID);
+    await settle();
+
+    expect(store.calls).toContain(`removeHost:${MACHINE_ID}`);
+    expect(store.calls).not.toContain("clear");
+    expect(manager.getStatus()).toBe("connected");
+    expect(manager.getHost()?.machineId).toBe(MACHINE_ID2);
+  });
+});

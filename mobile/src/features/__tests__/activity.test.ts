@@ -520,6 +520,41 @@ describe("ActivityController — the stream rides the manager's hysteresis", () 
     expect(env.activity.getState().latest.every((n) => n.read === 1)).toBe(true);
   });
 
+  it("R118-B: both read POSTs carry bodyText \"{}\" — the Kotlin module rejects bodyless POSTs before any socket opens", async () => {
+    // The regression pin (spec §5.2): AcuteNetModule.kt's requestBodyFor()
+    // THROWS on a POST without bodyText ("bad-argument", zero network
+    // activity — the owner's "mark all read fails as soon as I clicked"
+    // root cause). These were the app's only two bodyless POSTs; the house
+    // pattern is sessions.ts's read routes: { method: "POST", bodyText: "{}" }.
+    const env = makeEnv();
+    env.setHandler((o) =>
+      o.url.endsWith("/health")
+        ? health()
+        : o.url.endsWith("/read-all")
+          ? { status: 200, headers: {}, bodyText: JSON.stringify({ ok: true, cleared: 0 }) }
+          : o.url.endsWith("/read")
+            ? { status: 200, headers: {}, bodyText: JSON.stringify({ ok: true, unread: 0 }) }
+            : page(),
+    );
+    await env.manager.start();
+    await settle();
+    env.controller.start({ manager: env.manager });
+    await settle();
+
+    await env.controller.markAllRead();
+    await env.controller.markRead("n1");
+
+    const readAll = env.requests.find((r) => r.url.endsWith("/api/v1/notifications/read-all"));
+    expect(readAll).toBeDefined();
+    expect(readAll?.method).toBe("POST");
+    expect(readAll?.bodyText).toBe("{}");
+
+    const readOne = env.requests.find((r) => r.url.endsWith("/api/v1/notifications/n1/read"));
+    expect(readOne).toBeDefined();
+    expect(readOne?.method).toBe("POST");
+    expect(readOne?.bodyText).toBe("{}");
+  });
+
   it("R116-f: an HTTP failure answers {ok:false} and leaves the ring standing", async () => {
     const env = makeEnv();
     env.setHandler((o) =>

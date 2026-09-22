@@ -34,11 +34,21 @@
  * R117-g2 (round-117-elevation.md §2.2): the management rows' option chips
  * are ClayIconChips — the accentTint fill + clayRim hairline + the
  * accentDeep glyph replace the bare glyph boxes (the §1.5 ghost-chip kill).
+ *
+ * R118-B (spec §2.5) — the DESKTOPS switcher: above "This connection" a
+ * "Desktops" section lists EVERY stored host (the multi-host store landed
+ * this round) — one row per desktop (ClayIconChip Monitor 40 + the
+ * word-pair name + "paired {timeAgo}"), the ACTIVE one carrying the
+ * success Badge, every other one an ArrowLeftRight that switches the live
+ * link (teardown + fresh probe — a 20dp ActivityIndicator rides the row
+ * while the switch probes). The scan row's copy turns honest for the
+ * multi-host world: pairing ADDS a desktop to this phone (re-pairing a
+ * known machine refreshes its slot in place).
  */
 
-import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
+import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Svg, { Line } from "react-native-svg";
 import Animated, {
@@ -52,6 +62,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import {
+  ArrowLeftRight,
   Monitor,
   RefreshCw,
   ScanLine,
@@ -62,6 +73,7 @@ import type { LucideIcon } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { timeAgo } from "@/components/host-card";
 import {
+  Badge,
   ChromeButton,
   ClayCard,
   ClayIconChip,
@@ -89,6 +101,7 @@ import {
 } from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
+import type { StoredHost } from "@/link/connection";
 
 /** The dashed link line's pattern: 8 on, 8 off. */
 const DASH = 8;
@@ -218,8 +231,31 @@ function ConnectPairHero() {
 export default function ConnectHubScreen() {
   const { tokens } = useTheme();
   const router = useRouter();
-  const { status, host, live, lastSeen } = useLink();
+  const { link, status, host, live, lastSeen } = useLink();
   const [, setTick] = useState(0);
+
+  // R118-B — the stored desktops (the switcher's rows). Reload on every
+  // focus: pairing on the scanner / disconnecting on the host page both
+  // change the list while this hub sits beneath them in the stack.
+  const [hosts, setHosts] = useState<StoredHost[]>([]);
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      void link.listHosts().then((list) => {
+        if (alive) setHosts(list);
+      });
+      return () => {
+        alive = false;
+      };
+    }, [link]),
+  );
+
+  // The switch's trying state: the tapped row spins while its fresh probe
+  // runs, then settles (the row re-reads as the active host).
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
+  useEffect(() => {
+    if (switchingId !== null && status !== "probing") setSwitchingId(null);
+  }, [status, switchingId]);
 
   // R110 #4: the hub is the ROOT of the connect flow — the chevron only
   // makes sense when the ROOT stack can pop (pushed from the tabs' pill).
@@ -234,6 +270,9 @@ export default function ConnectHubScreen() {
   }, [host]);
 
   const connected = status === "connected";
+  // The store's ACTIVE desktop (the manager's host) — the switcher's badge
+  // truth; while unpaired the hero branch above owns the screen instead.
+  const activeId = host?.machineId ?? null;
 
   if (host === null) {
     // ── no host yet: the BROKEN-LINK moment + ONE primary action (R116-c) ──
@@ -321,6 +360,58 @@ export default function ConnectHubScreen() {
         </View>
       </ClayCard>
 
+      {/* ── R118-B — the DESKTOPS switcher: every stored host one row. The
+          ACTIVE desktop carries the success Badge (its tap opens the
+          details page); every other one carries the switch glyph — tap and
+          the live link tears down and re-probes onto that desktop, a 20dp
+          spinner riding the row for the probe's duration. The section
+          renders only once the list resolves (no header-with-no-rows flash
+          on first mount). ── */}
+      {hosts.length > 0 ? (
+        <>
+          <SectionHeader>Desktops</SectionHeader>
+          {hosts.map((stored, i) => {
+            const isActive = stored.machineId === activeId;
+            const switching = switchingId === stored.machineId && status === "probing";
+            return (
+              <PressableCard
+                key={stored.machineId}
+                enterIndex={i}
+                onPress={
+                  isActive
+                    ? () => router.push("/settings/host")
+                    : () => {
+                        setSwitchingId(stored.machineId);
+                        void link.switchHost(stored.machineId);
+                      }
+                }
+                accessibilityLabel={
+                  isActive
+                    ? `${stored.hostLabel}, active desktop — open connection details`
+                    : `${stored.hostLabel}, paired ${timeAgo(stored.pairedAt)} — switch the link to this desktop`
+                }
+                testID={`hub-host-${i}`}
+              >
+                <View style={styles.hostRowInner}>
+                  <ClayIconChip icon={Monitor} iconSize={20} size={40} />
+                  <View style={styles.hostRowText}>
+                    <TypeBodyStrong numberOfLines={1}>{stored.hostLabel}</TypeBodyStrong>
+                    <TypeCaption numberOfLines={1}>{`paired ${timeAgo(stored.pairedAt)}`}</TypeCaption>
+                  </View>
+                  {switching ? (
+                    <ActivityIndicator size="small" />
+                  ) : isActive ? (
+                    <Badge tone="success">Active</Badge>
+                  ) : (
+                    <ArrowLeftRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
+                  )}
+                </View>
+              </PressableCard>
+            );
+          })}
+        </>
+      ) : null}
+
       {/* The one management section — both rows, ONE measured line each. */}
       <SectionHeader>This connection</SectionHeader>
       <PressableCard onPress={() => router.push("/settings/host")}>
@@ -332,12 +423,12 @@ export default function ConnectHubScreen() {
       </PressableCard>
       <PressableCard
         onPress={() => router.push("/connect/scan")}
-        accessibilityLabel="Scan to pair a different desktop"
+        accessibilityLabel="Scan to add another desktop"
       >
         <OptionRow
           icon={ScanLine}
           title="Scan a new pairing code"
-          body="Replaces this phone's link."
+          body="Adds a desktop to this phone."
         />
       </PressableCard>
     </ScreenScaffold>
@@ -404,4 +495,9 @@ const styles = StyleSheet.create({
   optionInner: { flexDirection: "row", gap: spacing.md, padding: spacing.lg, alignItems: "center" },
   optionText: { flex: 1, gap: 2 },
   optionBody: { lineHeight: 18 },
+  // R118-B — the Desktops switcher's row: [Monitor chip 40 + name/paired
+  // caption] with the trailing state (the Active badge / the switch glyph /
+  // the switch probe's 20dp spinner).
+  hostRowInner: { flexDirection: "row", gap: spacing.md, padding: spacing.lg, alignItems: "center" },
+  hostRowText: { flex: 1, gap: 2 },
 });
