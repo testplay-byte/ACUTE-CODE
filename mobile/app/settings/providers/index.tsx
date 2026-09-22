@@ -2,28 +2,41 @@
  * Providers — the configured-first inventory (R114-f rework): "Your
  * providers" (the SERVER's `configured` bit — custom row OR any held key,
  * pool-aware) as full rows pushing to the detail page; "Add a provider"
- * COLLAPSED behind ONE prominent full-width row action (R115-O — the owner:
- * "by default shows all options — instead ONE option to click then the
- * others appear"): tapping it reveals the unconfigured seeded presets as
- * compact add-rows + the CUSTOM PROVIDER row (the house 30ms stagger ≈ the
- * ~200ms reveal) — tapping it again collapses. The custom row opens the
- * create sheet (name + base URL + api format + the first key); server
- * validation surfaces inline exactly like the New Project sheet. Live: the
- * settings epoch reloads the tiers while the screen is open (another
- * device's key save flips a row's tier the moment the server does).
+ * COLLAPSED behind ONE CTA (R115-O — the owner: "by default shows all
+ * options — instead ONE option to click then the others appear"): tapping
+ * it reveals the unconfigured seeded presets as compact add-rows + the
+ * CUSTOM PROVIDER row (the house 30ms stagger ≈ the ~200ms reveal) —
+ * tapping it again collapses. The custom row opens the create sheet (name
+ * + base URL + api format + the first key); server validation surfaces
+ * inline exactly like the New Project sheet. Live: the settings epoch
+ * reloads the tiers while the screen is open (another device's key save
+ * flips a row's tier the moment the server does).
  *
  * R113-e — the events-bus live reload; R114-f — the phone OWNS its
  * inventory (create included), the tiers re-derived off the fresh rows;
- * R115-O — the add-list collapse + the row polish (one meta line per
- * row, the two-line discipline); R116-j — the owner's verdict #39: the
- * row is a COLORED identity (the provider's name-hash hue — the same
- * palette as model colors, never the neutral key glyph) over the MODELS
- * count (the baseUrl/key-count machine truth is gone — donts #35), and
- * the add action is a full-width peer row, not a quiet half-chip.
+ * R115-O — the add-list collapse + the row polish (one meta line per row,
+ * the two-line discipline); R116-j — the owner's verdict #39: the row is a
+ * COLORED identity (the provider's name-hash hue — the same palette as
+ * model colors, never the neutral key glyph) over the MODELS count (the
+ * baseUrl/key-count machine truth is gone — donts #35).
+ *
+ * R118-E (§2A) — the registry-screen grammar: "Your providers" carries the
+ * LARGE tier heading (SectionHeader large — TypeTitle 20/700, the peer of
+ * the screen that heads it); the configured rows' names read 15/700 (the
+ * inventory is primary — the revealed catalog rows stay 600, suggestion
+ * weight); the tier break is the VISIBLE clay divider (Hairline strong,
+ * inset md, marginVertical xl — ~65px of total break, a step the 12px
+ * intra-group rhythm can never fake); and AddProviderAction (the old
+ * full-width outlined row doing a CTA's job) is DELETED — the centered
+ * self-sized ChromeButton (minWidth PAGE_CTA_MIN_W, accessibilityExpanded)
+ * in ALL THREE states (empty / configured-only / mixed), so the zero-state
+ * caption's "add one below" finally points at a real affordance. The sheet
+ * rides the R118-A law: no field captions, the API format is the shared
+ * SegmentedControl, the CTA centered.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, RefreshControl, StyleSheet, View } from "react-native";
+import { RefreshControl, StyleSheet, View } from "react-native";
 import { ChevronRight, Plus, Server } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { ScreenScaffold } from "@/components/screen-scaffold";
@@ -31,17 +44,25 @@ import { Sheet } from "@/components/sheet";
 import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
 import {
   Badge,
-  Chip,
   ChromeButton,
   ClayInput,
+  Hairline,
   PressableCard,
   SectionHeader,
+  SegmentedControl,
   TypeBodyStrong,
   TypeCaption,
   TypeMicro,
 } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
-import { getContrastText, mixHex, RADIUS_CHIP, RADIUS_INPUT, spacing } from "@/design/tokens";
+import {
+  fontFamily,
+  getContrastText,
+  PAGE_CTA_MIN_W,
+  RADIUS_CHIP,
+  SHEET_CTA_MIN_W,
+  spacing,
+} from "@/design/tokens";
 import { modelColor } from "@/design/model-colors";
 import { selectionHaptic, successHaptic, warningHaptic } from "@/design/haptics";
 import {
@@ -59,12 +80,20 @@ import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import { mobLog, mobWarn } from "@/lib/log";
 
-/** The custom-create sheet's api-format options — the POST route's exact
- * enum (anything else falls back to chat-completions server-side). */
-const API_FORMATS: ReadonlyArray<{ id: ProviderApiFormat; label: string }> = [
-  { id: "chat-completions", label: "Chat completions" },
-  { id: "anthropic-messages", label: "Anthropic messages" },
-  { id: "responses", label: "Responses" },
+/**
+ * The custom-create sheet's api-format options — the POST route's exact
+ * enum (anything else falls back to chat-completions server-side). R118-A:
+ * the labels are SHORT ("Chat" / "Anthropic" / "Responses" — three on one
+ * line at 360dp) and the a11y labels carry the full names.
+ */
+const API_FORMATS: ReadonlyArray<{
+  id: ProviderApiFormat;
+  label: string;
+  accessibilityLabel: string;
+}> = [
+  { id: "chat-completions", label: "Chat", accessibilityLabel: "Chat completions" },
+  { id: "anthropic-messages", label: "Anthropic", accessibilityLabel: "Anthropic messages" },
+  { id: "responses", label: "Responses", accessibilityLabel: "Responses" },
 ];
 
 export default function ProvidersScreen() {
@@ -157,6 +186,15 @@ export default function ProvidersScreen() {
   // hasKey read would miss sits in "Your providers" where it belongs.
   const tiers = splitProviders(providers ?? []);
 
+  // R118-E (A4): the ONE add affordance, shared by all three states — the
+  // centered self-sized CTA (the old AddProviderAction full-width row is
+  // deleted). accessibilityExpanded speaks the reveal; the icon dies with
+  // the row it lived in.
+  const onAddToggle = useCallback(() => {
+    void selectionHaptic();
+    setAddOpen((v) => !v);
+  }, []);
+
   return (
     <ScreenScaffold
       title="Providers"
@@ -182,48 +220,64 @@ export default function ProvidersScreen() {
         ) : (
           <LoadingState caption="loading providers…" />
         )
-      ) : providers.length === 0 ? (
-        <EmptyState
-          title="no providers yet"
-          caption="add one below — a preset with a key, or your own endpoint."
-        />
       ) : (
         <>
-          {/* ── GROUP 1 — "Your providers" (the server's configured bit). */}
-          <SectionHeader>Your providers</SectionHeader>
-          {tiers.configured.length === 0 ? (
-            // The honest empty line — the presets below are a catalog, not
-            // an inventory; never pretend "no providers" when they exist.
-            <TypeCaption style={[styles.tierEmpty, { color: tokens.textTertiary }]} numberOfLines={1}>
-              none configured yet — add a key to your first provider below.
-            </TypeCaption>
+          {providers.length === 0 ? (
+            // ── the ZERO state — the CTA below is a real affordance now
+            // (R118-E: the old branch's caption pointed at nothing; the
+            // centered ChromeButton + its reveal live here too).
+            <EmptyState
+              title="no providers yet"
+              caption="add one below — a preset with a key, or your own endpoint."
+            />
           ) : (
-            tiers.configured.map((provider, index) => (
-              <ProviderRowCard
-                key={provider.id}
-                provider={provider}
-                index={index}
-                modelsCount={modelCounts?.get(provider.id) ?? null}
-              />
-            ))
+            <>
+              {/* ── GROUP 1 — "Your providers" (the server's configured bit);
+                  R118-E: the LARGE tier heading — the inventory tier reads a
+                  ladder step above every other section header. */}
+              <SectionHeader large>Your providers</SectionHeader>
+              {tiers.configured.length === 0 ? (
+                // The honest empty line — the presets below are a catalog,
+                // not an inventory; never pretend "no providers" when they
+                // exist.
+                <TypeCaption style={[styles.tierEmpty, { color: tokens.textTertiary }]} numberOfLines={1}>
+                  none configured yet — add a key to your first provider below.
+                </TypeCaption>
+              ) : (
+                tiers.configured.map((provider, index) => (
+                  <ProviderRowCard
+                    key={provider.id}
+                    provider={provider}
+                    index={index}
+                    modelsCount={modelCounts?.get(provider.id) ?? null}
+                  />
+                ))
+              )}
+
+              {/* ── the TIER BREAK (R118-E A3): the visible clay divider —
+                  Hairline strong, inset md, marginVertical xl — ~65px of
+                  total break, unmistakable against the 12px row rhythm. */}
+              <Hairline strong inset={spacing.md} style={styles.tierBreak} />
+            </>
           )}
 
-          {/* ── GROUP 2 — "Add a provider" COLLAPSED behind ONE prominent
-              FULL-WIDTH row action (R115-O + R116-j): the presets + the
-              custom row reveal below it on the house stagger (~200ms for
-              the preset wall); tapping the action again collapses. The
-              custom row stays reachable even with every preset configured
-              — the owner can always add another endpoint. Tapping a preset
-              pushes to its page — the key pool there is where the key lands
-              (the desktop's R113-d rule, kept). */}
-          <View style={[styles.tierDivider, { borderBottomColor: tokens.borderSubtle }]} />
-          <AddProviderAction
-            open={addOpen}
-            onPress={() => {
-              void selectionHaptic();
-              setAddOpen((v) => !v);
-            }}
-          />
+          {/* ── GROUP 2 — "Add a provider" COLLAPSED behind the ONE CTA
+              (R115-O + R116-j + R118-E A4): the presets + the custom row
+              reveal below it on the house stagger (~200ms for the preset
+              wall); tapping the CTA again collapses. The custom row stays
+              reachable even with every preset configured — the owner can
+              always add another endpoint. Tapping a preset pushes to its
+              page — the key pool there is where the key lands (the
+              desktop's R113-d rule, kept). */}
+          <ChromeButton
+            onPress={onAddToggle}
+            accessibilityLabel="Add a provider"
+            accessibilityExpanded={addOpen}
+            testID="providers-add-toggle"
+            style={styles.addCta}
+          >
+            Add a provider
+          </ChromeButton>
           {addOpen ? (
             <>
               {tiers.addable.map((provider, index) => (
@@ -275,7 +329,11 @@ function ProviderRowCard({
         </View>
         <View style={styles.rowText}>
           <View style={styles.rowTitleLine}>
-            <TypeBodyStrong numberOfLines={1} style={styles.rowTitle}>
+            {/* R118-E A2: the INVENTORY's names read 15/700 — the primary
+                tier (the revealed catalog rows below keep 600: the
+                inventory is what the owner owns, the catalog is
+                suggestion). */}
+            <TypeBodyStrong numberOfLines={1} style={styles.rowTitleBold}>
               {provider.name}
             </TypeBodyStrong>
             {provider.enabled ? null : <Badge tone="neutral">off</Badge>}
@@ -346,46 +404,6 @@ function CustomProviderRow({ onPress, index }: { onPress: () => void; index: num
         <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
       </View>
     </PressableCard>
-  );
-}
-
-// ── the add-provider action — ONE prominent FULL-WIDTH row ─────────────────
-
-/** The section's single resting affordance (R116-j, verdict #39: "clearer
- *  add"): a proper peer of the list rows — full-width, 52px tall, the
- *  accent-tinted outline carrying the affordance, icon + label (no
- *  chevron, no description — the reveal speaks for itself). Collapsed it
- *  is the ONLY add affordance on screen; tapping reveals the presets +
- *  the custom row below it (the accordion grammar — children expand under
- *  the tapped row); tapping it again collapses them. */
-function AddProviderAction({ open, onPress }: { open: boolean; onPress: () => void }) {
-  const { tokens } = useTheme();
-  // The outlined accent tint — the accent softened onto the card surface
-  // (a full-strength accent border would shout; the tint reads as "this
-  // row is the action").
-  const accentTint = mixHex(tokens.accent, tokens.card, 0.55);
-  return (
-    <Pressable
-      testID="providers-add-toggle"
-      accessibilityRole="button"
-      accessibilityLabel="Add a provider"
-      accessibilityState={{ expanded: open }}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.addAction,
-        {
-          borderColor: pressed ? tokens.accent : accentTint,
-          backgroundColor: pressed ? tokens.subtle : "transparent",
-        },
-      ]}
-    >
-      <View style={[styles.addActionIcon, { backgroundColor: tokens.subtleHover }]}>
-        <Plus size={20} color={tokens.accent} strokeWidth={2.2} />
-      </View>
-      <TypeBodyStrong numberOfLines={1} style={styles.addActionLabel}>
-        Add a provider
-      </TypeBodyStrong>
-    </Pressable>
   );
 }
 
@@ -495,6 +513,9 @@ function CustomProviderSheet({
   return (
     <Sheet open={open} onClose={onClose} title="Custom provider" testID="custom-provider-sheet">
       <View style={styles.fieldGap}>
+        {/* R118-A: label + input ONLY — the field captions are banned in
+            sheets (the route's own validation message surfaces inline when
+            there is something to say). */}
         <ClayInput
           label="Name"
           value={name}
@@ -502,7 +523,6 @@ function CustomProviderSheet({
           autoCapitalize="none"
           autoCorrect={false}
           accessibilityLabel="Provider name"
-          caption="unique across your providers — the server refuses a duplicate"
         />
         <ClayInput
           label="Base URL"
@@ -513,23 +533,16 @@ function CustomProviderSheet({
           autoCorrect={false}
           inputMode="url"
           accessibilityLabel="Provider base URL"
-          caption="the http(s) endpoint the desktop calls"
         />
-        <View style={styles.fieldWrap}>
-          <TypeCaption style={styles.fieldLabel}>API format</TypeCaption>
-          <View style={styles.formatRow}>
-            {API_FORMATS.map((format) => (
-              <Chip
-                key={format.id}
-                selected={apiFormat === format.id}
-                onPress={() => setApiFormat(format.id)}
-                testID={`api-format-${format.id}`}
-              >
-                {format.label}
-              </Chip>
-            ))}
-          </View>
-        </View>
+        {/* R118-A: the API format is the shared SegmentedControl — three
+            choices on ONE line (the wrapping Chip row is gone); the full
+            names ride the a11y labels. */}
+        <SegmentedControl
+          options={API_FORMATS}
+          selectedId={apiFormat}
+          onSelect={setApiFormat}
+          testID="api-format"
+        />
         <ClayInput
           label="First API key (optional)"
           mono
@@ -539,23 +552,26 @@ function CustomProviderSheet({
           autoCorrect={false}
           secureTextEntry
           accessibilityLabel="First API key"
-          caption="write-only from this phone — it lands in the desktop's keyring and is never shown back"
         />
         {error !== null ? (
           <TypeCaption style={{ color: tokens.danger }} numberOfLines={4}>
             {error}
           </TypeCaption>
         ) : null}
+        {/* R118-A §2.4: the CTA zone — centered, self-sized, minWidth 200;
+            the created-state label is the one-word "Done" (the 8-word essay
+            died with the full-width idiom). */}
         {created ? (
           // The provider exists — creating again would 409 on the name.
-          <ChromeButton onPress={finish} accessibilityLabel="Done — close the sheet">
-            Done — add its key from the page
+          <ChromeButton onPress={finish} accessibilityLabel="Done — close the sheet" style={styles.sheetCta}>
+            Done
           </ChromeButton>
         ) : (
           <ChromeButton
             onPress={() => void onCreate()}
             disabled={busy}
             accessibilityLabel={busy ? "Creating the provider" : "Create the provider"}
+            style={styles.sheetCta}
           >
             {busy ? "creating…" : "Create provider"}
           </ChromeButton>
@@ -600,7 +616,9 @@ const styles = StyleSheet.create({
   },
   rowText: { flex: 1, gap: 3 },
   rowTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  rowTitle: { flexShrink: 1 },
+  /** R118-E A2 — the INVENTORY tier's name override: 15/700 (the bold
+   *  face over TypeBodyStrong's semibold — same size, same line box). */
+  rowTitleBold: { flexShrink: 1, fontFamily: fontFamily.bold },
   addRowInner: {
     flexDirection: "row",
     alignItems: "center",
@@ -618,27 +636,14 @@ const styles = StyleSheet.create({
   },
   addRowText: { flex: 1, gap: 2 },
   tierEmpty: { paddingHorizontal: spacing.xs, paddingVertical: spacing.sm },
-  tierDivider: { borderBottomWidth: StyleSheet.hairlineWidth, marginVertical: spacing.md },
-  addAction: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: RADIUS_INPUT,
-    minHeight: 52,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-  },
-  addActionIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 11,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  addActionLabel: { flex: 1 },
+  /** R118-E A3 — the tier break: the strong hairline's own breathing room
+   *  (marginVertical xl both sides; the scaffold's 12px gap rides on top —
+   *  ~65px of total break). */
+  tierBreak: { marginVertical: spacing.xl },
+  /** R118-E A4 — the page-level CTA law: centered, self-sized, minWidth
+   *  200 (never a full-width row pretending to be a button). */
+  addCta: { alignSelf: "center", minWidth: PAGE_CTA_MIN_W },
+  /** R118-A — the sheet CTA law: centered, self-sized, minWidth 200. */
+  sheetCta: { alignSelf: "center", minWidth: SHEET_CTA_MIN_W },
   fieldGap: { gap: spacing.md },
-  fieldWrap: { gap: spacing.xs },
-  fieldLabel: { textTransform: "uppercase", letterSpacing: 0.8 },
-  formatRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
 });

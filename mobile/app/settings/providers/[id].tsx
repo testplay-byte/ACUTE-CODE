@@ -1,29 +1,27 @@
 /**
  * The provider detail — the phone's full Models & Providers replica (R114-f):
- * the header card (name, kind/baseUrl, the live enabled toggle, rename via a
- * small sheet, "Test connection"), the API KEY POOL (masked slots — add via
- * the next-free-slot math, per-slot test with a busy→ok/fail verdict,
- * per-slot remove with a confirm sheet; the key VALUE is never shown back —
- * poolInfo's `abcd…wxyz` masking is the only read), and MODELS — THE SAVED
- * ROWS ONLY (GET /providers/:id/models-config, the DB truth the owner asked
- * for — never the live catalog): each row's capability chips (vision/
- * thinking/hidden) + the quiet FACTS line (context · pricing · max output)
- * and a tap → the model actions sheet (a 2×2 GRID — test / edit / hide /
- * delete), plus the add-model flow (from the live catalog with static-catalog
- * prefill, or custom). Server validation surfaces inline everywhere.
+ * the THREE-ZONE HERO (R118-E §2B1: the name-hash identity tile + the
+ * enabled toggle → the one-honest-line BASE-URL strip → the Test/Rename
+ * pair), the API KEY POOL (masked slots — add via the next-free-slot math,
+ * per-slot test with a busy→ok/fail verdict, per-slot remove with a confirm
+ * sheet; the key VALUE is never shown back — poolInfo's `abcd…wxyz` masking
+ * is the only read), and MODELS — THE SAVED ROWS ONLY (GET
+ * /providers/:id/models-config, the DB truth the owner asked for — never
+ * the live catalog): NAME-ONLY rows (R118-E §2B3 — the modelId line is
+ * deleted; the id survives on detail surfaces only) with capability chips
+ * (vision/thinking/hidden) + the quiet FACTS line (context · pricing · max
+ * output) and a tap → the model actions sheet (a 2×2 GRID — test / edit /
+ * hide / delete), plus the add-model flow (from the live catalog with
+ * static-catalog prefill, or custom). Server validation surfaces inline
+ * everywhere.
  *
- * R115-O — the surgical UX pass: the model actions sheet reads as ONE
- * hierarchy, the edit-model sheet breathes, the header's Rename / Test
- * actions carry icons on 46px targets. R116-j — the owner's verdicts
- * #40-#43: the broken layout fixed (the model title line never wraps —
- * chips sit inline, overflow drops; the identity card breathes on single
- * lines), the model menu is the 2×2 action grid, the edit sheet owns the
- * FULL R87 field set (sizing + the pricing trio incl. cache read + the
- * input/output capability chips — the Thinking toggle is GONE: reasoning
- * and tool use are detected automatically), the preload race is fixed
- * (hydrate keyed on the model identity, §1.9), and every test call waits
- * 35s with an honest class-based failure line (§1.8 — never the blanket
- * "the host dropped").
+ * R115-O — the surgical UX pass; R116-j — the owner's verdicts #40-#43 (the
+ * model menu is the 2×2 action grid, the edit sheet owns the FULL R87 field
+ * set, the preload race is fixed, every test call waits 35s with an honest
+ * class-based failure line). R118-E — the hero rebuild + the key-pool row
+ * anatomy + the name-only model rows + the R118-A sheet migrations (no
+ * captions anywhere, SegmentedControl for the mode pair, centered CTAs,
+ * the danger tone on the remove confirm).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -44,8 +42,8 @@ import {
   KeyRound,
   PencilLine,
   Plus,
+  Server,
   Trash2,
-  Zap,
 } from "lucide-react-native";
 import Animated, {
   interpolateColor,
@@ -62,21 +60,26 @@ import {
   ChromeButton,
   ClayCard,
   ClayInput,
+  Hairline,
   PressableCard,
   QuietButton,
   SectionHeader,
+  SegmentedControl,
   StatusDot,
   TypeBodyStrong,
   TypeCaption,
   TypeMicro,
   TypeMono,
+  TypeTitle,
 } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
+import { modelColor } from "@/design/model-colors";
 import {
   fontFamily,
+  getContrastText,
   RADIUS_INPUT,
+  SHEET_CTA_MIN_W,
   spacing,
-  TOUCH_TARGET,
   TYPE_BODY,
 } from "@/design/tokens";
 import { SPRING } from "@/design/motion";
@@ -86,7 +89,6 @@ import {
   addProviderModel,
   catalogEntriesFromStatic,
   catalogPrefillFor,
-  cleanModelName,
   deleteModel,
   deleteProviderKeySlot,
   fetchModelCatalog,
@@ -117,6 +119,14 @@ import {
   type ProviderRow,
 } from "@/features/config";
 import { useEventsEpoch } from "@/features/events";
+import {
+  apiFormatLabel,
+  KEY_SLOT_MONO_LINE,
+  KEY_SLOT_MONO_SIZE,
+  keySlotMetaLine,
+  modelFactsLine,
+  modelRowLabel,
+} from "@/features/provider-display";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import { mobLog, mobWarn } from "@/lib/log";
@@ -371,6 +381,10 @@ export default function ProviderDetailScreen() {
 
   // ── the model sheets' plumbing (sheets own their busy/error states) ───────
 
+  // R118-E §2B1 — the hero's identity tile hue: the provider's stable
+  // name-hash color (the same palette the list row wears), resolved once.
+  const heroTileColor = provider !== null ? modelColor(provider.name, tokens.isDark) : null;
+
   const actionsModel = useMemo(
     () => (models ?? []).find((m) => m.id === actionsModelId) ?? null,
     [models, actionsModelId],
@@ -433,26 +447,35 @@ export default function ProviderDetailScreen() {
         />
       ) : provider !== null ? (
         <>
-          {/* ── the header card: identity, enabled, rename, live test ── */}
+          {/* ── the THREE-ZONE HERO (R118-E §2B1): identity + toggle →
+              hairline → the one-honest-line BASE-URL strip → hairline → the
+              Test/Rename pair. The list's name-hash hue carries onto the
+              page (the identity tile); the machine meta line (kind ·
+              apiFormat · keyCount) is GONE — kind lives in the scaffold's
+              subtitle, the format is the context line, key truth is the
+              keys section's own. ── */}
           <ClayCard elevated>
             <View style={styles.identityPad}>
               <View style={styles.identityHead}>
-                <View style={[styles.identityIcon, { backgroundColor: tokens.subtleHover }]}>
-                  <FlaskConical size={22} color={tokens.accent} strokeWidth={2.2} />
+                {/* The identity tile — the provider's stable name-hash hue
+                    (the same palette the list row wears), Server 24 in the
+                    tile's own contrast ink. */}
+                <View style={[styles.identityIcon, { backgroundColor: heroTileColor ?? tokens.surfaceWell }]}>
+                  <Server
+                    size={24}
+                    color={heroTileColor !== null ? getContrastText(heroTileColor) : tokens.textTertiary}
+                    strokeWidth={2.2}
+                  />
                 </View>
                 <View style={styles.identityText}>
-                  <TypeBodyStrong numberOfLines={1}>{provider.name}</TypeBodyStrong>
-                  <TypeMono numberOfLines={1} style={styles.identityMono}>
-                    {provider.baseUrl}
-                  </TypeMono>
-                  <TypeMicro numberOfLines={1}>
-                    {provider.apiFormat !== undefined && provider.apiFormat !== ""
-                      ? `${provider.kind} · ${provider.apiFormat}`
-                      : provider.kind}
-                    {provider.keyCount > 0
-                      ? ` · ${provider.keyCount} key${provider.keyCount === 1 ? "" : "s"}`
-                      : " · no key yet"}
-                  </TypeMicro>
+                  <TypeTitle numberOfLines={1} style={styles.identityName}>
+                    {provider.name}
+                  </TypeTitle>
+                  {/* The ONE context line — the API format's human name;
+                      omitted when the row carries nothing. */}
+                  {apiFormatLabel(provider.apiFormat) !== "" ? (
+                    <TypeCaption numberOfLines={1}>{apiFormatLabel(provider.apiFormat)}</TypeCaption>
+                  ) : null}
                 </View>
                 <View style={styles.identityToggleWrap}>
                   <ClaySwitch
@@ -464,36 +487,53 @@ export default function ProviderDetailScreen() {
                 </View>
               </View>
               {enabledNote !== null ? <NoteLine note={enabledNote} /> : null}
-              <View style={styles.identityActions}>
-                {/* R115-O — the header actions carry icons on 46px targets
-                    (the ActionRow grammar; a busy spinner rides the test). */}
-                <View style={styles.identityButtons}>
-                  <ActionRow
-                    icon={PencilLine}
-                    label="Rename"
-                    onPress={() => setRenameOpen(true)}
-                    accessibilityLabel="Rename the provider"
-                  />
-                  <ActionRow
-                    icon={Zap}
-                    label={testing ? "testing…" : "Test connection"}
-                    busy={testing}
-                    disabled={testing}
-                    onPress={() => void runTest()}
-                    accessibilityLabel="Test the connection"
-                  />
-                </View>
-                {testNote !== null ? <NoteLine note={testNote} /> : null}
+
+              {/* Zone divider → the BASE-URL strip: the micro-caps label +
+                  one mono line, tail-ellipsized — the ONLY machine truth on
+                  the identity card. */}
+              <Hairline />
+              <View style={styles.baseUrlZone}>
+                <TypeMicro numberOfLines={1} style={[styles.baseUrlLabel, { color: tokens.textTertiary }]}>
+                  BASE URL
+                </TypeMicro>
+                {/* 13/19 is TypeMono's own recipe — one line, tail-clipped. */}
+                <TypeMono numberOfLines={1}>{provider.baseUrl}</TypeMono>
               </View>
+
+              {/* Zone divider → the actions: the primary is a PRIMARY —
+                  ChromeButton flex 1 (busy swaps the label for the
+                  spinner, the a11y label follows the swap) + the quiet
+                  Rename peer, minHeight-matched at 50. */}
+              <Hairline />
+              <View style={styles.heroActions}>
+                <ChromeButton
+                  onPress={() => void runTest()}
+                  disabled={testing}
+                  busy={testing}
+                  style={styles.heroAction}
+                  accessibilityLabel={testing ? "Testing the connection" : "Test the connection"}
+                >
+                  {testing ? "testing…" : "Test connection"}
+                </ChromeButton>
+                <QuietButton onPress={() => setRenameOpen(true)} style={styles.heroQuiet}>
+                  Rename
+                </QuietButton>
+              </View>
+              {testNote !== null ? <NoteLine note={testNote} /> : null}
             </View>
           </ClayCard>
 
           {/* ── the API key pool (masked — the value never comes back) ── */}
           <SectionHeader>API keys</SectionHeader>
           {keys === null ? (
-            <SkeletonList rows={2} rowHeight={64} />
+            <SkeletonList rows={2} rowHeight={76} />
           ) : (
             <ClayCard>
+              {/* R118-E §2B2 — the key-pool row anatomy: the accentTint key
+                  tile (surfaceWell + tertiary glyph when empty), the title
+                  + "empty" Badge, ONE mono meta line (the mask · the last
+                  use — keySlotMetaLine), inset hairlines between the rows
+                  and a final rule, compact quiet actions. */}
               <View style={styles.poolPad}>
                 {keys.map((slot, index) => {
                   const note =
@@ -501,12 +541,17 @@ export default function ProviderDetailScreen() {
                   const busy = slotTestBusy === slot.slot;
                   return (
                     <View key={slot.slot}>
-                      {index > 0 ? <View style={[styles.poolRule, { borderBottomColor: tokens.borderSubtle }]} /> : null}
+                      {index > 0 ? <Hairline inset={spacing.lg} /> : null}
                       <View style={styles.slotRow}>
-                        <View style={[styles.slotIcon, { backgroundColor: tokens.subtleHover }]}>
+                        <View
+                          style={[
+                            styles.slotIcon,
+                            { backgroundColor: slot.hasKey ? tokens.accentTint : tokens.surfaceWell },
+                          ]}
+                        >
                           <KeyRound
                             size={16}
-                            color={slot.hasKey ? tokens.accent : tokens.textTertiary}
+                            color={slot.hasKey ? tokens.accentDeep : tokens.textTertiary}
                             strokeWidth={2.2}
                           />
                         </View>
@@ -517,8 +562,12 @@ export default function ProviderDetailScreen() {
                             </TypeBodyStrong>
                             {!slot.hasKey ? <Badge tone="neutral">empty</Badge> : null}
                           </View>
+                          {/* The ONE meta line — the mask (plus the honest
+                              " · used <short>" when the OPTIONAL lastUsedAt
+                              rides the slot; an older sidecar degrades to
+                              the mask-only line). */}
                           <TypeMono numberOfLines={1} style={styles.slotMasked}>
-                            {slot.hasKey ? (slot.masked ?? "••••••••") : "—"}
+                            {keySlotMetaLine(slot)}
                           </TypeMono>
                           {note !== null ? <NoteLine note={note} /> : null}
                         </View>
@@ -526,11 +575,11 @@ export default function ProviderDetailScreen() {
                           <View style={styles.slotActions}>
                             <QuietButton
                               onPress={() => void testSlot(slot.slot)}
-                              disabled={busy}
+                              busy={busy}
                               textStyle={styles.actionButtonText}
                               style={styles.slotActionButton}
                             >
-                              {busy ? "…" : "Test"}
+                              {busy ? "testing…" : "Test"}
                             </QuietButton>
                             {slot.slot === 0 ? (
                               <QuietButton
@@ -556,7 +605,10 @@ export default function ProviderDetailScreen() {
                     </View>
                   );
                 })}
-                <View style={[styles.poolRule, { borderBottomColor: tokens.borderSubtle }]} />
+                <Hairline inset={spacing.lg} />
+                {/* The add-key row — the accentTint tile + the one-line
+                    label (the caption line is DELETED: the sheet that
+                    follows owns the explanation, and it also carries none). */}
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Add an API key"
@@ -566,14 +618,11 @@ export default function ProviderDetailScreen() {
                     { backgroundColor: pressed ? tokens.subtle : "transparent" },
                   ]}
                 >
-                  <View style={[styles.addRowIcon, { backgroundColor: tokens.subtleHover }]}>
-                    <Plus size={16} color={tokens.accent} strokeWidth={2.2} />
+                  <View style={[styles.addRowIcon, { backgroundColor: tokens.accentTint }]}>
+                    <Plus size={16} color={tokens.accentDeep} strokeWidth={2.2} />
                   </View>
                   <View style={styles.addRowText}>
                     <TypeBodyStrong numberOfLines={1}>Add a key</TypeBodyStrong>
-                    <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-                      pasted once, masked forever — the value never returns to this phone
-                    </TypeMicro>
                   </View>
                 </Pressable>
               </View>
@@ -604,8 +653,10 @@ export default function ProviderDetailScreen() {
           )}
           <PressableCard onPress={openAddModel} accessibilityLabel="Add a model">
             <View style={styles.addRowInner}>
-              <View style={[styles.addRowIcon, { backgroundColor: tokens.subtleHover }]}>
-                <Plus size={16} color={tokens.accent} strokeWidth={2.2} />
+              {/* R118-E §2B3 — the add-model row carries the accentTint tile
+                  (the same add grammar as the key pool's add row). */}
+              <View style={[styles.addRowIcon, { backgroundColor: tokens.accentTint }]}>
+                <Plus size={16} color={tokens.accentDeep} strokeWidth={2.2} />
               </View>
               <View style={styles.addRowText}>
                 <TypeBodyStrong numberOfLines={1}>Add a model</TypeBodyStrong>
@@ -700,10 +751,12 @@ export default function ProviderDetailScreen() {
 function SavedModelRow({ model, onPress }: { model: ModelRecord; onPress: () => void }) {
   const { tokens } = useTheme();
   const chips = modelCapabilityChips(model);
-  const label =
-    model.displayName !== null && model.displayName.trim() !== ""
-      ? model.displayName
-      : cleanModelName(model.modelId);
+  // R118-E §2B3 — NAME-ONLY: the label is displayName ?? cleanModelName
+  // (modelRowLabel — never the raw id); the modelId TypeMono line under it
+  // is DELETED (the owner: "It should not show the model ID"). The id
+  // survives on the DETAIL surfaces — the actions sheet's mono block and
+  // the edit form's read-only field.
+  const label = modelRowLabel(model);
   return (
     <PressableCard onPress={onPress} accessibilityLabel={`Model ${label}`}>
       <View style={[styles.modelRowInner, chips.hidden ? styles.modelRowHidden : null]}>
@@ -730,12 +783,10 @@ function SavedModelRow({ model, onPress }: { model: ModelRecord; onPress: () => 
             ) : null}
             {chips.hidden ? <Badge tone="neutral">hidden</Badge> : null}
           </View>
-          <TypeMono numberOfLines={1} style={styles.modelIdMono}>
-            {model.modelId}
-          </TypeMono>
           {/* The quiet FACTS line (verdict #40: "models not detailed") — the
               sizing/pricing numbers that are SET, honest "— ctx" when
-              unknown; never a fabricated 0. */}
+              unknown; never a fabricated 0. Line 2 of 2 — the id line is
+              gone, the row is NAME-only. */}
           <TypeMono numberOfLines={1} style={[styles.modelIdMono, { color: tokens.textTertiary }]}>
             {modelFactsLine(model)}
           </TypeMono>
@@ -743,19 +794,6 @@ function SavedModelRow({ model, onPress }: { model: ModelRecord; onPress: () => 
       </View>
     </PressableCard>
   );
-}
-
-/** The model row's facts line: "131k ctx · $0.14 in · $0.60 out · 8k max
- * out" — context always (unknown → "—"), prices and max output only when
- * set (the PC's honest-omission discipline). Pure. */
-function modelFactsLine(model: ModelRecord): string {
-  const parts: string[] = [
-    `${model.contextWindow === null ? "—" : formatTokens(model.contextWindow)} ctx`,
-  ];
-  if (model.inputPricePerMtok !== null) parts.push(`$${model.inputPricePerMtok} in`);
-  if (model.outputPricePerMtok !== null) parts.push(`$${model.outputPricePerMtok} out`);
-  if (model.maxOutputTokens !== null) parts.push(`${formatTokens(model.maxOutputTokens)} max out`);
-  return parts.join(" · ");
 }
 
 // ── the rename sheet (name + base URL — both PATCHable) ─────────────────────
@@ -828,6 +866,7 @@ function RenameProviderSheet({
   return (
     <Sheet open={open} onClose={onClose} title="Edit provider" testID="rename-provider-sheet">
       <View style={styles.fieldGap}>
+        {/* R118-A: label + input only — the captions are banned in sheets. */}
         <ClayInput
           label="Name"
           value={name}
@@ -835,7 +874,6 @@ function RenameProviderSheet({
           autoCapitalize="none"
           autoCorrect={false}
           accessibilityLabel="Provider name"
-          caption="unique across your providers — the server refuses a duplicate"
         />
         <ClayInput
           label="Base URL"
@@ -846,7 +884,6 @@ function RenameProviderSheet({
           autoCorrect={false}
           inputMode="url"
           accessibilityLabel="Provider base URL"
-          caption="the http(s) endpoint the desktop calls"
         />
         {error !== null ? (
           <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
@@ -857,6 +894,7 @@ function RenameProviderSheet({
           onPress={() => void onSave()}
           disabled={busy}
           accessibilityLabel={busy ? "Saving the provider" : "Save the provider"}
+          style={styles.sheetCta}
         >
           {busy ? "saving…" : "Save changes"}
         </ChromeButton>
@@ -951,15 +989,11 @@ function AddKeySheet({
       testID="add-key-sheet"
     >
       <View style={styles.fieldGap}>
-        <TypeCaption style={{ color: tokens.textSecondary }}>
-          {replacePrimary
-            ? "the primary key (slot 0) is overwritten — the old value is gone."
-            : slot === -1
-              ? "the pool is full (31 keys) — remove one first."
-              : slot === 0
-                ? "this becomes the PRIMARY key (slot 0) — the one every turn uses first."
-                : `this lands in POOL SLOT ${slot} — a second key the runners juggle for load.`}
-        </TypeCaption>
+        {/* R118-A — the slot-explainer block and the field caption are
+            DELETED (sheets ask ONE question with label + input only). The
+            slot math still owns the save (slot 0 rides the primary route);
+            the pool-full refusal surfaces through the honest error line
+            the moment the CTA is tapped, not through a pre-emptive essay. */}
         <ClayInput
           label="API key"
           mono
@@ -969,7 +1003,6 @@ function AddKeySheet({
           autoCorrect={false}
           secureTextEntry
           accessibilityLabel="API key"
-          caption="write-only from this phone — the desktop's keyring holds it, only the mask ever returns"
         />
         {error !== null ? (
           <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
@@ -978,8 +1011,9 @@ function AddKeySheet({
         ) : null}
         <ChromeButton
           onPress={() => void onSave()}
-          disabled={busy || slot === -1}
+          disabled={busy}
           accessibilityLabel={busy ? "Saving the key" : "Save the key"}
+          style={styles.sheetCta}
         >
           {busy ? "saving…" : "Save key"}
         </ChromeButton>
@@ -1050,25 +1084,26 @@ function RemoveKeySheet({
     <Sheet open={open} onClose={onClose} title="Remove a key" testID="remove-key-sheet">
       {shown !== null ? (
         <View style={styles.fieldGap}>
+          {/* R118-A — the sheet asks ONE question; the consequence caption
+              is DELETED (the danger CTA's own spelling carries the stakes). */}
           <TypeBodyStrong>
             {`Remove pool slot ${shown.slot}${shown.masked !== null ? ` (${shown.masked})` : ""}?`}
           </TypeBodyStrong>
-          <TypeCaption style={{ color: tokens.textSecondary }}>
-            the desktop forgets this key — turns stop juggling it immediately.
-          </TypeCaption>
           {error !== null ? (
             <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
               {error}
             </TypeCaption>
           ) : null}
           <ChromeButton
+            tone="danger"
             onPress={() => void onRemove()}
             disabled={busy}
             accessibilityLabel={busy ? "Removing the key" : "Remove the key"}
+            style={styles.sheetCta}
           >
             {busy ? "removing…" : "Remove key"}
           </ChromeButton>
-          <QuietButton onPress={onClose} disabled={busy}>
+          <QuietButton onPress={onClose} disabled={busy} style={styles.sheetQuiet}>
             Keep it
           </QuietButton>
         </View>
@@ -1120,12 +1155,7 @@ function ModelActionsSheet({
     setDeleteError(null);
   }, [shownId]);
 
-  const label = useMemo(() => {
-    if (shown === null) return "";
-    return shown.displayName !== null && shown.displayName.trim() !== ""
-      ? shown.displayName
-      : cleanModelName(shown.modelId);
-  }, [shown]);
+  const label = useMemo(() => (shown === null ? "" : modelRowLabel(shown)), [shown]);
 
   const runTest = useCallback(async () => {
     if (testing || shown === null) return;
@@ -1286,13 +1316,12 @@ function ModelActionsSheet({
           {hideNote !== null ? <NoteLine note={hideNote} /> : null}
 
           {/* Delete's confirm step lives inline BELOW the grid (never a
-              one-tap loss) — the tiles stay for context. */}
+              one-tap loss) — the tiles stay for context. R118-A: the
+              confirm box's consequence caption is DELETED — the question
+              itself + the danger verbs carry the stakes. */}
           {confirmingDelete ? (
             <View style={[styles.confirmBox, { borderColor: tokens.danger }]}>
               <TypeBodyStrong numberOfLines={1}>{`Delete ${label}?`}</TypeBodyStrong>
-              <TypeCaption numberOfLines={1} style={{ color: tokens.textSecondary }}>
-                This removes it from every picker.
-              </TypeCaption>
               {deleteError !== null ? (
                 <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
                   {deleteError}
@@ -1510,14 +1539,17 @@ function EditModelSheet({
               {error}
             </TypeCaption>
           ) : null}
+          {/* R118-A — the CTA zone: centered, self-sized, minWidth 200; the
+              Cancel escape is a centered QuietButton beneath. */}
           <ChromeButton
             onPress={() => void onSave()}
             disabled={busy}
             accessibilityLabel={busy ? "Saving the model" : "Save the model"}
+            style={styles.sheetCta}
           >
             {busy ? "saving…" : "Save model"}
           </ChromeButton>
-          <QuietButton onPress={onClose} disabled={busy}>
+          <QuietButton onPress={onClose} disabled={busy} style={styles.sheetQuiet}>
             Cancel
           </QuietButton>
         </View>
@@ -1539,7 +1571,9 @@ function EditModelSheet({
 // guessed boolean). Text input is locked ON (every chat model accepts
 // text); text output renders ON until turned off (the chat-completions
 // default). supportsTools has NO chip (detected at runtime) — it rides the
-// draft for the lossless round-trip only.
+// draft for the lossless round-trip only. R118-A: every field caption and
+// both capability footnotes are GONE — inside sheets, ClayInput is label +
+// input only (the section kickers + the live preview strip carry the rest).
 
 function ModelFormSections({
   draft,
@@ -1563,7 +1597,6 @@ function ModelFormSections({
           autoCapitalize="none"
           autoCorrect={false}
           accessibilityLabel="Display name"
-          caption="blank = the humanized model id"
         />
         <ClayInput
           label="Size label"
@@ -1572,7 +1605,6 @@ function ModelFormSections({
           autoCapitalize="none"
           autoCorrect={false}
           accessibilityLabel="Size label"
-          caption="parameter size, e.g. 70B — blank = unspecified"
         />
       </View>
 
@@ -1588,7 +1620,6 @@ function ModelFormSections({
           onChangeText={(text) => patch({ contextWindow: text })}
           keyboardType="number-pad"
           accessibilityLabel="Context window"
-          caption="tokens — blank = unknown"
         />
         <ClayInput
           label="Max output tokens"
@@ -1597,7 +1628,6 @@ function ModelFormSections({
           onChangeText={(text) => patch({ maxOutputTokens: text })}
           keyboardType="number-pad"
           accessibilityLabel="Max output tokens"
-          caption="tokens — blank = unknown"
         />
       </View>
 
@@ -1613,7 +1643,6 @@ function ModelFormSections({
           onChangeText={(text) => patch({ inputPricePerMtok: text })}
           keyboardType="decimal-pad"
           accessibilityLabel="Input price per million tokens"
-          caption="USD — blank = unknown"
         />
         <ClayInput
           label="Output price / Mtok"
@@ -1622,7 +1651,6 @@ function ModelFormSections({
           onChangeText={(text) => patch({ outputPricePerMtok: text })}
           keyboardType="decimal-pad"
           accessibilityLabel="Output price per million tokens"
-          caption="USD — blank = unknown"
         />
         <ClayInput
           label="Cache read / Mtok"
@@ -1631,7 +1659,6 @@ function ModelFormSections({
           onChangeText={(text) => patch({ inputPriceCachedPerMtok: text })}
           keyboardType="decimal-pad"
           accessibilityLabel="Cache read price per million tokens"
-          caption="USD — blank = unknown"
         />
       </View>
 
@@ -1673,9 +1700,6 @@ function ModelFormSections({
             Audio
           </Chip>
         </View>
-        <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-          text is always accepted — every chat model
-        </TypeMicro>
       </View>
 
       {/* OUTPUT capabilities — chip toggles (text out defaults ON). */}
@@ -1721,17 +1745,15 @@ function ModelFormSections({
             Audio out
           </Chip>
         </View>
-        <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-          reasoning and tool use are detected automatically
-        </TypeMicro>
       </View>
 
-      {/* Hide from the chat picker — the one behavioral toggle that stays. */}
+      {/* Hide from the chat picker — the one behavioral toggle that stays
+          (R118-A: the toggle's caption is GONE; the toggle's own line IS
+          the label). */}
       <View style={[styles.toggleCard, { borderColor: tokens.borderSubtle }]}>
         <View style={styles.toggleRow}>
           <View style={styles.rowText}>
             <TypeBodyStrong numberOfLines={1}>Hide from the chat picker</TypeBodyStrong>
-            <TypeCaption numberOfLines={1}>hidden models stay out of pickers</TypeCaption>
           </View>
           <ClaySwitch
             value={draft.hidden}
@@ -1927,15 +1949,18 @@ function AddModelSheet({
       maxHeightFraction={0.9}
     >
       <View style={styles.fieldGap}>
-        {/* the two modes */}
-        <View style={styles.formatRow}>
-          <ModeChip selected={mode === "catalog"} onPress={() => setMode("catalog")}>
-            From catalog
-          </ModeChip>
-          <ModeChip selected={mode === "custom"} onPress={() => setMode("custom")}>
-            Custom
-          </ModeChip>
-        </View>
+        {/* the two modes — R118-A: the local ModeChip drift is DELETED; the
+            shared SegmentedControl carries the catalog/custom pair (one
+            line, all visible; the a11y labels speak the modes in full). */}
+        <SegmentedControl
+          options={[
+            { id: "catalog", label: "Catalog", accessibilityLabel: "From the provider's catalog" },
+            { id: "custom", label: "Custom", accessibilityLabel: "Custom model id" },
+          ]}
+          selectedId={mode}
+          onSelect={setMode}
+          testID="add-model-mode"
+        />
 
         {mode === "catalog" ? (
           <View style={styles.fieldGap}>
@@ -2004,10 +2029,10 @@ function AddModelSheet({
             )}
           </View>
         ) : (
-          // Custom mode without a draft yet — the seed row opens the blank form.
-          <TypeCaption style={{ color: tokens.textSecondary }} numberOfLines={1}>
-            type the exact model id the provider expects.
-          </TypeCaption>
+          // Custom mode without a draft yet — the seed row below IS the
+          // affordance (R118-A: the explainer caption is gone; the seed
+          // row's own two-line anatomy says what it does).
+          null
         )}
 
         {/* the form — prefilled after a catalog tap, blank after the custom
@@ -2016,11 +2041,7 @@ function AddModelSheet({
           {draft === null ? (
             mode === "custom" ? (
               <SeedCustomDraft onSeed={() => setDraft(blankDraft())} />
-            ) : (
-              <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary, paddingTop: spacing.xs }}>
-                tap a catalog entry to prefill the form for review
-              </TypeMicro>
-            )
+            ) : null
           ) : (
             <>
               {/* R116-j: the add sheet renders the SAME form grammar as the
@@ -2035,7 +2056,6 @@ function AddModelSheet({
                 autoCapitalize="none"
                 autoCorrect={false}
                 accessibilityLabel="Model id"
-                caption="the exact id sent to the provider"
               />
               <ModelFormSections draft={draft} patch={patch} />
               <View style={[styles.previewStrip, { backgroundColor: tokens.subtle }]}>
@@ -2056,6 +2076,7 @@ function AddModelSheet({
                 onPress={() => void onSave()}
                 disabled={busy}
                 accessibilityLabel={busy ? "Saving the model" : "Save the model"}
+                style={styles.sheetCta}
               >
                 {busy ? "saving…" : "Save model"}
               </ChromeButton>
@@ -2113,97 +2134,7 @@ function blankDraft(): ModelFormDraft {
   };
 }
 
-/** The add-model sheet's mode chip (the catalog/custom pair). */
-function ModeChip({
-  children,
-  selected,
-  onPress,
-}: {
-  children: React.ReactNode;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  const { tokens } = useTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.modeChip,
-        {
-          backgroundColor: selected ? tokens.accent : pressed ? tokens.subtleHover : tokens.pillBg,
-          borderColor: selected ? tokens.accent : tokens.border,
-        },
-      ]}
-    >
-      <TypeCaption
-        style={{ color: selected ? tokens.accentText : tokens.textSecondary, fontWeight: "600" }}
-      >
-        {children}
-      </TypeCaption>
-    </Pressable>
-  );
-}
-
 // ── small shared pieces ─────────────────────────────────────────────────────
-
-// ── ActionRow — the icon action button (R115-O) ─────────────────────────────
-//
-// The QuietButton's exact geometry (hairline outline, radius 14, 46px) with
-// an ICON slot where the quiet button has text only — the header's
-// Rename/Test pair and the model-actions sheet's quiet/danger pair share it.
-// `busy` swaps the icon for the spinner (the label-swap idiom stays the
-// caller's); tone="danger" is the destructive hue. The primary action keeps
-// the house ChromeButton (text-only by design) — this row owns quiet.
-
-function ActionRow({
-  icon: Icon,
-  label,
-  onPress,
-  disabled = false,
-  busy = false,
-  tone = "neutral",
-  accessibilityLabel,
-}: {
-  icon: React.ComponentType<{ size?: number; color?: string; strokeWidth?: number }>;
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  busy?: boolean;
-  tone?: "neutral" | "danger";
-  accessibilityLabel?: string;
-}) {
-  const { tokens } = useTheme();
-  const fg = tone === "danger" ? tokens.danger : tokens.textSecondary;
-  const border = tone === "danger" ? tokens.danger : tokens.borderStrong;
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel ?? label}
-      accessibilityState={{ disabled: disabled || busy, busy }}
-      disabled={disabled || busy || !onPress}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.actionRow,
-        {
-          borderColor: border,
-          backgroundColor: pressed ? tokens.subtle : "transparent",
-          opacity: disabled ? 0.6 : 1,
-        },
-      ]}
-    >
-      {busy ? (
-        <ActivityIndicator size="small" color={fg} />
-      ) : (
-        <Icon size={17} color={fg} strokeWidth={2.2} />
-      )}
-      <Text style={{ color: fg, fontSize: TYPE_BODY, fontFamily: fontFamily.semibold }}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
 
 function NoteLine({ note }: { note: ActionNote }) {
   const { tokens } = useTheme();
@@ -2306,23 +2237,34 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  // R116-j (verdict #40): the identity card breathes — the three single-line
-  // rows get one more pixel of air between them.
+  // R116-j (verdict #40): the identity card breathes — the single-line rows
+  // get one more pixel of air between them.
   identityText: { flex: 1, gap: 4 },
+  /** R118-E §2B1 — the name at TypeTitle 20/700, one line, tail-clipped,
+   *  shrinking before the switch ever moves. */
+  identityName: { flexShrink: 1 },
   identityToggleWrap: { alignItems: "flex-end" },
-  identityMono: { fontSize: 11, lineHeight: 15 },
-  identityActions: { gap: spacing.md, alignItems: "flex-start" },
+  /** R118-E §2B1 — the BASE-URL zone: the micro-caps label above one mono
+   *  line (13/19, TypeMono's own recipe — tail-ellipsized by numberOfLines). */
+  baseUrlZone: { gap: 2 },
+  baseUrlLabel: { letterSpacing: 0.8, textTransform: "uppercase" },
   identityButtons: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
+  /** R118-E §2B1 — the hero's action pair: the primary rides flex 1 (the
+   *  CTA grammar — a REAL primary, not a quiet peer), the Rename quiet
+   *  button matches it at minHeight 50. */
+  heroActions: { flexDirection: "row", gap: spacing.sm, alignItems: "stretch" },
+  heroAction: { flex: 1 },
+  heroQuiet: { flex: 1, minHeight: 50 },
   actionButtonText: { fontSize: 13 },
-  poolPad: { paddingVertical: spacing.xs },
-  poolRule: { borderBottomWidth: StyleSheet.hairlineWidth },
+  /** R118-E §2B2 — the pool card's vertical rhythm (paddingVertical sm). */
+  poolPad: { paddingVertical: spacing.sm },
   slotRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
-    padding: spacing.md,
+    paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
-    minHeight: 64,
+    minHeight: 72,
   },
   slotIcon: {
     width: 32,
@@ -2334,9 +2276,14 @@ const styles = StyleSheet.create({
   slotText: { flex: 1, gap: 3 },
   slotTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   slotTitle: { flexShrink: 1 },
-  slotMasked: { fontSize: 11, lineHeight: 15 },
+  /** R118-E §2B2 — the ONE mono meta line: 12/18 (the mono ladder's own
+   *  caption size, one step up from the old 11/15 — pinned via
+   *  provider-display's KEY_SLOT_MONO pair so the cut cannot drift). */
+  slotMasked: { fontSize: KEY_SLOT_MONO_SIZE, lineHeight: KEY_SLOT_MONO_LINE },
   slotActions: { flexDirection: "row", gap: spacing.xs, alignItems: "center" },
-  slotActionButton: { paddingHorizontal: spacing.md },
+  /** R118-E §2B2 — the compact quiet actions: minHeight 36, caption-size
+   *  label — a row AFFORDANCE, not a page button. */
+  slotActionButton: { paddingHorizontal: spacing.md, minHeight: 36 },
   addKeyRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2387,21 +2334,14 @@ const styles = StyleSheet.create({
   emptyPad: { padding: spacing.lg },
   noteRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   noteText: { flex: 1 },
-  actionRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-    borderRadius: RADIUS_INPUT,
-    minHeight: TOUCH_TARGET + 2,
-    paddingHorizontal: spacing.xl,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
   fieldGap: { gap: spacing.md },
   editFormGap: { gap: spacing.lg },
   fieldWrap: { gap: spacing.xs },
   fieldLabel: { textTransform: "uppercase", letterSpacing: 0.8 },
-  formatRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  /** R118-A §2.4 — the sheet CTA zone: centered, self-sized, minWidth 200;
+   *  the quiet escape centers beneath at its natural width. */
+  sheetCta: { alignSelf: "center", minWidth: SHEET_CTA_MIN_W },
+  sheetQuiet: { alignSelf: "center" },
   readOnlyMono: {
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 14,
@@ -2465,15 +2405,6 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   formDividerTop: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: spacing.md },
-  modeChip: {
-    borderRadius: 999,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    minHeight: 44,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   switchTarget: { minWidth: 44, minHeight: 44, alignItems: "flex-end", justifyContent: "center" },
   switchTrack: {
     width: SWITCH_TRACK_W,

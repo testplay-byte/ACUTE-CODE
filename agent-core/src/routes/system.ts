@@ -33,9 +33,9 @@
 // The frontend then clears its localStorage stores + react-query cache and
 // reloads — the full journey back to first-run.
 // ─────────────────────────────────────────────────────────────────────────────
-import { rmSync, readdirSync, statSync, existsSync, unlinkSync, readFileSync, createWriteStream } from "node:fs";
+import { rmSync, readdirSync, statSync, existsSync, unlinkSync, readFileSync, createWriteStream, mkdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
@@ -756,6 +756,104 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
       entries: capped,
       truncated,
     });
+  });
+
+  // ── ROUND-118 (R118-E): the CREATE-FOLDER route — the browse's write
+  // twin, so a NEW folder can become a project the moment it exists (before
+  // this, POST /projects statSync-validates the root and 404s on a fresh
+  // folder — a brand-new directory genuinely could not be registered).
+  // POST /system/fs/mkdir {parentPath, name}
+  //   → 201 {path, name, dir: true}   (the browse entry's shape verbatim)
+  //   → 400 VALIDATION (field-named)  a relative parentPath, a parent that
+  //                                    is not a directory, or a name the
+  //                                    phone's folderNameValid would have
+  //                                    refused ("" · >60 · separators ·
+  //                                    "."/".." · leading dot · control)
+  //   → 404 NOT_FOUND                  a missing parent (the browse route's
+  //                                    ENOENT spelling; also the stat→mkdir
+  //                                    race where it vanished mid-flight)
+  //   → 409 CONFLICT                   EEXIST — the folder is already there
+  // TRUST MODEL (the R114-b ruling, unchanged): a paired phone is a
+  // view+input medium with CONFIG rights — mkdir is phone-reachable by
+  // construction (the device-token blocklist blocks only /system/reset,
+  // cloud-connector, internal/, computer-use/, keys/reveal, terminal);
+  // no blocklist change ships with this route. DIRECTORIES only, ONE level
+  // (recursive:false — the route never silently materializes a missing
+  // parent chain), and the name is separator-free so join() cannot climb.
+  scope.post("/system/fs/mkdir", async (request, reply) => {
+    const body = (request.body ?? null) as { parentPath?: unknown; name?: unknown } | null;
+    const rawParent = typeof body?.parentPath === "string" ? body.parentPath.trim() : "";
+    const rawName = typeof body?.name === "string" ? body.name : "";
+
+    // (a) parentPath — absolute (the route resolves nothing against cwd),
+    // then existing + a directory, with the browse route's exact error
+    // spelling (ENOENT → 404; EACCES & friends → 400; the OS's own message
+    // rides along).
+    if (!isAbsolute(rawParent)) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "body.parentPath must be an absolute directory path", {
+          field: "body.parentPath",
+        }),
+      );
+    }
+    let parentStat;
+    try {
+      parentStat = statSync(rawParent);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const isMissing = (error as NodeJS.ErrnoException).code === "ENOENT";
+      return fsError(
+        reply,
+        isMissing ? 404 : 400,
+        isMissing ? "NOT_FOUND" : "VALIDATION",
+        `cannot create in '${rawParent}': ${message}`,
+      );
+    }
+    if (!parentStat.isDirectory()) {
+      return fsError(reply, 400, "VALIDATION", `'${rawParent}' is not a directory`);
+    }
+
+    // (b) name — the SAME rules the phone's folderNameValid enforces
+    // client-side (fs-browse.ts); the client pre-refuses, the route is the
+    // wall. Every 400 names its field.
+    const trimmedName = rawName.trim();
+    const nameRejection =
+      trimmedName === ""
+        ? "body.name must be a folder name"
+        : trimmedName.length > 60
+          ? "body.name is capped at 60 characters"
+          : trimmedName.includes("/") || trimmedName.includes("\\")
+            ? "body.name cannot contain separators"
+            : trimmedName === "." || trimmedName === ".."
+              ? "body.name must be a real folder name"
+              : trimmedName.startsWith(".")
+                ? "body.name cannot start with a dot"
+                : /[\u0000-\u001f\u007f]/.test(trimmedName)
+                  ? "body.name cannot contain control characters"
+                  : null;
+    if (nameRejection !== null) {
+      return reply.code(400).send(errorBody("VALIDATION", nameRejection, { field: "body.name" }));
+    }
+
+    // (c) Create — one level, never recursive; EEXIST is the honest 409
+    // (the phone's inline namer renders "a folder with that name already
+    // exists"); a parent that vanished mid-flight answers the same 404 the
+    // browse gives it.
+    const abs = join(rawParent, trimmedName);
+    try {
+      mkdirSync(abs, { recursive: false });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") {
+        return fsError(reply, 409, "CONFLICT", `'${abs}' already exists`);
+      }
+      if (code === "ENOENT") {
+        return fsError(reply, 404, "NOT_FOUND", `cannot create in '${rawParent}': ${message}`);
+      }
+      return fsError(reply, 400, "VALIDATION", `cannot create '${abs}': ${message}`);
+    }
+    return reply.code(201).send({ path: abs, name: trimmedName, dir: true });
   });
 
   scope.post("/system/reset", async () => {
