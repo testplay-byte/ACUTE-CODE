@@ -106,3 +106,20 @@ The §N implementation, as the display-layer unification: **one visual TURN per 
 
 Tag `v0.113.0` at the release-prep commit. The §g 2c lock-sync proof passed before tagging (`npm ci --dry-run` clean — zero
 mobile dep changes this round; the package files are byte-identical to v0.112.0).
+
+Tag `v0.113.0` at `1052bdf` (the release-prep commit). All four workflows green: the tag `Release` run `35790039909`
+(launcher-kit + the Windows installer + the two AppImages + the two debs), the tag `Mobile APK` run `35790039870` (the APK
+attach), the main `CI` run `35790037220`, and the main `Mobile APK` run `35790037209`.
+
+Draft `394157407` carried all 7 assets, then was PUBLISHED (PATCH `draft:false`, `make_latest:"true"`, body = the CHANGELOG's
+0.113.0 section, no `target_commitish` — the §g 6 procedure). End-state verified per §g 6b:
+
+- `/releases/latest` answers `v0.113.0` authenticated; the PUBLIC check answers the same via the HTML redirect
+  (`/releases/latest` → `/releases/tag/v0.113.0`).
+- 7/7 assets on the published page: AppImages 134,334,984 / 136,604,152 B, debs 68,428,524 / 68,384,514 B, x64-setup.exe
+  39,344,439 B, launcher-kit 146,733 B, and `ACUTE-CODE_0.113.0_android-arm64.apk` 56,795,649 B.
+- **APK content check** (downloaded via the API with the octet-stream Accept, full zip central-directory pass): 1240 entries;
+  `assets/index.android.bundle` present with the Hermes bytecode magic `c6 1f bc 03`; 3 dex files; `lib/` contains
+  **arm64-v8a only**; exact size match.
+
+No stale drafts remain. The round is shipped.
