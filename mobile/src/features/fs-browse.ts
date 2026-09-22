@@ -22,6 +22,11 @@
  * Project sheet open (falling back to the server home when none is
  * stored). Storage is mocked in jest.setup.js, so importing it here never
  * touches a native bridge from any test.
+ *
+ * R118-E — the CREATE-FOLDER client (§2D): folderNameValid / joinChildPath
+ * (the inline namer's pure pair) + createFsFolder (POST /system/fs/mkdir)
+ * + nextBrowseAfterCreate (the optimistic listing with the new entry
+ * dirs-first alphabetical). One tap from "create" to "selected".
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -63,6 +68,93 @@ export async function fetchFsBrowse(
   const trimmed = path?.trim() ?? "";
   const query = trimmed === "" ? "" : `?path=${encodeURIComponent(trimmed)}`;
   return apiJson<FsBrowseReply>(sender, `/system/fs/browse${query}`);
+}
+
+// ── the create-folder client (R118-E, §2D) ──────────────────────────────────
+
+/** POST /system/fs/mkdir's reply — the browse entry's shape verbatim
+ *  (`dir: true` is a literal: the route only ever creates directories). */
+export interface FsMkdirReply {
+  path: string;
+  name: string;
+  dir: true;
+}
+
+/**
+ * The inline namer's validation (the same rules the route enforces
+ * server-side): trims; rejects "" · longer than 60 · any path separator
+ * ("/" or "\") · "." and ".." · a leading dot (dotfiles stay invisible in
+ * the picker — a folder the browser then hides would read as a failed
+ * create) · control characters. Pure; never throws.
+ */
+export function folderNameValid(
+  name: string,
+): { ok: true; name: string } | { ok: false; message: string } {
+  const trimmed = name.trim();
+  if (trimmed === "") return { ok: false, message: "a folder name is required" };
+  if (trimmed.length > 60) return { ok: false, message: "folder names are capped at 60 characters" };
+  if (trimmed.includes("/") || trimmed.includes("\\")) {
+    return { ok: false, message: "a folder name cannot contain separators" };
+  }
+  if (trimmed === "." || trimmed === "..") {
+    return { ok: false, message: "choose a real folder name" };
+  }
+  if (trimmed.startsWith(".")) return { ok: false, message: "folder names cannot start with a dot" };
+  if (/[\u0000-\u001f\u007f]/.test(trimmed)) {
+    return { ok: false, message: "folder names cannot contain control characters" };
+  }
+  return { ok: true, name: trimmed };
+}
+
+/**
+ * The child path under a parent — joined with THE PARENT'S OWN SEPARATOR
+ * (a Windows parent "C:\Users\z" gets "C:\Users\z\new"; a POSIX parent
+ * "/home/z" gets "/home/z/new"), trailing separators on the parent
+ * dropping first so the join never doubles one. Pure; never throws.
+ */
+export function joinChildPath(parent: string, name: string): string {
+  const separator = parent.includes("\\") ? "\\" : "/";
+  const base = parent.replace(/[\\/]+$/, "");
+  return `${base}${separator}${name}`;
+}
+
+/**
+ * POST /system/fs/mkdir {parentPath, name} — create one directory under an
+ * existing absolute parent. 201 `{path, name, dir: true}` on success; the
+ * route's honest errors are VALUES (409 CONFLICT when the folder already
+ * exists, 400 VALIDATION on a bad name/parent, 404 NOT_FOUND on a missing
+ * parent) — transport throws stay the screen's truth, exactly like the
+ * browse.
+ */
+export function createFsFolder(
+  sender: ApiSender,
+  parentPath: string,
+  name: string,
+): Promise<ApiOutcome<FsMkdirReply>> {
+  return apiJson<FsMkdirReply>(sender, "/system/fs/mkdir", {
+    method: "POST",
+    bodyText: JSON.stringify({ parentPath, name }),
+  });
+}
+
+/**
+ * The optimistic browse state the moment a create answers 201: the created
+ * entry inserted into the current listing DIRS-FIRST, alphabetical within
+ * the directory group (the route's own order — the background re-browse
+ * reconciles moments later, but a fast "Select another folder" tap must
+ * already see the new folder). Never mutates the input; a same-path entry
+ * (a race the re-browse already settled) is replaced, never duplicated.
+ * Pure; never throws.
+ */
+export function nextBrowseAfterCreate(
+  browse: FsBrowseReply,
+  created: FsMkdirReply,
+): FsBrowseReply {
+  const entry: FsBrowseEntry = { name: created.name, path: created.path, dir: true };
+  const entries = [...browse.entries.filter((e) => e.path !== created.path), entry].sort((a, b) =>
+    a.dir === b.dir ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.dir ? -1 : 1,
+  );
+  return { ...browse, entries };
 }
 
 /**

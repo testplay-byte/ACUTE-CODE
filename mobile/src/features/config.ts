@@ -431,6 +431,11 @@ export interface ProviderKeySlot {
   slot: number;
   hasKey: boolean;
   masked: string | null;
+  /** R118-E: the slot's last successful USE (ISO timestamp) — the OPTIONAL
+   * pool-route interlock. An older sidecar omits it entirely; the key row's
+   * meta line degrades to the mask-only spelling (provider-display.ts's
+   * keySlotMetaLine owns that honesty). */
+  lastUsedAt?: string | null;
 }
 
 /** The live catalog entry (GET /providers/:id/models — the provider's own

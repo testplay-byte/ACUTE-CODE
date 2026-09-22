@@ -33,20 +33,25 @@
  * badge), the "+N more" reveal, and the "New session" quiet action button
  * (the wave-J add-action grammar) closing the well.
  *
- * THE NEW PROJECT ACTION (screen-archetypes §2): at the list's BOTTOM,
- * half width (48%), CENTERED (donts #40 — bottom actions never left-hug),
- * FolderPlus + "New project" — no description, no chevron, the quiet
- * outline. Its sheet asks ONE question (components.md):
- * WHICH FOLDER — the Name field and the Color swatches are DEAD (donts
- * #18: never ask for derivable data — the name is the folder's basename,
- * the color is the server's own). The folder browser (breadcrumbs + the
- * dirs list + the home cap: the server pins parent null AT the user's
- * home dir, and the client hides Up whenever parent === null) + the
- * collapsed "Type a path instead" disclosure for power users. Once "Use
- * this folder" is tapped: the FULL path as a mono chip + "Select another
- * folder" (back to browsing) + the separate "Create the project" primary.
- * The old "tap a project to expand…" footnote is DELETED (copy.md — the
- * affordance teaches itself).
+ * THE NEW PROJECT ACTION (R118-E §2C1 — the centered CTA law): the
+ * list's bottom AND the empty state both carry the self-sized centered
+ * ChromeButton (minWidth PAGE_CTA_MIN_W) — the old half-width outlined
+ * NewProjectActionRow is DELETED. Its sheet asks ONE question
+ * (components.md): WHICH FOLDER — the Name field and the Color swatches
+ * are DEAD (donts #18: never ask for derivable data — the name is the
+ * folder's basename, the color is the server's own). The folder browser
+ * (breadcrumbs + the dirs list + the home cap: the server pins parent
+ * null AT the user's home dir, and the client hides Up whenever parent
+ * === null) + the CREATE-FOLDER first row (R118-E §2D: FolderPlus
+ * "Create a folder here" → the inline mono namer with Check/X circles →
+ * create → AUTO-SELECT the new folder, one tap from "create" to
+ * "selected") + the collapsed "Type a path instead" disclosure for
+ * power users (the manual path rides ClayInput mono — the R118-A field
+ * law — and the keyboard-aware sheet rides the IME). Once "Use this
+ * folder" is tapped: the FULL path as a mono chip + "Select another
+ * folder" (the centered quiet escape) + the separate "Create the project"
+ * centered primary. The old "tap a project to expand…" footnote is
+ * DELETED (copy.md — the affordance teaches itself).
  *
  * THE DEFAULT FOLDER (R116-k, verdict #52): every open starts from a
  * REMEMBERED default — the last successfully-created project's parent dir
@@ -59,6 +64,13 @@
  * and the debounced session-frame batches bump the epochs this screen keys
  * its refetches on, so a project created on the PC appears here the moment
  * it exists and the count badges follow every turn.
+ *
+ * R118-E §2C2 — THE SESSIONS WELL + ROWS: the well is the recessed surface
+ * (surfaceWell + the hairline clayRim, RADIUS_INPUT, sm margins,
+ * paddingVertical xs, gap 0 — the DIVIDERS own the rhythm) and the rows
+ * carry the model NAME (cleanModelName of the session's selectedModel) in
+ * the meta line; the 1dp inset dividers ride the STRONG recipe (the
+ * dashboard's recessed-well spelling — one spelling everywhere).
  */
 
 import { useRouter } from "expo-router";
@@ -80,12 +92,13 @@ import Animated, {
   withSpring,
 } from "react-native-reanimated";
 import {
+  Check,
   ChevronRight,
   ChevronUp,
   Folder,
   FolderGit2,
   FolderPlus,
-  Plus,
+  X,
 } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { Sheet } from "@/components/sheet";
@@ -94,9 +107,11 @@ import { EmptyState, ErrorState, SkeletonList } from "@/components/list-state";
 import {
   Badge,
   ChromeButton,
-  Chip,
+  ClayInput,
+  Hairline,
   PressableCard,
   QuietButton,
+  SegmentedControl,
   StatusDot,
   TypeBody,
   TypeBodyStrong,
@@ -107,11 +122,20 @@ import {
 import { selectionHaptic, successHaptic, warningHaptic } from "@/design/haptics";
 import { useTheme } from "@/design/theme";
 import { SPRING } from "@/design/motion";
-import { RADIUS_INPUT, TOUCH_TARGET, fontFamily, mixHex, spacing } from "@/design/tokens";
+import {
+  fontFamily,
+  PAGE_CTA_MIN_W,
+  RADIUS_INPUT,
+  SHEET_CTA_MIN_W,
+  spacing,
+  TOUCH_TARGET,
+} from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import { useEventsEpoch } from "@/features/events";
+import { timeAgoShort } from "@/lib/time-ago";
 import {
+  cleanModelName,
   createProject,
   createSession,
   fetchAgents,
@@ -133,8 +157,11 @@ import {
 import {
   breadcrumbSegments,
   clearDefaultProjectDir,
+  createFsFolder,
   fetchFsBrowse,
+  folderNameValid,
   loadDefaultProjectDir,
+  nextBrowseAfterCreate,
   parentDirOf,
   saveDefaultProjectDir,
   shortRootPath,
@@ -322,8 +349,16 @@ export default function ProjectsTab() {
             caption="Pick a folder on the desktop to begin."
           />
           {/* The New action lives at the list's BOTTOM (screen-archetypes
-              §2) — half width, quiet, no description, no chevron. */}
-          <NewProjectActionRow onPress={() => setNewProjectOpen(true)} />
+              §2) — R118-E §2C1: the self-sized centered CTA (the house
+              grammar, the same law as every page CTA). */}
+          <ChromeButton
+            onPress={() => setNewProjectOpen(true)}
+            accessibilityLabel="New project"
+            testID="projects-new-project"
+            style={styles.pageCta}
+          >
+            New project
+          </ChromeButton>
         </>
       ) : (
         <>
@@ -345,7 +380,14 @@ export default function ProjectsTab() {
               onOpenSession={(row) => router.push(`/session/${row.id}`)}
             />
           ))}
-          <NewProjectActionRow onPress={() => setNewProjectOpen(true)} />
+          <ChromeButton
+            onPress={() => setNewProjectOpen(true)}
+            accessibilityLabel="New project"
+            testID="projects-new-project"
+            style={styles.pageCta}
+          >
+            New project
+          </ChromeButton>
         </>
       )}
 
@@ -369,30 +411,6 @@ export default function ProjectsTab() {
         onClose={() => setSessionSheetProject(null)}
       />
     </ScreenScaffold>
-  );
-}
-
-// ── the New Project action (the list's bottom — half width, quiet) ─────────
-
-function NewProjectActionRow({ onPress }: { onPress: () => void }) {
-  const { tokens } = useTheme();
-  return (
-    <Pressable
-      accessibilityLabel="New project"
-      accessibilityRole="button"
-      testID="projects-new-project"
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.newProjectAction,
-        {
-          borderColor: pressed ? tokens.borderStrong : tokens.border,
-          backgroundColor: pressed ? tokens.subtle : "transparent",
-        },
-      ]}
-    >
-      <FolderPlus size={20} color={tokens.accent} strokeWidth={2.2} />
-      <TypeBodyStrong style={{ color: tokens.textSecondary }}>New project</TypeBodyStrong>
-    </Pressable>
   );
 }
 
@@ -475,10 +493,6 @@ function ProjectRowCard({
 }) {
   const { tokens } = useTheme();
   const running = stats?.running ?? 0;
-  // The New-session button's accent tint — wave-J's add-action idiom (the
-  // accent softened onto the card surface; a full-strength accent border
-  // on a full-width row would shout).
-  const newSessionTint = mixHex(tokens.accent, tokens.card, 0.55);
 
   const visible = full ? sessions : sessions.slice(0, EXPAND_PREVIEW);
   const hidden = sessions.length - visible.length;
@@ -520,14 +534,13 @@ function ProjectRowCard({
         ) : null}
       </View>
 
-      {/* ── the inline session expansion (R114-c) — R116-k: the fold is
-          its own INSET REGION (a subtle-tinted, hairline-bordered panel
-          floating inside the card), not a bare top border on the card's
-          tail. ── */}
+      {/* ── the inline session expansion (R114-c) — R118-E §2C2: the fold
+          is the RECESSED WELL (surfaceWell + the hairline clayRim,
+          RADIUS_INPUT, sm margins, paddingVertical xs, gap 0 — the 1dp
+          inset dividers own the rows' rhythm) floating inside the card,
+          closed by the centered New-session CTA. ── */}
       <Accordion open={expanded}>
-        <View
-          style={[styles.sessionsWell, { backgroundColor: tokens.subtle, borderColor: tokens.borderSubtle }]}
-        >
+        <View style={[styles.sessionsWell, { backgroundColor: tokens.surfaceWell, borderColor: tokens.clayRim }]}>
           {visible.length === 0 ? (
             <View style={styles.sessionsEmpty}>
               <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary }}>
@@ -535,8 +548,14 @@ function ProjectRowCard({
               </TypeCaption>
             </View>
           ) : (
-            visible.map((row) => (
-              <SessionRow key={row.id} row={row} onOpen={() => onOpenSession(row)} />
+            visible.map((row, index) => (
+              <View key={row.id}>
+                {/* The 1dp inset divider between rows — the STRONG recipe
+                    (borderStrong, inset md — the dashboard's recessed-well
+                    spelling; one spelling everywhere). */}
+                {index > 0 ? <Hairline strong inset={spacing.md} /> : null}
+                <SessionRow row={row} onOpen={() => onOpenSession(row)} />
+              </View>
             ))
           )}
           {hidden > 0 ? (
@@ -551,29 +570,17 @@ function ProjectRowCard({
               </TypeMicro>
             </Pressable>
           ) : null}
-          {/* The well's closing action (R116-k, verdict #51): a proper
-              quiet BUTTON — full-width, the wave-J add-action's outlined
-              accent tint + press grammar (scale + tint), separated from
-              the session rows above. */}
-          <Pressable
-            accessibilityLabel={`Start a new session in ${project.name}`}
-            accessibilityRole="button"
+          {/* R118-E §2C3 — the well's closing action is the centered CTA
+              (the tinted full-width row is deleted; same grammar as every
+              page CTA, minWidth 200). */}
+          <ChromeButton
             onPress={onNewSession}
+            accessibilityLabel={`Start a new session in ${project.name}`}
             testID="new-session-row"
-            style={({ pressed }) => [
-              styles.newSessionRow,
-              {
-                borderColor: pressed ? tokens.accent : newSessionTint,
-                backgroundColor: pressed ? tokens.subtleHover : "transparent",
-                transform: [{ scale: pressed ? 0.98 : 1 }],
-              },
-            ]}
+            style={styles.wellCta}
           >
-            <Plus size={16} color={tokens.accent} strokeWidth={2.4} />
-            <TypeBodyStrong numberOfLines={1} style={{ color: tokens.accent }}>
-              New session
-            </TypeBodyStrong>
-          </Pressable>
+            New session
+          </ChromeButton>
         </View>
       </Accordion>
     </PressableCard>
@@ -589,6 +596,13 @@ function SessionRow({ row, onOpen }: { row: SessionRow; onOpen: () => void }) {
   const label = sessionStatusLabel(row.status);
   const updatedMs = new Date(row.updatedAt).getTime();
   const updated = Number.isFinite(updatedMs) ? timeAgoShort(updatedMs) : "";
+  // R118-E §2C2 — the meta line finally says WHICH MODEL: the session's
+  // selected-model NAME (cleanModelName — never the raw id), then the time
+  // (+ the sub-role) in tertiary. A session following the agent default
+  // shows the time only, honestly (no invented model).
+  const modelName = row.selectedModel !== null ? cleanModelName(row.selectedModel.model) : null;
+  const subRole = row.subRole !== null && row.subRole !== "" ? row.subRole : null;
+  const rest = [updated, subRole].filter((part) => part !== "").join(" · ");
 
   return (
     <Pressable
@@ -597,8 +611,8 @@ function SessionRow({ row, onOpen }: { row: SessionRow; onOpen: () => void }) {
       onPress={onOpen}
       style={({ pressed }) => [
         styles.sessionRow,
-        // subtleHover — a step ABOVE the well's subtle tint, so the pressed
-        // row still reads on the tinted surface (R116-k).
+        // subtleHover — a step ABOVE the well's surfaceWell tint, so the
+        // pressed row still reads on the recessed surface (R116-k).
         { backgroundColor: pressed ? tokens.subtleHover : "transparent" },
       ]}
     >
@@ -608,10 +622,16 @@ function SessionRow({ row, onOpen }: { row: SessionRow; onOpen: () => void }) {
         </TypeBody>
         <View style={styles.sessionMeta}>
           {running ? <StatusDot color={tokens.running} pulse size={6} /> : null}
-          <TypeMicro numberOfLines={1}>
-            {updated}
-            {row.subRole !== null && row.subRole !== "" ? ` · ${row.subRole}` : ""}
-          </TypeMicro>
+          {modelName !== null ? (
+            <TypeMicro numberOfLines={1} style={{ color: tokens.textSecondary }}>
+              {modelName}
+            </TypeMicro>
+          ) : null}
+          {rest !== "" ? (
+            <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+              {`${modelName !== null ? " · " : ""}${rest}`}
+            </TypeMicro>
+          ) : null}
         </View>
       </View>
       {/* The status Badge only when it says something (R116-k, verdict
@@ -621,18 +641,6 @@ function SessionRow({ row, onOpen }: { row: SessionRow; onOpen: () => void }) {
       {label === "open" ? null : <Badge tone={running ? "running" : tone}>{label}</Badge>}
     </Pressable>
   );
-}
-
-/** The short relative time for list rows (s/m/h/d, honest at any age). */
-function timeAgoShort(then: number, now: number = Date.now()): string {
-  const s = Math.max(0, Math.floor((now - then) / 1000));
-  if (s < 60) return "just now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  return `${d}d ago`;
 }
 
 // ── the New Project sheet (ONE question: which folder) ──────────────────────
@@ -667,28 +675,48 @@ function NewProjectSheet({
   const [browseError, setBrowseError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // R118-E §2D — the CREATE-FOLDER state: `creating` = the inline namer is
+  // open in the folder list's first row; `createName`/`createBusy`/
+  // `createError` are the namer's own truth. Reset on every browse
+  // navigation + sheet open (a stale namer must never follow the user into
+  // another directory).
+  const [creating, setCreating] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const resetCreateState = useCallback(() => {
+    setCreating(false);
+    setCreateName("");
+    setCreateBusy(false);
+    setCreateError(null);
+  }, []);
 
   // Blank path = the SERVER's home directory — the browse's fallback
   // start (the remembered default, when one is stored, seeds ahead of it).
-  const browseTo = useCallback(async (path?: string) => {
-    setBrowseLoading(true);
-    setBrowseError(null);
-    try {
-      const outcome = await fetchFsBrowse(getLinkManager(), path);
-      if (outcome.ok) {
-        setBrowse(outcome.data);
-        mobLog("fs-browse", "listed", { path: outcome.data.path, entries: outcome.data.entries.length });
-      } else {
-        setBrowseError(outcome.error.message);
-        mobWarn("fs-browse", "failed", { status: outcome.error.status, code: outcome.error.code });
+  const browseTo = useCallback(
+    async (path?: string) => {
+      resetCreateState();
+      setBrowseLoading(true);
+      setBrowseError(null);
+      try {
+        const outcome = await fetchFsBrowse(getLinkManager(), path);
+        if (outcome.ok) {
+          setBrowse(outcome.data);
+          mobLog("fs-browse", "listed", { path: outcome.data.path, entries: outcome.data.entries.length });
+        } else {
+          setBrowseError(outcome.error.message);
+          mobWarn("fs-browse", "failed", { status: outcome.error.status, code: outcome.error.code });
+        }
+      } catch {
+        setBrowseError("the host is offline — browsing resumes when it returns");
+        mobWarn("fs-browse", "threw");
+      } finally {
+        setBrowseLoading(false);
       }
-    } catch {
-      setBrowseError("the host is offline — browsing resumes when it returns");
-      mobWarn("fs-browse", "threw");
-    } finally {
-      setBrowseLoading(false);
-    }
-  }, []);
+    },
+    [resetCreateState],
+  );
 
   // The predetermined start (R116-k, verdict #52): the REMEMBERED default
   // dir — the last successfully-created project's parent — with the server
@@ -726,7 +754,8 @@ function NewProjectSheet({
 
   // Every open starts FRESH (R116-k): the full browse state resets — a
   // cancelled sheet never reopens wherever the user left off — and the
-  // browse re-seeds from the predetermined start.
+  // browse re-seeds from the predetermined start (R118-E: the namer's state
+  // dies with it).
   useEffect(() => {
     if (!open) return;
     setRoot(null);
@@ -735,8 +764,9 @@ function NewProjectSheet({
     setBrowse(null);
     setBrowseError(null);
     setError(null);
+    resetCreateState();
     void seedBrowse();
-  }, [open, seedBrowse]);
+  }, [open, seedBrowse, resetCreateState]);
 
   // The folder list — dirs only (this is a FOLDER picker; the route already
   // sorts dirs first, each alphabetical).
@@ -750,6 +780,60 @@ function NewProjectSheet({
     setRoot(path);
     setManual(false);
   }, []);
+
+  // ── R118-E §2D — CREATE + SELECT: one tap from "create" to "selected".
+  // folderNameValid pre-refuses (the route enforces the same rules); a 201
+  // answers the success haptic, flips the sheet to the SELECTED state on
+  // the REPLY's path, plants the new entry in the listing optimistically
+  // (dirs-first alphabetical), and re-browses the parent in the background
+  // so a fast "Select another folder" tap lands on the reconciled truth.
+  const onCreateFolder = useCallback(async () => {
+    if (createBusy || browse === null) return;
+    const check = folderNameValid(createName);
+    if (!check.ok) {
+      setCreateError(check.message);
+      void warningHaptic();
+      return;
+    }
+    const parentPath = browse.path;
+    setCreateBusy(true);
+    setCreateError(null);
+    try {
+      const outcome = await createFsFolder(getLinkManager(), parentPath, check.name);
+      if (outcome.ok) {
+        mobLog("fs-browse", "folder created", { path: outcome.data.path });
+        void successHaptic();
+        setBrowse((prev) => (prev === null ? prev : nextBrowseAfterCreate(prev, outcome.data)));
+        setCreating(false);
+        setCreateName("");
+        selectFolder(outcome.data.path);
+        void browseTo(parentPath);
+        return;
+      }
+      // The honest one-line errors — the namer renders each verbatim.
+      if (outcome.error.status === 409) {
+        setCreateError("a folder with that name already exists");
+      } else if (outcome.error.status === 404) {
+        // The parent exists by construction (we are browsing it) — a 404
+        // here is the ROUTE itself missing: an older desktop build.
+        setCreateError("this desktop's build lacks folder creation — update it, or type the path instead");
+        mobWarn("fs-browse", "mkdir route missing (older sidecar?)", { status: 404 });
+      } else {
+        setCreateError(outcome.error.message);
+      }
+      void warningHaptic();
+      mobWarn("fs-browse", "mkdir failed", {
+        status: outcome.error.status,
+        code: outcome.error.code,
+      });
+    } catch {
+      setCreateError("the host is offline — the folder was not created");
+      void warningHaptic();
+      mobWarn("fs-browse", "mkdir threw");
+    } finally {
+      setCreateBusy(false);
+    }
+  }, [createBusy, browse, createName, selectFolder, browseTo]);
 
   const onCreate = useCallback(async () => {
     if (busy || root === null) return;
@@ -805,7 +889,8 @@ function NewProjectSheet({
     >
       {root !== null ? (
         // ── the SELECTED state: the FULL path as a mono chip (its own
-        // block) + "Select another folder" + the separate primary ──
+        // block) + the centered quiet escape + the separate centered
+        // primary (R118-A's CTA law) ──
         <View style={styles.fieldGap}>
           <View style={[styles.chosenRoot, { borderColor: tokens.borderSubtle, backgroundColor: tokens.inputBg }]}>
             <TypeMono numberOfLines={2} style={styles.chosenRootText}>
@@ -818,6 +903,7 @@ function NewProjectSheet({
               setRoot(null);
             }}
             testID="new-project-select-another"
+            style={styles.sheetQuiet}
           >
             Select another folder
           </QuietButton>
@@ -831,6 +917,7 @@ function NewProjectSheet({
             disabled={busy}
             accessibilityLabel={busy ? "Creating the project" : "Create the project"}
             testID="new-project-create"
+            style={styles.sheetCta}
           >
             {busy ? "creating…" : "Create the project"}
           </ChromeButton>
@@ -915,33 +1002,138 @@ function NewProjectSheet({
                     <TypeMicro style={{ color: tokens.accent }}>retry</TypeMicro>
                   </Pressable>
                 </View>
-              ) : dirs.length === 0 ? (
-                <View style={styles.browserPad}>
-                  <TypeCaption style={{ color: tokens.textTertiary }}>
-                    no subfolders here — use this folder
-                  </TypeCaption>
-                </View>
               ) : (
-                <ScrollView style={styles.dirScroll} nestedScrollEnabled>
-                  {dirs.map((entry) => (
-                    <Pressable
-                      key={entry.path}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Open folder ${entry.name}`}
-                      onPress={() => void browseTo(entry.path)}
-                      style={({ pressed }) => [
-                        styles.dirRow,
-                        { backgroundColor: pressed ? tokens.subtle : "transparent" },
-                      ]}
-                    >
-                      <Folder size={16} color={tokens.accent2} strokeWidth={2.2} />
-                      <TypeBody numberOfLines={1} style={styles.dirName}>
-                        {entry.name}
-                      </TypeBody>
-                      <ChevronRight size={14} color={tokens.textTertiary} strokeWidth={2.2} />
-                    </Pressable>
-                  ))}
-                </ScrollView>
+                <>
+                  {/* R118-E §2D — the CREATE-FOLDER first row, rendered
+                      whenever the browse loaded (including the empty
+                      state): collapsed it is the 46px affordance; tapped it
+                      EXPANDS IN PLACE into the inline mono namer (no sheet)
+                      with the Check/X circle pair; the hairline separates it
+                      from the dirs below. */}
+                  {browse !== null ? (
+                    creating ? (
+                      <View style={styles.createNamerZone}>
+                        <View style={styles.createNamerRow}>
+                          <TextInput
+                            accessibilityLabel="New folder name"
+                            placeholder="folder name"
+                            placeholderTextColor={tokens.textTertiary}
+                            value={createName}
+                            onChangeText={setCreateName}
+                            autoFocus
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            returnKeyType="done"
+                            onSubmitEditing={() => void onCreateFolder()}
+                            style={[
+                              styles.namerInput,
+                              {
+                                color: tokens.text,
+                                borderColor: tokens.inputBorder,
+                                backgroundColor: tokens.inputBg,
+                                fontFamily: fontFamily.mono,
+                              },
+                            ]}
+                          />
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={createBusy ? "Creating the folder" : "Create the folder"}
+                            accessibilityState={{ disabled: createBusy }}
+                            disabled={createBusy}
+                            onPress={() => void onCreateFolder()}
+                            testID="new-project-create-folder-confirm"
+                            style={({ pressed }) => [
+                              styles.namerConfirm,
+                              { backgroundColor: pressed ? tokens.accent : tokens.accentDeep },
+                            ]}
+                          >
+                            {createBusy ? (
+                              <ActivityIndicator size="small" color={tokens.accentText} />
+                            ) : (
+                              <Check size={18} color={tokens.accentText} strokeWidth={2.4} />
+                            )}
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Cancel creating a folder"
+                            disabled={createBusy}
+                            onPress={() => {
+                              void selectionHaptic();
+                              setCreating(false);
+                              setCreateName("");
+                              setCreateError(null);
+                            }}
+                            testID="new-project-create-folder-cancel"
+                            style={({ pressed }) => [
+                              styles.namerCancel,
+                              { backgroundColor: pressed ? tokens.subtleHover : tokens.subtle },
+                            ]}
+                          >
+                            <X size={16} color={tokens.textSecondary} strokeWidth={2.4} />
+                          </Pressable>
+                        </View>
+                        {createError !== null ? (
+                          <TypeCaption numberOfLines={1} style={{ color: tokens.danger }}>
+                            {createError}
+                          </TypeCaption>
+                        ) : null}
+                      </View>
+                    ) : (
+                      <View>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Create a folder inside ${
+                            crumbs.length > 0 ? crumbs[crumbs.length - 1]!.label : browse.path
+                          }`}
+                          onPress={() => {
+                            void selectionHaptic();
+                            setCreating(true);
+                            setCreateError(null);
+                          }}
+                          testID="new-project-create-folder"
+                          style={({ pressed }) => [
+                            styles.createRow,
+                            { backgroundColor: pressed ? tokens.subtle : "transparent" },
+                          ]}
+                        >
+                          <FolderPlus size={16} color={tokens.accentDeep} strokeWidth={2.2} />
+                          <TypeBody numberOfLines={1} style={[styles.createRowLabel, { color: tokens.accentDeep }]}>
+                            Create a folder here
+                          </TypeBody>
+                        </Pressable>
+                      </View>
+                    )
+                  ) : null}
+                  <Hairline />
+                  {dirs.length === 0 ? (
+                    <View style={styles.browserPad}>
+                      <TypeCaption style={{ color: tokens.textTertiary }}>
+                        no subfolders here — use this folder
+                      </TypeCaption>
+                    </View>
+                  ) : (
+                    <ScrollView style={styles.dirScroll} nestedScrollEnabled>
+                      {dirs.map((entry) => (
+                        <Pressable
+                          key={entry.path}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Open folder ${entry.name}`}
+                          onPress={() => void browseTo(entry.path)}
+                          style={({ pressed }) => [
+                            styles.dirRow,
+                            { backgroundColor: pressed ? tokens.subtle : "transparent" },
+                          ]}
+                        >
+                          <Folder size={16} color={tokens.accent2} strokeWidth={2.2} />
+                          <TypeBody numberOfLines={1} style={styles.dirName}>
+                            {entry.name}
+                          </TypeBody>
+                          <ChevronRight size={14} color={tokens.textTertiary} strokeWidth={2.2} />
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  )}
+                </>
               )}
             </View>
             {browse?.truncated === true ? (
@@ -950,31 +1142,26 @@ function NewProjectSheet({
               </TypeMicro>
             ) : null}
 
-            {/* the confirm — locks the current browse path in */}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Use this folder as the project root"
-              disabled={browse === null}
+            {/* the confirm — locks the current browse path in (R118-E
+                §2E: the centered ChromeButton CTA; the keyboard-aware
+                sheet rides the IME) */}
+            <ChromeButton
               onPress={() => {
                 if (browse !== null) selectFolder(browse.path);
               }}
+              disabled={browse === null}
+              accessibilityLabel="Use this folder as the project root"
               testID="new-project-use-folder"
-              style={({ pressed }) => [
-                styles.useFolderButton,
-                {
-                  borderColor: pressed ? tokens.borderStrong : tokens.border,
-                  backgroundColor: pressed ? tokens.subtle : "transparent",
-                  opacity: browse === null ? 0.5 : 1,
-                },
-              ]}
+              style={styles.sheetCta}
             >
-              <FolderPlus size={15} color={tokens.accent} strokeWidth={2.2} />
-              <TypeBodyStrong style={styles.useFolderText}>Use this folder</TypeBodyStrong>
-            </Pressable>
+              Use this folder
+            </ChromeButton>
           </View>
 
           {/* the power-user escape hatch — collapsed by default, ONE line
-              when open; the keyboard's return key commits the path */}
+              when open; the keyboard's return key commits the path. The
+              manual field rides ClayInput mono (R118-A's field law: label +
+              input, NO caption — the focus ring comes with it). */}
           <View style={styles.fieldWrap}>
             <Pressable
               accessibilityRole="button"
@@ -988,10 +1175,11 @@ function NewProjectSheet({
               </TypeMicro>
             </Pressable>
             {manual ? (
-              <TextInput
+              <ClayInput
+                label="Folder path"
+                mono
                 accessibilityLabel="Project root folder path"
                 placeholder={browse?.path ?? "/home/z/repos/acute-code"}
-                placeholderTextColor={tokens.textTertiary}
                 value={manualPath}
                 onChangeText={setManualPath}
                 autoCapitalize="none"
@@ -1002,11 +1190,6 @@ function NewProjectSheet({
                   const trimmed = manualPath.trim();
                   if (trimmed !== "") selectFolder(trimmed);
                 }}
-                style={[
-                  styles.fieldInput,
-                  styles.fieldMono,
-                  { color: tokens.text, borderColor: tokens.inputBorder, backgroundColor: tokens.inputBg },
-                ]}
               />
             ) : null}
           </View>
@@ -1018,15 +1201,18 @@ function NewProjectSheet({
 
 // ── the New Session sheet (optional name + the operating mode) ──────────────
 
-/** The operating modes' copy — the session screen's ModeSwitcher semantics. */
+/** The operating modes' copy — the session screen's ModeSwitcher
+ *  semantics. R118-A: the full names ride the a11y labels of the
+ *  SegmentedControl's three-on-one-line options; the caption under the
+ *  row is GONE. */
 const SESSION_MODES: ReadonlyArray<{
   id: "full" | "ask" | "plan";
   label: string;
-  caption: string;
+  accessibilityLabel: string;
 }> = [
-  { id: "full", label: "Full", caption: "runs without asking" },
-  { id: "ask", label: "Ask", caption: "asks before acting" },
-  { id: "plan", label: "Plan", caption: "writes a plan first" },
+  { id: "full", label: "Full", accessibilityLabel: "Full — runs without asking" },
+  { id: "ask", label: "Ask", accessibilityLabel: "Ask — asks before acting" },
+  { id: "plan", label: "Plan", accessibilityLabel: "Plan — writes a plan first" },
 ];
 
 function NewSessionSheet({
@@ -1126,44 +1312,32 @@ function NewSessionSheet({
           </View>
         ) : null}
 
-        <View style={styles.fieldWrap}>
-          <TypeCaption style={styles.fieldLabel}>Name (optional)</TypeCaption>
-          <TextInput
-            accessibilityLabel="Session name"
-            placeholder="auto-titled from the first message"
-            placeholderTextColor={tokens.textTertiary}
-            value={name}
-            onChangeText={setName}
-            autoCapitalize="sentences"
-            autoCorrect
-            style={[
-              styles.fieldInput,
-              { color: tokens.text, borderColor: tokens.inputBorder, backgroundColor: tokens.inputBg },
-            ]}
-          />
-        </View>
+        {/* R118-A — the house field: ClayInput with label, NO caption (the
+            placeholder carries the auto-title truth). */}
+        <ClayInput
+          label="Name"
+          accessibilityLabel="Session name"
+          placeholder="auto-titled from the first message"
+          value={name}
+          onChangeText={setName}
+          autoCapitalize="sentences"
+          autoCorrect
+        />
 
         <View style={styles.fieldWrap}>
           <TypeCaption style={styles.fieldLabel}>Operating mode</TypeCaption>
-          <View style={styles.modeRow}>
-            {SESSION_MODES.map((m) => (
-              <Chip
-                key={m.id}
-                testID={`new-session-mode-${m.id}`}
-                selected={mode === m.id}
-                onPress={() => {
-                  void selectionHaptic();
-                  setMode(m.id);
-                }}
-                style={styles.modeChip}
-              >
-                {m.label}
-              </Chip>
-            ))}
-          </View>
-          <TypeMicro style={{ color: tokens.textTertiary }}>
-            {SESSION_MODES.find((m) => m.id === mode)?.caption ?? ""}
-          </TypeMicro>
+          {/* R118-A — the mode selector is the shared SegmentedControl
+              (Full/Ask/Plan on one line; the a11y labels carry the
+              semantics the old caption spelled out). */}
+          <SegmentedControl
+            options={SESSION_MODES}
+            selectedId={mode}
+            onSelect={(id) => {
+              void selectionHaptic();
+              setMode(id);
+            }}
+            testID="new-session-mode"
+          />
         </View>
 
         {error !== null ? (
@@ -1175,6 +1349,7 @@ function NewSessionSheet({
           onPress={() => void onCreate()}
           disabled={busy}
           accessibilityLabel={busy ? "Creating the session" : "Create the session"}
+          style={styles.sheetCta}
         >
           {busy ? "creating…" : "Create the session"}
         </ChromeButton>
@@ -1199,85 +1374,61 @@ const styles = StyleSheet.create({
   rootPath: { fontSize: 12, lineHeight: 19 },
   countBadge: { alignSelf: "center" },
 
-  // ── the New Project action (the list's bottom — half width, CENTERED) ──
-  newProjectAction: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-    width: "48%",
-    alignSelf: "center",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: RADIUS_INPUT,
-    minHeight: TOUCH_TARGET + 2,
-    paddingHorizontal: spacing.lg,
-  },
+  /** R118-E §2C1 — the page-level CTA law: centered, self-sized, minWidth
+   *  200 (supersedes the half-width outlined NewProjectActionRow). */
+  pageCta: { alignSelf: "center", minWidth: PAGE_CTA_MIN_W },
+  /** R118-E §2C3 — the same CTA grammar inside the sessions well (marginTop
+   *  sm separates it from the rows/dividers above). */
+  wellCta: { alignSelf: "center", minWidth: PAGE_CTA_MIN_W, marginTop: spacing.sm },
+  /** R118-A — the sheet CTA law: centered, self-sized, minWidth 200; the
+   *  quiet escape centers beneath at its natural width. */
+  sheetCta: { alignSelf: "center", minWidth: SHEET_CTA_MIN_W },
+  sheetQuiet: { alignSelf: "center" },
 
   // ── the accordion (R115-h: overflow ONLY — no static height) ──
   accordionClip: { overflow: "hidden" },
   /** The ABSOLUTE measurement child — natural height at any clip height. */
   accordionMeasure: { position: "absolute", top: 0, left: 0, right: 0 },
-  /** The fold's INSET REGION (R116-k, verdict #48): its own surface — the
-   * subtle tint + hairline borderSubtle frame (inline token pair),
-   * RADIUS_INPUT corners, sm margins so the frame floats inside the card
-   * (the project row above keeps its own card identity), sm inner padding
-   * + xs gaps so the rows breathe. */
+  /** R118-E §2C2 — the fold's RECESSED WELL: surfaceWell + the hairline
+   *  clayRim frame (inline token pair), RADIUS_INPUT corners, sm margins
+   *  so the frame floats inside the card (the project row above keeps its
+   *  own card identity), paddingVertical xs and gap 0 — the 1dp inset
+   *  dividers between the rows own the rhythm. */
   sessionsWell: {
     marginTop: spacing.sm,
     marginHorizontal: spacing.sm,
     marginBottom: spacing.sm,
     borderRadius: RADIUS_INPUT,
     borderWidth: StyleSheet.hairlineWidth,
-    padding: spacing.sm,
-    gap: spacing.xs,
+    paddingVertical: spacing.xs,
   },
   sessionsEmpty: { padding: spacing.md },
   sessionRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
-    // FLUSH LEFT (R116-k, verdict #50) — no paddingLeft: the rows sit at
-    // the well's edge; only the right side pads.
-    paddingRight: spacing.lg,
-    minHeight: 48,
+    paddingLeft: spacing.md,
+    paddingRight: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    minHeight: 52,
   },
   sessionMain: { flex: 1, gap: 2 },
   sessionTitle: { fontWeight: "600", fontSize: 14 },
   sessionMeta: { flexDirection: "row", gap: 4, alignItems: "center", flexWrap: "wrap" },
+  /** R118-E §2C2 — the "+N more" reveal aligns with the rows above it
+   *  (paddingLeft md, like the rows). */
   moreRow: {
-    paddingRight: spacing.lg,
+    paddingLeft: spacing.md,
+    paddingRight: spacing.md,
     paddingVertical: spacing.sm,
     minHeight: 44,
     justifyContent: "center",
-  },
-  /** The well's New-session BUTTON (R116-k, verdict #51): full-width,
-   * 48px, RADIUS_INPUT, the accent-tinted outline (wave-J's add-action
-   * grammar) — the tint + pressed colors ride the inline token pair, xs
-   * top margin separates it from the session rows. */
-  newSessionRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: RADIUS_INPUT,
-    minHeight: 48,
-    paddingHorizontal: spacing.md,
-    marginTop: spacing.xs,
   },
 
   // ── the shared sheet fields (the New Session sheet + the manual path) ──
   fieldGap: { gap: spacing.md, paddingTop: spacing.xs },
   fieldWrap: { gap: 6 },
   fieldLabel: { paddingLeft: spacing.xs },
-  fieldInput: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: RADIUS_INPUT,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm + 2,
-    fontSize: 15,
-    minHeight: 44,
-  },
-  fieldMono: { fontFamily: fontFamily.mono },
 
   // ── the folder browser ──
   chosenRoot: {
@@ -1321,17 +1472,47 @@ const styles = StyleSheet.create({
   },
   dirName: { flex: 1, fontSize: 14 },
   browserPad: { padding: spacing.lg, gap: spacing.sm, alignItems: "flex-start" },
-  useFolderButton: {
+
+  // ── R118-E §2D — the create-folder first row + the inline namer ──
+  /** The collapsed affordance: 46 tall, FolderPlus 16 + TypeBody 14, both
+   *  accentDeep (the inline token pair); a hairline separates it from the
+   *  dirs below. */
+  createRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
     gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    height: 46,
+  },
+  createRowLabel: { fontSize: 14 },
+  /** The inline namer: mono TextInput flex 1 (13px mono, the fieldInput
+   *  surface, radius 14, minHeight 44) + the Check circle 36 (accentDeep)
+   *  + the X quiet circle 36 (subtle); the error line sits under it. */
+  createNamerZone: { gap: spacing.xs, paddingVertical: spacing.sm, paddingHorizontal: spacing.md },
+  createNamerRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  namerInput: {
+    flex: 1,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: RADIUS_INPUT,
-    minHeight: TOUCH_TARGET + 2,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    fontSize: 13,
+    minHeight: 44,
   },
-  useFolderText: { fontSize: 15 },
+  namerConfirm: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  namerCancel: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 
   // ── the New Session sheet ──
   sheetProjectRow: {
@@ -1342,6 +1523,4 @@ const styles = StyleSheet.create({
     paddingLeft: spacing.xs,
   },
   sheetProjectText: { flex: 1, gap: 2 },
-  modeRow: { flexDirection: "row", gap: spacing.sm },
-  modeChip: { flex: 1, alignItems: "center" },
 });

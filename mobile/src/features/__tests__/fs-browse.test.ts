@@ -4,12 +4,24 @@
  * path rides URL-encoded; the outcome carries the R114-b wire shape
  * verbatim) and the breadcrumb fold the picker's tappable ancestry renders
  * from. Injected sender fakes only — zero React Native.
+ *
+ * R118-E — the CREATE-FOLDER client (§2D): createFsFolder's POST (path +
+ * bodyText JSON + the 201/409/400/404 outcomes), folderNameValid's table
+ * (the same rules the route enforces server-side), and joinChildPath's
+ * separator table (posix + Windows + trailing slashes).
  */
 
 import { describe, expect, it } from "@jest/globals";
 
 import type { ApiSender } from "../api";
-import { breadcrumbSegments, fetchFsBrowse, shortRootPath } from "../fs-browse";
+import {
+  breadcrumbSegments,
+  createFsFolder,
+  fetchFsBrowse,
+  folderNameValid,
+  joinChildPath,
+  shortRootPath,
+} from "../fs-browse";
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -189,5 +201,144 @@ describe("shortRootPath — the project row's folded root path", () => {
     // At the default 22 the full tail fits; at 12 only the deepest pair.
     expect(shortRootPath("/home/z/repos/acute-code", "acute-code")).toBe("/home/z/repos");
     expect(shortRootPath("/home/z/repos/acute-code", "acute-code", 12)).toBe("…/z/repos");
+  });
+});
+
+// ── the create-folder client (R118-E §2D) ──────────────────────────────────
+
+describe("createFsFolder — POST /system/fs/mkdir", () => {
+  it("POSTs the {parentPath, name} body as JSON to the mkdir route", async () => {
+    const { sender, calls } = makeApiSender(() => ({
+      status: 201,
+      bodyText: JSON.stringify({ path: "/home/z/repos/new-folder", name: "new-folder", dir: true }),
+    }));
+    const outcome = await createFsFolder(sender, "/home/z/repos", "new-folder");
+    expect(calls[0]?.path).toBe("/api/v1/system/fs/mkdir");
+    expect(calls[0]?.init).toMatchObject({ method: "POST" });
+    expect(JSON.parse(String(calls[0]?.init?.bodyText))).toEqual({
+      parentPath: "/home/z/repos",
+      name: "new-folder",
+    });
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      // The reply is the browse entry's shape verbatim.
+      expect(outcome.data).toEqual({ path: "/home/z/repos/new-folder", name: "new-folder", dir: true });
+    }
+  });
+
+  it("409 CONFLICT is the honest already-exists OUTCOME — never a throw", async () => {
+    const { sender } = makeApiSender(() => ({
+      status: 409,
+      bodyText: JSON.stringify({
+        error: { code: "CONFLICT", message: "'/home/z/repos/new-folder' already exists" },
+      }),
+    }));
+    const outcome = await createFsFolder(sender, "/home/z/repos", "new-folder");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error.status).toBe(409);
+      expect(outcome.error.code).toBe("CONFLICT");
+      expect(outcome.error.message).toContain("already exists");
+    }
+  });
+
+  it("400 VALIDATION (a refused name/parent) rides the outcome verbatim", async () => {
+    const { sender } = makeApiSender(() => ({
+      status: 400,
+      bodyText: JSON.stringify({
+        error: { code: "VALIDATION", message: "body.name cannot contain separators" },
+      }),
+    }));
+    const outcome = await createFsFolder(sender, "/home/z/repos", "a/b");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error.status).toBe(400);
+      expect(outcome.error.code).toBe("VALIDATION");
+      expect(outcome.error.message).toContain("separators");
+    }
+  });
+
+  it("404 NOT_FOUND (a missing parent — or an older sidecar with no route) is an outcome", async () => {
+    const { sender } = makeApiSender(() => ({
+      status: 404,
+      bodyText: JSON.stringify({
+        error: { code: "NOT_FOUND", message: "cannot create in '/nope': ENOENT" },
+      }),
+    }));
+    const outcome = await createFsFolder(sender, "/nope", "new-folder");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error.status).toBe(404);
+      expect(outcome.error.code).toBe("NOT_FOUND");
+    }
+  });
+
+  it("a non-JSON 2xx body is the honest BAD_JSON outcome — never a fabricated entry", async () => {
+    const { sender } = makeApiSender(() => ({ status: 201, bodyText: "<html>" }));
+    const outcome = await createFsFolder(sender, "/home/z/repos", "new-folder");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error.code).toBe("BAD_JSON");
+    }
+  });
+});
+
+describe("folderNameValid — the inline namer's rules", () => {
+  const TABLE: ReadonlyArray<{ name: string; expected: { ok: boolean; value: string } }> = [
+    // A plain name trims and passes.
+    { name: "new-folder", expected: { ok: true, value: "new-folder" } },
+    { name: "  spaced  ", expected: { ok: true, value: "spaced" } },
+    // Blank (after trim) is refused.
+    { name: "", expected: { ok: false, value: "a folder name is required" } },
+    { name: "   ", expected: { ok: false, value: "a folder name is required" } },
+    // Separators are refused (either flavor).
+    { name: "a/b", expected: { ok: false, value: "a folder name cannot contain separators" } },
+    { name: "a\\b", expected: { ok: false, value: "a folder name cannot contain separators" } },
+    // The dot-only names are refused.
+    { name: ".", expected: { ok: false, value: "choose a real folder name" } },
+    { name: "..", expected: { ok: false, value: "choose a real folder name" } },
+    // A leading dot hides the folder from the picker — refused.
+    { name: ".env", expected: { ok: false, value: "folder names cannot start with a dot" } },
+    // Control characters are refused.
+    { name: "bad\nname", expected: { ok: false, value: "folder names cannot contain control characters" } },
+    { name: "bad\u0007name", expected: { ok: false, value: "folder names cannot contain control characters" } },
+  ];
+
+  it.each(TABLE)("folderNameValid(%j) → %j", ({ name, expected }) => {
+    const result = folderNameValid(name);
+    if (expected.ok) {
+      expect(result).toEqual({ ok: true, name: expected.value });
+    } else {
+      expect(result).toEqual({ ok: false, message: expected.value });
+    }
+  });
+
+  it("61 characters is over the cap; 60 passes (the route's own ceiling)", () => {
+    expect(folderNameValid("a".repeat(61))).toEqual({
+      ok: false,
+      message: "folder names are capped at 60 characters",
+    });
+    expect(folderNameValid("a".repeat(60))).toEqual({ ok: true, name: "a".repeat(60) });
+  });
+});
+
+describe("joinChildPath — the parent's own separator", () => {
+  const TABLE: ReadonlyArray<{ parent: string; name: string; expected: string }> = [
+    // POSIX parents join with "/".
+    { parent: "/home/z/repos", name: "new-folder", expected: "/home/z/repos/new-folder" },
+    // A trailing separator never doubles.
+    { parent: "/home/z/repos/", name: "new-folder", expected: "/home/z/repos/new-folder" },
+    { parent: "/home/z/repos//", name: "new-folder", expected: "/home/z/repos/new-folder" },
+    // Windows parents join with "\" — the parent's own separator.
+    { parent: "C:\\Users\\z\\repos", name: "new-folder", expected: "C:\\Users\\z\\repos\\new-folder" },
+    { parent: "C:\\Users\\z\\repos\\", name: "new-folder", expected: "C:\\Users\\z\\repos\\new-folder" },
+    // A Windows drive root keeps its backslash form.
+    { parent: "C:\\", name: "new-folder", expected: "C:\\new-folder" },
+    // A forward-slash Windows spelling stays forward-slash.
+    { parent: "C:/Users/z", name: "new-folder", expected: "C:/Users/z/new-folder" },
+  ];
+
+  it.each(TABLE)("joinChildPath(%j, %j) → %j", ({ parent, name, expected }) => {
+    expect(joinChildPath(parent, name)).toBe(expected);
   });
 });

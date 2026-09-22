@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from "@jest/globals";
 
-import { spacing } from "../tokens";
+import { PAGE_CTA_MIN_W, SHEET_CTA_MIN_W, spacing } from "../tokens";
 
 describe("the 12/32 list rhythm (R117-g2, AMENDMENT 5)", () => {
   it("the intra-group beat is spacing.md (12) — the scaffold's bodyContent gap", () => {
@@ -29,5 +29,22 @@ describe("the 12/32 list rhythm (R117-g2, AMENDMENT 5)", () => {
 
   it("gutters stay 16 — the body padding is not part of the rhythm change", () => {
     expect(spacing.lg).toBe(16);
+  });
+});
+
+// ── R118-E §5.5 — the registry screen's rhythm pins ────────────────────────
+
+describe("the R118-E page rhythm pins (spec-e §2A/§2C)", () => {
+  it("the page CTA minimum is 200 — the centered self-sized ChromeButton law", () => {
+    expect(PAGE_CTA_MIN_W).toBe(200);
+    expect(SHEET_CTA_MIN_W).toBe(200);
+  });
+
+  it("the providers TIER BREAK composes to ~65px (§2A3): the scaffold's 12px gap on BOTH sides + marginVertical 20×2 + the 1dp strong rule", () => {
+    // The break between "Your providers" and the add CTA is the ONLY step
+    // on the screen the 12px intra-group rhythm cannot imitate: the two
+    // scaffold gaps (12 each), the Hairline strong's own marginVertical
+    // (20 each), and the 1dp visible divider itself.
+    expect(spacing.md * 2 + spacing.xl * 2 + 1).toBe(65);
   });
 });
