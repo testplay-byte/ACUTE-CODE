@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-09-22 round-118 -->
 # R118-C — The dashboard spec (the mobile-first layout rethink)
 
 **STATUS: W1 foundations LANDED (de5ccc7)** — DISCLOSURE_SPRING {180,24} / COLLAPSE 200ms / FADE 150ms in motion.ts; Hairline strong; SectionHeader large; the R118 constants. The remaining work is this spec's screen implementation.

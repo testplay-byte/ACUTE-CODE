@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-09-22 round-118 -->
 # R118-D — The session chrome + delivery spec
 
 **STATUS: W1 foundations LANDED (de5ccc7)** — surfaceHeader token, QuietIconButton, LiveCaret; **W2 sheet LANDED (41bb654)**. Remaining: this spec's screen implementation.

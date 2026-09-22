@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-09-22 round-118 -->
 # R118-F — The PC-side plan (QR modal + PIN panel + manual pairing + restart + test status)
 
 All five items diagnosed with code-line evidence; item 51's root cause was **proven empirically in real Chromium** (a faithful repro at `/home/z/my-project/qr-repro` using the repo's exact `@radix-ui/react-dialog@1.1.23` + React 18.3, driven via agent-browser).

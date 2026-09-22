@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-09-22 round-118 -->
 # R118-E — The providers + projects spec
 
 **STATUS: W1 foundations LANDED (de5ccc7)** — SectionHeader large, ChromeButton tone/accessibilityExpanded, Hairline strong, the R118 constants; **W2 sheet keyboard layer LANDED (41bb654)**. Remaining: this spec's screens + sheets + the mkdir route.

@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-09-22 round-118 -->
 # R118-B — The chrome spec (tab bar + home + more + appearance + multi-host)
 
 Round 118, track B. Binding law: the design-language folder + `round-117-elevation.md`'s quality bar; every supersession is flagged AMENDMENT.

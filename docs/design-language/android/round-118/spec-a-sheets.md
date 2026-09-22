@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-09-22 round-118 -->
 # R118-A — The sheet system spec
 
 **Scope:** the universal bottom-sheet system for round 118 (owner's report §1 items 27–32, §H 23–26, §J 33). Binding law: the three laws + `01-foundations` + `02-patterns` + `03-rules`; every amendment this spec makes is flagged **AMENDMENT** and lands with the implementation wave per README's amendment rule. Environment facts verified: `react-native-reanimated 4.5.1`, `react-native 0.86.3`, Expo 57 (Fabric/new arch).
