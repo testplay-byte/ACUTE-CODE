@@ -73,6 +73,16 @@ export default function ManualEntryScreen() {
   const [pinError, setPinError] = useState<string | null>(null);
   const [fpError, setFpError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  /**
+   * R118-F (round-118 §1 item 53): the smart-paste's EXTRA LAN addresses
+   * (`values.addresses.slice(1)` — the desktop's copied pairing text carries
+   * the FULL address ladder, and the first address is not always the
+   * reachable one on multi-adapter machines). Set on smart-paste, CLEARED on
+   * every address edit (a hand edit drops the paste's extras — honest: they
+   * belong to the pasted address, not the typed one), and passed to
+   * parseManualEntry so the pairing ladder probes them after the primary.
+   */
+  const [altHosts, setAltHosts] = useState<string[]>([]);
   const noteAnim = useSharedValue(0);
   const reduced = useReducedMotion();
 
@@ -145,6 +155,7 @@ export default function ManualEntryScreen() {
     }
     setPasteNote(null);
     setAddress(values.address);
+    setAltHosts(values.addresses.slice(1));
     setPin(values.pin);
     if (values.certFP !== undefined) {
       setCertFP(formatCertFP(values.certFP));
@@ -153,6 +164,7 @@ export default function ManualEntryScreen() {
     void selectionHaptic();
     mobLog("pair", "pairing text pasted", {
       kind: values.address.toLowerCase().startsWith("https://") ? "tunnel" : "lan",
+      addrs: values.addresses.length,
     });
   }
 
@@ -166,6 +178,9 @@ export default function ManualEntryScreen() {
   function onEditAddress(text: string) {
     setAddress(text);
     setPasteNote(null);
+    // R118-F: a hand edit drops the paste's extra addresses — they belong
+    // to the pasted address, not whatever the owner is typing now.
+    setAltHosts([]);
   }
 
   // The PIN boxes' contract: digits-only, capped at 8 (PinBoxRow already
@@ -183,6 +198,9 @@ export default function ManualEntryScreen() {
       address: trimmedAddress,
       pin: trimmedPin,
       certFP: trimmedFp === "" ? undefined : trimmedFp,
+      // R118-F: the paste's extra addresses ride the lan target (validated +
+      // deduped by parseManualEntry; ignored by the tunnel/pin-only forms).
+      altHosts: altHosts.length > 0 ? altHosts : undefined,
     });
     if (!result.ok) {
       if (result.error.kind === "bad-pin") setPinError("the PIN is 8 digits");

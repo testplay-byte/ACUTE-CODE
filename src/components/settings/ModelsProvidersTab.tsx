@@ -1953,18 +1953,26 @@ function TestIconButton({
 }
 
 /** The config dialog's footer test button — the compact inline result line
- * (kept from R87; the dialog's footer row is the right home for it). */
+ * (kept from R87; the dialog's footer row is the right home for it).
+ * R118-F (round-118 §1 item 26, the R87 supersession): the line renders
+ * ALSO while the probe runs (a one-line spinning "Testing {model}…" row —
+ * the old busy cue was a 12px spinner buried in a 32px icon-only button);
+ * a FAIL persists (never auto-collapses — an error the owner must read
+ * never snaps away); a PASS folds at 10s (was 5 — a 2-10s real completion
+ * plus a 5s vanish read as "no status at all"). The useTestTint 5s tint
+ * stays as-is. */
 function ModelTestButton({ model }: { model: ProviderModelConfig }) {
   const styles = useThemeStyles();
   const { state, run } = useModelTest(model);
   const [showReply, setShowReply] = useState(false);
   const [showFull, setShowFull] = useState(false);
-  // The inline line auto-dismisses after 5s (the R87 contract).
+  // R118-F: pass folds at 10s; fail persists (no timer at all).
   const [showResult, setShowResult] = useState(false);
   useEffect(() => {
     if (state.kind !== "pass" && state.kind !== "fail") return;
     setShowResult(true);
-    const hide = setTimeout(() => setShowResult(false), 5_000);
+    if (state.kind === "fail") return; // R118-F: a fail stays until dismissed/retested
+    const hide = setTimeout(() => setShowResult(false), 10_000);
     return () => clearTimeout(hide);
   }, [state]);
 
@@ -1972,7 +1980,7 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
     <>
       <TestIconButton model={model} state={state} run={run} />
       <AnimatePresence>
-        {showResult && state.kind !== "idle" && state.kind !== "testing" && (
+        {(state.kind === "testing" || (showResult && (state.kind === "pass" || state.kind === "fail"))) && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
@@ -1982,7 +1990,16 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
             data-testid="model-test-result"
             data-model-test={state.kind}
           >
-            {state.kind === "pass" ? (
+            {state.kind === "testing" ? (
+              <div
+                className="flex items-center gap-1.5 text-[11px]"
+                style={{ color: styles.textSecondary }}
+                data-testid="model-test-busy"
+              >
+                <RefreshCw size={12} className="animate-spin" aria-hidden />
+                Testing {model.displayName || model.modelId}…
+              </div>
+            ) : state.kind === "pass" ? (
               <div className="flex flex-col gap-0.5 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap text-[11px]">
                   <span className="font-medium" style={{ color: SEMANTIC_COLORS.success }}>
@@ -2121,16 +2138,22 @@ function ModelCard({
     onTestAllResult?.(runInfoRef.current.seq, kind === "pass", row?.id ?? m.rowId ?? null);
   }, [state, testAllSeq, onTestAllResult, row, m]);
 
-  // The section appears on completion and auto-collapses after 5s UNLESS the
-  // owner interacts with it (Show reply / Show full cancels the timer — the
-  // reader keeps the section as long as they are reading).
+  // The section appears on completion — and R118-F (round-118 §1 item 26,
+  // the R87 supersession): a PASS auto-folds after 10s (was 5 — a 2-10s
+  // real completion plus a 5s vanish read as "no status at all"), a FAIL
+  // NEVER auto-collapses (an error the owner must read never snaps away),
+  // and the section renders WHILE TESTING too (the one-line busy row —
+  // "Testing {model}…"). UNLESS the owner interacts with it (Show reply /
+  // Show full cancels the timer — the reader keeps the section as long as
+  // they are reading).
   useEffect(() => {
     if (state.kind !== "pass" && state.kind !== "fail") return;
     setShowResult(true);
+    if (state.kind === "fail") return; // R118-F: a fail stays until dismissed/retested
     hideTimerRef.current = window.setTimeout(() => {
       setShowResult(false);
       hideTimerRef.current = null;
-    }, 5_000);
+    }, 10_000);
     return () => {
       if (hideTimerRef.current !== null) {
         window.clearTimeout(hideTimerRef.current);
@@ -2409,9 +2432,12 @@ function ModelCard({
 
       {/* ── the TEST SECTION (R89-C6) — the dedicated expansion below the
           card: the top half stays untouched, the details get their own
-          bordered band. Auto-collapses after 5s; interacting keeps it. */}
+          bordered band. R118-F: the band renders WHILE TESTING (the one-line
+          "Testing {model}…" busy row — the old busy cue was a 12px spinner
+          buried in a 32px icon-only button); a PASS folds at 10s (was 5s);
+          a FAIL persists; interacting with a PASS band keeps it. */}
       <AnimatePresence>
-        {showResult && state.kind !== "idle" && state.kind !== "testing" && (
+        {(state.kind === "testing" || (showResult && (state.kind === "pass" || state.kind === "fail"))) && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
@@ -2421,7 +2447,16 @@ function ModelCard({
             data-testid="model-test-result"
             data-model-test={state.kind}
           >
-            {state.kind === "pass" ? (
+            {state.kind === "testing" ? (
+              <div
+                className="mt-1.5 rounded-xl border-[1.5px] px-3.5 py-2.5 flex items-center gap-2 text-[11px]"
+                style={{ borderColor: withAlpha(styles.border, 0.9), color: styles.textSecondary }}
+                data-testid="model-test-busy"
+              >
+                <RefreshCw size={12} className="animate-spin" aria-hidden />
+                Testing {m.displayName || m.modelId}…
+              </div>
+            ) : state.kind === "pass" ? (
               <div
                 className="mt-1.5 rounded-xl border-[1.5px] px-3.5 py-2.5 flex flex-col gap-1.5"
                 style={{ borderColor: withAlpha(SEMANTIC_COLORS.success, 0.45), background: withAlpha(SEMANTIC_COLORS.success, 0.05) }}

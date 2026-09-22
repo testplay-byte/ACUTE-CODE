@@ -4,7 +4,73 @@ import { useConfigStore, type UpdateInFlight } from "../../lib/config-store";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { beginSidecarConnect, retryConnection } from "../../lib/sidecar-connection";
 import { getSidecarLogTail, isTauri, type SidecarLogTail } from "../../lib/sidecar";
+import { APP_VERSION } from "../../lib/version";
 import { AcuteLogo } from "./Sidebar";
+
+/* ── ROUND-118 (R118-F, round-118.md §1 item 50): the update-restart marker ──
+ *
+ * The update hand-off's second dark: `updateInFlight` deliberately dies with
+ * the process that set it (the NSIS /S install then runs UI-less for 10-40s
+ * while the window is gone), so the RELAUNCHED app had nothing to say beyond
+ * the generic "Connecting to agent-core…" splash — no version, no
+ * acknowledgment, just the anonymous boot. AboutTab.launchInstaller now
+ * writes a localStorage marker beside the flag; THIS gate consumes it at
+ * mount: while the connection is still coming up, the splash reads
+ * "Setting up v{VERSION}… / finishing the update — your data is kept",
+ * and the key is cleared the moment the sidecar connects (one-shot).
+ *
+ * Validation at mount (an INVALID marker is removed + ignored — a stale
+ * marker means the install never completed): the version is a non-empty
+ * string, `at` is a finite epoch-ms within the last 10 minutes, and the
+ * version EQUALS this build's APP_VERSION (a mismatched version = the
+ * relaunch is running the OLD binary still — the install failed — or a
+ * marker from a different install line). The key + {version, at} shape are
+ * the contract AboutTab writes; the 10-minute window is generous against
+ * the 10-40s install + boot but short against any forgotten marker. */
+
+/** The marker's localStorage key — AboutTab.launchInstaller writes it. */
+const UPDATE_RESTART_KEY = "acute-code.update-restart";
+/** A marker older than this is a failed install's leftovers, not a restart. */
+const UPDATE_RESTART_MAX_AGE_MS = 10 * 60 * 1000;
+
+interface UpdateRestartMarker {
+  version: string;
+  at: number;
+}
+
+/** Read + validate the marker; null = absent or invalid (invalid ones are
+ * REMOVED so they can never resurface on a later boot). */
+function readUpdateRestartMarker(): UpdateRestartMarker | null {
+  if (typeof window === "undefined") return null;
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(UPDATE_RESTART_KEY);
+  } catch {
+    return null; // a refusing storage has no marker to consume
+  }
+  if (raw === null) return null;
+  const remove = (): null => {
+    try {
+      window.localStorage.removeItem(UPDATE_RESTART_KEY);
+    } catch {
+      /* best-effort */
+    }
+    return null;
+  };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return remove();
+  }
+  if (typeof parsed !== "object" || parsed === null) return remove();
+  const { version, at } = parsed as { version?: unknown; at?: unknown };
+  if (typeof version !== "string" || version === "") return remove();
+  if (typeof at !== "number" || !Number.isFinite(at)) return remove();
+  if (Date.now() - at > UPDATE_RESTART_MAX_AGE_MS) return remove();
+  if (version !== APP_VERSION) return remove();
+  return { version, at };
+}
 
 /**
  * ROUND-53 (R53): the connection gate.
@@ -32,12 +98,39 @@ import { AcuteLogo } from "./Sidebar";
  * BEFORE the pre-install kill) is the belt-and-suspenders leg — any future
  * entry point that launches the installer gets the same calm treatment even
  * if it forgot to set the flag itself.
+ *
+ * ROUND-118 (R118-F): the post-restart leg — the localStorage marker written
+ * by AboutTab before the exit is consumed here (see the block above the
+ * component): while the relaunch is still connecting, the CONNECTING splash
+ * becomes "Setting up v{VERSION}… / finishing the update — your data is
+ * kept"; the key clears the moment the connection lands.
  */
 export function ConnectionGate({ children }: { children: ReactNode }) {
   const connection = useConfigStore((s) => s.connection);
   const connectionError = useConfigStore((s) => s.connectionError);
   const updateInFlight = useConfigStore((s) => s.updateInFlight);
   const bootedRef = useRef(false);
+  // R118-F: the consumed update-restart marker — read ONCE at mount (the
+  // lazy initializer), null when absent/invalid/stale.
+  const [updateRestart, setUpdateRestart] = useState<UpdateRestartMarker | null>(() =>
+    readUpdateRestartMarker(),
+  );
+
+  // R118-F: clear-on-connect — the marker is one-shot. The moment the
+  // sidecar answers, the key leaves storage (a later reconnect never
+  // re-shows the setup splash) and the state resets with it. A marker that
+  // lands offline instead stays (the Retry that eventually connects still
+  // consumes it) — the offline screen itself is unchanged, honest about a
+  // genuinely failed boot.
+  useEffect(() => {
+    if (connection !== "connected" || updateRestart === null) return;
+    try {
+      window.localStorage.removeItem(UPDATE_RESTART_KEY);
+    } catch {
+      /* best-effort */
+    }
+    setUpdateRestart(null);
+  }, [connection, updateRestart]);
 
   useEffect(() => {
     if (bootedRef.current) return;
@@ -77,7 +170,7 @@ export function ConnectionGate({ children }: { children: ReactNode }) {
   if (connection === "offline") {
     return <OfflineScreen error={connectionError} />;
   }
-  return <ConnectingSplash />;
+  return <ConnectingSplash settingUpVersion={updateRestart?.version ?? null} />;
 }
 
 /**
@@ -85,6 +178,10 @@ export function ConnectionGate({ children }: { children: ReactNode }) {
  * can replace it (the NSIS `/R` leg relaunches it afterwards). Calm by
  * design: logo, spinner, one honest line. No errors, no Retry — there is
  * nothing for the owner to do for the next few seconds.
+ * R118-F: the subline sets the expectation for the WHOLE dark (the window
+ * closing + the UI-less install + the relaunch) — "the window will close
+ * for a moment while v{VERSION} installs — it reopens by itself" (generic
+ * when the version is unknown).
  */
 function RestartingSplash({ update }: { update: UpdateInFlight }) {
   return (
@@ -104,7 +201,9 @@ function RestartingSplash({ update }: { update: UpdateInFlight }) {
           </span>
         </div>
         <span className="text-xs" style={{ color: "var(--ac-text-tertiary)" }}>
-          installing the update — your data is kept, the app comes back by itself
+          {update.version !== null
+            ? `the window will close for a moment while v${update.version} installs — it reopens by itself`
+            : "the window will close for a moment while the new version installs — it reopens by itself"}
         </span>
       </div>
     </div>
@@ -112,14 +211,19 @@ function RestartingSplash({ update }: { update: UpdateInFlight }) {
 }
 
 /** Branded full-viewport splash — the wizard's atmosphere, spinner + status.
- *  R58: h-full (was h-screen) — the App root's flex column sizes it. */
-function ConnectingSplash() {
+ *  R58: h-full (was h-screen) — the App root's flex column sizes it.
+ *  R118-F: the update-restart variant — same logo + spinner + layout, but
+ *  the lines name the update ("Setting up v{VERSION}…" / "finishing the
+ *  update — your data is kept") while the relaunch's sidecar is still
+ *  coming up; the key clears on connect. */
+function ConnectingSplash({ settingUpVersion }: { settingUpVersion: string | null }) {
   return (
     <div
       className="flex h-full w-full flex-col items-center justify-center gap-6"
       style={{ backgroundColor: "var(--ac-bg)" }}
       role="status"
       aria-live="polite"
+      data-testid={settingUpVersion !== null ? "update-setup-splash" : undefined}
     >
       <AcuteLogo size={72} ariaLabel="ACUTE-CODE" />
       <div className="flex flex-col items-center gap-2">
@@ -129,11 +233,13 @@ function ConnectingSplash() {
             className="text-sm font-medium"
             style={{ color: "var(--ac-text-secondary)" }}
           >
-            Connecting to agent-core…
+            {settingUpVersion !== null ? `Setting up v${settingUpVersion}…` : "Connecting to agent-core…"}
           </span>
         </div>
         <span className="text-xs" style={{ color: "var(--ac-text-tertiary)" }}>
-          starting the local engine — first launch can take a little longer
+          {settingUpVersion !== null
+            ? "finishing the update — your data is kept"
+            : "starting the local engine — first launch can take a little longer"}
         </span>
       </div>
     </div>

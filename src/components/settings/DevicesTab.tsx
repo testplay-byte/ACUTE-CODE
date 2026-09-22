@@ -664,6 +664,19 @@ function QrTile({
  * outside pointerdowns — so this layer SWALLOWS both (a capture-phase
  * keydown stop, and pointerdown/mousedown stops at the overlay root) to
  * keep Esc and backdrop-click scoped to the TOPMOST layer only.
+ *
+ * ROUND-118 (R118-F, round-118.md §1 item 51 — THE POINTER-EVENTS TRAP):
+ * the overlay root carries `pointer-events-auto`. Radix's modal scroll-lock
+ * sets `document.body { pointer-events: none }` while the pairing dialog is
+ * open, and this overlay — portaled to document.body — INHERITED it: every
+ * pointer interaction fell through to the Radix dialog underneath (a click
+ * on the big QR re-fired the tile's own open handler = "nothing happens";
+ * the top-right X co-located with the dialog's Close X = "closes the whole
+ * pop-up"). PROVEN empirically in real Chromium (a faithful repro with the
+ * repo's exact @radix-ui/react-dialog 1.1.23 + React 18.3): the computed
+ * pointer-events on the overlay was `none`, and adding `pointer-events-auto`
+ * to the root is the whole fix. Esc always worked — keyboard is not a
+ * pointer event — which is why this looked correct for two rounds.
  */
 function FullscreenPairQr({ payload, onClose }: { payload: string; onClose: () => void }) {
   useEffect(() => {
@@ -694,7 +707,7 @@ function FullscreenPairQr({ payload, onClose }: { payload: string; onClose: () =
         onClick={onClose}
         onPointerDown={swallowPointer}
         onMouseDown={swallowPointer}
-        className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-black/90"
+        className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-black/90 pointer-events-auto"
       >
         {/* R115-p comment fix: bg-black/90 + text-white/75 are THIS overlay's
             own dim utilities — ui/dialog.tsx's scrim is bg-black/40 and has no
@@ -875,16 +888,26 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
 
   // R115-E1 (c) + R116-e (the manual-LAN TLS fix's PC half,
   // round-116.md §1.1): the ONE-LINE pairing text the phone's smart-paste
-  // field consumes — first LAN address + port + the PIN + the certificate
-  // fingerprint. The trailing colon-hex fp is exactly what the phone's
-  // parsePairingText CERT_FP_SEARCH picks up, so a pasted manual-LAN entry
-  // pins the self-signed cert (Sha256) instead of dying on standard-CA
-  // verification — the QR path's strength, by clipboard. null = no address
-  // reported (the button stays honest and disabled — the QR + manual
-  // blocks carry the truth).
+  // field consumes — the certificate fingerprint + the PIN. The trailing
+  // colon-hex fp is exactly what the phone's parsePairingText
+  // CERT_FP_SEARCH picks up, so a pasted manual-LAN entry pins the
+  // self-signed cert (Sha256) instead of dying on standard-CA verification —
+  // the QR path's strength, by clipboard. null = no address reported (the
+  // button stays honest and disabled — the QR + manual blocks carry the
+  // truth).
+  //
+  // ROUND-118 (R118-F, round-118.md §1 item 53): the text carries the FULL
+  // address ladder (`addr1:port · addr2:port · …`), not just addrs[0] — the
+  // phone's smart-paste collects EVERY host:port and its manual candidate
+  // probes them all (the QR payload always carried the ladder; a one-rung
+  // manual ladder died "unreachable" whenever the first address was a
+  // virtual adapter). addrs ORDER also improved sidecar-side (the
+  // default-route NIC first, APIPA last — device-cert.ts), so the first
+  // entry is the best one; the per-block "Copy the address and port" button
+  // still copies the FIRST address alone (the phone splits them either way).
   const pairingText =
     payload !== null && payload.addrs.length > 0
-      ? `${payload.addrs[0]}:${payload.port} · PIN ${payload.pin} · cert ${certFpColonHex(payload.certFP)}`
+      ? `${payload.addrs.map((a) => `${a}:${payload.port}`).join(" · ")} · PIN ${payload.pin} · cert ${certFpColonHex(payload.certFP)}`
       : null;
 
   // R115-E1 (c): copy via the clipboard (the AgentChatPanel CopyButton
@@ -1045,9 +1068,18 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
                 small mono — what the phone should show when it pins.
                 R116-e (verdict #17): the expanded panel carries its OWN
                 bounded scroll (max-h-[240px]) so a long address list can
-                never push the dialog's actions out of reach. */}
+                never push the dialog's actions out of reach.
+                ROUND-118 (R118-F, round-118.md §1 item 52): the wrapper
+                gains `shrink-0` — overflow-hidden zeroes a flex child's
+                automatic minimum size (CSS Flexbox §4.5), so this panel
+                absorbed the QR tile's whole height deficit inside the
+                max-h-[86vh] dialog body and clipped the PIN with its own
+                overflow. shrink-0 keeps the panel at its natural height and
+                hands the scroll back to the dialog body (the body is the
+                scroll owner for the whole stack; the inner max-h-240 stays
+                for long lists). */}
             <div
-              className="rounded-xl border-[1.5px] overflow-hidden"
+              className="rounded-xl border-[1.5px] overflow-hidden shrink-0"
               style={{ borderColor: styles.border, background: styles.subtle }}
             >
               <button
@@ -1077,7 +1109,8 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
                       </div>
                       {/* R115-E1 (e): the block copies — the phone's paste
                           flow consumes exactly this string (first LAN addr +
-                          port, the same pick the QR's ladder makes). */}
+                          port — the ladder's best pick, which the sidecar's
+                          R118-F default-route ordering puts first). */}
                       {payload.addrs.length > 0 && (
                         <MiniCopyButton
                           text={`${payload.addrs[0]}:${payload.port}`}
@@ -1144,10 +1177,12 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
               >
                 <QrCode size={13} /> Generate new PIN
               </button>
-              {/* R115-E1 (c) + R116-e: the one-line pairing text —
-                  `{firstAddr}:{port} · PIN {pin} · cert {colon-hex fp}` —
+              {/* R115-E1 (c) + R116-e + R118-F: the one-line pairing text —
+                  `{addr1}:{port} · {addr2}:{port} · … · PIN {pin} · cert
+                  {colon-hex fp}` (the FULL address ladder since R118-F) —
                   for the phone's smart-paste field (the fingerprint is the
-                  manual-LAN TLS fix's PC half). Disabled when no LAN
+                  manual-LAN TLS fix's PC half; the ladder is the item-53
+                  fix's PC half). Disabled when no LAN
                   address was reported (nowhere honest to copy); a
                   missing/refusing clipboard falls back to the manual
                   section + the quiet note below. */}
@@ -1157,7 +1192,7 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
                 disabled={pairingText === null}
                 title={
                   pairingText !== null
-                    ? "Copies the address, PIN, and certificate fingerprint — paste it into ACUTE on your phone"
+                    ? "Copies the addresses, PIN, and certificate fingerprint — paste it into ACUTE on your phone"
                     : "No LAN address reported — scan the QR or use the manual details"
                 }
                 className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"

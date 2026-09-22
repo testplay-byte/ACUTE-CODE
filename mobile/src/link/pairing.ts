@@ -234,6 +234,17 @@ export interface ManualEntryInput {
    * then supplies it — TOFU over the PIN-gated claim).
    */
   certFP?: string;
+  /**
+   * OPTIONAL alternative LAN hosts (R118-F, round-118 §1 item 53): the
+   * smart-paste's EXTRA addresses (`values.addresses.slice(1)` — the desktop's
+   * copied pairing text carries the FULL address ladder, and the first
+   * address is not always the reachable one on multi-adapter machines).
+   * Validated + deduped onto the lan target by parseManualEntry; ignored by
+   * the tunnel/pin-only forms (a hand-edited address drops them — the manual
+   * screen clears the stash on every address edit, so they only ever ride
+   * an UNTOUCHED paste).
+   */
+  altHosts?: string[];
 }
 
 export type ManualTarget =
@@ -244,12 +255,16 @@ export type ManualTarget =
       pin: string;
     }
   | {
-      /** A bare host + port — the LAN form; certFP null = TOFU at claim. */
+      /** A bare host + port — the LAN form; certFP null = TOFU at claim.
+       * altHosts (R118-F): the EXTRA LAN hosts from a multi-address paste,
+       * validated + deduped (the primary host excluded); the pairing ladder
+       * probes them in order after the primary. */
       kind: "lan";
       host: string;
       port: number;
       certFP: string | null;
       pin: string;
+      altHosts?: string[];
     }
   | {
       /** A bare PIN — re-pair against the ALREADY-STORED host (revoked token). */
@@ -268,6 +283,40 @@ export type ManualParseResult =
 
 /** host:port — a hostname/IPv4, or a bracketed IPv6 literal ("[fe80::1]"). */
 const HOST_PORT = /^(\[[^\]]+\]|[^\s:/]+):([0-9]{1,5})$/;
+
+/**
+ * R118-F: validate + dedupe the smart-paste's alternative LAN hosts onto the
+ * manual lan target. Each entry may arrive as "host:port" (the smart-paste's
+ * `addresses.slice(1)` — the desktop's copied ladder) or already-bare (the
+ * pairing screen's own stash round-trip): a "host:port" entry must carry a
+ * valid port, which is then stripped (the ladder rides the target's ONE
+ * port — the desktop serves a single TLS port). Invalid entries are DROPPED,
+ * never fatal (a bad extra must not kill an otherwise-good paste); the
+ * primary host and duplicates (case-insensitive) are excluded.
+ */
+function normalizeAltHosts(host: string, altHosts: string[] | undefined): string[] {
+  if (altHosts === undefined) return [];
+  const seen = new Set<string>([host.toLowerCase()]);
+  const out: string[] = [];
+  for (const raw of altHosts) {
+    const trimmed = raw.trim();
+    // "host:port" (the paste shape) — the port validates, then drops.
+    const withPort = /^(\[[^\]]+\]|[A-Za-z0-9][A-Za-z0-9.\-]{0,253}):([0-9]{1,5})$/.exec(trimmed);
+    let bare: string | null = null;
+    if (withPort !== null) {
+      const port = Number.parseInt(withPort[2], 10);
+      if (port >= 1 && port <= 65535) bare = withPort[1];
+    } else if (/^(\[[^\]]+\]|[A-Za-z0-9][A-Za-z0-9.\-]{0,253})$/.test(trimmed)) {
+      bare = trimmed;
+    }
+    if (bare === null) continue;
+    const key = bare.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(bare);
+  }
+  return out;
+}
 
 /**
  * Parse the manual entry. The address field decides the form:
@@ -322,7 +371,13 @@ export function parseManualEntry(input: ManualEntryInput): ManualParseResult {
     return { ok: false, error: { kind: "bad-certfp" } };
   }
 
-  return { ok: true, value: { kind: "lan", host, port, certFP, pin } };
+  // R118-F: the smart-paste's extra LAN hosts ride the target (validated +
+  // deduped; omitted entirely when none survive, so the wire shape stays
+  // byte-identical for every pre-R118 caller).
+  const altHosts = normalizeAltHosts(host, input.altHosts);
+  return altHosts.length > 0
+    ? { ok: true, value: { kind: "lan", host, port, certFP, pin, altHosts } }
+    : { ok: true, value: { kind: "lan", host, port, certFP, pin } };
 }
 
 // ── smart paste (R115-D: the desktop's "Copy pairing text" companion) ──────
@@ -331,10 +386,19 @@ export function parseManualEntry(input: ManualEntryInput): ManualParseResult {
  * The smart-paste outcome — the fields the manual screen fills from ONE
  * clipboard read. `certFP` rides along only when the text carried a full
  * colon-hex fingerprint.
+ *
+ * R118-F (round-118 §1 item 53): `addresses` carries EVERY host:port the
+ * text contained (the desktop's copied pairing text is the FULL address
+ * ladder since R118 — the first address is not always the reachable one on
+ * multi-adapter Windows machines). `address` stays `addresses[0]` (the
+ * primary) so every pre-R118 consumer is unchanged; the manual screen
+ * stashes `addresses.slice(1)` as the pairing ladder's extra rungs.
  */
 export interface PairingTextValues {
   /** The address as typed: "host:port" (LAN) or a full "https://…" URL. */
   address: string;
+  /** EVERY host:port the text carried, in order — address is [0] (R118-F). */
+  addresses: string[];
   /** The 8-digit pairing PIN. */
   pin: string;
   /** The certificate fingerprint (canonical bare lowercase hex), when present. */
@@ -354,10 +418,11 @@ const HEXISH = /[0-9a-fA-F]/;
 
 /**
  * Parse the desktop's copied pairing text — the exact "Copy pairing text"
- * format `addr:port · PIN 12345678` — and the loose formats humans actually
- * produce (host:port plus an 8-digit number anywhere, an optional "PIN"
- * marker, a trailing fingerprint). Pure; null = nothing usable on the
- * clipboard (the caller shows ONE honest line, never a red card).
+ * format `addr1:port · addr2:port · … · PIN 12345678` (the FULL address
+ * ladder since R118-F) — and the loose formats humans actually produce
+ * (host:port plus an 8-digit number anywhere, an optional "PIN" marker, a
+ * trailing fingerprint). Pure; null = nothing usable on the clipboard (the
+ * caller shows ONE honest line, never a red card).
  */
 export function parsePairingText(text: string): PairingTextValues | null {
   let work = text.trim();
@@ -375,23 +440,27 @@ export function parsePairingText(text: string): PairingTextValues | null {
     }
   }
 
-  // 2. The address: a full https URL wins (tunnel / relay room); otherwise
-  //    the first host:port whose port is actually in range.
-  let address: string | null = null;
+  // 2. The addresses: a full https URL wins (tunnel / relay room — a URL
+  //    is a DIFFERENT kind of entry, so it rides alone); otherwise EVERY
+  //    host:port whose port is actually in range is collected — R118-F's
+  //    collect-ALL scan (the desktop's ladder carries several). Each match
+  //    is REMOVED from the work string as it is collected, so no address's
+  //    digits can masquerade as the PIN in step 3.
+  const addresses: string[] = [];
   const url = HTTPS_URL.exec(work);
   if (url !== null) {
-    address = url[0].replace(/[.,;:]+$/, "");
+    addresses.push(url[0].replace(/[.,;:]+$/, ""));
     work = work.replace(url[0], " ");
   } else {
     for (const match of work.matchAll(HOST_PORT_SEARCH)) {
       const port = Number.parseInt(match[2], 10);
       if (port < 1 || port > 65535) continue;
-      address = match[0];
+      addresses.push(match[0]);
       work = work.replace(match[0], " ");
-      break;
     }
   }
-  if (address === null) return null;
+  if (addresses.length === 0) return null;
+  const address = addresses[0];
 
   // 3. The PIN: the "PIN" marker when present; otherwise the LAST standalone
   //    8-digit run — flanked by non-hex chars so fingerprints, relay room
@@ -411,5 +480,7 @@ export function parsePairingText(text: string): PairingTextValues | null {
   }
   if (pin === null) return null;
 
-  return certFP === undefined ? { address, pin } : { address, pin, certFP };
+  return certFP === undefined
+    ? { address, addresses, pin }
+    : { address, addresses, pin, certFP };
 }

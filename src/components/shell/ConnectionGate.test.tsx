@@ -2,12 +2,22 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectionGate } from "./ConnectionGate";
+import { APP_VERSION } from "../../lib/version";
 
 /**
  * ROUND-54 (R54): the offline screen must explain itself IN-APP — the engine
  * log tail (via the sidecar_log_tail shell command) renders on screen with a
  * Copy-diagnostics button, replacing the R53 "go find sidecar.log in
  * %APPDATA%" instruction that the owner understandably never followed.
+ *
+ * ROUND-118 (R118-F, round-118 §1 item 50): the update-restart marker — the
+ * localStorage hand-off AboutTab.launchInstaller writes before the window
+ * exits. The gate consumes it at mount: a VALID marker (this build's
+ * APP_VERSION, written within the last 10 minutes) turns the connecting
+ * splash into "Setting up v{VERSION}… / finishing the update — your data is
+ * kept" until the sidecar connects (then the key clears, one-shot); an
+ * INVALID one (mismatched version, aged out, malformed) is removed +
+ * ignored — the normal connecting splash.
  */
 
 const sidecarMock = vi.hoisted(() => ({
@@ -162,7 +172,13 @@ describe("ConnectionGate — R101-B the update hand-off", () => {
     expect(screen.queryByText("APP TREE")).toBeNull();
     const splash = screen.getByTestId("update-restarting-splash");
     expect(splash.textContent).toContain("Restarting into 0.99.0");
-    expect(splash.textContent).toContain("your data is kept");
+    // R118-F: the subline now sets the expectation for the WHOLE dark (the
+    // window closing + the UI-less install + the relaunch) instead of the
+    // old "installing the update — your data is kept, the app comes back by
+    // itself" line.
+    expect(splash.textContent).toContain(
+      "the window will close for a moment while v0.99.0 installs — it reopens by itself",
+    );
   });
 
   it("the OFFLINE screen never shows mid-update — the splash outranks it", () => {
@@ -182,6 +198,10 @@ describe("ConnectionGate — R101-B the update hand-off", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     const splash = screen.getByTestId("update-restarting-splash");
     expect(splash.textContent).toContain("Restarting into the new version");
+    // R118-F: the GENERIC subline spelling (version unknown).
+    expect(splash.textContent).toContain(
+      "the window will close for a moment while the new version installs — it reopens by itself",
+    );
   });
 
   it("listens for the shell's update-installing event and arms the flag (belt-and-suspenders leg)", async () => {
@@ -204,6 +224,111 @@ describe("ConnectionGate — R101-B the update hand-off", () => {
       });
     } finally {
       delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    }
+  });
+});
+
+// ── R118-F: the update-restart marker (round-118 §1 item 50) ────────────────
+//
+// The relaunch's bridge over the NSIS dark: AboutTab writes
+// "acute-code.update-restart" = {version, at} beside the in-flight flag
+// BEFORE the invoke; this gate consumes it at mount. The tests below pin the
+// full validation ladder + the one-shot consumption.
+
+describe("ConnectionGate — R118-F the update-restart marker", () => {
+  const MARKER_KEY = "acute-code.update-restart";
+
+  /** Write a marker exactly as AboutTab.launchInstaller does. */
+  function writeMarker(version: string, at: number = Date.now()): void {
+    window.localStorage.setItem(MARKER_KEY, JSON.stringify({ version, at }));
+  }
+
+  it("a VALID marker (this build's version, fresh) turns the connecting splash into the setup variant", () => {
+    writeMarker(APP_VERSION);
+    render(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    // The variant lines — same logo/spinner/layout, the update named.
+    const splash = screen.getByTestId("update-setup-splash");
+    expect(splash.textContent).toContain(`Setting up v${APP_VERSION}…`);
+    expect(splash.textContent).toContain("finishing the update — your data is kept");
+    // The generic connecting line is gone.
+    expect(splash.textContent).not.toContain("Connecting to agent-core");
+    // Children stay unmounted while connecting.
+    expect(screen.queryByText("APP TREE")).toBeNull();
+    // The key is STILL LIVE while connecting — it clears on connect only.
+    expect(window.localStorage.getItem(MARKER_KEY)).not.toBeNull();
+  });
+
+  it("the marker is ONE-SHOT: it clears the moment the connection lands", async () => {
+    writeMarker(APP_VERSION);
+    useConfigStore.setState({ connection: "connecting" });
+    const { rerender } = render(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    expect(screen.getByTestId("update-setup-splash")).toBeTruthy();
+    // The sidecar answers → the app tree renders + the key leaves storage…
+    useConfigStore.setState({ connection: "connected" });
+    rerender(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    expect(screen.getByText("APP TREE")).toBeTruthy();
+    expect(window.localStorage.getItem(MARKER_KEY)).toBeNull();
+    // …and a LATER reconnect never re-shows the setup splash (one-shot).
+    useConfigStore.setState({ connection: "connecting" });
+    rerender(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    expect(screen.queryByTestId("update-setup-splash")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("Connecting to agent-core");
+  });
+
+  it("a marker for a DIFFERENT version is removed + ignored (a stale marker means the install failed)", () => {
+    writeMarker("0.0.0-old");
+    render(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    // The normal connecting splash — and the bad key is GONE (it can never
+    // resurface on a later boot).
+    expect(screen.queryByTestId("update-setup-splash")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("Connecting to agent-core");
+    expect(window.localStorage.getItem(MARKER_KEY)).toBeNull();
+  });
+
+  it("a marker older than 10 minutes is removed + ignored (an aged marker is a failed install's leftovers)", () => {
+    writeMarker(APP_VERSION, Date.now() - 11 * 60 * 1000);
+    render(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    expect(screen.queryByTestId("update-setup-splash")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("Connecting to agent-core");
+    expect(window.localStorage.getItem(MARKER_KEY)).toBeNull();
+  });
+
+  it("a malformed marker (broken JSON / wrong shape) is removed + ignored — never a crash", () => {
+    for (const bad of ["{not json", "42", '{"version":123}', `{"version":"${APP_VERSION}"}`, "null"]) {
+      window.localStorage.setItem(MARKER_KEY, bad);
+      render(
+        <ConnectionGate>
+          <p>APP TREE</p>
+        </ConnectionGate>,
+      );
+      expect(screen.queryByTestId("update-setup-splash")).toBeNull();
+      expect(screen.getByRole("status").textContent).toContain("Connecting to agent-core");
+      expect(window.localStorage.getItem(MARKER_KEY)).toBeNull();
+      cleanup();
     }
   });
 });

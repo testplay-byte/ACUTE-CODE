@@ -31,9 +31,11 @@ import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { buildServer, startServer, VERSION } from "../src/server";
 import {
   DEVICE_CERT_FILENAME,
+  detectPreferredLanIp,
   ensureDeviceCertificate,
   lanIPv4Addresses,
   resetDeviceCertificateForTest,
+  setPreferredLanIpForTest,
 } from "../src/lib/device-cert";
 import {
   generatePairingPin,
@@ -46,6 +48,30 @@ import {
   listMobileDevices,
   touchMobileDeviceLastSeen,
 } from "../src/storage/mobile-devices";
+
+// ── R118-F: the LAN address ORDERING pins need a controllable NIC list ──────
+//
+// The real machine's interfaces vary per host (a CI container: one eth0; the
+// owner's Windows box: WSL/Hyper-V/Docker/VPN/APIPA — the exact scenario the
+// ordering fixes), so node:os is mocked with the ACTUAL module spread — every
+// other consumer in the import graph (tmpdir/homedir/hostname/platform) stays
+// byte-identical — and only networkInterfaces is steerable. The DEFAULT
+// implementation delegates to the REAL interfaces, so every pre-existing test
+// in this file keeps exercising the machine itself; only the R118-F ordering
+// tests point it at a fixed Windows-like adapter set.
+type RealNetworkInterfaces = typeof import("node:os")["networkInterfaces"];
+const osMock = vi.hoisted(() => ({
+  networkInterfaces: vi.fn(),
+  // Rewired inside the vi.mock factory (hoisted code cannot import).
+  real: (() => ({})) as RealNetworkInterfaces,
+}));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const real = actual.networkInterfaces;
+  osMock.real = real;
+  osMock.networkInterfaces.mockImplementation(() => real());
+  return { ...actual, networkInterfaces: osMock.networkInterfaces };
+});
 
 const TOKEN = "r106-shell-token-9c1f";
 
@@ -225,6 +251,84 @@ describe("R106-S1: the per-machine device certificate", () => {
     }
     // The loopback face is internal and never rides the pairing payload.
     expect(addrs).not.toContain("127.0.0.1");
+  });
+
+  // ── R118-F (round-118 §1 item 53): the addrs ORDER — default-route first,
+  // APIPA last. The NIC list is the fixed Windows-like adapter set below
+  // (the owner's box: the old first-octet sort put WSL/Docker/VPN/APIPA
+  // BEFORE the real 192.168.x NIC, so the phone burned its probe budget on
+  // addresses that can never answer). afterEach restores the REAL
+  // interfaces + clears the preferred-IP cache for the rest of the file.
+  afterEach(() => {
+    osMock.networkInterfaces.mockImplementation(() => osMock.real());
+    setPreferredLanIpForTest(null);
+  });
+
+  /** The owner-like adapter set: loopback (internal), a VPN (10.x), Docker
+   * (172.17), WSL/Hyper-V (172.20), the REAL NIC (192.168.1.42), an APIPA
+   * face (169.254), and an IPv6 entry (excluded by the IPv4 filter). */
+  const OWNER_NICS = {
+    lo: [{ family: "IPv4", address: "127.0.0.1", netmask: "255.0.0.0", mac: "00:00:00:00:00:00", internal: true, cidr: "127.0.0.1/8" }],
+    eth0: [{ family: "IPv6", address: "fe80::d46e:deff:fe79:b44e", netmask: "ffff:ffff:ffff:ffff::", mac: "d6:6e:de:79:b4:4e", internal: false, scopeid: 3, cidr: "fe80::/64" }],
+    "vEthernet (WSL)": [{ family: "IPv4", address: "172.20.16.1", netmask: "255.255.240.0", mac: "00:15:5d:00:00:00", internal: false, cidr: "172.20.16.1/20" }],
+    "vEthernet (Docker)": [{ family: "IPv4", address: "172.17.0.1", netmask: "255.255.0.0", mac: "00:15:5d:00:00:01", internal: false, cidr: "172.17.0.1/16" }],
+    "VPN Adapter": [{ family: "IPv4", address: "10.211.55.3", netmask: "255.255.255.0", mac: "00:1c:42:00:00:02", internal: false, cidr: "10.211.55.3/24" }],
+    Ethernet: [{ family: "IPv4", address: "192.168.1.42", netmask: "255.255.255.0", mac: "d6:6e:de:79:b4:4e", internal: false, cidr: "192.168.1.42/24" }],
+    "Ethernet 2": [{ family: "IPv4", address: "169.254.203.187", netmask: "255.255.0.0", mac: "d6:6e:de:79:b4:4f", internal: false, cidr: "169.254.203.187/16" }],
+  };
+
+  it("R118-F fallback (no cached preferred IP): the numeric first-octet sort preserved — with APIPA LAST", () => {
+    osMock.networkInterfaces.mockReturnValue(OWNER_NICS);
+    setPreferredLanIpForTest(null);
+    // 10.x < 172.17 < 172.20 < 192.168 numerically; the 169.254 APIPA face
+    // (which sorted second under the old R106 order) moves to the END — a
+    // link-local autoconfig address can never pair, so it is the last rung.
+    expect(lanIPv4Addresses()).toEqual([
+      "10.211.55.3",
+      "172.17.0.1",
+      "172.20.16.1",
+      "192.168.1.42",
+      "169.254.203.187",
+    ]);
+  });
+
+  it("R118-F: the cached default-route IP moves to index 0 — the real NIC outranks every virtual adapter", () => {
+    osMock.networkInterfaces.mockReturnValue(OWNER_NICS);
+    setPreferredLanIpForTest("192.168.1.42");
+    // The QR's FIRST probe, the displayed list, and the copied text's first
+    // entry all become the address that actually answers.
+    expect(lanIPv4Addresses()).toEqual([
+      "192.168.1.42",
+      "10.211.55.3",
+      "172.17.0.1",
+      "172.20.16.1",
+      "169.254.203.187",
+    ]);
+  });
+
+  it("R118-F: a preferred IP that is not among the reported NICs leaves the order untouched", () => {
+    osMock.networkInterfaces.mockReturnValue(OWNER_NICS);
+    setPreferredLanIpForTest("203.0.113.9");
+    expect(lanIPv4Addresses()).toEqual([
+      "10.211.55.3",
+      "172.17.0.1",
+      "172.20.16.1",
+      "192.168.1.42",
+      "169.254.203.187",
+    ]);
+  });
+
+  it("R118-F: detectPreferredLanIp resolves within its budget, module-caches (never a throw)", async () => {
+    setPreferredLanIpForTest(null); // force a fresh probe
+    const ip = await detectPreferredLanIp();
+    // The honest contract: a string (the default-route IPv4) or null (no
+    // route / budget exceeded) — anything else is a bug.
+    expect(typeof ip === "string" || ip === null).toBe(true);
+    if (typeof ip === "string") {
+      expect(ip).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    }
+    // Module-cached: the second call answers identically (no re-probe).
+    expect(await detectPreferredLanIp()).toBe(ip);
   });
 });
 

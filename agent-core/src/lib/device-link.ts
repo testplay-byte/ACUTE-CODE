@@ -30,7 +30,7 @@
 import { randomBytes } from "node:crypto";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { ensureDeviceCertificate, lanIPv4Addresses } from "./device-cert.js";
+import { detectPreferredLanIp, ensureDeviceCertificate, lanIPv4Addresses } from "./device-cert.js";
 
 /**
  * ROUND-106 (R106-S1): did this request ride the TLS device listener?
@@ -212,6 +212,14 @@ export function createDeviceLinkController(options: DeviceLinkOptions): DeviceLi
       // documented gate and is idempotent once booted.
       await app.ready();
       const certMaterial = await ensureDeviceCertificate(dataDir);
+      // R118-F (round-118 §1 item 53): the default-route probe — awaited
+      // ONCE here (module-cached, single-flight, ≤500ms budget) so every
+      // lanIPv4Addresses() call below (the status snapshot, the pair/start
+      // payload, the QR ladder) leads with the REAL NIC instead of whatever
+      // the first-octet sort surfaced first. Beside ensureDeviceCertificate
+      // because both are the boot-time identity legs; failure → null → the
+      // numeric-sort fallback, never a failed start.
+      await detectPreferredLanIp();
       identity = { certFP: certMaterial.certFP, machineId: certMaterial.machineId };
       const tls = createHttpsServer(
         { key: certMaterial.key, cert: certMaterial.cert },

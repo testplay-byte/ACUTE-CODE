@@ -440,12 +440,36 @@ function VersionCard() {
       return;
     }
     useConfigStore.getState().setUpdateInFlight({ version });
+    // R118-F (round-118 §1 item 50): the update-restart marker — written
+    // BESIDE the in-flight flag, BEFORE the invoke. The flag deliberately
+    // dies with this process (the NSIS /S install runs UI-less for 10-40s
+    // while the window is gone), so the RELAUNCH had nothing to say beyond
+    // the generic "Connecting…" splash. The marker bridges the dark: the
+    // fresh process's ConnectionGate reads it at mount and renders
+    // "Setting up v{VERSION}… — finishing the update — your data is kept"
+    // until the sidecar connects, then clears it (one-shot; validated
+    // against APP_VERSION + a 10-minute age there). Same key + shape as
+    // ConnectionGate's reader: "acute-code.update-restart" =
+    // {version, at}. A rejected launch removes it with the flag below.
+    try {
+      window.localStorage.setItem(
+        "acute-code.update-restart",
+        JSON.stringify({ version, at: Date.now() }),
+      );
+    } catch {
+      // A refusing storage quota never blocks the install itself.
+    }
     try {
       await invoke("run_update_installer", { path, silent });
       setInstall({ kind: "launched", version, silent });
     } catch (err) {
       // The engine died for nothing — bring it back before anything else.
       useConfigStore.getState().setUpdateInFlight(null);
+      try {
+        window.localStorage.removeItem("acute-code.update-restart");
+      } catch {
+        /* best-effort — a stale marker is validated away at relaunch anyway */
+      }
       void retryConnection().catch(() => {});
       setInstall({
         kind: "error",
