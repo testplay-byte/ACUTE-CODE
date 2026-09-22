@@ -138,3 +138,32 @@ end-to-end runs. The release rides MAINTENANCE §g 2c/4-5/6-6b verbatim.
 The updater round (Linux same-version restart + Windows automation + incremental
 updates — the §4 note in round-116.md), multi-PC from the phone, device smoke pass,
 attachment image bytes, the browser save-download affordance.
+
+## §5 The sandbox E2E (R117-h — the owner's explicit ask, verified live)
+
+The sidecar was built (dist), started with a LIVE OpenRouter key, and driven
+end-to-end (the runs live in /tmp/acute-e2e/):
+
+1. **The workspace tier is LIVE on the real server** — POST /memory/workspace
+   returned `scope:"workspace", projectId:null`; the panel's list reads it back.
+2. **THE MEMORY ROUND-TRIP (the money proof)**: seeded 1 workspace memory ("the
+   owner prefers concise replies and vitest") + 1 project memory ("uses pnpm and
+   TypeScript strict"), then ran a REAL turn (z-ai/glm-5.2:free via OpenRouter,
+   646 thinking-deltas streamed). The model's reply:
+   *"Workspace memory: you prefer concise replies and vitest. Project memory:
+   this project uses pnpm and TypeScript strict. I've saved that round-117 E2E
+   passed."* — it RECITED both scopes' digests verbatim (the composed injection
+   works against the live provider) AND called memory_save with exactly the
+   requested fact (the row landed, `src=agent`, kind fact, the tool's result
+   frame honest: "saved fact memory (id mem_…); it persists across sessions and
+   is auto-loaded into future turns").
+3. The default agent's `memoryPolicy` reads `every-turn` on the live wire (the
+   dead flag is alive); turn.started carried model+provider; the SSE stream
+   carried the full frame vocabulary (thinking-delta/text-delta/tool-call/
+   tool-input-delta/tool-result/finish/done).
+
+Environment notes for future E2E rounds: the sandbox reaps background processes
+between tool invocations — run the sidecar + the whole driver INSIDE one bash
+invocation (start → READY-parse → curl sequence → kill); session POST requires
+agentId (no default configured on a fresh DB); project/session responses are
+top-level shapes (not wrapped).
