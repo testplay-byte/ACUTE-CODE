@@ -70,11 +70,37 @@ export const PAIRING_FADE_MS = 150;
  * The SHEET spring — panels: no overshoot, EVER (motion.md §1). Anything that
  * carries a panel or a large surface rides this config; a bounce that reveals
  * the page background is a defect, not personality.
+ *
+ * ROUND-119 (R119-P, the owner's round-119 verdict — the Add-Provider sheet's
+ * "animations were not that good"): tuned to the house DISCLOSURE settle
+ * {180, 24} (ζ ≈ 0.894 — one soft settle, ~0.6s), superseding R116-b's stiffer
+ * {210, 30}. The stiffer pair read as a snap-cut; the disclosure settle is the
+ * panel grammar the rest of the app already speaks. The keyboard ride shares
+ * this constant (its MECHANICS are untouched — R118-E's law; it simply
+ * inherits the same settle).
  */
 export const SHEET_SPRING: WithSpringConfig = {
-  stiffness: 210,
-  damping: 30,
+  stiffness: 180,
+  damping: 24,
 };
+
+/**
+ * ROUND-119 (R119-P) — the sheet's TIMED legs (the scrim fade + the close
+ * departure + the content ride), named + pinned so the anatomy test can hold
+ * them: the scrim eases OUT over 200ms (was 160 linear — a dim that completes
+ * as the panel crosses the fold); the close rides 200ms with an ease-IN curve
+ * (an accelerating departure reads natural — was 180 linear); the content
+ * row fades in over 120ms starting 40ms after the panel begins to move (the
+ * subtle ride — the header lands first, the body follows).
+ */
+/** The scrim's open fade (ms) — ease-out cubic in sheet.tsx. */
+export const SHEET_SCRIM_OPEN_MS = 200;
+/** The close departure (ms) — panel + scrim together, ease-in quad. */
+export const SHEET_CLOSE_MS = 200;
+/** The content row's fade-in duration (ms). */
+export const SHEET_CONTENT_FADE_MS = 120;
+/** The content row's fade-in delay after the panel starts (ms). */
+export const SHEET_CONTENT_FADE_DELAY_MS = 40;
 
 /**
  * The TAB spring — the calm indicator slide (motion.md §1): over-damped so

@@ -31,6 +31,7 @@ import {
   modelCapabilityChips,
   modelDraftFromRecord,
   modelEditBody,
+  modelTestToolsLegLine,
   newProjectBody,
   nextFreeKeySlot,
   parseModelNumericField,
@@ -585,7 +586,7 @@ describe("testModel — the wire call", () => {
     expect(JSON.parse(String(calls[0]?.init?.bodyText))).toEqual({ slot: 3 });
   });
 
-  it("rides the 35s test-call budget (R116-j §1.8 — the server probes up to 30s; the 15s default aborted the exchange)", async () => {
+  it("rides the 65s two-phase test-call budget (R119-P — the server now runs pong + the tools leg, 30s per leg; the R116-j 35s budget would abort the exchange mid-tools-leg)", async () => {
     const { sender, calls } = makeRouteSender([
       {
         path: "/api/v1/models/mdl_1/test",
@@ -595,7 +596,92 @@ describe("testModel — the wire call", () => {
       },
     ]);
     await testModel(sender, "mdl_1", {});
-    expect(calls[0]?.init?.timeoutMs).toBe(35_000);
+    expect(calls[0]?.init?.timeoutMs).toBe(65_000);
+  });
+});
+
+// ── R119-P (round-119 §1 item F): the tools leg's verdict line — the pure
+// formatting behind the model-actions sheet's SECOND note line. The owner's
+// TokenHarbor report: plain chat worked while every agent action failed, so
+// "test ✓" had to stop hiding the agent's real (tool-carrying) call shape.
+
+describe("modelTestToolsLegLine — the tools leg's one-line verdict (R119-P)", () => {
+  it("the model CALLED echo → the good line", () => {
+    expect(
+      modelTestToolsLegLine({
+        checks: {
+          http: true,
+          auth: true,
+          modelAccepted: true,
+          nonEmptyContent: true,
+          toolsAccepted: true,
+          toolCalled: true,
+        },
+      }),
+    ).toEqual({ tone: "good", text: "tools ✓ (called echo)" });
+  });
+
+  it("accepted-but-text → the CAUTION line (chat works, agent actions will not)", () => {
+    expect(
+      modelTestToolsLegLine({
+        checks: {
+          http: true,
+          auth: true,
+          modelAccepted: true,
+          nonEmptyContent: true,
+          toolsAccepted: true,
+          toolCalled: false,
+        },
+      }),
+    ).toEqual({
+      tone: "caution",
+      text: "tools accepted — answered in text, not called — usable for chat, not for agent actions",
+    });
+  });
+
+  it("rejected → the BAD line carries the reason snippet (110 chars, ellipsized)", () => {
+    const reason =
+      "the agent tools request was rejected (HTTP 400): tools are not supported for model qwen3.8-flash:free on this route — chat works, but every agent action will fail";
+    const line = modelTestToolsLegLine({
+      checks: {
+        http: true,
+        auth: true,
+        modelAccepted: true,
+        nonEmptyContent: true,
+        toolsAccepted: false,
+      },
+      reason,
+    });
+    expect(line?.tone).toBe("bad");
+    expect(line?.text.startsWith("tools rejected — ")).toBe(true);
+    expect(line?.text).toContain("the agent tools request was rejected (HTTP 400)");
+    // The snippet is capped: the prefix + 110 chars + the ellipsis.
+    expect(line?.text.length).toBeLessThanOrEqual("tools rejected — ".length + 111);
+    expect(line?.text.endsWith("…")).toBe(true);
+  });
+
+  it("a SHORT rejection reason renders whole — no dead ellipsis", () => {
+    expect(
+      modelTestToolsLegLine({
+        checks: {
+          http: true,
+          auth: true,
+          modelAccepted: true,
+          nonEmptyContent: true,
+          toolsAccepted: false,
+        },
+        reason: "the provider refused the tools request",
+      }),
+    ).toEqual({ tone: "bad", text: "tools rejected — the provider refused the tools request" });
+  });
+
+  it("not-run (no tools fields) → null — the base verdict line already tells that story", () => {
+    expect(
+      modelTestToolsLegLine({
+        checks: { http: true, auth: true, modelAccepted: false, nonEmptyContent: false },
+        reason: "model not found",
+      }),
+    ).toBeNull();
   });
 });
 

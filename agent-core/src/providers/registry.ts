@@ -636,6 +636,43 @@ const MODEL_TEST_TIMEOUT_MS = 30_000;
 
 const MODEL_TEST_PROMPT = "Reply with exactly one word: pong";
 
+// ── ROUND-119 (R119-P): the TOOLS leg of the per-model probe. ────────────────
+//
+// The owner's TokenHarbor report (round-119 §1 item F): plain chat worked on
+// his device while EVERY agent action failed ("the model was failing while
+// performing an action" — the dribbble-dashboard build). The probe below
+// never sent tools, so "Test model ✓" proved NOTHING about the agent's real
+// call shape — the agent ALWAYS carries its toolset, and a provider that
+// 400s the tools array is exactly the TokenHarbor action-failure shape. The
+// sandbox cannot live-probe tokenharbor.ai (region_blocked to this egress
+// IP), so the diagnostic has to be code-side: after the pong completion
+// succeeds, a SECOND bounded call carries ONE minimal tool (echo — one
+// string arg) and an inviting prompt, graded as two new checks
+// (toolsAccepted / toolCalled).
+
+/** The tools-leg system-side instruction (chat-completions `system` message /
+ * anthropic top-level `system` / responses `instructions`). */
+const MODEL_TEST_TOOLS_SYSTEM_PROMPT = "You must call the echo tool with the text 'hello'.";
+
+/** The tools-leg user turn — the direct invitation. */
+const MODEL_TEST_TOOLS_USER_PROMPT = "Call the echo tool now with text hello.";
+
+/** The echo tool's JSON Schema — one required string arg, shared verbatim by
+ * all three wire dialects (only the envelope differs per format). */
+const ECHO_TOOL_PARAMETERS = {
+  type: "object",
+  properties: { text: { type: "string" } },
+  required: ["text"],
+} as const;
+
+/** The quote cap for the accepted-but-text note (what the model answered
+ * instead of calling — the owner's eyeball context, never a wall). */
+const TOOLS_NOTE_SNIPPET_CHARS = 80;
+
+/** The verdict suffix every tools-rejection reason carries — the honest
+ * "agent will fail" line the TokenHarbor report demanded. */
+const TOOLS_REJECTION_SUFFIX = " — chat works, but every agent action will fail";
+
 /** The checks the probe runs, in order — surfaced individually so the UI can
  * show exactly WHICH stage failed (e.g. auth ok, model id rejected). */
 export interface ModelTestChecks {
@@ -648,12 +685,31 @@ export interface ModelTestChecks {
   modelAccepted: boolean;
   /** The parsed reply had non-blank text. */
   nonEmptyContent: boolean;
+  /** ROUND-119 (R119-P): the provider ACCEPTED the tool-carrying request
+   * (the agent's real call shape). Present ONLY when the tools leg ran —
+   * the pong phase must succeed first; every earlier failure skips the leg
+   * (undefined = not run). false = the provider hard-rejected the tools
+   * request (400/422 — the TokenHarbor action-failure shape) or answered
+   * it with an error; `reason` carries the raw scrubbed body. */
+  toolsAccepted?: boolean;
+  /** ROUND-119 (R119-P): the reply contained a well-formed tool call (the
+   * model actually called `echo`). Present only when the tools leg ran AND
+   * was accepted; false = the model answered in text instead (see `note`
+   * on the result — usable for chat, NOT for agent actions). */
+  toolCalled?: boolean;
 }
 
 /** POST /models/:id/test result. ok:true means every check passed; ok:false
  * carries the first failing check's reason (HTTP 200 either way — a probe
  * that RAN and got a NO is a successful test call, the same semantics as
- * the provider test above). */
+ * the provider test above).
+ *
+ * ROUND-119 (R119-P): `ok` now also requires the TOOLS leg to be ACCEPTED
+ * (toolsAccepted:false → ok:false — "the agent will fail" verdict, the
+ * TokenHarbor action-failure shape) but does NOT fail on toolCalled alone
+ * (a model that answers in text is still a working CHAT model — the `note`
+ * carries that honestly). When the pong phase fails the tools leg never
+ * runs and the checks carry no tools fields at all. */
 export interface ModelTestResult {
   ok: boolean;
   latencyMs: number;
@@ -669,6 +725,11 @@ export interface ModelTestResult {
   usage?: { inputTokens: number; outputTokens: number };
   /** Present on ok:false — the reason the probe failed, scrubbed. */
   reason?: string;
+  /** ROUND-119 (R119-P): present when the tools leg RAN and was accepted
+   * but the model answered in text instead of calling `echo` — the honest
+   * "usable for chat, NOT for agent actions" line (ok stays true; the UI
+   * shows the tools legs separately). */
+  note?: string;
 }
 
 /** Parse the reply text + usage from a chat-completions body. */
@@ -745,7 +806,17 @@ function parseAnthropicBody(
  *   2. auth — 401/403 means the key was rejected;
  *   3. modelAccepted — 400/404/410/422 (or an error object in a 200 body)
  *      means the model id is wrong/EOL'd for this provider;
- *   4. nonEmptyContent — the parsed reply is non-blank.
+ *   4. nonEmptyContent — the parsed reply is non-blank;
+ *   5. ROUND-119 (R119-P) — the TOOLS leg, run ONLY after 1-4 pass: a second
+ *      bounded call carrying ONE minimal tool (echo). toolsAccepted = the
+ *      provider took the tool-carrying request (a 400/422 here is EXACTLY
+ *      the TokenHarbor action-failure shape — the owner's report: plain
+ *      chat worked while every agent ACTION failed, because the old probe
+ *      never sent tools); toolCalled = the reply contains a well-formed
+ *      tool call. toolsAccepted:false fails the whole test (the "agent will
+ *      fail" verdict); toolCalled:false alone does NOT (the note says the
+ *      model is chat-only). Every earlier failure SKIPS the leg — the
+ *      checks then carry no tools fields (not-run, never guessed).
  *
  * Branches on provider.apiFormat (the provider-level probe's gap — it
  * hardcodes /chat/completions): chat-completions, anthropic-messages (the
@@ -756,7 +827,8 @@ function parseAnthropicBody(
  *
  * Scrubbing: the resolved key value (exact-match) PLUS the shared
  * secret-shape prefixes (sk-…/nvapi-…/github_pat_… — lib/secret-shapes.ts,
- * the R82 consolidation). Content previews cap at 200 chars.
+ * the R82 consolidation). Content previews cap at 200 chars; both phases
+ * share the 30 s MODEL_TEST_TIMEOUT_MS and the 64-token cap.
  *
  * The caller (the route) has already 404'd unknown model rows and 409'd
  * missing keys — this function still guards both for standalone safety
@@ -926,7 +998,15 @@ export async function testModelResponse(
       reason: "model returned an empty response (HTTP 200, no content)",
     };
   }
-  return {
+  // PONG PHASE PASSED — the chat round-trip is proven (http/auth/model/
+  // content). ROUND-119 (R119-P): run the TOOLS leg before declaring ok —
+  // the agent's real call shape always carries the toolset, and a provider
+  // that hard-rejects it (the TokenHarbor shape) must fail the test even
+  // though plain chat works. latencyMs stays the PONG round-trip's number
+  // (the base probe the latency line has always reported); the tools leg's
+  // cost rides the verdict fields, not the ms. (Named `pongResult` — the
+  // URL root `base` above stays `base`.)
+  const pongResult: ModelTestResult = {
     ok: true,
     latencyMs,
     providerId: provider.id,
@@ -935,6 +1015,284 @@ export async function testModelResponse(
     contentPreview: clean(parsed.text.slice(0, 200)),
     ...(parsed.usage !== undefined ? { usage: parsed.usage } : {}),
   };
+  const tools = await probeModelToolsAccepted({
+    base,
+    apiKey,
+    modelId,
+    apiFormat,
+    clean,
+  });
+  if (!tools.accepted) {
+    // The hard verdict: chat works, but the agent's tool-carrying calls are
+    // refused — ok:false + the raw scrubbed provider body in the reason.
+    return {
+      ...pongResult,
+      ok: false,
+      checks: { ...pongResult.checks, toolsAccepted: false },
+      reason: tools.reason,
+    };
+  }
+  if (!tools.called) {
+    // Accepted but not called: the model is a working CHAT model that
+    // ignored the tool invitation — ok stays true, the note says so.
+    return {
+      ...pongResult,
+      checks: { ...pongResult.checks, toolsAccepted: true, toolCalled: false },
+      note: tools.note,
+    };
+  }
+  return {
+    ...pongResult,
+    checks: { ...pongResult.checks, toolsAccepted: true, toolCalled: true },
+  };
+}
+
+// ── ROUND-119 (R119-P): the TOOLS leg's machinery ────────────────────────────
+
+/** The tools leg's verdict: either the request was accepted (and the model
+ * either called the tool or answered in text — `note` present in the latter
+ * case), or the request was refused/failed (`reason` carries the raw
+ * scrubbed error, verdict-suffixed). */
+type ModelToolsLeg =
+  | { accepted: true; called: boolean; note?: string }
+  | { accepted: false; reason: string };
+
+/**
+ * The second, tool-carrying call of POST /models/:id/test (R119-P). ONE
+ * minimal tool definition (`echo` — one required string arg) + an inviting
+ * prompt, in the provider's own wire dialect:
+ *   · chat-completions — tools:[{type:"function",function:{…}}] +
+ *     tool_choice:"auto", the system prompt as a `system` message;
+ *   · anthropic-messages — tools:[{name,description,input_schema}] +
+ *     tool_choice:{type:"auto"}, the system prompt as the top-level
+ *     `system` field (that dialect's convention);
+ *   · responses — tools:[{type:"function",name,description,parameters}] +
+ *     tool_choice:"auto", the system prompt as `instructions`.
+ *
+ * Same 30 s timeout and 64-token cap as the pong phase; the same scrubbing
+ * (exact key + secret shapes); the same error taxonomy mapped onto
+ * toolsAccepted:false with the raw body surfaced verbatim (the R80
+ * discipline) — a 400/422 here is EXACTLY the TokenHarbor action-failure
+ * shape ("chat worked, every action failed"), so the reason carries the
+ * "chat works, but every agent action will fail" verdict suffix.
+ */
+async function probeModelToolsAccepted(args: {
+  base: string;
+  apiKey: string;
+  modelId: string;
+  apiFormat: string;
+  clean: (text: string) => string;
+}): Promise<ModelToolsLeg> {
+  const { base, apiKey, modelId, apiFormat, clean } = args;
+  // `base` is the provider's normalized baseUrl (trailing slashes stripped
+  // by the caller) — the same root the pong phase posted to.
+
+  let response: Response;
+  try {
+    if (apiFormat === "anthropic-messages") {
+      response = await fetch(`${base}/messages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: modelId,
+          max_tokens: 64,
+          system: MODEL_TEST_TOOLS_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: MODEL_TEST_TOOLS_USER_PROMPT }],
+          tools: [
+            {
+              name: "echo",
+              description: "Echo the text back.",
+              input_schema: ECHO_TOOL_PARAMETERS,
+            },
+          ],
+          tool_choice: { type: "auto" },
+        }),
+        signal: AbortSignal.timeout(MODEL_TEST_TIMEOUT_MS),
+      });
+    } else if (apiFormat === "responses") {
+      response = await fetch(`${base}/responses`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: modelId,
+          instructions: MODEL_TEST_TOOLS_SYSTEM_PROMPT,
+          input: MODEL_TEST_TOOLS_USER_PROMPT,
+          max_output_tokens: 64,
+          tools: [
+            {
+              type: "function",
+              name: "echo",
+              description: "Echo the text back.",
+              parameters: ECHO_TOOL_PARAMETERS,
+            },
+          ],
+          tool_choice: "auto",
+        }),
+        signal: AbortSignal.timeout(MODEL_TEST_TIMEOUT_MS),
+      });
+    } else {
+      response = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [
+            { role: "system", content: MODEL_TEST_TOOLS_SYSTEM_PROMPT },
+            { role: "user", content: MODEL_TEST_TOOLS_USER_PROMPT },
+          ],
+          max_tokens: 64,
+          temperature: 0,
+          stream: false,
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "echo",
+                description: "Echo the text back.",
+                parameters: ECHO_TOOL_PARAMETERS,
+              },
+            },
+          ],
+          tool_choice: "auto",
+        }),
+        signal: AbortSignal.timeout(MODEL_TEST_TIMEOUT_MS),
+      });
+    }
+  } catch (error) {
+    // Transport failure on the tools call only (the pong phase just
+    // completed) — softer suffix than a provider rejection: the leg could
+    // not be verified, not "the provider refuses tools".
+    return {
+      accepted: false,
+      reason: clean(
+        `the agent tools request failed before reaching the provider: ${errorMessage(error)} — the tool-carrying call could not be verified (chat works; retry the test)`,
+      ),
+    };
+  }
+
+  if (
+    response.status === 400 ||
+    response.status === 401 ||
+    response.status === 403 ||
+    response.status === 404 ||
+    response.status === 410 ||
+    response.status === 422
+  ) {
+    // THE TokenHarbor action-failure shape: the provider takes plain chat
+    // (the pong phase just proved it) but hard-rejects the tools array —
+    // the raw body rides verbatim (upstreamErrorDetail scrubs the key).
+    // 401/403 on the tools call only (auth already proven) is the same
+    // verdict: the agent's tool-carrying calls are refused.
+    const detail = await upstreamErrorDetail(response, apiKey);
+    return {
+      accepted: false,
+      reason: `the agent tools request was rejected (HTTP ${response.status})${detail}${TOOLS_REJECTION_SUFFIX}`,
+    };
+  }
+  if (!response.ok) {
+    const detail = await upstreamErrorDetail(response, apiKey);
+    return {
+      accepted: false,
+      reason: `the agent tools request answered HTTP ${response.status}${detail}${TOOLS_REJECTION_SUFFIX}`,
+    };
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (error) {
+    return {
+      accepted: false,
+      reason: clean(
+        `the agent tools request returned a non-JSON 200 body: ${errorMessage(error)}${TOOLS_REJECTION_SUFFIX}`,
+      ),
+    };
+  }
+  const errorInBody = readErrorFromOkBody(body);
+  if (errorInBody !== null) {
+    // Some OpenAI-compatible gateways 200 + {"error": …} — the same trap the
+    // pong phase guards; on the tools leg it still means actions will fail.
+    return {
+      accepted: false,
+      reason: clean(
+        `the agent tools request returned HTTP 200 with an error body: ${errorInBody}${TOOLS_REJECTION_SUFFIX}`,
+      ),
+    };
+  }
+
+  const called =
+    apiFormat === "anthropic-messages"
+      ? readAnthropicToolUse(body)
+      : apiFormat === "responses"
+        ? readResponsesFunctionCall(body)
+        : readChatCompletionsToolCall(body);
+  if (called) {
+    return { accepted: true, called: true };
+  }
+  // Accepted, well-formed 200 — but the model answered in text. Quote what
+  // it actually said (≤80 chars, scrubbed) so the owner can eyeball it.
+  const text =
+    apiFormat === "anthropic-messages"
+      ? parseAnthropicBody(body).text
+      : apiFormat === "responses"
+        ? parseResponsesBody(body).text
+        : parseChatCompletionsBody(body).text;
+  const quote = text !== "" ? ` ("${clean(text.slice(0, TOOLS_NOTE_SNIPPET_CHARS))}")` : "";
+  return {
+    accepted: true,
+    called: false,
+    note: `tools accepted — the model answered in text instead of calling the echo tool${quote} — usable for chat, NOT for agent actions`,
+  };
+}
+
+/** chat-completions tool-call reader: choices[0].message.tool_calls is a
+ * non-empty array (the spec's definition of a well-formed call here). */
+function readChatCompletionsToolCall(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) return false;
+  const choices = (body as { choices?: unknown }).choices;
+  if (!Array.isArray(choices) || choices.length === 0) return false;
+  const first = choices[0];
+  if (typeof first !== "object" || first === null) return false;
+  const message = (first as { message?: unknown }).message;
+  if (typeof message !== "object" || message === null) return false;
+  const toolCalls = (message as { tool_calls?: unknown }).tool_calls;
+  return Array.isArray(toolCalls) && toolCalls.length > 0;
+}
+
+/** anthropic tool-call reader: content[] contains a tool_use block. */
+function readAnthropicToolUse(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) return false;
+  const content = (body as { content?: unknown }).content;
+  if (!Array.isArray(content)) return false;
+  return content.some(
+    (block) =>
+      typeof block === "object" &&
+      block !== null &&
+      (block as { type?: unknown }).type === "tool_use",
+  );
+}
+
+/** responses tool-call reader: output[] contains a function_call item. */
+function readResponsesFunctionCall(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) return false;
+  const output = (body as { output?: unknown }).output;
+  if (!Array.isArray(output)) return false;
+  return output.some(
+    (item) =>
+      typeof item === "object" &&
+      item !== null &&
+      (item as { type?: unknown }).type === "function_call",
+  );
 }
 
 /** Some OpenAI-compatible gateways answer 200 with `{"error": …}` — read the

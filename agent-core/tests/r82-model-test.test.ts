@@ -21,6 +21,12 @@
  *     EOL'd-NIM 410 shows verbatim); a 200-with-error-body (some
  *     OpenAI-compatible gateways) → modelAccepted:false; empty content 200 →
  *     nonEmptyContent:false.
+ *   · ROUND-119 (R119-P): a pong PASS now runs the TOOLS leg (a second
+ *     call carrying the echo tool) — the same text-only mock answer yields
+ *     toolsAccepted:true + toolCalled:false + the honest note (ok stays
+ *     true). A pong FAIL skips the leg entirely (no tools fields in the
+ *     checks — the not-run contract). The tools leg's own bodies,
+ *     rejections, and scrubbing are pinned in r119-p-model-tools.test.ts.
  *   · Transport failures → 502 PROVIDER_ERROR (scrubbed).
  *   · Key scrubbing: the resolved key never appears unmasked anywhere, and
  *     key SHAPES (sk-…/nvapi-…) in surfaced content are masked (the
@@ -228,7 +234,9 @@ describe("R82: POST /api/v1/models/:id/test — route guards (before any network
     expect(response.statusCode).toBe(200);
     expect(response.json().ok).toBe(true);
     expect(seenAuth).toBe(`Bearer ${SLOT2_KEY}`);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // R119-P: TWO calls now — the pong phase + the tools leg — both on the
+    // slot's key (the key-pool contract holds for every leg).
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     // Neither key value ever reaches the response body.
     expect(response.body).not.toContain(SLOT2_KEY);
     expect(response.body).not.toContain(KEY);
@@ -261,19 +269,32 @@ describe("R82: testModelResponse — the chat-completions branch", () => {
       payload: {},
     });
     expect(response.statusCode).toBe(200);
+    // R119-P: the mock answers the tools leg with the SAME text-only body
+    // (no tool_calls), so the pong passes, tools are ACCEPTED, the model
+    // answers in text — ok stays true + the honest note.
     expect(response.json()).toEqual({
       ok: true,
       latencyMs: expect.any(Number),
       providerId: GW_ID,
       model: GW_MODEL,
-      checks: { http: true, auth: true, modelAccepted: true, nonEmptyContent: true },
+      checks: {
+        http: true,
+        auth: true,
+        modelAccepted: true,
+        nonEmptyContent: true,
+        toolsAccepted: true,
+        toolCalled: false,
+      },
       contentPreview: "pong",
       usage: { inputTokens: 9, outputTokens: 1 },
+      note: 'tools accepted — the model answered in text instead of calling the echo tool ("pong") — usable for chat, NOT for agent actions',
     });
     // The request the probe really sent: {baseUrl}/chat/completions, the
     // resolved key, the exact probe body (64 tokens, temperature 0, no
-    // stream — a cheap, deterministic completion).
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // stream — a cheap, deterministic completion). R119-P: TWO calls —
+    // the pong phase + the tools leg (the tools body is pinned in the
+    // R119-P suite).
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(`${GW_BASE}/chat/completions`);
     expect(init?.method).toBe("POST");
@@ -409,18 +430,29 @@ describe("R82: testModelResponse — the anthropic-messages branch", () => {
       payload: {},
     });
     expect(response.statusCode).toBe(200);
+    // R119-P: the mock answers the tools leg with the SAME text-only body
+    // (no tool_use block) — accepted, answered in text, note carries it.
     expect(response.json()).toEqual({
       ok: true,
       latencyMs: expect.any(Number),
       providerId: "anthropic",
       model: "claude-r82-test",
-      checks: { http: true, auth: true, modelAccepted: true, nonEmptyContent: true },
+      checks: {
+        http: true,
+        auth: true,
+        modelAccepted: true,
+        nonEmptyContent: true,
+        toolsAccepted: true,
+        toolCalled: false,
+      },
       contentPreview: "pong",
       usage: { inputTokens: 4, outputTokens: 2 },
+      note: 'tools accepted — the model answered in text instead of calling the echo tool ("pong") — usable for chat, NOT for agent actions',
     });
     // The anthropic dialect: POST {base}/messages, x-api-key (NOT bearer),
-    // the version header, {model, max_tokens, messages}.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // the version header, {model, max_tokens, messages}. R119-P: TWO calls
+    // (pong + the tools leg; the tools body is pinned in the R119-P suite).
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.anthropic.com/v1/messages");
     expect(init?.method).toBe("POST");
@@ -468,7 +500,20 @@ describe("R82: testModelResponse — the responses branch", () => {
       contentPreview: "pong",
       usage: { inputTokens: 6, outputTokens: 3 },
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // R119-P: the same body answers the tools leg (text-only, no
+    // function_call item) — the accepted-but-text note rides the result.
+    expect(response.json().checks).toEqual({
+      http: true,
+      auth: true,
+      modelAccepted: true,
+      nonEmptyContent: true,
+      toolsAccepted: true,
+      toolCalled: false,
+    });
+    expect(response.json().note).toContain("answered in text instead of calling the echo tool");
+    // R119-P: TWO calls (pong + the tools leg; the tools body is pinned in
+    // the R119-P suite).
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(`${GW_BASE}/responses`);
     expect((init?.headers as Record<string, string>).authorization).toBe(`Bearer ${KEY}`);

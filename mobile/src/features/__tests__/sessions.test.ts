@@ -1678,6 +1678,70 @@ describe("sessions — the honest error fold (R117-d2)", () => {
     expect(bare.error?.errorClass).toBeNull();
     expect(bare.error?.attempts).toBeNull();
   });
+
+  // ── R119-P (round-119 §1 item F): the provider's RAW error text threads
+  // through BOTH reducers — the owner's TokenHarbor report (a region_blocked
+  // answer read as an unexplained generic failure on the phone, while the
+  // PC showed it). The persisted fold reads payload.providerError; the live
+  // frame reads details.providerError (+ details.classMessage).
+  it("R119-P: the persisted turn.error fold reads providerError (the raw provider text)", () => {
+    const items = foldSessionEvents([
+      event(1, "message.user", { content: "go" }),
+      event(2, "turn.error", {
+        code: "PROVIDER_ERROR",
+        message: "provider 'tokenharbor' call failed for session sess_1",
+        model: "qwen3.8-flash:free",
+        providerId: "tokenharbor",
+        providerError: "region_blocked: your region is not supported",
+        userSeq: 1,
+        errorClass: "region",
+      }),
+      event(3, "turn.error", { code: "NO_OUTPUT", message: "blank" }),
+    ]);
+    const errors = items.filter((item) => item.kind === "error");
+    expect(errors).toHaveLength(2);
+    const rich = errors[0];
+    expect(rich?.kind === "error" && rich.providerError).toBe(
+      "region_blocked: your region is not supported",
+    );
+    // Absent on the wire → null (never a guess; older sidecars).
+    const bare = errors[1];
+    expect(bare?.kind === "error" && bare.providerError).toBeNull();
+  });
+
+  it("R119-P: the LIVE error frame reads details.providerError + details.classMessage (both live + the card)", () => {
+    const errored = applyLiveFrame(
+      beginLiveTurn([], "go", NOW),
+      {
+        type: "error",
+        status: 502,
+        code: "PROVIDER_ERROR",
+        message: "the provider call failed",
+        details: {
+          errorClass: "rate_limit",
+          attempts: 6,
+          providerError: "429 rate limited: free-models-per-day quota exhausted",
+          classMessage: "the provider is out of quota",
+        },
+      },
+      NOW + 1,
+    );
+    expect(errored.error?.providerError).toBe("429 rate limited: free-models-per-day quota exhausted");
+    expect(errored.error?.classMessage).toBe("the provider is out of quota");
+    const card = errored.items[errored.items.length - 1];
+    expect(card?.kind === "error" && card.providerError).toBe(
+      "429 rate limited: free-models-per-day quota exhausted",
+    );
+    expect(card?.kind === "error" && card.classMessage).toBe("the provider is out of quota");
+    // a frame with NO details renders none (older sidecars)
+    const bare = applyLiveFrame(
+      beginLiveTurn([], "go", NOW),
+      { type: "error", status: 502, code: "PROVIDER_ERROR", message: "boom" },
+      NOW + 1,
+    );
+    expect(bare.error?.providerError).toBeNull();
+    expect(bare.error?.classMessage).toBeNull();
+  });
 });
 
 describe("sessions — the sub-agent control routes (R117-d2)", () => {

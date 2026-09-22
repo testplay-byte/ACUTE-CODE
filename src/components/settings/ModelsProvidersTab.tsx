@@ -1824,11 +1824,56 @@ interface ProviderCatalogState {
 // DEDICATED SECTION that expands below the model card (top half unchanged);
 // the config dialog keeps the compact inline line (its footer row).
 
+/** ROUND-119 (R119-P): the TOOLS leg carried on both verdict states — the
+ * agent-readiness verdict (the owner's TokenHarbor report: plain chat
+ * worked while every agent action failed, because the old probe never sent
+ * tools). undefined = the leg never ran (the pong phase failed first). */
+export interface ModelTestToolsLeg {
+  accepted: boolean;
+  called: boolean;
+}
+
+/**
+ * ROUND-119 (R119-P) — the tools leg's ONE-LINE verdict for the test bands
+ * (pure; both views render it as a single line in the band's own 11px
+ * typography): "tools ✓ — called echo" (the agent works), "tools accepted —
+ * answered in text, not called" (a chat-only model — the honest caution),
+ * or "tools rejected — {reason snippet}" (THE TokenHarbor shape: the
+ * provider refuses the agent's tool-carrying calls). null = the leg never
+ * ran; no line, never a guess.
+ */
+export function modelTestToolsLine(
+  tools: ModelTestToolsLeg | undefined,
+  reason?: string,
+): string | null {
+  if (tools === undefined) return null;
+  if (!tools.accepted) {
+    const raw = reason ?? "the provider refused the tools request";
+    const snippet = raw.slice(0, 140);
+    return `tools rejected — ${snippet}${raw.length > 140 ? "…" : ""}`;
+  }
+  if (tools.called) return "tools ✓ — called echo";
+  return "tools accepted — answered in text, not called";
+}
+
 export type ModelTestState =
   | { kind: "idle" }
   | { kind: "testing" }
-  | { kind: "pass"; latencyMs: number; preview?: string; usage?: { inputTokens: number; outputTokens: number } }
-  | { kind: "fail"; reason: string };
+  | {
+      kind: "pass";
+      latencyMs: number;
+      preview?: string;
+      usage?: { inputTokens: number; outputTokens: number };
+      /** R119-P — the tools leg (present whenever the probe ran it). */
+      tools?: ModelTestToolsLeg;
+    }
+  | {
+      kind: "fail";
+      reason: string;
+      /** R119-P — the tools leg (a tools rejection IS the failure — the
+       * line names it distinctly). */
+      tools?: ModelTestToolsLeg;
+    };
 
 function useModelTest(model: ProviderModelConfig | null): { state: ModelTestState; run: () => void } {
   const [state, setState] = useState<ModelTestState>({ kind: "idle" });
@@ -1837,17 +1882,28 @@ function useModelTest(model: ProviderModelConfig | null): { state: ModelTestStat
     setState({ kind: "testing" });
     testModelConnection(model.id)
       .then((result) => {
+        // R119-P: the tools leg rides BOTH verdict states (absent when the
+        // pong phase failed first — the leg never ran). Read defensively:
+        // the wire has carried `checks` since R82, but a malformed/legacy
+        // body (or a test fixture) without it degrades to "not run", never
+        // a crash.
+        const tools: ModelTestToolsLeg | undefined =
+          result.checks?.toolsAccepted === undefined
+            ? undefined
+            : { accepted: result.checks.toolsAccepted, called: result.checks.toolCalled === true };
         if (result.ok) {
           setState({
             kind: "pass",
             latencyMs: result.latencyMs,
             ...(result.contentPreview !== undefined ? { preview: result.contentPreview } : {}),
             ...(result.usage !== undefined ? { usage: result.usage } : {}),
+            ...(tools !== undefined ? { tools } : {}),
           });
         } else {
           setState({
             kind: "fail",
             reason: result.reason ?? "the probe failed without a reason",
+            ...(tools !== undefined ? { tools } : {}),
           });
         }
       })
@@ -1975,6 +2031,18 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
     const hide = setTimeout(() => setShowResult(false), 10_000);
     return () => clearTimeout(hide);
   }, [state]);
+  // R119-P — the tools leg's one-line verdict (the agent-readiness line;
+  // null when the leg never ran). One computation, both verdict branches.
+  const toolsLine =
+    state.kind === "pass" || state.kind === "fail"
+      ? modelTestToolsLine(state.tools, state.kind === "fail" ? state.reason : undefined)
+      : null;
+  const toolsColor =
+    state.kind === "fail"
+      ? SEMANTIC_COLORS.danger
+      : state.kind === "pass" && state.tools?.called
+        ? SEMANTIC_COLORS.success
+        : SEMANTIC_COLORS.warning;
 
   return (
     <>
@@ -2021,6 +2089,19 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
                     </button>
                   )}
                 </div>
+                {/* R119-P — the tools leg: one line, the band's own 11px
+                    typography; success when the model CALLED echo, warning
+                    when it answered in text (chat-only — the honest
+                    caution). */}
+                {toolsLine !== null ? (
+                  <div
+                    className="text-[11px] font-medium"
+                    style={{ color: toolsColor }}
+                    data-testid="model-test-tools"
+                  >
+                    {toolsLine}
+                  </div>
+                ) : null}
                 {showReply && state.preview !== undefined && (
                   <div
                     className="font-mono text-[11px] break-all rounded-sm px-2 py-1 max-h-24 overflow-y-auto"
@@ -2032,6 +2113,18 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
               </div>
             ) : (
               <div className="flex flex-col gap-0.5 min-w-0">
+                {/* R119-P — the tools rejection named distinctly (danger):
+                    the reason below carries the full raw body; this line is
+                    the scannable "the AGENT path is dead" verdict. */}
+                {toolsLine !== null ? (
+                  <div
+                    className="text-[11px] font-medium"
+                    style={{ color: SEMANTIC_COLORS.danger }}
+                    data-testid="model-test-tools"
+                  >
+                    {toolsLine}
+                  </div>
+                ) : null}
                 <div
                   className="text-[11px] break-all"
                   style={{ color: SEMANTIC_COLORS.danger }}
@@ -2103,6 +2196,19 @@ function ModelCard({
   const [showFull, setShowFull] = useState(false);
   const [showResult, setShowResult] = useState(false);
   const hideTimerRef = useRef<number | null>(null);
+  // R119-P — the tools leg's one-line verdict (the agent-readiness line;
+  // null when the leg never ran — the pong phase failed first). One
+  // computation, both verdict branches of the band below.
+  const toolsLine =
+    state.kind === "pass" || state.kind === "fail"
+      ? modelTestToolsLine(state.tools, state.kind === "fail" ? state.reason : undefined)
+      : null;
+  const toolsColor =
+    state.kind === "fail"
+      ? SEMANTIC_COLORS.danger
+      : state.kind === "pass" && state.tools?.called
+        ? SEMANTIC_COLORS.success
+        : SEMANTIC_COLORS.warning;
 
   // ── R93-A7 → R94-C: the Test-All wiring. A new seq fires the card's own
   // test once; every SETTLED outcome is reported to the header through the
@@ -2488,6 +2594,19 @@ function ModelCard({
                     </button>
                   )}
                 </div>
+                {/* R119-P — the tools leg: ONE line, the band's own 11px
+                    typography; success when the model CALLED echo, warning
+                    when it answered in text instead (a chat-only model —
+                    the honest caution the old probe could never surface). */}
+                {toolsLine !== null ? (
+                  <div
+                    className="text-[11px] font-medium"
+                    style={{ color: toolsColor }}
+                    data-testid="model-test-tools"
+                  >
+                    {toolsLine}
+                  </div>
+                ) : null}
                 {showReply && state.preview !== undefined && (
                   <div
                     className="font-mono text-[11px] break-all rounded-lg px-2.5 py-1.5 max-h-28 overflow-y-auto auto-scroll"
@@ -2506,6 +2625,19 @@ function ModelCard({
                 <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: SEMANTIC_COLORS.danger }}>
                   <AlertTriangle size={12} /> the test request failed
                 </div>
+                {/* R119-P — the tools rejection named distinctly: the reason
+                    below carries the provider's full raw body; this line is
+                    the scannable "the AGENT path is dead" verdict (THE
+                    TokenHarbor shape). */}
+                {toolsLine !== null ? (
+                  <div
+                    className="text-[11px] font-medium"
+                    style={{ color: SEMANTIC_COLORS.danger }}
+                    data-testid="model-test-tools"
+                  >
+                    {toolsLine}
+                  </div>
+                ) : null}
                 <div className="text-[11px] break-all" style={{ color: styles.textSecondary }} data-testid="model-test-reason">
                   {showFull ? state.reason : `${state.reason.slice(0, 300)}${state.reason.length > 300 ? "…" : ""}`}
                 </div>

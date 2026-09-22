@@ -13,6 +13,12 @@ import { describe, expect, it } from "@jest/globals";
 import type { QuietIconButtonProps, SegmentedControlProps } from "@/design/primitives";
 import type { SheetProps } from "@/components/sheet";
 import {
+  SHEET_CLOSE_MS,
+  SHEET_CONTENT_FADE_DELAY_MS,
+  SHEET_CONTENT_FADE_MS,
+  SHEET_SCRIM_OPEN_MS,
+} from "@/design/motion";
+import {
   PAGE_CTA_MIN_W,
   SEGMENT_INSET,
   SEGMENT_TRACK_H,
@@ -110,5 +116,34 @@ describe("the R118-A sheet anatomy — the drift-guards (spec-A §5)", () => {
   it("three segments fit on one line at 360dp: (360 − 2×16 gutters − 2×4 inset) / 3 ≥ 90dp per segment", () => {
     const segmentWidth = (360 - spacing.lg * 2 - SEGMENT_INSET * 2) / 3;
     expect(segmentWidth).toBeGreaterThanOrEqual(90);
+  });
+});
+
+// ── R119-P — the sheet's TIMED legs (the round-119 motion tuning, pinned) ───
+// The owner's verdict: the Add-Provider sheet's UI was right but "the
+// animations were not that good". The timed legs (scrim open / close
+// departure / content ride) are now NAMED constants in motion.ts — these
+// pins hold them (the spring pair itself lives in disclosure-motion.test.ts,
+// alongside the DISCLOSURE settle it now shares).
+
+describe("the R119-P sheet motion — the timed legs (round-119 §2 Track P)", () => {
+  it("the scrim's open fade is 200ms (was 160 linear) — the dim completes as the panel crosses the fold", () => {
+    expect(SHEET_SCRIM_OPEN_MS).toBe(200);
+  });
+
+  it("the close departure is 200ms — panel and scrim leave together, ease-in quad", () => {
+    expect(SHEET_CLOSE_MS).toBe(200);
+    // Panel and scrim MATCH — one exit, never a two-speed dissolve.
+    expect(SHEET_CLOSE_MS).toBe(SHEET_SCRIM_OPEN_MS);
+  });
+
+  it("the content ride: a 120ms fade starting 40ms after the panel begins (the header lands first)", () => {
+    expect(SHEET_CONTENT_FADE_MS).toBe(120);
+    expect(SHEET_CONTENT_FADE_DELAY_MS).toBe(40);
+    // The ride completes inside the scrim's open leg — the content is fully
+    // visible before the entrance settles.
+    expect(SHEET_CONTENT_FADE_DELAY_MS + SHEET_CONTENT_FADE_MS).toBeLessThanOrEqual(
+      SHEET_SCRIM_OPEN_MS,
+    );
   });
 });

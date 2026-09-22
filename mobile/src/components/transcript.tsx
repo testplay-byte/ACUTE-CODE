@@ -152,6 +152,26 @@ const THINKING_SETTLED_CAP = 20;
  * tail-truncate at 3 lines never offers a dead toggle). */
 const ERROR_MESSAGE_CLAMP_LINES = 3;
 const ERROR_MESSAGE_EXPAND_CHARS = 180;
+
+/**
+ * R119-P — the error card's BODY SELECTION (pure, exported for the tests):
+ * the provider's RAW error text is the honest PRIMARY line when the wire
+ * carried one (the round-119 §1 item F fix — the owner's TokenHarbor
+ * report: a region_blocked answer read as a generic "provider call failed"
+ * on the phone because BOTH mobile reducers dropped providerError); the
+ * generic machine message becomes the SECONDARY line (context, never the
+ * headline). No providerError → the generic line stays the only body
+ * (older sidecars, validation refusals). A blank/whitespace providerError
+ * is treated as absent (never an empty headline).
+ */
+export function errorCardLines(
+  providerError: string | null | undefined,
+  message: string,
+): { primary: string; secondary: string | null } {
+  const raw = providerError !== null && providerError !== undefined ? providerError.trim() : "";
+  if (raw === "") return { primary: message, secondary: null };
+  return { primary: raw, secondary: message };
+}
 /** R117-d2 — the sub-agent card's live accent rule + the copied-word flip's
  * quiet dwell (ms): the live caret's own 550ms rhythm and the PC's ~1.2s
  * "Copied" window, widened a beat for the smaller type. */
@@ -287,6 +307,8 @@ export function TranscriptItemView({
           message={item.message}
           errorClass={item.errorClass ?? null}
           attempts={item.attempts ?? null}
+          providerError={item.providerError ?? null}
+          classMessage={item.classMessage ?? null}
           onRetry={onRetryError}
         />
       );
@@ -2125,12 +2147,24 @@ function MetaLine({ text }: { text: string }) {
  * screen re-sends the failed turn's user message through the normal send
  * path; absent callback → no row, exactly the PC's optional-onRetry). The
  * card stays COMPACT — the richness is in the LINES, not the size.
+ *
+ * R119-P (round-119 §1 item F — the owner's TokenHarbor report: a
+ * region_blocked provider answer read as an unexplained generic failure on
+ * the phone): the BODY now prefers the provider's RAW error text
+ * (providerError, ≤4000 chars on the wire since R78/R80) as the headline —
+ * the PC's TurnErrorCard already did `providerError ?? message`; mobile now
+ * matches, with the generic machine message demoted to the dim secondary
+ * line (errorCardLines, exported for the tests). Copy details carries BOTH
+ * texts + the live frame's classified human line (classMessage). The clamp,
+ * the expand law, the chips, and the Retry row are untouched.
  */
 function ErrorCard({
   code,
   message,
   errorClass,
   attempts,
+  providerError,
+  classMessage,
   onRetry,
 }: {
   code: string;
@@ -2139,14 +2173,25 @@ function ErrorCard({
   errorClass?: string | null;
   /** The retry ladder's exhausted attempt count (rendered only when > 1). */
   attempts?: number | null;
+  /** R119-P — the provider's RAW error text (null = the wire carried none;
+   * the card then keeps the generic message as its only body). */
+  providerError?: string | null;
+  /** R119-P — the classified human one-liner (live frames only); rides Copy
+   * details, never the body. */
+  classMessage?: string | null;
   /** Zero-arg — the SCREEN binds the failed turn's user message. */
   onRetry?: () => void;
 }) {
   const { tokens } = useTheme();
   const prefs = useChatPrefs();
   const [expanded, setExpanded] = useState(false);
+  // R119-P — the body selection (errorCardLines above): the RAW provider
+  // text is the headline when present; the generic machine message demotes
+  // to the secondary line. The clamp + expand law is computed on the
+  // PRIMARY (the line the owner actually reads).
+  const { primary, secondary } = errorCardLines(providerError, message);
   const expandable =
-    message.split("\n").length > ERROR_MESSAGE_CLAMP_LINES || message.length > ERROR_MESSAGE_EXPAND_CHARS;
+    primary.split("\n").length > ERROR_MESSAGE_CLAMP_LINES || primary.length > ERROR_MESSAGE_EXPAND_CHARS;
   const cls = errorClass ?? null;
   const attemptCount =
     attempts !== null && attempts !== undefined && attempts > 1 ? attempts : null;
@@ -2159,12 +2204,18 @@ function ErrorCard({
       if (copyResetRef.current !== null) clearTimeout(copyResetRef.current);
     };
   }, []);
+  // R119-P — Copy details carries BOTH texts (the raw provider line + the
+  // generic machine message) plus the classified human line when the live
+  // frame carried one — the full honest story on the clipboard.
   const detailsText = [
     "Generation failed",
     `Code: ${code}`,
     ...(cls !== null ? [`Class: ${cls}`] : []),
     ...(attemptCount !== null ? [`Attempts: ${attemptCount}`] : []),
-    `Error: ${message}`,
+    ...(secondary !== null ? [`Provider error: ${primary}`, `Error: ${secondary}`] : [`Error: ${primary}`]),
+    ...(classMessage !== null && classMessage !== undefined && classMessage.trim() !== ""
+      ? [`Class message: ${classMessage.trim()}`]
+      : []),
   ].join("\n");
   const onCopy = (): void => {
     void Clipboard.setStringAsync(detailsText)
@@ -2205,7 +2256,7 @@ function ErrorCard({
   );
   return (
     <View
-      accessibilityLabel={`Error: ${message}`}
+      accessibilityLabel={`Error: ${primary}`}
       style={[
         styles.toolCard,
         {
@@ -2254,12 +2305,22 @@ function ErrorCard({
           )}
         </View>
       )}
+      {/* R119-P — the body: the RAW provider text as the headline (the
+          honest line — e.g. TokenHarbor's region_blocked message verbatim),
+          the generic machine message demoted to the dim secondary line
+          (context, never the headline). No providerError → the generic
+          line stays the only body, exactly the R117-d2 card. */}
       <TypeBody
         style={{ color: tokens.textSecondary }}
         numberOfLines={expanded ? undefined : ERROR_MESSAGE_CLAMP_LINES}
       >
-        {message}
+        {primary}
       </TypeBody>
+      {secondary !== null ? (
+        <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={1}>
+          {secondary}
+        </TypeCaption>
+      ) : null}
       <View style={styles.errorActionsRow}>
         <Pressable
           accessibilityLabel="Copy the error details"
