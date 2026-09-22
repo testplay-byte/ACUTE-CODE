@@ -2324,11 +2324,15 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
       SLOW,
     );
     expect(streamMock.streamSessionMessage).not.toHaveBeenCalled();
-    // The optimistic chip (seq 41 — the mocked POST return) is live-rendered.
+    // The optimistic queued row (seq 41 — the mocked POST return) is
+    // live-rendered. R119-C: it renders as a USER MESSAGE now — the content
+    // rides the bubble and the always-visible mono "queued" caption below
+    // it (the old amber banner's "Queued — sends after the current step"
+    // headline is gone).
     const chip = await screen.findByTestId("queued-chip", {}, SLOW);
     expect(chip.getAttribute("data-queued-seq")).toBe("41");
     expect(chip.textContent).toContain("also add tests");
-    expect(chip.textContent).toContain("Queued — sends after the current step");
+    expect(chip.querySelector('[data-testid="queued-state-caption"]')?.textContent).toBe("queued");
     // While the turn runs there is NO "Send now" (the queue will deliver).
     expect(screen.queryByRole("button", { name: "Send the queued message now" })).toBeNull();
     // The composer cleared exactly like a normal send.
@@ -2377,7 +2381,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy(), SLOW);
   });
 
-  it("R78-D: a queued-frame chip (live store) renders amber with the Clock label; X-REMOVE DELETEs the event and drops the chip optimistically", async () => {
+  it("R78-D: a queued-frame row (live store) renders as the USER BUBBLE with the queued caption; X-REMOVE DELETEs the event and drops the row optimistically", async () => {
     await renderQueuePanel([messageEvent(1, "user", "do the work", "2026-09-14T10:00:10Z")]);
     armLiveStream([{ seq: 77, content: "queued behind the tool call", ts: "2026-09-14T10:01:00Z" }]);
     const chip = await screen.findByTestId("queued-chip", {}, SLOW);
@@ -2530,6 +2534,356 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
     expect(card).toBeTruthy();
     expect(card.querySelector("[data-retry-provider-error]")).toBeNull();
     expect(card.textContent).toContain("rate limited — the provider is throttling requests");
+  });
+});
+
+// ── ROUND-119 (R119-C): the PC queued-message honesty. The owner's report had
+// two defects: (1) a queued message "does not appear as a message, but rather
+// as a notification or error message" — the amber banner is retired, the row
+// renders through the SAME UserMessage bubble every sent message uses; (2)
+// while a queued message waits, the transcript shows "the exact same thought
+// process… the exact same reply" TWICE — the queued POST's debounced
+// invalidation refetches the log mid-turn, the fold flushes the in-flight
+// turn's persisted events as a trailing OPEN turn, and the panel rendered
+// that AND the live section. The interlock: the items memo suppresses the
+// folded turn(s) opened at-or-after the LIVE turn's opening user message
+// (matched by content — the wire carries no seq for the opener) and the
+// folded queued rows the live queue already mirrors; when the overlay
+// clears, the fold renders everything exactly once. ──
+describe("AgentChatPanel queued-message honesty (ROUND-119 R119-C)", () => {
+  const SLOW = { timeout: 5000 };
+  const SESSION_ID = "sess_r119c";
+
+  function messageEvent(
+    seq: number,
+    role: "user" | "assistant",
+    content: string,
+    ts: string,
+    extra: Record<string, unknown> = {},
+  ): SessionEvent {
+    return {
+      seq,
+      type: role === "user" ? "message.user" : "message.assistant",
+      agentId: "agt_scribe",
+      payload: { role, content, agentId: "agt_scribe", ts, ...extra },
+      ts,
+    };
+  }
+
+  function queuedEvent(seq: number, content: string, ts: string): SessionEvent {
+    return {
+      seq,
+      type: "message.queued",
+      agentId: "agt_scribe",
+      payload: { role: "user", content, agentId: "agt_scribe", ts },
+      ts,
+    };
+  }
+
+  /** One live OWN-stream slice exactly as the stream left it when the queue
+   * POST's invalidation refetched mid-turn (the owner's moment): the turn is
+   * streaming, the optimistic echo is still armed, the queued message is in
+   * the live queue. */
+  const ownLiveSlice = (queued: Array<{ seq: number; content: string; ts: string }>) => ({
+    liveTurn: {
+      startedAtMs: Date.now() - 4000,
+      working: [
+        { type: "text" as const, content: "Let me inspect the project first.", ts: "2026-09-23T10:00:20Z" },
+      ],
+      streamText: "The file is ready.",
+      streamThinking: "",
+      stopped: false,
+      stoppedByUser: false,
+      streamingToolInputs: [],
+      debugReport: null,
+      browserCheckpoint: null,
+      retry: null,
+      note: null,
+      model: "test/live-model",
+    } satisfies LiveTurn,
+    streamBusy: true,
+    sendError: null,
+    liveError: null,
+    // The anchor content: the message that OPENED the live turn.
+    pendingEcho: "please build the thing",
+    lastLiveEndMs: Date.now(),
+    lastTurnStoppedByUser: false,
+    lastTurnStoppedTs: null,
+    queued,
+    deliveredQueued: [],
+    queueKeptNotice: null,
+    remote: false,
+  });
+
+  it("R119-C: THE OWNER'S DUPLICATE — a live turn + a folded log carrying the SAME in-flight turn renders it ONCE; the clearStream handoff renders it once again", async () => {
+    const projects = await getFixtureProjects().list();
+    // The mid-turn refetch's snapshot: the persisted opener, the in-flight
+    // turn's already-persisted interim events (the trailing OPEN turn), and
+    // the queued row whose POST triggered the invalidation.
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: SESSION_ID,
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "running",
+          title: "R119-C duplicate probe",
+          createdAt: "2026-09-23T10:00:00Z",
+          updatedAt: "2026-09-23T10:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "please build the thing", "2026-09-23T10:00:10Z"),
+          messageEvent(2, "assistant", "Let me inspect the project first.", "2026-09-23T10:00:20Z", {
+            model: "test/folded-model",
+          }),
+          queuedEvent(3, "and make it pretty", "2026-09-23T10:00:40Z"),
+          messageEvent(4, "assistant", "The file is ready.", "2026-09-23T10:00:50Z", {
+            model: "test/folded-model",
+          }),
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+
+    // Pre-control (no live overlay): the fold owns everything — ONE user
+    // row, ONE trailing turn, ONE queued row.
+    await screen.findByText("please build the thing", {}, SLOW);
+    expect(document.querySelectorAll('[data-testid="turn-header"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-testid="queued-chip"]')).toHaveLength(1);
+
+    // The live overlay arms exactly as the stream left it mid-turn.
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: ownLiveSlice([{ seq: 3, content: "and make it pretty", ts: "2026-09-23T10:00:40Z" }]),
+      },
+    });
+    await waitFor(() => expect(document.querySelector('[data-testid="streaming-caret"]')).not.toBeNull(), SLOW);
+
+    // THE PIN: exactly ONE turn header — the LIVE one (its model stamp), not
+    // the folded duplicate (the folded model never renders while live).
+    // waitFor: the folded copy's AnimatePresence exit must settle first —
+    // the DUPLICATE is the end state this test exists to kill.
+    await waitFor(() => {
+      const headers = Array.from(document.querySelectorAll('[data-testid="turn-header"]'));
+      expect(headers).toHaveLength(1);
+      expect(headers[0].textContent).toContain("test/live-model");
+      expect(headers[0].textContent).not.toContain("test/folded-model");
+    }, SLOW);
+    // The reply text renders ONCE (the live stream's copy — the folded
+    // trailing turn is suppressed, so the owner's "exact same reply" twice
+    // is gone), and so do the opener's bubble and the queued message.
+    await waitFor(() => expect(screen.getAllByText(/The file is ready/)).toHaveLength(1), SLOW);
+    expect(screen.getAllByText("please build the thing")).toHaveLength(1);
+    await waitFor(() => expect(screen.getAllByText("and make it pretty")).toHaveLength(1), SLOW);
+    await waitFor(() => expect(document.querySelectorAll('[data-testid="queued-chip"]')).toHaveLength(1), SLOW);
+
+    // The handoff (the stream ended; clearStream + the echo clear): the fold
+    // takes over — STILL exactly one of everything, now the folded copies.
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: {
+          liveTurn: null,
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: false,
+        },
+      },
+    });
+    await waitFor(() => {
+      const headers = Array.from(document.querySelectorAll('[data-testid="turn-header"]'));
+      expect(headers).toHaveLength(1);
+      expect(headers[0].textContent).toContain("test/folded-model");
+    }, SLOW);
+    await waitFor(() => expect(screen.getAllByText(/The file is ready/)).toHaveLength(1), SLOW);
+    expect(screen.getAllByText("please build the thing")).toHaveLength(1);
+    // The FOLDED queued row owns the render now — the same bubble, with the
+    // affordances bound through the panel's live path.
+    await waitFor(() => {
+      const chips = document.querySelectorAll('[data-testid="queued-chip"]');
+      expect(chips).toHaveLength(1);
+      expect(chips[0].getAttribute("data-queued-seq")).toBe("3");
+    }, SLOW);
+    expect(screen.getByRole("button", { name: "Remove the queued message" })).toBeTruthy();
+  });
+
+  it("R119-C: a REMOTE mirror suppresses its own folded turn too (the userText anchor) — the retire hands the fold the render", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r119c_remote",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "running",
+          title: "R119-C remote probe",
+          createdAt: "2026-09-23T11:00:00Z",
+          updatedAt: "2026-09-23T11:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "hey from the phone", "2026-09-23T11:00:10Z"),
+          messageEvent(2, "assistant", "The phone's answer so far", "2026-09-23T11:00:30Z", {
+            model: "test/folded-model",
+          }),
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await screen.findByText("hey from the phone", {}, SLOW);
+
+    // The mirror mid-turn: remote, userText stamped from turn.started.
+    useStreamStore.setState({
+      bySession: {
+        sess_r119c_remote: {
+          liveTurn: {
+            startedAtMs: Date.now() - 2000,
+            working: [],
+            streamText: "The phone's answer so far",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+            model: "test/live-model",
+            userText: "hey from the phone",
+          } satisfies LiveTurn,
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: 0,
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: true,
+        },
+      },
+    });
+
+    // While the mirror renders: ONE header (the live model), ONE answer, ONE
+    // user bubble (the persisted row — the remote live copy deduped).
+    await waitFor(() => {
+      const headers = Array.from(document.querySelectorAll('[data-testid="turn-header"]'));
+      expect(headers).toHaveLength(1);
+      expect(headers[0].textContent).toContain("test/live-model");
+    }, SLOW);
+    await waitFor(() => expect(screen.getAllByText(/phone's answer so far/)).toHaveLength(1), SLOW);
+    expect(screen.getAllByText("hey from the phone")).toHaveLength(1);
+
+    // The retire timer lands → the fold owns the render, still once.
+    useStreamStore.setState({
+      bySession: {
+        sess_r119c_remote: {
+          liveTurn: null,
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: false,
+        },
+      },
+    });
+    await waitFor(() => {
+      const headers = Array.from(document.querySelectorAll('[data-testid="turn-header"]'));
+      expect(headers).toHaveLength(1);
+      expect(headers[0].textContent).toContain("test/folded-model");
+    }, SLOW);
+    await waitFor(() => expect(screen.getAllByText(/phone's answer so far/)).toHaveLength(1), SLOW);
+  });
+
+  it("R119-C: the queued row renders AS A MESSAGE — the UserMessage bubble idiom, NO amber, the queued caption, and the affordances still fire", async () => {
+    const projects = await getFixtureProjects().list();
+    const longQueued =
+      "first line of the queued message. second line of the queued message. third line of the queued message.";
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r119c_idiom",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "R119-C idiom probe",
+          createdAt: "2026-09-23T12:00:00Z",
+          updatedAt: "2026-09-23T12:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "build the thing", "2026-09-23T12:00:10Z"),
+          messageEvent(2, "assistant", "on it — writing files", "2026-09-23T12:00:20Z"),
+          queuedEvent(3, longQueued, "2026-09-23T12:00:40Z"),
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    const chip = await screen.findByTestId("queued-chip", {}, SLOW);
+    expect(chip.getAttribute("data-queued-seq")).toBe("3");
+
+    // The BUBBLE idiom: the chip's first child is the reduced-opacity
+    // wrapper around the plain UserMessage — a right-aligned row capped at
+    // min(65%, 640px) with the accent-soft rounded-xl bubble inside, exactly
+    // like every sent message (NOT a bordered banner card).
+    const wrapper = chip.firstElementChild as HTMLElement;
+    expect(wrapper.style.opacity).toBe("0.75");
+    const row = wrapper.querySelector("div.flex.justify-end") as HTMLElement | null;
+    expect(row).not.toBeNull();
+    const bubble = row?.querySelector("div.rounded-xl") as HTMLElement | null;
+    expect(bubble).not.toBeNull();
+    expect(bubble?.className).toContain("text-[13px]");
+    // The FULL message rides the bubble — the old banner's line-clamp-2 is
+    // gone (the bubble's own clamp owns long text now).
+    expect(chip.querySelector(".line-clamp-2")).toBeNull();
+    expect(chip.textContent).toContain("third line of the queued message.");
+
+    // NO warning/amber styling anywhere on the row — the waiting state is
+    // chrome (opacity + caption), never a colored card. Both spellings the
+    // old banner used (#f59e0b and its withAlpha rgba form) must be absent.
+    expect(chip.outerHTML).not.toContain("#f59e0b");
+    expect(chip.outerHTML).not.toContain("rgba(245, 158, 11");
+
+    // The always-visible caption BELOW the bubble: right-aligned mono 10px
+    // "queued" (touch never sees hover — the state must not hide).
+    const caption = chip.querySelector('[data-testid="queued-state-caption"]') as HTMLElement;
+    expect(caption.textContent).toBe("queued");
+    expect(caption.className).toContain("justify-end");
+    expect(caption.className).toContain("font-mono");
+    expect(caption.className).toContain("text-[10px]");
+    // The hover-cluster state indicator + BOTH affordances ride the bubble's
+    // reveal row (idle here — the folded row, no busy slice).
+    expect(chip.querySelector('[data-testid="queued-hover-state"]')?.textContent).toContain("queued");
+    expect(chip.querySelector("[data-queued-send-now]")).not.toBeNull();
+    expect(chip.querySelector("[data-queued-remove]")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Send the queued message now" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove the queued message" })).toBeTruthy();
+
+    // The rail keeps its honest queued node (hollow dot + sr-only label).
+    const node = document.querySelector('[data-timeline-kind="queued"]');
+    expect(node).not.toBeNull();
+    expect(node?.querySelector(".sr-only")?.textContent).toContain("Queued message");
+
+    // The affordances still FIRE through the new chrome: X-remove → DELETE
+    // /sessions/:id/queue/:seq.
+    fireEvent.click(screen.getByRole("button", { name: "Remove the queued message" }));
+    await waitFor(() => expect(queueMock.dequeueSessionMessage).toHaveBeenCalledWith("sess_r119c_idiom", 3), SLOW);
   });
 });
 

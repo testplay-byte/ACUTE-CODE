@@ -1299,6 +1299,23 @@ export interface AssistantTurnItem {
   kind: "turn";
   /** seq of the turn's first event (assistant/tool/approval). */
   seq: number;
+  /** ROUND-119 (R119-C, owner: while a queued message waited the transcript
+   * rendered "the exact same thought process… the exact same reply" TWICE —
+   * the debounced session refetch folded the IN-FLIGHT turn's already-
+   * persisted events, and the panel painted that folded partial turn BELOW
+   * the identical live stream section): the seq of the user message that
+   * OPENED this turn — `lastUserSeq` at flush time, which is exactly the
+   * opener's seq on all three flush paths (a message.user flushes the
+   * previous accumulator BEFORE its own seq is recorded; turn.error and the
+   * end-of-log trailing flush leave it untouched). The panel's items memo
+   * compares this anchor against the LIVE turn's opening user message to
+   * suppress the folded copy while the live overlay renders the same turn.
+   * -1 when the log's events precede any message.user (a synthetic leading
+   * turn) — never matches a real anchor. A DELIVERED queued message (the
+   * message.queued row flipped to message.user IN PLACE) is a normal opener
+   * by then, so a mid-turn delivery splits the fold into two turn items that
+   * BOTH carry honest openers. */
+  startedBySeq: number;
   agentId: string | null;
   /** Turn start (first event ts). */
   ts: string;
@@ -1782,6 +1799,10 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
     const item: AssistantTurnItem = {
       kind: "turn",
       seq: acc.seq,
+      // R119-C: the opening user message's seq (see the field's docblock) —
+      // read BEFORE this flush's caller can advance lastUserSeq (the
+      // message.user branch assigns its own seq only after flushTurn()).
+      startedBySeq: lastUserSeq,
       agentId: acc.agentId,
       ts: acc.ts,
       endTs: acc.endTs,
