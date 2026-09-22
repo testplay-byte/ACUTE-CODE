@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-21 round-116 -->
+<!-- last-reviewed: 2026-09-22 round-118 -->
 
 # Rules — The Don'ts (the slop signature)
 
@@ -14,7 +14,8 @@ called out across three rounds of feedback.
 4. **Full-width "New X" actions at list tops** with descriptions and arrows. New
    actions live at list bottoms, icon + two words.
 5. **Footnote essays** under content ("The PIN window is…", "Tap a project to…").
-6. **Text-only back buttons.** Always the chevron icon.
+6. **Text-only back buttons.** Always the arrow — `ArrowLeft` in the quiet circle
+   chip (R118-D). Never the chevron bracket (the owner's word for it), never text.
 7. **Cluttered/cramped forms** — inputs jammed with hint paragraphs between them.
    Generous spacing, one hint max.
 8. **Floating gap below a sheet** during its open animation (page background visible).
@@ -82,3 +83,23 @@ called out across three rounds of feedback.
     home's single Connect-to-PC).
 40. **Left-hugging bottom actions** — the list-bottom "New X" is centered.
 41. **Back chevrons without a chip** — 44px target, subtle fill + hairline border.
+
+## Round-118 additions (the owner's v0.111.0 walkthrough)
+
+42. **Field captions/description blocks inside sheets** — label + input only; no
+    explainer essays between fields, no consequence captions under CTAs (R118-A).
+43. **Segmented options that wrap or hide** — 2–4 choices on ONE line, all visible
+    (R118-A).
+44. **Full-width CTAs in sheets** — centered, self-sized, `minWidth 200`; the
+    destructive confirm takes the danger tone; quiet escapes centered beneath
+    (R118-A).
+45. **Grab handles on non-draggable sheets** — a drag strip on a Modal sheet is a
+    lying affordance; the grip is deleted (R118-A).
+46. **State glyphs duplicating the body** — a tick/clock ladder restating what the
+    body already colors; the delivery ticks are retired for this reason (R118-D).
+47. **One-shot destructive rows** — Stop/Remove/Delete rows that fire on the first
+    tap; arm in place first ("Do you want to stop?") or open the centered confirm
+    (R118-D).
+48. **Controls without content** — an always-mounted disabled queue button with
+    nothing to send, a spinner on a vanished result: if there is nothing to act on,
+    render nothing (R118-D).

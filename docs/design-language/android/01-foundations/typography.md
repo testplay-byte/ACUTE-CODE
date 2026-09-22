@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-117 -->
+<!-- last-reviewed: 2026-09-22 round-118 -->
 
 # Foundations — Typography & the Copy-Length Law
 
@@ -36,7 +36,7 @@ Micro/Mono`). This file pins how much text each tier is ALLOWED to carry.
 | Wizard tagline | One line, ≤ ~48 chars |
 | Button label | 1–3 words ("Get started", "Scan", "Allow camera access", "Pair with this host") |
 | Empty-state message | One line title + one line caption |
-| Field hint | One line; only when the input is genuinely ambiguous |
+| Field hint | One line; only when the input is genuinely ambiguous; **never inside sheets** (R118-A — label + input, nothing else) |
 | Footnote/kicker under content | **Deleted as a pattern.** If it explains the screen, the screen is wrong. |
 
 Rules that follow:
@@ -53,7 +53,8 @@ Rules that follow:
 
 - `TypeDisplay` — the wizard only (Welcome / Camera / Link your desktop / Connect to PC).
 - `TypeStat` (round-117) — the dashboard's stat/data numbers (28 mono-medium).
-- `TypeTitle` — in-app pushed-screen heroes and full-screen moments.
+- `TypeTitle` — in-app pushed-screen heroes, full-screen moments, and **sheet headers**
+  (R118-A: the sheet's headline is a title, never a caption).
 - `TypeBodyStrong` — row labels, option labels.
 - `TypeCaption` — the one-line description tier (tertiary color).
 - `TypeMono` — paths, addresses, PINs, commands, model ids. The pairing PIN renders

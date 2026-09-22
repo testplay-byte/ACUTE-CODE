@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-117 -->
+<!-- last-reviewed: 2026-09-22 round-118 -->
 <!-- round-117-g — the visual-design-quality (elevation) spec. RESEARCH + SPEC only:
      this file prescribes; implementation waves execute. Binding law: the three laws
      (README.md) + 01-foundations + 02-patterns + 03-rules stay in force. Every place
@@ -357,6 +357,8 @@ forecasts); radius unchanged.
 top radius `RADIUS_CARD` → **`RADIUS_TILE` (24)**; the panel's hardcoded
 `"0px -2px 18px rgba(42,32,24,0.18)"` (`sheet.tsx:248`) → `clayShadowSheet`; grip
 28×4 → **32×4**. Spring/skirt mechanics untouched (R116-b is correct).
+
+*R118-A supersedes the grip clause (deleted); all other values stand.*
 
 **Composer (chat dock):** input background `inputBg` → `surfaceWell` (with the existing
 inputBorder hairline); the two hardcoded shadows (`composer.tsx:1673,1695`) →

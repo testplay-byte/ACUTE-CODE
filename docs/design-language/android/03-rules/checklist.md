@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-20 round-115 -->
+<!-- last-reviewed: 2026-09-22 round-118 -->
 
 # Rules — The Pre-Merge Checklist
 
@@ -66,3 +66,17 @@ Run against every mobile diff before review. A "no" to any question = rework.
 - [ ] Dashboard numbers are field-provenanced; whole-history sections say "all time".
 - [ ] Any mobile package.json/lockfile change → `npm ci --dry-run` proof before tagging
       (MAINTENANCE.md §g 2c — the v0.109.0 lesson).
+
+## Round-118 additions
+
+- [ ] Sheets carry the static initial pose — no first-frame at-rest flash on open
+      (`motion.md` §2's law).
+- [ ] No field captions inside sheets — label + input only (donts #42).
+- [ ] Selectors one-line, all options visible — 2–4 choices, no wrapping chip rows
+      (donts #43).
+- [ ] CTAs centered and self-sized (`minWidth 200`) — sheets AND pages; destructive
+      confirms take the danger tone (donts #44).
+- [ ] Sheet close = the circle chip (`QuietIconButton`) — never a bare X, never a
+      grip.
+- [ ] Back = the arrow (`ArrowLeft` in the quiet circle) — never the chevron bracket
+      (donts #6).

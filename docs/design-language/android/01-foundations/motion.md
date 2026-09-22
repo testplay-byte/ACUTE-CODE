@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-21 round-116 -->
+<!-- last-reviewed: 2026-09-22 round-118 -->
 
 # Foundations — Motion
 
@@ -34,6 +34,12 @@ spring.
 - Lists cap the stagger at 12 rows; beyond that everything enters on row 12's beat.
 - Wizard screens: the hero (icon + title + tagline) enters FIRST (0ms), options stagger
   after. Every wizard screen animates in — a static first-run screen is rejected.
+- **The static initial pose (R118-A, law):** every Modal-hosted animated surface —
+  sheets, centered dialogs — carries a STATIC fallback style ahead of the animated
+  one (panel pinned below the fold, scrim at 0). The Modal's new Android window can
+  composite its first frame before Reanimated attaches, and an empty first animated
+  style paints the panel OPEN at rest ("opens, then replays"). Last-wins flattening
+  makes the pose inert after frame one — the flash becomes impossible.
 
 ## 3. State-change grammar
 
@@ -41,10 +47,10 @@ spring.
 |---|---|
 | Press | scale 0.98 + shadow collapse + 8% tint (the house press) |
 | Toggle/select | spring to the new position (sliding pill, switch dot) |
-| Expand/collapse (accordion) | spring height 0↔measured + chevron rotates 180° on its own spring |
+| Expand/collapse (accordion) | expand springs height 0↔measured + chevron rotates 180° on its own spring; **collapse is a 200ms timing, never a spring (R118-C — closing never bounces)** |
 | Success (granted, linked, created) | icon tile bg springs to `success`, icon crossfades to the check, a single `successHaptic` |
 | Waiting (thinking) | three 6px dots, 1.2s opacity pulse, 180ms stagger — calm, never a spinner |
-| Live caret | 8×15 accent bar, 0.25↔1 opacity, 550ms each way |
+| Live caret | 8×15 accent bar, 0.25↔1 opacity, 550ms each way — the house live rhythm; R118-D: the processing bubble's accent edge breathes 0.34↔0.62 on the same 550ms legs (the delivery-edge rhythm; static 0.55 mix under reduced motion) |
 | Countdown pressure | the "Valid for Ns" chip tints warning under 30s, springs gently each tick — no seizure flashing |
 
 ## 4. The animated moments (round-115 mandates)
@@ -71,18 +77,33 @@ spring.
 7. **Tab label morph (round-116)**: the selected tab's label expands (width + opacity,
    ~200ms timing or TAB_SPRING) while the previous item's label collapses — the icon
    never moves, only the label breathes in beside it.
+   Round-118 amendment (R118-B): the label's expanded `maxWidth` is the measured width
+   **+2px** (`LABEL_EPSILON` — the pixel grid clips an exact fit), and the neighboring
+   slots rebalance on the label's own timing (`TAB_LABEL_MS`) so the row stays fluid
+   while the pill glides on TAB_SPRING.
 8. **Anchored dropdown (round-116)**: the header menu springs in below its control
    (scale 0.96→1 + opacity, origin top-right, ~180ms) and dismisses on tap-outside
    with a 120ms fade. Never a bottom sheet.
 9. **Broken-link idle (round-116, unpaired home)**: the desktop/phone chips drift a few
    px apart and back (~2.8s period) with the dashed link line's gap widening in sync —
    calm, looping, the "currently not connected" pulse.
+10. **Centered dialog entrance (round-118, R118-D)**: the confirm card springs in at
+    the screen center (scale 0.96→1 on the house spring, origin center) over the
+    160ms sheet scrim; exit is a 120ms fade. Scrim tap cancels; the confirm haptic
+    fires only on confirm. Carries the static initial pose (§2) — it is a
+    Modal-hosted surface.
+11. **Disclosure (round-118, R118-C)**: expand rides `DISCLOSURE_SPRING {180, 24}`
+    (ζ ≈ 0.89 — one soft settle, no jelly); collapse is `withTiming` **200ms ease-out
+    + a 150ms opacity fade** — a timing curve cannot overshoot, so closing NEVER
+    bounces. The chevron follows its level's direction; the onLayout re-measure rides
+    the spring; reduced motion snaps both ways.
 
 ## 5. What never animates
 
 - Resting cards, resting text, backgrounds.
 - The matte top edge (it's a material, not a light).
-- Sheet chrome (grip, title) — the panel slides, its contents don't double-slide.
+- Sheet chrome (header row) — the panel slides, its contents don't double-slide.
+  (R118-A: the grip is deleted — see `round-117-elevation.md` §2.2's supersession.)
 - Anything while `prefers-reduced-motion`/accessibility "remove animations" is on:
   entrance/stagger/idle animations drop; state changes snap.
 

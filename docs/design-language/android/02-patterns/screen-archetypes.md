@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-117 -->
+<!-- last-reviewed: 2026-09-22 round-118 -->
 
 # Patterns — Screen Archetypes
 
@@ -40,16 +40,16 @@ Anatomy:
 
 ```
 [header-free root: content starts at status-bar inset + spacing.xxl]
-   optional: live section strip (connection status / window chips)   ← one row, quiet
-   SectionHeader (micro kicker, optional action)
+   optional: state-conditional live strip (offline/probing only)  ← one row, quiet
+   SectionHeader (micro kicker, optional action; LARGE tier on registries)
    rows… (PressableCard / ClayCard rows, 12px gaps, stagger entrance)
-   [New thing action — at the BOTTOM, half width, no description]
+   [New thing CTA — at the BOTTOM, centered, self-sized, no description]
 [tab bar inset]
 ```
 
 Rules:
 - **Header-free tab roots** (no title row, no bell, no connection pill) — pushed
-  screens keep the compact 56px header (chevron | title+subtitle | right slot).
+  screens keep the compact 56px header (back arrow | title+subtitle | right slot).
 - Row = leading identity (letter avatar / icon chip) + label + ONE meta line.
   One line per meta datum; a row is 2 text lines max.
 - **Round-117 amendment (AMENDMENT 5 — the rhythm, round-117-elevation.md §2.1):**
@@ -59,17 +59,35 @@ Rules:
   themselves while groups knit tight. Gutters stay 16.
 - Empty state = Archetype-1-style centered message (icon + one-line title +
   one-line caption).
+- **The live strip is state-conditional (R118-B):** it renders ONLY while offline or
+  probing (dot + status word + "· messages will queue") — never an always-on status
+  row. The WHO + connection identity lives in the **More hero** (the More hub's
+  elevated card: host label, status dot + word, identity micro line → the connect
+  hub); home carries the strip, settings carries no connection row at all.
+- **Registry headings ride the LARGE tier (R118-E):** pushed registry screens set
+  their section heading at `SectionHeader large` (20/700) and break tiers with the
+  **strong Hairline** (~65px: `marginVertical xl` + the 1dp `borderStrong` rule) — a
+  25px hairline break is indistinguishable from the 12px intra-group rhythm.
 - Inline expansion (accordion) belongs to lists: tap a row → children expand below it
-  with the house spring; the chevron is the ONLY affordance (no + buttons on rows).
-- The "New X" action renders at the list's bottom, `alignSelf: "flex-start"`-ish
-  (half width), icon + two-word label, no description, no chevron.
+  with the disclosure motion (R118-C — expand springs, collapse is a timing); the
+  chevron is the ONLY affordance (no + buttons on rows).
+- **The "New X" CTA (R118-E):** centered, self-sized `ChromeButton`
+  (`minWidth: PAGE_CTA_MIN_W 200`), two-word label, no icon tile, no description, no
+  chevron — the SAME grammar in the empty state, the configured list, and the well
+  ("New project", "Add a provider", "New session"). The half-width outline idiom is
+  retired (donts #40's centered law, now with the real CTA recipe).
+- **The sessions well (R118-E):** a project's sessions render in the recessed well —
+  `surfaceWell` + hairline `clayRim` + `RADIUS_INPUT`, **1dp inset `borderStrong`
+  dividers between rows**, the model NAME in the meta line (the name-hash dot chip),
+  honest badges (non-"open" only) — ONE shared anatomy with the dashboard's session
+  rows (`components.md` §Session rows inside expansions).
 
 ## Archetype 3 — Detail / Form (manual entry, settings pages, confirm)
 
 Anatomy:
 
 ```
-[compact 56px header: chevron-back | title | right slot]
+[compact 56px header: back arrow | title | right slot]
    optional hero card (identity / status) — the subject of the screen
    form fields (ClayInput) or info cards, spacing.lg apart
    [primary action, bottom-sticky or at end]
@@ -79,6 +97,12 @@ Rules:
 - Highlight discipline: **each key datum gets its own visual tier** — address in mono
   body, PIN in big grouped mono, countdown in a tinted chip. Never two facts sharing
   one row when either matters.
+- **The three-zone hero (R118-E):** a detail screen's subject card separates into
+  zones — identity (the name-hash color tile + `TypeTitle` 20/700 name + ONE context
+  line) → hairline → the one-honest-line machine strip (mono) → hairline → the
+  actions pair (primary + quiet peer, both 50 tall). Never one undifferentiated card
+  carrying identity, machine meta, and same-weight outlined actions (the provider
+  detail page is the reference build).
 - Forms: label above input, one-line hint below ONLY when ambiguous, error text in
   danger replaces the hint. Return key submits when valid.
 - Smart affordances beat prose: a "Paste" action that parses clipboard pairing text
@@ -91,8 +115,9 @@ in its own file.
 
 ## Cross-archetype rules
 
-- **Back buttons are always the chevron icon** (`ChevronLeft`, 44px target). Never a
-  text-only "Back".
+- **Back buttons are always the arrow icon** — `ArrowLeft` in the 40px quiet circle
+  (`QuietIconButton`; R118-D supersedes the chevron — the owner called the bracket
+  what it was). Never a text-only "Back", never the chevron bracket.
 - Headers on pushed screens: title = the subject's NAME (project name, "Manual entry"),
   subtitle = one contextual line max.
 - Loading = skeletons shaped like the content (never centered spinners on list
@@ -113,7 +138,10 @@ in its own file.
   unpaired home shows the broken-link hero + "Currently not connected" + a single
   "Connect to PC" that opens the scanner directly. Secondary escapes (manual entry)
   live INSIDE the scanner, not on the home.
-- **The dashboard is DYNAMIC (round-116):** not one vertical scroll — stat carousels
-  (horizontal paging, snap), tappable cards that expand/spotlight, and sectioned
-  horizontal scrollers. Every number is field-provenanced; whole-history sections are
-  labeled "all time" honestly.
+- **The dashboard is a VERTICAL instrument (round-118 supersedes the carousel
+  mandate):** ONE scroll — the five-section stack (stat grid · daily chart · models
+  · tools/keys · projects) under a self-sized period selector. **Horizontal snap
+  carousels are BANNED on this screen — every horizontal FlatList there is a defect**
+  (they hid mixed-scope cards behind a swipe and split one section across two
+  surfaces). Every number is field-provenanced; whole-history sections are labeled
+  "all time" honestly.

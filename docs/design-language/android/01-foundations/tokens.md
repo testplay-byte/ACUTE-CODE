@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-117 -->
+<!-- last-reviewed: 2026-09-22 round-118 -->
 
 # Foundations — Tokens
 
@@ -77,6 +77,11 @@ THEMES[6] × (light|dark)  →  resolveTheme(themeId, isDark)  →  ResolvedThem
   Round-117 amendment: the in-app sheen's top stop is **0.18 alpha** (`sheenTop`, was
   0.42) — a whisper glint, never a gloss band; the metal ramp's dark stop
   (`chromeEdgeDark`) is 0.16 light so the edge actually draws on the white bar.
+  Round-118 amendment (R118-B): the ramp runs **VERTICALLY** — light stop along the
+  top edge, dark stop along the bottom, on all four sides — so every corner reads
+  symmetric (the old diagonal ramp left one visible corner and smudged the rest),
+  and the dark stop is **0.22 light / 0.08 dark** (deeper where the white bar needs
+  the line, softer in dark mode so it never smudges).
 
 ## 3. Spacing ladder (8pt-ish)
 
@@ -91,7 +96,8 @@ THEMES[6] × (light|dark)  →  resolveTheme(themeId, isDark)  →  ResolvedThem
   and `SectionHeader` carries `marginTop: spacing.xl` (20); the two compose the
   32 px section break while rows knit at 12. Gutters stay 16; card padding
   stays lg/md/xl.
-- Sheet padding: `spacing.xl` horizontal inside sheets (roomier than cards).
+- Sheet padding: `spacing.lg` (16) horizontal inside sheets (round-118, was `spacing.xl`:
+  the header row's title now aligns with the fields at the panel's own gutter).
 
 ## 4. Radii
 
@@ -107,7 +113,16 @@ THEMES[6] × (light|dark)  →  resolveTheme(themeId, isDark)  →  ResolvedThem
   smaller with `hitSlop`).
 - `BAR_HEIGHT 60`, `BAR_MARGIN 12` — the floating tab bar; content inset rides
   `TabBarInsetContext`.
-- Keyboard: the chat dock owns `ADJUST_NOTHING`; sheets ride the Modal host.
+- Keyboard: the chat dock owns `ADJUST_NOTHING`; sheets ride the Modal host (and ride
+  the IME itself — R118-E: the panel translates up by `min(kbHeight, headroom)` on
+  the sheet spring; `KeyboardAvoidingView` stays banned per R115-K).
+- **Round-118 geometry constants:** `SHEET_HEADER_ROW 48` (the sheet's title row),
+  `SEGMENT_TRACK_H 52` / `SEGMENT_INSET 4` (the segmented control's track —
+  `SEGMENT_TRACK_H − 2×SEGMENT_INSET === TOUCH_TARGET`), `SHEET_CTA_MIN_W 200` /
+  `PAGE_CTA_MIN_W 200` (the centered self-sized CTA floors — sheets and pages).
+- **`surfaceHeader` (R118-D):** the in-flow chrome shade — bg **+6% warm ink light /
+  +30% black dark** (#E0E2DC / #17130F on Clay) — for header columns pulled through
+  the status-bar inset (the session top bar); the text tiers hold AA on it.
 
 ## 6. Typography ladder (see `typography.md` for the law)
 
