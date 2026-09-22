@@ -73,7 +73,7 @@
  *      the error line instead of the misleading "No models yet".
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider, type QueryKey } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import { ModelsProvidersTab, ProviderKeysCard } from "./ModelsProvidersTab";
@@ -174,6 +174,11 @@ let modelTestFailIds: Set<string> = new Set();
  * optimistic-update test flips a row while the network leg is still in
  * flight (release() proves the flip never waited for it). */
 let modelPatchGate: Promise<void> | null = null;
+/** R118-F: when set, POST /models/:rowId/test waits on this gate — the
+ * busy-band test needs the probe still IN FLIGHT to pin the one-line
+ * "Testing {model}…" row (release() lets the answer land). Same pattern
+ * as modelPatchGate. */
+let modelTestGate: Promise<void> | null = null;
 // R93-A6: the knob that simulates the backend rejecting the upsert.
 let modelAddFails = false;
 /** R59-C: when true, the reveal route answers HTTP 500 (the error path). */
@@ -356,6 +361,8 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
         text: async () => JSON.stringify({ error: { code: "NOT_FOUND", message: "no such model row" } }),
       } as unknown as Response;
     }
+    // R118-F: hold the probe in flight when the busy-band test asks for it.
+    if (modelTestGate !== null) await modelTestGate;
     return jsonResponse(modelTestAnswer);
   }
   // ROUND-58 (R58-d): POST /providers/:id/keys/reveal — the full values.
@@ -522,6 +529,7 @@ beforeEach(() => {
   modelTestAnswer = null;
   modelTestFailIds = new Set();
   modelPatchGate = null;
+  modelTestGate = null;
   modelAddFails = false;
   providersFail = false;
   modelsConfigFail = false;
@@ -546,7 +554,40 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // R118-F: the timer tests flip the clock — never leak a fake clock into
+  // the next test (a no-op when the clock was real).
+  vi.useRealTimers();
 });
+
+/** R118-F: advance the FAKE clock inside act — fires react-query's notify
+ * timers (v5's notifyManager rides setTimeout(0), so a plain microtask flush
+ * leaves every query stuck in "loading" under fake timers) AND flushes the
+ * microtask generations the fired timers schedule (the DevicesTab.test.tsx
+ * idiom, lifted verbatim). */
+async function tick(ms: number): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
+/** R118-F: poll under the FAKE clock until a query resolves — the tab's
+ * query cascade (providers → models config → merged rows) spans several
+ * notify-timer generations, so a single tick(0) can land mid-flight. Each
+ * miss advances the fake clock by a small step; the ready() callback should
+ * be a pure query (its throw IS the "not yet" signal). */
+async function tickUntil(ready: () => void, stepMs = 25, budgetMs = 5_000): Promise<void> {
+  let waited = 0;
+  for (;;) {
+    try {
+      ready();
+      return;
+    } catch {
+      if (waited >= budgetMs) throw new Error("tickUntil: the subject never rendered");
+      await tick(stepMs);
+      waited += stepMs;
+    }
+  }
+}
 
 /* ── KeyPoolSection: the slot-collision fix (the round's bug) ─────────────── */
 
@@ -2540,14 +2581,127 @@ describe("Models UI — the R89 overhaul", () => {
     fireEvent.click(screen.getByTestId("model-test-button"));
 
     // The dedicated section appears below the card with the response time…
+    // (R118-F: the band now mounts in the "testing" state too — the
+    // one-line busy row — so the section's testid exists BEFORE the answer
+    // lands; the PASS verdict gets its own waitFor below.)
     const section = await screen.findByTestId("model-test-result");
-    expect(section.getAttribute("data-model-test")).toBe("pass");
+    await waitFor(() => {
+      expect(section.getAttribute("data-model-test")).toBe("pass");
+    });
     expect(section.textContent).toContain("432ms");
     expect(section.textContent).toContain("3 tokens in / 5 out");
 
     // …Show reply expands the FULL reply inside the section.
     fireEvent.click(within(section).getByTestId("model-test-show-reply"));
     expect(screen.getByTestId("model-test-reply-body").textContent).toContain("Hello from the model");
+  });
+
+  // ── R118-F (round-118 §1 item 26): the PC test-model status surface — the
+  // one-line busy row renders WHILE the probe runs (the old busy cue was a
+  // 12px spinner buried in a 32px icon-only button). The gate holds the
+  // fetch in flight so the testing state is observable deterministically.
+  it("R118-F: the band renders WHILE TESTING — the one-line 'Testing GLM 5.2…' busy row", async () => {
+    providersList = [PROVIDER];
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" })];
+    modelTestAnswer = { ok: true, latencyMs: 432 };
+    let release!: () => void;
+    modelTestGate = new Promise<void>((res) => {
+      release = res;
+    });
+
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByText("GLM 5.2")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("model-test-button"));
+
+    // The probe is in flight → the DEDICATED SECTION is already up, carrying
+    // the busy row (spinning icon + the model's display name, secondary
+    // text — never only the icon button's tiny spinner).
+    const busy = await screen.findByTestId("model-test-busy");
+    const section = screen.getByTestId("model-test-result");
+    expect(section.getAttribute("data-model-test")).toBe("testing");
+    expect(busy.textContent).toContain("Testing GLM 5.2…");
+    expect(busy.querySelector("svg")).toBeTruthy();
+
+    // Release the probe → the verdict replaces the busy row (pass here).
+    release();
+    await waitFor(() => {
+      expect(screen.getByTestId("model-test-result").getAttribute("data-model-test")).toBe("pass");
+    });
+    expect(screen.queryByTestId("model-test-busy")).toBeNull();
+  });
+
+  it("R118-F: a PASS band auto-folds at 10s — NOT at 5 (the R87 5s supersession)", async () => {
+    vi.useFakeTimers();
+    providersList = [PROVIDER];
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" })];
+    modelTestAnswer = { ok: true, latencyMs: 432 };
+    renderWithProviders(<ModelsProvidersTab />);
+    await tickUntil(() => {
+      screen.getByTestId("model-test-button");
+    });
+    fireEvent.click(screen.getByTestId("model-test-button"));
+    await tickUntil(() => {
+      expect(screen.getByTestId("model-test-result").getAttribute("data-model-test")).toBe("pass");
+    });
+    // 5s in: the OLD R87 contract would already have folded — the R118-F
+    // band is still up (a 2-10s real completion plus a 5s vanish read as
+    // "no status at all").
+    await tick(5_000);
+    expect(screen.getByTestId("model-test-result").getAttribute("data-model-test")).toBe("pass");
+    // 10s in: the pass folds and the row returns to rest for the reader
+    // who looked away (the FAIL case below never does).
+    await tick(5_100);
+    vi.useRealTimers(); // framer-motion's exit rides the REAL rAF clock
+    await waitFor(() => expect(screen.queryByTestId("model-test-result")).toBeNull());
+  });
+
+  it("R118-F: a FAIL band NEVER auto-collapses (an error the owner must read never snaps away)", async () => {
+    vi.useFakeTimers();
+    providersList = [PROVIDER];
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" })];
+    modelTestAnswer = { ok: false, reason: "the upstream refused (test fixture)" };
+    renderWithProviders(<ModelsProvidersTab />);
+    await tickUntil(() => {
+      screen.getByTestId("model-test-button");
+    });
+    fireEvent.click(screen.getByTestId("model-test-button"));
+    await tickUntil(() => {
+      expect(screen.getByTestId("model-test-result").getAttribute("data-model-test")).toBe("fail");
+    });
+    // Far past every timer the old contract ever armed (5s, then 10s) — the
+    // fail band is still on screen, verdict + reason readable.
+    await tick(60_000);
+    const section = screen.getByTestId("model-test-result");
+    expect(section.getAttribute("data-model-test")).toBe("fail");
+    expect(section.textContent).toContain("the upstream refused");
+    vi.useRealTimers();
+  });
+
+  it("R118-F: the config dialog's FOOTER line carries the busy row too (the compact variant)", async () => {
+    providersList = [PROVIDER];
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" })];
+    modelTestAnswer = { ok: true, latencyMs: 432 };
+    let release!: () => void;
+    modelTestGate = new Promise<void>((res) => {
+      release = res;
+    });
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByText("GLM 5.2")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Configure model GLM 5.2" }));
+    const dialog = screen.getByRole("dialog", { name: "Configure model" });
+    fireEvent.click(within(dialog).getByTestId("model-test-button"));
+    const busy = await within(dialog).findByTestId("model-test-busy");
+    expect(busy.textContent).toContain("Testing GLM 5.2…");
+    expect(
+      within(dialog).getByTestId("model-test-result").getAttribute("data-model-test"),
+    ).toBe("testing");
+    release();
+    await waitFor(() => {
+      expect(within(dialog).getByTestId("model-test-result").getAttribute("data-model-test")).toBe(
+        "pass",
+      );
+    });
+    expect(screen.queryByTestId("model-test-busy")).toBeNull();
   });
 });
 

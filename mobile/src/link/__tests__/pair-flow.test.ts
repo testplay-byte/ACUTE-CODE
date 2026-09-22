@@ -529,6 +529,101 @@ describe("pairWithHost — manual + tunnel forms", () => {
   });
 });
 
+// ── the manual lan LADDER (R118-F, round-118 §1 item 53) ────────────────────
+//
+// THE item-53 regression: a manual pairing built from the desktop's FULL
+// copied text (the primary address + the smart-paste's altHosts) probes every
+// rung — the QR path always carried a whole ladder while the manual path died
+// "unreachable" on its ONE rung whenever that address was a virtual adapter
+// (WSL/Hyper-V 172.x first under the old first-octet sort).
+
+describe("pairWithHost — the manual lan ladder (R118-F)", () => {
+  it("THE item-53 regression: the first rung network-errors, the second answers health → ok with activeAddr === the second", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    // The owner's exact scenario: 172.20.16.1 is the WSL/virtual adapter
+    // (nothing answers there), 192.168.1.4 is the real NIC.
+    const candidate = candidateFromManual({
+      kind: "lan",
+      host: "172.20.16.1",
+      port: 45999,
+      certFP: null,
+      pin: "87654321",
+      altHosts: ["192.168.1.4"],
+    });
+    net.setHealth((o) =>
+      o.url.startsWith("https://172.20.16.1:")
+        ? ((): HttpResponse => { throw netError("network", "unreachable"); })()
+        : ok(healthBody()),
+    );
+    const result = await pairWithHost(candidate, deps(net, store));
+    expect(result.ok).toBe(true);
+    // The ladder climbed: probe the dead rung, probe the live rung, claim
+    // over the live one — exactly the QR path's behavior.
+    expect(net.requests.map((r) => r.url)).toEqual([
+      "https://172.20.16.1:45999/health",
+      "https://192.168.1.4:45999/health",
+      "https://192.168.1.4:45999/api/v1/mobile/pair/claim",
+    ]);
+    if (!result.ok) return;
+    expect(result.value.activeAddr).toBe("192.168.1.4");
+    // The stored reconnect ladder leads with the working address.
+    expect(result.value.host.addrs[0]).toBe("192.168.1.4");
+  });
+
+  it("a single dead manual address still returns the EXACT unreachable message (pair-flow.ts :294, byte-identical)", async () => {
+    const net = makeNet();
+    const store = makeStore();
+    net.failHealth("network", "down");
+    const candidate = candidateFromManual({
+      kind: "lan",
+      host: "172.20.16.1",
+      port: 45999,
+      certFP: null,
+      pin: "87654321",
+    });
+    const result = await pairWithHost(candidate, deps(net, store));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe("unreachable");
+    expect(result.error.message).toBe(
+      "could not reach the host on any of its addresses — is the desktop on and links enabled?",
+    );
+  });
+
+  it("candidateFromManual's lan ladder shape: [host, ...altHosts] — absent/empty altHosts stay one rung", () => {
+    expect(
+      candidateFromManual({ kind: "lan", host: "172.20.16.1", port: 45999, certFP: null, pin: "87654321" }),
+    ).toEqual({
+      kind: "lan",
+      addrs: ["172.20.16.1"],
+      port: 45999,
+      certFP: null,
+      machineId: null,
+      pin: "87654321",
+      relay: null,
+    });
+    expect(
+      candidateFromManual({
+        kind: "lan",
+        host: "172.20.16.1",
+        port: 45999,
+        certFP: CERT_FP,
+        pin: "87654321",
+        altHosts: ["192.168.1.4", "[fe80::1]"],
+      }),
+    ).toEqual({
+      kind: "lan",
+      addrs: ["172.20.16.1", "192.168.1.4", "[fe80::1]"],
+      port: 45999,
+      certFP: CERT_FP,
+      machineId: null,
+      pin: "87654321",
+      relay: null,
+    });
+  });
+});
+
 // ── the relay rung (v0.106.0, R112) ──────────────────────────────────────────
 
 describe("pairWithHost — the relay rung", () => {

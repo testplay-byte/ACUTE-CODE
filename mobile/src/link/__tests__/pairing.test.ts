@@ -1,8 +1,8 @@
 /**
  * pairing.test.ts — the QR payload parser (happy + every malformed case),
- * the three manual fallback forms, and the smart-paste parser
- * (parsePairingText — the desktop's "Copy pairing text" format plus the
- * loose human forms).
+ * the three manual fallback forms (+ the R118-F altHosts leg), and the
+ * smart-paste parser (parsePairingText — the desktop's "Copy pairing text"
+ * format, the FULL address ladder since R118-F, plus the loose human forms).
  */
 
 import { describe, expect, it } from "@jest/globals";
@@ -393,6 +393,80 @@ describe("parseManualEntry", () => {
     });
   });
 
+  // ── the altHosts leg (R118-F, round-118 §1 item 53) ──────────────────────
+
+  it("R118-F: carries the smart-paste's extra hosts onto the lan target (ports stripped, order kept)", () => {
+    expect(
+      parseManualEntry({
+        address: "172.20.16.1:45999",
+        pin: "87654321",
+        altHosts: ["192.168.1.42:45999", "[fe80::1]:45999", "office-desktop.local:45999"],
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        kind: "lan",
+        host: "172.20.16.1",
+        port: 45999,
+        certFP: null,
+        pin: "87654321",
+        altHosts: ["192.168.1.42", "[fe80::1]", "office-desktop.local"],
+      },
+    });
+    // Already-bare hosts ride through unchanged (the screen's stash shape).
+    expect(
+      parseManualEntry({ address: "172.20.16.1:45999", pin: "87654321", altHosts: ["192.168.1.42"] }),
+    ).toEqual({
+      ok: true,
+      value: { kind: "lan", host: "172.20.16.1", port: 45999, certFP: null, pin: "87654321", altHosts: ["192.168.1.42"] },
+    });
+  });
+
+  it("R118-F: dedupes (case-insensitive), drops the primary host, drops invalid entries — never fatal", () => {
+    expect(
+      parseManualEntry({
+        address: "192.168.1.4:53411",
+        pin: "87654321",
+        altHosts: [
+          "192.168.1.4:53411", // the primary again
+          "OFFICE-DESKTOP.LOCAL:53411",
+          "office-desktop.local", // case-insensitive duplicate of the above
+          "192.168.1.4", // the primary, bare
+          "what is this", // garbage
+          "https://x.example.com", // a URL is not a LAN host
+          "192.168.1.9:99999", // out-of-range port
+        ],
+      }),
+    ).toEqual({
+      ok: true,
+      value: { kind: "lan", host: "192.168.1.4", port: 53411, certFP: null, pin: "87654321", altHosts: ["OFFICE-DESKTOP.LOCAL"] },
+    });
+  });
+
+  it("R118-F: an absent/empty altHosts keeps the lan wire shape byte-identical (pre-R118 callers)", () => {
+    expect(parseManualEntry({ address: "192.168.1.4:53411", pin: "87654321" })).toEqual({
+      ok: true,
+      value: { kind: "lan", host: "192.168.1.4", port: 53411, certFP: null, pin: "87654321" },
+    });
+    expect(parseManualEntry({ address: "192.168.1.4:53411", pin: "87654321", altHosts: [] })).toEqual({
+      ok: true,
+      value: { kind: "lan", host: "192.168.1.4", port: 53411, certFP: null, pin: "87654321" },
+    });
+  });
+
+  it("R118-F: altHosts are IGNORED by the tunnel + pin-only forms", () => {
+    expect(
+      parseManualEntry({ address: "https://abc.example.com", pin: "87654321", altHosts: ["192.168.1.4:8443"] }),
+    ).toEqual({
+      ok: true,
+      value: { kind: "tunnel", url: "https://abc.example.com", pin: "87654321" },
+    });
+    expect(parseManualEntry({ address: "", pin: "87654321", altHosts: ["192.168.1.4:8443"] })).toEqual({
+      ok: true,
+      value: { kind: "pin-only", pin: "87654321" },
+    });
+  });
+
   it("refuses address forms without a port and garbage addresses", () => {
     expect(parseManualEntry({ address: "192.168.1.4", pin: "87654321" })).toEqual({
       ok: false,
@@ -450,22 +524,51 @@ describe("parsePairingText", () => {
   it("parses the desktop's exact Copy pairing text format", () => {
     expect(parsePairingText("192.168.1.4:8443 · PIN 12345678")).toEqual({
       address: "192.168.1.4:8443",
+      addresses: ["192.168.1.4:8443"],
       pin: "12345678",
     });
   });
 
-  // The table: the loose human forms — separators, orderings, labels.
-  it.each<[string, { address: string; pin: string }]>([
-    ["192.168.1.4:8443 PIN 12345678", { address: "192.168.1.4:8443", pin: "12345678" }],
-    ["192.168.1.4:8443\nPIN 12345678", { address: "192.168.1.4:8443", pin: "12345678" }],
-    ["pin: 12345678 · 192.168.1.4:8443", { address: "192.168.1.4:8443", pin: "12345678" }],
-    ["PIN12345678 at 192.168.1.4:8443", { address: "192.168.1.4:8443", pin: "12345678" }],
-    ["office-desktop.local:53411 · PIN 87654321", { address: "office-desktop.local:53411", pin: "87654321" }],
-    ["[fe80::1]:8443 PIN 12345678", { address: "[fe80::1]:8443", pin: "12345678" }],
-    ["12345678 192.168.1.20:8443", { address: "192.168.1.20:8443", pin: "12345678" }],
-    ["192.168.1.20:8443 99887766", { address: "192.168.1.20:8443", pin: "99887766" }],
-    ["Address: 192.168.1.20:8443, PIN: 99887766", { address: "192.168.1.20:8443", pin: "99887766" }],
-    ["See https://host.example.com. PIN 12345678", { address: "https://host.example.com", pin: "12345678" }],
+  // THE owner scenario (R118-F, round-118 §1 item 53): the desktop's copied
+  // text carries the FULL address ladder — the first address is a virtual
+  // adapter (WSL/Hyper-V 172.x), the real NIC is second. EVERY address is
+  // collected (address = the first, addresses = both), and the PIN + cert
+  // still parse exactly as before.
+  it("R118-F: the owner scenario — the multi-address ladder text collects EVERY address", () => {
+    expect(
+      parsePairingText(`172.20.16.1:45999 · 192.168.1.42:45999 · PIN 49301182 · cert ${CERT_COLONS}`),
+    ).toEqual({
+      address: "172.20.16.1:45999",
+      addresses: ["172.20.16.1:45999", "192.168.1.42:45999"],
+      pin: "49301182",
+      certFP: CERT_BARE,
+    });
+  });
+
+  it("R118-F: a multi-address text WITHOUT the PIN marker still finds the PIN (each collected address leaves the scan string)", () => {
+    // The whole point of removing every match from the work string: the
+    // addresses' digits can never masquerade as the standalone 8-digit run.
+    expect(parsePairingText("172.20.16.1:45999 · 192.168.1.42:45999 · 49301182")).toEqual({
+      address: "172.20.16.1:45999",
+      addresses: ["172.20.16.1:45999", "192.168.1.42:45999"],
+      pin: "49301182",
+    });
+  });
+
+  // The table: the loose human forms — separators, orderings, labels. The
+  // single-address rows carry addresses: [that address] (R118-F's shape —
+  // address stays addresses[0]).
+  it.each<[string, { address: string; addresses: string[]; pin: string }]>([
+    ["192.168.1.4:8443 PIN 12345678", { address: "192.168.1.4:8443", addresses: ["192.168.1.4:8443"], pin: "12345678" }],
+    ["192.168.1.4:8443\nPIN 12345678", { address: "192.168.1.4:8443", addresses: ["192.168.1.4:8443"], pin: "12345678" }],
+    ["pin: 12345678 · 192.168.1.4:8443", { address: "192.168.1.4:8443", addresses: ["192.168.1.4:8443"], pin: "12345678" }],
+    ["PIN12345678 at 192.168.1.4:8443", { address: "192.168.1.4:8443", addresses: ["192.168.1.4:8443"], pin: "12345678" }],
+    ["office-desktop.local:53411 · PIN 87654321", { address: "office-desktop.local:53411", addresses: ["office-desktop.local:53411"], pin: "87654321" }],
+    ["[fe80::1]:8443 PIN 12345678", { address: "[fe80::1]:8443", addresses: ["[fe80::1]:8443"], pin: "12345678" }],
+    ["12345678 192.168.1.20:8443", { address: "192.168.1.20:8443", addresses: ["192.168.1.20:8443"], pin: "12345678" }],
+    ["192.168.1.20:8443 99887766", { address: "192.168.1.20:8443", addresses: ["192.168.1.20:8443"], pin: "99887766" }],
+    ["Address: 192.168.1.20:8443, PIN: 99887766", { address: "192.168.1.20:8443", addresses: ["192.168.1.20:8443"], pin: "99887766" }],
+    ["See https://host.example.com. PIN 12345678", { address: "https://host.example.com", addresses: ["https://host.example.com"], pin: "12345678" }],
   ])("parses the loose form %j", (text, expected) => {
     expect(parsePairingText(text)).toEqual(expected);
   });
@@ -473,6 +576,7 @@ describe("parsePairingText", () => {
   it("parses the tunnel URL form (https address, no port split)", () => {
     expect(parsePairingText("https://abc-xyz.trycloudflare.com · PIN 12345678")).toEqual({
       address: "https://abc-xyz.trycloudflare.com",
+      addresses: ["https://abc-xyz.trycloudflare.com"],
       pin: "12345678",
     });
   });
@@ -481,6 +585,7 @@ describe("parsePairingText", () => {
     const text = `https://acute-relay.anikuta.workers.dev/m/${MACHINE_ID} · PIN 12345678`;
     expect(parsePairingText(text)).toEqual({
       address: `https://acute-relay.anikuta.workers.dev/m/${MACHINE_ID}`,
+      addresses: [`https://acute-relay.anikuta.workers.dev/m/${MACHINE_ID}`],
       pin: "12345678",
     });
     // The same URL with NO PIN marker and nothing else — the machineId's
@@ -491,6 +596,7 @@ describe("parsePairingText", () => {
   it("extracts + normalizes a trailing certificate fingerprint when present", () => {
     expect(parsePairingText(`192.168.1.4:8443 · PIN 12345678 · ${CERT_COLONS}`)).toEqual({
       address: "192.168.1.4:8443",
+      addresses: ["192.168.1.4:8443"],
       pin: "12345678",
       certFP: CERT_BARE,
     });
@@ -500,6 +606,7 @@ describe("parsePairingText", () => {
     // "12345678" sits inside a hex string — only the standalone run wins.
     expect(parsePairingText("192.168.1.4:8443 abc12345678def 00000000")).toEqual({
       address: "192.168.1.4:8443",
+      addresses: ["192.168.1.4:8443"],
       pin: "00000000",
     });
   });

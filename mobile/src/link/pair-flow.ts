@@ -163,9 +163,14 @@ export function candidateFromManual(target: ManualTarget): PairCandidate {
         relay: null,
       };
     case "lan":
+      // R118-F (round-118 §1 item 53): the manual lan ladder carries the
+      // smart-paste's EXTRA hosts as further rungs — the QR path always
+      // probed a whole ladder while the manual path died "unreachable" on
+      // its ONE rung whenever that address was a virtual adapter. The
+      // probe loop, pinFor, claim, storage: zero changes.
       return {
         kind: "lan",
-        addrs: [target.host],
+        addrs: [target.host, ...(target.altHosts ?? [])],
         port: target.port,
         certFP: target.certFP,
         machineId: null,

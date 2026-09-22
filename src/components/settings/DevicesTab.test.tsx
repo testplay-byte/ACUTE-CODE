@@ -739,7 +739,7 @@ describe("DevicesTab §b R115: the pairing dialog upgrades (ROUND-115 R115-E1)",
     expect(screen.queryByTestId("pair-machine-name")).toBeNull();
   });
 
-  it("'Copy pairing text' copies `firstAddr:port · PIN pin · cert <colon-hex fp>` (the TLS fix's PC half) and flips to Copied", async () => {
+  it("'Copy pairing text' copies the FULL address ladder `addr1:port · addr2:port · PIN pin · cert <colon-hex fp>` and flips to Copied", async () => {
     const write = vi.fn().mockResolvedValue(undefined);
     stubClipboard(write);
     await openDialog(pairingPayload(Date.now() + 120_000));
@@ -747,18 +747,55 @@ describe("DevicesTab §b R115: the pairing dialog upgrades (ROUND-115 R115-E1)",
     const button = screen.getByTestId("pair-copy-text");
     expect(button.textContent).toContain("Copy pairing text");
     fireEvent.click(button);
-    // R116-e: the EXACT string — the trailing colon-hex fingerprint is what
-    // the phone's parsePairingText CERT_FP_SEARCH parses anywhere in the
-    // pasted text (the "cert " prefix word rides along harmlessly), so a
-    // pasted manual-LAN entry pins the self-signed cert like the QR does.
+    // R116-e: the trailing colon-hex fingerprint is what the phone's
+    // parsePairingText CERT_FP_SEARCH parses anywhere in the pasted text
+    // (the "cert " prefix word rides along harmlessly), so a pasted
+    // manual-LAN entry pins the self-signed cert like the QR does.
+    // R118-F (round-118 §1 item 53): the text now carries EVERY address, not
+    // just addrs[0] — the phone's smart-paste collects the whole ladder and
+    // probes them in order (a one-rung manual ladder died "unreachable"
+    // whenever the first address was a virtual adapter). The factory's two
+    // addresses (192.168.1.42 + 10.0.0.7, same port) pin the exact format.
     expect(write).toHaveBeenCalledWith(
-      `192.168.1.42:45999 · PIN 49301182 · cert ${CERT_FP}`,
+      `192.168.1.42:45999 · 10.0.0.7:45999 · PIN 49301182 · cert ${CERT_FP}`,
     );
     await waitFor(() => {
       expect(screen.getByTestId("pair-copy-text").textContent).toContain("Copied");
     });
     // No fallback note — the clipboard worked.
     expect(screen.queryByTestId("pair-copy-note")).toBeNull();
+  });
+
+  it("R118-F pins: the fullscreen overlay carries pointer-events-auto + the manual wrapper carries shrink-0 (the two one-class fixes)", async () => {
+    await openDialog(pairingPayload(Date.now() + 120_000));
+
+    // WHY THE CLASS IS THE PIN (not behavior): Radix's modal scroll-lock
+    // sets document.body{pointer-events:none} while the pairing dialog is
+    // open, and the fullscreen overlay — portaled to document.body — INHERITED
+    // it, so every pointer interaction fell through to the dialog underneath
+    // (a click on the big QR re-fired the tile's own open handler = "nothing
+    // happens"; the top-right X landed on the dialog's Close = "closes the
+    // whole pop-up"). PROVEN in real Chromium (/home/z/my-project/qr-repro —
+    // the repo's exact @radix-ui/react-dialog + React 18.3). jsdom's
+    // fireEvent.click NEVER models hit-testing (it dispatches straight to the
+    // target), so the BEHAVIOR cannot regress-test here — the class itself is
+    // the honest pin. Esc always worked (keyboard is not a pointer event),
+    // which is exactly why the bug survived two rounds of green tests.
+    fireEvent.click(screen.getByTestId("pair-qr"));
+    const fullscreen = screen.getByTestId("pair-qr-fullscreen");
+    expect(fullscreen.className).toContain("pointer-events-auto");
+    fireEvent.click(screen.getByTestId("pair-qr-fullscreen-close"));
+
+    // The flexbox shrink trap (round-118 §1 item 52): the manual panel's
+    // wrapper has overflow-hidden → its automatic minimum size is ZERO (CSS
+    // Flexbox §4.5) → it absorbed the ENTIRE height deficit created by the
+    // rigid QR tile inside the capped max-h-[86vh] flex column → it collapsed
+    // below its content and clipped the PIN with its own overflow. shrink-0
+    // keeps the panel at its natural height and hands the scroll back to the
+    // dialog body — jsdom does no layout either, so the class is the pin.
+    const manualWrapper = screen.getByTestId("pair-manual-toggle").parentElement;
+    expect(manualWrapper?.className).toContain("shrink-0");
+    expect(manualWrapper?.className).toContain("overflow-hidden");
   });
 
   it("a MISSING clipboard falls back to the legacy select-text leg: the manual section opens + the quiet note", async () => {
