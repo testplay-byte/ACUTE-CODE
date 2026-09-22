@@ -76,10 +76,13 @@ export function registerEventsRoutes(scope: FastifyInstance, ctx: RouteContext):
     // Assigned immediately after their declarations below — every guarded
     // write happens strictly after (bus frames + timer ticks are async).
     let unsubscribe: () => void = () => {};
-    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    // R117-e lint-fix: the heartbeat timer is a single-assignment const
+    // declared at its assignment site below; stopWriting closes over it
+    // (only ever invoked after initialization).
+    const heartbeatRef: { current: ReturnType<typeof setInterval> | undefined } = { current: undefined };
     const stopWriting = (): void => {
       socketDead = true;
-      if (heartbeat !== undefined) clearInterval(heartbeat);
+      if (heartbeatRef.current !== undefined) clearInterval(heartbeatRef.current);
       unsubscribe();
     };
     const guardedWrite = (chunk: string): void => {
@@ -116,9 +119,10 @@ export function registerEventsRoutes(scope: FastifyInstance, ctx: RouteContext):
     // that keep NAT/proxy/Wi-Fi power-save from reaping the idle stream.
     // R117-e: rides the SAME guard — a failing ping write tears down exactly
     // like a failing frame write (one dead socket, one teardown).
-    heartbeat = setInterval(() => {
+    const heartbeat: ReturnType<typeof setInterval> = setInterval(() => {
       guardedWrite(": ping\n\n");
     }, 10_000);
+    heartbeatRef.current = heartbeat;
     res.on("close", () => {
       clearInterval(heartbeat);
       unsubscribe();
