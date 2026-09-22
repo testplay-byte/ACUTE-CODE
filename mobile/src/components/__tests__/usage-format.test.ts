@@ -108,6 +108,7 @@ describe("timeAgoFromIso — the shared relative-time vocabulary", () => {
   it.each([
     [0, "just now"],
     [44_000, "just now"],
+    [59_000, "just now"],
     [5 * 60_000, "5m ago"],
     [59 * 60_000, "59m ago"],
     [3 * 3_600_000, "3h ago"],

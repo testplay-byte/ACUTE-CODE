@@ -121,8 +121,11 @@ export function localDateString(date: Date = new Date()): string {
  */
 function relativeTimeWord(then: number, now: number): string {
   const seconds = Math.max(0, Math.floor((now - then) / 1000));
-  if (seconds < 45) return "just now";
-  const minutes = Math.floor(seconds / 60);
+  // R118-review WARN 2 — the unified boundary: "just now" under a MINUTE and
+  // the minutes band starts at 1 (the old <45s fork rendered "0m ago" for
+  // 45–59s across two of the three spellings).
+  if (seconds < 60) return "just now";
+  const minutes = Math.max(1, Math.floor(seconds / 60));
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;

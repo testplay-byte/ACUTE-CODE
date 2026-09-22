@@ -13,9 +13,11 @@ describe("timeAgoShort — the s/m/h/d ladder", () => {
   const NOW = 1_800_000_000_000;
 
   const TABLE: ReadonlyArray<{ then: number; expected: string }> = [
-    // Under a minute → "just now" (the whole 0–59s band).
+    // Under a MINUTE → "just now" (R118-review WARN 2: one law across all
+    // three spellings — and the minutes band starts at 1, never "0m ago").
     { then: NOW, expected: "just now" },
     { then: NOW - 1_000, expected: "just now" },
+    { then: NOW - 44_000, expected: "just now" },
     { then: NOW - 59_000, expected: "just now" },
     // Minutes.
     { then: NOW - 60_000, expected: "1m ago" },
