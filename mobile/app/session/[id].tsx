@@ -125,10 +125,26 @@
  * through the normal send path (onSend), exactly the PC panel's binding. A
  * live turn refuses honestly at the tap (the stream route's own 409 would
  * say it later; the quiet error line says it now).
+ *
+ * ROUND-118 (R118-D — the session chrome + the delivery states): the
+ * identity bar gains its CHROME COLUMN — a surfaceHeader-filled wrapper
+ * pulled up through the status-bar inset (negative margin + compensating
+ * padding) with the hairline borderSubtle separator at its bottom edge, and
+ * LiveHeaderLine moved INSIDE it, absolutely positioned over that edge (the
+ * breathing bar replaces the hairline while a turn runs). The back chip is
+ * the shared QuietIconButton (ArrowLeft 22, the 40px circle — the chevron
+ * "bracket" is retired). The kebab's menu is now a LEVEL STATE MACHINE
+ * (null/main/mode/model/thinking/context) rendered IN the anchored panel
+ * through HeaderDropdown's sub-level grammar: picks APPLY AND RETURN to
+ * main (the feedback loop closes where the owner looks); Context stays
+ * read-only at its own level. Both stop affordances confirm: the menu's
+ * Stop row arms ("Stop this turn" → "Do you want to stop?") before it
+ * fires, and the composer's stop button opens the centered ConfirmDialog
+ * (this screen's stopTurn owns the POST either way).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, FlatList, Pressable, RefreshControl, StyleSheet, View } from "react-native";
+import { ActivityIndicator, AppState, FlatList, Pressable, RefreshControl, StyleSheet, View } from "react-native";
 import {
   AndroidSoftInputModes,
   KeyboardController,
@@ -146,22 +162,24 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { ChevronLeft, Ellipsis } from "lucide-react-native";
+import { ArrowLeft, Check, ChevronRight, Ellipsis } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
-import { Composer, type ComposerControlsSnapshot, type ComposerMode, type ComposerSheet } from "@/components/composer";
-import { HeaderDropdown } from "@/components/header-dropdown";
+import { Composer, type ComposerControlsSnapshot, type ComposerMode, type ComposerSheet, type MenuModelRow, type MenuModelSection } from "@/components/composer";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { HeaderDropdown, type HeaderDropdownItem } from "@/components/header-dropdown";
 import { LetterAvatar } from "@/components/letter-avatar";
 import { TranscriptItemView } from "@/components/transcript";
 import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
-import { TypeBodyStrong, TypeCaption, TypeMicro } from "@/design/primitives";
+import { QuietIconButton, TypeBodyStrong, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
 import { useChatPrefs, useTheme } from "@/design/theme";
 import { SPRING } from "@/design/motion";
-import { RADIUS_CHIP, spacing, TOUCH_TARGET } from "@/design/tokens";
+import { spacing, TOUCH_TARGET } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { getLinkManager } from "@/link/runtime";
 import type { SseStream } from "@/link/connection";
 import { fetchProjects, type ProjectRow } from "@/features/config";
-import { modeOption } from "@/features/composer-state";
+import { CLASSIC_THINKING_OPTIONS, MODE_OPTIONS, modeOption } from "@/features/composer-state";
+import { contextPercent, contextPressure, formatTokens, type SessionContextReport } from "@/features/context-meter";
 import {
   abandonLiveTurn,
   applyLiveFrame,
@@ -211,11 +229,22 @@ const AUTO_RETRY_MS = 5_000;
  * tab-bar's breathe-constants precedent. */
 const LIVE_LINE_LEG_MS = 550;
 
-/** R115-I → R116-l — the session screen's open COMPOSER sheet (the screen
- * owns the state; the composer renders the content). The kebab's menu is its
- * own `menuOpen` boolean (the anchored dropdown is not a sheet). null =
- * closed. */
+/** R118-D §2.2 — the Model level's scroll cap (the provider sections scroll
+ * INSIDE the panel; contentMaxHeight rides HeaderDropdown). */
+const MODEL_LEVEL_MAX_HEIGHT = 360;
+/** R118-D §2.2 — the Context level's scroll cap (the read-only readout). */
+const CONTEXT_LEVEL_MAX_HEIGHT = 320;
+
+/** R115-I → R118-D — the session screen's open COMPOSER sheet, NARROWED to
+ * the attach pair (the kebab's rows no longer open sheets — the menu renders
+ * their levels in place). null = closed. */
 type SessionSheet = ComposerSheet | null;
+
+/** R118-D — the kebab menu's LEVEL state machine: null = closed, "main" =
+ *  the four control rows + the conditional Stop, and one level per control
+ *  (rendered inside the anchored panel through HeaderDropdown's sub-level
+ *  grammar — back chevron + title row + content). */
+type SessionMenu = null | "main" | "mode" | "model" | "thinking" | "context";
 
 export default function SessionScreen() {
   const { tokens } = useTheme();
@@ -233,24 +262,40 @@ export default function SessionScreen() {
   const [outboxEntries, setOutboxEntries] = useState<OutboxEntry[]>([]);
   const [appActive, setAppActive] = useState(AppState.currentState === "active");
 
-  // ── R115-I/R116-l — the identity bar + the kebab dropdown's state ──────────
+  // ── R115-I/R118-D — the identity bar + the kebab menu's state ──────────
 
   /** The registry's projects, fetched once per mount (cached like every
-   * other screen) — the identity bar's project row. */
+   *  other screen) — the identity bar's project row. */
   const [projects, setProjects] = useState<ProjectRow[] | null>(null);
-  /** The open composer sheet (mode/model/thinking/context ride the kebab's
-   * rows; attach/files open from the composer's own paperclip). */
+  /** The open composer sheet — R118-D: the attach PAIR only (the paperclip
+   *  + the attach sheet's own transition open them). */
   const [sheet, setSheet] = useState<SessionSheet>(null);
-  /** R116-l — the kebab's ANCHORED DROPDOWN (a menu, not a sheet). */
-  const [menuOpen, setMenuOpen] = useState(false);
-  /** The composer's live control values (the dropdown's Model/Thinking/
-   * Context rows); the honest pre-report defaults show until the first
-   * snapshot — the model ladder's floor is "—" (R116-l: the "Agent default"
-   * rung is retired, donts #36). */
+  /** R118-D — the kebab menu's LEVEL state machine (replaces menuOpen): null
+   *  = closed; the levels render inside the anchored panel. */
+  const [menu, setMenu] = useState<SessionMenu>(null);
+  /** R118-D — the two-step stop's armed flag: the main level's Stop row flips
+   *  its label IN PLACE ("Stop this turn" → "Do you want to stop?") before
+   *  the second tap fires. Resets on menu close + when the turn dies. */
+  const [stopArmed, setStopArmed] = useState(false);
+  /** R118-D — the composer's stop confirmation (the centered ConfirmDialog);
+   *  the kebab's armed row needs no dialog — its two-step IS the confirm. */
+  const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
+  /** The composer's live control values (the menu's rows + levels render
+   *  these); the honest pre-report defaults show until the first snapshot —
+   *  the model ladder's floor is "—" (R116-l: the "Agent default" rung is
+   *  retired, donts #36), the thinking options default to the classic four
+   *  (the pre-snapshot model is unknown). */
   const [controls, setControls] = useState<ComposerControlsSnapshot>({
     modelLabel: "—",
     thinkingLabel: "Default",
     ctxPct: null,
+    modelSections: null,
+    thinkingOptions: CLASSIC_THINKING_OPTIONS,
+    thinkingUnsupported: false,
+    thinkingSelected: "default",
+    contextReport: null,
+    pickModel: () => {},
+    pickThinking: () => {},
   });
 
   const streamRef = useRef<SseStream | null>(null);
@@ -627,7 +672,11 @@ export default function SessionScreen() {
     [status, sessionId, openStream],
   );
 
-  const onStop = useCallback(() => {
+  // R118-D — the STOP TURN (renamed from onStop): the same POST + phase
+  // flip + rehydrate ladder as ever; BOTH affordances route here — the
+  // composer's button (through the ConfirmDialog) and the kebab's armed
+  // two-step row (its label flip IS the confirmation, no dialog).
+  const stopTurn = useCallback(() => {
     if (liveRef.current !== null) {
       setLiveState({ ...liveRef.current, phase: "stopping" });
     }
@@ -849,10 +898,13 @@ export default function SessionScreen() {
     [turnLive, retryContentForError, onSend],
   );
 
-  // The composer's slice of the sheet state (R116-l: the kebab's menu is the
-  // separate `menuOpen` boolean, so `sheet` is now PURELY the composer's six
-  // values and passes straight through), and the referentially guarded
-  // snapshot receiver (a value-identical report re-renders nothing).
+  // The composer's slice of the sheet state (R118-D: `sheet` is now PURELY
+  // the composer's attach pair and passes straight through), and the
+  // referentially guarded snapshot receiver — R118-D's WIDENED guard:
+  // scalar-compare the labels (modelLabel/thinkingLabel/ctxPct/
+  // thinkingUnsupported/thinkingSelected), reference-compare the memos +
+  // callbacks (modelSections/thinkingOptions/contextReport/pickModel/
+  // pickThinking). A value-identical report re-renders nothing.
   const setComposerSheet = useCallback((next: ComposerSheet | null): void => {
     setSheet(next);
   }, []);
@@ -860,17 +912,186 @@ export default function SessionScreen() {
     setControls((prev) =>
       prev.modelLabel === next.modelLabel &&
       prev.thinkingLabel === next.thinkingLabel &&
-      prev.ctxPct === next.ctxPct
+      prev.ctxPct === next.ctxPct &&
+      prev.thinkingUnsupported === next.thinkingUnsupported &&
+      prev.thinkingSelected === next.thinkingSelected &&
+      prev.modelSections === next.modelSections &&
+      prev.thinkingOptions === next.thinkingOptions &&
+      prev.contextReport === next.contextReport &&
+      prev.pickModel === next.pickModel &&
+      prev.pickThinking === next.pickThinking
         ? prev
         : next,
     );
   }, []);
+
+  // ── R118-D — the kebab menu's level helpers ───────────────────────────
+
+  /** Close the whole menu: level → null + the armed stop resets (the
+   *  two-step never survives a dismissal). */
+  const closeMenu = useCallback((): void => {
+    setMenu(null);
+    setStopArmed(false);
+  }, []);
+
+  /** Back to the main level (the sub-levels' back chevron). */
+  const backToMain = useCallback((): void => {
+    setMenu("main");
+  }, []);
+
+  // The armed stop resets when the turn dies — a stale "Do you want to
+  // stop?" label over a dead turn is a lie.
+  useEffect(() => {
+    if (!turnLive) setStopArmed(false);
+  }, [turnLive]);
+
+  // ── R118-D — the kebab menu's LEVELS (spec §2.2) ─────────────────────────
+  // The rows + children each level renders IN the anchored panel. Picks
+  // APPLY AND RETURN to main (setMenu("main") — the feedback loop closes
+  // where the owner will look; the 90% flow is one adjustment, the back
+  // chevron remains for deliberate browsing). Context stays read-only at
+  // its own level — nothing to apply, the meter is the answer.
+  const connected = status === "connected";
+  /** The mode level's selected truth — the same source the main row's value
+   *  reads (the session row's CURRENT permission mode). */
+  const currentMode = detail?.permissionMode ?? "ask";
+
+  /** The level's own title (the main level keeps the panel's quiet caption). */
+  const menuTitle =
+    menu === "mode"
+      ? "Operating mode"
+      : menu === "model"
+        ? "Model"
+        : menu === "thinking"
+          ? "Thinking level"
+          : menu === "context"
+            ? "Context usage"
+            : "Session options";
+
+  const menuItems: HeaderDropdownItem[] =
+    menu === "mode"
+      ? MODE_OPTIONS.map((option) => ({
+          // Single-line law: the label alone, no descriptions (the sheet's
+          // two-line rows are the sheet's grammar — a menu row is one line).
+          key: `mode-${option.id}`,
+          label: option.label,
+          selected: option.id === currentMode,
+          onPress: () => {
+            if (option.id !== currentMode) onPermissionModeChange(option.id);
+            setMenu("main");
+          },
+        }))
+      : menu === "thinking"
+        ? controls.thinkingOptions.map((option) => ({
+            key: `thinking-${option.id}`,
+            label: option.label,
+            selected: option.id === controls.thinkingSelected,
+            onPress: () => {
+              controls.pickThinking(option.id);
+              setMenu("main");
+            },
+          }))
+        : menu === "context"
+          ? [] // read-only — the back chevron is the way out
+          : [
+              {
+                key: "mode",
+                label: "Mode",
+                value: kebabModeLabel,
+                onPress: () => setMenu("mode"),
+              },
+              {
+                key: "model",
+                label: "Model",
+                value: controls.modelLabel,
+                onPress: () => setMenu("model"),
+              },
+              {
+                key: "thinking",
+                label: "Thinking",
+                value: controls.thinkingLabel,
+                onPress: () => setMenu("thinking"),
+              },
+              {
+                key: "context",
+                label: "Context",
+                value: controls.ctxPct !== null ? `${controls.ctxPct}%` : "—",
+                onPress: () => setMenu("context"),
+              },
+              // THE TWO-STEP STOP: not armed → "Stop this turn" arms IN PLACE
+              // (nothing stops); armed → the owner's copy "Do you want to
+              // stop?" — the second tap closes + resets + fires stopTurn.
+              ...(turnLive
+                ? [
+                    {
+                      key: "stop",
+                      label: stopArmed ? "Do you want to stop?" : "Stop this turn",
+                      danger: true,
+                      onPress: () => {
+                        if (!stopArmed) {
+                          setStopArmed(true);
+                          return;
+                        }
+                        closeMenu();
+                        stopTurn();
+                      },
+                    },
+                  ]
+                : []),
+            ];
+
+  const menuChildren: React.ReactNode =
+    menu === "model" ? (
+      controls.modelSections === null ? (
+        <View style={styles.menuBusyRow}>
+          <ActivityIndicator size="small" color={tokens.accent} />
+          <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={1}>
+            {connected ? "loading the configured models…" : "the host is offline"}
+          </TypeCaption>
+        </View>
+      ) : controls.modelSections.length === 0 ? (
+        <View style={styles.menuCaptionRow}>
+          <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={1}>
+            no models configured on the host
+          </TypeCaption>
+        </View>
+      ) : (
+        <ModelLevelRows
+          sections={controls.modelSections}
+          onPick={(row) => {
+            controls.pickModel(row);
+            setMenu("main");
+          }}
+        />
+      )
+    ) : menu === "thinking" && controls.thinkingUnsupported ? (
+      <View style={styles.menuCaptionRow}>
+        <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={1}>
+          this model does not support reasoning
+        </TypeCaption>
+      </View>
+    ) : menu === "context" ? (
+      controls.contextReport === null ? (
+        <View style={styles.menuBusyRow}>
+          <ActivityIndicator size="small" color={tokens.accent} />
+          <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={1}>
+            {connected ? "reading the meter…" : "the host is offline"}
+          </TypeCaption>
+        </View>
+      ) : (
+        <ContextLevelReadout report={controls.contextReport} />
+      )
+    ) : null;
 
   // ── R115-K — the keyboard architecture: ONE dock, ONE expression ─────────
   // (the header comment above carries the full contract). The dock's kbHeight
   // is POSITIVE while open, 0 when closed, written by two idempotent paths.
   const insets = useSafeAreaInsets();
   const insetsBottom = insets.bottom;
+  // R118-D — the chrome column's status-bar strip: the negative margin that
+  // pulls the surfaceHeader fill UP through the safe-area inset (with the
+  // compensating paddingTop riding the inline style at the render).
+  const insetsTop = insets.top;
   const kbHeight = useSharedValue(0);
 
   // The window mode: ADJUST_NOTHING for this screen's lifetime — the window
@@ -965,57 +1186,76 @@ export default function SessionScreen() {
     // dock exactly where the header row used to sit, inside the top
     // safe-area inset the SafeAreaView already owns.
     <ScreenScaffold title="Session" scroll={false} chrome={false}>
-      {/* ── THE IDENTITY BAR (R115-I — chat.md §Header): [back CHIP 44px]
-          · [the project's LetterAvatar 36px] · [project name over the
-          session's own name] · [the kebab ⋮ 44px]. Status words are OUT — a
-          running turn shows as the breathing accent line under the bar. */}
-      <View style={styles.headerRow}>
-        <Pressable
-          accessibilityLabel="Go back"
-          accessibilityRole="button"
-          hitSlop={12}
-          onPress={() => router.back()}
-          style={[
-            styles.headerTarget,
-            styles.backChip,
-            { backgroundColor: tokens.subtle, borderColor: tokens.borderSubtle },
-          ]}
-          testID="session-back"
-        >
-          <ChevronLeft size={26} color={tokens.text} strokeWidth={2} />
-        </Pressable>
-        {project !== null ? (
-          <LetterAvatar label={project.name} color={project.color} size={36} testID="session-header-avatar" />
-        ) : (
-          <NeutralAvatar label={headerFallbackLetter} />
-        )}
-        <View style={styles.headerIdentity}>
-          <TypeBodyStrong numberOfLines={1} testID="session-header-title">
-            {headerTitle}
-          </TypeBodyStrong>
-          {headerSubtitle !== undefined ? (
-            <TypeCaption
-              style={{ color: tokens.textTertiary }}
-              numberOfLines={1}
-              testID="session-header-subtitle"
-            >
-              {headerSubtitle}
-            </TypeCaption>
-          ) : null}
+      {/* ── THE CHROME COLUMN (R118-D — spec §2.1): the identity bar's own
+          surfaceHeader fill, pulled UP through the status-bar inset (the
+          negative margin + compensating padding — the fill owns the strip
+          behind the status bar too), with the hairline borderSubtle
+          separator at its bottom edge. LiveHeaderLine moved INSIDE, pinned
+          absolutely over that edge — the breathing bar replaces the hairline
+          while a turn runs (its rhythm byte-frozen). THE IDENTITY BAR itself
+          (R115-I — chat.md §Header): [back circle 40px] · [the project's
+          LetterAvatar 36px] · [project name over the session's own name] ·
+          [the kebab ⋮ 44px]. Status words are OUT. */}
+      <View
+        style={[
+          styles.headerColumn,
+          {
+            marginTop: -insetsTop,
+            paddingTop: insetsTop,
+            backgroundColor: tokens.surfaceHeader,
+            borderBottomColor: tokens.borderSubtle,
+          },
+        ]}
+      >
+        <View style={styles.headerRow}>
+          {/* R118-D — the back button: the shared QuietIconButton (ArrowLeft
+              22, the 40px circle — the chevron "bracket" is retired) with a
+              real trailing gap (marginRight xs — 8dp total to the avatar). */}
+          <View style={styles.backWrap}>
+            <QuietIconButton
+              icon={ArrowLeft}
+              iconSize={22}
+              size={40}
+              onPress={() => router.back()}
+              accessibilityLabel="Go back"
+              testID="session-back"
+            />
+          </View>
+          {project !== null ? (
+            <LetterAvatar label={project.name} color={project.color} size={36} testID="session-header-avatar" />
+          ) : (
+            <NeutralAvatar label={headerFallbackLetter} />
+          )}
+          <View style={styles.headerIdentity}>
+            <TypeBodyStrong numberOfLines={1} testID="session-header-title">
+              {headerTitle}
+            </TypeBodyStrong>
+            {headerSubtitle !== undefined ? (
+              <TypeCaption
+                style={{ color: tokens.textTertiary }}
+                numberOfLines={1}
+                testID="session-header-subtitle"
+              >
+                {headerSubtitle}
+              </TypeCaption>
+            ) : null}
+          </View>
+          <Pressable
+            accessibilityLabel="Session options"
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={() => setMenu(menu !== null ? null : "main")}
+            style={styles.headerTarget}
+            testID="session-kebab"
+          >
+            <Ellipsis size={24} color={tokens.text} strokeWidth={2.4} />
+          </Pressable>
         </View>
-        <Pressable
-          accessibilityLabel="Session options"
-          accessibilityRole="button"
-          hitSlop={8}
-          onPress={() => setMenuOpen((prev) => !prev)}
-          style={styles.headerTarget}
-          testID="session-kebab"
-        >
-          <Ellipsis size={24} color={tokens.text} strokeWidth={2.4} />
-        </Pressable>
+        {/* The live-turn indicator — the "live" badge's replacement, now
+            ABSOLUTELY positioned over the column's bottom edge (on top of
+            the hairline separator). */}
+        <LiveHeaderLine live={turnLive} />
       </View>
-      {/* The live-turn indicator — the "live" badge's replacement. */}
-      <LiveHeaderLine live={liveRunning || remoteRunning} />
 
       {/* R115-K — the dock owns the keyboard: NO KeyboardAvoidingView, NO
           offsets, NO window resize (the window is ADJUST_NOTHING while this
@@ -1110,7 +1350,7 @@ export default function SessionScreen() {
             onPermissionModeChange={onPermissionModeChange}
             onModelChange={onModelChange}
             onSend={onSend}
-            onStop={onStop}
+            onStop={() => setStopConfirmOpen(true)}
             onQueue={onQueue}
             onDismissOutbox={() => void onDismissOutbox()}
             streaming={liveRunning || remoteRunning}
@@ -1118,76 +1358,49 @@ export default function SessionScreen() {
         </Animated.View>
       </View>
 
-      {/* ── THE KEBAB DROPDOWN (R116-l — components.md §Dropdown menus,
-          motion.md §4.8): the anchored menu replaces the bottom sheet. The
-          layer is the absolutely-positioned anchor aligned to the header
-          row's right/bottom (top: the 56px row's bottom edge, full width
-          below it, pointerEvents box-none so a closed/empty layer never
-          steals a touch); HeaderDropdown fills it with the tap-outside
-          catcher + the top-right panel. Each row carries its LIVE value and
-          routes to the composer's MATCHING sheet through the same
-          controlled-sheet API — the dropdown closes first, its 120ms exit
-          fading under the sheet's rise. The Stop row rides only while a
-          turn is live. */}
+      {/* ── THE KEBAB MENU (R116-l → R118-D — components.md §Dropdown
+          menus + this round's sub-level grammar): the anchored panel with
+          its LEVEL STATE MACHINE — main (the four control rows + the
+          conditional two-step Stop) and one level per control, rendered IN
+          the panel (back chevron + title row + content). Picks APPLY AND
+          RETURN to main; Context stays read-only at its level; the model
+          list scrolls inside the panel (contentMaxHeight 360). The layer is
+          the absolutely-positioned anchor below the identity bar,
+          pointerEvents box-none so a closed/empty layer never steals a
+          touch. */}
       <View pointerEvents="box-none" style={styles.menuLayer}>
         <HeaderDropdown
-          open={menuOpen}
-          onClose={() => setMenuOpen(false)}
-          title="Session options"
+          open={menu !== null}
+          onClose={closeMenu}
+          title={menuTitle}
+          onBack={menu === null || menu === "main" ? undefined : backToMain}
           testID="session-dropdown"
-          items={[
-            {
-              key: "mode",
-              label: "Mode",
-              value: kebabModeLabel,
-              onPress: () => {
-                setMenuOpen(false);
-                setSheet("mode");
-              },
-            },
-            {
-              key: "model",
-              label: "Model",
-              value: controls.modelLabel,
-              onPress: () => {
-                setMenuOpen(false);
-                setSheet("model");
-              },
-            },
-            {
-              key: "thinking",
-              label: "Thinking",
-              value: controls.thinkingLabel,
-              onPress: () => {
-                setMenuOpen(false);
-                setSheet("thinking");
-              },
-            },
-            {
-              key: "context",
-              label: "Context",
-              value: controls.ctxPct !== null ? `${controls.ctxPct}%` : "—",
-              onPress: () => {
-                setMenuOpen(false);
-                setSheet("context");
-              },
-            },
-            ...(turnLive
-              ? [
-                  {
-                    key: "stop",
-                    label: "Stop this turn",
-                    danger: true,
-                    onPress: () => {
-                      setMenuOpen(false);
-                      onStop();
-                    },
-                  },
-                ]
-              : []),
-          ]}
-        />
+          contentMaxHeight={
+            menu === "model" ? MODEL_LEVEL_MAX_HEIGHT : menu === "context" ? CONTEXT_LEVEL_MAX_HEIGHT : undefined
+          }
+          items={menuItems}
+        >
+          {menuChildren}
+        </HeaderDropdown>
       </View>
+
+      {/* ── THE CENTERED STOP CONFIRM (R118-D §2.3): the composer's stop
+          button opens the dialog; the kebab's armed row fires stopTurn
+          directly (its two-step IS the confirmation). */}
+      <ConfirmDialog
+        open={stopConfirmOpen}
+        title="Stop this turn?"
+        body="The agent stops — finished work stays."
+        confirmLabel="Stop"
+        cancelLabel="Cancel"
+        destructive
+        onConfirm={() => {
+          setStopConfirmOpen(false);
+          stopTurn();
+        }}
+        onCancel={() => setStopConfirmOpen(false)}
+        testID="session-stop-confirm"
+      />
     </ScreenScaffold>
   );
 }
@@ -1287,13 +1500,111 @@ function overrideAttachmentViews(overrides: SendOverrides): AttachmentView[] | n
   return views.length > 0 ? views : null;
 }
 
+// ── R118-D — the kebab's IN-PANEL levels (spec §2.2) ───────────────────────
+
+/** The Model level's provider sections — the old sheet's grouped list cut
+ *  to the menu's width: a TypeMicro header (`{label} · {n} models`) + the
+ *  rows (shortModelLabel — one line), the selected row carrying the accent
+ *  Check (the DropdownRow grammar: Check replaces the chevron). The pick
+ *  rides the snapshot's `pickModel` — apply + PATCH — and the menu returns
+ *  to its main level (the caller's onPick owns that half). */
+function ModelLevelRows({
+  sections,
+  onPick,
+}: {
+  sections: MenuModelSection[];
+  onPick: (row: MenuModelRow) => void;
+}) {
+  const { tokens } = useTheme();
+  return (
+    <View>
+      {sections.map((section) => (
+        <View key={section.providerId}>
+          <View style={styles.menuSectionHeader}>
+            <TypeMicro style={{ color: tokens.textTertiary }} numberOfLines={1}>
+              {section.label} · {section.rows.length} model{section.rows.length === 1 ? "" : "s"}
+            </TypeMicro>
+          </View>
+          {section.rows.map((row) => (
+            <Pressable
+              key={row.key}
+              testID={`session-dropdown-model-${row.key}`}
+              accessibilityLabel={row.label}
+              accessibilityRole="button"
+              accessibilityState={row.selected ? { selected: true } : undefined}
+              onPress={() => onPick(row)}
+              style={({ pressed }) => [
+                styles.menuRow,
+                { backgroundColor: pressed ? tokens.subtleHover : "transparent" },
+              ]}
+            >
+              <TypeBodyStrong style={{ flex: 1, color: tokens.text }} numberOfLines={1}>
+                {row.label}
+              </TypeBodyStrong>
+              {row.selected ? (
+                <Check size={16} color={tokens.accent} strokeWidth={2.4} />
+              ) : (
+                <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
+              )}
+            </Pressable>
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** The Context level's compact read-only readout (the old ContextBreakdown
+ *  sheet's HEAD, cut to the panel): the percentage line, the meter (height 4,
+ *  subtle track, the fill colored by contextPressure), the used/available
+ *  caption, and the model · provider mono line. Nothing here applies — the
+ *  level exists to be READ. */
+function ContextLevelReadout({ report }: { report: SessionContextReport }) {
+  const { tokens } = useTheme();
+  const pct = contextPercent(report.usedTokens, report.contextWindow);
+  const pressure = contextPressure(report.usedTokens, report.contextWindow);
+  const barColor =
+    pressure === "danger"
+      ? tokens.danger
+      : pressure === "filling"
+        ? tokens.warning
+        : tokens.accent;
+  return (
+    <View style={styles.contextReadout}>
+      <View style={{ flexDirection: "row", alignItems: "baseline", gap: spacing.sm }}>
+        <TypeBodyStrong>{pct}%</TypeBodyStrong>
+        <TypeCaption style={{ color: tokens.textSecondary, flex: 1 }} numberOfLines={1}>
+          of {formatTokens(report.contextWindow)} window
+        </TypeCaption>
+      </View>
+      <View style={[styles.contextMeterTrack, { backgroundColor: tokens.subtle }]}>
+        <View style={{ height: 4, width: `${pct}%`, backgroundColor: barColor }} />
+      </View>
+      <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={1}>
+        used {formatTokens(report.usedTokens)} · {formatTokens(report.available)} available
+      </TypeCaption>
+      <TypeMono style={{ color: tokens.textTertiary, fontSize: 10.5 }} numberOfLines={1}>
+        {report.model} · {report.providerId}
+      </TypeMono>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   body: {
     flex: 1,
   },
+  /** R118-D §2.1 — the chrome column: the surfaceHeader fill + separator
+   *  wrapper. The negative marginTop + compensating paddingTop ride the
+   *  INLINE style (insetsTop is dynamic); the fill + borderSubtle colors
+   *  ride the theme tokens, inline too. */
+  headerColumn: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
   // ── R115-I — the identity bar (the scaffold's own 56px header-row
   // geometry, restated for the bypassed chrome: 44px side targets, the
-  // left-aligned two-line identity, the breathing live line under it).
+  // left-aligned two-line identity — R118-D: it renders inside the chrome
+  // column above, the live line pinned to that column's own bottom edge).
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1307,18 +1618,26 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  /** R116-l — the back CHIP (donts #41): the 44px target gains a subtle fill
-   * + hairline border + the chip radius — the scaffold back-chip's exact
-   * grammar (fill/border colors ride the theme tokens, inline). */
-  backChip: {
-    borderRadius: RADIUS_CHIP,
-    borderWidth: StyleSheet.hairlineWidth,
+  /** R118-D §2.1 — the back button's wrap: marginRight xs gives the arrow a
+   *  REAL trailing gap (4 + 4 = 8dp total to the avatar; the old chevron
+   *  bracket sat 4dp away). The button itself is the shared QuietIconButton
+   *  — the chip grammar retired with the bracket. */
+  backWrap: {
+    marginRight: spacing.xs,
   },
   headerIdentity: {
     flex: 1,
     gap: 1,
   },
+  /** R118-D §2.1 — the live line rides INSIDE the chrome column, pinned
+   *  absolutely over its bottom edge — the breathing bar REPLACES the
+   *  hairline separator while a turn runs (2px constant so nothing below
+   *  ever shifts when the state flips). */
   liveLine: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
     height: 2,
   },
   neutralAvatar: {
@@ -1335,6 +1654,50 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+  },
+  // ── R118-D — the kebab's in-panel levels' geometry ────────────────────
+  /** The Model level's option row — the DropdownRow grammar restated (the
+   *  rows ride `children` so the provider headers can interleave). */
+  menuRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    minHeight: TOUCH_TARGET,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
+  },
+  /** The Model level's provider section header ("{label} · {n} models"). */
+  menuSectionHeader: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: 2,
+  },
+  /** The busy row that migrated in from the deleted sheets (the model
+   *  catalog load + the context meter's first read). */
+  menuBusyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    minHeight: TOUCH_TARGET,
+    paddingHorizontal: spacing.xs,
+  },
+  /** A non-pressable caption row (the thinking-unsupported line, the empty
+   *  catalog) — honest content, never a dead control. */
+  menuCaptionRow: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  /** The Context level's compact readout (the meter + its three lines). */
+  contextReadout: {
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  /** The meter's track (height 4, r2 — the old sheet's own geometry). */
+  contextMeterTrack: {
+    height: 4,
+    borderRadius: 2,
+    overflow: "hidden",
   },
   centerWrap: {
     flex: 1,

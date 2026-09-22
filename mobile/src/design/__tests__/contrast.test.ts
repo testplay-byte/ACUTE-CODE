@@ -287,3 +287,49 @@ describe("the spec's pinned token values (round-117-elevation.md §2.1)", () => 
     expect(TYPE_TAB_LABEL).toBe(11.5); // above the ladder's own 11px floor
   });
 });
+
+// ── R118-D: the session chrome + the destructive dialog pairs ───────────────
+//
+// spec-d-session.md §2.1/§2.3: surfaceHeader (the identity bar's chrome
+// shade — bg +6% warm ink light / +30% black dark, "chrome over content",
+// the inverse direction of card) must still carry the header's TEXT tiers
+// at AA, and the ConfirmDialog's destructive CTA (the dangerDeep fill with
+// white ink light / #211B16 dark) must carry its 15/700 label at AA.
+
+describe("the session chrome surface (R118-D — surfaceHeader)", () => {
+  // The spec's printed hexes — #E0E2DC / #17130F on Clay — pinned exactly.
+  it("the surfaceHeader hexes are the spec's printed pair", () => {
+    expect(light.surfaceHeader).toBe("#E0E2DC");
+    expect(dark.surfaceHeader).toBe("#17130F");
+  });
+
+  const rows: readonly PairRow[] = [
+    // The identity bar's subtitle + title tiers over the chrome shade —
+    // the fill must never cost the header its AA.
+    { name: "textTertiary on surfaceHeader (light — the session subtitle)", fg: light.textTertiary, bg: light.surfaceHeader, min: 4.5 },
+    { name: "textTertiary on surfaceHeader (dark — the session subtitle)", fg: dark.textTertiary, bg: dark.surfaceHeader, min: 4.5 },
+    { name: "text on surfaceHeader (light — the project title)", fg: light.text, bg: light.surfaceHeader, min: 4.5 },
+    { name: "text on surfaceHeader (dark — the project title)", fg: dark.text, bg: dark.surfaceHeader, min: 4.5 },
+    // The shade itself separates from the page bg (present, not a no-op —
+    // deliberately NOT the card ladder: chrome over content).
+    { name: "surfaceHeader vs bg (light)", fg: light.surfaceHeader, bg: light.bg, min: 1.02 },
+    { name: "surfaceHeader vs bg (dark)", fg: dark.surfaceHeader, bg: dark.bg, min: 1.02 },
+  ];
+  runPairTable(rows);
+});
+
+describe("the destructive dialog pair (R118-D — the ConfirmDialog CTA)", () => {
+  const rows: readonly PairRow[] = [
+    // §2.3: the confirm fills dangerDeep with white ink light / #211B16
+    // dark — the label is 15/700 (bold, but under WCAG's large-text bar, so
+    // the pair itself carries AA).
+    { name: "white on dangerDeep (light — the Stop label)", fg: "#FFFFFF", bg: light.dangerDeep, min: 4.5 },
+    { name: "#211B16 on dangerDeep (dark — the Stop label)", fg: "#211B16", bg: dark.dangerDeep, min: 4.5 },
+  ];
+  runPairTable(rows);
+
+  it("the dangerDeep hexes are the tokens' own (light #DC2626 / dark #F87171)", () => {
+    expect(light.dangerDeep).toBe("#DC2626");
+    expect(dark.dangerDeep).toBe("#F87171");
+  });
+});

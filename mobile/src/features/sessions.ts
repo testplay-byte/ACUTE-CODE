@@ -157,17 +157,21 @@ export interface AttachmentView {
 }
 
 /**
- * R116-m — the delivery ladder a user bubble's tick renders (chat.md's
- * Round-116 amendment; additive — no wire change):
- *   sending   the optimistic card / a queued or outbox row (clock glyph)
- *   sent      the PC acked the message (turn.started — single check)
- *   delivered the message settled into the persisted log / a queued row was
- *             delivered into a turn (double check, accent)
- *   failed    the turn's stream died with an error frame (alert glyph)
- * A user item WITHOUT a status renders NO glyph (rows from producers this
- * ladder never touched stay clean — the render layer's contract).
+ * R116-m → R118-D — the delivery ladder a user bubble's body renders
+ * (chat.md's round-118 amendment — the tick ladder is RETIRED, the state
+ * rides the message body; additive — no wire change):
+ *   sending     the optimistic card / a queued or outbox row (dull + veil)
+ *   sent        the PC acked the message (turn.started — the ack rung)
+ *   processing  the PC has STARTED WORKING (the first content/progress
+ *               frame after the ack — the breathing accent edge)
+ *   delivered   the message settled into the persisted log / a queued row
+ *               was delivered into a turn (the settled fold)
+ *   failed      the turn's stream died with an error frame (danger edge)
+ * A user item WITHOUT a status renders the settled shape (rows from
+ * producers this ladder never touched stay clean — the render layer's
+ * contract).
  */
-export type UserDeliveryStatus = "sending" | "sent" | "delivered" | "failed";
+export type UserDeliveryStatus = "sending" | "sent" | "processing" | "delivered" | "failed";
 
 /** The per-send override fields the stream route accepts (R113-c) — the
  * desktop composer's exact wire additions. */
@@ -1007,6 +1011,20 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
   const items = [...turn.items];
   const next: LiveTurn = { ...turn, items };
 
+  // R118-D — THE PROCESSING RUNG: any frame that is NOT the ack itself
+  // (turn.started) and not the queue pair (user.queued / queued.delivered)
+  // means the PC has started WORKING — the LAST item, if it is a user card
+  // still sitting at "sent", flips to "processing" (exactly once: the guard
+  // reads === "sent", and once an assistant/tool card lands it owns the tail
+  // so the user card is never re-examined). The remote mirror inherits the
+  // promotion free — it rides the same reducer. No wire change.
+  if (type !== "turn.started" && type !== "user.queued" && type !== "queued.delivered") {
+    const last = items[items.length - 1];
+    if (last !== undefined && last.kind === "user" && last.status === "sent") {
+      items[items.length - 1] = { ...last, status: "processing" };
+    }
+  }
+
   const pushAssistantDelta = (delta: string, thinking: boolean): void => {
     if (delta === "") return;
     const last = items[items.length - 1];
@@ -1626,17 +1644,22 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
             ? details.attempts
             : null,
       };
-      // R116-m — the failed rung: the turn's OWN user card (the last one
-      // still in flight — "sending" or "sent") flips to "failed" while the
-      // overlay lives; the rehydrate that follows swaps in the truth (the
-      // persisted row reads "delivered" — the message DID reach the log;
-      // the error card below carries the turn's failure story). Cards at
-      // any other rung are untouched (a delivered queued message did NOT
-      // fail; an undefined status stays clean — the additive discipline).
+      // R116-m → R118-D — the failed rung: the turn's OWN user card (the
+      // last one still in flight — "sending", "sent", or "processing") flips
+      // to "failed" while the overlay lives; the rehydrate that follows swaps
+      // in the truth (the persisted row reads "delivered" — the message DID
+      // reach the log; the error card below carries the turn's failure
+      // story). Cards at any other rung are untouched (a delivered queued
+      // message did NOT fail; an undefined status stays clean — the additive
+      // discipline).
       const inFlight = [...items]
         .reverse()
         .find(
-          (item) => item.kind === "user" && (item.status === "sending" || item.status === "sent"),
+          (item) =>
+            item.kind === "user" &&
+            (item.status === "sending" ||
+              item.status === "sent" ||
+              item.status === "processing"),
         );
       if (inFlight !== undefined && inFlight.kind === "user") {
         const index = items.indexOf(inFlight);

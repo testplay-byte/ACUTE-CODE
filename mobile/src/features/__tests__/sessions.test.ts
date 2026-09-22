@@ -1322,6 +1322,102 @@ describe("sessions — the delivery ladder (R116-m)", () => {
   });
 });
 
+// ── R118-D: the processing rung — the PC has STARTED WORKING ────────────────
+
+describe("sessions — the processing rung (R118-D)", () => {
+  it("the first content frame after the ack promotes the user card to processing — EXACTLY once", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(
+      turn,
+      { type: "turn.started", text: "go", model: "glm-4.7", providerId: "z-ai" },
+      NOW + 1,
+    );
+    expect(turn.items[0]?.kind === "user" && turn.items[0].status).toBe("sent");
+    // the first delta = the PC's first word of work: sent → processing
+    turn = applyLiveFrame(turn, { type: "text-delta", delta: "Hel" }, NOW + 2);
+    expect(turn.items[0]?.kind === "user" && turn.items[0].status).toBe("processing");
+    // EXACTLY once: further deltas leave it alone — once the assistant card
+    // lands it owns the tail, and the guard reads === "sent" anyway
+    turn = applyLiveFrame(turn, { type: "text-delta", delta: "lo" }, NOW + 3);
+    expect(turn.items[0]?.kind === "user" && turn.items[0].status).toBe("processing");
+    expect(turn.items.filter((item) => item.kind === "user")).toHaveLength(1);
+  });
+
+  it("turn.started itself never promotes — the ack is the sent rung, not work", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(
+      turn,
+      { type: "turn.started", text: "go", model: "glm-4.7", providerId: "z-ai" },
+      NOW + 1,
+    );
+    expect(turn.items[0]?.kind === "user" && turn.items[0].status).toBe("sent");
+  });
+
+  it("user.queued / queued.delivered never promote — the queue landing is not the PC working", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(
+      turn,
+      { type: "turn.started", text: "go", model: "glm-4.7", providerId: "z-ai" },
+      NOW + 1,
+    );
+    // The acked card is the LAST item and sits at "sent" — exactly the shape
+    // the promotion would mis-fire on without the queue-pair exclusion.
+    turn = applyLiveFrame(turn, { type: "user.queued", seq: 5, content: "next?", ts: "t" }, NOW + 2);
+    const own = turn.items.find((item) => item.key === `live-user-${NOW}`);
+    expect(own?.kind === "user" && own.status).toBe("sent"); // untouched
+    const queued = turn.items.find((item) => item.kind === "user" && item.key === "q5");
+    expect(queued?.kind === "user" && queued.status).toBe("sending");
+    turn = applyLiveFrame(turn, { type: "queued.delivered", seq: 5, content: "next?", ts: "t" }, NOW + 3);
+    const delivered = turn.items.find((item) => item.kind === "user" && item.key === "q5");
+    expect(delivered?.kind === "user" && delivered.status).toBe("delivered");
+    expect(own?.kind === "user" && own.status).toBe("sent"); // STILL never promoted
+  });
+
+  it("the error frame flips a processing card to failed (the widened finder)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(
+      turn,
+      { type: "turn.started", text: "go", model: "glm-4.7", providerId: "z-ai" },
+      NOW + 1,
+    );
+    turn = applyLiveFrame(turn, { type: "text-delta", delta: "working" }, NOW + 2);
+    expect(turn.items[0]?.kind === "user" && turn.items[0].status).toBe("processing");
+    turn = applyLiveFrame(
+      turn,
+      { type: "error", status: 502, code: "PROVIDER_ERROR", message: "the key was rejected" },
+      NOW + 3,
+    );
+    expect(turn.items[0]?.kind === "user" && turn.items[0].status).toBe("failed");
+  });
+
+  it("the REMOTE mirror inherits the promotion free — the same reducer drives it", () => {
+    const base = foldSessionEvents([event(1, "message.user", { content: "earlier ask" })]);
+    const opened = reduceRemoteTurnFrame({
+      live: null,
+      remote: false,
+      ownStream: false,
+      baseItems: base,
+      frame: { type: "turn.started", text: "the PC's ask", model: "glm-4.7", providerId: "z-ai" },
+      now: NOW,
+    });
+    const mirror = opened?.turn as LiveTurn;
+    const mirrored = mirror.items.find((item) => item.kind === "user" && item.content === "the PC's ask");
+    expect(mirrored?.kind === "user" && mirrored.status).toBe("sent");
+    const worked = reduceRemoteTurnFrame({
+      live: mirror,
+      remote: true,
+      ownStream: false,
+      baseItems: base,
+      frame: { type: "text-delta", delta: "hi" },
+      now: NOW + 1,
+    });
+    const promoted = (worked?.turn as LiveTurn).items.find(
+      (item) => item.kind === "user" && item.content === "the PC's ask",
+    );
+    expect(promoted?.kind === "user" && promoted.status).toBe("processing");
+  });
+});
+
 // ── R114-d: the folded rows carry their timestamps ──────────────────────────
 
 describe("sessions — message timestamps ride the fold (R114-d)", () => {

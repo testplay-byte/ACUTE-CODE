@@ -1,101 +1,95 @@
 /**
- * Composer v3 (R113-c → R115-I → R116-l) — the session screen's minimal
- * dock (chat.md §Composer): EXACTLY THREE visible controls — the ONE growing
- * PILL TextInput (max ~5 lines; the PAPERCLIP rides INSIDE the bar on the
- * right — R116-l, the old left-side + circle is deleted) · SEND (the
+ * Composer v3 (R113-c → R115-I → R116-l → R118-D) — the session screen's
+ * minimal dock (chat.md §Composer): EXACTLY THREE visible controls — the ONE
+ * growing PILL TextInput (max ~6 lines; the PAPERCLIP rides INSIDE the bar
+ * on the right — R116-l, the old left-side + circle is deleted) · SEND (the
  * sanctioned chrome circle) / Stop + Queue while a turn runs. THE CONTROL
  * PILL ROW IS DELETED (R115-I): the operating-mode / model / thinking /
- * context controls live in the header's kebab DROPDOWN — the session screen
- * owns the sheet open-state and renders the kebab; THIS component keeps
- * every sheet's CONTENT and all its feature logic, controlled through the
- * props:
+ * context controls live in the header's kebab DROPDOWN — and since R118-D
+ * the dropdown renders their LEVELS IN PLACE (its own sub-panel grammar);
+ * this component keeps the DATA + the picks, controlled through the props:
  *
- *   · sheet / onSheetChange — the CONTROLLED sheet state (the kebab dropdown
- *     opens mode/model/thinking/context; the in-bar paperclip + the attach
- *     sheet's own transition open attach/files; every pick closes);
- *   · onControlsSnapshot — the live control values the dropdown's rows
- *     display (the same sources the pills read today: the honest model
- *     ladder, the model-aware thinking label, the context meter's percentage);
+ *   · sheet / onSheetChange — the CONTROLLED sheet state (R118-D: narrowed
+ *     to "attach" | "files" — the mode/model/thinking/context SHEETS are
+ *     deleted; the kebab's menu owns those levels now);
+ *   · onControlsSnapshot — the v2 report the menu's levels render (the live
+ *     labels + the model sections + the thinking spec + the context report
+ *     + the stable pick callbacks);
  *   · ATTACHMENTS: the in-bar paperclip opens the attach sheet (pick a file
  *     from the device through expo-document-picker, or choose from the
  *     project's own files) and typing "@" quick-picks project files exactly
  *     like the desktop; chips (name · size · X) ride the send as the wire's
  *     attachments array, with picked binaries uploaded through POST
  *     /attachments/upload at send time (the desktop's R67-A pipeline);
- *   · MODE: the desktop's exact per-session PATCH (full/ask/plan) — the
- *     task-mode section is DELETED from mobile (the round-115 verdict: it
- *     confused the mode model; the desktop keeps it);
- *   · MODEL (R114-d's honest ladder, now grouped by provider per the
- *     round-115 spec — R116-l: the "Agent default" row is RETIRED, donts
- *     #36): the local per-send override → the session's server-side
- *     selectedModel → the context report's effective model → "—" only when
- *     NOTHING is known ("Auto"/"Agent default" never appear — copy.md +
- *     donts #36). A pick writes BOTH tiers: the per-send override (persisted
- *     per session, rides the send) AND PATCH /sessions/:id {model} (the
- *     server-side truth — the desktop + every other phone see the flip live
- *     through the meta frame); tapping the row that's in play via the
- *     SESSION-SELECTED tier (not the override) clears both — the PATCH-null
- *     path, reachable ONLY there. The sheet lists the providers as section
- *     rows (name + "{n} models" + chevron) that expand their models INLINE
- *     (the R115-h absolute-measurement accordion), and the in-play check
- *     rides the FULL three-tier ladder (override → selectedModel → the
- *     context report's model — the PC's actual selection carries the check);
+ *   · MODE: the desktop's exact per-session PATCH (full/ask/plan) — the menu
+ *     applies it through onPermissionModeChange;
+ *   · MODEL (R114-d's honest ladder, R118-D's menu shape): the local
+ *     per-send override → the session's server-side selectedModel → the
+ *     context report's effective model → "—" only when NOTHING is known
+ *     ("Auto"/"Agent default" never appear — copy.md + donts #36). A pick
+ *     writes BOTH tiers: the per-send override (persisted per session,
+ *     rides the send) AND PATCH /sessions/:id {model} (the server-side
+ *     truth); tapping the row that's in play via the SESSION-SELECTED tier
+ *     (not the override) clears both — the PATCH-null path, reachable ONLY
+ *     there;
  *   · THINKING: the desktop's exact level vocabulary + model-aware menu
  *     (detected reasoning ladders); rides the send as thinkingLevel;
- *   · CONTEXT: the full breakdown sheet (per-slice estimates, the provider's
- *     own last-request numbers, cache + lifetime totals) fed by
- *     GET /sessions/:id/context (2.5s live cadence while a turn runs).
+ *   · CONTEXT: the meter stays fed (GET /sessions/:id/context, 2.5s live
+ *     cadence while a turn runs) and now reports through the snapshot —
+ *     the menu's Context level renders the compact readout.
  *
  * While a turn runs, Send becomes Stop (+ Queue); while the link is offline,
  * Send lands the message in the outbox (overrides ride the flush). The
  * outbox chip keeps its DISMISS affordance. Keyboard-wise the Composer is a
  * PASSENGER of the session screen's dock (R115-K): this root View sits
  * inside the dock's Animated.View whose ONE expression — paddingBottom =
- * max(insetsBottom, kbHeight) — lifts EVERYTHING here (offline/outbox/note
- * rows, the @-picker popup above the input, attachment chips, the input bar
- * with its in-bar paperclip) clear of the keys; this file carries NO keyboard
- * offset logic of its own. Touch targets ≥ 44px; the send haptic.
+ * max(insetsBottom, kbHeight) — lifts EVERYTHING here clear of the keys.
+ * R118-D adds exactly ONE keyboard behavior of its own: keyboardDidHide →
+ * inputRef.blur() (the selection clear — the draft persists, the handles
+ * die). Touch targets ≥ 44px; the send haptic.
  *
  * ROUND-116 (R116-l — the pill bar, chat.md §Composer amendment): the input
  * is a PILL — RADIUS_ROUND while single-line, switching to RADIUS_BAR once
  * the content grows past the 44px resting height (no radius animation — the
- * conditional reads the same height arithmetic that drives the growth), the
- * compressed metrics (minHeight 44, ~10 vertical padding, lg horizontal
- * padding + ~52 right padding) clearing the 36px in-bar paperclip at the
- * bar's right edge (tertiary → accent on press, the same "attach" sheet).
+ * conditional reads the same height arithmetic that drives the growth).
+ *
+ * ROUND-118 (R118-D — the geometry pass): the growth is now NATIVE (the
+ * controlled-height + flex:1 pair is deleted — the classic Android desync
+ * fragility; a multiline TextInput with only min/max grows on its own and
+ * scrolls past the cap): minHeight 44, maxHeight 176 (6 lines × 21 + 10
+ * padding + the 40px ATTACH_BAND), onContentSizeChange survives ONLY to
+ * flip the `inputTall` boolean (threshold 24 — the same arithmetic that
+ * used to drive the radius swap, which it still does, plus the TWO-TIER
+ * attach geometry: resting = paddingRight 52 (the paperclip beside the
+ * line) + paddingBottom 10; tall = paddingRight 16 (text full width) +
+ * paddingBottom 40 — the reserved band UNDER the text where the paperclip
+ * lands, never overlapping beside it). The focus ring goes 1.5dp. The stop
+ * button is ICON-ONLY (50×50 circle, Square 15 — the label is deleted);
+ * the queue button renders ONLY when there IS something to send (the
+ * disabled arm + the 0.45 opacity die).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type LayoutChangeEvent } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import { KeyboardEvents } from "react-native-keyboard-controller";
 import {
   ArrowUp,
-  Brain,
   Check,
-  ChevronDown,
-  Cpu,
   FileText,
-  HelpCircle,
   ListPlus,
-  // `Map` aliased — the bare name would shadow TS's global Map (the model
-  // grouping below news one up).
-  Map as MapIcon,
   Paperclip,
   Plus,
   Search,
   Square,
   X,
-  Zap,
-  type LucideIcon,
 } from "lucide-react-native";
 import { useTheme } from "@/design/theme";
-import { Badge, ClayCard, ClayIconChip, TypeBodyStrong, TypeCaption, TypeMono } from "@/design/primitives";
+import { TypeCaption, TypeMono } from "@/design/primitives";
 import { successHaptic, warningHaptic } from "@/design/haptics";
 import { Sheet } from "@/components/sheet";
-import { SPRING } from "@/design/motion";
 import {
   pressTint,
   RADIUS_BAR,
@@ -136,22 +130,16 @@ import {
 } from "@/features/attachments";
 import {
   contextPercent,
-  contextPressure,
-  contextWindowSourceCaption,
   fetchSessionContext,
-  formatTokens,
-  formatUsd,
   type SessionContextReport,
 } from "@/features/context-meter";
 import {
-  MODE_OPTIONS,
   thinkingMenuSpec,
   thinkingOption,
   displayThinkingLevel,
-  type ModeOption,
   type ModelOverride,
-  type PermissionMode,
   type ThinkingLevel,
+  type ThinkingOption,
 } from "@/features/composer-state";
 import {
   loadLastUsedModel,
@@ -164,19 +152,59 @@ import {
 
 export type ComposerMode = "compose" | "running" | "offline";
 
-/** The composer's sheets — the session screen owns WHICH one is open (the
- * kebab's rows open mode/model/thinking/context; the attach circle and the
- * attach sheet's own transition open attach/files). null = closed. */
-export type ComposerSheet = "attach" | "files" | "mode" | "model" | "thinking" | "context";
+/** The composer's sheets — R118-D: NARROWED to the attach pair (the kebab's
+ * menu renders the mode/model/thinking/context levels in place now; their
+ * bottom sheets are deleted). null = closed. */
+export type ComposerSheet = "attach" | "files";
 
-/** R115-I — the live control values the session screen's kebab sheet rows
- * display (the same sources the deleted control pills read): the honest
- * model ladder's short label, the model-aware thinking label, and the
- * context meter's percentage (null = no reading yet). */
+/** R118-D — one model row of the menu's MODEL level (the pick's payload +
+ *  the row's own label + the in-play check). */
+export interface MenuModelRow {
+  /** The ModelRecord's stable id (the row key). */
+  key: string;
+  /** The full model id — the pick's wire value. */
+  model: string;
+  /** The provider whose catalog the model was picked from. */
+  providerId: string;
+  /** The row's label (shortModelLabel — one line). */
+  label: string;
+  /** The three-tier in-play truth (override → session row → the report). */
+  selected: boolean;
+}
+
+/** R118-D — one provider's slice of the menu's MODEL level. */
+export interface MenuModelSection {
+  providerId: string;
+  /** The provider's display name (the registry row's name). */
+  label: string;
+  rows: MenuModelRow[];
+}
+
+/** R115-I → R118-D — the live control values + content the session screen's
+ * kebab menu renders: the honest model ladder's short label, the
+ * model-aware thinking label, the context meter's percentage (null = no
+ * reading yet), plus the menu's own data (the model sections, the thinking
+ * spec, the context report) and the STABLE pick callbacks — the menu owns
+ * the levels, this report feeds them. */
 export interface ComposerControlsSnapshot {
   modelLabel: string;
   thinkingLabel: string;
   ctxPct: number | null;
+  /** R118-D — the model level's sections (null while the catalog loads). */
+  modelSections: MenuModelSection[] | null;
+  /** R118-D — the thinking level's rows (the model-aware menu spec). */
+  thinkingOptions: readonly ThinkingOption[];
+  /** R118-D — true when the model takes no reasoning parameter at all. */
+  thinkingUnsupported: boolean;
+  /** R118-D — the level the thinking control DISPLAYS. */
+  thinkingSelected: ThinkingLevel;
+  /** R118-D — the context meter's own report (the Context level's readout). */
+  contextReport: SessionContextReport | null;
+  /** R118-D — the model pick (apply + PATCH; the checked session-selected
+   *  row clears — the callback owns that rule). */
+  pickModel: (row: MenuModelRow) => void;
+  /** R118-D — the thinking pick (persists per session). */
+  pickThinking: (level: ThinkingLevel) => void;
 }
 
 export interface ComposerProps {
@@ -185,7 +213,10 @@ export interface ComposerProps {
   outboxCount: number;
   sessionId: string;
   projectId: string | null;
-  /** The session row's CURRENT operating mode (full|ask|plan). */
+  /** The session row's CURRENT operating mode (full|ask|plan). R118-D:
+   *  the composer no longer renders it (the mode sheet is deleted; the
+   *  kebab's menu level owns the picker) — the prop SURVIVES the frozen
+   *  ComposerProps surface so the screen's call site rides unchanged. */
   permissionMode: string;
   /** R114-d — the session row's SERVER-SIDE selected model (the tier between
    * the per-send override and the agent row; null = follow the agent
@@ -201,7 +232,10 @@ export interface ComposerProps {
   /** R115-I — the live control values report (fires only when a value
    * actually changes; the screen's referential guard keeps it calm). */
   onControlsSnapshot?: (snapshot: ComposerControlsSnapshot) => void;
-  /** PATCH /sessions/:id/permissions — the screen owns the round-trip. */
+  /** PATCH /sessions/:id/permissions — the screen owns the round-trip.
+   *  R118-D: same freeze as `permissionMode` above — the menu's Mode level
+   *  calls the SCREEN's own handler now; the composer keeps the prop for
+   *  the unchanged ComposerProps surface. */
   onPermissionModeChange: (mode: "full" | "ask" | "plan") => void;
   /** R114-d — PATCH /sessions/:id {model} — the session's server-side selected
    * model (the cross-device truth; the other devices see the flip live via
@@ -224,25 +258,15 @@ const ATTACHMENT_TEXT_CAP = 131_072;
 /** The picked-binary byte ceiling (POST /attachments/upload's 8MB gate). */
 const MAX_BINARY_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
-/** The big mode rows' icon per operating mode (chat.md §Mode sheet — icon +
- * label + one-line description). */
-const MODE_ICONS: Record<PermissionMode, LucideIcon> = {
-  full: Zap,
-  ask: HelpCircle,
-  plan: MapIcon,
-};
-
 export function Composer({
   mode,
   outboxCount,
   sessionId,
   projectId,
-  permissionMode,
   selectedModel,
   sheet,
   onSheetChange,
   onControlsSnapshot,
-  onPermissionModeChange,
   onModelChange,
   onSend,
   onStop,
@@ -256,7 +280,12 @@ export function Composer({
 
   const [draft, setDraft] = useState("");
   const [focused, setFocused] = useState(false);
-  const [inputHeight, setInputHeight] = useState<number | null>(null);
+  // R118-D — the native auto-grow: the controlled inputHeight state is
+  // DELETED (the classic Android desync source); this boolean is the ONLY
+  // thing onContentSizeChange still flips (the radius + two-tier geometry
+  // read it). The input ref serves the keyboardDidHide blur.
+  const [inputTall, setInputTall] = useState(false);
+  const inputRef = useRef<TextInput>(null);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [atToken, setAtToken] = useState<{ at: number; end: number; query: string } | null>(null);
   const caretRef = useRef(0);
@@ -354,16 +383,25 @@ export function Composer({
   }, [streaming, connected, refreshContext]);
 
   // ── R115-I — the CONTROLLED sheets' open-time side effects ────────────────
-  // The session screen owns the open sheet; these effects re-trigger each
-  // sheet's own lazy load exactly the way the old pill handlers did (the
-  // attach/files sheets prefetch the project tree; the context sheet
-  // re-reads the meter so the breakdown is fresh on every open).
+  // The session screen owns the open sheet; this effect re-triggers the
+  // attach/files sheets' own lazy load exactly the way the old pill handler
+  // did (the sheets prefetch the project tree). R118-D: the context sheet
+  // is deleted — the meter keeps its own live cadence below, and the menu's
+  // Context level reads the report through the snapshot.
   useEffect(() => {
     if (sheet === "attach" || sheet === "files") loadTree();
   }, [sheet, loadTree]);
+
+  // R118-D — the selection clear (the owner's item 46): when the IME hides,
+  // the input BLURS — the draft persists, the text handles + selection die
+  // (the R115-K listeners only wrote kbHeight before). The dock architecture
+  // is untouched; this adds exactly one listener.
   useEffect(() => {
-    if (sheet === "context") refreshContext();
-  }, [sheet, refreshContext]);
+    const hidden = KeyboardEvents.addListener("keyboardDidHide", () => {
+      inputRef.current?.blur();
+    });
+    return () => hidden.remove();
+  }, []);
 
   // ── the effective pair + the model-aware thinking spec (R95-E parity) ────
 
@@ -379,18 +417,28 @@ export function Composer({
   const thinkingSpec = useMemo(() => thinkingMenuSpec(reasoningSupport), [reasoningSupport]);
   const displayedThinkingLevel = displayThinkingLevel(thinkingLevel, thinkingSpec.options);
 
-  const providerName = useCallback(
-    (providerId: string): string =>
-      providers?.find((p) => p.id === providerId)?.name ?? providerId,
-    [providers],
-  );
-
-  // R115-I — the model sheet's provider grouping (chat.md §Model sheet: no
-  // flat mega-list — the providers are section rows that expand inline).
-  const modelSections = useMemo(
-    () => (models !== null ? groupModelsByProvider(models, providers) : null),
-    [models, providers],
-  );
+  // R115-I → R118-D — the model level's MENU shape: the provider grouping
+  // (groupModelsByProvider) re-cut into flat selectable rows — label via
+  // shortModelLabel, the check via the FULL three-tier in-play ladder
+  // (override → session row → the context report's effective model). The
+  // grouping memo fed the deleted sheet's accordion; this memo feeds the
+  // kebab menu's Model level through the snapshot.
+  const menuModelSections = useMemo<MenuModelSection[] | null>(() => {
+    if (models === null) return null;
+    return groupModelsByProvider(models, providers).map((section) => ({
+      providerId: section.providerId,
+      label: section.label,
+      rows: section.rows.map(
+        (m): MenuModelRow => ({
+          key: m.id,
+          model: m.modelId,
+          providerId: m.providerId,
+          label: shortModelLabel(m.modelId, models),
+          selected: isModelInPlay(modelOverride, selectedModel, contextReport, m),
+        }),
+      ),
+    }));
+  }, [models, providers, modelOverride, selectedModel, contextReport]);
 
   // ── attachments ────────────────────────────────────────────────────────────
 
@@ -586,7 +634,6 @@ export function Composer({
         setNote("host offline — picked binary files will send as name-only mentions");
       }
       setDraft("");
-      setInputHeight(null);
       setAtToken(null);
       setAttachments([]);
       void successHaptic();
@@ -603,7 +650,6 @@ export function Composer({
     try {
       const staged = await uploadStaged(attachments);
       setDraft("");
-      setInputHeight(null);
       setAtToken(null);
       setAttachments([]);
       onQueue(content, overridesFor(staged));
@@ -622,22 +668,25 @@ export function Composer({
     [sessionId],
   );
 
+  // R118-D — the menu's model pick: apply + PATCH, both tiers (the old
+  // pickModel's body, with the trailing onSheetChange(null) DELETED — the
+  // kebab's menu owns the levels now, and the MENU decides when to return
+  // to its main level). The checked session-selected row (no override in
+  // play) CLEARS the selection — the PATCH-null path, reachable ONLY there
+  // (donts #36: real models only).
   const pickModel = useCallback(
-    (override: ModelOverride | null): void => {
+    (row: MenuModelRow): void => {
+      const clear = row.selected && modelOverride === null && selectedModel !== null;
+      const override = clear ? null : { model: row.model, providerId: row.providerId };
       setModelOverride(override);
       void saveModelOverride(sessionId, override);
       if (override !== null) void saveLastUsedModel(override);
       // R114-d — the pick is ALSO the session's server-side selected model
       // (PATCH /sessions/:id {model}): the other devices see the flip live
-      // through the meta frame — the "Auto pill showed Auto while PC had a
-      // model selected" divergence dies at the source. null = clear both
-      // tiers back to the agent's own model — R116-l: the clear is reachable
-      // ONLY by tapping the row that's in play via the SESSION-SELECTED tier
-      // (the retired "Agent default" row used to own it; donts #36).
+      // through the meta frame.
       if (onModelChange !== undefined) onModelChange(override);
-      onSheetChange(null);
     },
-    [sessionId, onModelChange, onSheetChange],
+    [sessionId, onModelChange, modelOverride, selectedModel],
   );
 
   // ── render ────────────────────────────────────────────────────────────────
@@ -660,20 +709,45 @@ export function Composer({
   const thinkingLabel = thinkingSpec.unsupported ? "Off" : thinkingOption(displayedThinkingLevel).label;
   const ctxPct = contextReport !== null ? contextPercent(contextReport.usedTokens, contextReport.contextWindow) : null;
 
-  // R116-l — the pill→bar switch: the input is TALL once its grown content
-  // plus the vertical padding passes the compressed 44px resting height —
-  // the same arithmetic that styles the height drives the radius (the
-  // RADIUS_ROUND pill swaps for RADIUS_BAR; the radius itself never
-  // animates).
-  const inputTall = inputHeight !== null && inputHeight + INPUT_PADDING_Y * 2 > INPUT_MIN_HEIGHT;
+  // R116-l → R118-D — the pill→bar switch: the input is TALL once its grown
+  // content passes the 24px content threshold (44px resting height − the
+  // 2×10 vertical padding — the same arithmetic that used to drive the
+  // controlled height). `inputTall` is the ONE boolean onContentSizeChange
+  // flips; the radius swap (RADIUS_ROUND → RADIUS_BAR) and the two-tier
+  // attach geometry below read it (the radius itself never animates).
 
-  // R115-I — the live control-values report for the session screen's kebab
-  // dropdown (its rows display these; the callback is referentially guarded
-  // on the screen's side, so this fires only when a label actually changes).
+  // R115-I → R118-D — the live control-values report for the session
+  // screen's kebab menu (its main rows display the labels; its sub-levels
+  // render the sections/spec/report and call the picks). The callback is
+  // referentially guarded on the screen's side — scalar-compare the labels,
+  // reference-compare the memos/callbacks — so this fires only when
+  // something actually changed.
   useEffect(() => {
     if (onControlsSnapshot === undefined) return;
-    onControlsSnapshot({ modelLabel, thinkingLabel, ctxPct });
-  }, [onControlsSnapshot, modelLabel, thinkingLabel, ctxPct]);
+    onControlsSnapshot({
+      modelLabel,
+      thinkingLabel,
+      ctxPct,
+      modelSections: menuModelSections,
+      thinkingOptions: thinkingSpec.options,
+      thinkingUnsupported: thinkingSpec.unsupported,
+      thinkingSelected: displayedThinkingLevel,
+      contextReport,
+      pickModel,
+      pickThinking,
+    });
+  }, [
+    onControlsSnapshot,
+    modelLabel,
+    thinkingLabel,
+    ctxPct,
+    menuModelSections,
+    thinkingSpec,
+    displayedThinkingLevel,
+    contextReport,
+    pickModel,
+    pickThinking,
+  ]);
 
   return (
     <View style={[styles.root, { borderTopColor: tokens.borderSubtle }]}>
@@ -787,20 +861,24 @@ export function Composer({
         </ScrollView>
       )}
 
-      {/* R116-l — THE PILL BAR (chat.md §Composer amendment): [the input
-          container (flex:1, position:relative — the TextInput + the in-bar
-          paperclip)] [send circle / stop+queue]. The input is a PILL
-          (RADIUS_ROUND) while single-line and switches to the BAR radius
-          (RADIUS_BAR, 28) once the content grows past the 44px resting
-          height — the same arithmetic that drives the height drives the
-          radius (a plain conditional; the radius itself never animates).
-          THE PAPERCLIP rides INSIDE the bar at the right (a 36px Pressable,
-          tertiary → accent on press, the same "attach" sheet — the old
-          left-side + circle is deleted; the dock still carries EXACTLY
-          THREE controls). */}
+      {/* R116-l → R118-D — THE PILL BAR (chat.md §Composer amendment):
+          [the input container (flex:1, position:relative — the TextInput +
+          the in-bar paperclip)] [send circle / stop+queue]. The input is a
+          PILL (RADIUS_ROUND) while single-line and switches to the BAR
+          radius (RADIUS_BAR, 28) once the content passes the 24px content
+          threshold. R118-D — the growth is NATIVE: no controlled height, no
+          flex:1 — a multiline TextInput with only minHeight/maxHeight grows
+          on its own and scrolls past the cap; onContentSizeChange flips ONLY
+          the inputTall boolean (the radius swap + the TWO-TIER attach
+          geometry read it). THE PAPERCLIP rides INSIDE the bar at the right
+          (a 36px Pressable, tertiary → accent on press) — resting: ~52
+          right padding keeps the text clear of it; tall: the text takes the
+          full width and the 40px ATTACH_BAND reserves the band UNDER it
+          where the paperclip lands (never overlapping beside it). */}
       <View style={styles.row}>
         <View style={styles.inputWrap}>
           <TextInput
+            ref={inputRef}
             accessibilityLabel="Message the agent"
             accessibilityHint={
               running
@@ -818,11 +896,10 @@ export function Composer({
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             onContentSizeChange={(event) => {
-              const height = event.nativeEvent.contentSize.height;
-              // The content cap leaves room for the padding: the RENDERED
-              // height (content + 2×INPUT_PADDING_Y) tops out exactly at
-              // MAX_INPUT_HEIGHT (~5 lines).
-              setInputHeight(Math.min(height, MAX_INPUT_HEIGHT - INPUT_PADDING_Y * 2));
+              // R118-D — the ONLY survivor of the controlled-height era:
+              // flip the boolean (React bails on the same value, so this
+              // re-renders nothing per keystroke past the swap).
+              setInputTall(event.nativeEvent.contentSize.height > INPUT_TALL_THRESHOLD);
             }}
             placeholder={running ? "Queue a message behind the running turn…" : "Message the agent…"}
             placeholderTextColor={tokens.textTertiary}
@@ -832,21 +909,30 @@ export function Composer({
                 // round-117-elevation §2.2: the input sits in a SURFACE WELL
                 // (not the card plane) — the dock reads as carved, not floated.
                 backgroundColor: tokens.surfaceWell,
+                // R118-D — the bolder focus ring: 1.5dp while focused (the
+                // hairline rest stays a whisper, the focus finally reads).
+                borderWidth: focused ? 1.5 : StyleSheet.hairlineWidth,
                 borderColor: focused ? tokens.accent : tokens.inputBorder,
                 borderTopColor: tokens.clayTopEdge,
                 color: tokens.text,
                 fontFamily: fontFamily.medium,
+                // R118-D — the two-tier attach geometry (the inputTall
+                // boundary the radius swaps at): resting = 52 right (the
+                // paperclip beside the line) + 10 bottom; tall = 16 right
+                // (text full width) + the 40px band under it.
+                paddingRight: inputTall ? spacing.lg : 52,
+                paddingBottom: inputTall ? ATTACH_BAND : INPUT_PADDING_Y,
+                textAlignVertical: inputTall ? "top" : "center",
               },
-              // The pill→bar switch: tall once the grown content + the
-              // vertical padding passes the 44px resting height.
+              // The pill→bar switch: tall once the grown content passes
+              // the threshold.
               inputTall ? styles.inputTall : null,
-              inputHeight !== null ? { height: inputHeight + INPUT_PADDING_Y * 2 } : null,
             ]}
           />
           {/* The in-bar attach — the paperclip INSIDE the input's right edge
-              (testID kept from the old circle; ~52 right padding on the text
-              clears it; pinned to the bar's bottom so it never rides up as
-              the input grows — the WhatsApp posture). */}
+              (testID kept from the old circle; pinned to the bar's bottom —
+              resting: centered on the 44px single-line bar; tall: it lands
+              INSIDE the reserved 40px band, WhatsApp-pinned). */}
           <Pressable
             accessibilityLabel="Attach a file or choose one from the project"
             accessibilityRole="button"
@@ -865,29 +951,35 @@ export function Composer({
         </View>
         {running ? (
           <View style={styles.runningButtons}>
-            <Pressable
-              accessibilityLabel="Queue this message behind the running turn"
-              accessibilityRole="button"
-              accessibilityState={canSend ? undefined : { disabled: true }}
-              disabled={!canSend}
-              testID="composer-queue"
-              onPress={() => void queueNow()}
-              style={({ pressed }) => [
-                styles.queueButton,
-                {
-                  backgroundColor: tokens.card,
-                  borderTopColor: tokens.clayTopEdge,
-                  borderColor: pressed ? pressTint(tokens.card, tokens.isDark) : tokens.borderStrong,
-                  opacity: canSend ? 1 : 0.45,
-                },
-              ]}
-            >
-              {uploading ? (
-                <ActivityIndicator size="small" color={tokens.textSecondary} />
-              ) : (
-                <ListPlus size={TYPE_BODY + 3} color={tokens.textSecondary} strokeWidth={2} />
-              )}
-            </Pressable>
+            {/* R118-D — the CONDITIONAL queue: renders ONLY when there is
+                something to send (draft or chips) — the disabled arm + the
+                0.45 opacity die (a control without content is a dead
+                control; the stop circle stands alone while empty). */}
+            {canSend ? (
+              <Pressable
+                accessibilityLabel="Queue this message behind the running turn"
+                accessibilityRole="button"
+                testID="composer-queue"
+                onPress={() => void queueNow()}
+                style={({ pressed }) => [
+                  styles.queueButton,
+                  {
+                    backgroundColor: tokens.card,
+                    borderTopColor: tokens.clayTopEdge,
+                    borderColor: pressed ? pressTint(tokens.card, tokens.isDark) : tokens.borderStrong,
+                  },
+                ]}
+              >
+                {uploading ? (
+                  <ActivityIndicator size="small" color={tokens.textSecondary} />
+                ) : (
+                  <ListPlus size={TYPE_BODY + 3} color={tokens.textSecondary} strokeWidth={2} />
+                )}
+              </Pressable>
+            ) : null}
+            {/* R118-D — the ICON-ONLY stop: a 50×50 circle, Square 15 in the
+                danger hue (the "Stop" label is deleted — the glyph carries
+                it; the a11y label keeps the sentence). */}
             <Pressable
               accessibilityLabel="Stop the running turn"
               accessibilityRole="button"
@@ -901,8 +993,7 @@ export function Composer({
                 },
               ]}
             >
-              <Square size={TYPE_BODY - 2} color={tokens.danger} strokeWidth={2.4} fill={tokens.danger} />
-              <Text style={[styles.stopLabel, { color: tokens.danger }]}>Stop</Text>
+              <Square size={15} color={tokens.danger} strokeWidth={2.4} fill={tokens.danger} />
             </Pressable>
           </View>
         ) : (
@@ -945,7 +1036,9 @@ export function Composer({
       </View>
 
       {/* ── the sheets (R115-I — CONTROLLED by the session screen's sheet
-          state; every pick or cancel writes onSheetChange(null)) ─────────── */}
+          state; every pick or cancel writes onSheetChange(null)). R118-D:
+          the attach PAIR only — the mode/model/thinking/context sheets are
+          deleted (the kebab's menu renders those levels in place). */}
 
       <Sheet open={sheet === "attach"} onClose={() => onSheetChange(null)} title="Add context">
         <SheetRow
@@ -1021,162 +1114,11 @@ export function Composer({
           </ScrollView>
         )}
       </Sheet>
-
-      {/* R115-I — the mode sheet carries ONLY the three operating modes as
-          big selectable rows (chat.md §Mode sheet; the task-mode section is
-          deleted from mobile — the round-115 verdict). The PATCH permissions
-          flow rides unchanged. */}
-      <Sheet open={sheet === "mode"} onClose={() => onSheetChange(null)} title="Operating mode">
-        {MODE_OPTIONS.map((option) => (
-          <ModeOptionRow
-            key={option.id}
-            option={option}
-            selected={option.id === permissionMode}
-            onPress={() => {
-              if (option.id !== permissionMode) onPermissionModeChange(option.id);
-              onSheetChange(null);
-            }}
-          />
-        ))}
-      </Sheet>
-
-      {/* R115-I → R116-l — the model sheet, GROUPED BY PROVIDER (chat.md
-          §Model sheet): REAL MODELS ONLY — the "Agent default" row is
-          retired (donts #36). The providers are section rows (name + "{n}
-          models" + chevron) that expand their models INLINE — no flat
-          mega-list — and the IN-PLAY CHECK rides the full three-tier ladder
-          (override → the session's selectedModel → the context report's
-          model — the PC's actual selection carries the check). The pick
-          logic (override + PATCH) is byte-identical to R114-d's; tapping the
-          row checked via the SESSION-SELECTED tier clears it (PATCH null). */}
-      <Sheet open={sheet === "model"} onClose={() => onSheetChange(null)} title="Model" testID="model-sheet">
-        {modelSections === null ? (
-          <View style={styles.sheetBusy}>
-            <ActivityIndicator size="small" color={tokens.accent} />
-            <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={1}>
-              {connected ? "loading the configured models…" : "the host is offline"}
-            </TypeCaption>
-          </View>
-        ) : modelSections.length === 0 ? (
-          <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.xs }} numberOfLines={1}>
-            no models configured on the host
-          </TypeCaption>
-        ) : (
-          <ModelGroupedList
-            sections={modelSections}
-            override={modelOverride}
-            selectedModel={selectedModel}
-            report={contextReport}
-            providerDisplayName={providerName}
-            onPick={pickModel}
-          />
-        )}
-      </Sheet>
-
-      <Sheet open={sheet === "thinking"} onClose={() => onSheetChange(null)} title="Thinking level">
-        {thinkingSpec.unsupported ? (
-          <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.xs }}>
-            this model does not support reasoning
-          </TypeCaption>
-        ) : (
-          <>
-            {thinkingSpec.options.map((option) => (
-              <SheetRow
-                key={option.id}
-                icon={<Brain size={15} color={option.id === displayedThinkingLevel ? tokens.accent : tokens.textSecondary} strokeWidth={2.3} />}
-                title={option.label}
-                caption={
-                  option.description +
-                  (option.id === thinkingSpec.defaultRow && option.id !== "default"
-                    ? " · the model's default"
-                    : "")
-                }
-                selected={option.id === displayedThinkingLevel}
-                onPress={() => {
-                  pickThinking(option.id);
-                  onSheetChange(null);
-                }}
-              />
-            ))}
-            {thinkingSpec.note !== null && (
-              <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.xs }}>
-                {thinkingSpec.note}
-              </TypeCaption>
-            )}
-          </>
-        )}
-      </Sheet>
-
-      <Sheet open={sheet === "context"} onClose={() => onSheetChange(null)} title="Context usage">
-        {contextReport === null ? (
-          <View style={styles.sheetBusy}>
-            <ActivityIndicator size="small" color={tokens.accent} />
-            <TypeCaption style={{ color: tokens.textTertiary }}>
-              {connected ? "reading the meter…" : "the host is offline"}
-            </TypeCaption>
-          </View>
-        ) : (
-          <ContextBreakdown report={contextReport} />
-        )}
-      </Sheet>
     </View>
   );
 }
 
-// ── the mode sheet's big rows (R115-I — chat.md §Mode sheet) ───────────────
-
-/** One BIG selectable operating-mode row: icon chip + label + ONE-line
- * description; selected = accent border + check (the round-115 spec).
- * R117-g2 (round-117-elevation.md §2.2): the icon chip is a ClayIconChip —
- * the accentTint container + accentDeep glyph replace the subtle ghost
- * (§1.5); the row's own border + trailing check still carry the selection. */
-function ModeOptionRow({
-  option,
-  selected,
-  onPress,
-}: {
-  option: ModeOption;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  const { tokens } = useTheme();
-  const Icon = MODE_ICONS[option.id];
-  return (
-    <Pressable
-      testID={`mode-row-${option.id}`}
-      accessibilityLabel={`${option.label} — ${option.description}`}
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.modeRow,
-        {
-          backgroundColor: pressed ? tokens.subtleHover : tokens.card,
-          borderColor: selected ? tokens.accent : tokens.borderSubtle,
-          borderTopColor: tokens.clayTopEdge,
-        },
-      ]}
-    >
-      {/* R117-g2 — the ClayIconChip (44, r 15): the tinted identity container
-          replaces the modeIconChip ghost. */}
-      <ClayIconChip icon={Icon} iconSize={18} size={44} />
-      <View style={{ flex: 1, gap: 1 }}>
-        <Text style={{ color: tokens.text, fontSize: TYPE_BODY, fontFamily: fontFamily.semibold }} numberOfLines={1}>
-          {option.label}
-        </Text>
-        <Text
-          style={{ color: tokens.textTertiary, fontSize: TYPE_CAPTION - 1, fontFamily: fontFamily.regular }}
-          numberOfLines={1}
-        >
-          {option.description}
-        </Text>
-      </View>
-      {selected ? <Check size={16} color={tokens.accent} strokeWidth={2.6} /> : null}
-    </Pressable>
-  );
-}
-
-// ── the model sheet's provider grouping (R115-I — chat.md §Model sheet) ────
+// ── the model menu's provider grouping (R115-I → R118-D) ───────────────────
 
 /** One provider's slice of the configured models (its display label — the
  * registry row's name, falling back to the provider id — plus its rows). */
@@ -1216,225 +1158,7 @@ export function groupModelsByProvider(
   return sections;
 }
 
-/** The section holding the model that's actually IN PLAY (override → session
- * truth → the context report's effective model — R116-l), so the grouped
- * list opens on it. */
-function inPlayProviderId(
-  sections: ModelProviderSection[],
-  override: ModelOverride | null,
-  selectedModel: { providerId: string; model: string } | null,
-  report: SessionContextReport | null,
-): string | null {
-  for (const section of sections) {
-    if (section.rows.some((m) => isModelInPlay(override, selectedModel, report, m))) {
-      return section.providerId;
-    }
-  }
-  return null;
-}
-
-/** The grouped list itself: the providers as section rows that expand their
- * models INLINE (one open at a time, house spring). Mounts with the in-play
- * provider expanded — the sheet's Modal unmounts its content between opens,
- * so the initial state re-derives every time the sheet reopens. */
-function ModelGroupedList({
-  sections,
-  override,
-  selectedModel,
-  report,
-  providerDisplayName,
-  onPick,
-}: {
-  sections: ModelProviderSection[];
-  override: ModelOverride | null;
-  selectedModel: { providerId: string; model: string } | null;
-  /** R116-l — the context report (the in-play ladder's third tier: with no
-   * override and no session-selected model, the PC's actual selection
-   * carries the check). */
-  report: SessionContextReport | null;
-  providerDisplayName: (providerId: string) => string;
-  onPick: (override: ModelOverride | null) => void;
-}) {
-  const [expandedId, setExpandedId] = useState<string | null>(() =>
-    inPlayProviderId(sections, override, selectedModel, report),
-  );
-  return (
-    <View style={{ gap: spacing.sm }}>
-      {sections.map((section) => (
-        <ProviderSection
-          key={section.providerId}
-          section={section}
-          expanded={expandedId === section.providerId}
-          onToggle={() =>
-            setExpandedId((prev) => (prev === section.providerId ? null : section.providerId))
-          }
-          override={override}
-          selectedModel={selectedModel}
-          report={report}
-          providerDisplayName={providerDisplayName}
-          onPick={onPick}
-        />
-      ))}
-    </View>
-  );
-}
-
-/** One provider's section row (display name + "{n} models" caption + the
- * rotating chevron) with its models inside the inline Accordion — the same
- * row grammar the flat list used: label + "{provider} · {N} ctx" caption +
- * the selected check (the three-tier "in play" truth). Tapping the row
- * that's checked via the SESSION-SELECTED tier (no override) clears it —
- * pickModel(null), the retired "Agent default" row's PATCH-null path
- * (R116-l); every other tap picks. */
-function ProviderSection({
-  section,
-  expanded,
-  onToggle,
-  override,
-  selectedModel,
-  report,
-  providerDisplayName,
-  onPick,
-}: {
-  section: ModelProviderSection;
-  expanded: boolean;
-  onToggle: () => void;
-  override: ModelOverride | null;
-  selectedModel: { providerId: string; model: string } | null;
-  report: SessionContextReport | null;
-  providerDisplayName: (providerId: string) => string;
-  onPick: (override: ModelOverride | null) => void;
-}) {
-  const { tokens } = useTheme();
-  const chevron = useSharedValue(0);
-
-  useEffect(() => {
-    chevron.value = withSpring(expanded ? 1 : 0, SPRING);
-  }, [expanded, chevron]);
-
-  const chevronStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${chevron.value * 180}deg` }],
-  }));
-
-  return (
-    <View>
-      <Pressable
-        testID={`provider-row-${section.providerId}`}
-        accessibilityLabel={`${section.label} — ${section.rows.length} model${section.rows.length === 1 ? "" : "s"}`}
-        accessibilityRole="button"
-        accessibilityState={{ expanded }}
-        onPress={onToggle}
-        style={({ pressed }) => [
-          styles.providerRow,
-          {
-            backgroundColor: pressed ? tokens.subtleHover : "transparent",
-            borderColor: tokens.borderSubtle,
-          },
-        ]}
-      >
-        <View style={{ flex: 1, gap: 1 }}>
-          <Text style={{ color: tokens.text, fontSize: TYPE_BODY, fontFamily: fontFamily.semibold }} numberOfLines={1}>
-            {section.label}
-          </Text>
-          <Text
-            style={{ color: tokens.textTertiary, fontSize: TYPE_CAPTION - 1, fontFamily: fontFamily.regular }}
-            numberOfLines={1}
-          >
-            {section.rows.length} model{section.rows.length === 1 ? "" : "s"}
-          </Text>
-        </View>
-        <Animated.View style={chevronStyle}>
-          <ChevronDown size={16} color={tokens.textTertiary} strokeWidth={2.2} />
-        </Animated.View>
-      </Pressable>
-      <Accordion open={expanded}>
-        <View style={styles.modelRows}>
-          {section.rows.map((m) => (
-            <SheetRow
-              key={m.id}
-              testID={`model-row-${m.id}`}
-              icon={
-                <Cpu
-                  size={15}
-                  color={isModelInPlay(override, selectedModel, report, m) ? tokens.accent : tokens.textSecondary}
-                  strokeWidth={2.3}
-                />
-              }
-              title={m.displayName ?? m.modelId}
-              caption={`${providerDisplayName(m.providerId)}${
-                m.contextWindow !== null ? ` · ${formatTokens(m.contextWindow)} ctx` : ""
-              }`}
-              selected={isModelInPlay(override, selectedModel, report, m)}
-              onPress={() => {
-                // R116-l — the checked session-selected row (not the
-                // override's) CLEARS the selection: pickModel(null) PATCHes
-                // null and both tiers fall back honestly.
-                if (
-                  override === null &&
-                  selectedModel !== null &&
-                  isModelInPlay(override, selectedModel, report, m)
-                ) {
-                  onPick(null);
-                  return;
-                }
-                onPick({ model: m.modelId, providerId: m.providerId });
-              }}
-            />
-          ))}
-        </View>
-      </Accordion>
-    </View>
-  );
-}
-
-// ── the inline accordion (the R115-h absolute-measurement pattern) ─────────
-
-/**
- * The inline expansion — height + opacity under the ONE spring. The R115-h
- * Yoga fix (donts #10), the same shape projects.tsx/disclosure.tsx carry:
- * the clip View carries overflow:hidden ONLY, and the measurement child is
- * ABSOLUTE (top/left/right 0) so it lays out at its NATURAL height even
- * while the parent clips at 0 — the measured height is always real, and an
- * open panel re-springs when its content re-measures.
- */
-function Accordion({ open, children }: { open: boolean; children: React.ReactNode }) {
-  const height = useSharedValue(0);
-  const opacity = useSharedValue(0);
-  // The measured natural height — a SHARED VALUE so the toggle effect
-  // reads the FRESH number whenever it fires.
-  const contentHeight = useSharedValue(0);
-
-  useEffect(() => {
-    height.value = withSpring(open ? contentHeight.value : 0, SPRING);
-    opacity.value = withSpring(open ? 1 : 0, SPRING);
-  }, [open, height, opacity, contentHeight]);
-
-  const style = useAnimatedStyle(() => ({
-    height: Math.max(0, height.value),
-    opacity: Math.max(0, opacity.value),
-  }));
-
-  const onLayout = (event: LayoutChangeEvent): void => {
-    const measured = event.nativeEvent.layout.height;
-    if (measured <= 0) return;
-    contentHeight.value = measured;
-    // An OPEN panel whose content re-measured springs to the new height;
-    // a CLOSED one just records it for the next toggle.
-    if (open) height.value = withSpring(measured, SPRING);
-  };
-
-  return (
-    <Animated.View style={[styles.accordionClip, style]}>
-      {/* The ABSOLUTE measurement child — auto height at any clip height
-          (collapsable={false} keeps RN from folding it out of the tree). */}
-      <View collapsable={false} onLayout={onLayout} style={styles.accordionMeasure}>
-        {children}
-      </View>
-    </Animated.View>
-  );
-}
-
-// ── sheet rows + the context breakdown ──────────────────────────────────────
+// ── sheet rows ──────────────────────────────────────
 
 function SheetRow({
   icon,
@@ -1492,114 +1216,27 @@ function SheetRow({
   );
 }
 
-/** The full context breakdown — the desktop donut popover's sections, restated
- * as the phone's sheet (every number labeled estimate vs provider-measured). */
-function ContextBreakdown({ report }: { report: SessionContextReport }) {
-  const { tokens } = useTheme();
-  const pct = contextPercent(report.usedTokens, report.contextWindow);
-  const pressure = contextPressure(report.usedTokens, report.contextWindow);
-  const barColor =
-    pressure === "danger" ? tokens.danger : pressure === "filling" ? tokens.warning : tokens.accent;
-  const slices: Array<[string, number]> = [
-    ["messages", report.breakdown.messages],
-    ["system prompt", report.breakdown.systemPrompt],
-    ["tools + schemas", report.breakdown.systemTools],
-    ["memory", report.breakdown.memory],
-    ["meta (index + rules)", report.breakdown.meta],
-    ["mcp tools", report.breakdown.mcpTools],
-  ];
-  return (
-    <View style={{ gap: spacing.md }}>
-      <ClayCard small style={{ padding: spacing.md, gap: spacing.sm }}>
-        <View style={{ flexDirection: "row", alignItems: "baseline", gap: spacing.sm }}>
-          <TypeBodyStrong style={{ color: tokens.text }}>{pct}%</TypeBodyStrong>
-          <TypeCaption style={{ color: tokens.textTertiary, flex: 1 }} numberOfLines={1}>
-            {formatTokens(report.usedTokens)} of {formatTokens(report.contextWindow)} ·{" "}
-            {formatTokens(report.available)} available
-          </TypeCaption>
-        </View>
-        <View style={[styles.meterTrack, { backgroundColor: tokens.subtle }]}>
-          <View style={[styles.meterFill, { width: `${pct}%`, backgroundColor: barColor }]} />
-        </View>
-        <TypeCaption style={{ color: tokens.textTertiary, fontSize: TYPE_MICRO }}>
-          {report.usedTokensBasis} · window: {formatTokens(report.contextWindow)} (
-          {contextWindowSourceCaption(report.contextWindowSource)}) · max out{" "}
-          {formatTokens(report.maxOutputTokens)}
-        </TypeCaption>
-        <TypeMono style={{ color: tokens.textTertiary, fontSize: 10.5 }} numberOfLines={1}>
-          {report.model} · {report.providerId}
-        </TypeMono>
-      </ClayCard>
-
-      <View style={{ gap: spacing.xs }}>
-        {slices
-          .filter(([, value]) => value > 0)
-          .map(([label, value]) => (
-            <View key={label} style={{ flexDirection: "row", alignItems: "baseline", gap: spacing.sm, paddingHorizontal: spacing.xs }}>
-              <TypeCaption style={{ color: tokens.textSecondary, flex: 1 }} numberOfLines={1}>
-                {label}
-              </TypeCaption>
-              <TypeMono style={{ color: tokens.textTertiary, fontSize: 11 }}>{formatTokens(value)}</TypeMono>
-            </View>
-          ))}
-      </View>
-
-      {report.actual !== null && (
-        <View style={{ gap: spacing.xs }}>
-          <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.xs }}>
-            provider-measured, last request
-          </TypeCaption>
-          <View style={{ flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.xs }}>
-            <Badge tone="accent">↑ {formatTokens(report.actual.inputTokens)}</Badge>
-            <Badge tone="neutral">↓ {formatTokens(report.actual.outputTokens)}</Badge>
-            {report.actual.cachedInputTokens !== null && (
-              <Badge tone="success">cached {formatTokens(report.actual.cachedInputTokens)}</Badge>
-            )}
-          </View>
-        </View>
-      )}
-
-      {report.compaction !== undefined && (
-        <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.xs }}>
-          context compacted — {report.compaction.droppedMessages} messages summarized (~
-          {formatTokens(report.compaction.tokensSaved)} tokens saved)
-        </TypeCaption>
-      )}
-
-      <View style={{ gap: spacing.xs }}>
-        <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.xs }}>
-          session totals (main + sub-agents)
-        </TypeCaption>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, paddingHorizontal: spacing.xs }}>
-          <Badge tone="neutral">↑ {formatTokens(report.usage.combined.inputTokens)}</Badge>
-          <Badge tone="neutral">↓ {formatTokens(report.usage.combined.outputTokens)}</Badge>
-          <Badge tone="neutral">{report.usage.combined.requests} turns</Badge>
-          <Badge tone="neutral">{formatUsd(report.usage.combined.costUsd)}</Badge>
-        </View>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, paddingHorizontal: spacing.xs }}>
-          <Badge tone="accent">main {formatUsd(report.usage.main.costUsd)}</Badge>
-          <Badge tone="warning">sub-agents {formatUsd(report.usage.subagents.costUsd)}</Badge>
-        </View>
-        {report.cache.hitRate !== null && (
-          <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.xs }}>
-            cache hit rate {Math.round(report.cache.hitRate * 100)}%
-          </TypeCaption>
-        )}
-      </View>
-    </View>
-  );
-}
-
 // ── helpers ─────────────────────────────────────────────────────────────────
 
-/** R116-l — the compressed pill bar's metrics: the 44px resting height (from
- * 50), ~10 vertical padding, and the ~5-line growth cap (5 lines at 21pt +
- * the padding) all derive from these — the pill→bar radius switch reads the
- * same arithmetic. */
+/** R116-l → R118-D — the pill bar's metrics: the 44px resting height, the
+ * ~10 vertical padding, and the native-growth cap. R118-D re-cuts the cap:
+ * 6 lines at 21pt line height + 10 top padding + the 40px ATTACH_BAND the
+ * tall input reserves under the text (where the paperclip lands) = 176.
+ * Exported for the tests (the geometry is the contract). */
 const INPUT_MIN_HEIGHT = 44;
 const INPUT_PADDING_Y = 10;
 
-const MAX_INPUT_HEIGHT = 5 * 21 + INPUT_PADDING_Y * 2; // ~5 lines at 21pt line height + padding
+/** §2.4 — the input's line budget (the growth cap's line count). */
+export const INPUT_MAX_LINES = 6;
+/** §2.4 — the tall input's reserved band under the text (the paperclip's
+ *  landing zone — text never wraps AROUND it). */
+export const ATTACH_BAND = 40;
+/** §2.4 — the native-growth cap: 6×21 + 10 + 40 = 176. */
+export const MAX_INPUT_HEIGHT = INPUT_MAX_LINES * 21 + INPUT_PADDING_Y + ATTACH_BAND;
+/** §2.4 — the content-height threshold that flips `inputTall` (the 44px
+ *  resting height − the 2×10 vertical padding — the same arithmetic that
+ *  used to drive the controlled height + the radius swap). */
+export const INPUT_TALL_THRESHOLD = INPUT_MIN_HEIGHT - INPUT_PADDING_Y * 2;
 
 /** The model pill's compact label — the display name when one exists, else a
  * shortened model id (the desktop's graduated shrink, phone-sized). */
@@ -1616,13 +1253,14 @@ function isModelSelected(override: ModelOverride | null, m: ModelRecord): boolea
   return override !== null && override.model === m.modelId && override.providerId === m.providerId;
 }
 
-/** R114-d → R116-l — the model row's "in play" truth, on the FULL three-tier
- * ladder: the local override when set, else the session's SERVER-side
- * selectedModel (the row the other devices see), else the CONTEXT REPORT's
- * effective model — the PC's actual selection, so the sheet highlights it
- * even when the phone never chose (donts #36: real models only, the PC's
- * pick carries the check). The report tier matches modelId AND providerId
- * when the report carries its provider, else by model id/name equality. */
+/** R114-d → R116-l → R118-D — the model row's "in play" truth, on the FULL
+ * three-tier ladder: the local override when set, else the session's
+ * SERVER-side selectedModel (the row the other devices see), else the
+ * CONTEXT REPORT's effective model — the PC's actual selection, so the menu
+ * carries the check even when the phone never chose (donts #36: real models
+ * only, the PC's pick carries the check). The report tier matches modelId
+ * AND providerId when the report carries its provider, else by model
+ * id/name equality. */
 function isModelInPlay(
   override: ModelOverride | null,
   selectedModel: { providerId: string; model: string } | null,
@@ -1709,12 +1347,14 @@ const styles = StyleSheet.create({
     flex: 1,
     position: "relative",
   },
-  /** R116-l — the PILL input: RADIUS_ROUND while single-line (inputTall
-   * swaps in RADIUS_BAR), compressed to the 44px resting height with ~10
-   * vertical padding, lg horizontal padding, and ~52 right padding clearing
-   * the in-bar paperclip. */
+  /** R116-l → R118-D — the PILL input: RADIUS_ROUND while single-line
+   * (inputTall swaps in RADIUS_BAR). R118-D — NATIVE growth: the flex:1
+   * + the controlled height are DELETED; only minHeight 44 + maxHeight
+   * MAX_INPUT_HEIGHT (176) remain — a multiline TextInput with only
+   * min/max grows on its own and scrolls past the cap. The two-tier
+   * padding (resting 52/10, tall 16/40) rides the inline style where the
+   * inputTall conditional lives. */
   input: {
-    flex: 1,
     borderRadius: RADIUS_ROUND,
     borderWidth: StyleSheet.hairlineWidth,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -1725,6 +1365,7 @@ const styles = StyleSheet.create({
     fontSize: TYPE_BODY,
     lineHeight: 21,
     minHeight: INPUT_MIN_HEIGHT,
+    maxHeight: MAX_INPUT_HEIGHT,
   },
   /** The grown input's radius — the bar (28) once the content passes the
    * resting height (a plain conditional swap; the radius never animates). */
@@ -1774,58 +1415,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   stopButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
+    width: 50,
     height: 50,
-    paddingHorizontal: spacing.md,
     borderRadius: RADIUS_ROUND,
     borderWidth: 1,
+    alignItems: "center",
     justifyContent: "center",
-  },
-  stopLabel: {
-    fontSize: TYPE_CAPTION + 2,
-    fontFamily: fontFamily.semibold,
-  },
-  /** The mode sheet's big selectable rows (chat.md §Mode sheet). */
-  modeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    minHeight: 64,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: RADIUS_INPUT,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  /** The model sheet's provider section row. */
-  providerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    minHeight: TOUCH_TARGET + 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: RADIUS_INPUT,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
-  },
-  /** The models under an expanded provider — indented under the section's
-   * label, one 4px beat apart (the sheet's own gap owns the section rhythm). */
-  modelRows: {
-    paddingLeft: spacing.md,
-    gap: spacing.xs,
-  },
-  /** The accordion clip — overflow:hidden ONLY (the R115-h Yoga fix: a
-   * static height would clamp the relative child's measurement to 0). */
-  accordionClip: {
-    overflow: "hidden",
-  },
-  /** The ABSOLUTE measurement child — natural height at any clip height. */
-  accordionMeasure: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
   },
   sheetRow: {
     flexDirection: "row",
@@ -1852,14 +1447,5 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing.md,
     minHeight: 44,
-  },
-  meterTrack: {
-    height: 6,
-    borderRadius: 3,
-    overflow: "hidden",
-  },
-  meterFill: {
-    height: "100%",
-    borderRadius: 3,
   },
 });
