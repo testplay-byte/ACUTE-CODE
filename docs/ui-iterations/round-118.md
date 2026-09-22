@@ -300,3 +300,28 @@ platforms) was explicitly excluded from this round: the owner directed that ever
 v0.112.0 first, and that the center-section plan be EXPLAINED to him after the release verifies. §6 of
 this document (the release record) is followed by that explanation, delivered in the round's closing
 report.
+
+## §6 The v0.112.0 release (R118-i — shipped and end-state verified)
+
+Tag `v0.112.0` at `49a4068` (the release-prep commit). All four workflows green: the tag `Release`
+run `35756063878` (launcher-kit + the Windows installer + the two AppImages + the two debs), the tag
+`Mobile APK` run `35756063880` (the APK attach), the main `CI` run `35756059694`, and the main
+`Mobile APK` run `35756059877`. The §g 2c lock-sync proof passed before tagging (`npm ci --dry-run`
+clean — no mobile deps changed this round).
+
+Draft `393949568` carried all 7 assets, then was PUBLISHED (PATCH `draft:false`, `make_latest:"true"`,
+body = the CHANGELOG's 0.112.0 section, no `target_commitish` — the §g 6 procedure). End-state
+verified per §g 6b:
+
+- `/releases/latest` answers `v0.112.0` authenticated; the PUBLIC check answers the same via the HTML
+  redirect (`/releases/latest` → `/releases/tag/v0.112.0` — the unauthenticated API was rate-limited
+  from the sandbox IP at check time).
+- 7/7 assets on the published page: the six desktop ones (AppImages 134,330,888 / 136,604,152 B,
+  debs 68,422,238 / 68,378,704 B, x64-setup.exe 39,356,724 B, launcher-kit 145,710 B) plus
+  `ACUTE-CODE_0.112.0_android-arm64.apk` 56,789,693 B.
+- **APK content check** (downloaded via the API, full zip central-directory pass): 1240 entries;
+  `assets/index.android.bundle` present with the Hermes bytecode magic `c6 1f bc 03`; 3 dex files;
+  `lib/` contains **arm64-v8a only**; exact size match.
+
+No stale drafts remain. The round is shipped — followed by the §N center-section explanation the
+owner directed (delivered in the round's closing report; its implementation awaits his verdict).
