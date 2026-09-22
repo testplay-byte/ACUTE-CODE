@@ -92,20 +92,18 @@ import {
   type LucideIcon,
 } from "lucide-react-native";
 import { useTheme } from "@/design/theme";
-import { Badge, ClayCard, TypeBodyStrong, TypeCaption, TypeMono } from "@/design/primitives";
+import { Badge, ClayCard, ClayIconChip, TypeBodyStrong, TypeCaption, TypeMono } from "@/design/primitives";
 import { successHaptic, warningHaptic } from "@/design/haptics";
 import { Sheet } from "@/components/sheet";
 import { SPRING } from "@/design/motion";
 import {
   pressTint,
   RADIUS_BAR,
-  RADIUS_CHIP,
   RADIUS_INPUT,
   RADIUS_PILL,
   RADIUS_ROUND,
   fontFamily,
   spacing,
-  TILE_OPTION,
   TOUCH_TARGET,
   TYPE_BODY,
   TYPE_CAPTION,
@@ -1123,7 +1121,10 @@ export function Composer({
 // ── the mode sheet's big rows (R115-I — chat.md §Mode sheet) ───────────────
 
 /** One BIG selectable operating-mode row: icon chip + label + ONE-line
- * description; selected = accent border + check (the round-115 spec). */
+ * description; selected = accent border + check (the round-115 spec).
+ * R117-g2 (round-117-elevation.md §2.2): the icon chip is a ClayIconChip —
+ * the accentTint container + accentDeep glyph replace the subtle ghost
+ * (§1.5); the row's own border + trailing check still carry the selection. */
 function ModeOptionRow({
   option,
   selected,
@@ -1151,9 +1152,9 @@ function ModeOptionRow({
         },
       ]}
     >
-      <View style={[styles.modeIconChip, { backgroundColor: tokens.subtle }]}>
-        <Icon size={18} color={selected ? tokens.accent : tokens.textSecondary} strokeWidth={2.2} />
-      </View>
+      {/* R117-g2 — the ClayIconChip (44, r 15): the tinted identity container
+          replaces the modeIconChip ghost. */}
+      <ClayIconChip icon={Icon} iconSize={18} size={44} />
       <View style={{ flex: 1, gap: 1 }}>
         <Text style={{ color: tokens.text, fontSize: TYPE_BODY, fontFamily: fontFamily.semibold }} numberOfLines={1}>
           {option.label}
@@ -1793,13 +1794,6 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS_INPUT,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-  },
-  modeIconChip: {
-    width: TILE_OPTION - 4,
-    height: TILE_OPTION - 4,
-    borderRadius: RADIUS_CHIP,
-    alignItems: "center",
-    justifyContent: "center",
   },
   /** The model sheet's provider section row. */
   providerRow: {

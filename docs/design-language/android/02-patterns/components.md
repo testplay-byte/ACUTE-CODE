@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-21 round-116 -->
+<!-- last-reviewed: 2026-09-22 round-117 -->
 
 # Patterns — Components
 
@@ -39,6 +39,12 @@ Labels: 1–3 words. No sentence buttons. No glow, no gradient washes, no Apple-
 ## Chips & badges
 
 - `Chip` — selectable filters (windows, modes): selected = accent border + tint.
+- **`ClayIconChip` (round-117 — the elevation spec §2.2):** the tinted identity
+  chip for list rows — sizes 40/44/48 (r 14/15/16), fill `accentTint` + the
+  `clayRim` hairline + `clayShadowSm`, glyph `accentDeep` strokeWidth 2.2. This
+  replaces every `subtleHover` ghost icon chip (welcome's feature rows, home's
+  bell, more's about/settings, connect's option rows, the composer's mode
+  rows) — hue in every list row without breaking the one-accent law.
 - `Badge` — status vocabulary only (open/done/stopped/failed/live/expired) with the
   semantic tones. Never decorative.
 - **Countdown chip** — "Valid for 24s": mono numerals, tinted `warning` under 30s,
@@ -79,7 +85,13 @@ Labels: 1–3 words. No sentence buttons. No glow, no gradient washes, no Apple-
 - **Round-116 anatomy:** each item is a HORIZONTAL chip — icon LEFT, label RIGHT — and
   **the label renders ONLY on the selected item**, animating in (width + opacity) as
   the previous item's label collapses out. The selection indicator is a rounded pill
-  with a **2px accent border** (never hairline) sliding on a calm, over-damped spring.
+  sliding on a calm, over-damped spring.
+- **Round-117 presence (the elevation spec §2.3):** the selection pill wears the warm
+  **`accentTint` FILL under its 2px `accentDeep` border** (One UI's tinted-pill move,
+  in clay — the border discipline of donts #34 stays). The active icon is 23px /
+  strokeWidth 2.5 in `accentDeep`; inactive icons read `textSecondary` (never the old
+  tertiary ghosts). Labels sit at the 11.5px floor (`TYPE_TAB_LABEL`, label +
+  measurement row byte-identical). The pending badge fills `accentDeep` + `accentText`.
 - **Approvals pending**: icon (and the selected label) breathe in accent (1.6s opacity
   0.75↔1) + the count badge.
 - Hides under the keyboard on the house spring.

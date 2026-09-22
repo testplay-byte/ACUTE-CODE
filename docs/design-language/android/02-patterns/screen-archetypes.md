@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-20 round-115 -->
+<!-- last-reviewed: 2026-09-22 round-117 -->
 
 # Patterns — Screen Archetypes
 
@@ -52,6 +52,11 @@ Rules:
   screens keep the compact 56px header (chevron | title+subtitle | right slot).
 - Row = leading identity (letter avatar / icon chip) + label + ONE meta line.
   One line per meta datum; a row is 2 text lines max.
+- **Round-117 amendment (AMENDMENT 5 — the rhythm, round-117-elevation.md §2.1):**
+  the list cadence is **12 px within a group / 32 px between sections** (was the
+  uniform 16 px beat) — the scaffold's body gap is `spacing.md` and every
+  `SectionHeader` carries `marginTop: spacing.xl`, so sections announce
+  themselves while groups knit tight. Gutters stay 16.
 - Empty state = Archetype-1-style centered message (icon + one-line title +
   one-line caption).
 - Inline expansion (accordion) belongs to lists: tap a row → children expand below it

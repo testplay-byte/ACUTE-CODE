@@ -23,6 +23,18 @@
  * readers read unselected tabs whose visual label is collapsed). Reduced
  * motion snaps both the labels and the pill (motion.md §5).
  *
+ * R117-g2 (round-117-elevation.md §2.3 — the tab bar's PRESENCE): the
+ * selected chip sits on a warm terracotta-tinted pill — the indicator's
+ * fill becomes `accentTint` under the unchanged 2px `accentDeep` border
+ * (One UI's signature move, in clay; donts.md #34's never-a-hairline rule
+ * holds). The active icon renders 23px / strokeWidth 2.5 in `accentDeep`;
+ * inactive icons read `textSecondary` (they were 40%-black ghosts — 62%
+ * reads as real chrome). Labels ride the 11.5 floor (TYPE_TAB_LABEL, the
+ * label + measurement row switching TOGETHER — byte-identical recipes or
+ * the morph mis-measures). The pending badge fills `accentDeep` + the
+ * `accentText` ink. Bar height/radius/ChromeEdge/the measurement system
+ * are untouched — R116-b's mechanics stay frozen.
+ *
  * R115-g — the round-115 approvals mandate (motion.md §4.5): a tab whose
  * `alert` flag is true (pending approvals — derived from badge > 0 by the
  * tabs layout) tints its icon AND label to the accent and BREATHES: a calm
@@ -56,7 +68,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { ChromeEdge } from "@/design/primitives";
 import { selectionHaptic } from "@/design/haptics";
 import { useTheme } from "@/design/theme";
-import { BAR_HEIGHT, BAR_MARGIN, TYPE_MICRO, fontFamily, spacing } from "@/design/tokens";
+import { BAR_HEIGHT, BAR_MARGIN, TYPE_TAB_LABEL, fontFamily, spacing } from "@/design/tokens";
 import { TAB_LABEL_MS, TAB_SPRING } from "@/design/motion";
 
 export interface TabDescriptor {
@@ -86,8 +98,11 @@ const ALERT_BREATHE_LEG_MS = 800;
 /** The breathe's low opacity (motion.md §4.5: 0.75↔1). */
 const ALERT_BREATHE_MIN = 0.75;
 
-/** The chip's icon size (px) — the fixed anchor the label breathes beside. */
+/** The inactive chip's icon size (px) — the fixed anchor the label breathes beside. */
 const ICON_SIZE = 22;
+/** The ACTIVE icon's size (R117-g2 §2.3: 22 → 23 — the selection gains
+ *  weight alongside its strokeWidth/color, the M3/One UI state-weight cue). */
+const ICON_SIZE_ACTIVE = 23;
 /** The icon→label gutter inside the horizontal chip (px). */
 const CHIP_GAP = 6;
 /** The selection pill's horizontal breathing around the chip (px, per side). */
@@ -131,9 +146,10 @@ export function FloatingTabBar({ tabs, activeIndex, onSelect }: FloatingTabBarPr
   useEffect(() => {
     if (!allMeasured) return; // hold the mount pose until the labels measure
     const center = (activeIndex + 0.5) * tabWidth;
-    // The pill wraps the chip (icon + gutter + label) with breathing room,
-    // capped so it never pokes past the slab's own rounded edges.
-    const chip = ICON_SIZE + CHIP_GAP + activeLabelWidth;
+    // The pill wraps the ACTIVE chip (its 23px icon + gutter + label) with
+    // breathing room, capped so it never pokes past the slab's own rounded
+    // edges.
+    const chip = ICON_SIZE_ACTIVE + CHIP_GAP + activeLabelWidth;
     const edge = Math.min(center, barWidth - center) * 2 - 2;
     const width = Math.min(chip + PILL_PAD_X * 2, Math.max(edge, ICON_SIZE));
     if (reduced) {
@@ -181,17 +197,18 @@ export function FloatingTabBar({ tabs, activeIndex, onSelect }: FloatingTabBarPr
         <View style={{ boxShadow: tokens.clayShadow2 }}>
         <ChromeEdge radius={28}>
           <View style={[styles.bar, { width: barWidth }]}>
-            {/* The sliding accent pill — R116-b: the 2px accent border (never
-                hairline, donts.md #34) that wraps the selected chip; its
-                center slides on TAB_SPRING, its width breathes with the
-                label morph. */}
+            {/* The sliding selection pill — R116-b's 2px-bordered wrap, with
+                R117-g2's warm presence: the fill is accentTint (the selected
+                chip sits on a terracotta-tinted pill) under the 2px accentDeep
+                border (never hairline, donts.md #34); its center slides on
+                TAB_SPRING, its width breathes with the label morph. */}
             <Animated.View
               pointerEvents="none"
               style={[
                 styles.indicator,
                 {
-                  backgroundColor: tokens.subtleHover,
-                  borderColor: tokens.accent,
+                  backgroundColor: tokens.accentTint,
+                  borderColor: tokens.accentDeep,
                 },
                 indicatorStyle,
               ]}
@@ -311,9 +328,11 @@ function TabItem({
     opacity: labelOpacity.value * breathe.value,
   }));
 
-  // The pinned grammar (components.md §Tab bar): active = accent icon +
-  // bold label; alert = the same accent tint even at rest; else tertiary.
-  const color = alert || active ? tokens.accent : tokens.textTertiary;
+  // The pinned grammar (components.md §Tab bar): active = accentDeep icon +
+  // bold label (R117-g2: the deep tier — accent-as-text duty); alert = the
+  // same deep tint even at rest; else textSecondary — the inactive icons
+  // were 40%-black ghosts, 62% reads as real chrome (§2.3).
+  const color = alert || active ? tokens.accentDeep : tokens.textSecondary;
   const badge = tab.badge;
   const pending = badge !== undefined && badge > 0;
 
@@ -334,11 +353,18 @@ function TabItem({
       <View style={styles.chip}>
         <View>
           <Animated.View style={iconBreathe}>
-            <Icon size={ICON_SIZE} color={color} strokeWidth={active ? 2.4 : 2} />
+            {/* R117-g2 §2.3: the active icon is 23px / strokeWidth 2.5 — the
+                state-weight change (outline stays 22 / 2) that reads as
+                "product vs prototype" in the M3/One UI benchmark. */}
+            <Icon
+              size={active ? ICON_SIZE_ACTIVE : ICON_SIZE}
+              color={color}
+              strokeWidth={active ? 2.5 : 2}
+            />
           </Animated.View>
           {pending ? (
             <View
-              style={[styles.badge, { backgroundColor: tokens.accent }]}
+              style={[styles.badge, { backgroundColor: tokens.accentDeep }]}
               accessibilityLabel={`${badge} pending`}
             >
               <Animated.Text style={[styles.badgeText, { color: tokens.accentText }]}>
@@ -384,7 +410,8 @@ const styles = StyleSheet.create({
     bottom: spacing.sm,
     left: 0,
     borderRadius: 18,
-    // R116-b: 2px accent when selected — never a hairline (donts.md #34).
+    // R116-b/R117-g2: 2px accentDeep over the accentTint fill — never a
+    // hairline (donts.md #34).
     borderWidth: 2,
   },
   tab: {
@@ -417,7 +444,10 @@ const styles = StyleSheet.create({
     lineHeight: 12,
   },
   label: {
-    fontSize: TYPE_MICRO - 0.5,
+    // R117-g2 (AMENDMENT 4): 11.5 — the ladder's own tab-label floor. The
+    // measurement row below must stay byte-identical or the morph
+    // mis-measures (round-117-elevation.md §2.1).
+    fontSize: TYPE_TAB_LABEL,
     letterSpacing: 0.2,
   },
   /** The hidden measurement row — laid out unconstrained, never painted. */
@@ -428,9 +458,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     opacity: 0,
   },
-  /** Must match the EXPANDED label's exact type recipe (bold — selected). */
+  /** Must match the EXPANDED label's exact type recipe (bold — selected):
+   *  same 11.5 TYPE_TAB_LABEL spelling, byte-for-byte. */
   measureLabel: {
-    fontSize: TYPE_MICRO - 0.5,
+    fontSize: TYPE_TAB_LABEL,
     letterSpacing: 0.2,
     fontFamily: fontFamily.bold,
   },

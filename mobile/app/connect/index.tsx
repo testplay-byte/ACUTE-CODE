@@ -30,10 +30,14 @@
  * every replace() landing) there is nothing behind it, so the back chevron
  * only renders when the root stack can actually pop (e.g. pushed from the
  * connection pill inside the tabs).
+ *
+ * R117-g2 (round-117-elevation.md §2.2): the management rows' option chips
+ * are ClayIconChips — the accentTint fill + clayRim hairline + the
+ * accentDeep glyph replace the bare glyph boxes (the §1.5 ghost-chip kill).
  */
 
 import { useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Svg, { Line } from "react-native-svg";
@@ -54,11 +58,13 @@ import {
   Smartphone,
   Unplug,
 } from "lucide-react-native";
+import type { LucideIcon } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { timeAgo } from "@/components/host-card";
 import {
   ChromeButton,
   ClayCard,
+  ClayIconChip,
   FadeInUp,
   PressableCard,
   QuietButton,
@@ -315,7 +321,7 @@ export default function ConnectHubScreen() {
       <SectionHeader>This connection</SectionHeader>
       <PressableCard onPress={() => router.push("/settings/host")}>
         <OptionRow
-          icon={<Unplug size={22} color={tokens.textSecondary} strokeWidth={2.2} />}
+          icon={Unplug}
           title="Manage this connection"
           body="Details, diagnostics, and the disconnect."
         />
@@ -325,7 +331,7 @@ export default function ConnectHubScreen() {
         accessibilityLabel="Scan to pair a different desktop"
       >
         <OptionRow
-          icon={<ScanLine size={22} color={tokens.accent} strokeWidth={2.2} />}
+          icon={ScanLine}
           title="Scan a new pairing code"
           body="Replaces this phone's link."
         />
@@ -334,10 +340,12 @@ export default function ConnectHubScreen() {
   );
 }
 
-function OptionRow({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
+function OptionRow({ icon: Icon, title, body }: { icon: LucideIcon; title: string; body: string }) {
   return (
     <View style={styles.optionInner}>
-      <View style={styles.optionIcon}>{icon}</View>
+      {/* R117-g2 — the ClayIconChip (48, r 16): the tinted container replaces
+          the bare glyph box; the chip owns the accentDeep color. */}
+      <ClayIconChip icon={Icon} iconSize={22} size={48} />
       <View style={styles.optionText}>
         <TypeBody numberOfLines={1}>{title}</TypeBody>
         {/* The single-line law (donts #1/#31): one measured line, never an
@@ -390,13 +398,6 @@ const styles = StyleSheet.create({
   heroName: { flex: 1 },
   heroStatus: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   optionInner: { flexDirection: "row", gap: spacing.md, padding: spacing.lg, alignItems: "center" },
-  optionIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   optionText: { flex: 1, gap: 2 },
   optionBody: { lineHeight: 18 },
 });

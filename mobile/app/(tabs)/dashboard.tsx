@@ -273,7 +273,7 @@ function SingleBar({
         y={baselineY - totalHeight}
         width={barWidth}
         height={totalHeight}
-        rx={Math.min(2.5, barWidth / 2)}
+        rx={Math.min(2, barWidth / 2)}
         fill={fill}
         fillOpacity={emphasis}
         animatedProps={barProps}
@@ -352,7 +352,7 @@ function SplitBar({
         y={baselineY - inputHeight}
         width={barWidth}
         height={inputHeight}
-        rx={Math.min(2.5, barWidth / 2)}
+        rx={Math.min(2, barWidth / 2)}
         fill={inHue}
         fillOpacity={emphasis}
         animatedProps={inputProps}
@@ -363,7 +363,7 @@ function SplitBar({
           y={baselineY - totalHeight}
           width={barWidth}
           height={outputHeight}
-          rx={Math.min(2.5, barWidth / 2)}
+          rx={Math.min(2, barWidth / 2)}
           fill={outHue}
           fillOpacity={emphasis}
           animatedProps={outputProps}
@@ -421,6 +421,10 @@ function UsageChart({
   const hasSplit = days.some((day) => day.inputTokens !== null && day.outputTokens !== null);
   // 3 quiet dashed gridlines (quarter marks) — the y-axis's honest scale.
   const gridFractions = [0.25, 0.5, 0.75];
+  // R117-g2 §2.3 — the gridlines one step stronger than borderSubtle: the
+  // warm-ink family at 14% (light rgba(38,34,28,·) / dark white), so the
+  // dashed scale actually draws on the card.
+  const gridStroke = tokens.isDark ? "rgba(255,255,255,0.14)" : "rgba(38,34,28,0.14)";
 
   return (
     <View accessibilityLabel="daily token totals stacked bar chart" accessibilityRole="image">
@@ -444,7 +448,8 @@ function UsageChart({
         ) : null}
       </View>
       <Svg width={width} height={CHART_HEIGHT}>
-        {/* The quiet dashed gridlines (DESIGN.md's calm — borderSubtle). */}
+        {/* The quiet dashed gridlines — R117-g2 §2.3's one-step-stronger
+            warm-ink stroke (was borderSubtle's 6% — invisible at a squint). */}
         {gridFractions.map((fraction) => {
           const y = baselineY - fraction * plotHeight;
           return (
@@ -454,7 +459,7 @@ function UsageChart({
               y1={y}
               x2={width}
               y2={y}
-              stroke={tokens.borderSubtle}
+              stroke={gridStroke}
               strokeWidth={1}
               strokeDasharray="4 4"
             />
@@ -1245,12 +1250,15 @@ export default function DashboardScreen() {
                   <ClayCard>
                     <View style={styles.donutPad}>
                       <View style={styles.donutRow}>
+                        {/* R117-g2 §2.3: the track rides the mono-well class —
+                            mixHex(card,"#2A2018",0.06) light (monoBg's exact
+                            recipe), the honest recessed dark branch. */}
                         <DonutChart
                           testID="dashboard-donut"
                           segments={donutSegmentsInput}
                           dataKey={donutKey}
                           highlighted={highlightedModel}
-                          trackColor={tokens.borderSubtle}
+                          trackColor={tokens.monoBg}
                           accessibilityLabel={`model usage donut — top model ${shortModelName(models[0].model)} at ${Math.round((modelShares[0] ?? 0) * 100)}% of tokens`}
                           center={
                             <View style={styles.donutCenterWrap}>
@@ -1429,7 +1437,11 @@ const styles = StyleSheet.create({
   // The caption aligns under the model NAME: dot width (10) + head gap (sm).
   legendCaption: { paddingLeft: 10 + spacing.sm },
   footer: { textAlign: "center" },
-  skeletonWrap: { gap: spacing.lg },
-  carouselSkeleton: { height: 116, borderRadius: RADIUS_CARD },
+  // R117-g2 (AMENDMENT 5): the loading twin knits at the same 12 px beat the
+  // scaffold's bodyContent now carries (the skeleton forecasts the rhythm).
+  skeletonWrap: { gap: spacing.md },
+  // R117-g2 §2.3: the carousel skeleton forecasts the stat card's new 128px
+  // body (the card grew for TYPE_STAT's 28px headline number).
+  carouselSkeleton: { height: 128, borderRadius: RADIUS_CARD },
   chartSkeleton: { height: CHART_HEIGHT + 96, borderRadius: RADIUS_CARD },
 });

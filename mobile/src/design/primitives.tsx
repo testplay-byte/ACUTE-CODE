@@ -19,6 +19,9 @@
  *   ClayInput     — the text input: radius 14, focus ring in accent
  *   Chip          — the filter chip (selected = accentDeep fill; resting
  *                   chips sit in the surfaceWell)
+ *   ClayIconChip  — the tinted identity chip (R117-g2 §2.2): accentTint
+ *                   fill + clayRim hairline + clayShadowSm, the accentDeep
+ *                   glyph — kills the subtleHover ghost icon chips
  *   ConnectionPill— the always-visible link status pill (§6)
  *   StatusDot     — the animated state dot (pulses while probing)
  *   Skeleton      — the loading placeholder (calm opacity pulse, well fill)
@@ -34,6 +37,7 @@
 
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useCallback, useEffect } from "react";
+import type { LucideIcon } from "lucide-react-native";
 import {
   AccessibilityState,
   ActivityIndicator,
@@ -62,6 +66,7 @@ import { useTheme } from "./theme";
 import {
   RADIUS_BAR,
   RADIUS_CARD,
+  RADIUS_CHIP,
   RADIUS_INPUT,
   RADIUS_PILL,
   TOUCH_TARGET,
@@ -623,6 +628,71 @@ export function Chip({ children, selected = false, onPress, style, textStyle, te
   );
 }
 
+// ── ClayIconChip — the tinted identity chip (R117-g2 §2.2) ─────────────────
+
+export interface ClayIconChipProps {
+  /** The glyph — the chip owns its color (accentDeep) + strokeWidth (2.2). */
+  icon: LucideIcon;
+  /** The glyph's size (px) — the caller owns it (17–24 across the sites). */
+  iconSize: number;
+  /** The chip's edge: 40 (r 14) · 44 (r 15) · 48 (r 16). Default 40. */
+  size?: 40 | 44 | 48;
+  /** Overlay children rendered inside the chip (home's unread dot). */
+  children?: React.ReactNode;
+  style?: StyleProp<ViewStyle>;
+  testID?: string;
+}
+
+/** The per-size corner radii (round-117-elevation.md §2.2: 40→14, 44→15,
+ *  48→16 — the geometry the migrated sites already carried). */
+const CLAY_ICON_CHIP_RADIUS: Record<40 | 44 | 48, number> = {
+  40: RADIUS_INPUT,
+  44: 15,
+  48: RADIUS_CHIP,
+};
+
+/**
+ * The tinted identity chip (R117-g2, round-117-elevation.md §2.2): fill
+ * `accentTint` (the 12%/18% accent container — hue without loudness) + the
+ * `clayRim` hairline + `clayShadowSm`, glyph `accentDeep` strokeWidth 2.2.
+ * This is the single change that puts hue into every list row without
+ * touching the one-accent law: the old sites filled these with
+ * `subtleHover` — ghost rectangles behind accent glyphs at 1.19:1 (§1.5).
+ * The chips stay quiet (a 12% tint), but they finally exist.
+ */
+export function ClayIconChip({
+  icon: Icon,
+  iconSize,
+  size = 40,
+  children,
+  style,
+  testID,
+}: ClayIconChipProps) {
+  const { tokens } = useTheme();
+  return (
+    <View
+      testID={testID}
+      style={[
+        {
+          width: size,
+          height: size,
+          borderRadius: CLAY_ICON_CHIP_RADIUS[size],
+          backgroundColor: tokens.accentTint,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: tokens.clayRim,
+          boxShadow: tokens.clayShadowSm,
+          alignItems: "center",
+          justifyContent: "center",
+        },
+        style,
+      ]}
+    >
+      <Icon size={iconSize} color={tokens.accentDeep} strokeWidth={2.2} />
+      {children}
+    </View>
+  );
+}
+
 // ── StatusDot — the animated state dot ──────────────────────────────────────
 
 export interface StatusDotProps {
@@ -753,11 +823,25 @@ export interface SectionHeaderProps {
   style?: StyleProp<ViewStyle>;
 }
 
-/** The 16/700 section heading, with the optional quiet action link. */
+/** The 16/700 section heading, with the optional quiet action link.
+ *  R117-g2 (AMENDMENT 5 — the rhythm): the header carries `marginTop:
+ *  spacing.xl` (20) so a section break reads 32 px (20 + the scaffold's
+ *  12 px intra-group gap) while rows knit at 12 — the cadence that replaced
+ *  the uniform 16 px beat (round-117-elevation.md §2.1). */
 export function SectionHeader({ children, action, onAction, style }: SectionHeaderProps) {
   const { tokens } = useTheme();
   return (
-    <View style={[{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between" }, style]}>
+    <View
+      style={[
+        {
+          flexDirection: "row",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          marginTop: spacing.xl,
+        },
+        style,
+      ]}
+    >
       <Text
         style={{
           color: tokens.text,

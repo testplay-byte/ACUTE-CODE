@@ -18,6 +18,10 @@
  * directly under the cards instead of space-between-pinning to the
  * footer, so hero + cards + CTA read as one column and the space below
  * breathes.
+ *
+ * R117-g2 (round-117-elevation.md §2.2): the feature rows' identity chips
+ * are ClayIconChips — the accentTint fill + clayRim hairline + the
+ * accentDeep glyph replace the old subtleHover ghost rectangles (§1.5).
  */
 
 import { useRouter } from "expo-router";
@@ -36,6 +40,7 @@ import Animated, {
 import { ArrowRight, Bell, MessageSquareText, ShieldCheck, Smartphone } from "lucide-react-native";
 import {
   ChromeButton,
+  ClayIconChip,
   FadeInUp,
   PressableCard,
   TypeBody,
@@ -46,10 +51,8 @@ import {
 import { useTheme } from "@/design/theme";
 import {
   RADIUS_BAR,
-  RADIUS_INPUT,
   RADIUS_TILE,
   TILE_HERO,
-  TILE_ROW,
   TYPE_BODY,
   fontFamily,
   spacing,
@@ -150,9 +153,9 @@ export default function WelcomeScreen() {
             return (
               <PressableCard key={row.title} enterIndex={CARD_STAGGER_START + i}>
                 <View style={styles.rowInner}>
-                  <View style={[styles.rowIcon, { backgroundColor: tokens.subtleHover }]}>
-                    <Icon size={20} color={tokens.accent} strokeWidth={2.2} />
-                  </View>
+                  {/* R117-g2 — the feature rows' ClayIconChip (40, r 14): the
+                      accentTint container replaces the subtleHover ghost. */}
+                  <ClayIconChip icon={Icon} iconSize={20} />
                   <View style={styles.rowText}>
                     <TypeBodyStrong numberOfLines={1}>{row.title}</TypeBodyStrong>
                     <TypeCaption numberOfLines={1}>{row.body}</TypeCaption>
@@ -208,13 +211,6 @@ const styles = StyleSheet.create({
   tagline: { textAlign: "center", maxWidth: 320 },
   rows: { gap: spacing.md, marginTop: spacing.xxl },
   rowInner: { flexDirection: "row", gap: spacing.md, padding: spacing.lg, alignItems: "center" },
-  rowIcon: {
-    width: TILE_ROW,
-    height: TILE_ROW,
-    borderRadius: RADIUS_INPUT,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   rowText: { flex: 1, gap: spacing.xs },
   ctaWrap: { marginTop: spacing.xl },
   cta: { minHeight: 56, borderRadius: RADIUS_BAR },

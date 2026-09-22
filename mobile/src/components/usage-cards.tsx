@@ -4,8 +4,9 @@
  * dashboard screen (app/(tabs)/dashboard.tsx) owns the fetch orchestration
  * and passes typed rows down; this module owns the shapes.
  *
- *   StatCarouselCard   — one overview-carousel stat card (big mono number +
- *                        icon-chip accent + one-line caption)
+ *   StatCarouselCard   — one overview-carousel stat card (the TYPE_STAT
+ *                        28 mono-medium number + the accentTint icon chip +
+ *                        one-line caption)
  *   ActivityGrid       — the GitHub-style 7-row × N-week intensity grid over
  *                        the window's day buckets (tap a cell = the shared
  *                        day spotlight)
@@ -43,7 +44,7 @@ import {
   TypeCaption,
   TypeMicro,
   TypeMono,
-  TypeTitle,
+  TypeStat,
 } from "@/design/primitives";
 import { modelColor } from "@/design/model-colors";
 import { SPRING } from "@/design/motion";
@@ -139,9 +140,10 @@ export const CAROUSEL_GUTTER = spacing.md;
 
 /**
  * One overview-carousel card — the old 2×2 hero tile's carousel grammar: the
- * toned icon chip (color rides on the chip, never the card), the BIG MONO
- * number, and ONE caption line that carries the honesty scope ("last 14
- * days" / "all time").
+ * icon chip (R117-g2 §2.3: 30px r10, the accentTint fill — the hue rides
+ * the glyph as today), the headline number at TYPE_STAT (28 mono-medium,
+ * −0.5 tracking — the screen's numbers finally have a scale), and ONE
+ * caption line that carries the honesty scope ("last 14 days" / "all time").
  */
 export function StatCarouselCard({
   label,
@@ -162,25 +164,27 @@ export function StatCarouselCard({
 }) {
   const { tokens } = useTheme();
   return (
-    <ClayCard testID={testID} style={{ width, minHeight: 116 }}>
+    <ClayCard testID={testID} style={{ width, minHeight: 128 }}>
       <View style={styles.statPad}>
         <View style={styles.statHead}>
           <View
-            style={[styles.statChip, { backgroundColor: mixHex(tokens.card, hue, 0.14) }]}
+            style={[styles.statChip, { backgroundColor: tokens.accentTint }]}
             accessibilityLabel={`${label} indicator`}
             accessibilityElementsHidden
           >
             <Icon size={15} color={hue} strokeWidth={2.2} />
           </View>
-          <TypeMicro style={[styles.statLabel, { color: tokens.textTertiary }]} numberOfLines={1}>
+          <TypeMicro
+            numberOfLines={1}
+            style={[styles.statLabel, { color: tokens.textTertiary, fontFamily: fontFamily.bold }]}
+          >
             {label}
           </TypeMicro>
         </View>
-        {/* The big mono number — TypeTitle's ladder step in the mono face. */}
-        <TypeTitle numberOfLines={1} style={styles.statValue}>
-          {value}
-        </TypeTitle>
-        <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+        {/* The headline number — TYPE_STAT (R117-g2 §2.3): 28 mono-medium,
+            the display size on the mono face. */}
+        <TypeStat numberOfLines={1}>{value}</TypeStat>
+        <TypeMicro numberOfLines={1} style={{ color: tokens.textSecondary }}>
           {caption}
         </TypeMicro>
       </View>
@@ -348,9 +352,11 @@ export function ToolLeaderboardRow({
             {formatCount(count)}
           </TypeMono>
         </View>
-        {/* The sparkbar is decorative — the name + mono count carry the reading. */}
+        {/* The sparkbar is decorative — the name + mono count carry the reading.
+            R117-g2 §2.3: the track rides surfaceWell (the recessed step), the
+            fill stays accent (3.9:1 vs card — bars are non-text, pass). */}
         <View
-          style={[styles.toolTrack, { backgroundColor: tokens.borderSubtle }]}
+          style={[styles.toolTrack, { backgroundColor: tokens.surfaceWell }]}
           accessibilityElementsHidden
         >
           <View style={[styles.toolFill, { width: `${fraction}%`, backgroundColor: tokens.accent }]} />
@@ -680,18 +686,18 @@ export function ProjectUsageRow({
 // ── styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  // The stat carousel card.
+  // The stat carousel card (R117-g2 §2.3: 128 min, the 30px r10 accentTint
+  // chip, the label one weight up at 700).
   statPad: { padding: spacing.md, gap: spacing.xs },
   statHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   statChip: {
-    width: 26,
-    height: 26,
-    borderRadius: 9,
+    width: 30,
+    height: 30,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
   },
   statLabel: { textTransform: "uppercase", letterSpacing: 0.8, flexShrink: 1 },
-  statValue: { fontFamily: fontFamily.monoMedium },
   // The activity grid.
   grid: { flexDirection: "row", gap: GRID_GAP },
   gridColumn: { flexDirection: "column", gap: GRID_GAP },
@@ -738,6 +744,7 @@ const styles = StyleSheet.create({
   accordionClip: { overflow: "hidden" },
   /** The ABSOLUTE measurement child — natural height at any clip height. */
   accordionMeasure: { position: "absolute", top: 0, left: 0, right: 0 },
-  // The shared model dot (the name-hash color contract).
-  modelDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
+  // The shared model dot (the name-hash color contract; R117-g2 §2.3:
+  // 10 → 12 — identity readability at a squint).
+  modelDot: { width: 12, height: 12, borderRadius: 6, flexShrink: 0 },
 });

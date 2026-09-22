@@ -85,6 +85,12 @@ THEMES[6] × (light|dark)  →  resolveTheme(themeId, isDark)  →  ResolvedThem
 - Screen gutters: `spacing.lg` (16) standard, `spacing.xl` (20) on chromeless roots.
 - Card padding: `spacing.lg` standard, `spacing.md` compact rows, `spacing.xl` heroes.
 - List gaps: `spacing.md` (12) between rows, `spacing.lg` between sections.
+- **Round-117 amendment (AMENDMENT 5 — the rhythm, round-117-elevation.md §2.1):**
+  list cadence is **12 px within a group / 32 px between sections** (was a
+  uniform 16 px beat) — `ScreenScaffold.bodyContent`'s gap is `spacing.md` (12)
+  and `SectionHeader` carries `marginTop: spacing.xl` (20); the two compose the
+  32 px section break while rows knit at 12. Gutters stay 16; card padding
+  stays lg/md/xl.
 - Sheet padding: `spacing.xl` horizontal inside sheets (roomier than cards).
 
 ## 4. Radii

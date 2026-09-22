@@ -34,6 +34,12 @@
  * a proper CHIP now (donts.md #41): the 44px target gains a subtle fill +
  * hairline border + the chip radius. `tabBarAware` joins the vocabulary
  * (opt OUT of the floating bar's inset; default true — today's behavior).
+ *
+ * R117-g2 (AMENDMENT 5 — the rhythm, round-117-elevation.md §2.1): the
+ * bodyContent gap drops 16 → spacing.md (12) — the intra-group beat. The
+ * 32 px section break is SectionHeader's own marginTop (spacing.xl 20) +
+ * this 12 — two rhythms instead of the uniform 16 px phrase. Gutters stay
+ * 16 (the body padding); card padding stays lg/md/xl.
  */
 
 import { Bell, ChevronLeft } from "lucide-react-native";
@@ -277,12 +283,13 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.bold,
     letterSpacing: -0.2,
   },
-  /** TypeCaption's exact recipe (12.5/500, 17 leading) — same treatment. */
+  /** TypeCaption's exact recipe (12.5/500, 18 leading — R117-g1's caption
+   *  lineHeight) — same treatment. */
   subtitle: {
     textAlign: "center",
     fontSize: TYPE_CAPTION,
     fontFamily: fontFamily.medium,
-    lineHeight: 17,
+    lineHeight: 18,
   },
   rightSlot: { minWidth: 44, alignItems: "center", justifyContent: "center" },
   unreadDot: {
@@ -296,7 +303,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  bodyContent: { padding: spacing.lg, gap: spacing.lg },
+  /** R117-g2 (AMENDMENT 5): the intra-group beat is 12 (was 16); section
+   *  breaks read 32 via SectionHeader's marginTop (20) + this gap. */
+  bodyContent: { padding: spacing.lg, gap: spacing.md },
   /** The chromeless breathing room — extra top padding so the content's
    * first card sits clear of the status-bar inset (DESIGN.md §5's gutters). */
   bodyContentChromeless: { paddingTop: spacing.xxl },

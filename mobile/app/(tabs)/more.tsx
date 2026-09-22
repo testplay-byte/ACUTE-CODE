@@ -19,6 +19,10 @@
  *     management hub, a PUSHED screen in the settings stack).
  *
  * Every row staggers in (PressableCard enterIndex / FadeInUp — motion.md §2).
+ *
+ * R117-g2 (round-117-elevation.md §2.2): the about + settings identity
+ * chips are ClayIconChips — the accentTint fill + clayRim hairline + the
+ * accentDeep glyph replace the subtleHover ghost rectangles (§1.5).
  */
 
 import { useFocusEffect, useRouter } from "expo-router";
@@ -30,6 +34,7 @@ import { ScreenScaffold } from "@/components/screen-scaffold";
 import {
   Badge,
   ClayCard,
+  ClayIconChip,
   FadeInUp,
   PressableCard,
   TypeBody,
@@ -149,9 +154,8 @@ export default function MoreScreen() {
         <ClayCard testID="more-about">
           <View style={styles.aboutPad}>
             <View style={styles.aboutHead}>
-              <View style={[styles.aboutIcon, { backgroundColor: tokens.subtleHover }]}>
-                <Info size={20} color={tokens.accent} strokeWidth={2.2} />
-              </View>
+              {/* R117-g2 — the ClayIconChip (44, r 15) replaces the ghost. */}
+              <ClayIconChip icon={Info} iconSize={20} size={44} />
               <View style={styles.aboutHeadText}>
                 <TypeBodyStrong numberOfLines={1}>ACUTE companion</TypeBodyStrong>
               </View>
@@ -186,9 +190,8 @@ export default function MoreScreen() {
         testID="more-settings"
       >
         <View style={styles.settingsInner}>
-          <View style={[styles.settingsIcon, { backgroundColor: tokens.subtleHover }]}>
-            <Settings2 size={22} color={tokens.accent} strokeWidth={2.2} />
-          </View>
+          {/* R117-g2 — the ClayIconChip (44, r 15) replaces the ghost. */}
+          <ClayIconChip icon={Settings2} iconSize={22} size={44} />
           <View style={styles.settingsText}>
             <TypeBodyStrong numberOfLines={1}>Settings</TypeBodyStrong>
             <TypeCaption numberOfLines={1}>Appearance, providers, agents</TypeCaption>
@@ -231,23 +234,9 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     minHeight: 76,
   },
-  settingsIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 15,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   settingsText: { flex: 1, gap: 3 },
   aboutPad: { padding: spacing.lg, gap: spacing.md },
   aboutHead: { flexDirection: "row", alignItems: "center", gap: spacing.md },
-  aboutIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 15,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   aboutHeadText: { flex: 1, gap: 2 },
   // The stats card: quiet single-line rows, hairline dividers between.
   statsPad: { padding: spacing.lg },

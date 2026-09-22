@@ -12,8 +12,9 @@
  *     (Wave E — hostLabel IS "Confused Coconut" now), so the row reads
  *     "Live · Confused Coconut"; offline appends "· messages will queue"
  *     (one line — the old banner folded into it). Tap → /connect.
- *   · THE ACTIVITY STRIP — only while unread > 0 (bell chip + "{n} unread"
- *     + chevron → /activity; no unread → no row, no noise).
+ *   · THE ACTIVITY STRIP — only while unread > 0 (the R117-g2 ClayIconChip
+ *     bell + "{n} unread" + chevron → /activity; no unread → no row, no
+ *     noise).
  *   · HAPPENING NOW — the heart of the round: the host's RUNNING sessions
  *     (status === "running" straight off GET /sessions — the server's field
  *     is the only truth; up to 4) as rows: project letter avatar (TILE_ROW
@@ -54,6 +55,7 @@ import { timeAgo } from "@/components/host-card";
 import {
   Badge,
   ClayCard,
+  ClayIconChip,
   PressableCard,
   SectionHeader,
   StatusDot,
@@ -252,13 +254,16 @@ export default function HomeScreen() {
               testID="home-activity-strip"
             >
               <View style={styles.stripInner}>
-                <View style={[styles.bellChip, { backgroundColor: tokens.subtleHover }]}>
-                  <Bell size={17} color={tokens.accent} strokeWidth={2.2} />
+                {/* R117-g2 (§2.2's migration): the bell chip is a ClayIconChip
+                    (36 → 40) — the accentTint container + clayRim hairline +
+                    accentDeep glyph replace the subtleHover ghost rectangle;
+                    the unread dot rides the chip's overlay slot. */}
+                <ClayIconChip icon={Bell} iconSize={17} size={40}>
                   <View
                     style={[styles.bellDot, { backgroundColor: tokens.accent }]}
                     accessibilityLabel={`${unread} unread`}
                   />
-                </View>
+                </ClayIconChip>
                 <View style={styles.stripText}>
                   <TypeBodyStrong numberOfLines={1}>Activity</TypeBodyStrong>
                   <TypeCaption numberOfLines={1} style={styles.stripMeta}>
@@ -434,13 +439,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   stripMeta: { flexShrink: 1 },
-  bellChip: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  // The unread dot at the chip's top-right (the ClayIconChip's overlay slot).
   bellDot: {
     position: "absolute",
     top: -1,
