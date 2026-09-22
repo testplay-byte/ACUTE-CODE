@@ -20,15 +20,29 @@
  * ONE line — the single-line law) + a ChevronRight for detail-routed rows; the
  * danger arm carries the stop glyph instead (the KebabRow grammar the old
  * sheet owned, restated for the menu). Presentation only — no data, no sheets:
- * every row's onPress routes the CALLER's surface (the session screen opens
- * the composer's matching sheet; the dropdown closes first).
+ * every row's onPress routes the CALLER's surface.
+ *
+ * R118-D — THE SUB-LEVEL GRAMMAR (the owner's verdict: the kebab's rows used
+ * to close the menu and open the composer's bottom SHEETS — exactly what he
+ * rejected; the levels now render IN this panel):
+ *   · `onBack` — when present, the title row gains a leading back chevron
+ *     (ChevronLeft 18, a 40×32 Pressable with hitSlop 8): the sub-level's
+ *     way back to the caller's main level (still presentation-only — the
+ *     caller owns the level state);
+ *   · `HeaderDropdownItem.selected` — a selected row swaps the ChevronRight
+ *     for Check 16 in the accent (the in-place option list's marker);
+ *   · `children` — arbitrary content under the title row (the Context
+ *     readout, the Model level's sections, the busy rows);
+ *   · `contentMaxHeight` — wraps the rows in a ScrollView when set (the
+ *     model list scrolls INSIDE the panel; overScrollMode="never" — the
+ *     house's no-stretch law).
  *
  * Reduced motion snaps (motion.md §5): the entrance lands at 1 with no spring,
  * the exit unmounts immediately.
  */
 
 import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, View, type LayoutChangeEvent } from "react-native";
+import { Pressable, ScrollView, StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import Animated, {
   runOnJS,
   useAnimatedStyle,
@@ -37,7 +51,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { ChevronRight, Square } from "lucide-react-native";
+import { Check, ChevronLeft, ChevronRight, Square } from "lucide-react-native";
 import { useTheme } from "@/design/theme";
 import { TypeBodyStrong, TypeCaption, TypeMicro } from "@/design/primitives";
 import { SPRING } from "@/design/motion";
@@ -52,6 +66,9 @@ export interface HeaderDropdownItem {
   value?: string;
   /** The danger tone (the stop arm) — a filled stop glyph, no chevron. */
   danger?: boolean;
+  /** R118-D — the option-list marker: a selected row swaps the ChevronRight
+   *  for Check 16 in the accent (the sub-levels' in-place pickers). */
+  selected?: boolean;
   onPress: () => void;
 }
 
@@ -65,18 +82,35 @@ export interface HeaderDropdownProps {
   testID?: string;
   /** The quiet title row above the items ("Session options"). */
   title?: string;
+  /** R118-D — when present, the title row renders a leading back chevron
+   *  (the sub-level's way back to the caller's main level). */
+  onBack?: () => void;
+  /** R118-D — arbitrary content under the title row (the Context readout,
+   *  the Model level's provider sections, the busy rows). */
+  children?: React.ReactNode;
+  /** R118-D — when set, the rows scroll inside the panel (the model list). */
+  contentMaxHeight?: number;
 }
 
 /** The panel's fixed width (~200-240 per components.md §Dropdown menus). */
-const PANEL_WIDTH = 220;
+export const PANEL_WIDTH = 220;
 
 /** motion.md §4.8 — the entrance scale floor (0.96→1, origin top-right). */
-const ENTRANCE_SCALE = 0.96;
+export const ENTRANCE_SCALE = 0.96;
 
 /** motion.md §4.8 — the tap-outside dismissal fade. */
-const EXIT_FADE_MS = 120;
+export const EXIT_FADE_MS = 120;
 
-export function HeaderDropdown({ open, onClose, items, testID, title }: HeaderDropdownProps) {
+export function HeaderDropdown({
+  open,
+  onClose,
+  items,
+  testID,
+  title,
+  onBack,
+  children,
+  contentMaxHeight,
+}: HeaderDropdownProps) {
   const { tokens } = useTheme();
   const reduced = useReducedMotion();
   const progress = useSharedValue(0);
@@ -157,34 +191,70 @@ export function HeaderDropdown({ open, onClose, items, testID, title }: HeaderDr
       >
         {title !== undefined ? (
           <View style={[styles.titleRow, { borderBottomColor: tokens.borderSubtle }]}>
-            <TypeMicro style={{ color: tokens.textTertiary }} numberOfLines={1}>
+            {/* R118-D — the sub-level's way back: a leading back chevron
+                (40×32 Pressable, hitSlop 8) beside the title. */}
+            {onBack !== undefined ? (
+              <Pressable
+                accessibilityLabel="Back"
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={onBack}
+                style={styles.backTarget}
+              >
+                <ChevronLeft size={18} color={tokens.text} strokeWidth={2.2} />
+              </Pressable>
+            ) : null}
+            <TypeMicro style={{ color: tokens.textTertiary, flex: 1 }} numberOfLines={1}>
               {title}
             </TypeMicro>
           </View>
         ) : null}
-        {items.map((item) => (
-          <DropdownRow
-            key={item.key}
-            item={item}
-            testID={testID !== undefined ? `${testID}-${item.key}` : undefined}
-          />
-        ))}
+        {/* R118-D — the content: `children` (the readouts/sections) under the
+            title row, then the rows — wrapped in a ScrollView when
+            contentMaxHeight is set (the model list scrolls in place; the
+            house's no-stretch law carries over from the Sheet). */}
+        {contentMaxHeight !== undefined ? (
+          <ScrollView style={{ maxHeight: contentMaxHeight }} overScrollMode="never" nestedScrollEnabled>
+            {children}
+            {items.map((item) => (
+              <DropdownRow
+                key={item.key}
+                item={item}
+                testID={testID !== undefined ? `${testID}-${item.key}` : undefined}
+              />
+            ))}
+          </ScrollView>
+        ) : (
+          <>
+            {children}
+            {items.map((item) => (
+              <DropdownRow
+                key={item.key}
+                item={item}
+                testID={testID !== undefined ? `${testID}-${item.key}` : undefined}
+              />
+            ))}
+          </>
+        )}
       </Animated.View>
     </View>
   );
 }
 
 /** One menu row — label + CURRENT value right-aligned + the chevron (the
- * danger arm carries the stop affordance instead). The old kebab sheet's
- * KebabRow grammar, restated for the anchored menu. */
+ * danger arm carries the stop affordance instead; a R118-D `selected` row
+ * carries the accent Check). The old kebab sheet's KebabRow grammar, restated
+ * for the anchored menu. */
 function DropdownRow({ item, testID }: { item: HeaderDropdownItem; testID?: string }) {
   const { tokens } = useTheme();
   const danger = item.danger === true;
+  const selected = item.selected === true;
   return (
     <Pressable
       testID={testID}
       accessibilityLabel={item.value !== undefined ? `${item.label} — ${item.value}` : item.label}
       accessibilityRole="button"
+      accessibilityState={selected ? { selected: true } : undefined}
       onPress={item.onPress}
       style={({ pressed }) => [styles.row, { backgroundColor: pressed ? tokens.subtleHover : "transparent" }]}
     >
@@ -198,6 +268,8 @@ function DropdownRow({ item, testID }: { item: HeaderDropdownItem; testID?: stri
       ) : null}
       {danger ? (
         <Square size={13} color={tokens.danger} strokeWidth={2.4} fill={tokens.danger} />
+      ) : selected ? (
+        <Check size={16} color={tokens.accent} strokeWidth={2.4} />
       ) : (
         <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
       )}
@@ -219,9 +291,21 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
     borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  /** R118-D — the sub-level's back chevron: a 40×32 Pressable (hitSlop 8
+   *  carries the 44px law) leading the title row. */
+  backTarget: {
+    width: 40,
+    height: 32,
+    marginLeft: -spacing.xs,
+    alignItems: "center",
+    justifyContent: "center",
   },
   row: {
     flexDirection: "row",

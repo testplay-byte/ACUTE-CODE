@@ -8,10 +8,7 @@
  *     solid accent slab), r20 with the tighter 16px bottom-right corner (the
  *     WhatsApp tail hint), and the CLOCK INSIDE the bubble's bottom-right
  *     corner (10px tertiary, gated by the timestampsMode pref — never
- *     floating below) with the DELIVERY TICK beside it (R116-m: sending →
- *     clock · sent → check · delivered → double check, front accent · failed
- *     → danger alert + a subtle danger border tint; undefined renders NO
- *     glyph — clean history). Image attachments render as proper rounded
+ *     floating below). Image attachments render as proper rounded
  *     thumbnails (r12, ~64% of the column, aspect-kept) — never tiny chips;
  *     other attachments stay chips under the text.
  *   - ASSISTANT = a document (full width, no bubble): the meta line (model ·
@@ -61,6 +58,22 @@
  * One renderer for BOTH sources — the persisted fold and the live stream
  * produce the same TranscriptItem union (features/sessions.ts — the data
  * model's status rung is this wave's only addition there).
+ *
+ * ROUND-118 (R118-D — the delivery states ride the message body): the
+ * DeliveryTick ladder (clock / check / double-check / alert) is RETIRED —
+ * four glyphs duplicated what the body itself can carry. The clock row
+ * renders ONLY the clock now, and the FIVE delivery rungs shape the BUBBLE
+ * (spec §2.7): sending = the queued arm's neutral clay + textSecondary +
+ * the 12% bg VEIL (the RN-honest “grayscale + slight blur” — no View blur
+ * filter exists and expo-blur is not installed); sent/delivered = the
+ * settled tint byte-identical to today; processing = the normal fill with
+ * a BREATHING accent edge (borderColor mixHex(card, accent, 0.34)↔0.62 at
+ * the house 550ms legs — the caret/LiveHeaderLine rhythm; reduced motion
+ * holds the static 0.55 mix); failed = the normal fill + the 0.22 danger
+ * edge with NO glyph (the error card below carries the alert + Retry). The
+ * a11y label appends the rung word; `deliveryVisualRung` is exported for
+ * the tests. The assistant's live caret is now the SHARED LiveCaret
+ * primitive (R118-B's extraction — reuse, never re-roll).
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -68,6 +81,7 @@ import { ActivityIndicator, Image, Pressable, StyleSheet, Text, TextInput, View 
 import { useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import Animated, {
+  interpolateColor,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -76,10 +90,10 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { BookOpenText, Check, ChevronDown, ChevronUp, CircleAlert, CircleX, Clock, Copy, FileCode2, ImageIcon, RefreshCw, Square, SquareTerminal, Wrench } from "lucide-react-native";
+import { BookOpenText, Check, ChevronDown, ChevronUp, CircleX, Copy, FileCode2, ImageIcon, RefreshCw, Square, SquareTerminal, Wrench } from "lucide-react-native";
 import { useTheme, useChatPrefs } from "@/design/theme";
 import { decisionHaptic, selectionHaptic, warningHaptic } from "@/design/haptics";
-import { Badge, FadeInUp, Skeleton, TypeBody, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
+import { Badge, FadeInUp, LiveCaret, Skeleton, TypeBody, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
 import { MarkdownText } from "@/components/markdown-text";
 import { ImageViewer } from "@/components/image-viewer";
 import { getLinkManager } from "@/link/runtime";
@@ -138,14 +152,44 @@ const THINKING_SETTLED_CAP = 20;
  * tail-truncate at 3 lines never offers a dead toggle). */
 const ERROR_MESSAGE_CLAMP_LINES = 3;
 const ERROR_MESSAGE_EXPAND_CHARS = 180;
-/** The offset between the delivered double-check's two checks (the back one
- * rides 3px under the front — chat.md's R116 amendment). */
-const TICK_DOUBLE_OFFSET = 3;
 /** R117-d2 — the sub-agent card's live accent rule + the copied-word flip's
  * quiet dwell (ms): the live caret's own 550ms rhythm and the PC's ~1.2s
  * "Copied" window, widened a beat for the smaller type. */
 const SUBAGENT_LIVE_LEG_MS = 550;
 const COPY_STATE_DWELL_MS = 1_600;
+
+// ── R118-D — the delivery rung's visual grammar (spec §2.7) ──────────────────
+
+/** The rung word the a11y label appends ("Your message — processing"). */
+const DELIVERY_RUNG_WORDS: Record<UserDeliveryStatus, string> = {
+  sending: "sending",
+  sent: "sent",
+  processing: "processing",
+  delivered: "delivered",
+  failed: "failed",
+};
+
+/**
+ * The rung's a11y word — null for an undefined status (clean history from
+ * producers the ladder never touched). Exported for the tests.
+ */
+export function deliveryVisualRung(status: UserDeliveryStatus | undefined): string | null {
+  if (status === undefined) return null;
+  return DELIVERY_RUNG_WORDS[status] ?? null;
+}
+
+/** §2.7 (a) — the sending veil: bg at 12% over the whole bubble (the
+ *  RN-honest “grayscale + slight blur”; exported for the tests). */
+export const DELIVERY_VEIL_OPACITY = 0.12;
+/** §2.7 (c) — the processing edge's breathing mix depths (0.34 ↔ 0.62, the
+ *  static 0.55 reduced-motion hold; exported for the tests). */
+export const DELIVERY_EDGE_LOW = 0.34;
+export const DELIVERY_EDGE_HIGH = 0.62;
+export const DELIVERY_EDGE_STATIC = 0.55;
+/** §2.7 (d) — the failed tell: the danger edge's mix depth over card. */
+export const DELIVERY_FAILED_EDGE = 0.22;
+/** §2.7 (c) — the breathing edge's one leg (the house 550ms live rhythm). */
+const DELIVERY_EDGE_LEG_MS = 550;
 
 // ── the list ────────────────────────────────────────────────────────────────
 
@@ -291,40 +335,6 @@ function attachmentImageUri(a: AttachmentView): string | null {
   return /^(data:|file:|content:|https?:)/i.test(p) ? p : null;
 }
 
-/**
- * R116-m — the delivery tick (chat.md's Round-116 amendment): the glyph
- * beside the clock — sending renders the clock glyph, sent the single check,
- * delivered the DOUBLE check (two checks offset 3px, the front one accent),
- * failed the danger alert. The bubble's caller adds the danger border tint
- * on the failed rung; an undefined status never reaches here (no glyph —
- * clean history).
- */
-function DeliveryTick({ status }: { status: UserDeliveryStatus }) {
-  const { tokens } = useTheme();
-  switch (status) {
-    case "sending":
-      return <Clock size={12} color={tokens.textTertiary} strokeWidth={2.2} />;
-    case "sent":
-      return <Check size={12} color={tokens.textTertiary} strokeWidth={2.4} />;
-    case "delivered":
-      return (
-        <View style={styles.tickDouble}>
-          {/* The back check rides 3px under the front — the front (later
-              sibling) paints on top and carries the accent. */}
-          <Check
-            size={12}
-            color={tokens.textTertiary}
-            strokeWidth={2.4}
-            style={{ marginRight: -TICK_DOUBLE_OFFSET }}
-          />
-          <Check size={12} color={tokens.accentDeep} strokeWidth={2.4} />
-        </View>
-      );
-    case "failed":
-      return <CircleAlert size={12} color={tokens.danger} strokeWidth={2.2} />;
-  }
-}
-
 function UserBubble({
   content,
   queued,
@@ -336,7 +346,8 @@ function UserBubble({
   queued: boolean;
   attachments: AttachmentView[] | null;
   ts: string | null;
-  /** R116-m — the delivery ladder's rung (optional: undefined = no glyph). */
+  /** R116-m → R118-D — the delivery ladder's rung (optional: undefined =
+   *  the settled shape — clean history). */
   status: UserDeliveryStatus | undefined;
 }) {
   const { tokens } = useTheme();
@@ -353,100 +364,179 @@ function UserBubble({
   // bubble reads as the sender's accent clay, not a near-card wash.
   const tintedFill = mixHex(tokens.card, tokens.accent, 0.16);
   const tintedEdge = mixHex(tokens.card, tokens.accent, 0.34);
-  // R116-m — the failed rung's subtle danger border tint (the same 22% mix
-  // depth the accent edge uses, danger over card — the fill stays honest).
-  const failedEdge = mixHex(tokens.card, tokens.danger, 0.22);
-  const failed = status === "failed";
+  // R118-D (d) — the failed rung's subtle danger border tint (the same mix
+  // depth family the accent edge uses, danger over card — the fill stays
+  // honest; NO glyph — the error card below carries the alert + Retry).
+  const failedEdge = mixHex(tokens.card, tokens.danger, DELIVERY_FAILED_EDGE);
   const chipFill = mixHex(tokens.card, tokens.accent, 0.18);
   const chipEdge = mixHex(tokens.card, tokens.accent, 0.32);
   const images = attachments?.filter(isImageAttachment) ?? [];
   const files = attachments?.filter((a) => !isImageAttachment(a)) ?? [];
-  const edge = failed ? failedEdge : queued ? tokens.border : tintedEdge;
+  // R118-D (§2.7) — the four body treatments, keyed on the STATUS (the old
+  // code keyed its neutral arm on the queued FLAG):
+  //   (a) sending — the queued arm's neutral clay (card fill, border edge,
+  //       clay top edge) + textSecondary text + the veil below;
+  //   (b) sent/delivered — the settled tint, byte-identical to today;
+  //   (c) processing — the normal fill + the BREATHING accent edge (below);
+  //   (d) failed — the normal fill + the danger edge.
+  const sending = status === "sending";
+  const failed = status === "failed";
+  const processing = status === "processing";
+  const fill = sending ? tokens.card : tintedFill;
+  const edge = failed ? failedEdge : sending ? tokens.border : tintedEdge;
+  const topEdge = failed ? failedEdge : sending ? tokens.clayTopEdge : tintedEdge;
+  const rung = deliveryVisualRung(status);
+  const bubbleLabel = queued ? "Queued message" : "Your message";
+  const accessibilityLabel = rung !== null ? `${bubbleLabel} — ${rung}` : bubbleLabel;
+
+  // R118-D (c) — the processing edge's breath: the bubble's borderColor
+  // interpolates mixHex(card, accent, 0.34) ↔ 0.62 on the house 550ms legs
+  // (the caret/LiveHeaderLine rhythm); reduced motion holds the static 0.55
+  // mix. The bubble's View becomes an Animated.View for this row only —
+  // every other rung renders the plain View, byte-identical to R117.
+  const reduced = useReducedMotion();
+  const pulse = useSharedValue(0);
+  useEffect(() => {
+    if (!processing) return;
+    if (reduced) {
+      pulse.value = 0;
+      return;
+    }
+    pulse.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: DELIVERY_EDGE_LEG_MS }),
+        withTiming(0, { duration: DELIVERY_EDGE_LEG_MS }),
+      ),
+      -1,
+      false,
+    );
+  }, [processing, reduced, pulse]);
+  const processingEdgeLow = mixHex(tokens.card, tokens.accent, DELIVERY_EDGE_LOW);
+  const processingEdgeHigh = mixHex(tokens.card, tokens.accent, DELIVERY_EDGE_HIGH);
+  const processingEdgeStatic = mixHex(tokens.card, tokens.accent, DELIVERY_EDGE_STATIC);
+  const processingEdgeStyle = useAnimatedStyle(() => ({
+    borderColor: reduced
+      ? processingEdgeStatic
+      : interpolateColor(pulse.value, [0, 1], [processingEdgeLow, processingEdgeHigh]),
+  }));
+
+  // The bubble's content — shared by the plain and the animated shells.
+  const body = (
+    <>
+      {queued && (
+        <View style={{ marginBottom: spacing.xs }}>
+          <Badge tone="neutral">queued</Badge>
+        </View>
+      )}
+      <Text
+        style={{
+          // (a) sending — textSecondary (the desaturation half of the dull
+          // arm; the veil below is the other half).
+          color: sending ? tokens.textSecondary : tokens.text,
+          fontSize: Math.round(TYPE_BODY * scale),
+          fontFamily: fontFamily.regular,
+          lineHeight: Math.round(22 * scale),
+        }}
+      >
+        {content}
+      </Text>
+      {images.map((a) => (
+        <UserImageThumb key={`img-${a.name}-${a.path ?? ""}`} attachment={a} />
+      ))}
+      {files.length > 0 && (
+        <View style={styles.userAttachRow}>
+          {files.map((a) => (
+            <View
+              key={`${a.name}-${a.path ?? ""}`}
+              accessibilityLabel={`Attachment ${a.name}`}
+              style={[
+                styles.userAttachChip,
+                {
+                  backgroundColor: queued ? tokens.subtle : chipFill,
+                  borderColor: queued ? tokens.borderSubtle : chipEdge,
+                },
+              ]}
+            >
+              <ImageIcon size={11} color={queued ? tokens.textTertiary : tokens.accent} strokeWidth={2.2} />
+              <Text
+                style={{
+                  color: tokens.textSecondary,
+                  fontSize: TYPE_CAPTION - 1,
+                  fontFamily: fontFamily.medium,
+                }}
+                numberOfLines={1}
+              >
+                {a.name}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+      {/* chat.md — the clock lives INSIDE the bubble's bottom-right corner
+          (10px tertiary), never floating below it. R118-D — the clock row
+          renders ONLY the clock (the tick ladder is retired; the timestampsMode
+          pref gates the row as always). */}
+      {clock !== null && (
+        <View style={styles.userClockRow} testID="transcript-user-clock">
+          <TypeCaption style={{ color: tokens.textTertiary, fontSize: 10 }}>{clock}</TypeCaption>
+        </View>
+      )}
+      {/* (a) sending — the VEIL: the RN-honest “grayscale + slight blur” —
+          bg at 12% over the whole bubble, the bubble's own radii, pointer
+          events off (RN has no View blur filter and expo-blur is not
+          installed; the desaturated palette + this haze read as the same
+          soft dim the owner drew). Last child = paints over everything. */}
+      {sending && (
+        <View
+          pointerEvents="none"
+          style={[styles.userVeil, { backgroundColor: tokens.bg, opacity: DELIVERY_VEIL_OPACITY }]}
+          testID="transcript-user-veil"
+        />
+      )}
+    </>
+  );
+
   return (
     <View style={styles.userRow}>
-      <View
-        accessibilityLabel={queued ? "Queued message" : "Your message"}
-        testID="transcript-user-bubble"
-        style={[
-          styles.userBubble,
-          {
-            backgroundColor: queued ? tokens.card : tintedFill,
-            borderTopColor: failed ? failedEdge : queued ? tokens.clayTopEdge : tintedEdge,
-            borderColor: edge,
-            boxShadow: tokens.clayShadowSm,
-            paddingVertical: pad,
-          },
-        ]}
-      >
-        {queued && (
-          <View style={{ marginBottom: spacing.xs }}>
-            <Badge tone="neutral">queued</Badge>
-          </View>
-        )}
-        <Text
-          style={{
-            color: tokens.text,
-            fontSize: Math.round(TYPE_BODY * scale),
-            fontFamily: fontFamily.regular,
-            lineHeight: Math.round(22 * scale),
-          }}
+      {processing ? (
+        <Animated.View
+          accessibilityLabel={accessibilityLabel}
+          testID="transcript-user-bubble"
+          style={[
+            styles.userBubble,
+            {
+              backgroundColor: fill,
+              borderTopColor: topEdge,
+              boxShadow: tokens.clayShadowSm,
+              paddingVertical: pad,
+            },
+            // The static pose — the reduced-motion 0.55 mix, and the
+            // pre-attach fallback (last-wins: the worklet's borderColor wins
+            // once it reports).
+            { borderColor: processingEdgeStatic },
+            processingEdgeStyle,
+          ]}
         >
-          {content}
-        </Text>
-        {images.map((a) => (
-          <UserImageThumb key={`img-${a.name}-${a.path ?? ""}`} attachment={a} />
-        ))}
-        {files.length > 0 && (
-          <View style={styles.userAttachRow}>
-            {files.map((a) => (
-              <View
-                key={`${a.name}-${a.path ?? ""}`}
-                accessibilityLabel={`Attachment ${a.name}`}
-                style={[
-                  styles.userAttachChip,
-                  {
-                    backgroundColor: queued ? tokens.subtle : chipFill,
-                    borderColor: queued ? tokens.borderSubtle : chipEdge,
-                  },
-                ]}
-              >
-                <ImageIcon size={11} color={queued ? tokens.textTertiary : tokens.accent} strokeWidth={2.2} />
-                <Text
-                  style={{
-                    color: tokens.textSecondary,
-                    fontSize: TYPE_CAPTION - 1,
-                    fontFamily: fontFamily.medium,
-                  }}
-                  numberOfLines={1}
-                >
-                  {a.name}
-                </Text>
-              </View>
-            ))}
-          </View>
-        )}
-        {/* chat.md — the clock lives INSIDE the bubble's bottom-right corner
-            (10px tertiary), never floating below it; R116-m — the delivery
-            tick rides BESIDE it (the timestampsMode pref gates the clock,
-            never the ladder — a status renders its glyph alone when clocks
-            are off, and no status renders no row at all). */}
-        {(clock !== null || status !== undefined) && (
-          <View style={styles.userClockRow} testID="transcript-user-clock">
-            {status !== undefined && (
-              <View
-                accessibilityLabel={`delivery ${status}`}
-                style={styles.userTickSlot}
-                testID="transcript-user-tick"
-              >
-                <DeliveryTick status={status} />
-              </View>
-            )}
-            {clock !== null && (
-              <TypeCaption style={{ color: tokens.textTertiary, fontSize: 10 }}>{clock}</TypeCaption>
-            )}
-          </View>
-        )}
-      </View>
+          {body}
+        </Animated.View>
+      ) : (
+        <View
+          accessibilityLabel={accessibilityLabel}
+          testID="transcript-user-bubble"
+          style={[
+            styles.userBubble,
+            {
+              backgroundColor: fill,
+              borderTopColor: topEdge,
+              borderColor: edge,
+              boxShadow: tokens.clayShadowSm,
+              paddingVertical: pad,
+            },
+          ]}
+        >
+          {body}
+        </View>
+      )}
     </View>
   );
 }
@@ -567,39 +657,16 @@ function AssistantBlock({ item }: { item: TranscriptItem & { kind: "assistant" }
       {liveText !== null && liveText !== "" ? (
         <View style={styles.assistantLive}>
           <MarkdownText content={liveText} textScale={scale} />
-          <Caret color={tokens.accent} />
+          {/* R118-B — the shared LiveCaret (the private recipe's exact
+              extraction; reuse, never re-roll). */}
+          <LiveCaret color={tokens.accent} label="the agent is still writing" />
         </View>
       ) : settled !== null ? (
         <MarkdownText content={settled} textScale={scale} />
       ) : item.live ? (
-        <Caret color={tokens.accent} />
+        <LiveCaret color={tokens.accent} label="the agent is still writing" />
       ) : null}
     </View>
-  );
-}
-
-/** The live cursor — a calm 1.1s pulse marking the stream still flowing
- * (motion.md §3; reduced motion snaps it solid — §5). */
-function Caret({ color }: { color: string }) {
-  const reduced = useReducedMotion();
-  const opacity = useSharedValue(1);
-  useEffect(() => {
-    if (reduced) {
-      opacity.value = 1;
-      return;
-    }
-    opacity.value = withRepeat(
-      withSequence(withTiming(0.25, { duration: 550 }), withTiming(1, { duration: 550 })),
-      -1,
-      false,
-    );
-  }, [opacity, reduced]);
-  const animated = useAnimatedStyle(() => ({ opacity: opacity.value }));
-  return (
-    <Animated.View
-      accessibilityLabel="the agent is still writing"
-      style={[animated, { width: 8, height: 15, borderRadius: 2, backgroundColor: color, marginLeft: 2 }]}
-    />
   );
 }
 
@@ -2292,26 +2359,20 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     gap: spacing.xs,
   },
-  /** The clock's quiet right-aligned line INSIDE the bubble (R116-m — the
-   * delivery tick rides beside the time, 4px apart, center-aligned). */
+  /** The clock's quiet right-aligned line INSIDE the bubble (R118-D — the
+   *  tick ladder is retired; ONLY the clock renders here). */
   userClockRow: {
     flexDirection: "row",
     justifyContent: "flex-end",
     alignItems: "center",
     gap: 4,
   },
-  /** R116-m — the tick glyph's slot (keeps the row's height stable across
-   * the single-icon and the double-check shapes). */
-  userTickSlot: {
-    minHeight: 14,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  /** R116-m — the delivered double-check: two checks in a row, the back one
-   * pulled 3px under the front (the front paints on top, accent). */
-  tickDouble: {
-    flexDirection: "row",
-    alignItems: "center",
+  /** R118-D (a) — the sending VEIL: bg at 12% over the whole bubble, the
+   *  bubble's own radii (r20 + the 16px tail corner), pointer events off. */
+  userVeil: {
+    ...StyleSheet.absoluteFill,
+    borderRadius: RADIUS_CARD,
+    borderBottomRightRadius: RADIUS_BUBBLE_TAIL,
   },
   userAttachRow: {
     flexDirection: "row",
