@@ -2861,12 +2861,14 @@ describe("AgentChatPanel queued-message honesty (ROUND-119 R119-C)", () => {
     expect(chip.outerHTML).not.toContain("rgba(245, 158, 11");
 
     // The always-visible caption BELOW the bubble: right-aligned mono 10px
-    // "queued" (touch never sees hover — the state must not hide).
+    // "queued" (touch never sees hover — the state must not hide). The
+    // typography rides the INNER span (the wrapper carries the layout row).
     const caption = chip.querySelector('[data-testid="queued-state-caption"]') as HTMLElement;
     expect(caption.textContent).toBe("queued");
     expect(caption.className).toContain("justify-end");
-    expect(caption.className).toContain("font-mono");
-    expect(caption.className).toContain("text-[10px]");
+    const captionText = caption.querySelector("span") as HTMLElement;
+    expect(captionText.className).toContain("font-mono");
+    expect(captionText.className).toContain("text-[10px]");
     // The hover-cluster state indicator + BOTH affordances ride the bubble's
     // reveal row (idle here — the folded row, no busy slice).
     expect(chip.querySelector('[data-testid="queued-hover-state"]')?.textContent).toContain("queued");

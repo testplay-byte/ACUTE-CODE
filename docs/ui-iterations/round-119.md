@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-09-23 round-119 -->
 # Round 119 — the v0.112.0 device report: the session center rethink, the queue honesty, and the provider capability probe
 
 Open: 2026-09-23. Baseline: v0.112.0 (2dc83d5). Target release: v0.113.0.
