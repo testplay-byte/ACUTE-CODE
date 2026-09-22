@@ -141,6 +141,16 @@
  * Stop row arms ("Stop this turn" → "Do you want to stop?") before it
  * fires, and the composer's stop button opens the centered ConfirmDialog
  * (this screen's stopTurn owns the POST either way).
+ *
+ * ROUND-119 (R119-B — the session chrome rework): the kebab's MODEL level
+ * gains its EXPLICIT menuItems branch (the R118-D ternary had none, so the
+ * root rows trailed the model list — the owner's exact report) and its
+ * sections collapse into the PROVIDER ACCORDION (one provider open at a
+ * time, the open section resetting with the menu's own lifecycle); the
+ * dropdown's LEVEL SWAPS animate now (the directional 12dp slide lives
+ * INSIDE HeaderDropdown — this screen just passes `level`); and the
+ * composer dock rides the R119-B single-tier bar (see composer.tsx — the
+ * paperclip is the input's row peer, not an in-bar overlay).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -153,6 +163,7 @@ import {
 } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
+  FadeIn,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -164,15 +175,15 @@ import Animated, {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, Check, ChevronRight, Ellipsis } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
-import { Composer, type ComposerControlsSnapshot, type ComposerMode, type ComposerSheet, type MenuModelRow, type MenuModelSection } from "@/components/composer";
+import { Composer, menuLevelRendersRootRows, nextOpenModelProvider, type ComposerControlsSnapshot, type ComposerMode, type ComposerSheet, type MenuModelRow, type MenuModelSection } from "@/components/composer";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { HeaderDropdown, type HeaderDropdownItem } from "@/components/header-dropdown";
+import { HeaderDropdown, MAIN_LEVEL_KEY, type HeaderDropdownItem } from "@/components/header-dropdown";
 import { LetterAvatar } from "@/components/letter-avatar";
 import { TranscriptItemView } from "@/components/transcript";
 import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
 import { QuietIconButton, TypeBodyStrong, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
 import { useChatPrefs, useTheme } from "@/design/theme";
-import { SPRING } from "@/design/motion";
+import { DISCLOSURE_FADE_MS, SPRING } from "@/design/motion";
 import { spacing, TOUCH_TARGET } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { getLinkManager } from "@/link/runtime";
@@ -951,6 +962,12 @@ export default function SessionScreen() {
   // where the owner will look; the 90% flow is one adjustment, the back
   // chevron remains for deliberate browsing). Context stays read-only at
   // its own level — nothing to apply, the meter is the answer.
+  // R119-B — every named sub-level owns EXACTLY its own rows: the ternary
+  // carries the explicit "model" branch (the R118-D shape had none, so the
+  // ROOT rows fell through to the else arm and trailed the model list —
+  // the owner's exact report), and the else arm itself is guarded through
+  // menuLevelRendersRootRows so the root rows can ONLY ever render at the
+  // root (belt + suspenders — deleting either half alone keeps the law).
   const connected = status === "connected";
   /** The mode level's selected truth — the same source the main row's value
    *  reads (the session row's CURRENT permission mode). */
@@ -981,64 +998,71 @@ export default function SessionScreen() {
             setMenu("main");
           },
         }))
-      : menu === "thinking"
-        ? controls.thinkingOptions.map((option) => ({
-            key: `thinking-${option.id}`,
-            label: option.label,
-            selected: option.id === controls.thinkingSelected,
-            onPress: () => {
-              controls.pickThinking(option.id);
-              setMenu("main");
-            },
-          }))
-        : menu === "context"
-          ? [] // read-only — the back chevron is the way out
-          : [
-              {
-                key: "mode",
-                label: "Mode",
-                value: kebabModeLabel,
-                onPress: () => setMenu("mode"),
+      : menu === "model"
+        ? // R119-B — the EXPLICIT branch: the model level renders its OWN
+          // content (the provider accordion rides `children`); the root
+          // control rows NEVER trail the model list again.
+          []
+        : menu === "thinking"
+          ? controls.thinkingOptions.map((option) => ({
+              key: `thinking-${option.id}`,
+              label: option.label,
+              selected: option.id === controls.thinkingSelected,
+              onPress: () => {
+                controls.pickThinking(option.id);
+                setMenu("main");
               },
-              {
-                key: "model",
-                label: "Model",
-                value: controls.modelLabel,
-                onPress: () => setMenu("model"),
-              },
-              {
-                key: "thinking",
-                label: "Thinking",
-                value: controls.thinkingLabel,
-                onPress: () => setMenu("thinking"),
-              },
-              {
-                key: "context",
-                label: "Context",
-                value: controls.ctxPct !== null ? `${controls.ctxPct}%` : "—",
-                onPress: () => setMenu("context"),
-              },
-              // THE TWO-STEP STOP: not armed → "Stop this turn" arms IN PLACE
-              // (nothing stops); armed → the owner's copy "Do you want to
-              // stop?" — the second tap closes + resets + fires stopTurn.
-              ...(turnLive
-                ? [
-                    {
-                      key: "stop",
-                      label: stopArmed ? "Do you want to stop?" : "Stop this turn",
-                      danger: true,
-                      onPress: () => {
-                        if (!stopArmed) {
-                          setStopArmed(true);
-                          return;
-                        }
-                        closeMenu();
-                        stopTurn();
-                      },
-                    },
-                  ]
-                : []),
-            ];
+            }))
+          : menu === "context"
+            ? [] // read-only — the back chevron is the way out
+            : menuLevelRendersRootRows(menu)
+              ? [
+                  {
+                    key: "mode",
+                    label: "Mode",
+                    value: kebabModeLabel,
+                    onPress: () => setMenu("mode"),
+                  },
+                  {
+                    key: "model",
+                    label: "Model",
+                    value: controls.modelLabel,
+                    onPress: () => setMenu("model"),
+                  },
+                  {
+                    key: "thinking",
+                    label: "Thinking",
+                    value: controls.thinkingLabel,
+                    onPress: () => setMenu("thinking"),
+                  },
+                  {
+                    key: "context",
+                    label: "Context",
+                    value: controls.ctxPct !== null ? `${controls.ctxPct}%` : "—",
+                    onPress: () => setMenu("context"),
+                  },
+                  // THE TWO-STEP STOP: not armed → "Stop this turn" arms IN PLACE
+                  // (nothing stops); armed → the owner's copy "Do you want to
+                  // stop?" — the second tap closes + resets + fires stopTurn.
+                  ...(turnLive
+                    ? [
+                        {
+                          key: "stop",
+                          label: stopArmed ? "Do you want to stop?" : "Stop this turn",
+                          danger: true,
+                          onPress: () => {
+                            if (!stopArmed) {
+                              setStopArmed(true);
+                              return;
+                            }
+                            closeMenu();
+                            stopTurn();
+                          },
+                        },
+                      ]
+                    : []),
+                ]
+              : [];
 
   const menuChildren: React.ReactNode =
     menu === "model" ? (
@@ -1262,8 +1286,9 @@ export default function SessionScreen() {
           screen lives). The only thing that moves is the dock's own animated
           paddingBottom (dockStyle — max(insetsBottom, kbHeight)); the whole
           composer — offline/outbox/note rows, the @-picker popup, chips, the
-          input bar with its in-bar paperclip — rides INSIDE it, and the
-          inverted FlatList above (flex:1) reflows on its own. The list keeps
+          R119-B single-tier input bar with its attach circle BESIDE the
+          input — rides INSIDE it, and the inverted FlatList above (flex:1)
+          reflows on its own. The list keeps
           keyboardShouldPersistTaps="handled" so a transcript tap while the
           keys are up never dismiss-focus-then-refocus jarringly. */}
       <View style={styles.body}>
@@ -1358,14 +1383,17 @@ export default function SessionScreen() {
         </Animated.View>
       </View>
 
-      {/* ── THE KEBAB MENU (R116-l → R118-D — components.md §Dropdown
-          menus + this round's sub-level grammar): the anchored panel with
-          its LEVEL STATE MACHINE — main (the four control rows + the
+      {/* ── THE KEBAB MENU (R116-l → R118-D → R119-B — components.md §Dropdown
+          menus + the sub-level grammar): the anchored panel with its
+          LEVEL STATE MACHINE — main (the four control rows + the
           conditional two-step Stop) and one level per control, rendered IN
           the panel (back chevron + title row + content). Picks APPLY AND
-          RETURN to main; Context stays read-only at its level; the model
-          list scrolls inside the panel (contentMaxHeight 360). The layer is
-          the absolutely-positioned anchor below the identity bar,
+          RETURN to main; Context stays read-only at its level; the Model
+          level renders its PROVIDER ACCORDION (one section open at a time)
+          scrolling inside the panel (contentMaxHeight 360). R119-B: the
+          level SWAPS animate (the directional 12dp slide — HeaderDropdown
+          owns it; this screen passes `level`). The layer is the
+          absolutely-positioned anchor below the identity bar,
           pointerEvents box-none so a closed/empty layer never steals a
           touch. */}
       <View pointerEvents="box-none" style={styles.menuLayer}>
@@ -1379,6 +1407,7 @@ export default function SessionScreen() {
             menu === "model" ? MODEL_LEVEL_MAX_HEIGHT : menu === "context" ? CONTEXT_LEVEL_MAX_HEIGHT : undefined
           }
           items={menuItems}
+          level={menu ?? MAIN_LEVEL_KEY}
         >
           {menuChildren}
         </HeaderDropdown>
@@ -1502,12 +1531,28 @@ function overrideAttachmentViews(overrides: SendOverrides): AttachmentView[] | n
 
 // ── R118-D — the kebab's IN-PANEL levels (spec §2.2) ───────────────────────
 
-/** The Model level's provider sections — the old sheet's grouped list cut
- *  to the menu's width: a TypeMicro header (`{label} · {n} models`) + the
- *  rows (shortModelLabel — one line), the selected row carrying the accent
- *  Check (the DropdownRow grammar: Check replaces the chevron). The pick
- *  rides the snapshot's `pickModel` — apply + PATCH — and the menu returns
- *  to its main level (the caller's onPick owns that half). */
+/** R118-D → R119-B — the Model level's PROVIDER ACCORDION. The R118-D
+ *  shape was a flat fully-expanded provider-sectioned wall (a TypeMicro
+ *  header per provider + every model row always visible); the owner's
+ *  verdict: "the model list itself is a flat fully-expanded
+ *  provider-sectioned wall — he wants PROVIDER NAMES by default, one
+ *  provider expanding at a time into its models." So: ONE row per
+ *  configured provider (its display name — TypeBodyStrong — plus the
+ *  right-aligned "{n} model(s)" caption and ChevronRight 16), tapping a
+ *  provider expanding THAT ONE section beneath it (only one open at a
+ *  time — the pure `nextOpenModelProvider` transition, exported from the
+ *  composer module so the tests can pin it without rendering; tapping the
+ *  open provider toggles it shut). The expanded rows are the existing
+ *  model rows — shortModelLabel one-liners, the selected row carrying the
+ *  accent Check and the others NOTHING (the model rows' ChevronRight is
+ *  retired: inside an expanded provider the chevron says nothing the
+ *  section header didn't). Tapping a model still applies-and-returns (the
+ *  pick rides the snapshot's `pickModel` — apply + PATCH; the caller's
+ *  onPick owns the return to main). The open-section state is LOCAL and
+ *  dies with the unmount — the menu's close/back lifecycle resets it for
+ *  free. The expansion itself is the cheap disclosure: a 150ms content
+ *  fade-in (the house DISCLOSURE_FADE_MS); reduced motion snaps
+ *  (motion.md §5); the collapse stays instant — robustness over flourish. */
 function ModelLevelRows({
   sections,
   onPick,
@@ -1516,40 +1561,60 @@ function ModelLevelRows({
   onPick: (row: MenuModelRow) => void;
 }) {
   const { tokens } = useTheme();
+  const reduced = useReducedMotion();
+  const [openProvider, setOpenProvider] = useState<string | null>(null);
   return (
     <View>
-      {sections.map((section) => (
-        <View key={section.providerId}>
-          <View style={styles.menuSectionHeader}>
-            <TypeMicro style={{ color: tokens.textTertiary }} numberOfLines={1}>
-              {section.label} · {section.rows.length} model{section.rows.length === 1 ? "" : "s"}
-            </TypeMicro>
-          </View>
-          {section.rows.map((row) => (
+      {sections.map((section) => {
+        const open = openProvider === section.providerId;
+        const count = section.rows.length;
+        return (
+          <View key={section.providerId}>
             <Pressable
-              key={row.key}
-              testID={`session-dropdown-model-${row.key}`}
-              accessibilityLabel={row.label}
+              testID={`session-dropdown-provider-${section.providerId}`}
+              accessibilityLabel={`${section.label} — ${count} model${count === 1 ? "" : "s"}`}
               accessibilityRole="button"
-              accessibilityState={row.selected ? { selected: true } : undefined}
-              onPress={() => onPick(row)}
+              accessibilityState={{ expanded: open }}
+              onPress={() => setOpenProvider(nextOpenModelProvider(openProvider, section.providerId))}
               style={({ pressed }) => [
                 styles.menuRow,
                 { backgroundColor: pressed ? tokens.subtleHover : "transparent" },
               ]}
             >
               <TypeBodyStrong style={{ flex: 1, color: tokens.text }} numberOfLines={1}>
-                {row.label}
+                {section.label}
               </TypeBodyStrong>
-              {row.selected ? (
-                <Check size={16} color={tokens.accent} strokeWidth={2.4} />
-              ) : (
-                <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
-              )}
+              <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={1}>
+                {count} model{count === 1 ? "" : "s"}
+              </TypeCaption>
+              <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
             </Pressable>
-          ))}
-        </View>
-      ))}
+            {open ? (
+              <Animated.View entering={reduced ? undefined : FadeIn.duration(DISCLOSURE_FADE_MS)}>
+                {section.rows.map((row) => (
+                  <Pressable
+                    key={row.key}
+                    testID={`session-dropdown-model-${row.key}`}
+                    accessibilityLabel={row.label}
+                    accessibilityRole="button"
+                    accessibilityState={row.selected ? { selected: true } : undefined}
+                    onPress={() => onPick(row)}
+                    style={({ pressed }) => [
+                      styles.menuRow,
+                      { backgroundColor: pressed ? tokens.subtleHover : "transparent" },
+                    ]}
+                  >
+                    <TypeBodyStrong style={{ flex: 1, color: tokens.text }} numberOfLines={1}>
+                      {row.label}
+                    </TypeBodyStrong>
+                    {row.selected ? <Check size={16} color={tokens.accent} strokeWidth={2.4} /> : null}
+                  </Pressable>
+                ))}
+              </Animated.View>
+            ) : null}
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -1657,7 +1722,8 @@ const styles = StyleSheet.create({
   },
   // ── R118-D — the kebab's in-panel levels' geometry ────────────────────
   /** The Model level's option row — the DropdownRow grammar restated (the
-   *  rows ride `children` so the provider headers can interleave). */
+   *  rows ride `children`; R119-B: the same shape carries the accordion's
+   *  PROVIDER row — name + count caption + chevron — and its model rows). */
   menuRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1665,12 +1731,6 @@ const styles = StyleSheet.create({
     minHeight: TOUCH_TARGET,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs + 2,
-  },
-  /** The Model level's provider section header ("{label} · {n} models"). */
-  menuSectionHeader: {
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-    paddingBottom: 2,
   },
   /** The busy row that migrated in from the deleted sheets (the model
    *  catalog load + the context meter's first read). */

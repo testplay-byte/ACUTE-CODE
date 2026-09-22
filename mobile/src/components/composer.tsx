@@ -1,9 +1,10 @@
 /**
- * Composer v3 (R113-c → R115-I → R116-l → R118-D) — the session screen's
- * minimal dock (chat.md §Composer): EXACTLY THREE visible controls — the ONE
- * growing PILL TextInput (max ~6 lines; the PAPERCLIP rides INSIDE the bar
- * on the right — R116-l, the old left-side + circle is deleted) · SEND (the
- * sanctioned chrome circle) / Stop + Queue while a turn runs. THE CONTROL
+ * Composer v3 (R113-c → R115-I → R116-l → R118-D → R119-B) — the session
+ * screen's minimal dock (chat.md §Composer): EXACTLY THREE visible controls
+ * — the ONE growing PILL TextInput (max ~6 lines; the PAPERCLIP rides in
+ * its OWN 40px quiet circle BESIDE the bar — R119-B; the R116-l in-bar
+ * overlay and the R118-D two-tier band are deleted) · SEND (the sanctioned
+ * chrome circle) / Stop + Queue while a turn runs. THE CONTROL
  * PILL ROW IS DELETED (R115-I): the operating-mode / model / thinking /
  * context controls live in the header's kebab DROPDOWN — and since R118-D
  * the dropdown renders their LEVELS IN PLACE (its own sub-panel grammar);
@@ -15,7 +16,8 @@
  *   · onControlsSnapshot — the v2 report the menu's levels render (the live
  *     labels + the model sections + the thinking spec + the context report
  *     + the stable pick callbacks);
- *   · ATTACHMENTS: the in-bar paperclip opens the attach sheet (pick a file
+ *   · ATTACHMENTS: the attach circle (R119-B — the paperclip's own 40dp
+ *     quiet Pressable BESIDE the input) opens the attach sheet (pick a file
  *     from the device through expo-document-picker, or choose from the
  *     project's own files) and typing "@" quick-picks project files exactly
  *     like the desktop; chips (name · size · X) ride the send as the wire's
@@ -56,17 +58,29 @@
  * ROUND-118 (R118-D — the geometry pass): the growth is now NATIVE (the
  * controlled-height + flex:1 pair is deleted — the classic Android desync
  * fragility; a multiline TextInput with only min/max grows on its own and
- * scrolls past the cap): minHeight 44, maxHeight 176 (6 lines × 21 + 10
- * padding + the 40px ATTACH_BAND), onContentSizeChange survives ONLY to
- * flip the `inputTall` boolean (threshold 24 — the same arithmetic that
- * used to drive the radius swap, which it still does, plus the TWO-TIER
- * attach geometry: resting = paddingRight 52 (the paperclip beside the
- * line) + paddingBottom 10; tall = paddingRight 16 (text full width) +
- * paddingBottom 40 — the reserved band UNDER the text where the paperclip
- * lands, never overlapping beside it). The focus ring goes 1.5dp. The stop
- * button is ICON-ONLY (50×50 circle, Square 15 — the label is deleted);
- * the queue button renders ONLY when there IS something to send (the
- * disabled arm + the 0.45 opacity die).
+ * scrolls past the cap): minHeight 44 + onContentSizeChange flipping the
+ * `inputTall` boolean (threshold 24). The focus ring goes 1.5dp. The stop
+ * button is ICON-ONLY (50×50 circle, Square 15 — the label is deleted); the
+ * queue button renders ONLY when there IS something to send (the disabled
+ * arm + the 0.45 opacity die). [The two-tier attach geometry this round
+ * shipped — resting 52/10, tall 16/40 over a 40px ATTACH_BAND, cap 176 — is
+ * SUPERSEDED by R119-B below.]
+ *
+ * ROUND-119 (R119-B — the SINGLE-TIER dock): the owner's v0.112.0 verdict —
+ * the composer is "way too much taller in its height", and the text "would
+ * be typed on the left side of the add file option, but apparently it was
+ * being typed above it" (the R118 two-tier geometry put the grown text
+ * full-width ABOVE the paperclip's reserved band — rejected). The bar is
+ * now ONE ROW, ALWAYS: [the TextInput (flex:1 — the pill/bar, text LEFT of
+ * the add-file control in EVERY state)] [the attach CIRCLE — its OWN 40dp
+ * QuietIconButton-style Pressable BESIDE the input, never an overlay inside
+ * it] [send | stop + queue 50dp circles], all with alignItems flex-end so
+ * the circles ride the input's last line. The paperclip's absolute overlay,
+ * the ATTACH_BAND reserved space, and the two-tier paddingRight/paddingBottom
+ * swap are DELETED (the input's horizontal padding is the constant
+ * spacing.lg), and the growth cap falls 176 → 146 (6 lines × 21 + 2 × 10 —
+ * the band is gone). The pill→bar radius swap on `inputTall` STAYS, and the
+ * dock's root padding tightens 8/4 → 4/2 (the resting dock was too heavy).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -282,8 +296,9 @@ export function Composer({
   const [focused, setFocused] = useState(false);
   // R118-D — the native auto-grow: the controlled inputHeight state is
   // DELETED (the classic Android desync source); this boolean is the ONLY
-  // thing onContentSizeChange still flips (the radius + two-tier geometry
-  // read it). The input ref serves the keyboardDidHide blur.
+  // thing onContentSizeChange still flips (the radius swap + the tall
+  // text's vertical alignment read it). The input ref serves the
+  // keyboardDidHide blur.
   const [inputTall, setInputTall] = useState(false);
   const inputRef = useRef<TextInput>(null);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
@@ -861,94 +876,96 @@ export function Composer({
         </ScrollView>
       )}
 
-      {/* R116-l → R118-D — THE PILL BAR (chat.md §Composer amendment):
-          [the input container (flex:1, position:relative — the TextInput +
-          the in-bar paperclip)] [send circle / stop+queue]. The input is a
-          PILL (RADIUS_ROUND) while single-line and switches to the BAR
-          radius (RADIUS_BAR, 28) once the content passes the 24px content
-          threshold. R118-D — the growth is NATIVE: no controlled height, no
-          flex:1 — a multiline TextInput with only minHeight/maxHeight grows
-          on its own and scrolls past the cap; onContentSizeChange flips ONLY
-          the inputTall boolean (the radius swap + the TWO-TIER attach
-          geometry read it). THE PAPERCLIP rides INSIDE the bar at the right
-          (a 36px Pressable, tertiary → accent on press) — resting: ~52
-          right padding keeps the text clear of it; tall: the text takes the
-          full width and the 40px ATTACH_BAND reserves the band UNDER it
-          where the paperclip lands (never overlapping beside it). */}
+      {/* R116-l → R118-D → R119-B — THE SINGLE-TIER PILL BAR (chat.md
+          §Composer amendment): ONE ROW, ALWAYS — [the TextInput (flex:1 —
+          the pill/bar, the text always LEFT of the add-file control)] [the
+          attach CIRCLE 40 — its OWN quiet Pressable BESIDE the input, never
+          an overlay inside it] [send circle / stop+queue 50], the row's
+          alignItems flex-end so the circles ride the input's last line as
+          it grows. The input is a PILL (RADIUS_ROUND) while single-line and
+          switches to the BAR radius (RADIUS_BAR, 28) once the content
+          passes the 24px content threshold; the growth is NATIVE (no
+          controlled height — minHeight 44 / maxHeight 146, a multiline
+          TextInput with only min/max grows on its own and scrolls past the
+          cap), and onContentSizeChange flips ONLY the inputTall boolean
+          (the radius swap + the tall text's top alignment read it). The
+          R118-D two-tier geometry (52/10 resting → 16/40 tall over the
+          40px ATTACH_BAND) is DELETED — the owner's verdict: the tall text
+          went full-width ABOVE the reserved band, and the dock read too
+          heavy at rest. */}
       <View style={styles.row}>
-        <View style={styles.inputWrap}>
-          <TextInput
-            ref={inputRef}
-            accessibilityLabel="Message the agent"
-            accessibilityHint={
-              running
-                ? "A turn is running — queue behind it or stop it"
-                : mode === "offline"
-                  ? "The host is offline — the message will be sent when it returns"
-                  : "Send this message to the agent on the desktop"
-            }
-            multiline
-            value={draft}
-            onChangeText={onDraftChange}
-            onSelectionChange={(event) => {
-              caretRef.current = event.nativeEvent.selection.end;
-            }}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
-            onContentSizeChange={(event) => {
-              // R118-D — the ONLY survivor of the controlled-height era:
-              // flip the boolean (React bails on the same value, so this
-              // re-renders nothing per keystroke past the swap).
-              setInputTall(event.nativeEvent.contentSize.height > INPUT_TALL_THRESHOLD);
-            }}
-            placeholder={running ? "Queue a message behind the running turn…" : "Message the agent…"}
-            placeholderTextColor={tokens.textTertiary}
-            style={[
-              styles.input,
-              {
-                // round-117-elevation §2.2: the input sits in a SURFACE WELL
-                // (not the card plane) — the dock reads as carved, not floated.
-                backgroundColor: tokens.surfaceWell,
-                // R118-D — the bolder focus ring: 1.5dp while focused (the
-                // hairline rest stays a whisper, the focus finally reads).
-                borderWidth: focused ? 1.5 : StyleSheet.hairlineWidth,
-                borderColor: focused ? tokens.accent : tokens.inputBorder,
-                borderTopColor: tokens.clayTopEdge,
-                color: tokens.text,
-                fontFamily: fontFamily.medium,
-                // R118-D — the two-tier attach geometry (the inputTall
-                // boundary the radius swaps at): resting = 52 right (the
-                // paperclip beside the line) + 10 bottom; tall = 16 right
-                // (text full width) + the 40px band under it.
-                paddingRight: inputTall ? spacing.lg : 52,
-                paddingBottom: inputTall ? ATTACH_BAND : INPUT_PADDING_Y,
-                textAlignVertical: inputTall ? "top" : "center",
-              },
-              // The pill→bar switch: tall once the grown content passes
-              // the threshold.
-              inputTall ? styles.inputTall : null,
-            ]}
-          />
-          {/* The in-bar attach — the paperclip INSIDE the input's right edge
-              (testID kept from the old circle; pinned to the bar's bottom —
-              resting: centered on the 44px single-line bar; tall: it lands
-              INSIDE the reserved 40px band, WhatsApp-pinned). */}
-          <Pressable
-            accessibilityLabel="Attach a file or choose one from the project"
-            accessibilityRole="button"
-            hitSlop={4}
-            testID="composer-attach"
-            onPress={() => onSheetChange("attach")}
-            style={({ pressed }) => [
-              styles.inBarAttach,
-              { backgroundColor: pressed ? tokens.subtle : "transparent" },
-            ]}
-          >
-            {({ pressed }) => (
-              <Paperclip size={19} color={pressed ? tokens.accent : tokens.textTertiary} strokeWidth={2.2} />
-            )}
-          </Pressable>
-        </View>
+        <TextInput
+          ref={inputRef}
+          accessibilityLabel="Message the agent"
+          accessibilityHint={
+            running
+              ? "A turn is running — queue behind it or stop it"
+              : mode === "offline"
+                ? "The host is offline — the message will be sent when it returns"
+                : "Send this message to the agent on the desktop"
+          }
+          multiline
+          value={draft}
+          onChangeText={onDraftChange}
+          onSelectionChange={(event) => {
+            caretRef.current = event.nativeEvent.selection.end;
+          }}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          onContentSizeChange={(event) => {
+            // R118-D — the ONLY survivor of the controlled-height era:
+            // flip the boolean (React bails on the same value, so this
+            // re-renders nothing per keystroke past the swap).
+            setInputTall(event.nativeEvent.contentSize.height > INPUT_TALL_THRESHOLD);
+          }}
+          placeholder={running ? "Queue a message behind the running turn…" : "Message the agent…"}
+          placeholderTextColor={tokens.textTertiary}
+          style={[
+            styles.input,
+            {
+              // round-117-elevation §2.2: the input sits in a SURFACE WELL
+              // (not the card plane) — the dock reads as carved, not floated.
+              backgroundColor: tokens.surfaceWell,
+              // R118-D — the bolder focus ring: 1.5dp while focused (the
+              // hairline rest stays a whisper, the focus finally reads).
+              borderWidth: focused ? 1.5 : StyleSheet.hairlineWidth,
+              borderColor: focused ? tokens.accent : tokens.inputBorder,
+              borderTopColor: tokens.clayTopEdge,
+              color: tokens.text,
+              fontFamily: fontFamily.medium,
+              // R119-B — the padding is CONSTANT (spacing.lg both sides,
+              // INPUT_PADDING_Y top+bottom in the sheet style): the paperclip
+              // no longer lives inside the input, so NOTHING needs reserved
+              // room — the tall text keeps its full width at every height.
+              textAlignVertical: inputTall ? "top" : "center",
+            },
+            // The pill→bar switch: tall once the grown content passes
+            // the threshold.
+            inputTall ? styles.inputTall : null,
+          ]}
+        />
+        {/* R119-B — THE ATTACH CIRCLE: the paperclip in its OWN 40dp
+            quiet circle BESIDE the input (the R116-l in-bar overlay is
+            deleted — the text sits LEFT of the add-file control in every
+            state, single-line AND tall). The QuietIconButton grammar's
+            shape — RADIUS_ROUND, tertiary → accent on press, transparent
+            resting surface — at 40dp so it reads as the row's own control,
+            visually consistent with the 50dp send/stop circles. */}
+        <Pressable
+          accessibilityLabel="Attach a file or choose one from the project"
+          accessibilityRole="button"
+          hitSlop={4}
+          testID="composer-attach"
+          onPress={() => onSheetChange("attach")}
+          style={({ pressed }) => [
+            styles.attachCircle,
+            { backgroundColor: pressed ? tokens.subtle : "transparent" },
+          ]}
+        >
+          {({ pressed }) => (
+            <Paperclip size={19} color={pressed ? tokens.accent : tokens.textTertiary} strokeWidth={2.2} />
+          )}
+        </Pressable>
         {running ? (
           <View style={styles.runningButtons}>
             {/* R118-D — the CONDITIONAL queue: renders ONLY when there is
@@ -1158,6 +1175,30 @@ export function groupModelsByProvider(
   return sections;
 }
 
+/** R119-B — the Model level's ACCORDION open-section law (the owner's
+ *  verdict: the model list was "a flat fully-expanded provider-sectioned
+ *  wall — he wants PROVIDER NAMES by default, one provider expanding at a
+ *  time into its models"). Pure state transition so jest can pin it without
+ *  rendering: tapping a CLOSED provider opens it (closing whatever was
+ *  open — ONE section at a time), tapping the OPEN provider toggles it
+ *  shut. The state itself lives in the level rows component and dies with
+ *  the unmount — the menu's close/back lifecycle resets it for free. */
+export function nextOpenModelProvider(open: string | null, tapped: string): string | null {
+  return open === tapped ? null : tapped;
+}
+
+/** R119-B — does this menu level render the ROOT control rows (Mode / Model
+ *  / Thinking / Context + the conditional two-step Stop)? Only the main
+ *  level (and the closed panel's fade-out frame) does — every named
+ *  sub-level owns its own rows or children. The R118-D defect this pins:
+ *  the level ternary had NO "model" branch, so the root rows fell through
+ *  to the else arm and TRAILED the model list (the owner's exact report).
+ *  The screen's `menuItems` ternary carries the explicit branch AND guards
+ *  its else arm through this law. Pure. */
+export function menuLevelRendersRootRows(level: string | null): boolean {
+  return level === null || level === "main";
+}
+
 // ── sheet rows ──────────────────────────────────────
 
 function SheetRow({
@@ -1218,21 +1259,26 @@ function SheetRow({
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
-/** R116-l → R118-D — the pill bar's metrics: the 44px resting height, the
- * ~10 vertical padding, and the native-growth cap. R118-D re-cuts the cap:
- * 6 lines at 21pt line height + 10 top padding + the 40px ATTACH_BAND the
- * tall input reserves under the text (where the paperclip lands) = 176.
+/** R116-l → R118-D → R119-B — the pill bar's metrics: the 44px resting
+ * height, the ~10 vertical padding, and the native-growth cap. R119-B
+ * re-cuts the cap for the SINGLE-TIER row: the paperclip no longer lives
+ * inside the input, so the 40px ATTACH_BAND is DELETED and the cap is
+ * honestly 6 lines at 21pt line height + BOTH 10px vertical paddings
+ * = 146 (the R118-D two-tier 176 is gone with the band it reserved).
  * Exported for the tests (the geometry is the contract). */
 const INPUT_MIN_HEIGHT = 44;
 const INPUT_PADDING_Y = 10;
 
 /** §2.4 — the input's line budget (the growth cap's line count). */
 export const INPUT_MAX_LINES = 6;
-/** §2.4 — the tall input's reserved band under the text (the paperclip's
- *  landing zone — text never wraps AROUND it). */
-export const ATTACH_BAND = 40;
-/** §2.4 — the native-growth cap: 6×21 + 10 + 40 = 176. */
-export const MAX_INPUT_HEIGHT = INPUT_MAX_LINES * 21 + INPUT_PADDING_Y + ATTACH_BAND;
+/** R119-B — the attach circle's footprint: the paperclip's OWN 40dp quiet
+ *  circle BESIDE the input (the QuietIconButton grammar's 40dp arm), no
+ *  longer an absolutely-positioned overlay inside the pill. Exported for
+ *  the tests (the single-tier row's geometry is the contract). */
+export const ATTACH_CIRCLE_SIZE = 40;
+/** §2.4 → R119-B — the native-growth cap: 6×21 + 2×10 = 146 (the tall
+ *  input owns its full width at every height — nothing reserves a band). */
+export const MAX_INPUT_HEIGHT = INPUT_MAX_LINES * 21 + INPUT_PADDING_Y * 2;
 /** §2.4 — the content-height threshold that flips `inputTall` (the 44px
  *  resting height − the 2×10 vertical padding — the same arithmetic that
  *  used to drive the controlled height + the radius swap). */
@@ -1283,11 +1329,16 @@ function isModelInPlay(
 }
 
 const styles = StyleSheet.create({
+  /** R119-B — the dock's RESTING padding tightened 8/4 → 4/2 (the owner's
+   *  verdict: the composer was "way too much taller in its height" at rest —
+   *  the two-tier band is gone and the frame around it shrinks with it; the
+   *  2dp bottom is below the 4pt grid, deliberately — the hairline border
+   *  already carries a visual beat below the row). */
   root: {
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.xs,
+    paddingTop: spacing.xs,
+    paddingBottom: 2,
     gap: spacing.sm,
   },
   chipRow: {
@@ -1341,25 +1392,21 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     gap: spacing.sm,
   },
-  /** R116-l — the input's container: flex:1 + relative so the in-bar
-   * paperclip can absolutely position itself at the bar's right edge. */
-  inputWrap: {
-    flex: 1,
-    position: "relative",
-  },
-  /** R116-l → R118-D — the PILL input: RADIUS_ROUND while single-line
-   * (inputTall swaps in RADIUS_BAR). R118-D — NATIVE growth: the flex:1
-   * + the controlled height are DELETED; only minHeight 44 + maxHeight
-   * MAX_INPUT_HEIGHT (176) remain — a multiline TextInput with only
-   * min/max grows on its own and scrolls past the cap. The two-tier
-   * padding (resting 52/10, tall 16/40) rides the inline style where the
-   * inputTall conditional lives. */
+  /** R116-l → R118-D → R119-B — the PILL input: flex:1 (its own row peer —
+   *   the inputWrap container is deleted with the in-bar overlay) and
+   *   RADIUS_ROUND while single-line (inputTall swaps in RADIUS_BAR).
+   *   R118-D — NATIVE growth: only minHeight 44 + maxHeight
+   *   MAX_INPUT_HEIGHT (146) remain — a multiline TextInput with only
+   *   min/max grows on its own and scrolls past the cap. R119-B — the
+   *   padding is CONSTANT: spacing.lg horizontal, INPUT_PADDING_Y vertical
+   *   — the paperclip lives BESIDE the input, so nothing reserves a band
+   *   and the tall text keeps its full width at every height. */
   input: {
+    flex: 1,
     borderRadius: RADIUS_ROUND,
     borderWidth: StyleSheet.hairlineWidth,
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing.lg,
-    paddingRight: 52,
     paddingTop: INPUT_PADDING_Y,
     paddingBottom: INPUT_PADDING_Y,
     fontSize: TYPE_BODY,
@@ -1372,16 +1419,15 @@ const styles = StyleSheet.create({
   inputTall: {
     borderRadius: RADIUS_BAR,
   },
-  /** R116-l — the in-bar attach: a 36px Pressable absolutely positioned at
-   * the input's right edge, pinned to the bar's bottom (centered on the 44px
-   * single-line bar, WhatsApp-pinned as the input grows); hitSlop restores
-   * the 44px target. */
-  inBarAttach: {
-    position: "absolute",
-    right: spacing.sm,
-    bottom: 4,
-    width: 36,
-    height: 36,
+  /** R119-B — THE ATTACH CIRCLE: the paperclip's OWN 40dp quiet circle,
+   *   a row peer of the input (the in-bar absolute overlay is deleted).
+   *   RADIUS_ROUND at 40×40 — the QuietIconButton grammar's shape — with
+   *   hitSlop 4 carrying the 44px law and the transparent resting surface
+   *   tinting to `subtle` on press (the icon flips tertiary → accent
+   *   inline). */
+  attachCircle: {
+    width: ATTACH_CIRCLE_SIZE,
+    height: ATTACH_CIRCLE_SIZE,
     borderRadius: RADIUS_ROUND,
     alignItems: "center",
     justifyContent: "center",
