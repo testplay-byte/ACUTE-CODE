@@ -9,6 +9,39 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
+## [0.111.0] — 2026-09-22 — the system round (memory that remembers, calibrated prompts, robust orchestration)
+
+### Memory that remembers
+- **The memory system finally works the way you expected.** Memory formation is no longer only voluntary: **compaction summaries persist as project memory** (future sessions start knowing what past sessions did), the digest is injected with a content-scaled budget, and a session that has no memories yet sees the honest "No memories saved yet" line instead of silence.
+- **Workspace memory exists** — cross-project truths (your preferences, your environment) live above project memory, both labeled, both auto-loaded. The memory panel shows both tiers.
+- **`memory_policy` is real**: per-agent none / on first turn / every turn (it was a stored-but-ignored flag since the beginning).
+- **`session_recall`** — the agent can now search PAST SESSIONS of the project (episodic memory), and the CLI binds sessions to projects by working directory (or `--project`).
+- The prompts tab stops reporting memory as "absent", and a prompt override now warns that it replaces the live injection.
+
+### Prompts, re-engineered
+- The system prompt is calibrated like the top-tier agent prompts: every internal round-tag stripped from model-facing text, FILE EDITING RULES renumbered, ~100 shouty caps converted to real salience (hard NEVER/ALWAYS rules keep their caps), budgets stated as limits-never-targets, and the volatile blocks (memory, todos, background tasks) are fenced as data — the same injection guard the tool results always had.
+- The sub-agent brief gains a triviality carve-out (a single-lookup task no longer performs the todo ceremony), and the browser tool's 7.7K-character wall of text became a 1.3K policy head with the detail where it belongs (the schema).
+
+### Robust orchestration
+- **A stalled or transiently-failed sub-agent auto-resumes from its event log exactly once** (marked honestly; deliberate stops never auto-retry).
+- **You can send guidance to a running sub-agent** (`delegate_task {task_id, guidance}`) — it arrives at the child's next step boundary.
+- Delegation results end with a machine-readable block (files touched, usage) the parent agent can act on.
+- **The phone is a first-class multi-agent citizen**: live sub-agent streams (thinking, text, tools), Stop and Retry right on the cards, and error cards with the class chip, attempts line, copy-details, and retry.
+
+### Error hardening (the silent failures, closed)
+- Process-level crash handlers (a stray throw logs to the diagnostics ring and exits cleanly — the boot sweep recovers state on restart).
+- A throwing tool can no longer kill a whole turn (honest `ok:false` result instead); tool results without a shape are tagged unverified; the events stream guards dead sockets; message size is capped; notification failures land in the Console panel.
+
+### The PC transcript, honest at last
+- **Failed tool calls are finally visible**: the row tints danger, the section header says "Completed with N failures" instead of a green ✓, and a one-line error excerpt sits under the failure.
+- The thinking placeholder breathes; headings have a real hierarchy again; tool arguments render humanized per tool (paths, commands, roles); terminal shows its exit code as a chip and can be copied; the markdown pipeline and message components are memoized (no more re-parsing the whole transcript per stream delta).
+
+### The Android design elevation
+- A professional design audit fixed what made the UI read as "very bad" with hard numbers: the invisible surface ladder (cards were 1.08:1 against the background — now a real ladder), the unreadable meta text (2.83:1 → 5.2:1), the accent's contrast failures as text and CTA fill (a two-tier accent family), the one-volume typography (a 28px stat tier for the dashboard), ghost icon chips (a tinted ClayIconChip everywhere), the tab bar's presence (the warm pill), the chat's materials (the composer well, the deeper bubbles, the sheet's crown), and the hero moments (the welcome brand tile, the connect "you" chip). **The contrast floor is now CI-enforced** — 50 automated WCAG pins.
+
+### For the builders
+- Migration 0042 (the memory scopes — additive table rebuild; legacy rows carry over as project memory). New orchestration settings (autoRetry). No new mobile dependencies. The full story with every root cause: `docs/ui-iterations/round-117.md` — including the live-provider E2E proof that the memory round-trip works (the model recited both scopes and saved the asked fact).
+
 ## [0.110.0] — 2026-09-21 — the polish round (pairing that works by hand, the scanner reborn, the dashboard that finally shows everything)
 
 ### Pairing, fixed where it hurt
