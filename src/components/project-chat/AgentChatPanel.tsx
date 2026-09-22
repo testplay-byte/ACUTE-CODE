@@ -11,6 +11,7 @@ import {
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
   AlertTriangle,
+  ArrowUp,
   Braces,
   Brain,
   Check,
@@ -211,6 +212,13 @@ const msgVariants: Variants = {
   animate: { opacity: 1, y: 0, transition: { duration: 0.35, ease } },
   exit: { opacity: 0, y: -8, transition: { duration: 0.2, ease } },
 };
+
+/** ROUND-119 (R119-C): the stable EMPTY queue array — `streamSlice?.queued
+ * ?? []` mints a fresh [] identity on every render while no stream slice
+ * exists, which would defeat the items memo's dependency (a per-keystroke
+ * re-fold of the whole event log while the composer types). A module-level
+ * constant keeps "no queue" referentially stable. */
+const NO_QUEUED_MESSAGES: QueuedMessage[] = [];
 
 /** Round-30 empty-state suggestion chips (fill the composer on click). */
 const SUGGESTIONS: Array<{ label: string; prompt: string; icon: LucideIcon }> = [
@@ -847,6 +855,7 @@ function UserMessage({
   onRevert,
   revertDisabled,
   delivery,
+  hoverActions,
 }: {
   content: string;
   /** ROUND-50 (R50-c2): display-only attachment chips (name/path/size) on
@@ -862,6 +871,14 @@ function UserMessage({
    * "sending" until the turn acks, "sent" (the single check) after;
    * a persisted bubble leaves it undefined (no glyph). */
   delivery?: "sending" | "sent";
+  /** ROUND-119 (R119-C): an extra node rendered INSIDE the hover cluster
+   * (the timestamp · copy · revert row). The queued-user message is the
+   * first consumer — its clock+"queued" state indicator and its Send-now /
+   * Remove affordances ride the SAME reveal the cluster already owns, so a
+   * queued bubble keeps the exact input-row idiom (hover reveals the acts,
+   * the body stays a message) instead of the old amber banner's always-on
+   * chrome. Optional + last so every existing call site is untouched. */
+  hoverActions?: ReactNode;
 }) {
   const styles = useThemeStyles();
   // ROUND-38 (owner: "the messages which I sent… look bad and ugly. Their
@@ -914,6 +931,9 @@ function UserMessage({
           {delivery !== undefined ? <DeliveryTick status={delivery} /> : null}
           <TimestampChip ts={ts} className="pb-1 pr-0.5" />
           <CopyButton text={content} />
+          {/* R119-C: the queued bubble's state indicator + affordances ride
+              the SAME cluster (see the prop's docblock above). */}
+          {hoverActions !== undefined ? hoverActions : null}
           {onRevert !== undefined ? (
             <button
               type="button"
@@ -1692,20 +1712,35 @@ export function TurnStoppedCard({ ts }: { ts: string }) {
 
 /**
  * ROUND-78 (R78-D, owner: "工作中发送消息（排队）" — while the agent is
- * responding/running tools the user can still send): the QUEUED MESSAGE
- * CHIP — a compact amber card (the RetryStatusCard language: amber = alive
- * and waiting, never red) rendered below the working section for every
- * message sitting in the session's queue. A Clock glyph + the "sends after
- * the current step" label + the content clamped to 2 lines + two
- * affordances: X (remove → DELETE /sessions/:id/queue/:seq, optimistic) and
- * "Send now" (only while NOT busy → dequeue + a normal send of the content
- * — no waiting for the current step, which already finished). Renders from
- * BOTH sources: the live store's `queued` array (mid-stream, pushed by the
- * user.queued frame) and the folded log's `queued` items (after the
- * stream ends — message.queued events fold there; the panel dedupes by seq
+ * responding/running tools the user can still send): the QUEUED MESSAGE —
+ * rendered from BOTH sources: the live store's `queued` array (mid-stream,
+ * pushed by the user.queued frame) and the folded log's `queued` items (after
+ * the stream ends — message.queued events fold there; the panel dedupes by seq
  * so the handoff never double-renders).
+ *
+ * ROUND-119 (R119-C, owner: the queued message "does not appear as a message,
+ * but rather as a notification or error message… not a good experience"):
+ * the old amber `QueuedMessageChip` banner (bordered warning card, Clock +
+ * "Queued — sends after the current step", line-clamp-2, mono timestamp,
+ * Send-now/X always on) is RETIRED. A queued message now renders through the
+ * SAME `UserMessage` bubble every sent message uses — accent-soft, right-
+ * aligned, full content with the bubble's own clamp + Show more — with the
+ * queue state expressed as CHROME AROUND the bubble, never as warning
+ * coloring ON it (waiting, not an error):
+ *   · the bubble renders at a reduced 0.75 opacity (visibly "not sent yet");
+ *   · a tiny Clock + "queued" caption rides the hover cluster (beside the
+ *     timestamp/copy/revert row) together with the two affordances —
+ *     Send-now (the Composer's own ArrowUp send glyph, one tap = dequeue +
+ *     a normal send, only while NOT busy) and Remove (X → DELETE
+ *     /sessions/:id/queue/:seq, optimistic). Their handlers, aria-labels and
+ *     data-queued-send-now / data-queued-remove test hooks are unchanged;
+ *   · because hover-only state hides on touch, the SAME clock+queued caption
+ *     also renders BELOW the bubble, right-aligned, mono 10px textTertiary —
+ *     always visible, never louder than the message it waits behind.
+ * The timeline rail keeps its honest hollow dot + "Queued message" label for
+ * the folded rows (TimelineNode) — that part was already right.
  */
-export function QueuedMessageChip({
+export function QueuedUserMessage({
   entry,
   busy,
   onRemove,
@@ -1720,63 +1755,85 @@ export function QueuedMessageChip({
   onSendNow?: () => void;
 }) {
   const styles = useThemeStyles();
-  return (
-    <motion.div variants={msgVariants} initial="initial" animate="animate" className="min-w-0">
-      <div
-        data-testid="queued-chip"
-        data-queued-seq={entry.seq}
-        className="rounded-xl border px-3.5 py-2.5 flex items-start gap-2.5"
-        style={{
-          borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4),
-          background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.08 : 0.05),
-        }}
+  // The queued state's hover cluster node — one ReactNode threaded into
+  // UserMessage's existing reveal row (timestamp · copy · HERE · revert), so
+  // the bubble's internals stay single-sourced (no fork of the input idiom).
+  const hoverActions: ReactNode = (
+    <>
+      {/* The state indicator: tiny clock + lowercase mono "queued" — a
+          waiting state, deliberately NOT the amber warning spelling. */}
+      <span
+        data-testid="queued-hover-state"
+        title="Sends after the current step"
+        className="flex items-center gap-1 pb-1 pr-0.5 shrink-0 font-mono text-[10px]"
+        style={{ color: styles.textTertiary }}
       >
-        <Clock size={13} className="mt-0.5 shrink-0" style={{ color: SEMANTIC_COLORS.warning }} aria-hidden />
-        <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-semibold" style={{ color: SEMANTIC_COLORS.warning }}>
-            Queued — sends after the current step
-          </div>
-          {/* The message text, clamped to two lines (the full text lives in
-              the event log / the send-now round-trip — the chip is a glance,
-              not the transcript). */}
-          <div
-            className="mt-0.5 line-clamp-2 break-words text-[12px] leading-[1.5]"
-            style={{ color: styles.textSecondary }}
-          >
-            {entry.content}
-          </div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            <span className="text-[10px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
-              {formatTime(entry.ts)}
-            </span>
-            {!busy && onSendNow !== undefined ? (
-              <button
-                type="button"
-                onClick={onSendNow}
-                aria-label="Send the queued message now"
-                title="Stop waiting — send this message as a new turn right away"
-                data-queued-send-now
-                className="h-6 px-2 rounded-lg text-[11px] font-semibold border transition-colors shrink-0"
-                style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.45), color: SEMANTIC_COLORS.warning }}
-              >
-                Send now
-              </button>
-            ) : null}
-          </div>
-        </div>
-        {onRemove !== undefined ? (
-          <button
-            type="button"
-            onClick={onRemove}
-            aria-label="Remove the queued message"
-            title="Remove the queued message"
-            data-queued-remove
-            className="w-6 h-6 rounded-md grid place-items-center shrink-0 transition-colors hover:bg-hover"
-            style={{ color: styles.textTertiary }}
-          >
-            <X size={11} />
-          </button>
-        ) : null}
+        <Clock size={10} aria-hidden style={{ color: styles.textTertiary }} />
+        queued
+      </span>
+      {!busy && onSendNow !== undefined ? (
+        <button
+          type="button"
+          onClick={onSendNow}
+          aria-label="Send the queued message now"
+          title="Stop waiting — send this message as a new turn right away"
+          data-queued-send-now
+          className="w-6 h-6 rounded-md grid place-items-center shrink-0 transition-colors hover:bg-hover"
+          style={{ color: styles.textTertiary }}
+        >
+          {/* The Composer's own send glyph (ArrowUp) — "send this now" reads
+              in the same vocabulary as the composer's send button. */}
+          <ArrowUp size={11} strokeWidth={2.5} />
+        </button>
+      ) : null}
+      {onRemove !== undefined ? (
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label="Remove the queued message"
+          title="Remove the queued message"
+          data-queued-remove
+          className="w-6 h-6 rounded-md grid place-items-center shrink-0 transition-colors hover:bg-hover"
+          style={{ color: styles.textTertiary }}
+        >
+          <X size={11} />
+        </button>
+      ) : null}
+    </>
+  );
+  return (
+    <motion.div
+      variants={msgVariants}
+      initial="initial"
+      animate="animate"
+      className="min-w-0"
+      data-testid="queued-chip"
+      data-queued-seq={entry.seq}
+    >
+      {/* The bubble itself — the plain UserMessage idiom at a reduced
+          opacity (waiting), full content (the bubble's own clamp handles
+          long text; the old banner's line-clamp-2 is gone). */}
+      <div className="min-w-0" style={{ opacity: 0.75 }}>
+        <UserMessage
+          content={entry.content}
+          attachments={entry.attachments}
+          ts={entry.ts}
+          hoverActions={hoverActions}
+        />
+      </div>
+      {/* The always-visible waiting caption — BELOW the bubble, right-aligned
+          to the message column, mono 10px textTertiary. Hover reveals the
+          fuller affordances; this line alone keeps the state honest on
+          touch, where hover never fires. */}
+      <div
+        data-testid="queued-state-caption"
+        title="Sends after the current step"
+        className="mt-1 flex items-center justify-end gap-1 min-w-0"
+      >
+        <Clock size={10} className="shrink-0" aria-hidden style={{ color: styles.textTertiary }} />
+        <span className="font-mono text-[10px] shrink-0" style={{ color: styles.textTertiary }}>
+          queued
+        </span>
       </div>
     </motion.div>
   );
@@ -1986,12 +2043,13 @@ const MessageRenderer = memo(
           </div>
         );
       case "queued":
-        // R78: the folded queued chip (message.queued event) — the SAME chip
-        // the live store renders mid-stream, with the panel-bound affordances.
+        // R78: the folded queued row (message.queued event) — the SAME
+        // queued-user bubble the live store renders mid-stream, with the
+        // panel-bound affordances riding its hover cluster (R119-C).
         return (
           <div ref={ref} className={TIMELINE_ITEM_CLASS}>
             <TimelineNode kind="queued" ts={item.ts} />
-            <QueuedMessageChip
+            <QueuedUserMessage
               entry={item}
               busy={queuedBusy ?? false}
               onRemove={
@@ -2210,13 +2268,6 @@ export function AgentChatPanel({
     null,
   );
 
-  // ROUND-37: the turn fold carries stats turn-level — the old R33
-  // interim-reply stat-strip pass is GONE (superseded by the fold).
-  const items = useMemo(() => {
-    if (!sessionDetail.data) return [];
-    return toProjectChatItems(sessionDetail.data.events);
-  }, [sessionDetail.data]);
-
   const [input, setInput] = useState("");
   const [pendingUser, setPendingUser] = useState<string | null>(null);
   const [lastSent, setLastSent] = useState<string | null>(null);
@@ -2237,6 +2288,16 @@ export function AgentChatPanel({
     activeSessionId !== null ? s.bySession[activeSessionId] : undefined,
   );
   const liveTurn = streamSlice?.liveTurn ?? null;
+  // R119-C: the LIVE-overlay gates as PRIMITIVES (boolean/string), read once
+  // here so the items memo below never depends on the liveTurn OBJECT —
+  // the store patches liveTurn on every SSE delta, and a per-delta re-fold
+  // of the whole event log would regress R117-f's memoization exactly where
+  // it matters most (long sessions mid-stream).
+  const liveOverlayActive = liveTurn !== null;
+  // R119-C: REMOTE mirror flag WITHOUT remoteRunning's !stopped narrowing —
+  // a frozen/stopped mirror still suppresses the folded copy of ITS turn
+  // until the retire timer clears it (the fold takes over then).
+  const remoteMirror = streamSlice?.remote === true;
   const streamBusy = streamSlice?.streamBusy ?? false;
   // R113-b: a REMOTE mirror is in flight — another device's turn on THIS
   // session, replayed by the events stream. Keyed on the slice's remote
@@ -2245,20 +2306,22 @@ export function AgentChatPanel({
   // panel clears it, and busy/flicker would regress). Drives busy (a send
   // while a remote turn runs must take the QUEUE path — the stream POST
   // would 409 "a turn is already in flight") and the sidebar spinner below.
-  const remoteRunning =
-    streamSlice?.remote === true && liveTurn !== null && !liveTurn.stopped;
+  const remoteRunning = remoteMirror && liveTurn !== null && !liveTurn.stopped;
   // ROUND-43: the LIVE turn error — renders the error card immediately when a
   // stream fails; the persisted `turn.error` event takes over after the
   // refetch (matched by errorTs) so the card survives reloads.
   const liveError = streamSlice?.liveError ?? null;
   const streamPendingEcho = streamSlice?.pendingEcho ?? null;
   const lastLiveEndMs = streamSlice?.lastLiveEndMs ?? 0;
-  // ROUND-78 (R78-D): the session's live message QUEUE — chips (not yet
-  // delivered) + delivered bubbles. The frames keep them fresh mid-stream;
-  // startStream resets them and the stream-end finally clears them (the
-  // refetched folded log owns the render after that — message.queued events
-  // fold as `queued` items, delivered ones as ordinary user items).
-  const liveQueued = streamSlice?.queued ?? [];
+  // ROUND-78 (R78-D): the session's live message QUEUE — queued bubbles (not
+  // yet delivered) + delivered bubbles. The frames keep them fresh
+  // mid-stream; startStream resets them and the stream-end finally clears
+  // them (the refetched folded log owns the render after that —
+  // message.queued events fold as `queued` items, delivered ones as ordinary
+  // user items). R119-C: the empty fallback is the module-level
+  // NO_QUEUED_MESSAGES constant — a fresh `?? []` here would mint a new array
+  // identity on every panel render and defeat the items memo's dependency.
+  const liveQueued = streamSlice?.queued ?? NO_QUEUED_MESSAGES;
   const deliveredQueued = streamSlice?.deliveredQueued ?? [];
   // R93-B1: the KEPT-QUEUE notice — how many messages stayed queued when the
   // stream ended (the cap's honest break, or a failure that stranded them
@@ -2272,6 +2335,85 @@ export function AgentChatPanel({
   // clear after the refetch and resets on the next send).
   const lastTurnStoppedByUser = streamSlice?.lastTurnStoppedByUser ?? false;
   const lastTurnStoppedTs = streamSlice?.lastTurnStoppedTs ?? null;
+
+  // ── ROUND-119 (R119-C, owner: while a queued message waited, the transcript
+  //    showed "the exact same thought process… the exact same reply" as the
+  //    previous exchange — a folded/live DOUBLE render that self-cleared once
+  //    the queued message was processed): THE FOLD/LIVE INTERLOCK. Mechanism:
+  //    POST /queue appends the message.queued row → the session-events frame
+  //    fans out to the always-on events stream → scheduleSessionInvalidation
+  //    (300ms trailing debounce, events-stream.ts) → invalidateQueries
+  //    (["session"]) → this panel's useSession refetches MID-TURN →
+  //    toProjectChatItems folds the log INCLUDING the in-flight turn's
+  //    already-persisted events and flushes the trailing OPEN turn at
+  //    end-of-log → the items loop rendered that folded partial turn AND the
+  //    liveSection rendered the same content again. The fix is CLIENT-side
+  //    only (the server is untouched): while the live overlay is showing a
+  //    turn, the folded turn items that BELONG to that same live stream are
+  //    suppressed; when the overlay clears (post-stream clearStream on the
+  //    own path, the retire timer on a remote mirror), nothing is filtered
+  //    and the folded turn renders exactly once.
+  //
+  //    THE ANCHOR — why content, not a seq on the store: the task's first
+  //    choice was liveTurn.userSeq, but the wire genuinely carries NO such
+  //    seq anywhere (turn.started is {text, model, providerId} — a live-only
+  //    announcement, no event seq; the stream POST is SSE with no seq return;
+  //    the events-stream session frames carry a seq but not the event TYPE,
+  //    so "which append was the message.user" is unknowable there), and the
+  //    server is out of this round's reach. The minimal honest path is the
+  //    one the panel already trusts three times (pendingEcho, deliveredQueued,
+  //    remoteUserItem — "the moment the refetched event log carries the
+  //    persisted message.user row, the live copy drops out"): the LIVE turn's
+  //    opening user CONTENT (the store's pendingEcho on the own path — set at
+  //    send, kept until the post-stream clear; liveTurn.userText on a remote
+  //    mirror — stamped from turn.started) is matched against the folded
+  //    user items, and the LAST match's seq is the live turn's opener. From
+  //    there the suppression is `startedBySeq >= anchorSeq`: >= (not ===)
+  //    because a DELIVERED queued message flips its message.queued row to
+  //    message.user IN PLACE mid-turn, splitting the fold into a second turn
+  //    item whose opener seq is the flipped row — that continuation is still
+  //    the SAME live stream (the live overlay renders its content too), so
+  //    every folded turn opened at-or-after the anchor is the live stream's;
+  //    earlier turns are past exchanges and always render. Edge cases stay
+  //    honest: a refetch that raced persistence (the opener's row not yet in
+  //    the log) finds no anchor and suppresses nothing (there is nothing to
+  //    duplicate yet); a sent-twice identical text anchors on the LAST match
+  //    (the current turn); the folded `queued` rows mirrored by the live
+  //    overlay's queue (same seq — pushQueuedMessage dedupes by it) drop out
+  //    here instead of in the render loop, so exactly ONE queued bubble owns
+  //    the render while the stream is open. ──
+  const liveOpenUserText = remoteMirror ? (liveTurn?.userText ?? null) : streamPendingEcho;
+  // ROUND-37: the turn fold carries stats turn-level — the old R33
+  // interim-reply stat-strip pass is GONE (superseded by the fold).
+  const items = useMemo(() => {
+    const folded = sessionDetail.data ? toProjectChatItems(sessionDetail.data.events) : [];
+    if (!liveOverlayActive && liveQueued.length === 0) return folded;
+    // The anchor: the LAST folded user item whose content is the live turn's
+    // opening message (see the interlock block above for why content).
+    let anchorSeq: number | null = null;
+    if (liveOverlayActive && liveOpenUserText !== null && liveOpenUserText !== "") {
+      for (const it of folded) {
+        if (it.kind === "user" && it.content === liveOpenUserText) anchorSeq = it.seq;
+      }
+    }
+    if (anchorSeq === null && liveQueued.length === 0) return folded;
+    return folded.filter((it) => {
+      // R78 (moved here by R119-C): a folded queued row whose seq the live
+      // overlay's queue already mirrors — the LIVE bubble owns the render
+      // until the stream ends (exactly one, never two, never zero).
+      if (it.kind === "queued" && liveQueued.some((q) => q.seq === it.seq)) return false;
+      // R119-C: the folded trailing turn(s) of the LIVE stream — suppressed
+      // while the overlay renders them; the handoff renders them once.
+      if (it.kind === "turn" && anchorSeq !== null && it.startedBySeq >= anchorSeq) {
+        return false;
+      }
+      return true;
+    });
+    // Deps are PRIMITIVES + stable references on purpose (see the R119-C
+    // gates above the memo): the liveTurn object itself is patched per SSE
+    // delta and must never re-fold the log.
+  }, [sessionDetail.data, liveOverlayActive, liveOpenUserText, liveQueued]);
+
   // R37 review #4: turns that JUST finished while the user watched start
   // collapsed (the folded summary + answer); cold-loaded sessions use the
   // Detailed preference.
@@ -3645,13 +3787,10 @@ export function AgentChatPanel({
 
             <AnimatePresence mode="popLayout">
               {items.map((item) => {
-                // R78: a folded queued chip whose seq is still LIVE-rendered
-                // (a window-focus refetch raced the running stream) — skip it
-                // here; the live queue's chip with the same seq owns the
-                // render until the stream ends (never a double chip).
-                if (item.kind === "queued" && liveQueued.some((q) => q.seq === item.seq)) {
-                  return null;
-                }
+                // R78 → R119-C: the folded/live queued dedupe (a window-focus
+                // refetch raced the running stream) moved UP into the items
+                // memo — the suppressed rows never reach this loop, so the
+                // map stays a pure render of `items`.
                 return (
                   <MessageRenderer
                     key={itemKey(item)}
@@ -3781,20 +3920,25 @@ export function AgentChatPanel({
                   ts={new Date(liveTurn.startedAtMs).toISOString()}
                 />
                 {liveSection}
-                {/* ── ROUND-78 (R78-D): the QUEUED chips — below the working
-                    section (the messages wait BEHIND the current work), above
-                    the streaming answer. Live-store entries only here — the
-                    stream is OPEN, so the LIVE chip owns the render even when
-                    a window-focus refetch already folded the same seq into
-                    `items` (the items loop skips a folded queued chip whose
-                    seq is live-rendered — exactly ONE chip, never two, and
-                    never the zero-chip hole the mutual-skip would leave). The
-                    stream-end finally clears the live array, and the folded
-                    log's `queued` items take over in the items loop above. ── */}
+                {/* ── ROUND-78 (R78-D): the QUEUED messages — below the working
+                    section (they wait BEHIND the current work), above the
+                    streaming answer. Live-store entries only here — the
+                    stream is OPEN, so the LIVE bubble owns the render even
+                    when a window-focus refetch already folded the same seq
+                    into `items` (the items memo drops a folded queued row
+                    whose seq is live-rendered — R119-C moved that skip from
+                    the render loop into the memo, so exactly ONE bubble,
+                    never two, and never the zero-bubble hole the mutual-skip
+                    would leave). The stream-end finally clears the live
+                    array, and the folded log's `queued` items take over in
+                    the items loop above. R119-C: these are the SAME
+                    QueuedUserMessage bubbles the folded rows render — the
+                    right-aligned user-message idiom with the hover-cluster
+                    affordances, not the retired amber banner. ── */}
                 {liveQueued.length > 0 ? (
                   <div className="mt-2 flex flex-col gap-2 min-w-0" data-queued-live-list>
                     {liveQueued.map((q) => (
-                      <QueuedMessageChip
+                      <QueuedUserMessage
                         key={`live-q-${q.seq}`}
                         entry={q}
                         busy={busy}

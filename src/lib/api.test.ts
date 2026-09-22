@@ -473,6 +473,10 @@ describe("toProjectChatItems (ROUND-37 turn model)", () => {
       {
         kind: "turn",
         seq: 4,
+        // R119-C: the turn's opening user seq — the content-less message.user
+        // at seq 3 still advances lastUserSeq (the fold records the opener
+        // even when the row renders nothing).
+        startedBySeq: 3,
         agentId: "agt_scribe",
         ts: TS(4),
         endTs: TS(4),
@@ -1904,6 +1908,95 @@ describe("toProjectChatItems message.queued folding (ROUND-78 R78-D)", () => {
     expect(queued.attachments).toEqual([
       { name: "shot.png", path: "attachments/shot.png", size: 2048 },
     ]);
+  });
+});
+
+// ── ROUND-119 (R119-C): the turn item's OPENING-USER anchor. The owner saw
+// the in-flight turn rendered twice (the folded trailing turn + the live
+// stream section) while a queued message waited; the panel-side fix
+// compares each folded turn's opener seq against the LIVE turn's opening
+// user message, so the fold MUST carry that seq on every turn item. These
+// pins hold the accumulator's bookkeeping on all three flush paths. ──
+describe("toProjectChatItems startedBySeq (ROUND-119 R119-C)", () => {
+  it("each turn item carries the seq of the user message that OPENED it (two turns, two anchors)", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "first ask" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "first answer" }, "agt_scribe"),
+      ev(3, "message.user", { role: "user", content: "second ask" }, "agt_scribe"),
+      ev(4, "message.assistant", { role: "assistant", content: "second answer" }, "agt_scribe"),
+    ]);
+
+    expect(items.map((i) => i.kind)).toEqual(["user", "turn", "user", "turn"]);
+    const [first, second] = items.filter((i) => i.kind === "turn");
+    if (first.kind !== "turn" || second.kind !== "turn") throw new Error("expected turns");
+    // The opener's seq, NOT the turn's own first-event seq (first.seq === 2).
+    expect(first.startedBySeq).toBe(1);
+    expect(second.startedBySeq).toBe(3);
+  });
+
+  it("a mid-turn message.queued does NOT move the anchor — the interrupted turn keeps its ORIGINAL opener (the queued row is not a turn boundary)", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "run the build" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "Starting…" }, "agt_scribe"),
+      ev(3, "message.queued", { role: "user", content: "also the linter" }, "agt_scribe"),
+      toolUse(4, "run_command", "command: pnpm build"),
+    ]);
+
+    // One turn across the queued row — its opener is STILL the message that
+    // opened the stream, never the queued message waiting inside it.
+    const turn = items.find((i) => i.kind === "turn");
+    if (turn === undefined || turn.kind !== "turn") throw new Error("expected turn");
+    expect(turn.startedBySeq).toBe(1);
+  });
+
+  it("a DELIVERED queued message (flipped to message.user IN PLACE) splits the fold — BOTH halves carry their honest openers", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "run the build" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "Build green." }, "agt_scribe"),
+      // The queued row at seq 3, delivered: flipped in place.
+      ev(3, "message.user", { role: "user", content: "also the linter" }, "agt_scribe"),
+      ev(4, "message.assistant", { role: "assistant", content: "Lint clean too." }, "agt_scribe"),
+    ]);
+
+    expect(items.map((i) => i.kind)).toEqual(["user", "turn", "user", "turn"]);
+    const [before, after] = items.filter((i) => i.kind === "turn");
+    if (before.kind !== "turn" || after.kind !== "turn") throw new Error("expected turns");
+    expect(before.startedBySeq).toBe(1);
+    expect(after.startedBySeq).toBe(3);
+  });
+
+  it("a turn.error flush and the trailing end-of-log flush keep the opener too; a synthetic leading turn (no preceding user) carries -1", () => {
+    // (a) The trailing flush — the IN-FLIGHT turn the owner's duplicate was
+    // made of: events after the last user message, flushed at end-of-log.
+    const trailing = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "go" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "partial work" }, "agt_scribe"),
+      toolUse(3, "list_dir", "path: ."),
+    ]);
+    const trailingTurn = trailing.find((i) => i.kind === "turn");
+    if (trailingTurn === undefined || trailingTurn.kind !== "turn") throw new Error("expected turn");
+    expect(trailingTurn.startedBySeq).toBe(1);
+
+    // (b) The turn.error flush — the failure closes the accumulator; the
+    // partial's anchor is still the opener.
+    const failed = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "go" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "partial" }, "agt_scribe"),
+      ev(3, "turn.error", { code: "PROVIDER_ERROR", message: "boom" }, "agt_scribe"),
+    ]);
+    const failedTurn = failed.find((i) => i.kind === "turn");
+    if (failedTurn === undefined || failedTurn.kind !== "turn") throw new Error("expected turn");
+    expect(failedTurn.startedBySeq).toBe(1);
+
+    // (c) A synthetic leading turn (events before any message.user) — -1,
+    // which never matches a real panel anchor.
+    const leading = toProjectChatItems([
+      toolUse(1, "list_dir", "path: ."),
+      ev(2, "message.assistant", { role: "assistant", content: "orphan work" }, "agt_scribe"),
+    ]);
+    const leadingTurn = leading.find((i) => i.kind === "turn");
+    if (leadingTurn === undefined || leadingTurn.kind !== "turn") throw new Error("expected turn");
+    expect(leadingTurn.startedBySeq).toBe(-1);
   });
 });
 
