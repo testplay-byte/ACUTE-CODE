@@ -271,3 +271,32 @@ pairing). The headline diagnoses:
     verification.
 12. **The §N explanation** — the center-section rethink plan, explained to the owner
     AFTER the release verifies.
+
+## §3 Verification
+
+- **The full gate ladder on the MERGED tree** (the five tracks were built in isolated git worktrees by
+  parallel agents — B/C/D/E/F branches — then merged): mobile tsc clean · jest **38 suites / 811 tests**
+  (baseline 28/616) · agent-core tsc clean · vitest **145 files / 2734** (was 144/2710) · root vitest
+  **252 files / 4491** (was 4457) · root eslint 0 · docs:check 264/0 (the servo.org HEAD flake is
+  sandbox egress, not content).
+- **The independent review pass** (a dedicated reviewer agent walked the owner's §1 report item-by-item
+  against the CODE, not the reports): **zero blockers** — every in-scope item verified real (the adaptive
+  slots, the in-place kebab transformation, BOTH stop confirmations, the auto-grow, the deleted tick
+  ladder, the folder flow, the three pairing legs, the pointer-events fix); the frozen files
+  (tokens/motion/primitives/sheet) byte-clean; the do-not-touch lists intact; the four deep-checked
+  test suites judged REAL pins. Both WARNs it raised were closed in `59f7514` (the sheet-anatomy
+  drift-guards; the unified timeAgo law — "just now" under a minute, minutes start at 1, "0m ago" dead).
+- **Cannot be verified in this sandbox** (the release checklist for the owner's device): the tab-bar
+  corners at 200% zoom + the 360dp pill poses + reduced motion; the dashboard squint test + the ≥768dp
+  reflow; the session chrome at rest + the sending→processing sequence; **the sheet keyboard gate** (the
+  namer/manual-path/CTA above the IME — watch for double-compensation if the Modal's dialog window also
+  pans with the IME); the real Windows multi-adapter LAN pairing (the 172.x→192.168.x climb); the NSIS
+  relaunch marker surviving the WebView2 restart; the real dgram default-route probe.
+
+## §4 The §N deferral (the center-section rethink — NOT implemented, per the owner's sequencing)
+
+The transcript-center card rethink (thinking / tool calls / failed calls as separate cards, on BOTH
+platforms) was explicitly excluded from this round: the owner directed that everything else ship as
+v0.112.0 first, and that the center-section plan be EXPLAINED to him after the release verifies. §6 of
+this document (the release record) is followed by that explanation, delivered in the round's closing
+report.

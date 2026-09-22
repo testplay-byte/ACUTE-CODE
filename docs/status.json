@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.111.0",
+    "version": "0.112.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -348,33 +348,29 @@
     {
       "date": "2026-09-22",
       "label": "R117 — the twenty-fourth round: the system round (memory that remembers [workspace tier + policy live + auto-formation + session_recall + CLI binding], the prompt-engineering pass [round-tags stripped, caps calibrated, fences, the sub-agent carve-out, browser_control restructured], robust orchestration [auto-retry, guidance, structured envelopes, mobile parity], error hardening [crash handlers, the tool safety net, content caps], the honest PC transcript [failure visibility, ticks, hierarchy, memoization], and the Android design elevation [the contrast-verified token/primitive/presence/hero waves + CI-enforced WCAG pins]) — all suites green + the live-provider E2E proof — v0.111.0 next (the release round owns the version gate)"
+    },
+    {
+      "date": "2026-09-22",
+      "label": "R118 — the twenty-fifth round: the fit-and-finish round (the owner's v0.111.0 device report answered: the adaptive tab bar, the sheet system rebuilt, the in-place kebab, the delivery states on the message body, the vertical dashboard, the provider hero + folder creation + multi-host, the PC's manual-pairing ladder + QR toggle + restart marker) — mobile 38 suites 811/811, agent-core 145/2734, root 252/4491, review-passed — v0.112.0 released"
     }
   ],
   "quality": {
-    "ci": "LOCAL-GATES TRUTH at the R117 close (every wave's own triple re-run fresh): agent-core tsc clean · vitest 144 files 2710/2710 · root tsc clean · root vitest 252 files 4457/4457 · mobile tsc clean · jest 28 suites 616/616 · eslint 0 on every touched file · docs:check 257/0. PLUS THE LIVE E2E: the real sidecar + a live OpenRouter key — the model recited both memory-scope digests verbatim and called memory_save exactly as asked (round-117.md §5).",
+    "ci": "LOCAL-GATES TRUTH at the R118 close (the merged tree, every gate re-run fresh): agent-core tsc clean · vitest 145 files 2734/2734 · root tsc clean · root vitest 252 files 4491/4491 · mobile tsc clean · jest 38 suites 811/811 · eslint 0 · docs:check 264/0 (the servo.org HEAD flake is sandbox egress, not content). The five tracks were built in isolated git worktrees by parallel agents, merged, then FULLY re-gated on the merged tree; an independent review agent then walked the owner's report item-by-item against the code (no blockers; both WARNs closed in 59f7514).",
     "suites": [
       {
         "name": "frontend",
-        "tests": 4457,
-        "detail": "252 files / 4457 tests at the R117 close (was 244/4337): the PC transcript wave's pins (failure-aware headers, ticks, headings, tool-args) + the DevicesTab/MemoryPanel extensions."
+        "tests": 4491,
+        "detail": "252 files / 4491 tests at the R118 close (was 4457): the QR pointer-events pins, the restart-marker splash cases, the PC test-model band timers, the pairing-text multi-address format."
       },
       {
         "name": "agent-core",
-        "tests": 2710,
-        "detail": "144 files / 2710 tests at the R117 close (was 137/2618): the r117 suites (memory-scopes 28, orchestration-robustness, crash-handlers, error-hardening, events-write-guard, missing-ok, tool-safety-net) + the recalibrated prompt pins (74 updated to the new spellings)."
+        "tests": 2734,
+        "detail": "145 files / 2734 tests at the R118 close (was 2710): the fs-mkdir route suite (20) + the preferred-NIC/APIPA ordering pins."
       },
       {
         "name": "mobile",
-        "tests": 616,
-        "detail": "28 suites / 616 passing at the R117 close (was 25/533 at R116): +50 contrast WCAG pins (g1), +6 chip/rhythm pins (g2), +10 subagent-live/error pins (d2), +10 delivery-ladder pins carried from R116-m, the model-colors + activity suites carried."
-      },
-      {
-        "name": "sidecar e2e",
-        "tests": 12
-      },
-      {
-        "name": "launcher (python unittest)",
-        "tests": 16
+        "tests": 811,
+        "detail": "38 suites / 811 tests at the R118 close (was 28/616): tab-slots (the adaptive algorithm), the activity bodyText regression pin, host-store multi-host + switchHost, usage-format + sessionStatusBadge, disclosure-motion, the processing-rung pins, the composer v2 surface, confirm-dialog + header-dropdown, the mkdir client, provider-display, time-ago, the sheet-anatomy drift-guards."
       }
     ],
     "cargoCheck": "green",
@@ -390,7 +386,7 @@
     }
   ],
   "plan": {
-    "current": "R117 LANDED — the system round (the owner's post-v0.110.0 direction: memory that remembers, prompt engineering, robust multi-agent, hardened errors, the honest PC transcript, the Android design elevation — built on four parallel deep analyses, verified by a LIVE sandbox E2E where the real model recited both memory scopes and saved the asked fact) — 13 implementation waves, agent-core 144 files 2710 tests, root 252 files 4457 tests, mobile 28 suites 616 tests, all green",
+    "current": "R118 LANDED — the fit-and-finish round (the owner's v0.111.0 device report, ~53 items across 16 sections, answered screen-by-screen: the adaptive tab bar + the corner fix, the universal sheet system rebuilt [first-frame law, real header, captions banned, centered CTAs, keyboard-aware], the in-place kebab sub-levels + the two-step stop + the centered confirm, the composer geometry + the delivery states riding the message body, the vertical dashboard + honest session rows + the no-bounce collapse, the provider hero + name-only model rows + the centered CTA law, the folder creation + the mkdir route, the multi-host store + switcher, the PC's pointer-events/shrink-0/manual-pairing-ladder/restart-marker/test-status fixes, and mark-all-read's bodyText root cause) — built on six parallel spec tracks, implemented by five worktree-isolated agents, merged, fully re-gated, and review-passed — v0.112.0 released",
     "upcoming": [
       {
         "title": "The owner's round-117 walkthrough on real hardware (v0.111.0)",
@@ -416,8 +412,8 @@
     ]
   },
   "round": {
-    "current": "R117 LANDED — the system round (the owner's post-v0.110.0 direction: memory that remembers, prompt engineering, robust multi-agent, hardened errors, the honest PC transcript, the Android design elevation — built on four parallel deep analyses, verified by a LIVE sandbox E2E where the real model recited both memory scopes and saved the asked fact) — 13 implementation waves, agent-core 144 files 2710 tests, root 252 files 4457 tests, mobile 28 suites 616 tests, all green",
+    "current": "R118 LANDED — the fit-and-finish round (the owner's v0.111.0 device report, ~53 items across 16 sections, answered screen-by-screen: the adaptive tab bar + the corner fix, the universal sheet system rebuilt [first-frame law, real header, captions banned, centered CTAs, keyboard-aware], the in-place kebab sub-levels + the two-step stop + the centered confirm, the composer geometry + the delivery states riding the message body, the vertical dashboard + honest session rows + the no-bounce collapse, the provider hero + name-only model rows + the centered CTA law, the folder creation + the mkdir route, the multi-host store + switcher, the PC's pointer-events/shrink-0/manual-pairing-ladder/restart-marker/test-status fixes, and mark-all-read's bodyText root cause) — built on six parallel spec tracks, implemented by five worktree-isolated agents, merged, fully re-gated, and review-passed — v0.112.0 released",
     "next": "The owner's round-117 walkthrough on real hardware (v0.111.0) — memory across sessions, the elevation's look, the PC transcript's failure visibility, the sub-agent Stop/Retry from the phone; then the standing queue (the updater round, multi-PC, device smoke pass)."
   },
-  "ci": "GREEN — v0.109.0 PUBLISHED (release 392648426, latest) after the R115-r re-issue: the first tag's Mobile APK run 35535853130 died at npm ci (R115-a's lock regeneration had dropped the RN toolchain entries; the pre-installed node_modules masked it locally), so the lockfile was restored from the proven v0.108.0 base with the four QR-photo deps re-added (a six-entry additive diff, npm ci --dry-run-proven) and the tag re-issued at 442b29c. On main: CI 35550797554 + Mobile APK 35550797480 both SUCCESS. On the tag: Release 35551965986 + Mobile APK 35551966018 both SUCCESS. 7/7 assets: setup.exe 39,295,280 B + amd64.deb 68,321,290 B + amd64.AppImage 136,518,136 B + arm64.deb 68,263,416 B + aarch64.AppImage 134,248,968 B + android-arm64.apk 56,688,525 B (content-checked: 1240 entries, Hermes bundle present, 3 dex, arm64-v8a only) + launcher-kit 140,539 B. /releases/latest → v0.109.0. The shipping runbook gained the standing guards (MAINTENANCE.md §g 2c + 4/5 + 6/6b)."
+  "ci": "GREEN — v0.111.0 PUBLISHED (release 393431111, latest, end-state verified: 7/7 assets, APK content-checked [1240 entries, Hermes, arm64-v8a only]); v0.112.0 rides the same proven pipeline (lock-sync proof below)."
 }

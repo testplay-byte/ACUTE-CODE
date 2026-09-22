@@ -9,6 +9,49 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
+## [0.112.0] — 2026-09-22 — the fit-and-finish round (the owner's device report, answered screen by screen)
+
+### The bottom navigation, finally right
+- **The corner "sticker" glitch is gone** — the bar's shadow used to cast from a bare square wrapper around the rounded slab; it now casts from the rounded bar itself, and the chrome edge runs vertically so all four corners read symmetric.
+- **The selection adapts to what's selected**: the chosen tab's slot grows to fit its icon AND label with real padding (the Home pill's cramped look and the cut-off "Approvals" label are dead — every label fits with room to spare), the neighbors rebalance fluidly, and the pill never touches the bar's edges.
+
+### The bottom-sheet system, rebuilt (every menu in the app)
+- The ugly late animation ("it just opens, then plays the animation") is fixed at the frame level — the sheet now enters from below the fold on the very first frame, every time.
+- The header is a real header: a proper title and a close button that matches the app's back button. The stray "line" (the fake grab handle) is deleted.
+- Field menus lost their description walls — label + input only; the API format's three options sit on ONE line; every Create/Save button is centered and self-sized; destructive confirms wear the danger color.
+- **Sheets are keyboard-aware**: the panel rides the keyboard, so the folder-path field (and every bottom field) stays visible while typing.
+
+### The session screen
+- The top bar gets its own shade + a separator line, and the back button is a REAL arrow now (not the bracket) — everywhere in the app.
+- The three-dot menu transforms IN PLACE: mode, model, thinking level, and context details replace the menu's own options (with a back arrow to return) instead of dropping a bottom sheet.
+- **"Stop this session" now asks first** — one tap arms it ("Do you want to stop?"), the second stops. The composer's stop button gets a small centered confirmation dialog.
+- The composer: long messages grow the input (up to six lines), the focus ring is bolder, text wraps properly around the attach button, the stop button is icon-only, and the queue button only appears when you've actually typed something.
+- **Delivery states ride the message itself**: a just-sent message renders dull and veiled, snaps to normal when the PC receives it, and its border breathes while the PC processes it. The double-check marks are retired.
+
+### The dashboard, rethought for mobile
+- One vertical scroll — no more swiping through stat cards. A compact 14d/30d/3mo selector, a clean stat grid, thinner daily bars with weekday labels and a highlighted "today", and the models list merged with the donut into one card.
+- Expanded projects show honest session rows: real separators, per-session status (no more "open" on everything), formatted token/cost numbers, and two-line titles. Expanding keeps its (smoother) bounce; **closing never bounces**.
+
+### Providers & projects
+- The provider page is a proper hero (color-coded identity, name, base URL, Test/Rename) with a clean key list (masked keys, last-used, compact actions) and **model rows show names only — never the raw IDs**.
+- "Add a provider", "New project", "New session" — all centered, self-sized, consistent.
+- **You can create a folder while picking a project location** (then it's selected in one tap).
+- **Multiple desktops**: pair more than one PC and switch between them from the connect screen.
+
+### The PC side
+- **Manual pairing finally works**: the pairing text now carries every address, the phone tries them all, and the desktop reports its real network interface first (virtual adapters like WSL's no longer shadow the real LAN IP).
+- The QR popup toggles: click the enlarged QR to shrink it back; the PIN panel scrolls properly (no more cut-off).
+- The update restart announces itself ("Setting up v0.112.0…" on relaunch) instead of going dark.
+- Model tests on PC now show a visible "Testing…" state, and failures stay on screen instead of vanishing after 5 seconds.
+
+### Fixed along the way
+- "Mark all read" never left the phone (a missing request body made Android's transport reject it before connecting — now it sends properly, with a busy spinner).
+- The activities list and the More screen's stats gained visible separator lines; the home screen's live preview carries the animated live caret; the More screen's top card became the status + connection hero (the live status moved there from Home).
+- Appearance: the mode selector moves smoothly (no bounce), chat options render as centered chips under their headings, and the "synced across devices" footer is gone.
+
+### For the builders
+- No new mobile dependencies. New agent-core route: `POST /system/fs/mkdir` (phone-reachable). The host store is multi-host (additive migration from the single-host record). The full story with every root cause: `docs/ui-iterations/round-118.md` + the five track specs in `docs/design-language/android/round-118/`.
+
 ## [0.111.0] — 2026-09-22 — the system round (memory that remembers, calibrated prompts, robust orchestration)
 
 ### Memory that remembers
