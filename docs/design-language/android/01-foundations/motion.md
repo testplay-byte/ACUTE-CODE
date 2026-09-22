@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-118 -->
+<!-- last-reviewed: 2026-09-22 round-119 -->
 
 # Foundations — Motion
 
@@ -16,9 +16,20 @@ Every spring in the app uses exactly this config — **EXCEPT the round-116 mech
 springs, which are deliberately over-damped:**
 
 ```
-SHEET_SPRING   = { stiffness: 210, damping: 30 }   // panels: no overshoot, ever
+SHEET_SPRING   = { stiffness: 180, damping: 24 }   // panels: one soft settle (R119-P)
 TAB_SPRING     = { stiffness: 200, damping: 26 }   // the tab indicator: calm slide
 ```
+
+**Round-119 amendment (R119-P — SUPERSEDED: `{210, 30}` → `{180, 24}`):** the
+owner's verdict on the Add-Provider sheet — "the animations were not that good" —
+retired the stiffer snap-cut. Panels ride the house **DISCLOSURE settle** (ζ ≈ 0.89,
+one soft settle, no jelly — `SHEET_SPRING` now equals `DISCLOSURE_SPRING` by design),
+and the timed legs are named constants: the scrim opens **200ms ease-out** (was 160
+linear), the close departs **200ms ease-in-quad** on both legs (was 180 linear), and
+the content row below the header fades in **120ms ease-out starting 40ms after the
+panel begins to move** (reduced motion snaps it; the first-frame static-pose law
+applies). The keyboard ride inherits the settle — its MECHANICS are untouched
+(R118-E's law); the clamp, skirt, and every frozen sheet constant stand.
 
 The house spring (180/22) stays for presses, toggles, entrances — moments where a
 little life is right. Anything that carries a PANEL or a large surface rides the
@@ -49,7 +60,7 @@ spring.
 | Toggle/select | spring to the new position (sliding pill, switch dot) |
 | Expand/collapse (accordion) | expand springs height 0↔measured + chevron rotates 180° on its own spring; **collapse is a 200ms timing, never a spring (R118-C — closing never bounces)** |
 | Success (granted, linked, created) | icon tile bg springs to `success`, icon crossfades to the check, a single `successHaptic` |
-| Waiting (thinking) | three 6px dots, 1.2s opacity pulse, 180ms stagger — calm, never a spinner |
+| Waiting (thinking) | the TurnBlock rail's three dots, 1.2s opacity pulse (600ms legs, 0.85↔1) with a 180ms stagger — calm, never a spinner (R119-A: the dots moved from the retired placeholder card into the rail's live state; the rail breathes only while the turn WORKS — once text streams, the LiveCaret owns the motion) |
 | Live caret | 8×15 accent bar, 0.25↔1 opacity, 550ms each way — the house live rhythm; R118-D: the processing bubble's accent edge breathes 0.34↔0.62 on the same 550ms legs (the delivery-edge rhythm; static 0.55 mix under reduced motion) |
 | Countdown pressure | the "Valid for Ns" chip tints warning under 30s, springs gently each tick — no seizure flashing |
 
@@ -96,14 +107,27 @@ spring.
     (ζ ≈ 0.89 — one soft settle, no jelly); collapse is `withTiming` **200ms ease-out
     + a 150ms opacity fade** — a timing curve cannot overshoot, so closing NEVER
     bounces. The chevron follows its level's direction; the onLayout re-measure rides
-    the spring; reduced motion snaps both ways.
+    the spring; reduced motion snaps both ways. (R119-A: the TurnBlock's activity
+    well rides this same disclosure — `Reveal` — for its expand/collapse.)
+12. **Kebab level swaps (round-119, R119-B)**: the owner asked for "some animation
+    while switching between the menus" — the dropdown panel's body (title row +
+    content) is KEYED by level and swaps directionally: drilling in, the new level
+    slides in from the RIGHT **12dp over 180ms ease-out** while the root mirrors out
+    LEFT (120ms); going back reverses it — the sub-level exits RIGHT the way it came
+    in. The direction derives from level DEPTH (root 0 / named sub-levels 1 — the
+    pure `levelSwapDirection`), never a per-menu flag; equal-depth swaps dissolve;
+    reduced motion = the plain 120ms fade. The panel's own entrance (spring
+    0.96→1) + exit fade are untouched and frozen: `PANEL_WIDTH 220`,
+    `ENTRANCE_SCALE 0.96`, `EXIT_FADE_MS 120`.
 
 ## 5. What never animates
 
 - Resting cards, resting text, backgrounds.
 - The matte top edge (it's a material, not a light).
 - Sheet chrome (header row) — the panel slides, its contents don't double-slide.
-  (R118-A: the grip is deleted — see `round-117-elevation.md` §2.2's supersession.)
+  (R118-A: the grip is deleted — see `round-117-elevation.md` §2.2's supersession.
+  R119-P's ONE sanctioned exception: the content row's 120ms/40ms fade-in under the
+  moving panel — a fade, never a second slide.)
 - Anything while `prefers-reduced-motion`/accessibility "remove animations" is on:
   entrance/stagger/idle animations drop; state changes snap.
 
@@ -115,5 +139,6 @@ moment — never per frame.
 
 ## 7. Durations (when `withTiming` is unavoidable)
 
-instant 120ms (scrim pre-fade) · quick 180ms (sheet exit, crossfade) · base 300ms
-(terminal moments) · deliberate 500ms (donut sweep). Everything else is the spring.
+instant 120ms (scrim pre-fade) · quick 180ms (crossfade) · sheet legs **200ms** (scrim
+open ease-out / close ease-in — R119-P) · base 300ms (terminal moments) · deliberate
+500ms (donut sweep). Everything else is the spring.

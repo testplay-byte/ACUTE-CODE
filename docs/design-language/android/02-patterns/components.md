@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-118 -->
+<!-- last-reviewed: 2026-09-22 round-119 -->
 
 # Patterns — Components
 
@@ -15,6 +15,7 @@ file pins the idioms round-115 established.
 | **Icon-circle** | 50px circle (send) / 44px quiet circle (stop) | Composer + row actions |
 | **Icon-circle (quiet)** (R118-A) | `QuietIconButton` — 36/40/44 circle, subtle fill + hairline rim, `hitSlop` | Header/close/back chrome (the chip grammar the owner ruled): 36 = sheet close, 40 = back, 44 = row actions |
 | **Sheet CTA** (R118-A) | `ChromeButton` centered, self-sized, `minWidth: SHEET_CTA_MIN_W (200)`; `tone="danger"` for destructive confirms | The sheet's ONE primary; quiet escapes centered beneath at natural width — never a second full-width bar |
+| **Fitted label** (R119-P) | `ChromeButton labelFit` — `numberOfLines 1` + `adjustsFontSizeToFit`, `minimumFontScale 0.85`, horizontal padding xl→md while on | Two `flex:1` peers at 360dp where a 15px bold label line-breaks (the provider hero's "Test connection" — the owner's report). Opt-in: every other call site wraps as before |
 
 Labels: 1–3 words. No sentence buttons. No glow, no gradient washes, no Apple-y shine.
 
@@ -53,7 +54,8 @@ not a CTA; the half-width idiom is retired.
   machine strip (the one honest mono line: BASE URL, 13/19), the actions pair
   (primary `flex:1` + quiet peer `flex:1`, both 50 tall) — hairlines between zones.
   Never one undifferentiated card carrying identity + machine meta + two
-  same-weight outlined rows.
+  same-weight outlined rows. **R119-P:** the primary opts into `labelFit` so the
+  pair's ~144dp share at 360dp never wraps the label (see §Buttons).
 - **Model rows are NAME-only (R118-E):** the display name (or the cleaned name) +
   the facts line — the raw model id renders on DETAIL surfaces only (the actions
   sheet's mono block, the edit form's read-only field), never in the list row.
@@ -112,11 +114,18 @@ not a CTA; the half-width idiom is retired.
   styles — the Modal's new Android window can composite before Reanimated attaches,
   and an empty first animated style paints the panel open at rest ("opens, then
   replays"). See `motion.md` §2.
-- **Round-116 mechanics (unchanged):** the entrance rides the SHEET spring
-  (over-damped — no overshoot, no settle-wobble), the progress value is clamped so
-  the panel can never dip below its rest, and the panel carries a below-the-fold
-  skirt so the page background is never visible under it, even mid-animation. The
-  inner ScrollView sets `overScrollMode="never"` (no Android stretch).
+- **Round-116 mechanics (amended R119-P):** the entrance rides the SHEET spring —
+  **now the house disclosure settle `{180, 24}`** (R119-P supersedes the stiffer
+  `{210, 30}` snap-cut; the owner's verdict on the Add-Provider sheet: "the
+  animations were not that good") — one soft settle, never a jelly bounce; the
+  progress value stays clamped so the panel can never dip below its rest, the
+  below-the-fold skirt stays so the page background is never visible under it even
+  mid-animation, and the inner ScrollView keeps `overScrollMode="never"` (no
+  Android stretch). The timed legs are named constants: the scrim fades in **200ms
+  ease-out**, the close departs **200ms ease-in** on both legs, and the content row
+  below the header fades in **120ms starting 40ms after the panel begins to move**
+  (reduced motion snaps it; the first-frame static pose applies — `motion.md` §1).
+  The keyboard ride inherits the settle (mechanics untouched — R118-E's law).
 - Sheet contents = Archetype 3 forms: label + control stacks, `spacing.lg` (16)
   horizontal. **Fields are `ClayInput` (label above) with captions banned** — no
   description blocks, no explainer footnotes, nothing between or under fields
@@ -137,6 +146,16 @@ not a CTA; the half-width idiom is retired.
   page background is never visible through/below the panel.
 - **Action menus with ≤4 actions render as a GRID** (2×2), not a vertical stack —
   round-116: the model menu (Test / Edit / Hide / Delete).
+- **The model test's verdict reports the TOOLS leg (R119-P):** "Test model ✓"
+  used to prove nothing about the agent's real call shape — the probe never sent
+  tools, and the owner's TokenHarbor report showed exactly that gap (chat worked
+  while every action failed). The probe's second leg carries ONE minimal tool
+  (`echo`); the sheet renders the verdict as its own note line with the three
+  honest spellings — **"tools ✓ (called echo)"** (saved) / **"tools accepted —
+  answered in text, not called — usable for chat, not for agent actions"**
+  (caution) / **"tools rejected — {the raw reason}"** (bad) — and a hard
+  tools-rejection fails the whole test with the suffix "chat works, but every
+  agent action will fail". A leg that never ran renders NO line, never a guess.
 
 ## Folder browser (in-sheet)
 
@@ -199,6 +218,24 @@ not a CTA; the half-width idiom is retired.
   values, so the feedback loop closes where the user is looking; the back chevron
   remains for deliberate browsing. Read-only levels (Context) stay at their level.
   The two-step stop lives on the main level (see `chat.md`).
+- **The level swaps animate (R119-B):** the owner asked for "some animation while
+  switching between the menus" — the panel's BODY (title row + content) is keyed
+  by level; a drill-in enters from the RIGHT (12dp slide + crossfade, 180ms
+  ease-out) while the root mirrors out LEFT (120ms); going back reverses it (the
+  sub-level exits RIGHT the way it came in). The direction derives from level
+  DEPTH (root 0 / named sub-levels 1), never a per-menu flag; equal-depth swaps
+  dissolve; reduced motion = the plain 120ms fade; the panel's own entrance
+  spring + exit fade are untouched and frozen (`motion.md` §4.12).
+- **The model level's provider accordion (R119-B):** the owner's ask — the model
+  list "will show me only the provider names by default." ONE row per configured
+  provider (display name + the right-aligned "{n} model(s)" caption + ChevronRight
+  16, `accessibilityState expanded`), ONE section open at a time — tapping the
+  open provider toggles it shut; the expanded rows are one-line model names with
+  the accent Check on the selected one; a model tap applies-and-returns to main.
+  The open section dies with the keyed level body's unmount (close/back reset it);
+  the expansion is a 150ms content fade (the disclosure fade), reduced motion
+  snaps. The level renders NO root rows of its own — the root rows can never
+  trail beneath the provider list (the owner's exact defect report).
 
 ## Dialogs (centered, R118-D)
 
@@ -259,6 +296,11 @@ not a CTA; the half-width idiom is retired.
 
 ## Chat components (summary — full spec in `chat.md`)
 
-Header identity bar (avatar + two-line identity + kebab menu with in-place
-sub-levels) · message bubbles with inline meta · docked composer (attach + input +
-send only) · the two-step stop + the centered confirm (R118-D).
+Header identity bar (avatar + two-line identity + kebab menu with ANIMATED in-place
+sub-levels + the model level's provider accordion — R119-B) · user bubbles with
+inline meta (a queued row rides the same bubble idiom AFTER the in-progress turn,
+never a banner — R119-A/C) · the **TurnBlock** — ONE clay container per assistant
+turn: activity rail / recessed well / tool rows / reply (R119-A; the standalone
+thinking/tool/assistant cards are retired as list items) · the single-tier docked
+composer — input LEFT of the attach circle, always (R119-B) · the two-step stop +
+the centered confirm (R118-D).

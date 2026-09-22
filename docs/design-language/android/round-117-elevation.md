@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-118 -->
+<!-- last-reviewed: 2026-09-22 round-119 -->
 <!-- round-117-g — the visual-design-quality (elevation) spec. RESEARCH + SPEC only:
      this file prescribes; implementation waves execute. Binding law: the three laws
      (README.md) + 01-foundations + 02-patterns + 03-rules stay in force. Every place
@@ -358,7 +358,10 @@ top radius `RADIUS_CARD` → **`RADIUS_TILE` (24)**; the panel's hardcoded
 `"0px -2px 18px rgba(42,32,24,0.18)"` (`sheet.tsx:248`) → `clayShadowSheet`; grip
 28×4 → **32×4**. Spring/skirt mechanics untouched (R116-b is correct).
 
-*R118-A supersedes the grip clause (deleted); all other values stand.*
+*R118-A supersedes the grip clause (deleted); R119-P supersedes the spring value —
+SHEET_SPRING is the house disclosure settle {180, 24} with the timed legs (scrim
+200ms ease-out, close 200ms ease-in) — the skirt/clamp mechanics still stand; all
+other values stand.*
 
 **Composer (chat dock):** input background `inputBg` → `surfaceWell` (with the existing
 inputBorder hairline); the two hardcoded shadows (`composer.tsx:1673,1695`) →
@@ -438,6 +441,11 @@ The motion vocabulary is already professional and law-abiding — springs 180/22
 Two visual-only nudges: the pressed tint alpha 0.08 → **0.10** (press becomes
 perceivable; still the "quiet instrument"), and nothing else. Reduced-motion paths are
 already correct everywhere — the spec adds no continuous animations.
+
+*R119-P supersedes the sheet-spring clause: 210/30 → the disclosure settle {180, 24} +
+the scrim/close/content timed legs (`motion.md` §1) — the "no timing changes" verdict
+held until the owner's round-119 report that the sheet "animations were not that good";
+everything else in this paragraph stands.*
 
 ---
 

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-118 -->
+<!-- last-reviewed: 2026-09-22 round-119 -->
 
 # Rules — The Pre-Merge Checklist
 
@@ -80,3 +80,21 @@ Run against every mobile diff before review. A "no" to any question = rework.
       grip.
 - [ ] Back = the arrow (`ArrowLeft` in the quiet circle) — never the chevron bracket
       (donts #6).
+
+## Round-119 additions
+
+- [ ] The composer is ONE row in every state — the input sits LEFT of the attach
+      circle; no reserved band, no overlay paperclip, cap 146 (`chat.md` §Composer).
+- [ ] ONE visual turn per exchange — the TurnBlock (activity rail / recessed well /
+      tool rows / reply); no standalone thinking/tool/assistant cards as list items
+      (`chat.md` §Transcript).
+- [ ] Queued user rows render AFTER the in-progress turn, AS A MESSAGE — never a
+      banner, never above the running turn (donts #49).
+- [ ] The model level is the provider accordion — provider rows by default, ONE
+      section open at a time, apply-and-return; no root rows trailing the list
+      (donts #50/#51).
+- [ ] Kebab level swaps animate — the directional 12dp slide + crossfade (reduced
+      motion fades); never an instant re-render (`motion.md` §4.12).
+- [ ] The model test probes TOOLS — the verdict line reports the tools leg honestly
+      ("tools ✓ (called echo)" / accepted-but-text / rejected + the raw reason); a
+      hard tools-rejection fails the test (`components.md` §Sheets).
