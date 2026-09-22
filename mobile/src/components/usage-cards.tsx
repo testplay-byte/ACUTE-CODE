@@ -1,44 +1,59 @@
 /**
- * usage-cards.tsx — R116-g: the dashboard's dynamic section components (the
- * round-116 verdict #27-#34 redo). Everything here is PRESENTATIONAL: the
- * dashboard screen (app/(tabs)/dashboard.tsx) owns the fetch orchestration
+ * usage-cards.tsx — R118-C: the dashboard's section components (the
+ * mobile-first vertical-instrument redo). Everything here is PRESENTATIONAL:
+ * the dashboard screen (app/(tabs)/dashboard.tsx) owns the fetch orchestration
  * and passes typed rows down; this module owns the shapes.
  *
- *   StatCarouselCard   — one overview-carousel stat card (the TYPE_STAT
- *                        28 mono-medium number + the accentTint icon chip +
- *                        one-line caption)
- *   ActivityGrid       — the GitHub-style 7-row × N-week intensity grid over
- *                        the window's day buckets (tap a cell = the shared
- *                        day spotlight)
- *   ToolLeaderboardRow — rank + tool + count + failures chip + sparkbar
- *   ModelCarouselCard  — one per-model card (name-hash color dot, in/out
- *                        split, calls, cost, provider micro line)
- *   KeyStatRow         — one API-key rollup row (providerId mono, slot,
- *                        requests/tokens/cost, last-used timeAgo)
- *   ProjectUsageRow    — one project row + the inline sessions accordion
- *                        (the R115-h Yoga-safe pattern, copied)
+ *   PeriodSegmentedControl — the ONE self-sized 14d/30d/3mo selector (§2.1:
+ *                          the tab-pill recipe at the chrome-tier label class —
+ *                          accentTint fill + 2px accentDeep border, TAB_SPRING)
+ *   StatGrid            — the headline stat block (§2.2: ONE ClayCard, 2×2
+ *                          composed cells / 4-across ≥768dp, 1px inset
+ *                          borderStrong dividers, TypeMicro kicker → TypeStat
+ *                          → optional caption)
+ *   ActivityGrid        — R118-C TOMBSTONE: zero call sites since the vertical
+ *                          rewrite (the chart owns the day buckets); kept for
+ *                          export stability.
+ *   ToolLeaderboardRow  — rank + tool + count + failures chip + sparkbar
+ *   ModelLegendRow      — one ranked model row (the donut card's list half)
+ *   KeyStatRow          — one API-key rollup row
+ *   ProjectUsageRow     — one project row + the inline sessions accordion in
+ *                          the recessed well (§2.6's anatomy + §2.7's motion)
  *
  * THE COLOR CONTRACT (round-116 §1.6): every MODEL surface here resolves its
  * color through modelColor(model.name, isDark) — the PC's 12-hue name-hash
- * palette port (src/design/model-colors.ts). CHART_HUES stays the chart
- * bars' semantic family; model hue IDENTITY is the data encoding.
+ * palette port (src/design/model-colors.ts). CHART_HUES stays the chart bars'
+ * semantic family; model hue IDENTITY is the data encoding.
  *
- * The pure number/date formatters (formatTokens/formatUsd/formatCount/
- * shortDate/formatClock) moved HERE from dashboard.tsx so both modules share
- * one spelling — exported for the future pure-logic suites.
+ * THE MOTION SPLIT (§2.7, R118-C): expansion rides DISCLOSURE_SPRING {180,24}
+ * — ζ 0.894, one soft settle; COLLAPSE rides withTiming 200ms ease-out + a
+ * 150ms opacity fade — a timing curve cannot overshoot, so closing never
+ * bounces. Reduced motion snaps. The chevron follows the same split.
+ *
+ * The pure number/date/status formatters (formatTokens/formatUsd/formatCount/
+ * shortDate/formatClock/timeAgoFromIso/sessionStatusBadge/
+ * sessionLastActivityIso/PERIOD_OPTIONS/localDateString) moved to
+ * usage-format.ts (pure, zero RN imports, jest-pinned) — RE-EXPORTED below so
+ * every existing `@/components/usage-cards` import path keeps working.
  */
 
-import { useEffect, useMemo } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Pressable, StyleSheet, View, type LayoutChangeEvent } from "react-native";
-import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withSpring } from "react-native-reanimated";
+import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
 import { ChevronDown } from "lucide-react-native";
-import type { LucideIcon } from "lucide-react-native";
-import { timeAgo } from "@/components/host-card";
 import { LetterAvatar } from "@/components/letter-avatar";
 import {
   Badge,
   ClayCard,
+  Hairline,
   PressableCard,
   TypeBodyStrong,
   TypeCaption,
@@ -46,77 +61,57 @@ import {
   TypeMono,
   TypeStat,
 } from "@/design/primitives";
+import { DONUT_DIM_OPACITY } from "@/components/chart-donut";
 import { modelColor } from "@/design/model-colors";
-import { SPRING } from "@/design/motion";
+import {
+  DISCLOSURE_COLLAPSE_MS,
+  DISCLOSURE_FADE_MS,
+  DISCLOSURE_SPRING,
+  TAB_SPRING,
+} from "@/design/motion";
 import { useTheme } from "@/design/theme";
-import { fontFamily, mixHex, RADIUS_INPUT, spacing } from "@/design/tokens";
+import {
+  fontFamily,
+  mixHex,
+  RADIUS_INPUT,
+  SEGMENT_INSET,
+  SEGMENT_TRACK_H,
+  spacing,
+  TYPE_CAPTION,
+} from "@/design/tokens";
 import type { DetailedUsageProject, DetailedUsageSession, UsageStatsModel } from "@/features/config";
-import { sessionStatusLabel, sessionStatusTone, type SessionStatus } from "@/features/sessions";
+import {
+  formatCount,
+  formatTokens,
+  formatUsd,
+  PERIOD_OPTIONS,
+  sessionLastActivityIso,
+  sessionStatusBadge,
+  shortDate,
+  timeAgoFromIso,
+  type PeriodKey,
+} from "@/components/usage-format";
 
 // ── the pure helpers (one spelling, shared with the dashboard screen) ───────
 
-/** 999 → "999" · 1234 → "1.2k" · 3_400_000 → "3.4M" · 2_100_000_000 → "2.1B". */
-export function formatTokens(value: number): string {
-  if (!Number.isFinite(value)) return "—";
-  const abs = Math.abs(value);
-  if (abs < 1000) return String(Math.round(value));
-  const units: ReadonlyArray<readonly [number, string]> = [
-    [1_000_000_000, "B"],
-    [1_000_000, "M"],
-    [1_000, "k"],
-  ];
-  for (const [size, suffix] of units) {
-    if (abs >= size) {
-      const scaled = value / size;
-      const text =
-        Math.abs(scaled) >= 100 ? String(Math.round(scaled)) : String(Math.round(scaled * 10) / 10);
-      return `${text}${suffix}`;
-    }
-  }
-  return String(value);
-}
-
-/** "$0.0000" for dust → "$0.500" → "$1.23" — 2 decimals once it matters, 4 when it doesn't. */
-export function formatUsd(value: number): string {
-  if (!Number.isFinite(value)) return "—";
-  const abs = Math.abs(value);
-  if (abs === 0) return "$0.00";
-  if (abs >= 1) return `$${value.toFixed(2)}`;
-  if (abs >= 0.01) return `$${value.toFixed(3)}`;
-  return `$${value.toFixed(4)}`;
-}
-
-/** 1234 → "1,234" (deterministic en-US grouping). */
-export function formatCount(value: number): string {
-  if (!Number.isFinite(value)) return "—";
-  return Math.round(value).toLocaleString("en-US");
-}
-
-/** "2026-09-01" → "Sep 1" — parsed calendar-LOCAL, never timezone-shifted. */
-export function shortDate(date: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(date);
-  if (m !== null) {
-    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    });
-  }
-  const t = new Date(date).getTime();
-  return Number.isNaN(t) ? date : new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-/** ISO → "3:42 PM" (the generated-at footer's clock). */
-export function formatClock(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return iso;
-  return new Date(t).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-}
-
-/** ISO → "5m ago" / "3d ago" (host-card's shared timeAgo vocabulary). */
-export function timeAgoFromIso(iso: string): string {
-  const t = Date.parse(iso);
-  return Number.isNaN(t) ? iso : timeAgo(t);
-}
+export {
+  formatClock,
+  formatCount,
+  formatTokens,
+  formatUsd,
+  localDateString,
+  PERIOD_OPTIONS,
+  sessionLastActivityIso,
+  sessionStatusBadge,
+  shortDate,
+  timeAgoFromIso,
+} from "./usage-format";
+export type {
+  PeriodKey,
+  PeriodOption,
+  SessionBadgeTone,
+  SessionStatusBadge,
+} from "./usage-format";
 
 // ── the shared day row (the chart's, the grid's, the detail line's) ─────────
 
@@ -133,66 +128,200 @@ export interface UsageDayRow {
   costUsd: number | null;
 }
 
-/** The carousels' shared snap grammar: card width + this gutter = the snap interval. */
-export const CAROUSEL_GUTTER = spacing.md;
-
-// ── the stat carousel card ──────────────────────────────────────────────────
+// ── the period selector (§2.1) ──────────────────────────────────────────────
 
 /**
- * One overview-carousel card — the old 2×2 hero tile's carousel grammar: the
- * icon chip (R117-g2 §2.3: 30px r10, the accentTint fill — the hue rides
- * the glyph as today), the headline number at TYPE_STAT (28 mono-medium,
- * −0.5 tracking — the screen's numbers finally have a scale), and ONE
- * caption line that carries the honesty scope ("last 14 days" / "all time").
+ * THE PERIOD SELECTOR — ONE self-sized 3-segment control (leading, never a
+ * wrapping row of three buttons). Geometry = the shared SegmentedControl
+ * grammar (track 52 / r26 / inset 4) but the INDICATOR is the tab-pill
+ * recipe, not the primitive's accentDeep fill: accentTint fill + a 2px
+ * accentDeep border (r22), gliding on TAB_SPRING. The labels are pinned at
+ * the chrome tier — 12.5/700 accentDeep selected, 12.5/600 textSecondary
+ * unselected — which is why this is a LOCAL control (the shared
+ * SegmentedControl primitive's labels are the text tier, accentText 15/700
+ * on a filled pill). Segments self-size to their label (no flex:1), the
+ * track wraps them, and the testIDs stay `dashboard-window-14d/30d/3mo`.
  */
-export function StatCarouselCard({
-  label,
-  value,
-  caption,
-  icon: Icon,
-  hue,
-  width,
+export function PeriodSegmentedControl({
+  selected,
+  onSelect,
+}: {
+  selected: PeriodKey;
+  onSelect: (key: PeriodKey) => void;
+}) {
+  const { tokens } = useTheme();
+  const reduced = useReducedMotion();
+  /** Each segment's measured x/width inside the track (the indicator's pose). */
+  const [segmentLayout, setSegmentLayout] = useState<Partial<Record<PeriodKey, { x: number; width: number }>>>({});
+  const indicatorX = useSharedValue(-1);
+  const indicatorWidth = useSharedValue(0);
+  /** False until the first pose lands — the mount pose snaps, never springs. */
+  const primed = useRef(false);
+
+  const activeLayout = segmentLayout[selected];
+
+  useEffect(() => {
+    if (activeLayout === undefined) return;
+    if (!primed.current) {
+      // The mount pose: appear exactly on the selected segment, no slide-in.
+      primed.current = true;
+      indicatorX.value = activeLayout.x;
+      indicatorWidth.value = activeLayout.width;
+      return;
+    }
+    if (reduced) {
+      indicatorX.value = activeLayout.x;
+      indicatorWidth.value = activeLayout.width;
+      return;
+    }
+    indicatorX.value = withSpring(activeLayout.x, TAB_SPRING);
+    // The labels are all ≤4 chars — the width deltas are sub-pixel; snap it.
+    indicatorWidth.value = activeLayout.width;
+  }, [activeLayout, reduced, indicatorX, indicatorWidth]);
+
+  const indicatorStyle = useAnimatedStyle(() => ({
+    width: indicatorWidth.value,
+    transform: [{ translateX: indicatorX.value }],
+  }));
+
+  return (
+    <View
+      style={[
+        styles.periodTrack,
+        {
+          alignSelf: "flex-start",
+          backgroundColor: tokens.surfaceWell,
+          borderColor: tokens.clayRim,
+        },
+      ]}
+    >
+      {activeLayout !== undefined ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.periodIndicator,
+            { backgroundColor: tokens.accentTint, borderColor: tokens.accentDeep },
+            indicatorStyle,
+          ]}
+        />
+      ) : null}
+      {PERIOD_OPTIONS.map((option) => {
+        const isSelected = option.key === selected;
+        return (
+          <Pressable
+            key={option.key}
+            testID={`dashboard-window-${option.key}`}
+            accessibilityRole="button"
+            accessibilityLabel={option.accessibilityLabel}
+            accessibilityState={{ selected: isSelected }}
+            onPress={() => onSelect(option.key)}
+            onLayout={(event: LayoutChangeEvent) => {
+              const { x, width } = event.nativeEvent.layout;
+              setSegmentLayout((current) => {
+                const known = current[option.key];
+                if (known !== undefined && known.x === x && known.width === width) return current;
+                return { ...current, [option.key]: { x, width } };
+              });
+            }}
+            style={styles.periodSegment}
+          >
+            <Text
+              numberOfLines={1}
+              style={{
+                color: isSelected ? tokens.accentDeep : tokens.textSecondary,
+                fontSize: TYPE_CAPTION,
+                fontFamily: isSelected ? fontFamily.bold : fontFamily.semibold,
+                lineHeight: 16,
+              }}
+            >
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+// ── the headline stat block (§2.2) ──────────────────────────────────────────
+
+/** One StatGrid cell — kicker → value → optional one-line caption. */
+export interface StatGridCell {
+  key: string;
+  /** The uppercase TypeMicro kicker ("Tokens", "Cost", …). */
+  kicker: string;
+  /** The headline figure — formatTokens/formatUsd/formatCount's spelling. */
+  value: string;
+  /** The optional one-line TypeMicro caption (the cell's honesty scope). */
+  caption?: string;
+}
+
+/**
+ * THE STAT GRID — the screen's biggest numbers first: ONE ClayCard (the
+ * resting clay material: r20, clayShadow1, clayRim) carrying a composed
+ * grid — 2×2 on phones, 4-across ≥768dp — with the cells split by 1px inset
+ * dividers at borderStrong (the shared strong-divider spelling). Cell =
+ * TypeMicro kicker (uppercase 0.8 tertiary) → TypeStat value (28
+ * mono-medium, ink) → optional one-line TypeMicro caption; minHeight 88.
+ * No icon chips, no carousels — one window, one card, four numbers.
+ */
+export function StatGrid({
+  cells,
+  wide = false,
   testID,
 }: {
-  label: string;
-  value: string;
-  caption: string;
-  icon: LucideIcon;
-  hue: string;
-  width: number;
+  cells: ReadonlyArray<StatGridCell>;
+  /** ≥768dp: 4-across instead of the phone's 2×2. */
+  wide?: boolean;
+  /** The cell testIDs' prefix — `${testID}-${cell.key}`. */
   testID?: string;
 }) {
   const { tokens } = useTheme();
+  if (cells.length === 0) return null;
+  const columns = wide ? Math.min(4, cells.length) : 2;
+  const rows = Math.ceil(cells.length / columns);
+
   return (
-    <ClayCard testID={testID} style={{ width, minHeight: 128 }}>
-      <View style={styles.statPad}>
-        <View style={styles.statHead}>
-          <View
-            style={[styles.statChip, { backgroundColor: tokens.accentTint }]}
-            accessibilityLabel={`${label} indicator`}
-            accessibilityElementsHidden
-          >
-            <Icon size={15} color={hue} strokeWidth={2.2} />
-          </View>
-          <TypeMicro
-            numberOfLines={1}
-            style={[styles.statLabel, { color: tokens.textTertiary, fontFamily: fontFamily.bold }]}
-          >
-            {label}
-          </TypeMicro>
+    <ClayCard>
+      <View style={styles.statGridPad}>
+        <View style={styles.statGrid}>
+          {cells.map((cell, index) => {
+            const isLastRow = Math.floor(index / columns) === rows - 1;
+            const isLastColumn = (index + 1) % columns === 0 || index === cells.length - 1;
+            return (
+              <View
+                key={cell.key}
+                testID={testID !== undefined ? `${testID}-${cell.key}` : undefined}
+                accessibilityLabel={`${cell.kicker}: ${cell.value}${cell.caption !== undefined ? `, ${cell.caption}` : ""}`}
+                style={[
+                  styles.statCell,
+                  { width: `${100 / columns}%` },
+                  !isLastColumn ? { borderRightWidth: 1, borderRightColor: tokens.borderStrong } : null,
+                  !isLastRow ? { borderBottomWidth: 1, borderBottomColor: tokens.borderStrong } : null,
+                ]}
+              >
+                <TypeMicro
+                  numberOfLines={1}
+                  style={[styles.statKicker, { color: tokens.textTertiary }]}
+                >
+                  {cell.kicker}
+                </TypeMicro>
+                <TypeStat numberOfLines={1}>{cell.value}</TypeStat>
+                {cell.caption !== undefined ? (
+                  <TypeMicro numberOfLines={1} style={{ color: tokens.textSecondary }}>
+                    {cell.caption}
+                  </TypeMicro>
+                ) : null}
+              </View>
+            );
+          })}
         </View>
-        {/* The headline number — TYPE_STAT (R117-g2 §2.3): 28 mono-medium,
-            the display size on the mono face. */}
-        <TypeStat numberOfLines={1}>{value}</TypeStat>
-        <TypeMicro numberOfLines={1} style={{ color: tokens.textSecondary }}>
-          {caption}
-        </TypeMicro>
       </View>
     </ClayCard>
   );
 }
 
-// ── the GitHub-style activity grid ──────────────────────────────────────────
+// ── the GitHub-style activity grid (R118-C TOMBSTONE) ───────────────────────
 
 const GRID_GAP = 3;
 /** The intensity ladder's blend stops toward the accent (level 4 = accent). */
@@ -206,6 +335,10 @@ function dayOfWeek(date: string): number {
 }
 
 /**
+ * R118-C TOMBSTONE — zero call sites since the vertical-instrument redo
+ * (the daily chart owns the day buckets; a second surface over the same
+ * data was the §1 #5 duplication); kept for export stability.
+ *
  * The 7-row × N-week intensity grid over the window's own day buckets —
  * GitHub's grammar, the house's reading: the accent (the clay-est hue in
  * the palette) blended toward the card in four steps, empty days the subtle
@@ -366,58 +499,66 @@ export function ToolLeaderboardRow({
   );
 }
 
-// ── the models carousel card ────────────────────────────────────────────────
+// ── the model legend row (the donut card's list half, §2.4) ─────────────────
 
 /**
- * One per-model card — the name-hash color dot (the PC contract) + the full
- * model name + the in/out token split on two lines + calls · cost + the
- * provider micro line. Windowed (the stats response's own window — the
- * screen labels that honestly).
+ * One legend row — the R115-N fold of the old ModelRow: the NAME-HASH hue
+ * carries the row (dot 12 + the donut's own segment — the PC's color
+ * contract, R116-g), the head line reads model · share · tokens (mono,
+ * right-aligned tabular columns), and the cost·calls caption keeps the
+ * leaderboard's truth. Tapping spotlights that model's segment on the ring
+ * (the PC's MUTUAL highlight: this row + its arc at 1, everything else
+ * dimmed to DONUT_DIM_OPACITY); tapping it again clears. R118-C: rows carry
+ * 1px borderStrong dividers between them (the caller's Hairline strong) and
+ * the ranked list caps at 8 with the honest "+N more models" line.
  */
-export function ModelCarouselCard({
+export function ModelLegendRow({
   model,
-  width,
-  testID,
+  share,
+  rank,
+  highlighted,
+  dimmed,
+  onToggle,
 }: {
   model: UsageStatsModel;
-  width: number;
-  testID?: string;
+  share: number;
+  rank: number;
+  highlighted: boolean;
+  dimmed: boolean;
+  onToggle: () => void;
 }) {
   const { tokens } = useTheme();
   const hue = modelColor(model.model, tokens.isDark);
-  const provider =
-    model.providers.length > 1
-      ? `${model.providers[0]} +${model.providers.length - 1}`
-      : (model.providers[0] ?? "unknown provider");
+  const pct = Math.round(share * 100);
   return (
-    <ClayCard testID={testID} style={{ width, minHeight: 132 }}>
-      <View style={styles.modelCardPad}>
-        <View style={styles.modelCardHead}>
-          <View style={[styles.modelDot, { backgroundColor: hue }]} accessibilityElementsHidden />
-          <TypeMono numberOfLines={1} style={styles.modelCardName}>
-            {model.model}
-          </TypeMono>
-        </View>
-        <View style={styles.modelSplitRow}>
-          <TypeMicro style={styles.modelSplitLabel}>in</TypeMicro>
-          <TypeMono numberOfLines={1} style={styles.modelSplitValue}>
-            {formatTokens(model.inputTokens)}
-          </TypeMono>
-        </View>
-        <View style={styles.modelSplitRow}>
-          <TypeMicro style={styles.modelSplitLabel}>out</TypeMicro>
-          <TypeMono numberOfLines={1} style={styles.modelSplitValue}>
-            {formatTokens(model.outputTokens)}
-          </TypeMono>
-        </View>
-        <TypeMicro numberOfLines={1} style={[styles.modelCardMeta, { color: tokens.textTertiary }]}>
-          {`${formatCount(model.calls)} calls · ${formatUsd(model.costUsd)}`}
-        </TypeMicro>
-        <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-          {provider}
-        </TypeMicro>
+    <Pressable
+      testID={`dashboard-legend-${rank}`}
+      onPress={onToggle}
+      accessibilityRole="button"
+      accessibilityState={{ selected: highlighted }}
+      accessibilityLabel={`${model.model}: ${pct}% of tokens, ${formatTokens(model.tokens)} tokens, ${formatUsd(model.costUsd)}, ${formatCount(model.calls)} calls`}
+      style={({ pressed }) => [
+        styles.modelLegendRow,
+        {
+          backgroundColor: pressed ? tokens.subtleHover : "transparent",
+          opacity: dimmed ? DONUT_DIM_OPACITY : 1,
+        },
+      ]}
+    >
+      <View style={styles.modelHead}>
+        <View style={[styles.modelDot, { backgroundColor: hue }]} accessibilityElementsHidden />
+        <TypeMono numberOfLines={1} style={styles.modelName}>
+          {model.model}
+        </TypeMono>
+        <TypeMono numberOfLines={1} style={styles.legendPct}>{`${pct}%`}</TypeMono>
+        <TypeMono numberOfLines={1} style={styles.legendTokens}>
+          {formatTokens(model.tokens)}
+        </TypeMono>
       </View>
-    </ClayCard>
+      <TypeMicro numberOfLines={1} style={[styles.legendCaption, { color: tokens.textTertiary }]}>
+        {`${formatUsd(model.costUsd)} · ${formatCount(model.calls)} calls`}
+      </TypeMicro>
+    </Pressable>
   );
 }
 
@@ -472,36 +613,25 @@ export function KeyStatRow({
 /** How many sessions the expansion previews before the "+N more" line. */
 const PROJECT_SESSIONS_PREVIEW = 5;
 
-const KNOWN_SESSION_STATUSES: ReadonlySet<string> = new Set([
-  "queued",
-  "running",
-  "completed",
-  "failed",
-  "cancelled",
-]);
-
-/** The wire's status string → the honest owner label (unknowns pass raw). */
-function sessionStatusWord(status: string): string {
-  return KNOWN_SESSION_STATUSES.has(status) ? sessionStatusLabel(status as SessionStatus) : status;
-}
-
-function sessionBadgeTone(status: string): "success" | "warning" | "danger" | "neutral" {
-  return KNOWN_SESSION_STATUSES.has(status) ? sessionStatusTone(status as SessionStatus) : "neutral";
-}
-
 /** The honest drill-down title: the session's own title, else a short id caption. */
 function sessionRowTitle(session: DetailedUsageSession): string {
   const trimmed = session.title.trim();
   return trimmed !== "" ? trimmed : `Session ${session.id.slice(0, 12)}`;
 }
 
+/** The collapse's timing curve — ease-out, zero overshoot by construction. */
+const COLLAPSE_EASING = Easing.out(Easing.quad);
+
 /**
- * THE ACCORDION (R115-h's Yoga fix, copied from the projects screen):
- * height + opacity under the ONE house spring; the clip View carries
+ * THE ACCORDION (R115-h's Yoga fix + R118-C §2.7's motion split): height +
+ * opacity under DISCLOSURE_SPRING on EXPAND (ζ 0.894 — one soft settle, the
+ * bounce the owner likes as a whisper), and on COLLAPSE the height rides
+ * withTiming 200ms ease-out while the content fades over 150ms — a timing
+ * curve cannot overshoot, so closing never bounces. The clip View carries
  * overflow:hidden ONLY (a static height would race the animated value AND
  * make Yoga clamp the relative auto-height child to 0 — onLayout reported 0
  * forever); the measurement child is ABSOLUTE so it lays out at its NATURAL
- * height at any clip height. Reduced motion snaps instead of springing.
+ * height at any clip height. Reduced motion snaps instead of animating.
  */
 function UsageAccordion({ open, children }: { open: boolean; children: ReactNode }) {
   const reduced = useReducedMotion();
@@ -517,8 +647,13 @@ function UsageAccordion({ open, children }: { open: boolean; children: ReactNode
       opacity.value = open ? 1 : 0;
       return;
     }
-    height.value = withSpring(open ? contentHeight.value : 0, SPRING);
-    opacity.value = withSpring(open ? 1 : 0, SPRING);
+    if (open) {
+      height.value = withSpring(contentHeight.value, DISCLOSURE_SPRING);
+      opacity.value = withSpring(1, DISCLOSURE_SPRING);
+    } else {
+      height.value = withTiming(0, { duration: DISCLOSURE_COLLAPSE_MS, easing: COLLAPSE_EASING });
+      opacity.value = withTiming(0, { duration: DISCLOSURE_FADE_MS });
+    }
   }, [open, reduced, height, opacity, contentHeight]);
 
   const style = useAnimatedStyle(() => ({
@@ -530,10 +665,10 @@ function UsageAccordion({ open, children }: { open: boolean; children: ReactNode
     const measured = event.nativeEvent.layout.height;
     if (measured <= 0) return;
     contentHeight.value = measured;
-    // An OPEN panel whose content re-measured springs to the new height;
-    // a CLOSED one just records it for the next toggle.
+    // An OPEN panel whose content re-measured springs to the new height on
+    // the disclosure spring; a CLOSED one just records it for the next toggle.
     if (open) {
-      height.value = reduced ? measured : withSpring(measured, SPRING);
+      height.value = reduced ? measured : withSpring(measured, DISCLOSURE_SPRING);
     }
   };
 
@@ -548,24 +683,33 @@ function UsageAccordion({ open, children }: { open: boolean; children: ReactNode
   );
 }
 
-/** One session row inside the expansion: title + status badge, then the
- * model-dot · tokens · cost meta line (all one-line). */
+/**
+ * One session row inside the expansion (§2.6's anatomy): the 2-line tail
+ * title + the honest status badge (ONLY when the status says something —
+ * queued shows NOTHING), the model chip (name-hash dot + mono name, the
+ * owner's keep) with the last-activity timeAgo trailing, and the
+ * right-aligned mono tokens · cost pair. minHeight 56; the 1px
+ * borderStrong divider between rows is the well's (the caller's Hairline).
+ */
 function UsageSessionRow({ session }: { session: DetailedUsageSession }) {
   const { tokens } = useTheme();
   const sessionTokens = session.tokens.input + session.tokens.output;
   const title = sessionRowTitle(session);
+  const badge = sessionStatusBadge(session.status);
+  const activityIso = sessionLastActivityIso(session);
+  const activity = activityIso !== null ? timeAgoFromIso(activityIso) : null;
   return (
     <View
       style={styles.sessionRow}
-      accessibilityLabel={`Session ${title}, ${sessionStatusWord(session.status)}, ${formatTokens(sessionTokens)} tokens, ${formatUsd(session.costUsd)}`}
+      accessibilityLabel={`Session ${title}${badge !== null ? `, ${badge.label}` : ""}, ${formatTokens(sessionTokens)} tokens, ${formatUsd(session.costUsd)}${activity !== null ? `, ${activity}` : ""}`}
     >
       <View style={styles.sessionHead}>
-        <TypeBodyStrong numberOfLines={1} style={styles.sessionTitle}>
+        <TypeBodyStrong numberOfLines={2} style={styles.sessionTitle}>
           {title}
         </TypeBodyStrong>
-        <Badge tone={sessionBadgeTone(session.status)}>{sessionStatusWord(session.status)}</Badge>
+        {badge !== null ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
       </View>
-      <View style={styles.sessionMeta}>
+      <View style={styles.sessionMetaRow}>
         {session.model !== null ? (
           <>
             <View
@@ -575,15 +719,21 @@ function UsageSessionRow({ session }: { session: DetailedUsageSession }) {
             <TypeMono numberOfLines={1} style={styles.sessionModel}>
               {session.model}
             </TypeMono>
-            <TypeMicro numberOfLines={1} style={[styles.sessionMetaTail, { color: tokens.textTertiary }]}>
-              {` · ${formatTokens(sessionTokens)} tokens · ${formatUsd(session.costUsd)}`}
-            </TypeMicro>
           </>
-        ) : (
-          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-            {`${formatTokens(sessionTokens)} tokens · ${formatUsd(session.costUsd)}`}
+        ) : null}
+        {activity !== null ? (
+          <TypeMicro numberOfLines={1} style={[styles.sessionActivity, { color: tokens.textTertiary }]}>
+            {activity}
           </TypeMicro>
-        )}
+        ) : null}
+      </View>
+      <View style={styles.sessionNumbers}>
+        <TypeMono numberOfLines={1} style={[styles.sessionTokens, { color: tokens.textSecondary }]}>
+          {formatTokens(sessionTokens)}
+        </TypeMono>
+        <TypeMono numberOfLines={1} style={[styles.sessionCost, { color: tokens.text }]}>
+          {` · ${formatUsd(session.costUsd)}`}
+        </TypeMono>
       </View>
     </View>
   );
@@ -593,7 +743,11 @@ function UsageSessionRow({ session }: { session: DetailedUsageSession }) {
  * One project row — the LetterAvatar identity (never a bare colored dot,
  * donts #15), the name + sessions/tokens meta line, the all-time cost
  * trailing, and the chevron affordance. Tapping expands the inline sessions
- * well (top sessions newest-first, the server's own drill-down order).
+ * WELL (§2.6: the recessed surfaceWell container, RADIUS_INPUT, hairline
+ * clayRim, inset by marginHorizontal sm — top sessions newest-first, the
+ * server's own drill-down order) under a 1px borderStrong divider that
+ * separates the header from the well. The chevron rides §2.7's motion
+ * split: DISCLOSURE_SPRING out, the 200ms timing curve back.
  */
 export function ProjectUsageRow({
   project,
@@ -615,7 +769,11 @@ export function ProjectUsageRow({
       chevron.value = expanded ? 1 : 0;
       return;
     }
-    chevron.value = withSpring(expanded ? 1 : 0, SPRING);
+    if (expanded) {
+      chevron.value = withSpring(1, DISCLOSURE_SPRING);
+    } else {
+      chevron.value = withTiming(0, { duration: DISCLOSURE_COLLAPSE_MS, easing: COLLAPSE_EASING });
+    }
   }, [expanded, reduced, chevron]);
 
   const chevronStyle = useAnimatedStyle(() => ({
@@ -653,27 +811,40 @@ export function ProjectUsageRow({
         </Animated.View>
       </View>
 
-      {/* ── the inline sessions expansion (the projects-screen grammar) ── */}
+      {/* ── the inline sessions expansion (§2.6's recessed well) ── */}
       <UsageAccordion open={expanded}>
-        <View style={[styles.projectWell, { borderTopColor: tokens.borderSubtle }]}>
+        {/* The tier break between the project header and the well. */}
+        <Hairline strong />
+        <View
+          style={[
+            styles.projectWell,
+            { backgroundColor: tokens.surfaceWell, borderColor: tokens.clayRim },
+          ]}
+        >
           {visible.length === 0 ? (
             // R116-n — the single-line law (donts #31), the dashboard's
             // QuietLine spelling: the well's honest empty clamps.
-            <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary }}>
+            <TypeCaption numberOfLines={1} style={[styles.wellFootnote, { color: tokens.textTertiary }]}>
               no sessions recorded yet
             </TypeCaption>
           ) : (
-            visible.map((session) => <UsageSessionRow key={session.id} session={session} />)
+            visible.map((session, index) => (
+              <Fragment key={session.id}>
+                <UsageSessionRow session={session} />
+                {/* The 1px row divider — never after the last row. */}
+                {index < visible.length - 1 ? <Hairline strong /> : null}
+              </Fragment>
+            ))
           )}
           {hidden > 0 ? (
             // R116-n — the clamp the projects screen's own "+N more sessions"
             // row carries (one spelling of the idiom across the two wells).
-            <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+            <TypeMicro numberOfLines={1} style={[styles.wellFootnote, { color: tokens.textTertiary }]}>
               +{hidden} more sessions
             </TypeMicro>
           ) : null}
           {project.subagents.count > 0 ? (
-            <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+            <TypeMicro numberOfLines={1} style={[styles.wellFootnote, { color: tokens.textTertiary }]}>
               {`${project.subagents.count} sub-agent session${project.subagents.count === 1 ? "" : "s"}`}
             </TypeMicro>
           ) : null}
@@ -686,18 +857,37 @@ export function ProjectUsageRow({
 // ── styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  // The stat carousel card (R117-g2 §2.3: 128 min, the 30px r10 accentTint
-  // chip, the label one weight up at 700).
-  statPad: { padding: spacing.md, gap: spacing.xs },
-  statHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  statChip: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
+  // The period selector (§2.1): the shared track geometry (52/r26/inset 4)
+  // with self-sized segments carrying the 44px touch law.
+  periodTrack: {
+    height: SEGMENT_TRACK_H,
+    borderRadius: SEGMENT_TRACK_H / 2,
+    padding: SEGMENT_INSET,
+    flexDirection: "row",
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  periodSegment: {
+    minHeight: SEGMENT_TRACK_H - SEGMENT_INSET * 2,
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: spacing.lg,
   },
-  statLabel: { textTransform: "uppercase", letterSpacing: 0.8, flexShrink: 1 },
+  // The tab-pill indicator: accentTint fill + the 2px accentDeep border,
+  // radius 22 = the track's inner height halved.
+  periodIndicator: {
+    position: "absolute",
+    top: SEGMENT_INSET,
+    bottom: SEGMENT_INSET,
+    left: 0,
+    borderRadius: (SEGMENT_TRACK_H - SEGMENT_INSET * 2) / 2,
+    borderWidth: 2,
+  },
+  // The stat grid (§2.2): the card's md padding insets the dividers off the
+  // rim; cells pad md so the numbers breathe off the lines.
+  statGridPad: { padding: spacing.md },
+  statGrid: { flexDirection: "row", flexWrap: "wrap" },
+  statCell: { padding: spacing.md, minHeight: 88, gap: 3 },
+  statKicker: { textTransform: "uppercase", letterSpacing: 0.8 },
   // The activity grid.
   grid: { flexDirection: "row", gap: GRID_GAP },
   gridColumn: { flexDirection: "column", gap: GRID_GAP },
@@ -710,36 +900,51 @@ const styles = StyleSheet.create({
   toolCount: { flexShrink: 0, minWidth: 44, textAlign: "right" },
   toolTrack: { height: 4, borderRadius: 2, overflow: "hidden" },
   toolFill: { height: 4, borderRadius: 2 },
-  // The models carousel card.
-  modelCardPad: { padding: spacing.md, gap: 5 },
-  modelCardHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, minHeight: 26 },
-  modelCardName: { flex: 1 },
-  modelSplitRow: { flexDirection: "row", alignItems: "baseline", gap: spacing.sm },
-  modelSplitLabel: { width: 24, flexShrink: 0 },
-  modelSplitValue: { flexShrink: 1 },
-  modelCardMeta: { marginTop: spacing.xs },
+  // The model legend row (§2.4 — minHeight 44, the dot at 12).
+  modelLegendRow: {
+    minHeight: 44,
+    borderRadius: RADIUS_INPUT,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    gap: 2,
+    justifyContent: "center",
+  },
+  modelHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
+  modelName: { flex: 1 },
+  legendPct: { flexShrink: 0, minWidth: 44, textAlign: "right" },
+  legendTokens: { flexShrink: 0, minWidth: 56, textAlign: "right" },
+  // The caption aligns under the model NAME: dot width (12) + head gap (sm).
+  legendCaption: { paddingLeft: 12 + spacing.sm },
   // The key stat row.
   keyRow: { gap: 3, minHeight: 44, justifyContent: "center" },
   keyHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   keyProvider: { flex: 1 },
-  // The project row + the sessions well.
+  // The project row + the sessions well (§2.6).
   projectInner: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md },
   projectMain: { flex: 1, gap: 2 },
   projectCost: { flexShrink: 0, minWidth: 52, textAlign: "right" },
+  // The recessed well: surfaceWell fill + hairline clayRim + RADIUS_INPUT,
+  // inset by marginHorizontal sm; dividers own the rows' rhythm (gap 0).
   projectWell: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.md,
-    gap: spacing.sm,
+    marginHorizontal: spacing.sm,
+    borderRadius: RADIUS_INPUT,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: spacing.sm,
+    overflow: "hidden",
   },
-  sessionRow: { gap: 3, minHeight: 40, justifyContent: "center", borderRadius: RADIUS_INPUT, paddingHorizontal: spacing.xs },
-  sessionHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  sessionTitle: { flex: 1 },
-  sessionMeta: { flexDirection: "row", alignItems: "center", gap: 5, paddingLeft: spacing.xs },
-  sessionModelDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
+  wellFootnote: { paddingTop: spacing.sm },
+  // The session row anatomy (§2.6): minHeight 56, the 2-line title, the
+  // model chip + trailing timeAgo, the right-aligned mono pair.
+  sessionRow: { minHeight: 56, paddingVertical: spacing.sm, gap: 3 },
+  sessionHead: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+  sessionTitle: { flex: 1, lineHeight: 20 },
+  sessionMetaRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  sessionModelDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
   sessionModel: { flexShrink: 1, fontSize: 11 },
-  sessionMetaTail: { flexShrink: 1 },
+  sessionActivity: { flexShrink: 0, marginLeft: "auto" },
+  sessionNumbers: { flexDirection: "row", alignItems: "baseline", justifyContent: "flex-end" },
+  sessionTokens: { flexShrink: 0 },
+  sessionCost: { flexShrink: 0 },
   // The accordion (R115-h — overflow ONLY, no static height).
   accordionClip: { overflow: "hidden" },
   /** The ABSOLUTE measurement child — natural height at any clip height. */

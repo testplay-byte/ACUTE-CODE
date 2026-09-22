@@ -1,63 +1,51 @@
 /**
- * Dashboard v5 (R109-c; R113-e; R114-c; R115-N the donut round; R116-g —
- * the DYNAMIC redo) — the owner's "see the dashboard, the stats, the usage"
- * screen. Round-116 verdicts #27-#34: everything the owner asked for was
- * already on the wire — /usage/detailed serves totals, a tool leaderboard
- * with per-tool failures, per-model stats, API-key rollups, and
- * project→session drill-downs; this screen now calls it and renders it.
+ * Dashboard v6 (R118-C — the mobile-first vertical instrument) — the owner's
+ * "see the dashboard, the stats, the usage" screen. ONE vertical scroll, ZERO
+ * horizontal FlatLists (the R116 carousel mandate is superseded — every
+ * horizontal scroller on this screen was a defect: mixed-scope cards behind
+ * a swipe, a second surface for the models section, a duplicate of the
+ * chart's own day buckets).
  *
- * THE LOAD (features/config.ts, typed 1:1):
+ * THE LOAD (features/config.ts, typed 1:1 — the orchestration is untouched):
  *   window 14d/30d → fetchUsageSummary(14|30) + fetchUsageStats(1) alongside
  *                    (always — the models ring's own calendar window)
  *   window 3mo     → fetchUsageStats(3) — its series is daily, so it carries
  *                    the chart AND the ring
  *   every window   → fetchDetailedUsage(14|30|90) — the whole-history
- *                    drill-down (tools/keys/projects + the all-time counts);
- *                    its `days` param scopes ONLY its activity series, and
- *                    the screen reuses the PRIMARY window's day buckets for
- *                    the grid instead (one window, one truth)
+ *                    drill-down (tools/keys/projects)
  *
- * LAYOUT (top → bottom): the window chips, THE OVERVIEW CAROUSEL — a
- * horizontal snap FlatList of stat cards (Total/Input/Output tokens,
- * Requests, Tool calls, Cost, Projects, Sessions; big mono numbers, toned
- * icon chips; windowed cards carry the window label, whole-history cards
- * say "all time" — the honesty law), THE CHART — the hand-built
- * react-native-svg stacked bar chart (input terracotta / output sage, dashed
- * gridlines, the peak highlighted, tap a bar for its day), THE ACTIVITY GRID
- * — a GitHub-style 7-row × N-week intensity grid over the same day buckets
- * (the accent blended toward the card in four quartile steps; tap a cell
- * drives the SHARED day spotlight), MODELS — the donut + top-6 legend (the
- * PC's 12-hue NAME-HASH color contract, src/design/model-colors.ts) plus a
- * per-model carousel (in/out split, calls, cost, provider), TOOLS — the
- * whole-history leaderboard (rank + count + a failures chip only when a
- * tool actually failed + a proportional sparkbar; replaces the old Activity
- * table + Health blocks, round-116 #33), KEYS — the per-key rollups
- * (providerId mono, slot, requests/tokens/cost, last-used), PROJECTS — the
- * drill-down rows with the inline sessions accordion (the projects-screen
- * grammar), and the footer clock.
+ * THE STACK (top → bottom, §2.0): the PERIOD SELECTOR — one self-sized
+ * 14d/30d/3mo segmented control (the tab-pill recipe, TAB_SPRING glide) →
+ * THE STAT GRID — one ClayCard, 2×2 composed cells (4-across ≥768dp) split
+ * by 1px inset borderStrong dividers, all four numbers from the SELECTED
+ * window (Tokens in/out · Cost avg/day · Turns · Peak day) → THE DAILY
+ * CHART — the hand-built react-native-svg stacked bar chart (input
+ * terracotta / output sage, dashed gridlines, thin capped bars centered in
+ * their columns, weekday ticks + the "today" anchor in the 14-day window,
+ * tap a bar for its day) → MODELS — the R117 donut + the ranked list in ONE
+ * card (cap 8 + the honest "+N more models") → TOOLS → KEYS — the
+ * whole-history leaderboards with 1px row dividers → PROJECTS — the
+ * drill-down rows with the inline sessions well (the honest status law:
+ * queued shows NO badge) → the footer clock.
  *
- * MOTION (motion.md §4.6, kept from R115-N): the bars GROW from the baseline
- * on every data load — each column withTiming 350ms, staggered 12ms, keyed
- * on the dataset's identity — and the donut SWEEPS its arcs in (500ms). The
- * page's dynamism is INTERACTION (snap carousels, the tappable grid/chart,
- * the spring accordions), never looping decoration; reduced motion is
- * honored everywhere (snaps instead of springs).
+ * TABLET (≥768dp, §2.8): the body stack centers at maxWidth 840; the stats
+ * go 4-across; the chart + models pair side-by-side; tools + keys pair when
+ * keys exist; projects stay full width; the selector stays self-sized
+ * leading.
  *
- * The pure number helpers (formatTokens/formatUsd/formatCount/shortDate/
- * formatClock) live in components/usage-cards.tsx now — one spelling shared
- * with the section components.
+ * MOTION: the bars GROW from the baseline on every data load (withTiming
+ * 350ms, staggered 12ms, capped at 30 beats) and the donut SWEEPS its arcs
+ * in (500ms) — unchanged; the accordions ride the R118-C disclosure split
+ * (expand DISCLOSURE_SPRING {180,24}; collapse withTiming 200ms ease-out +
+ * 150ms fade — closing never bounces). Reduced motion snaps everywhere.
+ *
+ * The pure number/date/status helpers live in components/usage-format.ts
+ * (jest-pinned, zero RN imports), re-exported through usage-cards.tsx.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
-import {
-  FlatList,
-  Pressable,
-  RefreshControl,
-  StyleSheet,
-  View,
-  useWindowDimensions,
-} from "react-native";
+import { RefreshControl, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Svg, { G, Line, Rect } from "react-native-svg";
 import Animated, {
   Easing,
@@ -67,35 +55,25 @@ import Animated, {
   withDelay,
   withTiming,
 } from "react-native-reanimated";
-import {
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  Coins,
-  DollarSign,
-  Folder,
-  MessageSquare,
-  Wrench,
-  Zap,
-} from "lucide-react-native";
-import type { LucideIcon } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import {
-  ActivityGrid,
-  CAROUSEL_GUTTER,
   formatClock,
   formatCount,
   formatTokens,
   formatUsd,
   KeyStatRow,
-  ModelCarouselCard,
+  localDateString,
+  ModelLegendRow,
+  PeriodSegmentedControl,
   ProjectUsageRow,
   shortDate,
-  StatCarouselCard,
+  StatGrid,
   ToolLeaderboardRow,
+  type PeriodKey,
+  type StatGridCell,
   type UsageDayRow,
 } from "@/components/usage-cards";
 import {
-  DONUT_DIM_OPACITY,
   DonutChart,
   donutShares,
   shortModelName,
@@ -103,8 +81,8 @@ import {
 } from "@/components/chart-donut";
 import { ErrorState, LoadingState, SkeletonList } from "@/components/list-state";
 import {
-  Chip,
   ClayCard,
+  Hairline,
   SectionHeader,
   Skeleton,
   TypeCaption,
@@ -119,9 +97,10 @@ import { useTheme } from "@/design/theme";
 import {
   CHART_HUES,
   chartHue,
+  fontFamily,
   mixHex,
   RADIUS_CARD,
-  RADIUS_INPUT,
+  SEGMENT_TRACK_H,
   spacing,
 } from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
@@ -133,34 +112,23 @@ import {
   fetchUsageSummary,
   type DetailedUsage,
   type UsageStats,
-  type UsageStatsModel,
   type UsageSummary,
 } from "@/features/config";
 import { mobLog, mobWarn } from "@/lib/log";
 
-// ── the window selector ─────────────────────────────────────────────────────
-
-type WindowKey = "14d" | "30d" | "3mo";
-
-const WINDOWS: ReadonlyArray<{ key: WindowKey; label: string }> = [
-  { key: "14d", label: "14 days" },
-  { key: "30d", label: "30 days" },
-  { key: "3mo", label: "3 months" },
-];
+// ── the window selector's wiring ────────────────────────────────────────────
 
 /**
  * The detailed drill-down's `days` per window — the route validates 1–90, so
  * the 3-month window maps to 90 (the param scopes only that response's own
  * activity series; the whole-history sections are windowless by contract).
  */
-const DETAILED_DAYS: Record<WindowKey, number> = { "14d": 14, "30d": 30, "3mo": 90 };
+const DETAILED_DAYS: Record<PeriodKey, number> = { "14d": 14, "30d": 30, "3mo": 90 };
 
-/** The carousel card's share of the content column (the next card's edge peeks). */
-const CAROUSEL_CARD_FRACTION = 0.78;
-/** The carousel card's width ceiling — tablet-class screens don't balloon the cards. */
-const CAROUSEL_CARD_MAX = 312;
 /** The tool leaderboard's visible rows before the honest "+N more" line. */
 const TOOL_ROWS_CAP = 8;
+/** The model ranked list's visible rows before the honest "+N more" line (§2.4). */
+const MODEL_ROWS_CAP = 8;
 
 // ── the chart (react-native-svg, the only chart surface) ────────────────────
 
@@ -173,6 +141,16 @@ const CHART_CAP = 2;
  * instead of a 1.1-second crawl.
  */
 const CHART_STAGGER_CAP = 30;
+
+/** §2.3 — the weekday tick row's label vocabulary ("Mon"-style, calendar-LOCAL). */
+const WEEKDAY_LABELS: ReadonlyArray<string> = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** "2026-09-01" → "Mon" — parsed calendar-LOCAL, matching shortDate. */
+function localWeekday(date: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(date);
+  if (m === null) return "";
+  return WEEKDAY_LABELS[new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getDay()] ?? "";
+}
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
@@ -394,6 +372,7 @@ function UsageChart({
   selected,
   onSelect,
   dataKey,
+  showWeekdayTicks,
 }: {
   days: UsageDayRow[];
   width: number;
@@ -401,6 +380,8 @@ function UsageChart({
   onSelect: (index: number | null) => void;
   /** The dataset's identity — the bars' grow re-triggers whenever it changes. */
   dataKey: string;
+  /** §2.3 — the weekday tick row renders ONLY in the 14-day window. */
+  showWeekdayTicks: boolean;
 }) {
   const { tokens } = useTheme();
   const n = days.length;
@@ -417,8 +398,17 @@ function UsageChart({
   // The molded clay cap — the TOP segment's hue lightened toward the card.
   const capFillOut = mixHex(outHue, tokens.card, 0.45);
   const columnWidth = n > 0 ? width / n : width;
-  const gap = columnWidth > 12 ? 3 : columnWidth > 6 ? 2 : columnWidth > 3.5 ? 1 : 0;
+  // R118-C §2.3 — the thin capped bar: 62% of the column, never wider than
+  // 10px, never thinner than 1px, CENTERED in its column (the old
+  // fill-the-column bars were 18-19px chunks at 14 days).
+  const barWidth = Math.max(1, Math.min(columnWidth * 0.62, 10));
   const hasSplit = days.some((day) => day.inputTokens !== null && day.outputTokens !== null);
+  // §2.3 — the TODAY anchor: the bucket whose date is the device's own
+  // calendar day (the wire's series ends today; a stale dataset anchors
+  // nothing — honesty over assumption). Its tick reads "today" and its bar
+  // carries full emphasis.
+  const todayIso = localDateString();
+  const todayIndex = days.findIndex((day) => day.date === todayIso);
   // 3 quiet dashed gridlines (quarter marks) — the y-axis's honest scale.
   const gridFractions = [0.25, 0.5, 0.75];
   // R117-g2 §2.3 — the gridlines one step stronger than borderSubtle: the
@@ -466,11 +456,11 @@ function UsageChart({
           );
         })}
         {days.map((day, index) => {
-          const barWidth = Math.max(columnWidth - gap, 0.5);
-          const x = index * columnWidth + gap / 2;
+          const x = index * columnWidth + (columnWidth - barWidth) / 2;
           const isPeak = day.tokens === peakTokens && day.tokens > 0;
           const isSelected = selected === index;
-          const emphasis = isPeak || isSelected ? 1 : 0.72;
+          const isToday = index === todayIndex;
+          const emphasis = isPeak || isSelected || isToday ? 1 : 0.72;
           // The tap target — the full column, so thin bars stay tappable.
           const tapTarget = (
             <Rect
@@ -558,10 +548,41 @@ function UsageChart({
         })}
         <Line x1={0} y1={baselineY} x2={width} y2={baselineY} stroke={tokens.borderSubtle} strokeWidth={1} />
       </Svg>
-      <View style={styles.axisRow}>
-        <TypeMicro style={{ color: tokens.textTertiary }}>{n > 0 ? shortDate(days[0].date) : ""}</TypeMicro>
-        <TypeMicro style={{ color: tokens.textTertiary }}>{n > 1 ? shortDate(days[n - 1].date) : ""}</TypeMicro>
-      </View>
+      {showWeekdayTicks ? (
+        // §2.3 — the weekday tick row (the 14-day window only): a label on
+        // every 2nd column in the micro tier at 10, with the TODAY bucket
+        // anchored — "today" in accentDeep 10/700 (the last bucket by the
+        // wire's ends-today contract; a single unbreakable word may kiss its
+        // column's edge, which the chart card's padding absorbs).
+        <View style={styles.axisRow}>
+          {days.map((day, index) => {
+            const isToday = index === todayIndex;
+            if (index % 2 !== 0 && !isToday) {
+              return <View key={`${day.date}-${index}`} style={{ width: columnWidth }} />;
+            }
+            return (
+              <View key={`${day.date}-${index}`} style={{ width: columnWidth, alignItems: "center" }}>
+                <Text
+                  style={
+                    isToday
+                      ? [styles.tickToday, { color: tokens.accentDeep }]
+                      : [styles.tickWeekday, { color: tokens.textTertiary }]
+                  }
+                >
+                  {isToday ? "today" : localWeekday(day.date)}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+      ) : (
+        // The 30d/3mo windows keep the endpoint axis (their columns are too
+        // narrow for a tick every 2nd day to read).
+        <View style={styles.axisRow}>
+          <TypeMicro style={{ color: tokens.textTertiary }}>{n > 0 ? shortDate(days[0].date) : ""}</TypeMicro>
+          <TypeMicro style={{ color: tokens.textTertiary }}>{n > 1 ? shortDate(days[n - 1].date) : ""}</TypeMicro>
+        </View>
+      )}
     </View>
   );
 }
@@ -593,74 +614,15 @@ function QuietLine({ children }: { children: string }) {
   );
 }
 
-// ── the model legend (the leaderboard folded into the donut card) ───────────
-
-/**
- * One legend row — the R115-N fold of the old ModelRow: the NAME-HASH hue
- * carries the row (dot + the donut's own segment — the PC's color contract,
- * R116-g), the head line reads model · share · tokens (mono, right-aligned
- * tabular columns), and the cost·calls caption keeps the leaderboard's
- * truth. Tapping spotlights that model's segment on the ring (the PC's
- * MUTUAL highlight: this row + its arc at 1, everything else dimmed to
- * DONUT_DIM_OPACITY); tapping it again clears.
- */
-function ModelLegendRow({
-  model,
-  share,
-  rank,
-  highlighted,
-  dimmed,
-  onToggle,
-}: {
-  model: UsageStatsModel;
-  share: number;
-  rank: number;
-  highlighted: boolean;
-  dimmed: boolean;
-  onToggle: () => void;
-}) {
-  const { tokens } = useTheme();
-  const hue = modelColor(model.model, tokens.isDark);
-  const pct = Math.round(share * 100);
-  return (
-    <Pressable
-      testID={`dashboard-legend-${rank}`}
-      onPress={onToggle}
-      accessibilityRole="button"
-      accessibilityState={{ selected: highlighted }}
-      accessibilityLabel={`${model.model}: ${pct}% of tokens, ${formatTokens(model.tokens)} tokens, ${formatUsd(model.costUsd)}, ${formatCount(model.calls)} calls`}
-      style={({ pressed }) => [
-        styles.modelLegendRow,
-        {
-          backgroundColor: pressed ? tokens.subtleHover : "transparent",
-          opacity: dimmed ? DONUT_DIM_OPACITY : 1,
-        },
-      ]}
-    >
-      <View style={styles.modelHead}>
-        <View style={[styles.modelDot, { backgroundColor: hue }]} />
-        <TypeMono numberOfLines={1} style={styles.modelName}>
-          {model.model}
-        </TypeMono>
-        <TypeMono numberOfLines={1} style={styles.legendPct}>{`${pct}%`}</TypeMono>
-        <TypeMono numberOfLines={1} style={styles.legendTokens}>
-          {formatTokens(model.tokens)}
-        </TypeMono>
-      </View>
-      <TypeMicro numberOfLines={1} style={[styles.legendCaption, { color: tokens.textTertiary }]}>
-        {`${formatUsd(model.costUsd)} · ${formatCount(model.calls)} calls`}
-      </TypeMicro>
-    </Pressable>
-  );
-}
-
 // ── the loading skeleton ────────────────────────────────────────────────────
 
 function DashboardSkeleton() {
   return (
     <View style={styles.skeletonWrap}>
-      {/* Shaped like the content: the carousel's first card, the chart, rows. */}
-      <Skeleton style={styles.carouselSkeleton} />
+      {/* Shaped like the stack: the period selector, the 2×2 stat grid, the
+          chart card, then rows. */}
+      <Skeleton style={styles.selectorSkeleton} />
+      <Skeleton style={styles.statsSkeleton} />
       <Skeleton style={styles.chartSkeleton} />
       <SkeletonList rows={3} rowHeight={64} />
     </View>
@@ -669,23 +631,13 @@ function DashboardSkeleton() {
 
 // ── the screen ──────────────────────────────────────────────────────────────
 
-/** One overview-carousel card spec (the statCards memo's row). */
-interface StatCardSpec {
-  key: string;
-  label: string;
-  value: string;
-  caption: string;
-  icon: LucideIcon;
-  hue: string;
-}
-
 export default function DashboardScreen() {
   const { tokens } = useTheme();
   const { status } = useLink();
   const { width: windowWidth } = useWindowDimensions();
   const connected = status === "connected";
 
-  const [windowKey, setWindowKey] = useState<WindowKey>("14d");
+  const [windowKey, setWindowKey] = useState<PeriodKey>("14d");
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [stats, setStats] = useState<UsageStats | null>(null);
   /** True if the auxiliary stats(1) fetch failed — the quiet degradation flag. */
@@ -775,7 +727,7 @@ export default function DashboardScreen() {
           setStatsMissing(false);
           mobLog("dashboard", "model stats loaded", { models: statsOut.data.models.length });
         } else {
-          // The window itself is fine — leaderboard + carousel degrade quietly.
+          // The window itself is fine — leaderboard + ring degrade quietly.
           setStats(null);
           setStatsMissing(true);
           mobWarn("dashboard", "model stats unavailable", { status: statsOut.error.status, code: statsOut.error.code });
@@ -804,7 +756,7 @@ export default function DashboardScreen() {
   }, [status, load]);
 
   const selectWindow = useCallback(
-    (key: WindowKey) => {
+    (key: PeriodKey) => {
       if (key === windowKey) return;
       void selectionHaptic();
       setWindowKey(key);
@@ -889,12 +841,13 @@ export default function DashboardScreen() {
 
   // The FULL model ranking — the donut's honest denominator is every model
   // the stats carry (the PC passes them all too), so a share is of the
-  // window's tokens; the legend below folds the old top-6 leaderboard.
+  // window's tokens; the legend below caps at MODEL_ROWS_CAP (§2.4).
   const models = useMemo(() => {
     if (stats === null) return [];
     return [...stats.models].sort((a, b) => b.tokens - a.tokens);
   }, [stats]);
-  const topModels = useMemo(() => models.slice(0, 6), [models]);
+  const topModels = useMemo(() => models.slice(0, MODEL_ROWS_CAP), [models]);
+  const hiddenModels = Math.max(0, models.length - topModels.length);
   const modelShares = useMemo(() => donutShares(models.map((m) => m.tokens)), [models]);
   const totalModelTokens = models.reduce((sum, model) => sum + model.tokens, 0);
   const donutSegmentsInput = useMemo<DonutSegment[]>(
@@ -929,86 +882,36 @@ export default function DashboardScreen() {
     setHighlightedModel((current) => (current === index ? null : index));
   }, []);
 
-  // The overview carousel's cards (verdict #27): windowed totals from
-  // summary/stats as today; tool calls / projects / sessions are
-  // WHOLE-HISTORY counts from the detailed rollup — captioned "all time".
-  const windowLabel = `last ${WINDOWS.find((w) => w.key === windowKey)?.label ?? ""}`;
   // The models ride the stats response's own calendar window (stats(1) for
   // the 14d/30d chips — the R109-c contract), so the section says THAT.
   const modelsWindowLabel = windowKey === "3mo" ? "last 3 months" : "last month";
 
-  const statCards = useMemo<StatCardSpec[]>(() => {
-    const inHue = chartHue(CHART_HUES.input, tokens.isDark);
-    const outHue = chartHue(CHART_HUES.output, tokens.isDark);
-    const peakHue = chartHue(CHART_HUES.peak, tokens.isDark);
-    const detailedCount = (value: number): string => (detailed !== null ? formatCount(value) : "—");
+  // §2.2 — the stat grid's four cells, ALL from the selected window (the
+  // all-time counters leave the headline; the sections own them).
+  const statCells = useMemo<StatGridCell[]>(() => {
+    const dayCount = days.length > 0 ? days.length : 1;
     return [
       {
         key: "tokens",
-        label: "Total tokens",
+        kicker: "Tokens",
         value: formatTokens(totals.totalTokens),
-        caption: windowLabel,
-        icon: Coins,
-        hue: inHue,
-      },
-      {
-        key: "input",
-        label: "Input tokens",
-        value: formatTokens(totals.inputTokens),
-        caption: windowLabel,
-        icon: ArrowDownToLine,
-        hue: inHue,
-      },
-      {
-        key: "output",
-        label: "Output tokens",
-        value: formatTokens(totals.outputTokens),
-        caption: windowLabel,
-        icon: ArrowUpFromLine,
-        hue: outHue,
-      },
-      {
-        key: "requests",
-        label: "Requests",
-        value: formatCount(totals.requests),
-        caption: windowLabel,
-        icon: Zap,
-        hue: tokens.success,
-      },
-      {
-        key: "toolcalls",
-        label: "Tool calls",
-        value: detailedCount(detailed?.totals.toolCalls ?? 0),
-        caption: "all time",
-        icon: Wrench,
-        hue: tokens.warning,
+        caption: `${formatTokens(totals.inputTokens)} in / ${formatTokens(totals.outputTokens)} out`,
       },
       {
         key: "cost",
-        label: "Cost",
+        kicker: "Cost",
         value: formatUsd(totals.costUsd),
-        caption: windowLabel,
-        icon: DollarSign,
-        hue: tokens.warning,
+        caption: `${formatUsd(totals.costUsd / dayCount)} avg/day`,
       },
+      { key: "turns", kicker: "Turns", value: formatCount(totals.requests) },
       {
-        key: "projects",
-        label: "Projects",
-        value: detailedCount(detailed?.totals.projects ?? 0),
-        caption: "all time",
-        icon: Folder,
-        hue: peakHue,
-      },
-      {
-        key: "sessions",
-        label: "Sessions",
-        value: detailedCount(detailed?.totals.sessions ?? 0),
-        caption: "all time",
-        icon: MessageSquare,
-        hue: tokens.accent2,
+        key: "peak",
+        kicker: "Peak day",
+        value: formatTokens(totals.peak.tokens),
+        caption: totals.peak.date !== null ? `${shortDate(totals.peak.date)} · busiest` : undefined,
       },
     ];
-  }, [totals, detailed, windowLabel, tokens]);
+  }, [totals, days]);
 
   // The tool leaderboard (verdict #29) — detailed.tools is already count-desc
   // server-side; sorted defensively, capped, sparkbars scaled to its own max.
@@ -1047,34 +950,16 @@ export default function DashboardScreen() {
     setSelectedDay(peakIndex);
   }, [days]);
 
+  // ── the responsive geometry (§2.8: the tablet reflow) ──
+  const wide = windowWidth >= 768;
+  // The stack's own width — the scaffold's 16px gutters, capped at 840 on
+  // tablets (the centered instrument column).
+  const bodyWidth = Math.min(wide ? 840 : Number.POSITIVE_INFINITY, windowWidth - spacing.lg * 2);
   // The chart's responsive width: the window minus the screen gutters (the
-  // scaffold's own body padding) minus the chart card's own padding.
-  const gutter = spacing.lg;
-  const chartWidth = Math.max(120, Math.floor(windowWidth - gutter * 2 - spacing.md * 2));
-
-  // The carousels' shared snap grammar: fixed card width + gutter, the next
-  // card's edge peeking in the column, getItemLayout trivial (fixed width).
-  const carouselCardWidth = Math.min(
-    CAROUSEL_CARD_MAX,
-    Math.round((windowWidth - gutter * 2) * CAROUSEL_CARD_FRACTION),
-  );
-  const carouselSnap = carouselCardWidth + CAROUSEL_GUTTER;
-  const statItemLayout = useCallback(
-    (_data: ArrayLike<StatCardSpec> | null | undefined, index: number) => ({
-      length: carouselSnap,
-      offset: carouselSnap * index,
-      index,
-    }),
-    [carouselSnap],
-  );
-  const modelItemLayout = useCallback(
-    (_data: ArrayLike<UsageStatsModel> | null | undefined, index: number) => ({
-      length: carouselSnap,
-      offset: carouselSnap * index,
-      index,
-    }),
-    [carouselSnap],
-  );
+  // scaffold's own body padding) minus the chart card's own padding —
+  // HALVED when the chart pairs beside the models card on tablets.
+  const pairWidth = Math.floor((bodyWidth - spacing.lg) / 2);
+  const chartWidth = Math.max(120, Math.floor((wide ? pairWidth : bodyWidth) - spacing.md * 2));
 
   const refreshControl = (
     <RefreshControl
@@ -1094,6 +979,161 @@ export default function DashboardScreen() {
   const generatedAt =
     windowKey === "3mo" ? stats?.generatedAt : (summary?.generatedAt ?? stats?.generatedAt);
 
+  // ── the sections (composed once, then stacked or paired per §2.8) ──
+
+  const chartSection = (
+    <>
+      <SectionHeader>Daily tokens</SectionHeader>
+      {days.length === 0 ? (
+        <QuietLine>no usage recorded in this window yet</QuietLine>
+      ) : (
+        <ClayCard>
+          <View style={styles.chartPad}>
+            <UsageChart
+              days={days}
+              width={chartWidth}
+              selected={selectedDay}
+              onSelect={setSelectedDay}
+              dataKey={chartKey}
+              showWeekdayTicks={windowKey === "14d"}
+            />
+            <View style={styles.dayDetailWrap}>
+              {selectedDay !== null && selectedDay < days.length ? (
+                <DayDetailLine day={days[selectedDay]} />
+              ) : (
+                // R116-n — the single-line law (donts #31): the
+                // chart's own hint line gains the clamp too.
+                <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary }}>
+                  tap a day for its detail
+                </TypeCaption>
+              )}
+            </View>
+          </View>
+        </ClayCard>
+      )}
+    </>
+  );
+
+  const modelsSection = (
+    <>
+      <SectionHeader>{`Models · ${modelsWindowLabel}`}</SectionHeader>
+      {stats === null ? (
+        <QuietLine>
+          {statsMissing
+            ? "model stats unavailable — pull to retry"
+            : "no model usage in this window yet"}
+        </QuietLine>
+      ) : totalModelTokens === 0 ? (
+        <QuietLine>no model usage in this window yet</QuietLine>
+      ) : (
+        <ClayCard>
+          <View style={styles.donutPad}>
+            <View style={styles.donutRow}>
+              {/* R117-g2 §2.3: the track rides the mono-well class —
+                  mixHex(card,"#2A2018",0.06) light (monoBg's exact
+                  recipe), the honest recessed dark branch. */}
+              <DonutChart
+                testID="dashboard-donut"
+                segments={donutSegmentsInput}
+                dataKey={donutKey}
+                highlighted={highlightedModel}
+                trackColor={tokens.monoBg}
+                accessibilityLabel={`model usage donut — top model ${shortModelName(models[0].model)} at ${Math.round((modelShares[0] ?? 0) * 100)}% of tokens`}
+                center={
+                  <View style={styles.donutCenterWrap}>
+                    <TypeMono numberOfLines={1} style={styles.donutCenterName}>
+                      {shortModelName(models[0].model)}
+                    </TypeMono>
+                    <TypeTitle numberOfLines={1} style={styles.donutCenterPct}>
+                      {`${Math.round((modelShares[0] ?? 0) * 100)}%`}
+                    </TypeTitle>
+                  </View>
+                }
+              />
+            </View>
+            {/* The ranked list — §2.4's ONE-card fold: 1px borderStrong
+                dividers between rows, cap 8, the honest "+N more". */}
+            <View>
+              {topModels.map((model, index) => (
+                <Fragment key={model.model}>
+                  <ModelLegendRow
+                    model={model}
+                    share={modelShares[index] ?? 0}
+                    rank={index}
+                    highlighted={highlightedModel === index}
+                    dimmed={highlightedModel !== null && highlightedModel !== index}
+                    onToggle={() => toggleHighlight(index)}
+                  />
+                  {index < topModels.length - 1 ? <Hairline strong /> : null}
+                </Fragment>
+              ))}
+              {hiddenModels > 0 ? (
+                <TypeMicro numberOfLines={1} style={[styles.moreLine, { color: tokens.textTertiary }]}>
+                  +{hiddenModels} more models
+                </TypeMicro>
+              ) : null}
+            </View>
+          </View>
+        </ClayCard>
+      )}
+    </>
+  );
+
+  const toolsSection = (
+    <>
+      <SectionHeader>Tools · all time</SectionHeader>
+      {toolBoard === null ? (
+        <QuietLine>
+          {detailedMissing ? detailedUnavailableLine : "no tool calls recorded yet"}
+        </QuietLine>
+      ) : toolBoard.rows.length === 0 ? (
+        <QuietLine>no tool calls recorded yet</QuietLine>
+      ) : (
+        <ClayCard testID="dashboard-tools">
+          <View style={styles.rowsPad}>
+            {toolBoard.rows.map((row, index) => (
+              <Fragment key={row.tool}>
+                <ToolLeaderboardRow {...row} />
+                {index < toolBoard.rows.length - 1 ? <Hairline strong /> : null}
+              </Fragment>
+            ))}
+            {toolBoard.hidden > 0 ? (
+              // R116-n — the clamp the "+N more sessions" idiom carries
+              // everywhere else (one spelling).
+              <TypeMicro numberOfLines={1} style={[styles.moreLine, { color: tokens.textTertiary }]}>
+                +{toolBoard.hidden} more tools
+              </TypeMicro>
+            ) : null}
+          </View>
+        </ClayCard>
+      )}
+    </>
+  );
+
+  const keysSection =
+    detailed !== null && detailed.keys.length > 0 ? (
+      <>
+        <SectionHeader>Keys · all time</SectionHeader>
+        <ClayCard testID="dashboard-keys">
+          <View style={styles.rowsPad}>
+            {detailed.keys.map((key, index) => (
+              <Fragment key={`${key.providerId}-${key.keySlot}`}>
+                <KeyStatRow
+                  providerId={key.providerId}
+                  keySlot={key.keySlot}
+                  requests={key.requests}
+                  tokensTotal={key.inputTokens + key.outputTokens}
+                  costUsd={key.costUsd}
+                  lastUsedAt={key.lastUsedAt}
+                />
+                {index < detailed.keys.length - 1 ? <Hairline strong /> : null}
+              </Fragment>
+            ))}
+          </View>
+        </ClayCard>
+      </>
+    ) : null;
+
   return (
     <ScreenScaffold title="Dashboard" refreshControl={refreshControl} chrome={false}>
       {status === "unpaired" ? (
@@ -1110,20 +1150,12 @@ export default function DashboardScreen() {
           />
         )
       ) : (
-        <>
-          {/* ── the window selector ── */}
-          <View style={styles.windowRow}>
-            {WINDOWS.map((w) => (
-              <Chip
-                key={w.key}
-                testID={`dashboard-window-${w.key}`}
-                selected={windowKey === w.key}
-                onPress={() => selectWindow(w.key)}
-              >
-                {w.label}
-              </Chip>
-            ))}
-          </View>
+        // The body stack (§2.8): the scaffold's 12px intra-group beat carries
+        // inside this wrapper; tablets center the whole instrument at 840.
+        <View style={wide ? [styles.bodyStack, styles.tabletBody] : styles.bodyStack}>
+          {/* ── the period selector (§2.1) — ONE self-sized control, leading,
+              first element of the scroll body, NOT sticky ── */}
+          <PeriodSegmentedControl selected={windowKey} onSelect={selectWindow} />
 
           {loading && !primaryLoaded ? (
             <DashboardSkeleton />
@@ -1146,220 +1178,40 @@ export default function DashboardScreen() {
                 </TypeCaption>
               ) : null}
 
-              {/* ── the overview carousel (verdicts #27 + #34) — horizontal
-                  snap cards; windowed cards carry the window label, the
-                  whole-history counts say "all time" (the honesty law) ── */}
-              <FlatList
-                testID="dashboard-carousel"
-                horizontal
-                data={statCards}
-                keyExtractor={(item) => item.key}
-                renderItem={({ item }) => (
-                  <View style={{ marginRight: CAROUSEL_GUTTER }}>
-                    <StatCarouselCard
-                      testID={`dashboard-stat-${item.key}`}
-                      label={item.label}
-                      value={item.value}
-                      caption={item.caption}
-                      icon={item.icon}
-                      hue={item.hue}
-                      width={carouselCardWidth}
-                    />
-                  </View>
-                )}
-                getItemLayout={statItemLayout}
-                snapToInterval={carouselSnap}
-                decelerationRate="fast"
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ paddingRight: spacing.lg }}
-              />
+              {/* ── the headline stat block (§2.2) — one card, four windowed
+                  numbers, the biggest figure first ── */}
+              <StatGrid cells={statCells} wide={wide} testID="dashboard-stat" />
 
-              {/* ── the daily tokens chart (verdict #28 — kept) ── */}
-              <SectionHeader>Daily tokens</SectionHeader>
-              {days.length === 0 ? (
-                <QuietLine>no usage recorded in this window yet</QuietLine>
-              ) : (
-                <ClayCard>
-                  <View style={styles.chartPad}>
-                    <UsageChart
-                      days={days}
-                      width={chartWidth}
-                      selected={selectedDay}
-                      onSelect={setSelectedDay}
-                      dataKey={chartKey}
-                    />
-                    <View style={styles.dayDetailWrap}>
-                      {selectedDay !== null && selectedDay < days.length ? (
-                        <DayDetailLine day={days[selectedDay]} />
-                      ) : (
-                        // R116-n — the single-line law (donts #31): the
-                        // chart's own hint line gains the clamp too.
-                        <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary }}>
-                          tap a day for its detail
-                        </TypeCaption>
-                      )}
-                    </View>
-                  </View>
-                </ClayCard>
-              )}
-
-              {/* ── the GitHub-style activity grid (verdict #30) — the same
-                  day buckets, intensity by quartile; a tap drives the SHARED
-                  day spotlight (the chart's bar + both detail lines) ── */}
-              <SectionHeader>Activity</SectionHeader>
-              {days.length === 0 ? (
-                <QuietLine>no usage recorded in this window yet</QuietLine>
-              ) : (
-                <ClayCard>
-                  <View style={styles.chartPad}>
-                    <ActivityGrid
-                      days={days}
-                      width={chartWidth}
-                      selected={selectedDay}
-                      onSelect={setSelectedDay}
-                    />
-                    <View style={styles.dayDetailWrap}>
-                      {selectedDay !== null && selectedDay < days.length ? (
-                        <DayDetailLine day={days[selectedDay]} />
-                      ) : (
-                        // R116-n — the single-line law (donts #31), applied
-                        // to the grid's twin of the chart's hint line.
-                        <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary }}>
-                          tap a day for its detail
-                        </TypeCaption>
-                      )}
-                    </View>
-                  </View>
-                </ClayCard>
-              )}
-
-              {/* ── models (verdict #31) — the donut + legend (top 6) with the
-                  PC's name-hash colors, then the per-model carousel. The
-                  stats response's own calendar window is the honest label ── */}
-              <SectionHeader>{`Models · ${modelsWindowLabel}`}</SectionHeader>
-              {stats === null ? (
-                <QuietLine>
-                  {statsMissing
-                    ? "model stats unavailable — pull to retry"
-                    : "no model usage in this window yet"}
-                </QuietLine>
-              ) : totalModelTokens === 0 ? (
-                <QuietLine>no model usage in this window yet</QuietLine>
+              {/* ── the daily chart + the models (§2.3/§2.4) — stacked on
+                  phones, side-by-side columns ≥768dp ── */}
+              {wide ? (
+                <View style={styles.pairRow}>
+                  <View style={styles.pairCol}>{chartSection}</View>
+                  <View style={styles.pairCol}>{modelsSection}</View>
+                </View>
               ) : (
                 <>
-                  <ClayCard>
-                    <View style={styles.donutPad}>
-                      <View style={styles.donutRow}>
-                        {/* R117-g2 §2.3: the track rides the mono-well class —
-                            mixHex(card,"#2A2018",0.06) light (monoBg's exact
-                            recipe), the honest recessed dark branch. */}
-                        <DonutChart
-                          testID="dashboard-donut"
-                          segments={donutSegmentsInput}
-                          dataKey={donutKey}
-                          highlighted={highlightedModel}
-                          trackColor={tokens.monoBg}
-                          accessibilityLabel={`model usage donut — top model ${shortModelName(models[0].model)} at ${Math.round((modelShares[0] ?? 0) * 100)}% of tokens`}
-                          center={
-                            <View style={styles.donutCenterWrap}>
-                              <TypeMono numberOfLines={1} style={styles.donutCenterName}>
-                                {shortModelName(models[0].model)}
-                              </TypeMono>
-                              <TypeTitle numberOfLines={1} style={styles.donutCenterPct}>
-                                {`${Math.round((modelShares[0] ?? 0) * 100)}%`}
-                              </TypeTitle>
-                            </View>
-                          }
-                        />
-                      </View>
-                      <View style={styles.legendList}>
-                        {topModels.map((model, index) => (
-                          <ModelLegendRow
-                            key={model.model}
-                            model={model}
-                            share={modelShares[index] ?? 0}
-                            rank={index}
-                            highlighted={highlightedModel === index}
-                            dimmed={highlightedModel !== null && highlightedModel !== index}
-                            onToggle={() => toggleHighlight(index)}
-                          />
-                        ))}
-                      </View>
-                    </View>
-                  </ClayCard>
-                  <FlatList
-                    testID="dashboard-models-carousel"
-                    horizontal
-                    data={models}
-                    keyExtractor={(item) => item.model}
-                    renderItem={({ item }) => (
-                      <View style={{ marginRight: CAROUSEL_GUTTER }}>
-                        <ModelCarouselCard model={item} width={carouselCardWidth} />
-                      </View>
-                    )}
-                    getItemLayout={modelItemLayout}
-                    snapToInterval={carouselSnap}
-                    decelerationRate="fast"
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={{ paddingRight: spacing.lg }}
-                  />
+                  {chartSection}
+                  {modelsSection}
                 </>
               )}
 
-              {/* ── the tool leaderboard (verdict #29) — count + failures
-                  COMBINED per tool; replaces the old Activity table + Health
-                  (round-116 #33). Whole-history, labeled ── */}
-              <SectionHeader>Tools · all time</SectionHeader>
-              {toolBoard === null ? (
-                <QuietLine>
-                  {detailedMissing ? detailedUnavailableLine : "no tool calls recorded yet"}
-                </QuietLine>
-              ) : toolBoard.rows.length === 0 ? (
-                <QuietLine>no tool calls recorded yet</QuietLine>
+              {/* ── tools + keys (§2.5) — paired columns on tablets when the
+                  keys exist; tools stand alone otherwise ── */}
+              {wide && keysSection !== null ? (
+                <View style={styles.pairRow}>
+                  <View style={styles.pairCol}>{toolsSection}</View>
+                  <View style={styles.pairCol}>{keysSection}</View>
+                </View>
               ) : (
-                <ClayCard testID="dashboard-tools">
-                  <View style={styles.rowsPad}>
-                    {toolBoard.rows.map((row) => (
-                      <ToolLeaderboardRow key={row.tool} {...row} />
-                    ))}
-                    {toolBoard.hidden > 0 ? (
-                      // R116-n — the clamp the "+N more sessions" idiom
-                      // carries everywhere else (one spelling).
-                      <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-                        +{toolBoard.hidden} more tools
-                      </TypeMicro>
-                    ) : null}
-                  </View>
-                </ClayCard>
+                <>
+                  {toolsSection}
+                  {keysSection}
+                </>
               )}
 
-              {/* ── the API key stats (verdict #32) — whole-history rollups;
-                  providerIds stay mono (no extra providers roundtrip — the
-                  machine truth is the honest cheap read) ── */}
-              {detailed !== null && detailed.keys.length > 0 ? (
-                <>
-                  <SectionHeader>Keys · all time</SectionHeader>
-                  <ClayCard testID="dashboard-keys">
-                    <View style={styles.rowsPad}>
-                      {detailed.keys.map((key) => (
-                        <KeyStatRow
-                          key={`${key.providerId}-${key.keySlot}`}
-                          providerId={key.providerId}
-                          keySlot={key.keySlot}
-                          requests={key.requests}
-                          tokensTotal={key.inputTokens + key.outputTokens}
-                          costUsd={key.costUsd}
-                          lastUsedAt={key.lastUsedAt}
-                        />
-                      ))}
-                    </View>
-                  </ClayCard>
-                </>
-              ) : null}
-
-              {/* ── the projects drill-down (verdict #32) — whole-history
-                  rows; tap expands the inline sessions well (the
-                  projects-screen accordion grammar) ── */}
+              {/* ── the projects drill-down (§2.6) — whole-history rows; tap
+                  expands the inline sessions well; full width everywhere ── */}
               <SectionHeader>Projects · all time</SectionHeader>
               {detailed === null ? (
                 <QuietLine>
@@ -1388,14 +1240,19 @@ export default function DashboardScreen() {
               ) : null}
             </>
           )}
-        </>
+        </View>
       )}
     </ScreenScaffold>
   );
 }
 
 const styles = StyleSheet.create({
-  windowRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  // The body stack (§2.8): the 12px intra-group beat moves inside this
+  // wrapper; the tablet column centers at 840.
+  bodyStack: { gap: spacing.md },
+  tabletBody: { width: "100%", maxWidth: 840, alignSelf: "center" },
+  pairRow: { flexDirection: "row", gap: spacing.lg },
+  pairCol: { flex: 1, gap: spacing.md },
   softNotice: { paddingHorizontal: spacing.xs },
   scaleRow: {
     flexDirection: "row",
@@ -1410,38 +1267,29 @@ const styles = StyleSheet.create({
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   chartPad: { padding: spacing.md, gap: spacing.sm },
   axisRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: spacing.xs },
+  // §2.3 — the weekday tick row's label tier: the micro recipe at 10px.
+  tickWeekday: { fontSize: 10, fontFamily: fontFamily.semibold, lineHeight: 13, letterSpacing: 0.6 },
+  tickToday: { fontSize: 10, fontFamily: fontFamily.bold, lineHeight: 13, letterSpacing: 0.6 },
   dayDetailWrap: { paddingHorizontal: spacing.xs },
   emptyPad: { padding: spacing.lg, alignItems: "center" },
-  rowsPad: { padding: spacing.md, gap: spacing.sm },
+  rowsPad: { padding: spacing.md },
+  moreLine: { paddingTop: spacing.sm },
   projectsList: { gap: spacing.md },
-  // The donut + legend card (R115-N — the leaderboard folded in).
-  modelHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
-  modelDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
-  modelName: { flex: 1 },
+  // The donut + legend card (R115-N — the leaderboard folded in; R118-C:
+  // the dividers own the rows' rhythm).
   donutPad: { padding: spacing.md, gap: spacing.md },
   donutRow: { alignItems: "center" },
   donutCenterWrap: { alignItems: "center", maxWidth: 84 },
   donutCenterName: { textAlign: "center" },
   donutCenterPct: { textAlign: "center" },
-  legendList: { gap: spacing.xs },
-  modelLegendRow: {
-    minHeight: 44,
-    borderRadius: RADIUS_INPUT,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    gap: 2,
-    justifyContent: "center",
-  },
-  legendPct: { flexShrink: 0, minWidth: 44, textAlign: "right" },
-  legendTokens: { flexShrink: 0, minWidth: 56, textAlign: "right" },
-  // The caption aligns under the model NAME: dot width (10) + head gap (sm).
-  legendCaption: { paddingLeft: 10 + spacing.sm },
   footer: { textAlign: "center" },
-  // R117-g2 (AMENDMENT 5): the loading twin knits at the same 12 px beat the
-  // scaffold's bodyContent now carries (the skeleton forecasts the rhythm).
+  // R117-g2 (AMENDMENT 5): the loading twin knits at the same 12px beat the
+  // body stack carries (the skeleton forecasts the rhythm).
   skeletonWrap: { gap: spacing.md },
-  // R117-g2 §2.3: the carousel skeleton forecasts the stat card's new 128px
-  // body (the card grew for TYPE_STAT's 28px headline number).
-  carouselSkeleton: { height: 128, borderRadius: RADIUS_CARD },
+  // The selector skeleton — the 52px track, self-width, r26.
+  selectorSkeleton: { height: SEGMENT_TRACK_H, width: 176, borderRadius: SEGMENT_TRACK_H / 2 },
+  // The stat-grid skeleton — the 2×2 composed cells (two ~94px rows + the
+  // card's padding).
+  statsSkeleton: { height: 200, borderRadius: RADIUS_CARD },
   chartSkeleton: { height: CHART_HEIGHT + 96, borderRadius: RADIUS_CARD },
 });

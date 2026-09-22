@@ -1,7 +1,13 @@
 /**
  * Disclosure — the collapsed "optional" row (R115-D): a 44px-target row with
- * a label + ChevronRight, expanding its hidden content on the house spring
- * (chevron rotates 90° alongside — motion.md §3's accordion grammar).
+ * a label + ChevronRight, expanding its hidden content (chevron rotates 90°
+ * alongside — motion.md §3's accordion grammar).
+ *
+ * R118-C §2.7 — THE MOTION SPLIT: expansion rides DISCLOSURE_SPRING {180,24}
+ * (ζ 0.894 — one soft settle, the bounce the owner likes as a whisper);
+ * COLLAPSE rides withTiming 200ms ease-out on the height while the content
+ * fades over 150ms — a timing curve cannot overshoot, so closing never
+ * bounces. Reduced motion snaps.
  *
  * The height animation uses the R115-plan Yoga fix: the content is measured
  * by an ABSOLUTELY-POSITIONED child (top/left/right) inside the clipping
@@ -16,14 +22,19 @@ import { ChevronRight } from "lucide-react-native";
 import React, { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import Animated, {
+  Easing,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
   withSpring,
+  withTiming,
 } from "react-native-reanimated";
 import { useTheme } from "@/design/theme";
-import { SPRING } from "@/design/motion";
+import { DISCLOSURE_COLLAPSE_MS, DISCLOSURE_FADE_MS, DISCLOSURE_SPRING } from "@/design/motion";
 import { TOUCH_TARGET, spacing } from "@/design/tokens";
+
+/** The collapse's timing curve — ease-out, zero overshoot by construction. */
+const COLLAPSE_EASING = Easing.out(Easing.quad);
 
 export interface DisclosureProps {
   /** The row's label (text or a small node — the manual screen's mono value). */
@@ -50,10 +61,11 @@ export function Disclosure({
   const reduced = useReducedMotion();
   const chevron = useSharedValue(0);
   const height = useSharedValue(0);
+  const opacity = useSharedValue(0);
   const measured = useSharedValue(0);
   const [hasMeasured, setHasMeasured] = useState(false);
 
-  // The callbacks ride a ref — the spring effect runs once per open flip,
+  // The callbacks ride a ref — the motion effect runs once per open flip,
   // not per render identity.
   const toggleRef = useRef(onToggle);
   toggleRef.current = onToggle;
@@ -62,16 +74,30 @@ export function Disclosure({
     if (reduced) {
       chevron.value = open ? 1 : 0;
       height.value = open ? measured.value : 0;
+      opacity.value = open ? 1 : 0;
       return;
     }
-    chevron.value = withSpring(open ? 1 : 0, SPRING);
-    height.value = withSpring(open ? measured.value : 0, SPRING);
-  }, [open, reduced, chevron, height, measured]);
+    if (open) {
+      // §2.7 — the expand: the disclosure spring (one soft settle).
+      chevron.value = withSpring(1, DISCLOSURE_SPRING);
+      height.value = withSpring(measured.value, DISCLOSURE_SPRING);
+      opacity.value = withSpring(1, DISCLOSURE_SPRING);
+    } else {
+      // §2.7 — the collapse: timing cannot overshoot; the content fades
+      // slightly ahead of the height.
+      chevron.value = withTiming(0, { duration: DISCLOSURE_COLLAPSE_MS, easing: COLLAPSE_EASING });
+      height.value = withTiming(0, { duration: DISCLOSURE_COLLAPSE_MS, easing: COLLAPSE_EASING });
+      opacity.value = withTiming(0, { duration: DISCLOSURE_FADE_MS });
+    }
+  }, [open, reduced, chevron, height, opacity, measured]);
 
   const chevronStyle = useAnimatedStyle(() => ({
     transform: [{ rotate: `${chevron.value * 90}deg` }],
   }));
-  const clipStyle = useAnimatedStyle(() => ({ height: height.value }));
+  const clipStyle = useAnimatedStyle(() => ({
+    height: Math.max(0, height.value),
+    opacity: Math.max(0, opacity.value),
+  }));
 
   return (
     <View>
