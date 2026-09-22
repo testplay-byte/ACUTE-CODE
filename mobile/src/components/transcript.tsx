@@ -220,6 +220,23 @@ export function errorCardLines(
   if (raw === "") return { primary: message, secondary: null };
   return { primary: raw, secondary: message };
 }
+
+/** R119-review WARN — the card's ACCESSIBILITY label, capped for TalkBack.
+ * The body selection above is honest on screen (3-line clamp + expand), but
+ * the raw providerError can carry a 4000-char multiline JSON body — reading
+ * that verbatim through the screen reader is a wall in exactly the
+ * TokenHarbor case the raw line exists for. The label carries the code + the
+ * first ~120 chars of the primary + the "expand for the full details" cue;
+ * multiline bodies collapse to their first line before the cap. Pure +
+ * exported for the tests. */
+const ERROR_A11Y_CAP = 120;
+
+export function errorCardA11yLabel(code: string, primary: string): string {
+  const firstLine = primary.split("\n", 1)[0] ?? primary;
+  const clipped =
+    firstLine.length > ERROR_A11Y_CAP ? `${firstLine.slice(0, ERROR_A11Y_CAP)}…` : firstLine;
+  return `Error ${code}: ${clipped} — expand for the full details`;
+}
 /** R117-d2 — the sub-agent card's live accent rule + the copied-word flip's
  * quiet dwell (ms): the live caret's own 550ms rhythm and the PC's ~1.2s
  * "Copied" window, widened a beat for the smaller type. */
@@ -2162,7 +2179,7 @@ function ErrorCard({
   );
   return (
     <View
-      accessibilityLabel={`Error: ${primary}`}
+      accessibilityLabel={errorCardA11yLabel(code, primary)}
       style={[
         styles.toolCard,
         {

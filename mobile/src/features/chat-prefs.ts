@@ -17,7 +17,9 @@
  *   timestampsMode hidden → omit entirely;
  *                  hover  → on the phone (no hover) a subtle clock in each
  *                  message's meta line.
- *   toolActivity   detailed → full expandable tool cards;
+ *   toolActivity   detailed → the TurnBlock's full activity well (R119-A:
+ *                  thinking text + expandable tool ROWS inside the recessed
+ *                  well — the standalone expandable tool cards are retired);
  *                  compact → always-collapsed single-line tool rows;
  *                  hidden  → consecutive tool items fold into ONE quiet
  *                  meta line per turn ("· 6 tool calls").

@@ -39,7 +39,7 @@ jest.mock("@/link/runtime", () => ({ getLinkManager: () => ({}) }));
 jest.mock("@/components/markdown-text", () => ({ MarkdownText: () => null }));
 jest.mock("@/components/image-viewer", () => ({ ImageViewer: () => null }));
 
-import { errorCardLines } from "@/components/transcript";
+import { errorCardA11yLabel, errorCardLines } from "@/components/transcript";
 
 describe("the error card's body selection — errorCardLines (R119-P)", () => {
   it("a providerError present becomes the PRIMARY (the honest raw line) with the generic message demoted to the secondary", () => {
@@ -81,5 +81,29 @@ describe("the error card's body selection — errorCardLines (R119-P)", () => {
       primary: "raw provider text",
       secondary: "the generic line",
     });
+  });
+});
+
+describe("the error card's ACCESSIBILITY label — errorCardA11yLabel (R119-review)", () => {
+  it("a short primary rides the label whole, prefixed by the code, with the expand cue", () => {
+    expect(errorCardA11yLabel("PROVIDER_ERROR", "rate limited — try again")).toBe(
+      "Error PROVIDER_ERROR: rate limited — try again — expand for the full details",
+    );
+  });
+
+  it("a LONG raw provider body is capped at ~120 chars — the screen reader never reads the whole JSON wall", () => {
+    const wall = `${"region_blocked: API access from your region is not available. "}${"detail ".repeat(40)}`;
+    const label = errorCardA11yLabel("PROVIDER_ERROR", wall);
+    // 22 (code prefix) + 121 (cap + ellipsis) + 30 (expand cue) — bounded, not exact:
+    expect(label.length).toBeLessThan(180);
+    expect(label.startsWith("Error PROVIDER_ERROR: region_blocked")).toBe(true);
+    expect(label.endsWith("… — expand for the full details")).toBe(true);
+  });
+
+  it("a MULTILINE body collapses to its first line before the cap — TalkBack reads one line, not the JSON stack", () => {
+    const label = errorCardA11yLabel("PROVIDER_ERROR", "first line of the body\n{\n  \"error\": …4000 chars…\n}");
+    expect(label).toBe(
+      "Error PROVIDER_ERROR: first line of the body — expand for the full details",
+    );
   });
 });
