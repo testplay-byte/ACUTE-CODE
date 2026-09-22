@@ -74,6 +74,37 @@
  * a11y label appends the rung word; `deliveryVisualRung` is exported for
  * the tests. The assistant's live caret is now the SHARED LiveCaret
  * primitive (R118-B's extraction — reuse, never re-roll).
+ *
+ * ROUND-119 (R119-A — the §N center-section rethink): the owner's verdict —
+ * thinking / tool call / failed tool call "each get a proper card of
+ * itself, which makes the whole interface bad… everything looks ugly" —
+ * retires the per-narration card stack. ONE VISUAL TURN PER EXCHANGE now:
+ * the `TurnBlock` (below) wraps a turn's assistant/thinking/tool items in
+ * ONE clay container — the collapsible ACTIVITY RAIL above the text
+ * ("Thought for 8s · 3 actions ▾"; live: the breathing "Thinking…" / the
+ * running tool's verb — ONE line, never both cards), the recessed ACTIVITY
+ * WELL it expands (surfaceWell + the R118 strong-Hairline divider: the
+ * thinking text in the retired ThinkingBlock's own mono-dim voice with its
+ * 20-line settled cap + Show all, then the TOOL ROWS — one compact row per
+ * call, icon + verb + target + status, failed = the inline danger chip +
+ * the row's danger wash, tap to expand the retired cards' content logic
+ * (streaming write previews, +A/−B diff chips, terminal tails, output
+ * summaries) as the row's body), and the REPLY as the block's body (the
+ * retired AssistantBlock's meta line + MarkdownText + LiveCaret grammar;
+ * live text streams in place). The standalone ThinkingPlaceholder card,
+ * ThinkingBlock card, AssistantBlock, ToolCard and its Write/Terminal/
+ * Skill/Generic/Compact shells are RETIRED as list items — their content
+ * logic moved INSIDE the block (the dots/breath became the rail's live
+ * state; `thinkingPlaceholderVisible`'s honesty rules survive in the
+ * screen's synthetic marker, which the grouping consumes). The dispatch
+ * renders STANDALONE kinds only (user / approval / question / todo /
+ * subagent / image / meta / error / debug — the interactive + terminal
+ * surfaces, not narration); the grouping itself is features/turn-block.ts
+ * (pure: `orderDisplayItems`'s queued-after-turn law + `groupDisplayRows`'
+ * partition + `activitySummary`'s pinned strings). The toolActivity pref
+ * applies INSIDE the block: hidden = no tool rows + no rail unless the
+ * turn carries thinking text (the clean document); compact = one-line rows,
+ * no expansion; detailed = the full anatomy.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -93,7 +124,7 @@ import Animated, {
 import { BookOpenText, Check, ChevronDown, ChevronUp, CircleX, Copy, FileCode2, ImageIcon, RefreshCw, Square, SquareTerminal, Wrench } from "lucide-react-native";
 import { useTheme, useChatPrefs } from "@/design/theme";
 import { decisionHaptic, selectionHaptic, warningHaptic } from "@/design/haptics";
-import { Badge, FadeInUp, LiveCaret, Skeleton, TypeBody, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
+import { Badge, Hairline, LiveCaret, Skeleton, TypeBody, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
 import { MarkdownText } from "@/components/markdown-text";
 import { ImageViewer } from "@/components/image-viewer";
 import { getLinkManager } from "@/link/runtime";
@@ -107,12 +138,29 @@ import {
   toolActivityVisibility,
 } from "@/features/chat-prefs";
 import {
-  extractStringArg,
   extractWritePreview,
   READ_TOOLS,
   TERMINAL_TOOLS,
   WRITE_TOOLS,
 } from "@/features/streaming-args";
+import {
+  activitySummary,
+  genericOneLineSummary,
+  groupDisplayRows,
+  humanizeToolName,
+  orderDisplayItems,
+  readTargetSegment,
+  turnActivityFacts,
+  turnBlockA11yLabel,
+  turnReplyText,
+  turnThinkingText,
+  writeLineDiff,
+  writePath,
+  type DisplayRow,
+  type StandaloneTranscriptItem,
+  type ToolItem,
+  type TurnGroup,
+} from "@/features/turn-block";
 import {
   ENTRANCE_DELTA,
   SPRING,
@@ -220,7 +268,10 @@ export type QuestionAnswerFn = (
   sources: Array<"option" | "custom">,
 ) => Promise<boolean>;
 
-/** The plain (non-virtualized) list — small transcripts + tests. */
+/** The plain (non-virtualized) list — small transcripts + tests. R119-A: it
+ *  speaks the SAME grammar as the screen's FlatList — order (the queued
+ *  law) + group (the turn partition) + the row renderer — so both lists
+ *  can never disagree about the anatomy. */
 export function TranscriptList({
   items,
   onApprovalDecide,
@@ -236,12 +287,13 @@ export function TranscriptList({
   /** R117-d2 — the error card's Retry (the screen owns the re-send). */
   onRetryError?: () => void;
 }) {
+  const rows = groupDisplayRows(orderDisplayItems(items));
   return (
     <View style={styles.list} accessibilityLabel="Conversation transcript">
-      {items.map((item) => (
-        <TranscriptItemView
-          key={item.key}
-          item={item}
+      {rows.map((row) => (
+        <TranscriptRowView
+          key={row.key}
+          row={row}
           onApprovalDecide={onApprovalDecide}
           onAnswerQuestion={onAnswerQuestion}
           subagentLive={subagentLive}
@@ -252,7 +304,46 @@ export function TranscriptList({
   );
 }
 
-/** One row — exported for the session screen's inverted FlatList. */
+/** One rendered ROW — exported for the session screen's inverted FlatList
+ *  (R119-A: the list's data is the GROUPED stream — turn blocks + the
+ *  standalone cards; the row's key is the group's first item's key, so
+ *  recycling stays stable). */
+export function TranscriptRowView({
+  row,
+  onApprovalDecide,
+  onAnswerQuestion,
+  subagentLive,
+  onRetryError,
+}: {
+  row: DisplayRow;
+  onApprovalDecide?: (approvalId: string) => void;
+  onAnswerQuestion?: QuestionAnswerFn;
+  /** R117-d2 — the live sub-agent map (the SubAgentCard's live data source).
+   * Absent on a settled transcript (no live overlay) — the card renders its
+   * quiet settled shape. */
+  subagentLive?: Record<string, SubAgentLiveEntry>;
+  /** R117-d2 — the error card's Retry (zero-arg: the SCREEN binds the failed
+   * turn's user message before calling — the PC's own contract). */
+  onRetryError?: () => void;
+}) {
+  if (row.kind === "turn") {
+    return <TurnBlock group={row} />;
+  }
+  return (
+    <TranscriptItemView
+      item={row.item}
+      onApprovalDecide={onApprovalDecide}
+      onAnswerQuestion={onAnswerQuestion}
+      subagentLive={subagentLive}
+      onRetryError={onRetryError}
+    />
+  );
+}
+
+/** One STANDALONE item row — the interactive + terminal surfaces only
+ *  (R119-A: the assistant/thinking/tool kinds belong to the TurnBlock; the
+ *  narrowed prop type enforces it at compile time — a caller feeding an
+ *  ungrouped item simply cannot compile). */
 export function TranscriptItemView({
   item,
   onApprovalDecide,
@@ -260,7 +351,7 @@ export function TranscriptItemView({
   subagentLive,
   onRetryError,
 }: {
-  item: TranscriptItem;
+  item: StandaloneTranscriptItem;
   onApprovalDecide?: (approvalId: string) => void;
   onAnswerQuestion?: QuestionAnswerFn;
   /** R117-d2 — the live sub-agent map (the SubAgentCard's live data source).
@@ -282,10 +373,6 @@ export function TranscriptItemView({
           status={item.status}
         />
       );
-    case "assistant":
-      return <AssistantBlock item={item} />;
-    case "tool":
-      return <ToolCard item={item} />;
     case "approval":
       return <ApprovalMini item={item} onDecide={onApprovalDecide} />;
     case "question":
@@ -296,8 +383,6 @@ export function TranscriptItemView({
       return <SubAgentCard item={item} live={subagentLive?.[item.childSessionId]} />;
     case "image":
       return <ImageTile item={item} />;
-    case "thinking":
-      return <ThinkingPlaceholder model={item.model} />;
     case "meta":
       return <MetaLine text={item.text} />;
     case "error":
@@ -645,70 +730,90 @@ function UserImageThumb({ attachment }: { attachment: AttachmentView }) {
   );
 }
 
-// ── assistant (the document: meta line ABOVE, markdown, live caret) ─────────
-
-function AssistantBlock({ item }: { item: TranscriptItem & { kind: "assistant" } }) {
-  const { tokens } = useTheme();
-  // R114-d — the prefs: body text scales (mono/micro lines never do —
-  // they are the calibration marks); timestamps gate the meta clock.
-  const prefs = useChatPrefs();
-  const scale = textSizeScale(prefs.chatTextSize);
-  const clock = timestampsVisible(prefs.timestampsMode) ? messageClock(item.ts) : null;
-  const liveText =
-    item.live && item.chunks !== null ? item.chunks.join("") : null;
-  const settled = !item.live && item.content !== "" ? item.content : null;
-  // chat.md — the meta line rides ABOVE the FIRST CONTENT chunk and only
-  // when the turn has content (a thinking-only turn keeps its quiet card;
-  // the placeholder owned the model naming before the first delta).
-  const hasContent = (liveText !== null && liveText !== "") || settled !== null;
-
-  return (
-    <View style={styles.block} accessibilityLabel="Assistant message" testID="transcript-assistant">
-      {item.thinking !== null && item.thinking !== "" && (
-        <ThinkingBlock text={item.thinking} live={item.live} />
-      )}
-      {hasContent && (item.model !== null || clock !== null) && (
-        <TypeMono
-          numberOfLines={1}
-          style={{ color: tokens.textTertiary, fontSize: 10.5 }}
-          testID="transcript-assistant-meta"
-        >
-          {[item.model, clock].filter((part) => part !== null).join(" · ")}
-        </TypeMono>
-      )}
-      {liveText !== null && liveText !== "" ? (
-        <View style={styles.assistantLive}>
-          <MarkdownText content={liveText} textScale={scale} />
-          {/* R118-B — the shared LiveCaret (the private recipe's exact
-              extraction; reuse, never re-roll). */}
-          <LiveCaret color={tokens.accent} label="the agent is still writing" />
-        </View>
-      ) : settled !== null ? (
-        <MarkdownText content={settled} textScale={scale} />
-      ) : item.live ? (
-        <LiveCaret color={tokens.accent} label="the agent is still writing" />
-      ) : null}
-    </View>
-  );
-}
-
-// ── the THINKING PLACEHOLDER (the processing story, R115-J) ─────────────────
+// ── THE TURN BLOCK (R119-A — one visual turn per exchange) ──────────────────
 //
-// Sits exactly where the assistant message will appear while a live turn
-// streams with NO content yet: the three staggered StatusDot-grammar dots,
-// the word "Thinking", and the turn's resolved model in micro mono. The card
-// itself now BREATHES (opacity 0.85↔1, ~1.2s — calm, never attention-thrash)
-// and enters with the house fade-in-up the moment the turn starts; the first
-// real delta replaces it (the screen stops emitting the synthetic item —
-// that logic is untouched). With the header's breathing accent line (R115-I)
-// this card IS the processing story: no spinner anywhere.
+// The §N verdict's answer: a turn's assistant/thinking/tool items render as
+// ONE clay container —
+//   · the ACTIVITY RAIL, the collapsible head row above the text: collapsed
+//     it carries the ONE summary line ("Thought for 8s · 3 actions ▾", the
+//     pure `activitySummary`); live it carries the breathing "Thinking…"
+//     word (the retired placeholder's own dots + model micro-mono) or the
+//     RUNNING TOOL's verb ("Reading src/a.ts…") — one line, never the
+//     thinking card AND a tool card stacked;
+//   · the ACTIVITY WELL the rail expands: the recessed surfaceWell container
+//     (the usage-cards' own recipe: surfaceWell + hairline clayRim +
+//     RADIUS_INPUT) carrying the thinking text (the retired ThinkingBlock's
+//     mono-dim voice, its 20-line settled cap + Show all) over the R118
+//     strong-Hairline divider, then the TOOL ROWS — one compact row per
+//     call (icon + verb + target + status), the retired cards' content
+//     logic as each row's expandable body;
+//   · the REPLY as the block's body below the rail (the retired
+//     AssistantBlock's grammar: the meta line above the first content
+//     chunk, the MarkdownText, the shared LiveCaret while streaming).
+// The toolActivity pref applies INSIDE (hidden: no tool rows, the rail only
+// while thinking text exists — the clean document; compact: one-line rows,
+// no expansion; detailed: the full anatomy). The well's open state rides the
+// PC's own discipline (WorkingSection): live → open (the work streams into
+// view), the settle → collapse, a user's tap always wins.
 
-function ThinkingPlaceholder({ model }: { model: string | null }) {
+export function TurnBlock({ group }: { group: TurnGroup }) {
   const { tokens } = useTheme();
+  const prefs = useChatPrefs();
   const reduced = useReducedMotion();
+  const visibility = toolActivityVisibility(prefs.toolActivity);
+  // R114-d — the prefs: body text scales (mono/micro lines never do — they
+  // are the calibration marks); density shrinks the block's vertical
+  // padding; timestamps gate the meta clock.
+  const scale = textSizeScale(prefs.chatTextSize);
+
+  // ── the members (the group's items, split by role) ──────────────────────
+  const thinkingText = turnThinkingText(group.items);
+  const toolItems = group.items.filter((item): item is ToolItem => item.kind === "tool");
+  const assistantItems = group.items.filter(
+    (item): item is TranscriptItem & { kind: "assistant" } => item.kind === "assistant",
+  );
+
+  // ── the rail's facts + ONE summary line (pure — features/turn-block.ts) ──
+  const facts = turnActivityFacts(group, prefs.toolActivity);
+  const summary = activitySummary(facts);
+  const showToolRows = !visibility.hidden;
+  const wellHasContent = thinkingText !== null || (showToolRows && toolItems.length > 0);
+
+  // ── the body (the retired AssistantBlock's grammar, over the segments) ──
+  const textSegments = assistantItems.filter((seg) => {
+    const live = seg.live && seg.chunks !== null ? seg.chunks.join("") : "";
+    return live !== "" || (!seg.live && seg.content !== "");
+  });
+  const hasContent = textSegments.length > 0;
+  // chat.md — the meta line rides ABOVE the FIRST CONTENT chunk and only
+  // when the turn has content (a thinking-only turn keeps its quiet rail).
+  const firstContentTs = textSegments[0]?.ts ?? null;
+  const clock = timestampsVisible(prefs.timestampsMode) ? messageClock(firstContentTs) : null;
+
+  // ── the well's open state — the PC's discipline, verbatim in spirit:
+  // live → open, the settle → collapse, a user's tap wins (userTouched).
+  const [open, setOpen] = useState(group.live);
+  const userTouched = useRef(false);
+  const prevLive = useRef(group.live);
+  useEffect(() => {
+    if (!userTouched.current) {
+      if (group.live) setOpen(true);
+      else if (prevLive.current !== group.live) setOpen(false);
+    }
+    prevLive.current = group.live;
+  }, [group.live]);
+  const toggleWell = (): void => {
+    userTouched.current = true;
+    setOpen((value) => !value);
+  };
+
+  // ── the live rail's breath — the retired placeholder's own 0.85↔1 ~1.2s
+  // cycle, calm, only while the turn WORKS (once text streams, the shared
+  // LiveCaret owns the motion — never two breathing things for one state).
+  const railBreathes = group.live && !facts.writing;
   const breathe = useSharedValue(1);
   useEffect(() => {
-    if (reduced) {
+    if (!railBreathes || reduced) {
       breathe.value = 1;
       return;
     }
@@ -720,52 +825,162 @@ function ThinkingPlaceholder({ model }: { model: string | null }) {
       -1,
       false,
     );
-  }, [reduced, breathe]);
-  const breathing = useAnimatedStyle(() => ({ opacity: breathe.value }));
-  return (
-    <FadeInUp testID="transcript-thinking-placeholder">
-      <Animated.View style={breathing}>
-        <View
-          accessibilityLabel={
-            model !== null ? `The agent is thinking with ${model}` : "The agent is thinking"
-          }
-          style={[
-            styles.thinking,
-            {
-              borderColor: tokens.borderSubtle,
-              backgroundColor: tokens.monoBg,
-              borderTopColor: tokens.clayTopEdge,
-              boxShadow: tokens.clayShadowSm,
-            },
-          ]}
-        >
-          <View style={styles.thinkingDots}>
-            {[0, 1, 2].map((i) => (
-              <View key={i} style={styles.thinkingDotSlot}>
-                <ThinkingDot color={tokens.textTertiary} delay={i * 180} />
-              </View>
-            ))}
-            <TypeCaption style={{ color: tokens.textTertiary, marginLeft: spacing.xs }}>
-              Thinking
-            </TypeCaption>
-            {model !== null && (
-              // The spec's micro-mono model name (the calibration-mark voice the
-              // assistant cards' own meta line speaks — scaled never, tertiary
-              // always).
-              <TypeMono style={{ color: tokens.textTertiary, fontSize: 11 }}>
-                {`· ${model}`}
-              </TypeMono>
-            )}
-          </View>
+  }, [railBreathes, reduced, breathe]);
+  const railBreath = useAnimatedStyle(() => ({
+    opacity: Math.min(1, Math.max(0, breathe.value)),
+  }));
+
+  // The live rail's THINKING word carries the placeholder's full grammar —
+  // the three staggered dots + the word + the resolved model in micro mono
+  // (the calibration-mark voice the meta line speaks).
+  const railThinkingWord = group.live && facts.runningToolWord === null && !facts.writing;
+  const railInner = railThinkingWord ? (
+    <View style={styles.turnRailDots}>
+      {[0, 1, 2].map((i) => (
+        <View key={i} style={styles.thinkingDotSlot}>
+          <ThinkingDot color={tokens.textTertiary} delay={i * 180} />
         </View>
-      </Animated.View>
-    </FadeInUp>
+      ))}
+      <TypeCaption style={{ color: tokens.textTertiary, marginLeft: spacing.xs }} numberOfLines={1}>
+        {summary}
+      </TypeCaption>
+      {group.model !== null && (
+        <TypeMono style={{ color: tokens.textTertiary, fontSize: 11 }} numberOfLines={1}>
+          {`· ${group.model}`}
+        </TypeMono>
+      )}
+    </View>
+  ) : (
+    <TypeCaption style={{ color: tokens.textTertiary, flex: 1 }} numberOfLines={1}>
+      {summary}
+    </TypeCaption>
+  );
+  const railChevron = open ? (
+    <ChevronUp size={15} color={tokens.textTertiary} strokeWidth={2} />
+  ) : (
+    <ChevronDown size={15} color={tokens.textTertiary} strokeWidth={2} />
+  );
+  // The rail is a CONTROL only while the well has something to show; the
+  // pending state (dots, no content yet) is a state line, never a dead button.
+  const rail =
+    summary !== null ? (
+      wellHasContent ? (
+        <Pressable
+          accessibilityLabel={open ? "Hide the turn's activity" : "Show the turn's activity"}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: open }}
+          onPress={toggleWell}
+          style={styles.turnRail}
+        >
+          <Animated.View style={[styles.turnRailRow, railBreath]}>{railInner}</Animated.View>
+          {railChevron}
+        </Pressable>
+      ) : (
+        <View style={styles.turnRail}>
+          <Animated.View style={[styles.turnRailRow, railBreath]}>{railInner}</Animated.View>
+        </View>
+      )
+    ) : null;
+
+  return (
+    <View
+      accessibilityLabel={turnBlockA11yLabel({ ...facts, replyText: turnReplyText(group.items) })}
+      style={[
+        styles.turnBlock,
+        {
+          backgroundColor: tokens.card,
+          borderTopColor: tokens.clayTopEdge,
+          borderColor: tokens.borderSubtle,
+          boxShadow: tokens.clayShadowSm,
+          paddingVertical: densityVerticalPadding(prefs.chatDensity),
+        },
+      ]}
+      testID="transcript-turn-block"
+    >
+      {rail}
+      {wellHasContent && (
+        <Reveal open={open}>
+          <View
+            style={[styles.turnWell, { backgroundColor: tokens.surfaceWell, borderColor: tokens.clayRim }]}
+          >
+            {thinkingText !== null && <WellThinking text={thinkingText} live={group.live} />}
+            {thinkingText !== null && showToolRows && toolItems.length > 0 && <Hairline strong />}
+            {showToolRows &&
+              toolItems.map((item) => (
+                <ToolRow key={item.key} item={item} expandable={visibility.expandable} />
+              ))}
+          </View>
+        </Reveal>
+      )}
+      {hasContent && (group.model !== null || clock !== null) && (
+        <TypeMono
+          numberOfLines={1}
+          style={{ color: tokens.textTertiary, fontSize: 10.5 }}
+          testID="transcript-assistant-meta"
+        >
+          {[group.model, clock].filter((part) => part !== null).join(" · ")}
+        </TypeMono>
+      )}
+      {textSegments.map((seg, index) => {
+        const liveText = seg.live && seg.chunks !== null ? seg.chunks.join("") : "";
+        if (liveText !== "") {
+          const isLast = index === textSegments.length - 1;
+          return (
+            <View key={seg.key} style={styles.assistantLive}>
+              <MarkdownText content={liveText} textScale={scale} />
+              {/* R118-B — the shared LiveCaret (the private recipe's exact
+                  extraction; reuse, never re-roll). */}
+              {isLast && <LiveCaret color={tokens.accent} label="the agent is still writing" />}
+            </View>
+          );
+        }
+        return seg.content !== "" ? (
+          <MarkdownText key={seg.key} content={seg.content} textScale={scale} />
+        ) : null;
+      })}
+    </View>
   );
 }
 
-/** One pulsing dot of the placeholder — the StatusDot's calm 1.2s opacity
- * pulse (the house motion vocabulary), staggered per dot; reduced motion
- * snaps to a steady mid read (§5). */
+/**
+ * The well's thinking text — the retired ThinkingBlock's own body, moved
+ * inside (R116-m's settled cap 20 + the "Show all" affordance at the cap;
+ * live thinking never clamps — it IS the stream). The block-level rail owns
+ * the collapse; this is the TEXT alone.
+ */
+function WellThinking({ text, live }: { text: string; live: boolean }) {
+  const { tokens } = useTheme();
+  const [showAll, setShowAll] = useState(false);
+  const overCap = !live && text.split("\n").length > THINKING_SETTLED_CAP;
+  return (
+    <View style={{ gap: spacing.xs }}>
+      <TypeMono
+        style={{ color: tokens.textTertiary }}
+        numberOfLines={live ? undefined : showAll ? undefined : THINKING_SETTLED_CAP}
+      >
+        {text}
+      </TypeMono>
+      {overCap && (
+        <Pressable
+          accessibilityLabel={showAll ? "Show less of the agent's thinking" : "Show all of the agent's thinking"}
+          accessibilityRole="button"
+          onPress={() => setShowAll((value) => !value)}
+          style={styles.thinkingShowAll}
+          testID="thinking-show-all"
+        >
+          <TypeMicro style={{ color: tokens.accent }} numberOfLines={1}>
+            {showAll ? "Show less" : "Show all"}
+          </TypeMicro>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
+/** One pulsing dot of the live rail's thinking word — the StatusDot's calm
+ * 1.2s opacity pulse (the house motion vocabulary), staggered per dot;
+ *  reduced motion snaps to a steady mid read (§5). R119-A: the dots moved
+ *  from the retired ThinkingPlaceholder card INTO the rail's live state. */
 function ThinkingDot({ color, delay }: { color: string; delay: number }) {
   const reduced = useReducedMotion();
   const opacity = useSharedValue(0.35);
@@ -823,105 +1038,159 @@ function PulseDot({ color, size }: { color: string; size: number }) {
   );
 }
 
-// ── thinking (collapsible dim block, clay-styled) ───────────────────────────
+// ── the tool rows (R119-A — the retired cards' content logic, moved INSIDE
+// the TurnBlock's well) ──────────────────────────────────────────────────────
+//
+// ONE compact row per call: icon + verb + target + status (the head row the
+// cards always led with), the retired card families' content riding below —
+// the write family's streaming tail + "Wrote {file}" + +A/−B diff chips, the
+// terminal family's streamed output tail + exit summary, the read family's
+// quiet one-liner, the generic fallback's humanized verb + target. Tapping a
+// row expands its detail (args dump + output tail + output summary) while
+// toolActivity=detailed; compact pins every row to its one line; hidden never
+// renders the rows at all (the block's rail collapses with them).
+//
+// The failed call's tell stays the R116-m grammar: the inline danger chip on
+// the head row + the row's quiet danger wash (visible at a glance inside the
+// well); running = the small warning chip; success = NOTHING.
 
-function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
+function ToolRow({ item, expandable }: { item: ToolItem; expandable: boolean }) {
   const { tokens } = useTheme();
-  const [open, setOpen] = useState(live);
-  // R116-m — the settled cap raised 14 → 20 + the "Show all" affordance
-  // AT the cap (chat.md's amendment): a settled block longer than the cap
-  // clamps and offers the toggle; live thinking never clamps (it IS the
-  // stream). The toggle flips unlimited on/off — one affordance, both ways.
-  const [showAll, setShowAll] = useState(false);
-  const overCap = !live && text.split("\n").length > THINKING_SETTLED_CAP;
+  const [expanded, setExpanded] = useState(false);
+  const showDetails = expandable && expanded;
+  const failed = item.ok === false;
+  const running = item.ok === null;
+  const isWrite = WRITE_TOOLS.has(item.toolName);
+  const isTerminal = TERMINAL_TOOLS.has(item.toolName);
+  const isRead = READ_TOOLS.has(item.toolName);
+
+  // The head's ONE line — the families' existing grammar, moved from the
+  // retired cards: the write family keeps its "Writing {file}… · {n} chars"
+  // streaming verb and "Wrote {file}" settle; every other family carries the
+  // CompactToolRow's own one-line law, "verb · target".
+  const preview = extractWritePreview(item.inputRaw ?? "");
+  const path = writePath(item);
+  const streaming = running && isWrite && item.inputRaw !== null;
+  let title: string;
+  if (isWrite) {
+    const verbRunning = item.toolName === "write_file" ? "Writing" : "Editing";
+    const verbDone = item.toolName === "write_file" ? "Wrote" : "Edited";
+    title = running
+      ? path !== null
+        ? streaming
+          ? `${verbRunning} ${path}… · ${preview.chars.toLocaleString()} chars`
+          : `${verbRunning} ${path}…`
+        : `${verbRunning}…`
+      : path !== null
+        ? `${verbDone} ${path}`
+        : humanizeToolName(item.toolName);
+  } else {
+    const summary = isRead ? readTargetSegment(item) : genericOneLineSummary(item);
+    title =
+      summary !== null && summary !== ""
+        ? `${humanizeToolName(item.toolName)} · ${summary}`
+        : humanizeToolName(item.toolName);
+  }
+  const icon = isWrite ? (
+    <FileCode2 size={13} color={tokens.accent} strokeWidth={2.2} />
+  ) : isTerminal ? (
+    <SquareTerminal size={13} color={tokens.accent} strokeWidth={2.2} />
+  ) : isRead ? (
+    <BookOpenText size={13} color={tokens.accent2} strokeWidth={2.2} />
+  ) : (
+    <Wrench size={13} color={tokens.textSecondary} strokeWidth={2.2} />
+  );
+  // R116-m — the settled edit's +A/−B chips ride the head line (null while
+  // running, on failures, and for plain writes — the byte summary line below
+  // carries those stories honestly).
+  const diff = isWrite ? writeLineDiff(item) : null;
+  // The quiet content tail — the LAST 160 chars of what has arrived (the
+  // R58-c streamed-args preview: the head lives in the reducer's raw; the
+  // tail is what is being typed NOW).
+  const writeTail =
+    streaming && preview.content !== ""
+      ? preview.content.length > 160
+        ? `…${preview.content.slice(preview.content.length - 160)}`
+        : preview.content
+      : null;
+  // The terminal family's streamed output tail (tool-output frames; the
+  // persisted fold never carries one — live-only, exactly the old card).
+  const terminalTail = isTerminal && item.outputTail !== null && item.outputTail !== "" ? item.outputTail : null;
+
   return (
     <View
       style={[
-        styles.thinking,
-        {
-          borderColor: tokens.borderSubtle,
-          backgroundColor: tokens.monoBg,
-          borderTopColor: tokens.clayTopEdge,
-          boxShadow: tokens.clayShadowSm,
-        },
+        styles.turnToolRow,
+        // The failed row's quiet danger wash (donts #37's card-wide tint,
+        // translated to the row inside the well).
+        failed ? { backgroundColor: mixHex(tokens.surfaceWell, tokens.danger, 0.08) } : null,
       ]}
     >
-      <Pressable
-        accessibilityLabel={open ? "Hide the agent's thinking" : "Show the agent's thinking"}
-        accessibilityRole="button"
-        onPress={() => setOpen((value) => !value)}
-        style={styles.thinkingHead}
-      >
-        <TypeCaption style={{ color: tokens.textTertiary, flex: 1 }}>
-          {live ? "thinking…" : "thinking"}
-        </TypeCaption>
-        {open ? (
-          <ChevronUp size={TYPE_CAPTION + 5} color={tokens.textTertiary} strokeWidth={2} />
-        ) : (
-          <ChevronDown size={TYPE_CAPTION + 5} color={tokens.textTertiary} strokeWidth={2} />
-        )}
-      </Pressable>
-      <Reveal open={open}>
+      <ToolHeadRow
+        item={item}
+        icon={icon}
+        title={title}
+        expanded={showDetails}
+        expandable={expandable}
+        onToggle={expandable ? () => setExpanded((v) => !v) : undefined}
+        after={diff !== null ? <WriteDiffChips added={diff.added} removed={diff.removed} /> : undefined}
+      />
+      {writeTail !== null && (
         <TypeMono
-          style={{ color: tokens.textTertiary }}
-          numberOfLines={live ? undefined : showAll ? undefined : THINKING_SETTLED_CAP}
+          style={[
+            styles.terminalBlock,
+            {
+              color: tokens.textTertiary,
+              backgroundColor: tokens.monoBg,
+              borderColor: tokens.borderSubtle,
+            },
+          ]}
+          numberOfLines={3}
         >
-          {text}
+          {writeTail}
         </TypeMono>
-        {overCap && (
-          <Pressable
-            accessibilityLabel={showAll ? "Show less of the agent's thinking" : "Show all of the agent's thinking"}
-            accessibilityRole="button"
-            onPress={() => setShowAll((value) => !value)}
-            style={styles.thinkingShowAll}
-            testID="thinking-show-all"
-          >
-            <TypeMicro style={{ color: tokens.accent }} numberOfLines={1}>
-              {showAll ? "Show less" : "Show all"}
-            </TypeMicro>
-          </Pressable>
-        )}
-      </Reveal>
+      )}
+      {terminalTail !== null && (
+        <TypeMono
+          style={[
+            styles.terminalBlock,
+            {
+              color: tokens.textTertiary,
+              backgroundColor: tokens.monoBg,
+              borderColor: tokens.borderSubtle,
+            },
+          ]}
+          numberOfLines={showDetails ? undefined : 3}
+        >
+          {terminalTail}
+        </TypeMono>
+      )}
+      {!running && !isRead && item.outputSummary !== null && item.outputSummary !== "" && (
+        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={showDetails ? undefined : 1}>
+          {item.outputSummary}
+        </TypeMono>
+      )}
+      {showDetails && (
+        <Reveal open>
+          {!isTerminal && item.argsSummary !== "" && (
+            <TypeMono style={{ color: tokens.textSecondary }} numberOfLines={6}>
+              {item.argsSummary}
+            </TypeMono>
+          )}
+          {!isTerminal && !isWrite && item.outputTail !== null && item.outputTail !== "" && (
+            <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={8}>
+              {item.outputTail}
+            </TypeMono>
+          )}
+          {isRead && item.outputSummary !== null && item.outputSummary !== "" && (
+            <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={4}>
+              {item.outputSummary}
+            </TypeMono>
+          )}
+        </Reveal>
+      )}
     </View>
   );
-}
-
-// ── tool (the per-tool dispatcher — ONE line per state, R115-J) ─────────────
-//
-// chat.md's tool table, one presentation per family, the generic card as the
-// fallback for everything unknown:
-//   · write_file / edit_file → the WRITE card: the head line carries
-//     "Writing {file}… · {n} chars" while the args stream (the live tail
-//     preview below it — the tool-input-delta raw the reducer accumulates),
-//     "Wrote {file}" + the result summary once the call settles.
-//   · run_command / bash → the TERMINAL card: mono command line, the
-//     streamed tool-output tail as a quiet terminal block, status on result.
-//   · read_skill + the compact-read family → ONE slim quiet chip:
-//     "Read skill · {name}" + the status check — never the full view; the
-//     args dump renders ONLY on manual expand.
-// The collapsed discipline: every card renders ONE compact line when
-// collapsed; expand shows the details. chatDensity shrinks the vertical
-// padding; toolActivity=compact pins every card to a single collapsed line;
-// hidden folds the runs away entirely before the list renders (chat-prefs.ts).
-
-type ToolItem = TranscriptItem & { kind: "tool" };
-
-function ToolCard({ item }: { item: ToolItem }) {
-  const prefs = useChatPrefs();
-  const visibility = toolActivityVisibility(prefs.toolActivity);
-  if (visibility.collapsedRows) {
-    return <CompactToolRow item={item} />;
-  }
-  if (WRITE_TOOLS.has(item.toolName)) {
-    return <WriteCard item={item} expandable={visibility.expandable} />;
-  }
-  if (TERMINAL_TOOLS.has(item.toolName)) {
-    return <TerminalCard item={item} expandable={visibility.expandable} />;
-  }
-  if (READ_TOOLS.has(item.toolName)) {
-    return <SkillCard item={item} expandable={visibility.expandable} />;
-  }
-  return <GenericToolCard item={item} expandable={visibility.expandable} />;
 }
 
 /**
@@ -952,45 +1221,6 @@ function ToolStatusChip({ ok }: { ok: boolean | null }) {
   );
 }
 
-/** "run_command" → "run command" (the humanized name the rows lead with). */
-function humanizeToolName(name: string): string {
-  return name.replace(/_/g, " ");
-}
-
-/** The write card's file path: the streaming raw's `path` arg first (the
- * tolerant extractor — live, before the args complete), else the settled
- * argsSummary's `path: …` segment. */
-function writePath(item: ToolItem): string | null {
-  if (item.inputRaw !== null) {
-    const preview = extractWritePreview(item.inputRaw);
-    if (preview.path !== null) return preview.path;
-  }
-  return item.argsSummary.match(/^path:\s*([^,]+)/)?.[1] ?? null;
-}
-
-/**
- * R116-m — the settled WRITE card's +A/−B line counts, parsed from the
- * server's own edit confirmation (agent-core fs-ops.ts editConfirmation):
- *   "Edited '<path>': 2 replacements, +12 −3 lines"
- * The minus is U+2212 (−, the REAL server glyph — verified against the
- * source; an ASCII hyphen never rides this wire), the plus is ASCII, and
- * the "N replacements, " prefix + " lines" suffix pin the shape so a
- * lookalike string never lies. Plain writes ("wrote N bytes to '<path>'")
- * and every failure shape miss the pattern → null → NO chips (the byte
- * summary line below carries that story) — the PC's toolStatusDetail
- * twin, honestly tolerant of both output shapes.
- */
-const EDIT_LINE_DIFF_RE = /(\d+) replacements?, \+(\d+) \u2212(\d+) lines/;
-
-/** The settled card's parsed line delta (null while running / failed / a
- * plain write — only a parsed edit summary answers). */
-function writeLineDiff(item: ToolItem): { added: number; removed: number } | null {
-  if (item.ok === null || item.outputSummary === null) return null;
-  const match = EDIT_LINE_DIFF_RE.exec(item.outputSummary);
-  if (match === null) return null;
-  return { added: Number(match[2]), removed: Number(match[3]) };
-}
-
 /** The +A/−B count chips (mono 11px, inline in the settled head row): the
  * added count on a quiet success tint, the removed count on a quiet danger
  * tint — the PC chat's own diff-chip grammar, ported through mixHex. The
@@ -1009,48 +1239,6 @@ function WriteDiffChips({ added, removed }: { added: number; removed: number }) 
           {`−${removed}`}
         </TypeMono>
       </View>
-    </View>
-  );
-}
-
-/** The one-line summary the collapsed generic row shows. */
-function genericOneLineSummary(item: ToolItem): string {
-  if (TERMINAL_TOOLS.has(item.toolName)) {
-    return item.argsSummary.match(/^command:\s*(.*)$/)?.[1] ?? item.argsSummary;
-  }
-  return item.argsSummary;
-}
-
-/** The read family's one-line target: the argsSummary's first "key: value"
- * segment, key stripped ("path: src/a.ts" → "src/a.ts"). */
-function readTargetSegment(item: ToolItem): string {
-  const segment = item.argsSummary.split(",")[0] ?? "";
-  return segment.replace(/^[a-zA-Z_]+:\s*/, "").trim();
-}
-
-/** The shared card shell: the clay tile + the density-aware vertical
- * padding. R116-m — a FAILED call tints the WHOLE card danger (donts #37:
- * the border + a quiet 5% danger wash — the failure reads at a glance,
- * the details stay behind the expand). */
-function ToolShell({ item, children }: { item: ToolItem; children: React.ReactNode }) {
-  const { tokens } = useTheme();
-  const prefs = useChatPrefs();
-  const failed = item.ok === false;
-  return (
-    <View
-      testID="transcript-tool-card"
-      style={[
-        styles.toolCard,
-        {
-          backgroundColor: failed ? mixHex(tokens.card, tokens.danger, 0.05) : tokens.card,
-          borderTopColor: tokens.clayTopEdge,
-          borderColor: failed ? tokens.danger : tokens.borderSubtle,
-          boxShadow: tokens.clayShadowSm,
-          paddingVertical: densityVerticalPadding(prefs.chatDensity),
-        },
-      ]}
-    >
-      {children}
     </View>
   );
 }
@@ -1108,288 +1296,6 @@ function ToolHeadRow({
     >
       {row}
     </Pressable>
-  );
-}
-
-/** toolActivity=compact — the ALWAYS-collapsed SINGLE line: icon + humanized
- * verb + target + status in one row (no expansion, ever). */
-function CompactToolRow({ item }: { item: ToolItem }) {
-  const { tokens } = useTheme();
-  const summary = WRITE_TOOLS.has(item.toolName)
-    ? writePath(item)
-    : genericOneLineSummary(item);
-  const label =
-    summary !== null && summary !== ""
-      ? `${humanizeToolName(item.toolName)} · ${summary}`
-      : humanizeToolName(item.toolName);
-  return (
-    <ToolShell item={item}>
-      <ToolHeadRow
-        item={item}
-        icon={<Wrench size={13} color={tokens.textSecondary} strokeWidth={2.2} />}
-        title={label}
-        expanded={false}
-        expandable={false}
-      />
-    </ToolShell>
-  );
-}
-
-/** read_skill + the compact-read family — the ONE slim quiet chip (chat.md:
- * "Read skill · {name} · ✓ — one quiet chip, never a full view"; the owner's
- * R114 report: "'read skill' showed the full view with an ok status —
- * ugly"). The args dump renders ONLY on manual expand. */
-function SkillCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
-  const { tokens } = useTheme();
-  const [expanded, setExpanded] = useState(false);
-  const showDetails = expandable && expanded;
-  const name =
-    item.inputRaw !== null
-      ? extractStringArg(item.inputRaw, "name")
-      : { found: false, value: "" };
-  const skillName =
-    name.found && name.value.trim() !== ""
-      ? name.value.trim()
-      : item.argsSummary.match(/^name:\s*([^,]+)/)?.[1] ?? "";
-  const target = readTargetSegment(item);
-  const title =
-    item.toolName === "read_skill"
-      ? skillName !== ""
-        ? `Read skill · ${skillName}`
-        : "Read skill"
-      : target !== ""
-        ? `${humanizeToolName(item.toolName)} · ${target}`
-        : humanizeToolName(item.toolName);
-  const chip = (
-    <View
-      style={[styles.skillChip, { borderColor: tokens.borderSubtle, backgroundColor: tokens.subtle }]}
-    >
-      <BookOpenText size={13} color={tokens.accent2} strokeWidth={2.2} />
-      <TypeMono style={{ color: tokens.textSecondary, flex: 1 }} numberOfLines={1}>
-        {title}
-      </TypeMono>
-      {item.ok === true ? (
-        <Check size={13} color={tokens.success} strokeWidth={2.6} />
-      ) : item.ok === false ? (
-        <CircleX size={13} color={tokens.danger} strokeWidth={2.2} />
-      ) : null}
-      {expandable ? (
-        expanded ? (
-          <ChevronUp size={14} color={tokens.textTertiary} strokeWidth={2} />
-        ) : (
-          <ChevronDown size={14} color={tokens.textTertiary} strokeWidth={2} />
-        )
-      ) : null}
-    </View>
-  );
-  if (!expandable) {
-    return <View accessibilityLabel={`Tool ${item.toolName}`}>{chip}</View>;
-  }
-  return (
-    <View style={styles.skillWrap}>
-      <Pressable
-        accessibilityLabel={`Tool ${item.toolName}${item.ok === null ? " running" : item.ok === false ? " failed" : " succeeded"}${expanded ? ", expanded" : ""}`}
-        accessibilityRole="button"
-        onPress={() => setExpanded((v) => !v)}
-        style={styles.skillPress}
-      >
-        {chip}
-      </Pressable>
-      {showDetails && (
-        <Reveal open>
-          {item.argsSummary !== "" && (
-            <TypeMono style={{ color: tokens.textSecondary }} numberOfLines={6}>
-              {item.argsSummary}
-            </TypeMono>
-          )}
-          {item.outputSummary !== null && item.outputSummary !== "" && (
-            <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={4}>
-              {item.outputSummary}
-            </TypeMono>
-          )}
-        </Reveal>
-      )}
-    </View>
-  );
-}
-
-/** write_file / edit_file — the WRITE card. The head line IS the state:
- * "Writing {file}… · {n} chars" while the args stream, "Wrote {file}" once
- * settled — with the edit's +A/−B LINE-COUNT CHIPS inline in the settled
- * head row (R116-m, mono 11px, the success/danger pair parsed from the
- * server's own confirmation — see writeLineDiff below); the live content
- * tail (the LAST 160 chars of what has arrived) previews below the head
- * while streaming. The preview's source is the tool-input-delta raw the
- * reducer accumulates (R114-d). */
-function WriteCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
-  const { tokens } = useTheme();
-  const [expanded, setExpanded] = useState(false);
-  const showDetails = expandable && expanded;
-  const running = item.ok === null;
-  const streaming = running && item.inputRaw !== null;
-  const preview = extractWritePreview(item.inputRaw ?? "");
-  const path = writePath(item);
-  const verbRunning = item.toolName === "write_file" ? "Writing" : "Editing";
-  const verbDone = item.toolName === "write_file" ? "Wrote" : "Edited";
-  const title = running
-    ? path !== null
-      ? streaming
-        ? `${verbRunning} ${path}… · ${preview.chars.toLocaleString()} chars`
-        : `${verbRunning} ${path}…`
-      : `${verbRunning}…`
-    : path !== null
-      ? `${verbDone} ${path}`
-      : humanizeToolName(item.toolName);
-  // R116-m — the settled edit's +A/−B chips ride the head line (null while
-  // running, on failures, and for plain writes — the byte summary line
-  // below carries those stories honestly).
-  const diff = writeLineDiff(item);
-  // The quiet content tail — the LAST 160 chars of what has arrived (the
-  // head lives in the reducer's raw; the tail is what is being typed NOW).
-  const tail =
-    streaming && preview.content !== ""
-      ? preview.content.length > 160
-        ? `…${preview.content.slice(preview.content.length - 160)}`
-        : preview.content
-      : null;
-  return (
-    <ToolShell item={item}>
-      <ToolHeadRow
-        item={item}
-        icon={<FileCode2 size={13} color={tokens.accent} strokeWidth={2.2} />}
-        title={title}
-        expanded={showDetails}
-        expandable={expandable}
-        onToggle={expandable ? () => setExpanded((v) => !v) : undefined}
-        after={diff !== null ? <WriteDiffChips added={diff.added} removed={diff.removed} /> : undefined}
-      />
-      {streaming && tail !== null && (
-        <TypeMono
-          style={[
-            styles.terminalBlock,
-            {
-              color: tokens.textTertiary,
-              backgroundColor: tokens.monoBg,
-              borderColor: tokens.borderSubtle,
-            },
-          ]}
-          numberOfLines={3}
-        >
-          {tail}
-        </TypeMono>
-      )}
-      {!running && item.outputSummary !== null && item.outputSummary !== "" && (
-        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={showDetails ? undefined : 1}>
-          {item.outputSummary}
-        </TypeMono>
-      )}
-      {showDetails && (
-        <Reveal open>
-          {item.argsSummary !== "" && (
-            <TypeMono style={{ color: tokens.textSecondary }} numberOfLines={6}>
-              {item.argsSummary}
-            </TypeMono>
-          )}
-          {item.outputTail !== null && item.outputTail !== "" && (
-            <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={8}>
-              {item.outputTail}
-            </TypeMono>
-          )}
-        </Reveal>
-      )}
-    </ToolShell>
-  );
-}
-
-/** run_command / bash — the TERMINAL card: mono command line (the
- * argsSummary), the streamed tool-output tail as a quiet terminal block,
- * the exit status badge on the result. */
-function TerminalCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
-  const { tokens } = useTheme();
-  const [expanded, setExpanded] = useState(false);
-  const showDetails = expandable && expanded;
-  const command = genericOneLineSummary(item);
-  return (
-    <ToolShell item={item}>
-      <ToolHeadRow
-        item={item}
-        icon={<SquareTerminal size={13} color={tokens.accent} strokeWidth={2.2} />}
-        title={humanizeToolName(item.toolName)}
-        expanded={showDetails}
-        expandable={expandable}
-        onToggle={expandable ? () => setExpanded((v) => !v) : undefined}
-      />
-      {command !== "" && (
-        <TypeMono
-          style={{ color: tokens.textSecondary }}
-          numberOfLines={showDetails ? 2 : 1}
-        >
-          {command}
-        </TypeMono>
-      )}
-      {item.outputTail !== null && item.outputTail !== "" && (
-        <TypeMono
-          style={[
-            styles.terminalBlock,
-            {
-              color: tokens.textTertiary,
-              backgroundColor: tokens.monoBg,
-              borderColor: tokens.borderSubtle,
-            },
-          ]}
-          numberOfLines={showDetails ? undefined : 3}
-        >
-          {item.outputTail}
-        </TypeMono>
-      )}
-      {item.outputSummary !== null && item.outputSummary !== "" && (
-        // R116-m — one line when collapsed (the compact mandate); expanded
-        // detail keeps the whole confirmation.
-        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={showDetails ? undefined : 1}>
-          {item.outputSummary}
-        </TypeMono>
-      )}
-    </ToolShell>
-  );
-}
-
-/** The generic fallback — the humanized verb + target + status in the head,
- * ONE compact line when collapsed, expand for the details. */
-function GenericToolCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
-  const { tokens } = useTheme();
-  const [expanded, setExpanded] = useState(false);
-  const showDetails = expandable && expanded;
-  const summary = genericOneLineSummary(item);
-  return (
-    <ToolShell item={item}>
-      <ToolHeadRow
-        item={item}
-        icon={<Wrench size={13} color={tokens.textSecondary} strokeWidth={2.2} />}
-        title={humanizeToolName(item.toolName)}
-        expanded={showDetails}
-        expandable={expandable}
-        onToggle={expandable ? () => setExpanded((v) => !v) : undefined}
-      />
-      {summary !== "" && (
-        <TypeMono style={{ color: tokens.textSecondary }} numberOfLines={showDetails ? undefined : 1}>
-          {summary}
-        </TypeMono>
-      )}
-      {showDetails && (
-        <Reveal open>
-          {item.outputTail !== null && item.outputTail !== "" && (
-            <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={8}>
-              {item.outputTail}
-            </TypeMono>
-          )}
-          {item.outputSummary !== null && item.outputSummary !== "" && (
-            <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={6}>
-              {item.outputSummary}
-            </TypeMono>
-          )}
-        </Reveal>
-      )}
-    </ToolShell>
   );
 }
 
@@ -2472,9 +2378,56 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     paddingHorizontal: spacing.md,
   },
-  block: {
+  /** R119-A — THE TURN BLOCK: one clay container per assistant turn (the
+   *  existing card grammar, subtle — the retired document's weight):
+   *  RADIUS_INPUT, card fill, hairline borderSubtle + clayTopEdge, the
+   *  small clay shadow, density-aware vertical padding. */
+  turnBlock: {
+    borderRadius: RADIUS_INPUT,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    padding: spacing.md,
     gap: spacing.sm,
-    maxWidth: "100%",
+  },
+  /** The block's ACTIVITY RAIL — the collapsible head row (minHeight 32,
+   *  the toolHead's own quiet target height; the chevron rides outside the
+   *  breathing word so it never pulses). */
+  turnRail: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    minHeight: 32,
+  },
+  /** The rail's breathing content wrapper (the retired placeholder's own
+   *  0.85↔1 cycle rides here; steady at opacity 1 once text streams). */
+  turnRailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    flex: 1,
+  },
+  /** The live rail's THINKING word — the retired placeholder's staggered
+   *  dots row (gap 5, the word + the model micro-mono in tow). */
+  turnRailDots: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    flex: 1,
+  },
+  /** The recessed ACTIVITY WELL — the usage-cards' own recipe (surfaceWell
+   *  fill + hairline clayRim + RADIUS_INPUT), tight rows (gap xs). */
+  turnWell: {
+    borderRadius: RADIUS_INPUT,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: spacing.sm,
+    gap: spacing.xs,
+  },
+  /** One tool row inside the well (a failed call's quiet danger wash rides
+   *  inline; the rows are flush lines, never nested cards). */
+  turnToolRow: {
+    gap: spacing.xs,
+    borderRadius: 10,
+    paddingHorizontal: spacing.sm,
   },
   assistantLive: {
     flexDirection: "row",
@@ -2494,13 +2447,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     minHeight: 32,
   },
-  /** The thinking placeholder's staggered dot row. */
-  thinkingDots: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    minHeight: 32,
-  },
+  /** The live rail's dot slot (the retired placeholder's own 6×6 slot). */
   thinkingDotSlot: {
     width: 6,
     height: 6,
@@ -2550,30 +2497,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
   },
-  /** R116-m — the thinking block's "Show all" affordance (at the settled
-   * cap): the 44px touch-target law on the one interactive row. */
+  /** R116-m → R119-A — the well's thinking text's "Show all" affordance (at
+   * the settled cap): the 44px touch-target law on the one interactive row. */
   thinkingShowAll: {
     minHeight: 44,
     justifyContent: "center",
     alignSelf: "flex-start",
-  },
-  /** The read-skill family's slim quiet chip (never a full card view). */
-  skillWrap: {
-    gap: spacing.xs,
-  },
-  skillChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    borderRadius: RADIUS_PILL,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  /** The chip's expand target — the 44px law on the ONE interactive row. */
-  skillPress: {
-    minHeight: 44,
-    justifyContent: "center",
   },
   miniLink: {
     minHeight: 44,

@@ -151,6 +151,18 @@
  * INSIDE HeaderDropdown — this screen just passes `level`); and the
  * composer dock rides the R119-B single-tier bar (see composer.tsx — the
  * paperclip is the input's row peer, not an in-bar overlay).
+ *
+ * ROUND-119 (R119-A — the §N center-section rethink): the transcript's
+ * center is ONE VISUAL TURN PER EXCHANGE. The displayItems memo keeps its
+ * live/settled item streams (the fold + the live reducer are untouched —
+ * the ITEM MODEL is the same) but now ends in the QUEUED-AFTER-TURN LAW
+ * (orderDisplayItems — a still-queued row renders after the in-progress
+ * turn, never above it) and a GROUPING memo (groupDisplayRows — runs of
+ * consecutive assistant/thinking/tool items become ONE TurnBlock; every
+ * interactive/terminal kind stays its own row). The synthetic thinking
+ * marker survives (thinkingPlaceholderVisible's honesty rules unchanged)
+ * but renders as the TurnBlock's own breathing rail state, not a card; the
+ * toolActivity pref applies INSIDE the block (see transcript.tsx).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -179,10 +191,10 @@ import { Composer, menuLevelRendersRootRows, nextOpenModelProvider, type Compose
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { HeaderDropdown, MAIN_LEVEL_KEY, type HeaderDropdownItem } from "@/components/header-dropdown";
 import { LetterAvatar } from "@/components/letter-avatar";
-import { TranscriptItemView } from "@/components/transcript";
+import { TranscriptRowView } from "@/components/transcript";
 import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
 import { QuietIconButton, TypeBodyStrong, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
-import { useChatPrefs, useTheme } from "@/design/theme";
+import { useTheme } from "@/design/theme";
 import { DISCLOSURE_FADE_MS, SPRING } from "@/design/motion";
 import { spacing, TOUCH_TARGET } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
@@ -218,7 +230,7 @@ import {
   type SendOverrides,
   type TranscriptItem,
 } from "@/features/sessions";
-import { foldToolActivity } from "@/features/chat-prefs";
+import { groupDisplayRows, orderDisplayItems, type DisplayRow } from "@/features/turn-block";
 import { getEventsStore, turnFrameRecord, type EventsFrame } from "@/features/events";
 import { getOutbox, outboxForSession, type OutboxEntry } from "@/features/outbox";
 import { mobLog, mobWarn } from "@/lib/log";
@@ -801,10 +813,17 @@ export default function SessionScreen() {
 
   // ── render ─────────────────────────────────────────────────────────────────
 
-  // R114-d — the chat prefs drive the transcript's rendering here (the hook
-  // is reactive: a flip in Settings → Appearance re-renders this memo).
-  const prefs = useChatPrefs();
-
+  // R119-A — THE CENTER: one visual TURN per exchange. The memo builds the
+  // ordered ITEM stream (live tail or the settled fold + the outbox rows;
+  // the synthetic thinking marker while the live turn streams with no
+  // content — thinkingPlaceholderVisible's honesty rules unchanged), then
+  // the QUEUED-AFTER-TURN LAW re-positions every still-queued row AFTER it
+  // (never above the processing section), then the grouping memo below
+  // partitions it into turn blocks + the standalone cards. The chat prefs
+  // (density / text size / timestamps / toolActivity) are read by the
+  // TurnBlock + the item cards themselves through useChatPrefs — reactive,
+  // exactly as before; the screen no longer folds tool runs here (the
+  // toolActivity pref applies INSIDE the block now).
   const displayItems = useMemo<TranscriptItem[]>(() => {
     let items: TranscriptItem[];
     if (live !== null) {
@@ -823,18 +842,27 @@ export default function SessionScreen() {
       }));
       items = [...baseItems, ...pending];
     }
-    // R114-d — the THINKING PLACEHOLDER: while the live turn streams with
-    // no assistant content yet, the animated card sits exactly where the
-    // assistant message will appear (the list's tail). The first real
-    // delta retires it (thinkingPlaceholderVisible flips false).
+    // R114-d → R119-A — the THINKING MARKER: while the live turn streams
+    // with no assistant content yet, the synthetic item rides exactly where
+    // the turn's block will render. The FIRST real delta retires it
+    // (thinkingPlaceholderVisible flips false — the marker is gone and the
+    // grouping hands the block to the real items). The standalone
+    // placeholder CARD is retired: the grouping consumes the marker as the
+    // TurnBlock's own pending, breathing rail state.
     if (live !== null && thinkingPlaceholderVisible(live)) {
       items = [...items, { kind: "thinking", key: "live-thinking", model: live.model }];
     }
-    // R114-d — toolActivity=hidden folds consecutive tool runs into one
-    // quiet meta line per turn (chat-prefs.ts — the other prefs the item
-    // components read themselves through useChatPrefs).
-    return foldToolActivity(items, prefs.toolActivity);
-  }, [live, baseItems, outboxEntries, prefs.toolActivity]);
+    // R119-A — the queued-position law (round-119 §1 item 7): still-queued
+    // rows move AFTER everything else — in particular after the marker/turn
+    // items — so a waiting message never renders above the currently-
+    // processing section (pure + pinned: features/turn-block.ts).
+    return orderDisplayItems(items);
+  }, [live, baseItems, outboxEntries]);
+
+  // The grouped rows the FlatList renders (turn blocks + standalone cards;
+  // a group's key is its FIRST item's key, so inverted-list recycling
+  // stays stable across frames).
+  const displayRows = useMemo<DisplayRow[]>(() => groupDisplayRows(displayItems), [displayItems]);
 
   const composerMode: ComposerMode =
     status !== "connected" ? "offline" : liveRunning || remoteRunning ? "running" : "compose";
@@ -1178,7 +1206,7 @@ export default function SessionScreen() {
     paddingBottom: Math.max(insetsBottom, kbHeight.value),
   }));
 
-  const data = useMemo(() => [...displayItems].reverse(), [displayItems]);
+  const data = useMemo(() => [...displayRows].reverse(), [displayRows]);
 
   const refreshControl = (
     <RefreshControl
@@ -1329,15 +1357,17 @@ export default function SessionScreen() {
           <FlatList
             data={data}
             inverted
-            keyExtractor={(item) => item.key}
-            renderItem={({ item }) => (
-              <TranscriptItemView
-                item={item}
+            keyExtractor={(row) => row.key}
+            renderItem={({ item: row }) => (
+              <TranscriptRowView
+                row={row}
                 onApprovalDecide={() => router.navigate("/approvals")}
                 onAnswerQuestion={onAnswerQuestion}
                 subagentLive={live?.subagentLive}
                 onRetryError={
-                  item.kind === "error" ? () => onRetryFailedTurn(item.key) : undefined
+                  row.kind === "item" && row.item.kind === "error"
+                    ? () => onRetryFailedTurn(row.item.key)
+                    : undefined
                 }
               />
             )}

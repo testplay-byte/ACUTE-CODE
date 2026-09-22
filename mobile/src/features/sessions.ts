@@ -219,6 +219,14 @@ export type TranscriptItem =
       live: boolean;
       /** R114-d: the event's ts (persisted) or the turn-time ISO (live). */
       ts: string | null;
+      /** R119-A — the event's MEASURED thinking duration in ms (the wire's
+       * additive `thinkingMs`, emitted by the runtime alongside `thinking`
+       * since Round 37 — the PC's "Thought for Ns" label reads the same
+       * field). The TurnBlock's collapsed rail summarizes it; absent/invalid
+       * → undefined (older sidecars, thinking-less segments) and the rail
+       * reads the plain "Thought" word, never a guess. Live items never
+       * carry it (the live rail shows the live word instead). */
+      thinkingMs?: number | null;
     }
   | {
       kind: "tool";
@@ -525,6 +533,14 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
         const thinking = readString(payload, "thinking");
         const model = readString(payload, "model");
         if (content.trim() === "" && (thinking === null || thinking.trim() === "")) break;
+        // R119-A — the measured thinking duration (additive since Round 37,
+        // emitted only alongside a non-empty `thinking`): read it honestly —
+        // finite and > 0, else absent (never a guess).
+        const thinkingMsRaw = payload.thinkingMs;
+        const thinkingMs =
+          typeof thinkingMsRaw === "number" && Number.isFinite(thinkingMsRaw) && thinkingMsRaw > 0
+            ? thinkingMsRaw
+            : null;
         items.push({
           kind: "assistant",
           key: `e${event.seq}`,
@@ -534,6 +550,7 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
           chunks: null,
           live: false,
           ts: event.ts,
+          ...(thinkingMs !== null ? { thinkingMs } : {}),
         });
         break;
       }
@@ -1818,20 +1835,34 @@ export function beginRemoteTurn(baseItems: TranscriptItem[]): LiveTurn {
  * the base length the mirror was LAST rebased onto — everything after it
  * in the mirror's items is the live tail. Pure; a shorter fresh base (a
  * log trim) safely drops the tail's anchor row.
+ *
+ * ROUND-119 (R119-A — the queued-message position law, round-119 §1 item 7):
+ * a folded `message.queued` row rides its LOG position — right after the
+ * last persisted event, which early in a turn is right after the opening
+ * user message — so `[...freshBase, ...tail]` rendered the waiting chip
+ * ABOVE the in-progress items (the owner: "the queued message renders just
+ * below the first message instead of after the currently-processing
+ * section"). The STILL-QUEUED folded rows now move to the END of the live
+ * tail (after the in-progress items); a folded queued row the tail already
+ * mirrors as a LIVE q-row (the events stream carried the queue route's
+ * user.queued frame onto the mirror) is dropped — the live row owns the
+ * slot, content-identical, and flips in place on queued.delivered, exactly
+ * the head-dedupe discipline below.
  */
 export function rebaseRemoteTurn(
   turn: LiveTurn,
   baseItems: TranscriptItem[],
   baseCount: number,
 ): LiveTurn {
-  const tail = turn.items.slice(baseCount);
+  const rawTail = turn.items.slice(baseCount);
   // R114-d: turn.started's mirrored user card (the frame's own text, pushed
   // so the bubble rendered BEFORE the persisted fold refetch) duplicates the
   // message.user row the fresh base now carries — drop the LIVE one (the
   // persisted card owns the slot; content-identical, key-stable). Anything
   // else folds exactly as before.
-  if (tail.length > 0) {
-    const head = tail[0];
+  let tail = rawTail;
+  if (rawTail.length > 0) {
+    const head = rawTail[0];
     const last = baseItems.length > 0 ? baseItems[baseItems.length - 1] : undefined;
     if (
       head?.kind === "user" &&
@@ -1839,10 +1870,29 @@ export function rebaseRemoteTurn(
       last?.kind === "user" &&
       last.content === head.content
     ) {
-      return { ...turn, items: [...baseItems, ...tail.slice(1)] };
+      tail = rawTail.slice(1);
     }
   }
-  return { ...turn, items: [...baseItems, ...tail] };
+  // R119-A — pull the STILL-QUEUED folded rows out of the fresh base and
+  // re-append them AFTER the live tail. Delivered rows (the log flips
+  // message.queued → message.user IN PLACE) ride their settled positions —
+  // the law moves only what is still WAITING.
+  const queuedFolded: Array<TranscriptItem & { kind: "user" }> = [];
+  const settledBase: TranscriptItem[] = [];
+  for (const item of baseItems) {
+    if (item.kind === "user" && item.queued) queuedFolded.push(item);
+    else settledBase.push(item);
+  }
+  if (queuedFolded.length === 0) {
+    return { ...turn, items: [...settledBase, ...tail] };
+  }
+  const unmirrored = queuedFolded.filter(
+    (row) =>
+      !tail.some(
+        (live) => live.kind === "user" && live.queued && live.content === row.content,
+      ),
+  );
+  return { ...turn, items: [...settledBase, ...tail, ...unmirrored] };
 }
 
 /** One remote-turn decision off the events stream — the screen drives the

@@ -1775,3 +1775,118 @@ describe("sessions — the sub-agent control routes (R117-d2)", () => {
     expect(!outcome.ok && outcome.error.message).toContain("already running");
   });
 });
+
+// ── R119-A — the queued-message position law + the measured thinking span ──
+
+describe("sessions — rebaseRemoteTurn's queued-position law (R119-A)", () => {
+  /** The persisted base: one settled exchange. */
+  const base = foldSessionEvents([
+    event(1, "message.user", { role: "user", content: "earlier ask" }),
+    event(2, "message.assistant", { role: "assistant", content: "earlier answer", model: "z-ai/glm-5.2:free" }),
+  ]);
+
+  /** A remote mirror streaming one live assistant segment over the base. */
+  function streamingMirror(extraFrames: Array<Record<string, unknown>> = []): LiveTurn {
+    let opened = reduceRemoteTurnFrame({
+      live: null,
+      remote: false,
+      ownStream: false,
+      baseItems: base,
+      frame: { type: "text-delta", delta: "PC says" },
+      now: NOW,
+    });
+    for (const frame of extraFrames) {
+      opened = reduceRemoteTurnFrame({
+        live: opened?.turn ?? null,
+        remote: true,
+        ownStream: false,
+        baseItems: base,
+        frame,
+        now: NOW,
+      });
+    }
+    if (opened === null) throw new Error("the mirror did not open");
+    return opened.turn;
+  }
+
+  it("a folded message.queued row moves to the END of the live tail — after the in-progress items, never above them (§1 item 7)", () => {
+    const mirror = streamingMirror();
+    // The rehydrate landed mid-turn: the fresh base carries the opening user
+    // row AND a waiting queued message at its LOG position (early).
+    const grownBase = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "earlier ask" }),
+      event(2, "message.assistant", { role: "assistant", content: "earlier answer", model: "z-ai/glm-5.2:free" }),
+      event(3, "message.queued", { role: "user", content: "the waiting one" }),
+    ]);
+    const rebased = rebaseRemoteTurn(mirror, grownBase, base.length);
+    // the settled base (2 rows), then the LIVE tail, then the STILL-QUEUED
+    // row at the very end — never above the processing section
+    expect(rebased.items).toHaveLength(4);
+    expect(rebased.items[1]?.kind === "assistant" && rebased.items[1].live).toBe(false);
+    const live = rebased.items[2];
+    expect(live?.kind === "assistant" && live.live).toBe(true);
+    const last = rebased.items[3];
+    expect(last?.kind === "user" && last.queued).toBe(true);
+    expect(last?.kind === "user" && last.content).toBe("the waiting one");
+  });
+
+  it("a folded queued row the live tail already mirrors (the events stream's user.queued frame) is DROPPED — one waiting row, the live one", () => {
+    const mirror = streamingMirror([
+      { type: "user.queued", seq: 7, content: "the waiting one", ts: "2026-09-18T11:00:01Z" },
+    ]);
+    const grownBase = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "earlier ask" }),
+      event(2, "message.assistant", { role: "assistant", content: "earlier answer", model: "z-ai/glm-5.2:free" }),
+      event(3, "message.queued", { role: "user", content: "the waiting one" }),
+    ]);
+    const rebased = rebaseRemoteTurn(mirror, grownBase, base.length);
+    // exactly ONE waiting row survives — the live q-row owns the slot
+    const waiting = rebased.items.filter((item) => item.kind === "user" && item.queued);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]?.kind === "user" && waiting[0].key).toBe("q7");
+    // and it rides the very end, after the live assistant
+    const tail = rebased.items[rebased.items.length - 1];
+    expect(tail?.kind === "user" && tail.queued).toBe(true);
+  });
+
+  it("a DELIVERED folded row (message.queued flipped to message.user in place) never moves — its settled log position stands", () => {
+    const mirror = streamingMirror();
+    const grownBase = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "earlier ask" }),
+      event(2, "message.assistant", { role: "assistant", content: "earlier answer", model: "z-ai/glm-5.2:free" }),
+      event(3, "message.user", { role: "user", content: "the delivered one" }),
+    ]);
+    const rebased = rebaseRemoteTurn(mirror, grownBase, base.length);
+    // the delivered row rides its log position (index 2), the live tail after
+    expect(rebased.items).toHaveLength(4);
+    expect(rebased.items.map((item) => item.kind)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(rebased.items[2]?.kind === "user" && rebased.items[2].queued).toBe(false);
+    expect(rebased.items[2]?.kind === "user" && rebased.items[2].content).toBe("the delivered one");
+    expect(rebased.items[3]?.kind === "assistant" && rebased.items[3].live).toBe(true);
+  });
+});
+
+describe("sessions — the measured thinking span rides the fold (R119-A)", () => {
+  it("a message.assistant with thinking + thinkingMs carries the measured span; invalid/absent spans stay absent (never a guess)", () => {
+    const [measured] = foldSessionEvents([
+      event(1, "message.assistant", { role: "assistant", content: "", thinking: "hmm", thinkingMs: 6_400 }),
+    ]);
+    expect(measured?.kind === "assistant" && measured.thinkingMs).toBe(6_400);
+    const [zero] = foldSessionEvents([
+      event(2, "message.assistant", { role: "assistant", content: "", thinking: "hmm", thinkingMs: 0 }),
+    ]);
+    expect(zero?.kind === "assistant" && zero.thinkingMs).toBeUndefined();
+    const [negative] = foldSessionEvents([
+      event(3, "message.assistant", { role: "assistant", content: "", thinking: "hmm", thinkingMs: -50 }),
+    ]);
+    expect(negative?.kind === "assistant" && negative.thinkingMs).toBeUndefined();
+    const [notNumber] = foldSessionEvents([
+      event(4, "message.assistant", { role: "assistant", content: "", thinking: "hmm", thinkingMs: "8000" }),
+    ]);
+    expect(notNumber?.kind === "assistant" && notNumber.thinkingMs).toBeUndefined();
+    const [absent] = foldSessionEvents([
+      event(5, "message.assistant", { role: "assistant", content: "", thinking: "hmm" }),
+    ]);
+    expect(absent?.kind === "assistant" && absent.thinkingMs).toBeUndefined();
+  });
+});

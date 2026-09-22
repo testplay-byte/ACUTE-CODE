@@ -94,6 +94,15 @@ export function toolActivityVisibility(activity: ToolActivity): ToolActivityVisi
  *   · compact / detailed — the items pass through UNCHANGED (the card
  *               component renders collapsed rows / expandable cards).
  * Pure + order-preserving; non-tool items never merge.
+ *
+ * ROUND-119 (R119-A — the §N center rethink): the session screen no longer
+ * runs this fold — the toolActivity pref now applies INSIDE the TurnBlock
+ * (hidden = no tool rows + the rail only while thinking text exists, the
+ * "clean document" verdict that supersedes the meta line; compact =
+ * one-line rows; detailed = the full anatomy). The helper stays as the
+ * vocabulary's documented fold (pinned by chat-prefs.test.ts) — the
+ * pure law, ready for any future consumer that renders the UNgrouped item
+ * stream.
  */
 export function foldToolActivity(
   items: TranscriptItem[],
