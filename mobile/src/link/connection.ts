@@ -209,6 +209,10 @@ export class ConnectionManager {
   /** R110 #1c — the NetInfo debounce bookkeeping (clock via this.now()). */
   private lastNetworkWakeAt = Number.NEGATIVE_INFINITY;
   private lastNetworkReachable: boolean | null = null;
+  /** R118-B — the probe generation: every host swap/removal bumps it so an
+   * in-flight round for the PREVIOUS host can never report its verdict onto
+   * the new one (the "teardown" half of switchHost/removeHost). */
+  private probeGeneration = 0;
 
   constructor(deps: ConnectionManagerDeps) {
     this.store = deps.store;
@@ -221,11 +225,13 @@ export class ConnectionManager {
   // ── lifecycle ─────────────────────────────────────────────────────────────
 
   /** Load the store, subscribe the triggers, and begin probing if paired.
-   * Idempotent (React strict-mode double-mount safe). */
+   * Idempotent (React strict-mode double-mount safe). R118-B: the store read
+   * is the ACTIVE host + ITS token (multi-host stores); single-host stores
+   * (the frozen sibling fakes) keep their readHost/readDeviceToken pair. */
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
-    const [host, token] = await Promise.all([this.store.readHost(), this.store.readDeviceToken()]);
+    const [host, token] = await Promise.all([this.readActiveHost(), this.store.readDeviceToken()]);
     if (host !== null && token !== null) {
       this.state = { ...this.state, host, token };
       this.booted = true;
@@ -299,6 +305,80 @@ export class ConnectionManager {
     this.wake("manual");
   }
 
+  // ── the R118-B multi-host surface ────────────────────────────────────────────
+
+  /**
+   * Every stored host (the connect hub's "Desktops" switcher): the
+   * multi-host list when the store carries it, else the single legacy host.
+   * The manager is the façade — screens never touch the store directly.
+   */
+  async listHosts(): Promise<StoredHost[]> {
+    const viaMulti = await this.store.listHosts?.();
+    if (viaMulti !== undefined) return viaMulti;
+    const lone = await this.store.readHost();
+    return lone === null ? [] : [lone];
+  }
+
+  /**
+   * Switch the ACTIVE host (the connect hub's "Desktops" switcher): the
+   * pointer moves, the current link tears down (backoff timer + any
+   * in-flight probe round is abandoned via the generation bump), and the
+   * new host is probed FRESH — subscribers see probing → connected/offline.
+   * One live link at a time; the store owns which host the pointer names.
+   */
+  async switchHost(machineId: string): Promise<void> {
+    if (this.store.setActiveHost === undefined) return; // single-host store — nothing to switch
+    await this.store.setActiveHost(machineId);
+    await this.activateStoredHost();
+  }
+
+  /**
+   * Remove one stored host (the host details page's disconnect for a
+   * non-active desktop): the store splices it + its token, then the link
+   * falls to the next stored host (probed fresh) or unpaired.
+   */
+  async removeHost(machineId: string): Promise<void> {
+    if (this.store.removeHost === undefined) return; // single-host store — unpair() owns that path
+    await this.store.removeHost(machineId);
+    await this.activateStoredHost();
+  }
+
+  /** The ACTIVE host — the multi-host leg when the store carries it, the
+   *  legacy readHost otherwise (the frozen single-host fakes). */
+  private async readActiveHost(): Promise<StoredHost | null> {
+    const viaMulti = await this.store.readActiveHost?.();
+    if (viaMulti !== undefined) return viaMulti;
+    return this.store.readHost();
+  }
+
+  /** Post-swap/removal: read the (new) active host + its token and probe it
+   *  fresh. A host without its token (or a pointer at nothing) honestly
+   *  reads as unpaired — the crash-mid-save pose, same as start(). */
+  private async activateStoredHost(): Promise<void> {
+    const [host, token] = await Promise.all([this.readActiveHost(), this.store.readDeviceToken()]);
+    this.clearBackoffTimer();
+    this.consecutiveFailures = 0;
+    this.probeQueued = false;
+    this.probeGeneration += 1; // abandon any in-flight round for the previous host
+    this.probeInFlight = false;
+    if (host === null || token === null) {
+      this.fallBackToUnpairedState();
+      return;
+    }
+    this.state = {
+      status: "probing",
+      host,
+      token,
+      activeAddr: null,
+      live: null,
+      lastSeen: null,
+      lastFailure: null,
+      fatal: false,
+    };
+    this.notify();
+    void this.probeRound();
+  }
+
   /** A probe round: try every rung of the ladder in order — the stored LAN
    * addresses, then the relay (R112) — LAN first, internet fallback.
    *
@@ -320,6 +400,11 @@ export class ConnectionManager {
     }
     const { host, token } = this.state;
     if (host === null || token === null) return;
+    // R118-B — this round's generation: a host swap/removal bumps the
+    // counter mid-flight, and the stale round exits WITHOUT reporting (an
+    // old host's success must never claim the new link). The hysteresis/
+    // ladder mechanics below are otherwise byte-frozen.
+    const generation = this.probeGeneration;
     this.probeInFlight = true;
     if (this.state.status !== "connected") {
       this.setState({ status: "probing", fatal: false, lastFailure: null });
@@ -337,6 +422,12 @@ export class ConnectionManager {
           timeoutMs: this.probeTimeoutMs,
           pinSha256: pinFor(addr, host.certFP),
         });
+        if (generation !== this.probeGeneration) {
+          // Stale — the swap/fallback that bumped the generation already
+          // owns the in-flight flags (and the fresh round, if any). Writing
+          // them here would clobber the NEW round's guard mid-flight.
+          return;
+        }
         if (res.status !== 200) {
           // The relay's clean "desktop offline" 503 — a connectivity verdict,
           // never an auth failure: remember it for the honest failure line.
@@ -391,6 +482,10 @@ export class ConnectionManager {
       }
     }
 
+    if (generation !== this.probeGeneration) {
+      // Stale — same as the in-ladder exit: the swap owns the flags.
+      return;
+    }
     this.probeInFlight = false;
     // A FAILED round drops any queued wake — the backoff ladder owns the
     // next attempt (no wake path can bypass it, R110 #1c).
@@ -552,8 +647,11 @@ export class ConnectionManager {
         this.onHostAnswered();
       }
       if (res.status === 401) {
-        // Revoked (or corrupted) device token — the honest fallback.
-        void this.fallBackToUnpaired();
+        // Revoked (or corrupted) device token — the honest fallback. R118-B:
+        // only the ACTIVE host is removed (the other stored desktops survive
+        // and the next one takes over); single-host stores keep the legacy
+        // whole-store clear.
+        void this.unpair();
       } else if (relayHostOffline) {
         mobLog("link", "api() got the relay's host_offline — verifying the ladder");
         void this.probeRound();
@@ -660,13 +758,18 @@ export class ConnectionManager {
     this.notify();
   }
 
-  /** "Unpair this device" (settings) or the revoked-token fallback. */
+  /** "Disconnect this desktop" (settings) or the revoked-token fallback.
+   *  R118-B: the removal is ACTIVE-ONLY — the multi-host store splices the
+   *  active host and the link falls to the next stored one (probed fresh);
+   *  a single-host store (the frozen sibling fakes) keeps the legacy
+   *  clear()-everything semantics. */
   async unpair(): Promise<void> {
-    await this.store.clear();
-    this.fallBackToUnpairedState();
-  }
-
-  private async fallBackToUnpaired(): Promise<void> {
+    const machineId = this.state.host?.machineId ?? null;
+    if (machineId !== null && this.store.removeHost !== undefined) {
+      await this.store.removeHost(machineId);
+      await this.activateStoredHost();
+      return;
+    }
     await this.store.clear();
     this.fallBackToUnpairedState();
   }
@@ -674,6 +777,9 @@ export class ConnectionManager {
   private fallBackToUnpairedState(): void {
     this.clearBackoffTimer();
     this.consecutiveFailures = 0;
+    this.probeQueued = false;
+    this.probeGeneration += 1; // R118-B — abandon any in-flight round
+    this.probeInFlight = false;
     this.state = {
       status: "unpaired",
       host: null,

@@ -43,6 +43,29 @@
  * (99+ cap) and sits at the icon's top-right. Reduced motion snaps the
  * breathe off (motion.md §5).
  *
+ * R118-B — the ADAPTIVE SLOTS + the corner fix (round-118, spec-b §2.1):
+ * the fixed `flex: 1` slots are DEAD — `computeTabSlots` (exported, pure,
+ * pinned by tab-slots.test.ts) gives the SELECTED tab a slot sized to its
+ * chip's natural width (icon + gutter + measured label + LABEL_EPSILON 2)
+ * plus the pill's 12px breathing pair, while the neighbors rebalance to the
+ * equal split of what remains (capped at the old barWidth/N width). The
+ * row insets 12 from the slab's inner edges (TAB_INSET_X), so the FIRST and
+ * LAST pills sit 12px off the edge (the old ~1px crowding is gone) and
+ * "Approvals" finally fits (its label budget clears the measured label by
+ * LABEL_EPSILON + 2*PILL_PAD_X = 26px). The edge clamp is DELETED — the
+ * slot math makes it unreachable. Per-slot WIDTHS animate on TAB_LABEL_MS
+ * (the row rebalances fluidly, the icons glide); the pill's CENTER still
+ * rides TAB_SPRING and its WIDTH the label's timing, both off the same
+ * layout. The corner artifact (the "sticker pasted" halo) dies with the
+ * square shadow wrapper: the bar's radius-28 card fill + clayShadow2 now
+ * live on ONE rounded View wrapping the (vertical, overflow-clipped)
+ * ChromeEdge — ClayCard's own proven pattern. The label gains
+ * ellipsizeMode="tail" beside numberOfLines 1 (Android's pixel grid can
+ * clip the last glyph at an exactly-measured maxWidth). Frozen intact:
+ * TAB_SPRING/TAB_LABEL_MS, the R116-b morph mechanics + measurement row,
+ * the a11y contract, the alert breathe, the keyboard slide-away, the pill's
+ * accentTint/2px-accentDeep material.
+ *
  * Purely presentational — the tabs layout owns navigation state.
  */
 
@@ -70,6 +93,7 @@ import { selectionHaptic } from "@/design/haptics";
 import { useTheme } from "@/design/theme";
 import { BAR_HEIGHT, BAR_MARGIN, TYPE_TAB_LABEL, fontFamily, spacing } from "@/design/tokens";
 import { TAB_LABEL_MS, TAB_SPRING } from "@/design/motion";
+import { computeTabSlots, LABEL_EPSILON, TAB_INSET_X } from "./tab-slots";
 
 export interface TabDescriptor {
   /** The route name (the navigation key). */
@@ -93,6 +117,19 @@ export interface FloatingTabBarProps {
   onSelect: (index: number) => void;
 }
 
+// ── the R118-B adaptive slot algorithm — pure, lives in tab-slots.ts so the
+// jest sandbox never imports this file's RN/reanimated graph; re-exported
+// here as the bar's own surface (spec §2.1: tab-bar exports the algorithm).
+
+export {
+  computeTabSlots,
+  TAB_INSET_X,
+  PILL_PAD_X,
+  LABEL_EPSILON,
+  type TabSlotsInput,
+  type TabSlotsLayout,
+} from "./tab-slots";
+
 /** One leg of the alert breathe (ms) — 800 + 800 = motion.md §4.5's ~1.6s. */
 const ALERT_BREATHE_LEG_MS = 800;
 /** The breathe's low opacity (motion.md §4.5: 0.75↔1). */
@@ -105,8 +142,6 @@ const ICON_SIZE = 22;
 const ICON_SIZE_ACTIVE = 23;
 /** The icon→label gutter inside the horizontal chip (px). */
 const CHIP_GAP = 6;
-/** The selection pill's horizontal breathing around the chip (px, per side). */
-const PILL_PAD_X = 8;
 /**
  * While a label's natural width is still unmeasured, its expanded maxWidth
  * rides this sentinel — a Text self-limits to its natural width, so the
@@ -126,7 +161,6 @@ export function FloatingTabBar({ tabs, activeIndex, onSelect }: FloatingTabBarPr
   // morph and the pill's wrap read these, never hardcoded px).
   const [labelWidths, setLabelWidths] = useState<Record<string, number>>({});
   const allMeasured = tabs.every((tab) => (labelWidths[tab.name] ?? 0) > 0);
-  const activeLabelWidth = labelWidths[tabs[activeIndex]?.name ?? ""] ?? 0;
 
   const barWidth = useMemo(
     () => windowWidth - BAR_MARGIN * 2,
@@ -134,24 +168,50 @@ export function FloatingTabBar({ tabs, activeIndex, onSelect }: FloatingTabBarPr
   );
   const tabWidth = useMemo(() => barWidth / Math.max(tabs.length, 1), [barWidth, tabs.length]);
 
+  // R118-B — the adaptive slots: the measured layout (what the row and the
+  // pill animate toward once every label has reported) and the UNMEASURED
+  // mount pose (selected slot at its floor, the others at the equal split),
+  // both off the one pure function.
+  const layout = useMemo(
+    () =>
+      computeTabSlots({
+        barWidth,
+        tabCount: tabs.length,
+        activeIndex,
+        labelWidths: tabs.map((tab) => labelWidths[tab.name] ?? 0),
+      }),
+    [barWidth, tabs, activeIndex, labelWidths],
+  );
+  const mountLayout = useMemo(
+    () =>
+      computeTabSlots({
+        barWidth,
+        tabCount: tabs.length,
+        activeIndex,
+        labelWidths: tabs.map(() => 0),
+      }),
+    [barWidth, tabs, activeIndex],
+  );
+
   // The sliding indicator — one shared pill. Its CENTER glides on TAB_SPRING
   // (the calm slide, motion.md §1) while its WIDTH rides the label morph's
   // TAB_LABEL_MS timing, so the border visually wraps the selected chip at
-  // every beat of the morph. Until the labels measure, the pill holds its
-  // mount pose (the R115 slot-wide pill) — no flash, no zero-width sliver.
-  const indicatorCenter = useSharedValue((activeIndex + 0.5) * tabWidth);
-  const indicatorWidth = useSharedValue(tabWidth - spacing.sm);
+  // every beat of the morph. R118-B: both read the adaptive slot layout —
+  // the pill centers inside the SELECTED SLOT (the edge clamp is deleted;
+  // the slot math keeps it ≥ TAB_INSET_X from the slab's rounded edges).
+  // Until the labels measure, the pill holds the unmeasured pose (the
+  // selected slot at its floor, the pill the slot's own width) — no flash,
+  // no zero-width sliver.
+  const indicatorCenter = useSharedValue(
+    mountLayout.centers[activeIndex] ?? (activeIndex + 0.5) * tabWidth,
+  );
+  const indicatorWidth = useSharedValue(mountLayout.pillWidth);
   const barTranslate = useSharedValue(0);
 
   useEffect(() => {
     if (!allMeasured) return; // hold the mount pose until the labels measure
-    const center = (activeIndex + 0.5) * tabWidth;
-    // The pill wraps the ACTIVE chip (its 23px icon + gutter + label) with
-    // breathing room, capped so it never pokes past the slab's own rounded
-    // edges.
-    const chip = ICON_SIZE_ACTIVE + CHIP_GAP + activeLabelWidth;
-    const edge = Math.min(center, barWidth - center) * 2 - 2;
-    const width = Math.min(chip + PILL_PAD_X * 2, Math.max(edge, ICON_SIZE));
+    const center = layout.centers[activeIndex] ?? (activeIndex + 0.5) * tabWidth;
+    const width = layout.pillWidth;
     if (reduced) {
       indicatorCenter.value = center;
       indicatorWidth.value = width;
@@ -161,9 +221,8 @@ export function FloatingTabBar({ tabs, activeIndex, onSelect }: FloatingTabBarPr
     indicatorWidth.value = withTiming(width, { duration: TAB_LABEL_MS });
   }, [
     activeIndex,
+    layout,
     tabWidth,
-    barWidth,
-    activeLabelWidth,
     allMeasured,
     reduced,
     indicatorCenter,
@@ -194,9 +253,15 @@ export function FloatingTabBar({ tabs, activeIndex, onSelect }: FloatingTabBarPr
         pointerEvents="box-none"
         style={[styles.floatWrap, { marginBottom: Math.max(insets.bottom, 8) }, barStyle]}
       >
-        <View style={{ boxShadow: tokens.clayShadow2 }}>
-        <ChromeEdge radius={28}>
-          <View style={[styles.bar, { width: barWidth }]}>
+        {/* R118-B — the corner fix: the bar's geometry (radius 28, card fill,
+            the elevation-2 clay shadow) lives on ONE rounded View — the old
+            square boxShadow wrapper cast a rectangular halo around the rounded
+            slab (the "sticker pasted" corners). ClayCard's own pattern. */}
+        <View
+          style={{ borderRadius: 28, backgroundColor: tokens.card, boxShadow: tokens.clayShadow2 }}
+        >
+          <ChromeEdge radius={28}>
+            <View style={[styles.bar, { width: barWidth }]}>
             {/* The sliding selection pill — R116-b's 2px-bordered wrap, with
                 R117-g2's warm presence: the fill is accentTint (the selected
                 chip sits on a terracotta-tinted pill) under the 2px accentDeep
@@ -219,6 +284,11 @@ export function FloatingTabBar({ tabs, activeIndex, onSelect }: FloatingTabBarPr
                 tab={tab}
                 active={index === activeIndex}
                 labelWidth={labelWidths[tab.name] ?? 0}
+                slotWidth={
+                  allMeasured
+                    ? (layout.slots[index] ?? tabWidth)
+                    : (mountLayout.slots[index] ?? tabWidth)
+                }
                 onPress={() => {
                   if (index === activeIndex) return;
                   void selectionHaptic();
@@ -252,24 +322,35 @@ export function FloatingTabBar({ tabs, activeIndex, onSelect }: FloatingTabBarPr
                 </Text>
               ))}
             </View>
-          </View>
-        </ChromeEdge>
+            </View>
+          </ChromeEdge>
         </View>
       </Animated.View>
     </SafeAreaView>
   );
 }
 
-/** One tab item — the horizontal chip, the label morph, the alert breathe. */
+/** One tab item — the animated slot, the horizontal chip, the label morph,
+ *  the alert breathe. */
+
+/** The tab's touch target carries an animated WIDTH (the adaptive slot) —
+ *  RN core's Pressable can't take an animated style, so the animated wrapper
+ *  owns the slot's box and the press sits inside it. */
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
 function TabItem({
   tab,
   active,
   labelWidth,
+  slotWidth,
   onPress,
 }: {
   tab: TabDescriptor;
   active: boolean;
   labelWidth: number;
+  /** The slot's target width — the measured adaptive layout, or the
+   *  unmeasured mount pose (floor/equal-split) until the labels report. */
+  slotWidth: number;
   onPress: () => void;
 }) {
   const { tokens } = useTheme();
@@ -277,6 +358,22 @@ function TabItem({
   const breathe = useSharedValue(1);
   const alert = tab.alert === true;
   const Icon = tab.icon;
+
+  // R118-B — the SLOT's width (the fixed flex:1 slot is dead): the row
+  // rebalances fluidly on the label morph's own TAB_LABEL_MS timing — the
+  // newly-selected slot grows to its chip, every other slot glides to the
+  // new equal split, so the icons glide and never jump. Mounted at the
+  // unmeasured pose; the row blooms when allMeasured flips (the parent
+  // swaps slotWidth to the measured layout then). Reduced motion snaps.
+  const slot = useSharedValue(slotWidth);
+  useEffect(() => {
+    if (reduced) {
+      slot.value = slotWidth;
+      return;
+    }
+    slot.value = withTiming(slotWidth, { duration: TAB_LABEL_MS });
+  }, [slotWidth, reduced, slot]);
+  const slotStyle = useAnimatedStyle(() => ({ width: slot.value }));
 
   // The label morph's two drivers: the maxWidth the label's box animates
   // through (0 collapsed ↔ natural expanded) and its fade. Mounted at the
@@ -305,10 +402,13 @@ function TabItem({
   // R116-b — the label morph (motion.md §4.7): maxWidth animates the row's
   // reflow (the chip re-centers fluidly — no jump), opacity fades the text
   // in/out. While unmeasured the expanded max rides the unconstrained
-  // sentinel (the Text self-limits to its natural width). Reduced motion
-  // snaps both values (motion.md §5).
+  // sentinel (the Text self-limits to its natural width); once measured it
+  // targets the measurement + LABEL_EPSILON (R118-B — Android's pixel-grid
+  // rounding can clip the last glyph at an exactly-measured maxWidth, and
+  // ellipsizeMode="tail" below spells the honest truncation). Reduced
+  // motion snaps both values (motion.md §5).
   useEffect(() => {
-    const max = active ? (labelWidth > 0 ? labelWidth : LABEL_UNCONSTRAINED) : 0;
+    const max = active ? (labelWidth > 0 ? labelWidth + LABEL_EPSILON : LABEL_UNCONSTRAINED) : 0;
     const opacity = active ? 1 : 0;
     if (reduced) {
       labelMax.value = max;
@@ -337,7 +437,7 @@ function TabItem({
   const pending = badge !== undefined && badge > 0;
 
   return (
-    <Pressable
+    <AnimatedPressable
       accessibilityLabel={
         alert && pending
           ? `${tab.label} tab, ${badge} pending approvals`
@@ -345,11 +445,12 @@ function TabItem({
       }
       accessibilityRole="tab"
       accessibilityState={{ selected: active }}
-      style={styles.tab}
+      style={[styles.tab, slotStyle]}
       onPress={onPress}
     >
       {/* The horizontal chip (round-116): icon LEFT, label RIGHT — the label
-          breathes in beside the icon; the neighbors' slots never move. */}
+          breathes in beside the icon while the SLOT widths rebalance around
+          it (R118-B — the neighbors' centers glide on the same timing). */}
       <View style={styles.chip}>
         <View>
           <Animated.View style={iconBreathe}>
@@ -380,11 +481,12 @@ function TabItem({
             { color, fontFamily: active ? fontFamily.bold : fontFamily.semibold },
           ]}
           numberOfLines={1}
+          ellipsizeMode="tail"
         >
           {tab.label}
         </Animated.Text>
       </View>
-    </Pressable>
+    </AnimatedPressable>
   );
 }
 
@@ -403,6 +505,11 @@ const styles = StyleSheet.create({
     height: BAR_HEIGHT,
     flexDirection: "row",
     alignItems: "center",
+    // R118-B — the row's 12px inset from the slab's inner edges: the pill
+    // math (computeTabSlots) works in this padded space while the absolute
+    // pill + measurement row keep the FULL-WIDTH coordinate space (absolute
+    // children ignore padding).
+    paddingHorizontal: TAB_INSET_X,
   },
   indicator: {
     position: "absolute",
@@ -415,7 +522,9 @@ const styles = StyleSheet.create({
     borderWidth: 2,
   },
   tab: {
-    flex: 1,
+    // R118-B — the fixed flex:1 slot is DEAD: the width arrives as an
+    // animated value (the adaptive slot layout) via slotStyle. The slot is
+    // still the full-height touch target.
     alignItems: "center",
     justifyContent: "center",
     height: "100%",

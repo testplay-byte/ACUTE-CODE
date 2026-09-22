@@ -35,6 +35,12 @@
  * hairline border + the chip radius. `tabBarAware` joins the vocabulary
  * (opt OUT of the floating bar's inset; default true — today's behavior).
  *
+ * R118-B (spec §2.7) — the shared ARROW back button: the pushed screens'
+ * back slot is the shared QuietIconButton (ArrowLeft 22, the 40px quiet
+ * circle — "make it a bit more smaller"), replacing the R116-b chevron
+ * chip. The session screen's own back button is track D's; this scaffold
+ * + the connect header swap together.
+ *
  * R117-g2 (AMENDMENT 5 — the rhythm, round-117-elevation.md §2.1): the
  * bodyContent gap drops 16 → spacing.md (12) — the intra-group beat. The
  * 32 px section break is SectionHeader's own marginTop (spacing.xl 20) +
@@ -42,7 +48,7 @@
  * 16 (the body padding); card padding stays lg/md/xl.
  */
 
-import { Bell, ChevronLeft } from "lucide-react-native";
+import { ArrowLeft, Bell } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import React, { createContext, useContext } from "react";
 import {
@@ -56,9 +62,9 @@ import {
 } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { ConnectionPill } from "@/design/primitives";
+import { ConnectionPill, QuietIconButton } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
-import { fontFamily, RADIUS_CHIP, spacing, TYPE_CAPTION, TYPE_TITLE } from "@/design/tokens";
+import { fontFamily, spacing, TYPE_CAPTION, TYPE_TITLE } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { useUnread } from "@/features/activity";
 
@@ -147,24 +153,21 @@ export function ScreenScaffold({
       {/* ── the ONE compact header: back | bell · centered title · right · pill ──
           (R114-c: chrome={false} renders NO row — the tab roots are header-free;
            R116-b: the title is absolutely centered over the WHOLE row, the back
-           button is a chip, the spacer keeps the right side flush right) */}
+           button is a chip, the spacer keeps the right side flush right;
+           R118-B: the back slot is the shared 40px ArrowLeft QuietIconButton) */}
       {chrome ? (
         <View style={styles.headerRow}>
           {back ? (
-            <Pressable
-              accessibilityLabel="Go back"
-              accessibilityRole="button"
-              hitSlop={12}
-              onPress={() => router.back()}
-              style={[
-                styles.sideTarget,
-                styles.backChip,
-                { backgroundColor: tokens.subtle, borderColor: tokens.borderSubtle },
-              ]}
-              testID="scaffold-back"
-            >
-              <ChevronLeft size={26} color={tokens.text} strokeWidth={2} />
-            </Pressable>
+            <View style={styles.backWrap}>
+              <QuietIconButton
+                icon={ArrowLeft}
+                iconSize={22}
+                size={40}
+                accessibilityLabel="Go back"
+                onPress={() => router.back()}
+                testID="scaffold-back"
+              />
+            </View>
           ) : (
             // The tab roots' bell — the notifications entry (the pushed screens
             // reach it through their own tab root underneath).
@@ -247,18 +250,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     gap: spacing.xs,
   },
-  /** The 44px side target: the back chevron (pushed screens) or the bell
-   * (tab roots) — one discipline, one width. */
+  /** The 44px side target: the bell (tab roots) — one discipline, one width.
+   * (R118-B: the back slot moved to the shared 40px QuietIconButton.) */
   sideTarget: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  /**
-   * R116-b — the back CHIP (donts.md #41): the 44px target gains a subtle
-   * fill + hairline border + the chip radius; the chevron is unchanged.
-   * The fill/border colors ride the theme tokens (inline).
-   */
-  backChip: {
-    borderRadius: RADIUS_CHIP,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
+  /** R118-B — the shared ArrowLeft back button's wrapper: the 4dp tail gap
+   * (+ the row's own 4dp gap = 8dp to the title's overlay space). */
+  backWrap: { marginRight: spacing.xs },
   /** R116-b — the flex spacer (the title left the flow to center absolutely). */
   titleSpacer: { flex: 1 },
   /**

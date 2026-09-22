@@ -3,42 +3,36 @@
  * old rows/cards/preview): the six themes as a clean TWO-COLUMN card grid
  * (each card = the 5-swatch strip, rendered in the ACTIVE mode's palette —
  * the honest preview of what a switch changes — + the theme name; selected
- * = the 2px accent border + the check badge), the mode selector as ONE
- * segmented control (the tab-bar pill grammar — a clay track at the pill
- * radius, three segments, the spring-sliding accent indicator, the selected
- * label bold accent), and the CHAT section (R114-c — the four synced prefs
- * the appearance domain grew: density, text size, timestamps, tool
- * activity; every flip optimistically applies + PUTs the partial patch,
- * the same house pattern as the theme/mode controls). The R114 "The clay,
- * up close" preview card is GONE — the owner: "the preview at the bottom
- * is completely unnecessary — remove."
+ * = the 2px accent border + the check badge), the mode selector as the
+ * SHARED SegmentedControl (R118-B — the local ModeSegmentedControl is
+ * DELETED; the control's own comment always claimed the tab-pill grammar,
+ * and now it finally rides it: the AA-clean accentDeep indicator sliding
+ * on TAB_SPRING), and the CHAT section (R114-c — the four synced prefs the
+ * appearance domain grew: density, text size, timestamps, tool activity;
+ * every flip optimistically applies + PUTs the partial patch, the same
+ * house pattern as the theme/mode controls). The R114 "The clay, up close"
+ * preview card is GONE — the owner: "the preview at the bottom is
+ * completely unnecessary — remove."
  *
- * R116-i (verdicts #36/#37): the mode indicator carries the 2px accent
- * selection border (donts #34 — a selection border is never hairline),
- * and the chat rows sit their chips RIGHT-ALIGNED in the label's row —
- * [label + caption stacked] at the left, the chips vertically centered
- * against it at the right edge, no dead right space. A row that genuinely
- * can't fit (three wide chips on a narrow phone) wraps its chips to their
- * own right-aligned line — never a clipped label.
+ * R118-B (items 18-20, spec §2.6): the chat rows' CAPTIONS DIE — each row
+ * is the label heading (TypeBodyStrong) on top with the option chips BELOW
+ * as a centered wrapping row (flexWrap + justifyContent center + gap sm,
+ * nearly full width — the options are the content, not a right-aligned
+ * afterthought); the rows knit with the strong Hairline dividers; the
+ * "synced across devices — applied live" footer is DELETED (the sync is
+ * the system's own behavior, not a caption's job).
  */
 
-import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import { Check } from "lucide-react-native";
-import Animated, {
-  useAnimatedStyle,
-  useReducedMotion,
-  useSharedValue,
-  withSpring,
-} from "react-native-reanimated";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import {
   Chip,
   ClayCard,
+  Hairline,
   SectionHeader,
+  SegmentedControl,
   TypeBodyStrong,
-  TypeCaption,
-  TypeMicro,
 } from "@/design/primitives";
 import {
   useTheme,
@@ -48,23 +42,14 @@ import {
   type TimestampsMode,
   type ToolActivity,
 } from "@/design/theme";
-import {
-  fontFamily,
-  RADIUS_INPUT,
-  RADIUS_PILL,
-  spacing,
-  THEMES,
-  type ThemeColors,
-  TYPE_BODY,
-} from "@/design/tokens";
-import { SPRING } from "@/design/motion";
+import { RADIUS_INPUT, RADIUS_PILL, spacing, THEMES, type ThemeColors } from "@/design/tokens";
 import { selectionHaptic } from "@/design/haptics";
 import { mobLog } from "@/lib/log";
 
-const MODES: ReadonlyArray<{ id: ThemeMode; label: string }> = [
-  { id: "system", label: "System" },
-  { id: "dark", label: "Dark" },
-  { id: "light", label: "Light" },
+const MODES: ReadonlyArray<{ id: ThemeMode; label: string; accessibilityLabel: string }> = [
+  { id: "system", label: "System", accessibilityLabel: "Mode: follow the system setting" },
+  { id: "dark", label: "Dark", accessibilityLabel: "Mode: dark" },
+  { id: "light", label: "Light", accessibilityLabel: "Mode: light" },
 ];
 
 const DENSITIES: ReadonlyArray<{ id: ChatDensity; label: string }> = [
@@ -98,7 +83,6 @@ const THEME_ROWS: ReadonlyArray<ReadonlyArray<ThemeColors>> = Array.from(
 
 export default function AppearanceSettingsScreen() {
   const {
-    tokens,
     mode,
     setMode,
     chatDensity,
@@ -121,10 +105,14 @@ export default function AppearanceSettingsScreen() {
         </View>
       </ClayCard>
 
-      {/* ── the mode selector — one segmented control, one spring ── */}
+      {/* ── the mode selector — the SHARED SegmentedControl (R118-B: the
+          local ModeSegmentedControl is deleted; the control rides TAB_SPRING
+          — the grammar its own comment always claimed). ── */}
       <SectionHeader>Mode</SectionHeader>
-      <ModeSegmentedControl
-        mode={mode}
+      <SegmentedControl
+        testID="appearance-mode"
+        options={MODES}
+        selectedId={mode}
         onSelect={(next) => {
           if (next === mode) return; // the selected segment is at rest
           void selectionHaptic();
@@ -134,11 +122,14 @@ export default function AppearanceSettingsScreen() {
       />
 
       {/* ── the chat prefs (R114-c — the domain's four synced fields; every
-          flip applies optimistically + PUTs its one-field partial patch) ── */}
+          flip applies optimistically + PUTs its one-field partial patch).
+          R118-B: the captions DIE — the label heads the row, the options sit
+          BELOW as a centered wrapping chips row, and the strong dividers knit
+          the rows. ── */}
       <SectionHeader>Chat</SectionHeader>
       <ClayCard>
         <View style={styles.chatPad}>
-          <ChatPrefRow label="Chat density" caption="bubble spacing">
+          <ChatPrefRow label="Chat density">
             {DENSITIES.map((option) => (
               <Chip
                 key={option.id}
@@ -155,7 +146,8 @@ export default function AppearanceSettingsScreen() {
               </Chip>
             ))}
           </ChatPrefRow>
-          <ChatPrefRow label="Text size" caption="reading size">
+          <Hairline strong inset={spacing.md} />
+          <ChatPrefRow label="Text size">
             {TEXT_SIZES.map((option) => (
               <Chip
                 key={option.id}
@@ -172,7 +164,8 @@ export default function AppearanceSettingsScreen() {
               </Chip>
             ))}
           </ChatPrefRow>
-          <ChatPrefRow label="Timestamps" caption="when times appear">
+          <Hairline strong inset={spacing.md} />
+          <ChatPrefRow label="Timestamps">
             {TIMESTAMPS.map((option) => (
               <Chip
                 key={option.id}
@@ -189,7 +182,8 @@ export default function AppearanceSettingsScreen() {
               </Chip>
             ))}
           </ChatPrefRow>
-          <ChatPrefRow label="Tool activity" caption="tool rendering" last>
+          <Hairline strong inset={spacing.md} />
+          <ChatPrefRow label="Tool activity">
             {TOOL_ACTIVITY.map((option) => (
               <Chip
                 key={option.id}
@@ -206,9 +200,6 @@ export default function AppearanceSettingsScreen() {
               </Chip>
             ))}
           </ChatPrefRow>
-          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-            synced across devices — applied live
-          </TypeMicro>
         </View>
       </ClayCard>
     </ScreenScaffold>
@@ -271,131 +262,21 @@ function ThemeGrid() {
   );
 }
 
-// ── the mode segmented control (the tab-bar pill grammar) ───────────────────
+// ── the chat pref row — the label heads, the options sit below ──────────────
 
-/** The indicator's inset inside the pill track (4px = spacing.xs). */
-const SEGMENT_INSET = 4;
-/** The track height — the inset pair + a 44px touch segment. */
-const SEGMENT_TRACK_H = 52;
-
-/**
- * ONE clay track (pill radius) with three segments and the spring-sliding
- * accent indicator — the tab-bar pill grammar exactly: a subtleHover fill
- * + the 2px accent border (donts #34 — selection borders are never
- * hairline), one spring (SPRING) slide, the selected label bold accent.
- * The indicator is positioned in INDEX space so the spring runs even
- * before the first layout measurement; reduced motion snaps (motion.md §5).
- */
-function ModeSegmentedControl({
-  mode,
-  onSelect,
-}: {
-  mode: ThemeMode;
-  onSelect: (next: ThemeMode) => void;
-}) {
-  const { tokens } = useTheme();
-  const reduced = useReducedMotion();
-  const [trackWidth, setTrackWidth] = useState(0);
-
-  const activeIndex = Math.max(0, MODES.findIndex((m) => m.id === mode));
-  const segmentWidth = (trackWidth - SEGMENT_INSET * 2) / MODES.length;
-  const indicatorIndex = useSharedValue(activeIndex);
-
-  useEffect(() => {
-    if (reduced) {
-      indicatorIndex.value = activeIndex;
-      return;
-    }
-    indicatorIndex.value = withSpring(activeIndex, SPRING);
-  }, [activeIndex, reduced, indicatorIndex]);
-
-  const indicatorStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: indicatorIndex.value * segmentWidth }],
-  }));
-
+/** One chat-pref row (R118-B, items 19/20): the CAPTION DIES — the label is
+ *  the heading (TypeBodyStrong) on its own line, the option chips sit BELOW
+ *  as a CENTERED wrapping row (flexWrap + justifyContent center + gap sm,
+ *  nearly full width — the options ARE the row's content, not a
+ *  right-aligned afterthought). The rows knit via the strong Hairline
+ *  dividers the caller renders between them; the selected chip carries the
+ *  accent fill — the same chip grammar as the sheets. */
+function ChatPrefRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <View
-      style={[styles.segTrack, { backgroundColor: tokens.pillBg, borderColor: tokens.border }]}
-      onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
-    >
-      {trackWidth > 0 ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.segIndicator,
-            {
-              width: segmentWidth,
-              backgroundColor: tokens.subtleHover,
-              borderColor: tokens.accent,
-            },
-            indicatorStyle,
-          ]}
-        />
-      ) : null}
-      {MODES.map((m) => {
-        const selected = mode === m.id;
-        return (
-          <Pressable
-            key={m.id}
-            testID={`appearance-mode-${m.id}`}
-            accessibilityRole="button"
-            accessibilityLabel={`Mode: ${m.label}`}
-            accessibilityState={{ selected }}
-            onPress={() => onSelect(m.id)}
-            style={styles.segSegment}
-          >
-            <Text
-              style={{
-                color: selected ? tokens.accent : tokens.textSecondary,
-                fontSize: TYPE_BODY,
-                fontFamily: selected ? fontFamily.bold : fontFamily.medium,
-              }}
-            >
-              {m.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
-// ── the chat pref row — label + caption left, chips right in the row ───────
-
-/** One chat-pref row (R116-i — verdict #37): the label + one-line caption
- *  stacked at the LEFT, the option chips RIGHT-ALIGNED in the same row,
- *  vertically centered with the label — no dead right space. The head
- *  wraps only when a row genuinely can't fit (three wide chips on a
- *  narrow phone): the chips drop to their own right-aligned line
- *  (marginLeft auto owns that edge), never a clipped label. The selected
- *  chip carries the accent fill — the same chip grammar as the sheets. */
-function ChatPrefRow({
-  label,
-  caption,
-  last = false,
-  children,
-}: {
-  label: string;
-  caption: string;
-  last?: boolean;
-  children: React.ReactNode;
-}) {
-  const { tokens } = useTheme();
-  return (
-    <View
-      style={[
-        styles.chatRowHead,
-        last ? null : [styles.chatRowDivider, { borderBottomColor: tokens.borderSubtle }],
-      ]}
-    >
-      <View style={styles.chatRowText}>
-        <TypeBodyStrong numberOfLines={1} style={styles.chatRowLabel}>
-          {label}
-        </TypeBodyStrong>
-        <TypeCaption numberOfLines={1} style={styles.chatRowCaption}>
-          {caption}
-        </TypeCaption>
-      </View>
+    <View style={styles.chatRow}>
+      <TypeBodyStrong numberOfLines={1} style={styles.chatRowLabel}>
+        {label}
+      </TypeBodyStrong>
       <View style={styles.chatChips}>{children}</View>
     </View>
   );
@@ -434,56 +315,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  // ── mode segmented control ──
-  segTrack: {
-    height: SEGMENT_TRACK_H,
-    // half-of-height — the pill geometry (the ClaySwitch track recipe)
-    borderRadius: SEGMENT_TRACK_H / 2,
-    borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: "row",
-    padding: SEGMENT_INSET,
-  },
-  segIndicator: {
-    position: "absolute",
-    top: SEGMENT_INSET,
-    bottom: SEGMENT_INSET,
-    left: SEGMENT_INSET,
-    // half-of-height — the pill geometry
-    borderRadius: (SEGMENT_TRACK_H - SEGMENT_INSET * 2) / 2,
-    // donts #34 — a selection border is 2px, never hairline
-    borderWidth: 2,
-  },
-  segSegment: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: SEGMENT_TRACK_H - SEGMENT_INSET * 2,
-  },
-  // ── chat prefs ──
-  chatPad: { padding: spacing.lg, gap: spacing.lg },
-  chatRowDivider: {
-    paddingBottom: spacing.lg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  // R116-i: the one-row anatomy — [label + caption stacked] left, the
-  // chips right-aligned (vertically centered with the label). flexWrap +
-  // the chips' marginLeft auto degrade gracefully: a row that can't fit
-  // drops its chips to their own right-aligned line, never a clip.
-  chatRowHead: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: spacing.md,
-    flexWrap: "wrap",
-  },
-  chatRowText: { gap: 2 },
+  // ── chat prefs (R118-B: label heads, chips wrap centered below; the
+  // rows knit via the strong Hairline dividers the caller renders) ──
+  chatPad: { padding: spacing.lg },
+  chatRow: { paddingVertical: spacing.md, gap: spacing.sm },
   chatRowLabel: { fontSize: 15 },
-  chatRowCaption: {},
   chatChips: {
     flexDirection: "row",
-    gap: spacing.sm,
-    justifyContent: "flex-end",
     flexWrap: "wrap",
-    marginLeft: "auto",
+    justifyContent: "center",
+    gap: spacing.sm,
   },
 });
+

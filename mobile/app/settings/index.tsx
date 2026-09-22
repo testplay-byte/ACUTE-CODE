@@ -1,12 +1,17 @@
 /**
  * Settings — the management HUB (R109 tab root; R115-g — MOVED here into
  * the pushed settings stack, its tab slot taken by the MORE hub): every
- * desktop-management page one tap away — connection, appearance, providers,
- * agents, prompts, preferences. A PUSHED screen now: the standard compact
- * header (chevron | title | right slot). The about card (version, the
- * one-line role, the wizard replay) lives in the More tab. Unpaired → the
- * config rows carry the honest "requires a linked host" caption and are
- * disabled (the hub itself never pretends the desktop is reachable).
+ * desktop-management page one tap away — appearance, providers, agents,
+ * prompts, preferences. A PUSHED screen now: the standard compact header
+ * (chevron | title | right slot). The about card (version, the one-line
+ * role, the wizard replay) lives in the More tab. Unpaired → the config
+ * rows carry the honest "requires a linked host" caption and are disabled
+ * (the hub itself never pretends the desktop is reachable).
+ *
+ * R118-B (spec §2.4): the CONNECTION ROW IS DELETED — the link's surface
+ * is the More hero (tap → the connect hub) and /settings/host stays
+ * reachable from the hub's "Manage this connection" row. The settings
+ * stack starts at Appearance; the WHO+status truth lives in ONE place.
  */
 
 import { useRouter } from "expo-router";
@@ -19,10 +24,9 @@ import {
   FileText,
   Palette,
   SlidersHorizontal,
-  Unplug,
 } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
-import { PressableCard, StatusDot, TypeBodyStrong, TypeCaption } from "@/design/primitives";
+import { PressableCard, TypeBodyStrong, TypeCaption } from "@/design/primitives";
 import { useTheme } from "@/design/theme";
 import { getTheme, spacing } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
@@ -31,64 +35,26 @@ import { mobLog } from "@/lib/log";
 export default function SettingsScreen() {
   const { tokens, themeId, mode } = useTheme();
   const router = useRouter();
-  const { status, host } = useLink();
+  const { status } = useLink();
 
   useEffect(() => {
     mobLog("settings", "hub opened", { status });
   }, [status]);
 
-  const connected = status === "connected";
   const unpaired = status === "unpaired";
   const themeName = getTheme(themeId).name;
   const modeWord = mode === "system" ? "follows system" : mode;
 
-  // The config rows need a linked host. Connection + Appearance never do
-  // (the link is managed from Connection; the theme is this phone's own).
+  // The config rows need a linked host. Appearance never does (the theme is
+  // this phone's own).
   const configCaption = unpaired ? "requires a linked host" : null;
 
   return (
     <ScreenScaffold title="Settings" back>
-      {/* ── the connection row: the live truth + the host's name ── */}
-      <PressableCard
-        onPress={() => router.push("/settings/host")}
-        accessibilityLabel="Connection settings"
-      >
-        <View style={styles.rowInner}>
-          <View style={[styles.rowIcon, { backgroundColor: tokens.subtleHover }]}>
-            <Unplug size={22} color={tokens.accent} strokeWidth={2.2} />
-          </View>
-          <View style={styles.rowText}>
-            <View style={styles.rowTitleLine}>
-              <TypeBodyStrong>Connection</TypeBodyStrong>
-              <StatusDot
-                color={
-                  connected
-                    ? tokens.success
-                    : status === "offline"
-                      ? tokens.warning
-                      : status === "probing"
-                        ? tokens.accent
-                        : tokens.textTertiary
-                }
-                pulse={status === "probing"}
-              />
-            </View>
-            {/* R115-p — copy.md's pinned state vocabulary (the same words the
-                home strip + the More hub spell): "Live" / "Looking for the
-                host…" / "Offline", the word-pair name after the separator. */}
-            <TypeCaption numberOfLines={1}>
-              {host !== null
-                ? connected
-                  ? `Live · ${host.hostLabel}`
-                  : status === "probing"
-                    ? `Looking for the host… · ${host.hostLabel}`
-                    : `Offline · ${host.hostLabel}`
-                : "no desktop linked yet"}
-            </TypeCaption>
-          </View>
-          <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
-        </View>
-      </PressableCard>
+      {/* ── R118-B: the connection row is DELETED — the More hero + the
+          connect hub own the link's whole surface now; /settings/host stays
+          reachable from the hub's "Manage this connection" row. The stack
+          starts at this phone's own material. ── */}
 
       {/* ── appearance: this phone's own material ── */}
       <PressableCard
@@ -205,5 +171,4 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   rowText: { flex: 1, gap: 3 },
-  rowTitleLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
 });

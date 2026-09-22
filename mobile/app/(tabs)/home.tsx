@@ -4,14 +4,12 @@
  * quiet strip per truth, rows of two text lines max, nothing that fidgets.
  * Top → bottom:
  *
- *   · THE CONNECTION ROW — one compact PressableCard (the big hero is DEAD:
- *     version / last-seen / last-failure / retry all moved out — /connect
- *     owns retry now). Dot: live=success, probing=warning+pulse,
- *     offline=danger. Word: "Live" / "Looking for the host…" / "Offline"
- *     (copy.md's pinned vocabulary). Caption: the host's word-pair name
- *     (Wave E — hostLabel IS "Confused Coconut" now), so the row reads
- *     "Live · Confused Coconut"; offline appends "· messages will queue"
- *     (one line — the old banner folded into it). Tap → /connect.
+ *   · THE LINK TRUTH (R118-B): the always-on connection row is DEAD — the
+ *     home renders a quiet strip ONLY while the link is offline/probing
+ *     ("Offline · messages will queue" / "Looking for the host…", tap →
+ *     /connect); while LIVE, nothing renders (the WHO + live status live
+ *     in the More hero now — one truth, one surface). Unpaired keeps the
+ *     one-liner deep-link card.
  *   · THE ACTIVITY STRIP — only while unread > 0 (the R117-g2 ClayIconChip
  *     bell + "{n} unread" + chevron → /activity; no unread → no row, no
  *     noise).
@@ -19,27 +17,35 @@
  *     (status === "running" straight off GET /sessions — the server's field
  *     is the only truth; up to 4) as rows: project letter avatar (TILE_ROW
  *     circle, the project's own color) + sessionTitle + "{projectName} ·
- *     {sessionStatusLabel}" + the Live badge → /session/{id}. Live-refreshed
- *     off the events epochs (hello + debounced session batches + project
- *     frames — the projects.tsx pattern). Empty → the section simply
- *     doesn't render (no empty state — quiet is the honest default).
+ *     {sessionStatusLabel}" + the Live badge → /session/{id}. R118-B — the
+ *     LIVE treatment: the section header carries the breathing running dot
+ *     (6px tokens.running, 0.55↔1 at 800ms legs — the §4.5 calm), and every
+ *     row's caption line appends the shared LiveCaret (motion.md §3) so the
+ *     preview carries the still-streaming presence. Live-refreshed off the
+ *     events epochs (hello + debounced session batches + project frames —
+ *     the projects.tsx pattern). Empty → the section simply doesn't render.
  *   · RECENT ACTIVITY (R116-f — verdict #21: "too minimal, not clickable,
  *     lacks color") — the 4-row preview, each row a 44px-min Pressable:
  *     leading kind glyph (error→CircleAlert in danger, approval→Bell in
  *     accent, anything else→CircleCheck in the quiet tertiary) beside the
  *     unread accent dot (read rows lose the dot), title + one body line
  *     (n.body, or the kind word when the body is empty) + the time
- *     right-aligned. Tap → the notification's session when it carries one,
- *     else the activity history. + "see all"; the one-liner empty state.
+ *     right-aligned, the rows knit by the R118-B STRONG Hairline dividers
+ *     (1dp borderStrong — the visible clay divider, one recipe with More's
+ *     stats). Tap → the notification's session when it carries one, else
+ *     the activity history. + "see all"; the one-liner empty state.
  *
  * DELETED FOREVER (R115-f): the Appearance section + ThemeDots (the theme
  * lives in settings now), the Quick actions 2×2 grid, the unpaired
  * Scan/Enter card (the gate routes unpaired users to /connect as their
  * landing — home renders the one-liner card for the deep-link case only).
+ * R118-B: the always-on connection row (the More hero + the offline/probing
+ * strip own the truth now) and the extra bottom breathing — home rides
+ * `bottomInset={spacing.xxxl}` (+32) so the fold clears the floating bar.
  */
 
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import {
   Bell,
   ChevronRight,
@@ -49,6 +55,14 @@ import {
   MonitorSmartphone,
 } from "lucide-react-native";
 import { Pressable, StyleSheet, View } from "react-native";
+import Animated, {
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from "react-native-reanimated";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { LetterAvatar } from "@/components/letter-avatar";
 import { timeAgo } from "@/components/host-card";
@@ -56,6 +70,8 @@ import {
   Badge,
   ClayCard,
   ClayIconChip,
+  Hairline,
+  LiveCaret,
   PressableCard,
   SectionHeader,
   StatusDot,
@@ -97,6 +113,45 @@ const KIND_GLYPHS: Record<string, ComponentType<{ size?: number; color?: string;
 
 function kindGlyph(kind: string) {
   return KIND_GLYPHS[kind] ?? CircleCheck;
+}
+
+/** One leg of the section dot's breathe (ms) — 800 + 800 = the §4.5 calm. */
+const LIVE_DOT_BREATHE_LEG_MS = 800;
+/** The section dot's low opacity (spec §2.2: 0.55↔1). */
+const LIVE_DOT_BREATHE_MIN = 0.55;
+
+/**
+ * The breathing section dot (R118-B, spec §2.2) — a 6px tokens.running dot
+ * leading the "Happening now" header, opacity 0.55↔1 at 800ms legs (the
+ * alert breathe's own calm rhythm, motion.md §4.5). Reduced motion holds
+ * it steady (motion.md §5 — the state stays legible, the cycle drops). The
+ * "Live" badge on each row stays static; this dot is the section's pulse.
+ */
+function LiveSectionDot() {
+  const { tokens } = useTheme();
+  const reduced = useReducedMotion();
+  const opacity = useSharedValue(1);
+  useEffect(() => {
+    if (reduced) {
+      opacity.value = 1;
+      return;
+    }
+    opacity.value = withRepeat(
+      withSequence(
+        withTiming(LIVE_DOT_BREATHE_MIN, { duration: LIVE_DOT_BREATHE_LEG_MS }),
+        withTiming(1, { duration: LIVE_DOT_BREATHE_LEG_MS }),
+      ),
+      -1,
+      false,
+    );
+  }, [reduced, opacity]);
+  const animated = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return (
+    <Animated.View
+      accessibilityLabel="live"
+      style={[animated, styles.liveDot, { backgroundColor: tokens.running }]}
+    />
+  );
 }
 
 /** The notification kinds' words (the activity screen's badge vocabulary). */
@@ -198,8 +253,8 @@ export default function HomeScreen() {
     return map;
   }, [projects]);
 
-  // The connection row's pinned vocabulary (copy.md): the word + the
-  // word-pair name read as one line — "Live · Confused Coconut".
+  // The link strip's pinned vocabulary (copy.md): the word + the queue note —
+  // NO host name (the WHO lives in the More hero; this row is the STATE only).
   const statusWord = connected ? "Live" : probing ? "Looking for the host…" : "Offline";
   // round-117-elevation: the deep status hues (spec §2.3 — readable at a glance).
   const isDark = tokens.isDark;
@@ -216,7 +271,7 @@ export default function HomeScreen() {
         : "#DC2626";
 
   return (
-    <ScreenScaffold title="ACUTE" chrome={false}>
+    <ScreenScaffold title="ACUTE" chrome={false} bottomInset={spacing.xxxl}>
       {host === null ? (
         // ── unpaired: the honest one-liner (the gate normally lands these
         //     users on /connect before home ever renders — this card is the
@@ -234,40 +289,45 @@ export default function HomeScreen() {
         </PressableCard>
       ) : (
         <>
-          {/* ── the connection row — the whole link truth in one compact
-              strip; tap → the connect hub (which owns retry). ── */}
-          <PressableCard
-            onPress={() => router.push("/connect")}
-            enterIndex={0}
-            accessibilityLabel={`${statusWord}, ${host.hostLabel}${offline ? ", messages will queue" : ""} — open connection settings`}
-            testID="home-status"
-          >
-            <View style={styles.stripInner}>
-              <StatusDot
-                color={connected ? tokens.success : probing ? tokens.warning : tokens.danger}
-                pulse={probing}
-              />
-              <View style={styles.stripText}>
-                {/* round-117-elevation §2.3: the status word carries the DEEP state
-                    hue (the row is the screen's status hero) — Live #15803D-class,
-                    probing #B45309-class, offline #DC2626-class, dark-mode pairs via
-                    the theme's resolved deep tokens. */}
-                <TypeBodyStrong
-                  numberOfLines={1}
-                  style={[styles.stripWord, { color: statusHue }]}
-                >
-                  {statusWord}
-                </TypeBodyStrong>
-                <TypeCaption
-                  numberOfLines={1}
-                  style={[styles.stripMeta, { color: tokens.textSecondary }]}
-                >
-                  {`· ${host.hostLabel}${offline ? " · messages will queue" : ""}`}
-                </TypeCaption>
+          {/* ── R118-B — the link's quiet strip, ONLY while offline/probing:
+              while LIVE, nothing renders (the More hero carries the WHO +
+              the live status — one truth, one surface). No host name here;
+              tap → the connect hub (which owns retry). ── */}
+          {!connected ? (
+            <PressableCard
+              onPress={() => router.push("/connect")}
+              enterIndex={0}
+              accessibilityLabel={`${statusWord}${offline ? ", messages will queue" : ""} — open connection settings`}
+              testID="home-status"
+            >
+              <View style={styles.stripInner}>
+                <StatusDot
+                  color={probing ? tokens.warning : tokens.danger}
+                  pulse={probing}
+                />
+                <View style={styles.stripText}>
+                  {/* round-117-elevation §2.3: the status word carries the DEEP
+                      state hue — probing #B45309-class, offline #DC2626-class,
+                      dark-mode pairs via the resolved deep tokens. */}
+                  <TypeBodyStrong
+                    numberOfLines={1}
+                    style={[styles.stripWord, { color: statusHue }]}
+                  >
+                    {statusWord}
+                  </TypeBodyStrong>
+                  {offline ? (
+                    <TypeCaption
+                      numberOfLines={1}
+                      style={[styles.stripMeta, { color: tokens.textSecondary }]}
+                    >
+                      · messages will queue
+                    </TypeCaption>
+                  ) : null}
+                </View>
+                <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
               </View>
-              <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
-            </View>
-          </PressableCard>
+            </PressableCard>
+          ) : null}
 
           {/* ── the activity strip — visible ONLY while something is unread
               (no unread → no row, no noise). ── */}
@@ -301,10 +361,15 @@ export default function HomeScreen() {
           ) : null}
 
           {/* ── "Happening now" — the host's running sessions; the section
-              simply doesn't render when nothing runs (no empty state). ── */}
+              simply doesn't render when nothing runs (no empty state).
+              R118-B: the header carries the breathing running dot and every
+              row's caption line ends in the shared LiveCaret. ── */}
           {running.length > 0 ? (
             <>
-              <SectionHeader>Happening now</SectionHeader>
+              <View style={styles.liveSectionRow}>
+                <LiveSectionDot />
+                <SectionHeader style={styles.liveSectionHeader}>Happening now</SectionHeader>
+              </View>
               {running.map((row, i) => {
                 const project =
                   row.projectId !== null ? (projectById.get(row.projectId) ?? null) : null;
@@ -347,11 +412,17 @@ export default function HomeScreen() {
                       )}
                       <View style={styles.runText}>
                         <TypeBodyStrong numberOfLines={1}>{title}</TypeBodyStrong>
-                        <TypeCaption numberOfLines={1}>
-                          {project !== null
-                            ? `${project.name} · ${sessionStatusLabel(row.status)}`
-                            : sessionStatusLabel(row.status)}
-                        </TypeCaption>
+                        {/* R118-B — the live caption line: the meta pair, then
+                            the shared LiveCaret (motion.md §3) — the row's
+                            "still streaming" presence, one 4dp gutter away. */}
+                        <View style={styles.runCaptionRow}>
+                          <TypeCaption numberOfLines={1} style={styles.runCaption}>
+                            {project !== null
+                              ? `${project.name} · ${sessionStatusLabel(row.status)}`
+                              : sessionStatusLabel(row.status)}
+                          </TypeCaption>
+                          <LiveCaret color={tokens.accent} />
+                        </View>
                       </View>
                       <Badge tone="running">Live</Badge>
                     </View>
@@ -390,50 +461,55 @@ export default function HomeScreen() {
                         ? tokens.accent
                         : tokens.textTertiary;
                   return (
-                    <Pressable
-                      key={n.id}
-                      onPress={() =>
-                        router.push(
-                          n.sessionId !== null && n.sessionId !== "" ? `/session/${n.sessionId}` : "/activity",
-                        )
-                      }
-                      accessibilityRole="button"
-                      accessibilityLabel={`${n.title}${when !== "" ? `, ${when}` : ""}${unread ? ", unread" : ""}`}
-                      testID={`home-recent-${i}`}
-                      style={({ pressed }) => [
-                        styles.recentRow,
-                        pressed ? { backgroundColor: tokens.subtleHover } : null,
-                      ]}
-                    >
-                      {/* The lead: the kind glyph beside the unread dot — the
-                          dot renders ONLY while unread (the glyph owns the
-                          row's identity now; the fixed-width slot keeps the
-                          text column aligned across read + unread rows). */}
-                      <View style={styles.recentLead}>
-                        <KindGlyph size={16} color={kindHue} strokeWidth={2.2} />
-                        {unread ? (
-                          <StatusDot color={tokens.accent} size={7} />
-                        ) : (
-                          <View style={styles.recentDotSpace} />
-                        )}
-                      </View>
-                      <View style={styles.recentText}>
-                        <TypeBodyStrong
-                          numberOfLines={1}
-                          style={{ color: unread ? tokens.text : tokens.textSecondary }}
-                        >
-                          {n.title}
-                        </TypeBodyStrong>
-                        <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-                          {n.body !== "" ? n.body : (KIND_WORDS[n.kind] ?? n.kind)}
-                        </TypeMicro>
-                      </View>
-                      {when !== "" ? (
-                        <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-                          {when}
-                        </TypeMicro>
-                      ) : null}
-                    </Pressable>
+                    <Fragment key={n.id}>
+                      {/* R118-B — the strong divider: a full 1dp of
+                          borderStrong between the preview rows (the old gap
+                          knit them with nothing visible at all). */}
+                      {i > 0 ? <Hairline strong inset={spacing.md} /> : null}
+                      <Pressable
+                        onPress={() =>
+                          router.push(
+                            n.sessionId !== null && n.sessionId !== "" ? `/session/${n.sessionId}` : "/activity",
+                          )
+                        }
+                        accessibilityRole="button"
+                        accessibilityLabel={`${n.title}${when !== "" ? `, ${when}` : ""}${unread ? ", unread" : ""}`}
+                        testID={`home-recent-${i}`}
+                        style={({ pressed }) => [
+                          styles.recentRow,
+                          pressed ? { backgroundColor: tokens.subtleHover } : null,
+                        ]}
+                      >
+                        {/* The lead: the kind glyph beside the unread dot — the
+                            dot renders ONLY while unread (the glyph owns the
+                            row's identity now; the fixed-width slot keeps the
+                            text column aligned across read + unread rows). */}
+                        <View style={styles.recentLead}>
+                          <KindGlyph size={16} color={kindHue} strokeWidth={2.2} />
+                          {unread ? (
+                            <StatusDot color={tokens.accent} size={7} />
+                          ) : (
+                            <View style={styles.recentDotSpace} />
+                          )}
+                        </View>
+                        <View style={styles.recentText}>
+                          <TypeBodyStrong
+                            numberOfLines={1}
+                            style={{ color: unread ? tokens.text : tokens.textSecondary }}
+                          >
+                            {n.title}
+                          </TypeBodyStrong>
+                          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+                            {n.body !== "" ? n.body : (KIND_WORDS[n.kind] ?? n.kind)}
+                          </TypeMicro>
+                        </View>
+                        {when !== "" ? (
+                          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+                            {when}
+                          </TypeMicro>
+                        ) : null}
+                      </Pressable>
+                    </Fragment>
                   );
                 })}
               </View>
@@ -483,7 +559,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     minHeight: 64,
   },
-  runText: { flex: 1, gap: 2 },
+  runText: { flex: 1, gap: 2, minWidth: 0 },
+  // R118-B — the live caption line: meta pair + the LiveCaret, 4dp gutter.
+  runCaptionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    minWidth: 0,
+  },
+  runCaption: { flexShrink: 1 },
+  // R118-B — the breathing dot leads the section header (the header's own
+  // marginTop moves to the row so the dot centers against the title).
+  liveSectionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.xl,
+  },
+  liveSectionHeader: { marginTop: 0 },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
   neutralTile: {
     width: TILE_ROW,
     height: TILE_ROW,
@@ -493,7 +591,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  recentPad: { padding: spacing.md, gap: spacing.md },
+  // R118-B — the strong dividers knit the preview rows: the card's gap is
+  // GONE (the rows' own paddingVertical carries the rhythm, 6+1+6 around
+  // each 1dp line — the house 12 beat, now visible).
+  recentPad: { padding: spacing.md },
   // The recent-activity row (R116-f): a 44px-min Pressable — [kind glyph +
   // unread dot] [title + one body line] [time right-aligned]. The row lives
   // INSIDE the preview card, so the pressed leg is the quiet hover tint
