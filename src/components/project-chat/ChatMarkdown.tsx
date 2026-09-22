@@ -841,11 +841,17 @@ export function parseMarkdownBlocks(content: string): MdBlock[] {
 
 // ─── The renderer ────────────────────────────────────────────────────────────
 
-/** Heading sizes per the R100-D spec (research §C4.4 + TOKENS §2): h1–h3
- * snap to 13px/600 (the `section` tier — the cliff: body 13 → title 24, no
- * in-between staircase); h4–h6 are 12px/600. The old 15/13.5/12.5px ladder
- * was the measured "AI-generated" tell (8 evenly-spaced sub-14px steps). */
-const HEADING_SIZES: Record<number, string> = { 1: "13px", 2: "13px", 3: "13px", 4: "12px", 5: "12px", 6: "12px" };
+/** R117-f (deliverable 4): the heading LADDER — a real hierarchy back,
+ * scaled in EM off the container's 13px body so the chat's text-size
+ * setting (Settings → Appearance → Text Size, .chat-prose's calc) scales
+ * headings with the body: h1 ~1.5em/700, h2 ~1.3em/650, h3 ~1.15em/600,
+ * h4–h6 ~0.9em/600 (≈ today's 12px, now scale-tracking). Restrained by
+ * design — the R100-D anti-staircase verdict was about no-huge-jumps
+ * between evenly-spaced sub-14px steps, not about flattening hierarchy:
+ * answers get their document shape back without ever touching the 24px
+ * `title` tier (the greeting's own). */
+const HEADING_SIZES: Record<number, string> = { 1: "1.5em", 2: "1.3em", 3: "1.15em", 4: "0.9em", 5: "0.9em", 6: "0.9em" };
+const HEADING_WEIGHTS: Record<number, number> = { 1: 700, 2: 650, 3: 600, 4: 600, 5: 600, 6: 600 };
 const HEADING_MARGINS: Record<number, string> = { 1: "mt-3 mb-1", 2: "mt-2.5 mb-1", 3: "mt-2 mb-0.5", 4: "mt-1.5 mb-0.5", 5: "mt-1.5 mb-0.5", 6: "mt-1.5 mb-0.5" };
 
 /** Render the parsed blocks (module-level: pure given styles + projectId). */
@@ -874,8 +880,15 @@ function renderBlocks(content: string, projectId: string, styles: ThemeStyles): 
           return (
             <div
               key={`md-h-${i}`}
-              className={`${HEADING_MARGINS[b.level]} font-semibold break-words`}
-              style={{ fontSize: size, color: styles.text }}
+              className={`${HEADING_MARGINS[b.level]} break-words`}
+              style={{
+                fontSize: size,
+                fontWeight: HEADING_WEIGHTS[b.level],
+                // R117-f: a tighter measure for the taller rungs (1.65 body
+                // leading at 20px reads as padding, not rhythm).
+                lineHeight: 1.3,
+                color: styles.text,
+              }}
             >
               {renderInline(b.text, projectId, `h${i}`, styles)}
             </div>
@@ -1025,12 +1038,22 @@ function renderBlocks(content: string, projectId: string, styles: ThemeStyles): 
  * specificity) — the turn header / bubble already provides the opening gap,
  * and a first paragraph riding 4–6px lower than every later sibling was the
  * one visible rhythm inconsistency left after R100-D.
+ * R117-f (deliverable 7a — the perf leg): the parse+render pass is
+ * MEMOIZED on [content, projectId, styles]. The panel re-renders on every
+ * SSE delta and every folded item re-renders with it; the parse itself was
+ * the per-render cost (a full line scan + element tree per delta). styles
+ * comes from useThemeStyles (memoized on [themeId, isDark]) so the memo
+ * holds across theme-stable re-renders, and a text DELTA still re-parses —
+ * strictly fewer parses than the per-render call, never more. Mid-stream
+ * fences are unaffected: the unterminated-fence handling lives inside the
+ * parse, keyed on the same content.
  */
 export function ChatMarkdown({ content, projectId }: { content: string; projectId: string }) {
   const styles = useThemeStyles();
+  const blocks = useMemo(() => renderBlocks(content, projectId, styles), [content, projectId, styles]);
   return (
     <div className="min-w-0 break-words [&>*:first-child]:mt-0">
-      {renderBlocks(content, projectId, styles)}
+      {blocks}
     </div>
   );
 }

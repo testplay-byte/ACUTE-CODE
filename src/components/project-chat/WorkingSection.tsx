@@ -7,6 +7,7 @@ import {
   ChevronDown,
   CircleCheck,
   CircleX,
+  Copy,
   FileCode2,
   Globe,
   Loader,
@@ -46,7 +47,13 @@ import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { SubAgentCard } from "./SubAgentCard";
 // R97-F: the thinking body renders fenced code blocks through the SAME
 // CodeBlock the answers use (syntax colors + the language badge + Copy).
-import { CodeBlock } from "./ChatMarkdown";
+import { CodeBlock, PathPill } from "./ChatMarkdown";
+// R117-f: the per-tool arg humanizer + the failed row's error excerpt (pure
+// formatters over the server's argsSummary/outputSummary display strings).
+import { formatToolTarget, toolErrorExcerpt } from "./tool-args";
+// R117-f: the terminal detail's Copy button rides the app's shared
+// copied-flash reset hook (the CodeBlock copy idiom).
+import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 // R101-F (DEFECT 4, owner v0.98.0: "it was not showing me the properly
 // rendered flow diagrams"): a CLOSED ```mermaid fence inside a thinking/
 // work block mounts the SAME diagram renderer the answers use — mirroring
@@ -93,10 +100,12 @@ import { withAlpha } from "../dashboard/helpers";
  *
  *   COMPRESSED (the folded summary row — what the eye needs at a glance):
  *     · status glyph — ✓ success while the work stands completed cleanly,
- *       □ (Square, tertiary) for a stopped live section, ● pulsing accent
- *       dot while it runs;
+ *       ✗ danger when any tool in the fold failed (R117-f — never a clean ✓
+ *       over failed work), □ (Square, tertiary) for a stopped live section,
+ *       ● pulsing accent dot while it runs;
  *     · step count — "Completed N steps" (every entry the section renders:
- *     tools, thoughts, narration, approvals, captures — pluralized honestly);
+ *     tools, thoughts, narration, approvals, captures — pluralized honestly)
+ *     · failure count — "· N failed" in the danger color when N > 0 (R117-f);
  *     · tool count — "· N tools" only when tools > 0;
  *     · duration — the right-aligned mono tabular-nums chip (mm:ss — the
  *       same formatClock the live clock speaks). LIVE rows keep "● Working"
@@ -538,6 +547,11 @@ function useLiveSeconds(startedAtMs: number | undefined, running: boolean): numb
 
 // ─── ThoughtRow: one-line thought, click to expand ───────────────────────────
 
+/** R117-f: the Show-all threshold — ~15 mono lines at 11px/1.6 leading fill
+ * the expanded body's max-h-64 (256px) clamp; a settled thought past that
+ * count offers the quiet underline toggle that removes the cap. */
+const THOUGHT_CLAMP_LINES = 15;
+
 /**
  * Owner spec: "The thoughts will be only one line by default and when I tap
  * on them then it will expand and show me the full thoughts… While that
@@ -615,6 +629,15 @@ export function ThoughtRow({
    * not flip into a code block until its closer arrives — the partial
    * fence stays plain text so the block never pops in and out mid-stream. */
   const fenceParts = useMemo(() => splitThinkingFences(trimmed), [trimmed]);
+
+  // ── R117-f (the thinking moment, part 2): the settled thought's Show-all
+  //    affordance. The expanded body clamps at max-h-64; once the thought
+  //    settles (live → false) and its line count passes the clamp, a quiet
+  //    underline toggle removes it. A LIVE thought never shows the toggle —
+  //    the stick-to-bottom scroller owns that view (the R95-D contract). ──
+  const [showAll, setShowAll] = useState(false);
+  const bodyLineCount = useMemo(() => trimmed.split("\n").length, [trimmed]);
+  const overClamp = !live && bodyLineCount > THOUGHT_CLAMP_LINES;
 
   // ── ROUND-95 (R95-D, owner: the thinking area "should be automatically
   //    scrolling if the user was at the very bottom of it but apparently it
@@ -699,7 +722,9 @@ export function ThoughtRow({
               <div
                 ref={thoughtScrollRef}
                 data-thinking-scroll
-                className="chat-thinking rounded-lg px-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words max-h-64 overflow-y-auto auto-scroll"
+                className={`chat-thinking rounded-lg px-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words overflow-y-auto auto-scroll ${
+                  overClamp && !showAll ? "max-h-64" : ""
+                }`}
                 style={{ background: styles.subtle, color: styles.textSecondary, ["--chat-base-size" as string]: "11px" } as React.CSSProperties}
               >
                 {/* The single content wrapper: the stick hook's
@@ -763,6 +788,23 @@ export function ThoughtRow({
                 >
                   <span className="text-[10px] font-semibold">Jump to latest</span>
                   <ChevronDown size={9} style={{ color: styles.accent }} aria-hidden />
+                </button>
+              ) : null}
+              {/* ── R117-f: the settled thought's SHOW-ALL toggle — only when
+                  the body passed its max-h-64 clamp (see THOUGHT_CLAMP_LINES)
+                  and never while live. A quiet accent underline (the
+                  TerminalDetail "+N more lines" idiom); "Show less" restores
+                  the clamp. ── */}
+              {overClamp ? (
+                <button
+                  type="button"
+                  data-testid="thought-show-all"
+                  onClick={() => setShowAll((v) => !v)}
+                  aria-expanded={showAll}
+                  className="mt-1 ml-1 text-[10px] font-medium underline"
+                  style={{ color: styles.accent }}
+                >
+                  {showAll ? "Show less" : "Show all"}
                 </button>
               ) : null}
             </div>
@@ -1336,6 +1378,10 @@ function LiveWritePendingRow({ toolName, raw }: { toolName: string; raw: string 
 function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
   const styles = useThemeStyles();
   const [expanded, setExpanded] = useState(false);
+  // R117-f (deliverable 6): the Copy button's copied-flash (the CodeBlock
+  // copy idiom — 1.2s reset through the shared timeout-clear hook).
+  const resetAfter = useTimeoutClear();
+  const [copied, setCopied] = useState(false);
   const output = tool.outputSummary ?? null;
   // ROUND-52 (R52-c): an expanded in-flight run_command shows its LIVE
   // streaming tail (the same live view as under the pill — the "running…"
@@ -1345,6 +1391,7 @@ function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
     return <LiveOutputTail output={liveOutput} />;
   }
   const lines = output ? output.split("\n").filter((l) => l.length > 0) : [];
+  // R117-f: the preview keeps its 3 lines (the rest behind the toggle).
   const preview = lines.slice(0, 3);
   const rest = lines.slice(3);
   if (output === null) {
@@ -1354,30 +1401,71 @@ function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
       </div>
     );
   }
+  // R117-f (deliverable 6): the exit chip rides the detail's header row —
+  // the colored form of the collapsed row's status detail (0 → quiet
+  // success, N → danger), beside the Copy button (the CodeBlock idiom).
+  const exitDetail = toolStatusDetail(tool);
+  const copyOutput = () => {
+    void navigator.clipboard?.writeText(output).then(() => {
+      setCopied(true);
+      resetAfter(() => setCopied(false), 1200);
+    });
+  };
   return (
     <div
       // R100-D (research §C4.5): expanded terminal card = 8px radius + 1px
       // border; 10.5→10px mono per the type floor snap.
-      className="rounded-lg border px-3 py-2 font-mono text-[10px] leading-[1.55] max-h-56 overflow-y-auto auto-scroll"
-      style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)", color: styles.textSecondary }}
+      className="rounded-lg border overflow-hidden"
+      style={{ borderColor: styles.border }}
+      data-testid="terminal-detail"
     >
-      {preview.map((line, i) => (
-        <div key={i} className="whitespace-pre-wrap break-words">{line}</div>
-      ))}
-      {rest.length > 0 && (
-        <>
-          {expanded && rest.map((line, i) => (
-            <div key={`r-${i}`} className="whitespace-pre-wrap break-words">{line}</div>
-          ))}
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            className="mt-1 text-[10px] font-medium underline"
-            style={{ color: styles.accent }}
-          >
-            {expanded ? "Show less" : `+${rest.length} more line${rest.length === 1 ? "" : "s"}`}
-          </button>
-        </>
-      )}
+      <div
+        className="flex items-center justify-between gap-2 px-2.5 py-1.5 border-b"
+        style={{ background: styles.subtle, borderColor: styles.border }}
+      >
+        <span className="flex items-center gap-1.5 min-w-0">
+          {exitDetail !== null ? (
+            <ToolStatusChip detail={exitDetail} />
+          ) : (
+            <span className="font-mono text-[10px] font-medium uppercase tracking-wide" style={{ color: styles.textTertiary }}>
+              output
+            </span>
+          )}
+        </span>
+        <button
+          onClick={copyOutput}
+          aria-label="Copy output"
+          title="Copy the command's output"
+          data-testid="terminal-copy"
+          className="shrink-0 flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold transition-colors hover:bg-hover"
+          style={{ color: styles.textTertiary }}
+        >
+          {copied ? <Check size={10} style={{ color: SEMANTIC_COLORS.success }} /> : <Copy size={10} />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <div
+        className="px-3 py-2 font-mono text-[10px] leading-[1.55] max-h-56 overflow-y-auto auto-scroll"
+        style={{ background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)", color: styles.textSecondary }}
+      >
+        {preview.map((line, i) => (
+          <div key={i} className="whitespace-pre-wrap break-words">{line}</div>
+        ))}
+        {rest.length > 0 && (
+          <>
+            {expanded && rest.map((line, i) => (
+              <div key={`r-${i}`} className="whitespace-pre-wrap break-words">{line}</div>
+            ))}
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-1 text-[10px] font-medium underline"
+              style={{ color: styles.accent }}
+            >
+              {expanded ? "Show less" : `+${rest.length} more line${rest.length === 1 ? "" : "s"}`}
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -1573,9 +1661,11 @@ function ApprovalRow({
  * HONESTY CONTRACT — only what the data actually carries:
  *  · run_command: the shell's exit code. Non-zero codes ride the output's
  *    "[exit code: N]" line (the exec tool stamps them); ok:true IS exit 0
- *    (the tool sets ok from the code). A background launch has no settled
- *    code (the JOB outlives the launching shell) and a timeout/launch
- *    failure has none either → NO chip, the ✗ alone stays honest.
+ *    (the tool sets ok from the code) → the QUIET SUCCESS chip (R117-f:
+ *    the colored exit-code chip — 0 reads green at 12% alpha, non-zero
+ *    reads danger). A background launch has no settled code (the JOB
+ *    outlives the launching shell) and a timeout/launch failure has none
+ *    either → NO chip, the ✗ alone stays honest.
  *    Duration is NOT rendered: neither the SSE tool-result frame nor the
  *    persisted event carries one — noted rather than invented.
  *  · edit_file: the R96-C confirmation line ("Edited 'rel': N replacements,
@@ -1590,15 +1680,20 @@ function ApprovalRow({
  */
 export function toolStatusDetail(
   tool: ToolUseEntry,
-): { label: string; tone: "diff" | "danger" | "muted" } | null {
+): { label: string; tone: "diff" | "danger" | "success" | "muted" } | null {
   if (tool.ok === null) return null;
   const out = tool.outputSummary ?? "";
   switch (tool.toolName) {
     case "run_command": {
       if (out.includes("[background job")) return null;
       const m = /\[exit code: (\d+)\]/.exec(out);
-      if (m !== null) return { label: `exit ${m[1]}`, tone: "danger" };
-      if (tool.ok === true) return { label: "exit 0", tone: "muted" };
+      if (m !== null) {
+        // R117-f: a STAMPED code is the honest one — 0 reads the quiet
+        // success tint whatever ok says (the exec tool sets ok FROM the
+        // code, but the stamp is the record).
+        return { label: `exit ${m[1]}`, tone: m[1] === "0" ? "success" : "danger" };
+      }
+      if (tool.ok === true) return { label: "exit 0", tone: "success" };
       return null;
     }
     case "edit_file": {
@@ -1638,7 +1733,10 @@ export function toolStatusDetail(
 }
 
 /** The rendered status-detail chip (toolStatusDetail's tone → styling).
- * R99-B: tabular-nums — the counts hold their width as they land. */
+ * R99-B: tabular-nums — the counts hold their width as they land.
+ * R117-f: the tone ladder grew a SUCCESS rung — exit 0 reads the quiet
+ * success tint, the danger tone gets its own chip background (the exit-code
+ * chip is COLORED now, not just red text on a neutral pill). */
 function ToolStatusChip({ detail }: { detail: NonNullable<ReturnType<typeof toolStatusDetail>> }) {
   const styles = useThemeStyles();
   if (detail.tone === "diff") {
@@ -1659,8 +1757,18 @@ function ToolStatusChip({ detail }: { detail: NonNullable<ReturnType<typeof tool
     <span
       className="shrink-0 font-mono text-[10px] tabular-nums px-1.5 py-0.5 rounded-full"
       style={{
-        background: styles.subtle,
-        color: detail.tone === "danger" ? SEMANTIC_COLORS.danger : styles.textTertiary,
+        background:
+          detail.tone === "success"
+            ? withAlpha(SEMANTIC_COLORS.success, 0.12)
+            : detail.tone === "danger"
+              ? withAlpha(SEMANTIC_COLORS.danger, 0.1)
+              : styles.subtle,
+        color:
+          detail.tone === "success"
+            ? SEMANTIC_COLORS.success
+            : detail.tone === "danger"
+              ? SEMANTIC_COLORS.danger
+              : styles.textTertiary,
       }}
       data-tool-status={detail.label}
     >
@@ -1753,6 +1861,21 @@ function ToolLine({
   // match count / the edit's +A −B) — only what the tool's own summary
   // carries (see toolStatusDetail's honesty contract).
   const statusDetail = toolStatusDetail(tool);
+  // ── R117-f (deliverable 1): FAILURE VISIBILITY. A failed call tints the
+  //    WHOLE row container — mobile ToolShell's language (R116-m donts #37:
+  //    a danger border + a quiet ~5% danger wash; the 12px ✗ glyph alone was
+  //    nearly invisible) — and its one-line error excerpt rides under the
+  //    head while collapsed (expanding still shows the full dump). Rows that
+  //    did NOT fail render byte-identical to pre-R117: no border, no wash —
+  //    the tint arrives WITH the failure, never as hover noise. ──
+  const failedRow = tool.ok === false;
+  const errorExcerpt = failedRow && !open ? toolErrorExcerpt(tool.outputSummary) : null;
+  // ── R117-f (deliverable 5): the humanized glance target — the file
+  //    family's clickable PATH PILL, run_command's command headline, the
+  //    delegate's role · task_id. The RAW argsSummary stays the fallback for
+  //    unknown shapes AND always rides the row's title + aria-label + the
+  //    expand — the record never shrinks to the glance. ──
+  const target = formatToolTarget(tool.toolName, tool.argsSummary);
   // R99-B: the LEADING outcome glyph — ✓ success / ✗ failure / ◌ in-flight
   // (amber while the call waits on an approval — TOKENS §4: warning IS the
   // wait/attention semantic). The old TRAILING ✓/✗ span moved here so the
@@ -1853,8 +1976,26 @@ function ToolLine({
     tool.ok === null && DIFF_TOOLS.has(tool.toolName) && liveInput !== undefined && liveInput !== "";
 
   return (
-    <div className="min-w-0">
-      <button
+    <div
+      data-testid="tool-line"
+      data-tool-failed={failedRow ? "true" : undefined}
+      className={failedRow ? "min-w-0 rounded-lg border py-0.5 px-0.5" : "min-w-0"}
+      style={
+        failedRow
+          ? {
+              borderColor: withAlpha(SEMANTIC_COLORS.danger, styles.isDark ? 0.55 : 0.45),
+              background: withAlpha(SEMANTIC_COLORS.danger, 0.05),
+            }
+          : undefined
+      }
+    >
+      {/* R117-f: the row is a div[role=button] (the LiveDelegateRow
+          precedent) so a failed/path row can host REAL interactive children —
+          the clickable PathPill below — without nesting buttons; the keydown
+          handler mirrors the native-button Enter/Space contract exactly. */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={
           rowAction === "open-subagent"
             ? openSingleLive
@@ -1862,6 +2003,15 @@ function ToolLine({
               ? toggle
               : undefined
         }
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          // Non-interactive rows keep the native-button behavior: focusable,
+          // but the keys never act.
+          if (rowAction === null) return;
+          e.preventDefault();
+          if (rowAction === "open-subagent") openSingleLive();
+          else toggle();
+        }}
         aria-expanded={rowAction === "toggle" ? open : undefined}
         aria-label={
           rowAction === "open-subagent" && singleLiveChild !== null
@@ -1876,9 +2026,11 @@ function ToolLine({
         // R100-D: the row's hover wash is a CSS class (hover:bg-hover), gated
         // to interactive rows exactly as the old JS handler was — the
         // non-interactive rows (rowAction === null) never paint a hover.
-        className={`flex items-center gap-2 h-7 w-full max-w-full px-1 -ml-1 rounded-md transition-colors text-left ${
+        // R117-f: the failed row sits INSIDE its tinted container, so the
+        // -ml-1 bleed (the hover wash's left reach) drops there only.
+        className={`flex items-center gap-2 h-7 w-full max-w-full px-1 rounded-md transition-colors text-left ${
           rowAction !== null ? "hover:bg-hover" : ""
-        }`}
+        }${failedRow ? "" : " -ml-1"}`}
         style={{
           color: styles.textTertiary,
           cursor: rowAction !== null ? "pointer" : "default",
@@ -1902,9 +2054,24 @@ function ToolLine({
         <span className="shrink-0 text-[11px] font-medium" style={{ color: styles.textSecondary }}>
           {label}
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: styles.textTertiary }}>
-          {tool.argsSummary}
-        </span>
+        {/* R117-f: the humanized target (deliverable 5) — the path PILL for
+            file tools (the R40 open-in-sidebar affordance, the same component
+            the answers speak; stopPropagation keeps the row's toggle out of
+            the pill's click), the command's headline / the delegate's
+            role · task_id as plain mono, else the RAW summary. */}
+        {target !== null && target.kind === "path" ? (
+          <span className="min-w-0 flex-1 flex justify-start" onClick={(e) => e.stopPropagation()}>
+            <PathPill path={target.value} projectId={projectId} />
+          </span>
+        ) : (
+          <span
+            className="min-w-0 flex-1 truncate font-mono text-[11px]"
+            style={{ color: styles.textTertiary }}
+            title={tool.argsSummary}
+          >
+            {target !== null ? target.value : tool.argsSummary}
+          </span>
+        )}
         {statusDetail !== null ? <ToolStatusChip detail={statusDetail} /> : null}
         {rowAction === "open-subagent" ? (
           <span
@@ -1924,7 +2091,21 @@ function ToolLine({
         ) : (
           <span className="w-2.5 shrink-0" />
         )}
-      </button>
+      </div>
+      {/* R117-f (deliverable 1c): the one-line error excerpt under a failed
+          row's head — the tool's own first output line, mono, danger,
+          truncated; expanding swaps it for the full dump. */}
+      {errorExcerpt !== null ? (
+        <div className="mt-0.5 mb-1 pl-1 pr-2 min-w-0" data-testid="tool-error-excerpt">
+          <span
+            className="block truncate font-mono text-[10px]"
+            style={{ color: SEMANTIC_COLORS.danger }}
+            title={errorExcerpt}
+          >
+            {errorExcerpt}
+          </span>
+        </div>
+      ) : null}
       {/* ROUND-52 (R52-c): the compact live tail under the pill while the
           command streams — hidden while expanded (the expanded body's
           TerminalDetail carries the same live view there, never both).
@@ -2156,16 +2337,24 @@ export function WorkingSection({
   // stopped live section keeps the Square glyph (the TurnStoppedCard mark).
   // The status word rides the aria-label — the row button's aria-label
   // REPLACES interior content for assistive tech, so an interior sr-only
-  // span would never be announced; the label says it outright. ──
+  // span would never be announced; the label says it outright.
+  // ── R117-f (deliverable 1b): the folded header STOPS LYING. When any tool
+  // in the folded section failed, the green ✓ swaps for the danger ✗ and a
+  // "· N failed" count rides the label (the "N steps · M failed" variant of
+  // the round's fix) — the pre-R117 header showed "✓ Completed N steps"
+  // even when tools failed inside it (round-117 §1 item 13, the round's #1
+  // PC bug). ──
   const stepCount = entries.length;
   const stepWord = stepCount === 1 ? "step" : "steps";
   const toolWord = toolCount === 1 ? "tool" : "tools";
+  const failedToolCount = entries.filter((e) => e.type === "tool" && e.tool.ok === false).length;
   const headerLabel = live
     ? stopped
       ? "Stopped"
       : "Working"
     : `Completed ${stepCount} ${stepWord}`;
   const toolSuffix = !live && toolCount > 0 ? ` · ${toolCount} ${toolWord}` : "";
+  const failedSuffix = !live && failedToolCount > 0 ? ` · ${failedToolCount} failed` : "";
   const liveActionLabel =
     live && toolCount > 0 ? `${toolCount} ${toolCount === 1 ? "action" : "actions"}` : "";
   const liveClock =
@@ -2176,7 +2365,7 @@ export function WorkingSection({
     ? `${headerLabel}${liveActionLabel !== "" ? ` · ${liveActionLabel}` : ""}${
         liveClock !== null ? ` · ${liveClock}` : ""
       }`
-    : `Completed ${stepCount} ${stepWord}${toolSuffix}${
+    : `${headerLabel}${toolSuffix}${failedSuffix}${
         foldedClock !== null ? ` · ${foldedClock}` : ""
       }`;
 
@@ -2207,6 +2396,11 @@ export function WorkingSection({
           /* The stopped mark — the TurnStoppedCard's Square glyph (a stop is
              a quiet terminal state, never a failure). */
           <Square size={11} strokeWidth={2.5} className="shrink-0" style={{ color: styles.textTertiary }} aria-hidden />
+        ) : failedToolCount > 0 ? (
+          /* R117-f: the failure-aware mark — ✗ in the danger color (the
+             glyph swaps with the label; the section no longer claims a
+             clean ✓ over failed work). */
+          <CircleX size={11} strokeWidth={2.5} className="shrink-0" style={{ color: SEMANTIC_COLORS.danger }} aria-hidden />
         ) : (
           /* The completed mark — success ✓ (the folded work stands done). */
           <Check size={11} strokeWidth={2.5} className="shrink-0" style={{ color: SEMANTIC_COLORS.success }} aria-hidden />
@@ -2217,6 +2411,18 @@ export function WorkingSection({
         {!live && toolCount > 0 && !pendingApproval ? (
           <span className="shrink-0 text-[10px] font-mono tabular-nums" style={{ color: styles.textTertiary }}>
             · {toolCount} {toolWord}
+          </span>
+        ) : null}
+        {/* R117-f: the failure count — mono tabular-nums like the tool count,
+          but in the danger color so the compressed row tells the truth at a
+          glance (only on a folded section with failures). */}
+        {!live && failedToolCount > 0 ? (
+          <span
+            data-testid="work-failed-count"
+            className="shrink-0 text-[10px] font-mono tabular-nums font-medium"
+            style={{ color: SEMANTIC_COLORS.danger }}
+          >
+            · {failedToolCount} failed
           </span>
         ) : null}
         {pendingApproval ? (

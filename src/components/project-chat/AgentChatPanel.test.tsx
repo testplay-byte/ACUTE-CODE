@@ -3003,3 +3003,193 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
     expect(screen.queryByTestId("thinking-jump-latest")).toBeNull();
   });
 });
+
+// ── ROUND-117 (R117-f): the PC transcript quality wave's panel legs ─────────
+// Deliverable 2 — DELIVERY TICKS on user messages (mobile R116-m parity, the
+// minimal honest PC version): the optimistic echo renders a subtle "…"
+// ("sending") until the turn acks (the turn.started model stamp / first
+// content frame — liveTurnAcked), the single check ("sent") after, and a
+// PERSISTED message.user row renders NO glyph. The REMOTE bubble is born
+// from the ack frame itself → it enters at "sent" (mobile's exact rule).
+// Deliverable 3 — the BREATHING thinking placeholder (dot + "Thinking" +
+// the resolved model) replaces the plain mono line.
+describe("AgentChatPanel R117-f delivery ticks + breathing placeholder", () => {
+  const SLOW = { timeout: 5000 };
+
+  /** A minimal live-mode session with NO events (the optimistic echo owns the
+   * transcript until the fold lands). */
+  async function renderEchoProbe(sessionId: string) {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: sessionId,
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "echo probe",
+          createdAt: "2026-09-22T12:00:00Z",
+          updatedAt: "2026-09-22T12:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy(), SLOW);
+  }
+
+  /** The fresh-turn liveTurn shape exactly as startStream seeds it (NO
+   * evidence the turn acked yet: no model stamp, no content). */
+  const freshLiveTurn = (): LiveTurn => ({
+    startedAtMs: Date.now() - 500,
+    working: [],
+    streamText: "",
+    streamThinking: "",
+    stopped: false,
+    stoppedByUser: false,
+    streamingToolInputs: [],
+    debugReport: null,
+    browserCheckpoint: null,
+    retry: null,
+    note: null,
+  });
+
+  const sliceWith = (liveTurn: LiveTurn | null, extra: Record<string, unknown> = {}) => ({
+    liveTurn,
+    streamBusy: liveTurn !== null,
+    sendError: null,
+    liveError: null,
+    pendingEcho: "hello there",
+    lastLiveEndMs: 0,
+    lastTurnStoppedByUser: false,
+    lastTurnStoppedTs: null,
+    queued: [],
+    deliveredQueued: [],
+    queueKeptNotice: null,
+    remote: false,
+    ...extra,
+  });
+
+  it("the optimistic echo's tick: '…' while the POST is in flight → the single check the moment the turn acks", async () => {
+    await renderEchoProbe("sess_r117f_echo");
+    useStreamStore.setState({ bySession: { sess_r117f_echo: sliceWith(null) } });
+    // The echo bubble + the SENDING rung (no liveTurn yet — the POST/stream
+    // has not opened; the subtle "…" beat).
+    expect(await screen.findByText("hello there", {}, SLOW)).toBeTruthy();
+    const sending = await waitFor(() => {
+      const tick = document.querySelector('[data-testid="user-delivery-tick"]');
+      expect(tick).not.toBeNull();
+      return tick as HTMLElement;
+    }, SLOW);
+    expect(sending.getAttribute("data-delivery")).toBe("sending");
+    expect(sending.textContent).toContain("…");
+
+    // The stream opens (startStream seeds the fresh turn) but NO ack evidence
+    // yet — still "sending" (the honest generalization: no model stamp, no
+    // content frame, nothing).
+    useStreamStore.setState({ bySession: { sess_r117f_echo: sliceWith(freshLiveTurn()) } });
+    await waitFor(() => {
+      expect(
+        document.querySelector('[data-testid="user-delivery-tick"]')?.getAttribute("data-delivery"),
+      ).toBe("sending");
+    }, SLOW);
+
+    // The turn.started ack lands (the model stamp — R114-e) → the SINGLE
+    // CHECK (the message is with the agent).
+    useStreamStore.setState({
+      bySession: { sess_r117f_echo: sliceWith({ ...freshLiveTurn(), model: "z-ai/glm-4.7" }) },
+    });
+    await waitFor(() => {
+      const tick = document.querySelector('[data-testid="user-delivery-tick"]');
+      expect(tick?.getAttribute("data-delivery")).toBe("sent");
+      // The single check glyph (mobile's exact spec: Check 12 / 2.4).
+      expect(tick?.querySelector("svg")).not.toBeNull();
+    }, SLOW);
+  });
+
+  it("a PERSISTED message.user row renders NO glyph (the fold is the receipt — the tick never survives the fold)", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r117f_folded",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "fold probe",
+          createdAt: "2026-09-22T12:00:00Z",
+          updatedAt: "2026-09-22T12:05:00Z",
+        },
+        events: [
+          {
+            seq: 1,
+            type: "message.user",
+            agentId: "agt_scribe",
+            payload: { role: "user", content: "hello there", agentId: "agt_scribe", ts: "2026-09-22T12:00:10Z" },
+            ts: "2026-09-22T12:00:10Z",
+          },
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(screen.getByText("hello there")).toBeTruthy(), SLOW);
+    // The folded log already owns the row — no optimistic echo (content
+    // dedupe), and the persisted bubble carries NO delivery glyph at all.
+    expect(document.querySelector('[data-testid="user-delivery-tick"]')).toBeNull();
+  });
+
+  it("the REMOTE turn's bubble is born from the ack frame itself → it enters at 'sent' (mobile's rule)", async () => {
+    await renderEchoProbe("sess_r117f_remote");
+    useStreamStore.setState({
+      bySession: {
+        sess_r117f_remote: sliceWith(
+          { ...freshLiveTurn(), model: "z-ai/glm-4.7", userText: "hey from the phone" },
+          { remote: true, streamBusy: false },
+        ),
+      },
+    });
+    expect(await screen.findByText("hey from the phone", {}, SLOW)).toBeTruthy();
+    const tick = await waitFor(() => {
+      const el = document.querySelector('[data-testid="user-delivery-tick"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    }, SLOW);
+    expect(tick.getAttribute("data-delivery")).toBe("sent");
+  });
+
+  it("the BREATHING thinking placeholder: pulsing accent dot + 'Thinking' + the resolved model (replaces the plain mono line)", async () => {
+    await renderEchoProbe("sess_r117f_thinking");
+    useStreamStore.setState({
+      bySession: {
+        sess_r117f_thinking: {
+          liveTurn: { ...freshLiveTurn(), model: "z-ai/glm-4.7" },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: 0,
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: false,
+        },
+      },
+    });
+    const placeholder = await waitFor(() => {
+      const el = document.querySelector('[data-testid="thinking-placeholder"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    }, SLOW);
+    // The breathing accent dot (the app's shared live-dot animation)…
+    expect(placeholder.querySelector(".ac-pulse")).not.toBeNull();
+    // …the word…
+    expect(screen.getByText("Thinking")).toBeTruthy();
+    // …and the turn's resolved model in micro mono (the stream knows it —
+    // the turn.started stamp).
+    expect(placeholder.textContent).toContain("z-ai/glm-4.7");
+  });
+});

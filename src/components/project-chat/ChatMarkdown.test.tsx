@@ -236,20 +236,30 @@ describe("ChatMarkdown block rendering", () => {
     // element (the text node's parent) for the heading's own styling.
     const blockFor = (text: string): HTMLElement =>
       (screen.getByText(text) as HTMLElement).parentElement as HTMLElement;
-    // R100-D re-pin (§C4.4 + TOKENS §2): markdown headings snapped to the
-    // ladder — 600 weight everywhere (font-semibold; 700 is wizard display
-    // only), h1–h3 at 13px (the `section` tier) and h4–h6 at 12px — the old
-    // 15/13.5/12.5px staircase was the measured "AI-generated" tell.
+    // R117-f re-pin (deliverable 4): the heading LADDER is back — h1–h3
+    // scale off the 13px body in EM (1.5 / 1.3 / 1.15 — the chat's text-size
+    // setting tracks them through .chat-prose's calc) with a 700 / 650 / 600
+    // weight run; h4–h6 ≈ 0.9em/600. The weights moved from the old
+    // font-semibold class to inline styles so the per-level ladder can
+    // speak (R100-D's anti-staircase was about no-huge-jumps, not
+    // no-hierarchy — h1 at 1.5em never touches the 24px title tier).
     for (const text of ["Big", "Medium", "Small", "Tiny"]) {
-      expect(blockFor(text).className).toContain("font-semibold");
+      expect(blockFor(text).style.fontWeight).not.toBe("");
+      expect(Number(blockFor(text).style.fontWeight)).toBeGreaterThanOrEqual(600);
     }
     expect(document.body.textContent).not.toContain("##");
     expect(document.body.textContent).not.toContain("####");
-    // h1–h3 = 13px (the cliff: body 13 → title 24, no in-between); h4 = 12px.
-    expect(blockFor("Big").style.fontSize).toBe("13px");
-    expect(blockFor("Medium").style.fontSize).toBe("13px");
-    expect(blockFor("Small").style.fontSize).toBe("13px");
-    expect(blockFor("Tiny").style.fontSize).toBe("12px");
+    expect(blockFor("Big").style.fontSize).toBe("1.5em");
+    expect(blockFor("Big").style.fontWeight).toBe("700");
+    expect(blockFor("Medium").style.fontSize).toBe("1.3em");
+    expect(blockFor("Medium").style.fontWeight).toBe("650");
+    expect(blockFor("Small").style.fontSize).toBe("1.15em");
+    expect(blockFor("Small").style.fontWeight).toBe("600");
+    expect(blockFor("Tiny").style.fontSize).toBe("0.9em");
+    expect(blockFor("Tiny").style.fontWeight).toBe("600");
+    // The taller rungs carry the tighter 1.3 measure (body 1.65 at 20px
+    // reads as padding, not rhythm).
+    expect(blockFor("Big").style.lineHeight).toBe("1.3");
   });
 
   it("bullets render with markers, one nesting level, and inline marks inside items", () => {

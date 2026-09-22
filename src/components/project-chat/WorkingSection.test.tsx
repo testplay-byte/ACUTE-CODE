@@ -549,13 +549,16 @@ describe("Delegated card live rows (ROUND-48 R48-e2)", () => {
 
     // Per-row-container counts: each pending row's ToolLine wrapper owns
     // EXACTLY its claimed child (the third owns none — "delegating…").
+    // R117-f re-pin: the row head is a div[role=button] now (the PathPill
+    // nesting change) — the wrapper is addressed by its data-testid, not by
+    // closest("div") (which would stop at the row head itself).
     const perRow = [
       /^Delegated task: Refactor auth module/,
       /^Delegated task: Write tests/,
       /^Delegated task: Audit deps/,
     ].map((re) => {
       const button = screen.getByRole("button", { name: re });
-      const rowRoot = button.closest("div") as HTMLElement;
+      const rowRoot = button.closest('[data-testid="tool-line"]') as HTMLElement;
       return rowRoot.querySelectorAll('[data-testid="live-delegate-row"]').length;
     });
     expect(perRow).toEqual([1, 1, 0]);
@@ -1231,7 +1234,11 @@ describe("R96-H tool status details (toolStatusDetail — pure, honest)", () => 
     toolStatusDetail({ seq: 1, toolName, argsSummary: "x", ok, ts: "t", ...(outputSummary ? { outputSummary } : {}) });
 
   it("run_command: ok:true renders exit 0; a stamped non-zero code renders exit N (danger)", () => {
-    expect(detail("run_command", true, "build output…")).toEqual({ label: "exit 0", tone: "muted" });
+    // R117-f re-pin: exit 0 moved to the SUCCESS tone (the colored exit
+    // chip — quiet success tint, not the neutral muted pill) — including a
+    // STAMPED "[exit code: 0]" (the stamp is the record).
+    expect(detail("run_command", true, "build output…")).toEqual({ label: "exit 0", tone: "success" });
+    expect(detail("run_command", true, "3 passed\n[exit code: 0]")).toEqual({ label: "exit 0", tone: "success" });
     expect(detail("run_command", false, "boom\n[exit code: 127]")).toEqual({ label: "exit 127", tone: "danger" });
   });
 
@@ -1814,5 +1821,324 @@ describe("mermaid fences in the thinking area (ROUND-101 R101-F)", () => {
     );
     // It is NOT a plain CodeBlock anymore — no Copy button for the fence.
     expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull();
+  });
+});
+
+// ── ROUND-117 (R117-f): FAILURE VISIBILITY + terminal polish + Show-all ─────
+// The round's #1 PC bug (round-117.md §1 item 13): a failed tool call was a
+// 12px red glyph on an identical row, and the folded section header showed a
+// green ✓ "Completed N steps" even when tools failed inside it. Now: the row
+// tints (mobile ToolShell's language), the excerpt rides under the head, the
+// header tells the truth — plus the terminal's colored exit chip + Copy and
+// the settled thought's Show-all past the max-h-64 clamp.
+describe("R117-f failure visibility (the folded header + the failed row)", () => {
+  // Whitespace-normalizer: happy-dom re-serializes rgba() with its own
+  // spacing (the same treatment the R51-d chip tests use).
+  const tight = (v: string): string => v.replace(/\s+/g, "");
+
+  /** A folded section whose run_command FAILED (stamped exit 1 + an error). */
+  const FAILED_ENTRIES: WorkingEntry[] = [
+    { type: "thinking", text: "try the build", ts: "2026-09-21T10:00:00Z", thinkingMs: 400 },
+    { type: "tool", tool: { seq: 61, toolName: "read_file", argsSummary: "path: src/app.ts", ok: true, ts: "2026-09-21T10:00:20Z", outputSummary: "of 42 total" } },
+    {
+      type: "tool",
+      tool: {
+        seq: 62,
+        toolName: "run_command",
+        argsSummary: "command: pnpm build",
+        ok: false,
+        ts: "2026-09-21T10:00:40Z",
+        outputSummary: "error TS2304: Cannot find name 'foo'\n[exit code: 1]",
+      },
+    },
+  ];
+
+  it("the folded header tells the truth: ✗ danger glyph + 'Completed N steps' + '· 1 failed' (never a clean ✓ over failed work)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={FAILED_ENTRIES}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        ts="2026-09-21T10:00:00Z"
+        endTs="2026-09-21T10:00:52Z"
+      />,
+    );
+    const header = screen.getByTestId("work-section-header");
+    // The step + tool counts keep their grammar; the failure count joins in
+    // the danger color (mono tabular-nums like its siblings).
+    expect(header.textContent).toContain("Completed 3 steps");
+    expect(header.textContent).toContain("· 2 tools");
+    expect(header.textContent).toContain("· 1 failed");
+    const failedChip = screen.getByTestId("work-failed-count");
+    expect(failedChip.className).toContain("tabular-nums");
+    expect(failedChip.className).toContain("font-mono");
+    // The glyph is the danger ✗ (lucide CircleX), not the success Check.
+    const glyphSvg = header.querySelector("svg");
+    expect(glyphSvg).not.toBeNull();
+    expect(glyphSvg!.style.color).toBe(SEMANTIC_COLORS.danger);
+    // The aria-label carries the failure too (the label REPLACES interior
+    // content for AT).
+    expect(header.getAttribute("aria-label")).toContain("Completed 3 steps · 2 tools · 1 failed · 0:52.");
+  });
+
+  it("a clean folded section keeps the green ✓ grammar — no failure chip (the no-regression pin)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={FAILED_ENTRIES.slice(0, 2)}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        ts="2026-09-21T10:00:00Z"
+        endTs="2026-09-21T10:00:52Z"
+      />,
+    );
+    const header = screen.getByTestId("work-section-header");
+    expect(header.textContent).toContain("Completed 2 steps");
+    expect(header.textContent).not.toContain("failed");
+    expect(screen.queryByTestId("work-failed-count")).toBeNull();
+    expect(header.querySelector("svg")!.style.color).toBe(SEMANTIC_COLORS.success);
+  });
+
+  it("a failed row TINTS its whole container — danger border + ~5% danger wash (mobile ToolShell's language)", () => {
+    renderWithProviders(
+      <WorkingSection entries={FAILED_ENTRIES} sessionId={SESSION_ID} projectId="proj_probe" defaultOpen />,
+    );
+    const failRow = screen.getByRole("button", { name: /^Ran command: pnpm build — failed$/ });
+    const container = failRow.closest('[data-testid="tool-line"]') as HTMLElement;
+    expect(container).not.toBeNull();
+    expect(container.getAttribute("data-tool-failed")).toBe("true");
+    // The tint: a 1px danger-family border + the quiet 5% wash (dark theme →
+    // the 0.55 border spelling; whitespace-normalized for happy-dom).
+    expect(tight(container.style.borderColor)).toBe(tight(withAlpha(SEMANTIC_COLORS.danger, 0.55)));
+    expect(tight(container.style.background)).toBe(tight(withAlpha(SEMANTIC_COLORS.danger, 0.05)));
+    expect(container.className).toContain("rounded-lg");
+    // The status glyph KEEPS its red (the leading ✗ is unchanged).
+    const glyph = container.querySelector('[data-testid="tool-status-glyph"]') as HTMLElement;
+    expect(glyph.querySelector("svg")!.style.color).toBe(SEMANTIC_COLORS.danger);
+    // A clean sibling row carries NO tint (byte-identical to pre-R117).
+    const okRow = screen.getByRole("button", { name: /^Read path: src\/app\.ts — completed$/ });
+    const okContainer = okRow.closest('[data-testid="tool-line"]') as HTMLElement;
+    expect(okContainer.getAttribute("data-tool-failed")).toBeNull();
+    expect(okContainer.className).not.toContain("border");
+    expect(okContainer.style.borderColor).toBe("");
+  });
+
+  it("the failed row's ONE-LINE error excerpt: the output's first line, mono danger, truncated — expanding swaps it for the full dump", () => {
+    renderWithProviders(
+      <WorkingSection entries={FAILED_ENTRIES} sessionId={SESSION_ID} projectId="proj_probe" defaultOpen />,
+    );
+    const failRow = screen.getByRole("button", { name: /^Ran command: pnpm build — failed$/ });
+    // Collapsed: the excerpt rides under the head (the error's first line).
+    const excerpt = screen.getByTestId("tool-error-excerpt");
+    expect(excerpt.textContent).toBe("error TS2304: Cannot find name 'foo'");
+    expect(excerpt.querySelector("span")!.className).toContain("truncate");
+    expect(excerpt.querySelector("span")!.className).toContain("font-mono");
+    expect(excerpt.querySelector("span")!.style.color).toBe(SEMANTIC_COLORS.danger);
+
+    // Expanding: the excerpt goes, the FULL dump (both lines + the exit chip
+    // + Copy) renders instead.
+    fireEvent.click(failRow);
+    expect(screen.queryByTestId("tool-error-excerpt")).toBeNull();
+    expect(screen.getByText("error TS2304: Cannot find name 'foo'")).toBeTruthy();
+    expect(screen.getByText("[exit code: 1]")).toBeTruthy();
+  });
+
+  it("a failed row with NO output renders no excerpt (the ✗ alone stays honest)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: { seq: 71, toolName: "web_fetch", argsSummary: "url: https://x.test", ok: false, ts: "t" } }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    expect(screen.queryByTestId("tool-error-excerpt")).toBeNull();
+  });
+});
+
+describe("R117-f humanized tool args (the collapsed row's glance)", () => {
+  it("file tools render the CLICKABLE PATH PILL — and the pill opens the file without toggling the row", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: { seq: 81, toolName: "read_file", argsSummary: "path: src/app.ts", ok: true, ts: "t", outputSummary: "of 42 total" } }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    const row = screen.getByRole("button", { name: /^Read path: src\/app\.ts — completed$/ });
+    // The pill (the R40 affordance — the same component the answers speak).
+    const pill = screen.getByRole("button", { name: "Open src/app.ts in sidebar" });
+    expect(row.contains(pill)).toBe(true);
+    // The RAW summary still rides the row's title (the record).
+    expect(row.getAttribute("title")).toBe("read_file path: src/app.ts");
+    // Clicking the PILL opens the file — the row does NOT expand.
+    fireEvent.click(pill);
+    const slices = Object.values(useRightSidebarStore.getState().byProject);
+    const tab = slices[0]?.tabs.find((t) => t.type === "file");
+    expect(tab).toMatchObject({ filePath: "src/app.ts" });
+    expect(screen.queryByTestId("terminal-detail")).toBeNull();
+    // Clicking the ROW itself still expands (the toggle survives the pill).
+    fireEvent.click(row);
+    expect(screen.getByText("of 42 total")).toBeTruthy();
+  });
+
+  it("run_command shows the command headline; delegate shows role · task_id; the raw string stays the fallback", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[
+          { type: "tool", tool: { seq: 82, toolName: "run_command", argsSummary: "command: pnpm exec vitest run", ok: true, ts: "t", outputSummary: "3 passed\n[exit code: 0]" } },
+          { type: "tool", tool: { seq: 83, toolName: "delegate_task", argsSummary: "task: Fix the login flow, role: coder, task_id: 4f2a", ok: null, ts: "t" } },
+          { type: "tool", tool: { seq: 84, toolName: "web_search", argsSummary: "query: fix the login bug", ok: true, ts: "t", outputSummary: "no results" } },
+        ]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        defaultOpen
+      />,
+    );
+    // run_command → the command's headline (mono, truncated, raw on title).
+    const runRow = screen.getByRole("button", { name: /^Ran command: pnpm exec vitest run — completed$/ });
+    expect(runRow.textContent).toContain("pnpm exec vitest run");
+    expect(runRow.getAttribute("title")).toBe("run_command command: pnpm exec vitest run");
+    // delegate → role · task_id (the task text stays behind the expand).
+    const delegateRow = screen.getByRole("button", { name: /^Delegated task: Fix the login flow, role: coder, task_id: 4f2a — running$/ });
+    expect(delegateRow.textContent).toContain("coder · 4f2a");
+    expect(delegateRow.textContent).not.toContain("Fix the login flow");
+    // Unknown family → the RAW string (the fallback).
+    const searchRow = screen.getByRole("button", { name: /^Searched query: fix the login bug — completed$/ });
+    expect(searchRow.textContent).toContain("query: fix the login bug");
+  });
+});
+
+describe("R117-f terminal polish (the colored exit chip + Copy)", () => {
+  /** Expand a settled run_command row and return its TerminalDetail card. */
+  function renderTerminal(tool: ToolUseEntry): HTMLElement {
+    renderWithProviders(
+      <WorkingSection entries={[{ type: "tool", tool }]} sessionId={SESSION_ID} projectId="proj_probe" defaultOpen />,
+    );
+    const label = TOOL_LABELS_RUN;
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label} `) }));
+    return screen.getByTestId("terminal-detail");
+  }
+  const TOOL_LABELS_RUN = "Ran";
+
+  it("exit 0 renders the QUIET SUCCESS chip (tinted background, not the neutral pill)", () => {
+    const card = renderTerminal({
+      seq: 91,
+      toolName: "run_command",
+      argsSummary: "command: pnpm test",
+      ok: true,
+      ts: "t",
+      outputSummary: "3 passed\n[exit code: 0]",
+    });
+    const chip = card.querySelector('[data-tool-status="exit 0"]') as HTMLElement;
+    expect(chip).not.toBeNull();
+    const tight = (v: string): string => v.replace(/\s+/g, "");
+    expect(tight(chip.style.background)).toBe(tight(withAlpha(SEMANTIC_COLORS.success, 0.12)));
+    expect(chip.style.color).toBe(SEMANTIC_COLORS.success);
+  });
+
+  it("a non-zero exit renders the DANGER chip — and the Copy button writes the full output to the clipboard", async () => {
+    const write = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: write },
+      configurable: true,
+    });
+    const card = renderTerminal({
+      seq: 92,
+      toolName: "run_command",
+      argsSummary: "command: pnpm build",
+      ok: false,
+      ts: "t",
+      outputSummary: "error TS2304\n[exit code: 1]",
+    });
+    const chip = card.querySelector('[data-tool-status="exit 1"]') as HTMLElement;
+    expect(chip).not.toBeNull();
+    const tight = (v: string): string => v.replace(/\s+/g, "");
+    expect(tight(chip.style.background)).toBe(tight(withAlpha(SEMANTIC_COLORS.danger, 0.1)));
+    expect(chip.style.color).toBe(SEMANTIC_COLORS.danger);
+
+    // The Copy button (the CodeBlock idiom): writes the COMPLETE output and
+    // flashes "Copied".
+    fireEvent.click(screen.getByTestId("terminal-copy"));
+    expect(write).toHaveBeenCalledWith("error TS2304\n[exit code: 1]");
+    expect(await screen.findByText("Copied")).toBeTruthy();
+  });
+
+  it("the preview keeps its 3 lines — the rest stays behind the +N toggle", () => {
+    const output = Array.from({ length: 6 }, (_, i) => `line ${i + 1}`).join("\n");
+    renderTerminal({
+      seq: 93,
+      toolName: "run_command",
+      argsSummary: "command: echo",
+      ok: true,
+      ts: "t",
+      outputSummary: output,
+    });
+    expect(screen.getByText("line 1")).toBeTruthy();
+    expect(screen.getByText("line 3")).toBeTruthy();
+    expect(screen.queryByText("line 4")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "+3 more lines" }));
+    expect(screen.getByText("line 4")).toBeTruthy();
+    expect(screen.getByText("line 6")).toBeTruthy();
+  });
+});
+
+describe("R117-f the settled thought's Show-all (past the max-h-64 clamp)", () => {
+  /** A 30-line settled thought (well past the ~15-line clamp). */
+  const LONG_THOUGHT = Array.from({ length: 30 }, (_, i) => `thought line ${i + 1}`).join("\n");
+
+  it("a long settled thought offers 'Show all' — clicking REMOVES the clamp; a live thought never shows it", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "thinking", text: LONG_THOUGHT, ts: "t", thinkingMs: 900 }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Expand thought" }));
+    const scroller = document.querySelector("[data-thinking-scroll]") as HTMLElement;
+    expect(scroller).not.toBeNull();
+    // Settled + over the clamp → the toggle shows and the clamp is ON.
+    expect(scroller.className).toContain("max-h-64");
+    const toggle = screen.getByTestId("thought-show-all");
+    expect(toggle.textContent).toBe("Show all");
+    expect(toggle.className).toContain("underline");
+    fireEvent.click(toggle);
+    // The clamp is GONE (the full body opens) and the toggle flips.
+    const opened = document.querySelector("[data-thinking-scroll]") as HTMLElement;
+    expect(opened.className).not.toContain("max-h-64");
+    expect(screen.getByTestId("thought-show-all").textContent).toBe("Show less");
+    // Show less restores the clamp.
+    fireEvent.click(screen.getByTestId("thought-show-all"));
+    expect((document.querySelector("[data-thinking-scroll]") as HTMLElement).className).toContain("max-h-64");
+  });
+
+  it("a SHORT settled thought renders no toggle (nothing to unclamp)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "thinking", text: "short thought", ts: "t", thinkingMs: 100 }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Expand thought" }));
+    expect(screen.queryByTestId("thought-show-all")).toBeNull();
+  });
+
+  it("a LIVE thought never shows the toggle (the stick-to-bottom scroller owns that view)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "thinking", text: LONG_THOUGHT, ts: "t" }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        liveEntryIndex={0}
+        defaultOpen
+      />,
+    );
+    expect(screen.queryByTestId("thought-show-all")).toBeNull();
   });
 });

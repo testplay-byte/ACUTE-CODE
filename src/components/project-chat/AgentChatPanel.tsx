@@ -1,5 +1,7 @@
 import {
   forwardRef,
+  memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -761,6 +763,75 @@ function ChatLoadErrorCard({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+// ─── ROUND-117 (R117-f): DELIVERY TICKS on user messages (mobile R116-m) ────
+
+/**
+ * R117-f (deliverable 2): has the live turn produced EVIDENCE that it
+ * started — the honest generalization of mobile's "turn.started ack" rung.
+ * On current sidecars the turn.started frame stamps LiveTurn.model the
+ * instant the server accepts the message (R114-e); an older sidecar never
+ * sends it, but its first content frame (thinking/text/tool) is the same
+ * verdict. Pure; exported for tests.
+ */
+export function liveTurnAcked(liveTurn: {
+  model?: string;
+  working: unknown[];
+  streamText: string;
+  streamThinking: string;
+  streamingToolInputs: unknown[];
+} | null): boolean {
+  if (liveTurn === null) return false;
+  return (
+    liveTurn.model !== undefined ||
+    liveTurn.working.length > 0 ||
+    liveTurn.streamText !== "" ||
+    liveTurn.streamThinking.trim() !== "" ||
+    liveTurn.streamingToolInputs.length > 0
+  );
+}
+
+/**
+ * R117-f (deliverable 2 — mobile parity, the minimal honest PC version): the
+ * delivery glyph beside the timestamp in the user bubble's hover row.
+ *   · "sending" — the live optimistic echo with NO evidence the turn took
+ *     the message yet (the POST is in flight; a subtle "…" beat)
+ *   · "sent"    — the single check (the turn.started ack / first frame
+ *     landed; the message is with the agent)
+ *   · undefined — a PERSISTED message.user row: NO glyph (the fold is the
+ *     receipt; the PC deliberately does NOT over-build the double-check
+ *     rung — there is no per-message delivery wire past the fold).
+ * The failed rung (mobile's danger alert) rides the send-error banner +
+ * the TurnErrorCard the PC already owns — never duplicated here.
+ */
+function DeliveryTick({ status }: { status: "sending" | "sent" }) {
+  const styles = useThemeStyles();
+  if (status === "sending") {
+    return (
+      <span
+        data-testid="user-delivery-tick"
+        data-delivery="sending"
+        title="Sending…"
+        aria-label="Sending"
+        className="shrink-0 font-mono text-[10px] leading-none select-none"
+        style={{ color: styles.textTertiary }}
+      >
+        …
+      </span>
+    );
+  }
+  return (
+    <span
+      data-testid="user-delivery-tick"
+      data-delivery="sent"
+      title="Sent"
+      aria-label="Sent"
+      className="shrink-0 grid place-items-center leading-none"
+    >
+      <Check size={12} strokeWidth={2.4} style={{ color: styles.textTertiary }} aria-hidden />
+    </span>
+  );
+}
+
 /**
  * ROUND-44 (R44-c, owner directive: "complete the whole agentic coding
  * environment"): a user bubble's hover actions — Copy (round-16) plus Revert,
@@ -775,6 +846,7 @@ function UserMessage({
   ts,
   onRevert,
   revertDisabled,
+  delivery,
 }: {
   content: string;
   /** ROUND-50 (R50-c2): display-only attachment chips (name/path/size) on
@@ -786,6 +858,10 @@ function UserMessage({
   ts?: string;
   onRevert?: () => void;
   revertDisabled?: boolean;
+  /** R117-f (deliverable 2): the optimistic echo's delivery rung —
+   * "sending" until the turn acks, "sent" (the single check) after;
+   * a persisted bubble leaves it undefined (no glyph). */
+  delivery?: "sending" | "sent";
 }) {
   const styles = useThemeStyles();
   // ROUND-38 (owner: "the messages which I sent… look bad and ugly. Their
@@ -832,6 +908,10 @@ function UserMessage({
             R99-B: ONE unified hover row — timestamp · copy · revert, gap-1,
             tabular-nums on the time (see TimestampChip). */}
         <div className="flex items-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity pb-0.5 shrink-0">
+          {/* R117-f: the delivery tick joins the cluster (mobile R116-m's
+              beside-the-clock placement) — only on the optimistic echo's
+              rungs; a persisted bubble renders none. */}
+          {delivery !== undefined ? <DeliveryTick status={delivery} /> : null}
           <TimestampChip ts={ts} className="pb-1 pr-0.5" />
           <CopyButton text={content} />
           {onRevert !== undefined ? (
@@ -1807,105 +1887,166 @@ function TimelineSpine() {
 
 /** Direct child of AnimatePresence mode="popLayout": framer-motion attaches a
  * measurement ref to this element (React 18 requires forwardRef — the demo
- * could skip it on React 19). The wrapper div is the presence child. */
-const MessageRenderer = forwardRef<
-  HTMLDivElement,
-  {
-    item: ProjectChatItem;
-    sessionId: string | null;
-    projectId: string;
-    collapseHint?: boolean;
-    /** ROUND-43: error-card actions. Zero-arg retry — the text is bound by
-     * the panel (the failed turn's user message). */
-    onRetry?: () => void;
-    retryDisabled?: boolean;
-    /** ROUND-44 (R44-c): user-bubble revert — rewinds the session to THIS
-     * message's event seq (bound by the panel; absent on items that cannot
-     * revert, e.g. the optimistic pending echo). */
-    onRevert?: () => void;
-    revertDisabled?: boolean;
-    /** ROUND-50 (R50-c2): display-only attachment chips for user items —
-     * from the persisted event log OR the optimistic pending echo. */
-    attachments?: AttachmentRef[];
-    /** ROUND-67 (R67-B): debug mode (the Functionality tab's settings —
-     * R98-I1's rename of the old Advanced/General label) — threaded to
-     * AssistantTurn so its footer can mount the second, full-turn copy
-     * button (gated on the ["debug-settings"] query upstream). */
-    debugMode?: boolean;
-    /** ROUND-78 (R78-D): the queued chip's affordances — bound by the panel
-     * for FOLDED queued items (live-mode only; the busy flag rides the
-     * dedicated prop). */
-    onQueuedRemove?: (seq: number) => void;
-    onQueuedSendNow?: (entry: QueuedMessage) => void;
-    queuedBusy?: boolean;
-  }
->(function MessageRenderer(
-  { item, sessionId, projectId, collapseHint, onRetry, retryDisabled, onRevert, revertDisabled, attachments, debugMode, onQueuedRemove, onQueuedSendNow, queuedBusy },
-  ref,
-) {
-  switch (item.kind) {
-    // R101-D: EVERY item renders in the TIMELINE RAIL grid (TIMELINE_ITEM_
-    // CLASS): the 28px rail cell (TimelineNode's dot, kind-coded) + the
-    // existing content cell, untouched. The wrapper div stays the
-    // AnimatePresence popLayout child (the ref is framer-motion's measurement
-    // hook — display:grid composes with its absolute exit positioning).
-    case "user":
-      return (
-        <div ref={ref} className={TIMELINE_ITEM_CLASS}>
-          <TimelineNode kind="user" ts={item.ts} />
-          <UserMessage
-            content={item.content}
-            ts={item.ts}
-            onRevert={onRevert}
-            revertDisabled={revertDisabled}
-            attachments={attachments ?? item.attachments}
-          />
-        </div>
-      );
-    case "queued":
-      // R78: the folded queued chip (message.queued event) — the SAME chip
-      // the live store renders mid-stream, with the panel-bound affordances.
-      return (
-        <div ref={ref} className={TIMELINE_ITEM_CLASS}>
-          <TimelineNode kind="queued" ts={item.ts} />
-          <QueuedMessageChip
-            entry={item}
-            busy={queuedBusy ?? false}
-            onRemove={onQueuedRemove !== undefined ? () => onQueuedRemove(item.seq) : undefined}
-            onSendNow={onQueuedSendNow !== undefined ? () => onQueuedSendNow(item) : undefined}
-          />
-        </div>
-      );
-    case "turn":
-      return (
-        <div ref={ref} className={TIMELINE_ITEM_CLASS}>
-          <TimelineNode kind="turn" ts={item.ts} />
-          <AssistantTurn
-            item={item}
-            sessionId={sessionId}
-            projectId={projectId}
-            collapseHint={collapseHint}
-            debugMode={debugMode}
-          />
-        </div>
-      );
-    case "error":
-      return (
-        <div ref={ref} className={TIMELINE_ITEM_CLASS}>
-          <TimelineNode kind="error" ts={item.ts} />
-          {/* R97-D: the thinking-loop guard's stop is NOT an error — the amber
-              ThinkingStoppedCard replaces the red TurnErrorCard for the
-              thinking_loop class (the owner's "should not be shown as errors
-              like 'generation failed'" directive). */}
-          {item.errorClass === "thinking_loop" ? (
-            <ThinkingStoppedCard error={item} onRetry={onRetry} disabled={retryDisabled} />
-          ) : (
-            <TurnErrorCard error={item} sessionId={sessionId} onRetry={onRetry} disabled={retryDisabled} />
-          )}
-        </div>
-      );
-  }
-});
+ * could skip it on React 19). The wrapper div is the presence child.
+ *
+ * R117-f (deliverable 7b — the perf leg): the renderer is MEMOIZED. The
+ * panel re-renders on every SSE delta (the stream-store patch), but the
+ * FOLDED items are immutable snapshots (toProjectChatItems over react-query's
+ * structurally-shared data — verified), so a prop-identical re-render is pure
+ * waste: every folded AssistantTurn re-rendered its WorkingSection + TurnFooter
+ * and re-rendered ChatMarkdown (which re-PARSED markdown — now separately
+ * memoized too, deliverable 7a). The stable-props discipline:
+ *   · item — the memoized fold snapshot (identity holds across deltas);
+ *   · primitives only elsewhere (sessionId/projectId/collapseHint/debugMode/
+ *     busy flags/delivery) — booleans flip exactly when the UI must change;
+ *   · callbacks are ITEM-TAKING and panel-stable (onRetryError/onRevertMessage/
+ *     onQueuedRemove/onQueuedSendNow) — the per-item zero-arg closures are
+ *     bound INSIDE this component, so they refresh exactly when a prop change
+ *     re-renders it, never per panel tick. The panel's handlersRef hands the
+ *     latest panel closures to the stable wrappers (see the call site). */
+const MessageRenderer = memo(
+  forwardRef<
+    HTMLDivElement,
+    {
+      item: ProjectChatItem;
+      sessionId: string | null;
+      projectId: string;
+      collapseHint?: boolean;
+      /** ROUND-43: the error-card retry — the panel-bound item-taking form
+       * (the failed turn's user message is resolved from the item). */
+      onRetryError?: (item: Extract<ProjectChatItem, { kind: "error" }>) => void;
+      retryDisabled?: boolean;
+      /** ROUND-44 (R44-c): user-bubble revert — rewinds the session to THIS
+       * message's event seq (panel-stable, item-taking; applies only to
+       * persisted user rows with a bound session). */
+      onRevertMessage?: (item: Extract<ProjectChatItem, { kind: "user" }>) => void;
+      revertDisabled?: boolean;
+      /** ROUND-50 (R50-c2): display-only attachment chips for user items —
+       * from the persisted event log OR the optimistic pending echo. */
+      attachments?: AttachmentRef[];
+      /** ROUND-67 (R67-B): debug mode (the Functionality tab's settings —
+       * R98-I1's rename of the old Advanced/General label) — threaded to
+       * AssistantTurn so its footer can mount the second, full-turn copy
+       * button (gated on the ["debug-settings"] query upstream). */
+      debugMode?: boolean;
+      /** ROUND-78 (R78-D): the queued chip's affordances — bound by the panel
+       * for FOLDED queued items (live-mode only; the busy flag rides the
+       * dedicated prop). */
+      onQueuedRemove?: (seq: number) => void;
+      onQueuedSendNow?: (entry: QueuedMessage) => void;
+      queuedBusy?: boolean;
+      /** R78: the folded queued affordances' gate (live mode + a bound
+       * session) — a primitive so the memo tracks it. */
+      queuedLive?: boolean;
+      /** R117-f (deliverable 2): the optimistic echo's delivery rung. */
+      delivery?: "sending" | "sent";
+    }
+  >(function MessageRenderer(
+    {
+      item,
+      sessionId,
+      projectId,
+      collapseHint,
+      onRetryError,
+      retryDisabled,
+      onRevertMessage,
+      revertDisabled,
+      attachments,
+      debugMode,
+      onQueuedRemove,
+      onQueuedSendNow,
+      queuedBusy,
+      queuedLive,
+      delivery,
+    },
+    ref,
+  ) {
+    switch (item.kind) {
+      // R101-D: EVERY item renders in the TIMELINE RAIL grid (TIMELINE_ITEM_
+      // CLASS): the 28px rail cell (TimelineNode's dot, kind-coded) + the
+      // existing content cell, untouched. The wrapper div stays the
+      // AnimatePresence popLayout child (the ref is framer-motion's measurement
+      // hook — display:grid composes with its absolute exit positioning).
+      case "user":
+        return (
+          <div ref={ref} className={TIMELINE_ITEM_CLASS}>
+            <TimelineNode kind="user" ts={item.ts} />
+            <UserMessage
+              content={item.content}
+              ts={item.ts}
+              onRevert={
+                item.seq >= 0 && sessionId !== null && onRevertMessage !== undefined
+                  ? () => onRevertMessage(item)
+                  : undefined
+              }
+              revertDisabled={revertDisabled}
+              attachments={attachments ?? item.attachments}
+              delivery={delivery}
+            />
+          </div>
+        );
+      case "queued":
+        // R78: the folded queued chip (message.queued event) — the SAME chip
+        // the live store renders mid-stream, with the panel-bound affordances.
+        return (
+          <div ref={ref} className={TIMELINE_ITEM_CLASS}>
+            <TimelineNode kind="queued" ts={item.ts} />
+            <QueuedMessageChip
+              entry={item}
+              busy={queuedBusy ?? false}
+              onRemove={
+                queuedLive === true && onQueuedRemove !== undefined
+                  ? () => onQueuedRemove(item.seq)
+                  : undefined
+              }
+              onSendNow={
+                queuedLive === true && onQueuedSendNow !== undefined
+                  ? () => onQueuedSendNow(item)
+                  : undefined
+              }
+            />
+          </div>
+        );
+      case "turn":
+        return (
+          <div ref={ref} className={TIMELINE_ITEM_CLASS}>
+            <TimelineNode kind="turn" ts={item.ts} />
+            <AssistantTurn
+              item={item}
+              sessionId={sessionId}
+              projectId={projectId}
+              collapseHint={collapseHint}
+              debugMode={debugMode}
+            />
+          </div>
+        );
+      case "error":
+        return (
+          <div ref={ref} className={TIMELINE_ITEM_CLASS}>
+            <TimelineNode kind="error" ts={item.ts} />
+            {/* R97-D: the thinking-loop guard's stop is NOT an error — the amber
+                ThinkingStoppedCard replaces the red TurnErrorCard for the
+                thinking_loop class (the owner's "should not be shown as errors
+                like 'generation failed'" directive). */}
+            {item.errorClass === "thinking_loop" ? (
+              <ThinkingStoppedCard
+                error={item}
+                onRetry={onRetryError !== undefined ? () => onRetryError(item) : undefined}
+                disabled={retryDisabled}
+              />
+            ) : (
+              <TurnErrorCard
+                error={item}
+                sessionId={sessionId}
+                onRetry={onRetryError !== undefined ? () => onRetryError(item) : undefined}
+                disabled={retryDisabled}
+              />
+            )}
+          </div>
+        );
+    }
+  }),
+);
 
 /** ROUND-39: LiveTurn now lives in src/lib/stream-store.ts so the streaming
  * state survives panel remounts (background sessions). The interface is
@@ -2379,6 +2520,42 @@ export function AgentChatPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // ── R117-f (deliverables 2 + 7b): the LIVE user rows' ITEM snapshots,
+  //    memoized so the memoized MessageRenderer holds across SSE deltas (the
+  //    old inline objects + a fresh Date.now() ts re-rendered these rows on
+  //    every panel tick). The echo carries its DELIVERY RUNG — "sending"
+  //    until the turn acks (liveTurnAcked — the turn.started stamp or the
+  //    first content frame), "sent" (the single check) after; the REMOTE
+  //    bubble is born from the ack frame itself, so it enters at "sent"
+  //    (mobile's exact rule); the DELIVERED-queued bubbles are persisted
+  //    server-side (the queue pre-flip) — no glyph, like any fold. ──
+  const echoDelivery: "sending" | "sent" = liveTurnAcked(liveTurn) ? "sent" : "sending";
+  const pendingEchoItem = useMemo(
+    () =>
+      pendingEcho !== null
+        ? { kind: "user" as const, seq: -1, content: pendingEcho, ts: new Date().toISOString() }
+        : null,
+    [pendingEcho],
+  );
+  const deliveredQueuedItems = useMemo(
+    () =>
+      deliveredQueued
+        .filter((d) => !items.some((it) => it.kind === "user" && it.content === d.content))
+        .map((d) => ({ kind: "user" as const, seq: -1, content: d.content, ts: d.ts })),
+    [deliveredQueued, items],
+  );
+  const remoteUserText = remoteRunning ? liveTurn?.userText : undefined;
+  const remoteStartedMs = liveTurn?.startedAtMs;
+  const remoteUserItem = useMemo(() => {
+    if (remoteUserText === undefined || remoteUserText === "") return null;
+    if (items.some((it) => it.kind === "user" && it.content === remoteUserText)) return null;
+    return {
+      kind: "user" as const,
+      seq: -1,
+      content: remoteUserText,
+      ts: new Date(remoteStartedMs ?? Date.now()).toISOString(),
+    };
+  }, [remoteUserText, remoteStartedMs, items]);
   useScrollFade(scrollRef);
 
   // ── R94-D2 (owner: "While the agent is doing its work, I should be able
@@ -3009,6 +3186,35 @@ export function AgentChatPanel({
     }
     return lastUserContent;
   };
+
+  // ── R117-f (deliverable 7b): STABLE item-level callbacks for the memoized
+  //    MessageRenderer. The panel re-renders on every SSE delta, but the
+  //    folded rows only need the LATEST closures AT CLICK TIME — this ref
+  //    (synced after every render) hands them over without re-rendering a
+  //    single prop-identical row. Zero staleness by construction: a click
+  //    always reads the post-render state of the current panel. ──
+  const itemHandlersRef = useRef({ runTurn, retryTextForError, removeQueuedMessage, sendQueuedNow });
+  useEffect(() => {
+    itemHandlersRef.current = { runTurn, retryTextForError, removeQueuedMessage, sendQueuedNow };
+  });
+  const onRetryError = useCallback((item: ErrorTurnItem) => {
+    const h = itemHandlersRef.current;
+    void h.runTurn(h.retryTextForError(item));
+  }, []);
+  const onRevertMessage = useCallback(
+    (item: Extract<ProjectChatItem, { kind: "user" }>) => setRevertTarget(item),
+    [],
+  );
+  const onQueuedRemove = useCallback((seq: number) => {
+    void itemHandlersRef.current.removeQueuedMessage(seq);
+  }, []);
+  const onQueuedSendNow = useCallback((entry: QueuedMessage) => {
+    void itemHandlersRef.current.sendQueuedNow(entry);
+  }, []);
+  // R78: the queued affordances' gate as a PRIMITIVE (live mode + a bound
+  // session) — the memo tracks its flips without per-render closures.
+  const queuedLive = liveMode && activeSessionId !== null;
+
   // The LIVE error card hides the moment the folded log carries the SAME
   // persisted turn.error (matched by the backend-minted errorTs) — no flash,
   // no duplicate, and the card survives reloads via the event log.
@@ -3456,40 +3662,30 @@ export function AgentChatPanel({
                     // ROUND-67 (R67-B): the debug-gated full-turn copy rides
                     // every assistant turn's footer.
                     debugMode={debugMode}
-                    {...(item.kind === "error"
-                      ? {
-                          onRetry: () => void runTurn(retryTextForError(item)),
-                          retryDisabled: busy,
-                        }
-                      : {})}
-                    // ROUND-44 (R44-c): persisted user bubbles (seq >= 0, session
-                    // bound) can rewind the log; the button is disabled while a
-                    // turn streams (busy = streamBusy | send | create | echo).
-                    {...(item.kind === "user" && item.seq >= 0 && activeSessionId !== null
-                      ? {
-                          onRevert: () => setRevertTarget(item),
-                          revertDisabled: busy,
-                        }
-                      : {})}
-                    // ROUND-78 (R78-D): FOLDED queued chips (message.queued
-                    // events from the refetch — the stream has ended or the
-                    // panel remounted). The SAME chip component the live area
-                    // renders, with the panel-bound affordances.
-                    {...(item.kind === "queued" && liveMode && activeSessionId !== null
-                      ? {
-                          queuedBusy: busy,
-                          onQueuedRemove: (seq) => void removeQueuedMessage(seq),
-                          onQueuedSendNow: (entry) => void sendQueuedNow(entry),
-                        }
-                      : {})}
+                    // R117-f (the perf leg): STABLE item-taking callbacks +
+                    // primitive gates — the memo now holds across every SSE
+                    // delta (the per-item closures bind INSIDE the renderer;
+                    // the error/user/queued gates moved there with them).
+                    // ROUND-43's retry, ROUND-44's revert, and ROUND-78's
+                    // queued affordances are byte-identical at the surface.
+                    onRetryError={onRetryError}
+                    retryDisabled={busy}
+                    onRevertMessage={onRevertMessage}
+                    revertDisabled={busy}
+                    onQueuedRemove={onQueuedRemove}
+                    onQueuedSendNow={onQueuedSendNow}
+                    queuedBusy={busy}
+                    queuedLive={queuedLive}
                   />
                 );
               })}
-              {pendingEcho !== null ? (
+              {pendingEchoItem !== null ? (
                 <MessageRenderer
-                  item={{ kind: "user", seq: -1, content: pendingEcho, ts: new Date().toISOString() }}
+                  key="pending-echo"
+                  item={pendingEchoItem}
                   sessionId={null}
                   projectId={projectId}
+                  delivery={echoDelivery}
                   {...(pendingEchoAttachments !== null ? { attachments: pendingEchoAttachments } : {})}
                 />
               ) : null}
@@ -3500,17 +3696,16 @@ export function AgentChatPanel({
                 the refetch hasn't folded it yet: render the ordinary user
                 bubble from the frame's content+ts, with the pendingEcho dedup
                 trick (once the folded log carries the same content, the live
-                copy drops out — no double bubble). ── */}
-            {deliveredQueued
-              .filter((d) => !items.some((it) => it.kind === "user" && it.content === d.content))
-              .map((d) => (
-                <MessageRenderer
-                  key={`delivered-q-${d.seq}`}
-                  item={{ kind: "user", seq: -1, content: d.content, ts: d.ts }}
-                  sessionId={null}
-                  projectId={projectId}
-                />
-              ))}
+                copy drops out — no double bubble). R117-f: the item snapshot
+                is memoized (deliveredQueuedItems) — persisted rows, no glyph. ── */}
+            {deliveredQueuedItems.map((d) => (
+              <MessageRenderer
+                key={`delivered-q-${d.seq}`}
+                item={d}
+                sessionId={null}
+                projectId={projectId}
+              />
+            ))}
 
             {/* ── ROUND-114 (R114-e, owner: "after sending from mobile, the PC
                 send button status does not change; no processing/thinking
@@ -3523,21 +3718,15 @@ export function AgentChatPanel({
                 refetch. Same content-dedupe trick as pendingEcho/delivered:
                 the moment the refetched event log carries the persisted
                 message.user row, this live copy drops out — never a double
-                bubble. ── */}
-            {remoteRunning &&
-            liveTurn?.userText !== undefined &&
-            liveTurn.userText !== "" &&
-            !items.some((it) => it.kind === "user" && it.content === liveTurn.userText) ? (
+                bubble. R117-f: memoized snapshot + the "sent" rung (the
+                bubble is born from the ack frame itself — mobile's rule). ── */}
+            {remoteUserItem !== null ? (
               <MessageRenderer
                 key="remote-turn-user"
-                item={{
-                  kind: "user",
-                  seq: -1,
-                  content: liveTurn.userText,
-                  ts: new Date(liveTurn.startedAtMs).toISOString(),
-                }}
+                item={remoteUserItem}
                 sessionId={null}
                 projectId={projectId}
+                delivery="sent"
               />
             ) : null}
 
@@ -3661,9 +3850,38 @@ export function AgentChatPanel({
                     ) : null}
                   </div>
                 ) : liveTurn.streamThinking.trim() === "" && liveTurn.working.length === 0 ? (
-                  <span className="text-[12px] font-mono" style={{ color: styles.textSecondary }}>
-                    Thinking<span className="ac-ellipsis" aria-hidden />
-                  </span>
+                  /* R117-f (deliverable 3, mobile R115-J parity): the plain
+                     mono "Thinking…" line became the BREATHING placeholder —
+                     a small pulsing accent dot (ac-pulse — the app's shared
+                     live-dot animation, reduced-motion aware) + "Thinking" +
+                     the turn's resolved model in micro mono (the same
+                     model the header above labels the turn with; absent on
+                     pre-R114 sidecars). The first real delta replaces it. */
+                  <div
+                    className="flex items-center gap-1.5 h-5 min-w-0"
+                    data-testid="thinking-placeholder"
+                  >
+                    <span
+                      className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0"
+                      style={{ background: styles.accent }}
+                      aria-hidden
+                    />
+                    <span className="text-[12px] font-medium shrink-0" style={{ color: styles.textSecondary }}>
+                      Thinking
+                    </span>
+                    {(() => {
+                      const phModel = liveTurn.model ?? effectiveModel ?? undefined;
+                      return phModel !== undefined && phModel !== "" ? (
+                        <span
+                          className="min-w-0 truncate font-mono text-[10px]"
+                          style={{ color: styles.textTertiary }}
+                          title={phModel}
+                        >
+                          · {phModel}
+                        </span>
+                      ) : null;
+                    })()}
+                  </div>
                 ) : null}
                 {/* ROUND-59 (R59-D): the live turn's rating key lands with the
                     done frame (LiveTurn.lastAssistantSeq) — the SAME footer
