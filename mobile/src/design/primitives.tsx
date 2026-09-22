@@ -3,27 +3,33 @@
  * (DESIGN.md, R109). Every screen is assembled from these plus raw
  * View/Text:
  *
- *   ClayCard      — the resting clay surface: radius 20, two-leg warm
- *                   shadow, matte 1px top-edge highlight (form, not glow)
+ *   ClayCard      — the resting clay surface v2 (R117-g1): radius 20, the
+ *                   warm hairline RIM on all four sides, two-leg shadow at
+ *                   v2 alphas, the matte top edge dark-mode-only
  *   PressableCard — the press state: tint + 0.98 scale + shadow collapse,
  *                   one spring, NO ripple (android_ripple stays off forever)
  *   FadeInUp      — the fade-in-up entrance for non-card blocks (R115 §2)
- *   ChromeButton  — the primary CTA: accent fill + the quiet vertical sheen
- *                   (one of the three sanctioned chrome surfaces, §2);
- *                   flat = the R115 wizard CTA (sheen-less, clay shadow)
+ *   ChromeButton  — the primary CTA: accentDeep fill + accentText label +
+ *                   the quiet vertical sheen (one of the three sanctioned
+ *                   chrome surfaces, §2); flat = the R115 wizard CTA
+ *                   (sheen-less, clay shadow)
  *   QuietButton   — the secondary action: outlined, flat, honest
  *   ChromeEdge    — the 1px gradient border wrapper (the floating bar's
  *                   edge + selected markers — the other sanctioned chrome)
  *   ClayInput     — the text input: radius 14, focus ring in accent
- *   Chip          — the filter chip (selected = accent fill)
+ *   Chip          — the filter chip (selected = accentDeep fill; resting
+ *                   chips sit in the surfaceWell)
  *   ConnectionPill— the always-visible link status pill (§6)
  *   StatusDot     — the animated state dot (pulses while probing)
- *   Skeleton      — the loading placeholder (calm opacity pulse)
+ *   Skeleton      — the loading placeholder (calm opacity pulse, well fill)
  *   SectionHeader — the 16/700 section heading + optional action
- *   Badge / Hairline / TypeScale — the quiet survivors, re-typed
+ *   Badge / Hairline / TypeScale — the quiet survivors, re-typed; Badge
+ *                   rides the R117-g1 tinted containers (deep-on-tint)
  *
  * Nothing here owns a color: every value reads the resolved theme so a
  * theme switch re-renders the whole instrument with zero prop plumbing.
+ * R117-g1 (round-117-elevation.md §2.2) upgraded the materials WITHOUT a
+ * single prop-API change — every consumer upgraded free.
  */
 
 import { LinearGradient } from "expo-linear-gradient";
@@ -65,6 +71,7 @@ import {
   TYPE_HEADING,
   TYPE_MICRO,
   TYPE_MONO,
+  TYPE_STAT,
   TYPE_TITLE,
   fontFamily,
   pressTint,
@@ -81,15 +88,19 @@ export interface ClayCardProps {
   elevated?: boolean;
   /** The small-surface shadow step (chips, compact tiles). */
   small?: boolean;
-  /** Solid hairline border (for input-ish cards); default is borderless clay. */
+  /** Input-ish cards swap the default clayRim for the stronger input
+   *  border (R117-g1: the default is now rimmed on all four sides). */
   bordered?: boolean;
   testID?: string;
 }
 
 /**
- * The resting clay surface — DESIGN.md §1. Depth is the two-leg warm shadow
- * plus the matte top-edge highlight (a SOLID 1px lighter line on the top
- * edge only — the molded-surface read, never a gradient, never animated).
+ * The resting clay surface — DESIGN.md §1, the v2 R117-g1 material: fill
+ * `card` + the warm hairline RIM on all four sides + the two-leg shadow at
+ * v2 alphas. The matte top edge is a DARK-MODE-ONLY device (14% white) —
+ * the old 55% white mix was arithmetically invisible on ~99%-white light
+ * cards (round-117-elevation.md §1.1/§2.2, AMENDMENT 1). Still never a
+ * gradient, never animated, never glow.
  */
 export function ClayCard({ children, style, elevated = false, small = false, bordered = false, testID }: ClayCardProps) {
   const { tokens } = useTheme();
@@ -100,12 +111,10 @@ export function ClayCard({ children, style, elevated = false, small = false, bor
         {
           backgroundColor: tokens.card,
           borderRadius: small ? RADIUS_INPUT : RADIUS_CARD,
-          borderTopWidth: StyleSheet.hairlineWidth,
-          borderTopColor: tokens.clayTopEdge,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: bordered ? tokens.border : tokens.clayRim,
+          ...(tokens.isDark ? { borderTopColor: tokens.clayTopEdge } : null),
           boxShadow: small ? tokens.clayShadowSm : elevated ? tokens.clayShadow2 : tokens.clayShadow1,
-          ...(bordered
-            ? { borderWidth: StyleSheet.hairlineWidth, borderColor: tokens.border }
-            : null),
           overflow: "hidden",
         },
         style,
@@ -178,8 +187,11 @@ export function PressableCard({
       {
         backgroundColor: state.pressed ? pressTint(tokens.card, tokens.isDark) : tokens.card,
         borderRadius: RADIUS_CARD,
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: tokens.clayTopEdge,
+        // The v2 R117-g1 material: rim all sides (the dark-mode top edge
+        // rides the same hairline) + the two-leg shadow at v2 alphas.
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: tokens.clayRim,
+        ...(tokens.isDark ? { borderTopColor: tokens.clayTopEdge } : null),
         boxShadow: state.pressed
           ? tokens.clayShadowPressed
           : elevated
@@ -282,10 +294,13 @@ export interface ChromeButtonProps {
 }
 
 /**
- * The primary action — accent fill, radius 14, 50px tall, and the ONE quiet
- * glint: a white α→0 gradient across the top half (a "one quiet glint,"
- * never a mirror). Pressed = scale 0.98 + tint. `flat` (R115) drops the
- * glint and adds the clay elevation-2 shadow — the wizard CTA idiom.
+ * The primary action — accentDeep fill (the ember light / the salmon
+ * dark), radius 14, 50px tall, and the ONE quiet glint: a white α→0
+ * gradient across the top half at the R117-g1 whisper alpha 0.18 (a
+ * "one quiet glint," never a mirror, never a 2012 gloss band). Label =
+ * accentText (white on ember 4.98:1 / warm ink on salmon 6.30:1 — AA at
+ * last). Pressed = scale 0.98 + tint. `flat` (R115) drops the glint and
+ * adds the clay elevation-2 shadow — the wizard CTA idiom.
  */
 export function ChromeButton({
   children,
@@ -307,7 +322,11 @@ export function ChromeButton({
   });
 
   const inert = disabled || busy || !onPress;
-  const bg = disabled ? pressTint(tokens.card, tokens.isDark) : tokens.accent;
+  // R117-g1 §2.2 — the CTA fill is the DEEP accent tier; the label rides
+  // accentText (the dark-mode ink flip: warm ink on the salmon — AA in both
+  // modes, where the old fill/label pair sat at 3.98:1 dark and 3.98:1
+  // light).
+  const bg = disabled ? pressTint(tokens.card, tokens.isDark) : tokens.accentDeep;
   const fg = disabled ? tokens.textTertiary : tokens.accentText;
 
   return (
@@ -376,7 +395,7 @@ export function ChromeButton({
                   color: fg,
                   fontSize: TYPE_BODY,
                   fontFamily: fontFamily.bold,
-                  letterSpacing: 0.2,
+                  letterSpacing: 0.3,
                 },
                 textStyle,
               ]}
@@ -564,7 +583,9 @@ export interface ChipProps {
   testID?: string;
 }
 
-/** The filter chip — selected = accent fill + contrast text. */
+/** The filter chip — selected = accentDeep fill + accentText (4.98:1);
+ *  resting chips sit in the surfaceWell with the clayRim hairline
+ *  (R117-g1 §2.2 — the old pillBg ghost rectangle is gone). */
 export function Chip({ children, selected = false, onPress, style, textStyle, testID }: ChipProps) {
   const { tokens } = useTheme();
   return (
@@ -576,12 +597,12 @@ export function Chip({ children, selected = false, onPress, style, textStyle, te
       disabled={!onPress}
       style={({ pressed }: PressableStateCallbackType) => [
         {
-          backgroundColor: selected ? tokens.accent : pressed ? tokens.subtleHover : tokens.pillBg,
+          backgroundColor: selected ? tokens.accentDeep : pressed ? tokens.subtleHover : tokens.surfaceWell,
           borderRadius: RADIUS_PILL,
           paddingHorizontal: spacing.md,
           paddingVertical: spacing.sm,
           borderWidth: StyleSheet.hairlineWidth,
-          borderColor: selected ? tokens.accent : tokens.border,
+          borderColor: selected ? tokens.accentDeep : tokens.clayRim,
         },
         style,
       ]}
@@ -715,7 +736,9 @@ export function Skeleton({ style }: { style?: StyleProp<ViewStyle> }) {
   const { tokens } = useTheme();
   return (
     <Animated.View
-      style={[animated, { backgroundColor: tokens.subtleHover, borderRadius: RADIUS_INPUT }, style]}
+      // R117-g1 §2.2 — the skeleton forecasts the WELL (one step warmer than
+      // the card it stands in), not the old ghost overlay.
+      style={[animated, { backgroundColor: tokens.surfaceWell, borderRadius: RADIUS_INPUT }, style]}
     />
   );
 }
@@ -749,7 +772,9 @@ export function SectionHeader({ children, action, onAction, style }: SectionHead
         <Pressable accessibilityRole="button" onPress={onAction} hitSlop={8}>
           <Text
             style={{
-              color: tokens.accent,
+              // R117-g1 §2.2 — accent-as-text rides the DEEP tier (4.89:1 on
+              // card; the old accent-as-text was 3.9:1).
+              color: tokens.accentDeep,
               fontSize: TYPE_CAPTION,
               fontFamily: fontFamily.bold,
               letterSpacing: 0.3,
@@ -795,27 +820,13 @@ export interface BadgeProps {
   textStyle?: StyleProp<TextStyle>;
 }
 
-/** The small pill — counts, scopes, status chips. 11pt/600, 8px radius. */
+/** The small pill — counts, scopes, status chips. 11/700, 8px radius.
+ *  R117-g1 §2.2 — every tone is a TINTED CONTAINER (deep-on-tint, M3-style)
+ *  off the theme's badgeTones map; the flat semantic hues remain for DOTS
+ *  only. Every ink/tint pair ≥4.5:1 in both modes. */
 export function Badge({ children, tone = "neutral", style, textStyle }: BadgeProps) {
   const { tokens } = useTheme();
-  const bg =
-    tone === "accent"
-      ? tokens.accent
-      : tone === "danger"
-        ? tokens.danger
-        : tone === "warning"
-          ? tokens.warning
-          : tone === "success"
-            ? tokens.success
-            : tone === "running"
-              ? tokens.running
-              : tokens.pillBg;
-  const fg =
-    tone === "accent"
-      ? tokens.accentText
-      : tone === "neutral"
-        ? tokens.textSecondary
-        : "#FFFFFF";
+  const { bg, fg } = tokens.badgeTones[tone];
   return (
     <View
       style={[
@@ -829,7 +840,7 @@ export function Badge({ children, tone = "neutral", style, textStyle }: BadgePro
         style,
       ]}
     >
-      <Text style={[{ color: fg, fontSize: TYPE_MICRO, fontFamily: fontFamily.bold, letterSpacing: 0.3 }, textStyle]}>
+      <Text style={[{ color: fg, fontSize: TYPE_MICRO, fontFamily: fontFamily.bold, letterSpacing: 0.4 }, textStyle]}>
         {children}
       </Text>
     </View>
@@ -847,7 +858,9 @@ export interface TypeScaleProps {
   accessibilityLabel?: string;
 }
 
-/** 28/800 — display: large titles (home hero, wizard headlines). */
+/** 28/800 — display: large titles (home hero, wizard headlines). R117-g1:
+ *  tracking tightened −0.5 → −0.8 (Manrope 800 at 28 likes it tighter; the
+ *  wizard wordmark's +1.5 letterspaced brand line overrides via style). */
 export function TypeDisplay({ children, style, numberOfLines, testID, accessibilityLabel }: TypeScaleProps) {
   const { tokens } = useTheme();
   return (
@@ -856,7 +869,7 @@ export function TypeDisplay({ children, style, numberOfLines, testID, accessibil
       accessibilityLabel={accessibilityLabel}
       numberOfLines={numberOfLines}
       style={[
-        { color: tokens.text, fontSize: TYPE_DISPLAY, fontFamily: fontFamily.extrabold, letterSpacing: -0.5 },
+        { color: tokens.text, fontSize: TYPE_DISPLAY, fontFamily: fontFamily.extrabold, letterSpacing: -0.8 },
         style,
       ]}
     >
@@ -925,7 +938,8 @@ export function TypeBodyStrong({ children, style, numberOfLines, testID, accessi
   );
 }
 
-/** 12.5/500 — captions, status lines, metadata (secondary tone by default). */
+/** 12.5/500 — captions, status lines, metadata (secondary tone by default;
+ *  R117-g1: lineHeight 17 → 18 — Manrope's tall ascenders wanted the room). */
 export function TypeCaption({ children, style, numberOfLines, testID, accessibilityLabel }: TypeScaleProps) {
   const { tokens } = useTheme();
   return (
@@ -934,7 +948,7 @@ export function TypeCaption({ children, style, numberOfLines, testID, accessibil
       accessibilityLabel={accessibilityLabel}
       numberOfLines={numberOfLines}
       style={[
-        { color: tokens.textSecondary, fontSize: TYPE_CAPTION, fontFamily: fontFamily.medium, lineHeight: 17 },
+        { color: tokens.textSecondary, fontSize: TYPE_CAPTION, fontFamily: fontFamily.medium, lineHeight: 18 },
         style,
       ]}
     >
@@ -943,7 +957,9 @@ export function TypeCaption({ children, style, numberOfLines, testID, accessibil
   );
 }
 
-/** 11/600 — micro badges, uppercase kickers. */
+/** 11/600 — micro badges, uppercase kickers. R117-g1: lineHeight 15 +
+ *  tracking 0.6 (the tiny tier gets its own rhythm instead of borrowing
+ *  the line box). */
 export function TypeMicro({ children, style, numberOfLines, testID, accessibilityLabel }: TypeScaleProps) {
   const { tokens } = useTheme();
   return (
@@ -951,7 +967,16 @@ export function TypeMicro({ children, style, numberOfLines, testID, accessibilit
       testID={testID}
       accessibilityLabel={accessibilityLabel}
       numberOfLines={numberOfLines}
-      style={[{ color: tokens.textSecondary, fontSize: TYPE_MICRO, fontFamily: fontFamily.semibold, letterSpacing: 0.5 }, style]}
+      style={[
+        {
+          color: tokens.textSecondary,
+          fontSize: TYPE_MICRO,
+          fontFamily: fontFamily.semibold,
+          lineHeight: 15,
+          letterSpacing: 0.6,
+        },
+        style,
+      ]}
     >
       {children}
     </Text>
@@ -968,6 +993,27 @@ export function TypeMono({ children, style, numberOfLines, testID, accessibility
       numberOfLines={numberOfLines}
       style={[
         { color: tokens.monoText, fontSize: TYPE_MONO, fontFamily: fontFamily.mono, lineHeight: 19 },
+        style,
+      ]}
+    >
+      {children}
+    </Text>
+  );
+}
+
+/** 28 / mono-medium — stat & data numbers (R117-g1 §2.1, AMENDMENT 4): the
+ *  dashboard's headline figures render at the display SIZE on the mono face
+ *  (letterSpacing −0.5). The wave-3 dashboard upgrade consumes this; a
+ *  named slot, not a new size. */
+export function TypeStat({ children, style, numberOfLines, testID, accessibilityLabel }: TypeScaleProps) {
+  const { tokens } = useTheme();
+  return (
+    <Text
+      testID={testID}
+      accessibilityLabel={accessibilityLabel}
+      numberOfLines={numberOfLines}
+      style={[
+        { color: tokens.text, fontSize: TYPE_STAT, fontFamily: fontFamily.monoMedium, letterSpacing: -0.5 },
         style,
       ]}
     >

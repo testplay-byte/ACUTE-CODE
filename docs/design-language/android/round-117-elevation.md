@@ -1,3 +1,4 @@
+<!-- last-reviewed: 2026-09-22 round-117 -->
 <!-- round-117-g — the visual-design-quality (elevation) spec. RESEARCH + SPEC only:
      this file prescribes; implementation waves execute. Binding law: the three laws
      (README.md) + 01-foundations + 02-patterns + 03-rules stay in force. Every place

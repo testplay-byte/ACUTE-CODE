@@ -12,6 +12,15 @@
  * Clay Studio is now FIRST (the mobile default, the owner's R109 direction,
  * palette carried verbatim from the desktop's §1b so both ends read as one
  * household). ADDING A THEME = appending one object literal to THEMES.
+ *
+ * ROUND-117-g1 (the elevation wave): the clay values were retuned per
+ * docs/design-language/android/round-117-elevation.md §2.1 so the surface
+ * ladder, ink tiers, accent family, and material strings carry real
+ * contrast (the old values shipped 1.08:1 surfaces and 2.8:1 tertiary
+ * text). Additive + value updates only — every export name survives, all
+ * consumers upgrade free. The clay-scoped values (surface ladder, accent
+ * tiers, badge tints) change; the theme-independent legs (ink ladder,
+ * shadows, rims, wells) apply to all six themes.
  */
 
 import { Platform } from "react-native";
@@ -28,6 +37,13 @@ export interface ThemeColors {
    * #242426; the dark-mode accent must keep ~4.5:1 against bgDark).
    */
   accentDark?: string;
+  /**
+   * R117-g1 §2.1 — the LIGHT-mode deep accent (accent-as-text + CTA fills):
+   * the same hue deepened for contrast duty, not a second accent. Optional —
+   * themes without one resolve accentDeep to their own accent (identity
+   * preserved).
+   */
+  accentDeep?: string;
   accent2: string;
   bgLight: string;
   bgDark: string;
@@ -57,23 +73,32 @@ export const THEMES: ThemeColors[] = [
     // verbatim from the desktop's tokens §1b: warm sand neutrals, warm ink,
     // a muted terracotta accent (never a blue-black, never a cold gray).
     // ROUND-114-c: the LIGHT whites cooled one step at the owner's ask ("a
-    // slightly colder tone of white") — bg #F4EEE5→#F3F4F0, card #FDFBF7→
-    // #FDFDFB — a whisper of warmth survives (never a flat gray); DARK
-    // surfaces stay as-is.
+    // slightly colder tone of white") — a whisper of warmth survives
+    // (never a flat gray); DARK surfaces stay as-is.
+    // ROUND-117-g1 (AMENDMENT 2, round-117-elevation.md §2.1): the VALUE
+    // step the clay identity depends on is restored — bg deepens to #ECEEE8
+    // (same cool cast, G ≥ R ≥ B — R114-c's temperature verdict preserved,
+    // only the value moves), dark bg/card deepen to #211B16/#332C26 so the
+    // ladder reads 1.15:1 light / 1.24:1 dark (was 1.08/1.11 — invisible).
+    // The dark accent is now DECLARED (the salmon #D98A63 — dotDark and the
+    // dark palette strip always said so) and the ember #B45330 joins as the
+    // light deep tier (AMENDMENT 3: one accent family, two depths).
     id: "clay",
     name: "Clay Studio",
     accent: "#C4653F",
+    accentDark: "#D98A63",
+    accentDeep: "#B45330",
     accent2: "#8A6A55",
-    bgLight: "#F3F4F0",
-    bgDark: "#26211C",
+    bgLight: "#ECEEE8",
+    bgDark: "#211B16",
     cardLight: "#FDFDFB",
-    cardDark: "#2F2924",
+    cardDark: "#332C26",
     textLight: "#2A2018",
     textDark: "#F2EBE1",
     dot: "#C4653F",
     dotDark: "#D98A63",
-    paletteLight: ["#C4653F", "#8A6A55", "#F3F4F0", "#FDFDFB", "#2A2018"],
-    paletteDark: ["#D98A63", "#B09380", "#26211C", "#2F2924", "#F2EBE1"],
+    paletteLight: ["#C4653F", "#B45330", "#ECEEE8", "#FDFDFB", "#2A2018"],
+    paletteDark: ["#D98A63", "#B09380", "#211B16", "#332C26", "#F2EBE1"],
     selectedBg: "#C4653F",
     selectedText: "#FFFFFF",
     unselectedBg: "#EFE7DB",
@@ -238,25 +263,67 @@ export function mixHex(a: string, b: string, t: number): string {
 }
 
 /**
- * The pressed-surface color — 8% toward white in dark mode, 8% toward
- * black in light mode (the quiet press state, unchanged).
+ * WCAG 2.1 relative luminance of an sRGB triple — the math under
+ * getContrastText (and the same formula the contrast test re-derives
+ * independently in __tests__/contrast.test.ts).
  */
-export function pressTint(surface: string, isDark: boolean): string {
-  return mixHex(surface, isDark ? "#FFFFFF" : "#000000", 0.08);
-}
-
-/** Black or white — for text sitting on accent/selected fills. */
-export function getContrastText(color: string): string {
-  const [r, g, b] = hexToRgb(color);
-  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  return luminance > 0.55 ? "#111111" : "#FFFFFF";
+function relativeLuminance(r: number, g: number, b: number): number {
+  const lin = (c: number): number => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
 }
 
 /**
- * The resolved, mode-aware palette every screen consumes — now carrying the
- * CLAY MATERIAL (DESIGN.md §1): the two-leg warm shadows, the matte
- * top-edge highlight, and the mono (code) surfaces.
+ * The pressed-surface color — 10% toward white in dark mode, 10% toward
+ * black in light mode (R117-g1 §2.4: the 8% tint sat below the perception
+ * floor; press becomes perceivable, still the "quiet instrument").
  */
+export function pressTint(surface: string, isDark: boolean): string {
+  return mixHex(surface, isDark ? "#FFFFFF" : "#000000", 0.1);
+}
+
+/** Black or white — for text sitting on accent/selected fills.
+ *
+ *  R117-g1 FIX (round-117-elevation.md §1.3/§2.1): the old fixed 0.55
+ *  YIQ-luminance threshold was a heuristic with no contrast guarantee — a
+ *  mid-luminance accent (the spec's diagnosis names the salmon #D98A63)
+ *  can land within a hair of the crossover and pick its weak side. The
+ *  pick is now the true WCAG comparison — whichever of ink (#111111) /
+ *  white scores the higher ratio against the fill wins, so a
+ *  mid-luminance accent can never resolve below its better side. (Verified
+ *  side-stable for all six themes' accents in both modes; resolveTheme no
+ *  longer routes clay's accentText through this — §2.1 hard-pins that pair
+ *  to white/ember and ink/salmon — but every other caller gets the honest
+ *  pick.)
+ */
+export function getContrastText(color: string): string {
+  const [r, g, b] = hexToRgb(color);
+  const lum = relativeLuminance(r, g, b);
+  const whiteRatio = 1.05 / (lum + 0.05);
+  const inkRatio = (lum + 0.05) / (relativeLuminance(17, 17, 17) + 0.05);
+  return whiteRatio >= inkRatio ? "#FFFFFF" : "#111111";
+}
+
+/**
+ * The resolved, mode-aware palette every screen consumes — carrying the
+ * CLAY MATERIAL (DESIGN.md §1): the two-leg warm shadows v2, the warm card
+ * rim, the recessed wells, the tinted badge containers, and the mono
+ * (code) surfaces. R117-g1 carried the elevation spec's §2.1 legs here.
+ */
+
+/** The Badge's tone vocabulary (primitives.Badge's prop union, one spelling). */
+export type BadgeToneName = "neutral" | "accent" | "danger" | "warning" | "success" | "running";
+
+/** One tinted badge container: the tint fill + the ink that rides it. */
+export interface BadgeToneColors {
+  /** The tinted container fill (never the flat hue — those stay for dots). */
+  bg: string;
+  /** The deep (light) / bright (dark) ink on the tint — ≥4.5:1 both modes. */
+  fg: string;
+}
+
 export interface ResolvedTheme {
   /** The raw theme tokens (for palette strips, identity). */
   theme: ThemeColors;
@@ -267,6 +334,10 @@ export interface ResolvedTheme {
   text: string;
   accent: string;
   accentText: string;
+  /** R117-g1 §2.1 — the DEEP accent tier: accent-as-text + CTA fills. Clay
+   *  light #B45330 (ember, 4.89:1 as text on card); dark = the dark accent
+   *  (the salmon). One family, two depths — not a second accent. */
+  accentDeep: string;
   accent2: string;
   // Borders (hairlines render at StyleSheet.hairlineWidth)
   border: string;
@@ -287,7 +358,9 @@ export interface ResolvedTheme {
   selectedText: string;
   pillBg: string;
   pillText: string;
-  // The clay material (DESIGN.md §1)
+  // The clay material (DESIGN.md §1; the v2 R117-g1 strings — contact legs
+  // 10–14%, ambient legs 14–24%, tighter spreads: the shadow draws a
+  // silhouette instead of a smudge)
   /** Elevation-1 two-leg clay shadow (list cards). */
   clayShadow1: string;
   /** Elevation-2 two-leg clay shadow (the floating bar, heroes). */
@@ -296,9 +369,28 @@ export interface ResolvedTheme {
   clayShadowSm: string;
   /** The tight leg alone — the pressed state's collapsed shadow. */
   clayShadowPressed: string;
-  /** The matte 1px top-edge highlight color for cards (molded, never glow). */
+  /** R117-g1 — the UPWARD two-leg sheet shadow (docks, bottom sheets). */
+  clayShadowSheet: string;
+  /** R117-g1 (AMENDMENT 1) — the default card hairline: a warm rim on all
+   *  four sides (10% ink into the card light / 10% white dark). */
+  clayRim: string;
+  /** The matte 1px top-edge highlight — a DARK-MODE-ONLY device at 14% white
+   *  (R117-g1 AMENDMENT 1: the 55% white mix was arithmetically invisible on
+   *  ~99%-white light cards; light cards carry the rim instead — the light
+   *  value stays resolved for not-yet-migrated consumers, waves 4–5). */
   clayTopEdge: string;
-  /** A slightly raised surface between bg and card (list wells, sheets). */
+  /** R117-g1 — the recessed WELL (accordions, recent-activity rows, inputs,
+   *  mono blocks, skeletons): one step down from the card, warm light /
+   *  5% white dark. */
+  surfaceWell: string;
+  /** R117-g1 — the accent's tinted container (icon chips, the tab indicator,
+   *  hero tiles): 12% accent into the card light / 18% dark. */
+  accentTint: string;
+  /**
+   *  R117-g1 — DEAD (tombstoned, not deleted): superseded by surfaceWell
+   *  (the 2% mix was invisible and carried essentially no consumers). Kept
+   *  for export stability; a future tokens-owning wave may delete it.
+   */
   surfaceRaised: string;
   // Mono / code surfaces (the machine-text family)
   monoBg: string;
@@ -314,6 +406,15 @@ export interface ResolvedTheme {
   success: string;
   warning: string;
   running: string;
+  // R117-g1 §2.1 — the semantic DEEP (light) / BRIGHT (dark) pairs: status
+  // TEXT and tinted badges ride these; the flat hues above stay for DOTS.
+  successDeep: string;
+  warningDeep: string;
+  dangerDeep: string;
+  runningDeep: string;
+  /** R117-g1 §2.2 — the Badge's tinted containers, resolved per theme so
+   *  screens never hand-mix (deep-on-tint; every pair ≥4.5:1). */
+  badgeTones: Record<BadgeToneName, BadgeToneColors>;
 }
 
 export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
@@ -322,10 +423,42 @@ export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
   const card = isDark ? theme.cardDark : theme.cardLight;
   // The clay ink family: warm in light mode (ceramics cast warm shadows —
   // R114-c cools it a half-step to rgba(38,34,28) so the warm cast never
-  // reads ORANGE against the colder #F3F4F0 white; still warm family,
-  // never the forbidden cold blue-black), deepened toward black in dark
-  // mode. Theme-independent, mode-aware — the desktop's R108-e grammar.
+  // reads ORANGE against the colder #ECEEE8 white; still warm family,
+  // never the forbidden cold blue-black), pure black in dark mode (the
+  // shadows must out-contrast the #332C26 cards). Theme-independent,
+  // mode-aware — the desktop's R108-e grammar.
   const inkWarm = isDark ? "rgba(0,0,0," : "rgba(38,34,28,";
+  // R117-g1 §2.1 — the two-tier accent family: `accent` stays the marker /
+  // icon / tint hue; `accentDeep` is the same hue deepened for accent-as-
+  // text + CTA fills. Clay declares the ember #B45330; the other themes
+  // resolve it to their own accent (verify, don't redesign). Dark mode: the
+  // deep tier IS the dark accent.
+  const accentDeep = isDark ? accent : theme.accentDeep ?? theme.accent;
+  // R117-g1 §2.1 — accentText is an EXPLICIT pair for clay: white on the
+  // ember light (4.98:1), warm INK on the salmon dark (6.30:1). Before this,
+  // clay declared no accentDark, so the dark CTA rendered the LIGHT
+  // terracotta with white — 3.98:1, below AA; the hard pin (plus the
+  // accentDark declaration above) lands the spec's ink-on-salmon outcome
+  // deterministically. The other five themes keep the computed pick.
+  const accentText = theme.id === "clay" ? (isDark ? "#211B16" : "#FFFFFF") : getContrastText(accent);
+  // R117-g1 §2.1 — the ink ladder (theme-independent, mode-aware).
+  const textSecondary = isDark ? "rgba(255,255,255,0.62)" : "rgba(0,0,0,0.62)";
+  const textTertiary = isDark ? "rgba(255,255,255,0.52)" : "rgba(0,0,0,0.57)";
+  // R117-g1 §2.1 — the recessed well + the accent's tinted container.
+  const surfaceWell = isDark ? mixHex(card, "#FFFFFF", 0.05) : mixHex(card, "#8A6A55", 0.08);
+  const accentTint = mixHex(card, accent, isDark ? 0.18 : 0.12);
+  // R117-g1 §2.2 — the Badge's tinted containers (deep-on-tint, M3-style):
+  // 12% of the flat hue into the card light / 20% dark, with the deep
+  // (light) / bright (dark) ink riding it. The flat fills stay for dots.
+  const badgeTint = (hue: string): string => mixHex(card, hue, isDark ? 0.2 : 0.12);
+  const badgeTones: Record<BadgeToneName, BadgeToneColors> = {
+    success: { bg: badgeTint("#22c55e"), fg: isDark ? "#4ADE80" : "#166534" },
+    warning: { bg: badgeTint("#f59e0b"), fg: isDark ? "#FBBF24" : "#92400E" },
+    danger: { bg: badgeTint("#ef4444"), fg: isDark ? "#FCA5A5" : "#B91C1C" },
+    running: { bg: badgeTint("#3b82f6"), fg: isDark ? "#93C5FD" : "#1D4ED8" },
+    accent: { bg: accentDeep, fg: accentText },
+    neutral: { bg: surfaceWell, fg: textSecondary },
+  };
   return {
     theme,
     isDark,
@@ -333,7 +466,8 @@ export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
     card,
     text: isDark ? theme.textDark : theme.textLight,
     accent,
-    accentText: getContrastText(accent),
+    accentText,
+    accentDeep,
     accent2: theme.accent2,
     border: isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)",
     borderStrong: isDark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.18)",
@@ -343,35 +477,62 @@ export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
     inputBg: isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.02)",
     inputBorder: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)",
     inputFocusBorder: isDark ? "rgba(255,255,255,0.30)" : "rgba(0,0,0,0.90)",
-    textSecondary: isDark ? "rgba(255,255,255,0.62)" : "rgba(0,0,0,0.62)",
-    textTertiary: isDark ? "rgba(255,255,255,0.40)" : "rgba(0,0,0,0.40)",
+    textSecondary,
+    textTertiary,
     selectedBg: theme.selectedBg,
     selectedText: theme.selectedText,
     pillBg: isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.06)",
     pillText: isDark ? theme.textDark : theme.textLight,
-    // ── the clay material (two-leg: tight contact + large soft ambient) ──
-    clayShadow1: `0px 1px 3px ${inkWarm}0.08), 0px 8px 24px -6px ${inkWarm}0.10)`,
-    clayShadow2: `0px 2px 6px ${inkWarm}0.10), 0px 16px 40px -8px ${inkWarm}0.14)`,
-    clayShadowSm: `0px 1px 2px ${inkWarm}0.08), 0px 4px 12px -4px ${inkWarm}0.08)`,
-    clayShadowPressed: `0px 1px 3px ${inkWarm}0.10)`,
+    // ── the clay material v2 (R117-g1: tight contact + soft ambient, now
+    // at alphas that actually draw — warm ink light, black dark) ──
+    clayShadow1: isDark
+      ? `0px 1px 2px ${inkWarm}0.40), 0px 8px 20px -6px ${inkWarm}0.50)`
+      : `0px 1px 2px ${inkWarm}0.12), 0px 6px 16px -6px ${inkWarm}0.18)`,
+    clayShadow2: isDark
+      ? `0px 2px 4px ${inkWarm}0.45), 0px 14px 36px -8px ${inkWarm}0.60)`
+      : `0px 2px 4px ${inkWarm}0.14), 0px 12px 32px -8px ${inkWarm}0.24)`,
+    clayShadowSm: isDark
+      ? `0px 1px 2px ${inkWarm}0.35), 0px 4px 12px -4px ${inkWarm}0.45)`
+      : `0px 1px 2px ${inkWarm}0.10), 0px 3px 10px -4px ${inkWarm}0.14)`,
+    clayShadowPressed: isDark
+      ? `0px 1px 2px ${inkWarm}0.40)`
+      : `0px 1px 2px ${inkWarm}0.12)`,
+    // Upward: the sheet/dock shadow (replaces sheet.tsx's hardcoded string
+    // once its wave lands; resolved here so the grammar exists).
+    clayShadowSheet: isDark
+      ? `0px -2px 6px ${inkWarm}0.50), 0px -14px 36px -8px ${inkWarm}0.65)`
+      : `0px -2px 6px ${inkWarm}0.12), 0px -12px 32px -8px ${inkWarm}0.22)`,
+    // AMENDMENT 1: the warm hairline rim on all four sides (light's default
+    // edge); the matte top edge becomes dark-mode-only at 14% white.
+    clayRim: isDark ? "rgba(255,255,255,0.10)" : mixHex(card, "#2A2018", 0.10),
     clayTopEdge: isDark
-      ? mixHex(card, "#FFFFFF", 0.06)
+      ? mixHex(card, "#FFFFFF", 0.14)
       : mixHex(card, "#FFFFFF", 0.55),
+    surfaceWell,
+    accentTint,
     surfaceRaised: isDark ? mixHex(card, "#FFFFFF", 0.02) : mixHex(card, "#000000", 0.02),
     // ── mono surfaces ──
-    monoBg: isDark ? "rgba(0,0,0,0.22)" : mixHex(card, "#2A2018", 0.04),
+    monoBg: isDark ? "rgba(0,0,0,0.22)" : mixHex(card, "#2A2018", 0.06),
     monoBorder: isDark ? "rgba(255,255,255,0.08)" : "rgba(42,32,24,0.10)",
     monoText: isDark ? "rgba(242,235,225,0.92)" : "#3A2E22",
-    // ── chrome jewelry stops (the metal ramp + the CTA sheen) ──
+    // ── chrome jewelry stops (the metal ramp + the CTA sheen; R117-g1: the
+    // dark stop 0.16 finally draws on the white bar; the sheen is a whisper
+    // glint at 0.18, not a 2012 gloss band) ──
     chromeEdgeLight: isDark ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.85)",
-    chromeEdgeDark: isDark ? "rgba(255,255,255,0.04)" : "rgba(42,32,24,0.10)",
-    sheenTop: isDark ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.42)",
+    chromeEdgeDark: isDark ? "rgba(255,255,255,0.06)" : "rgba(42,32,24,0.16)",
+    sheenTop: isDark ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.18)",
     sheenBottom: "rgba(255,255,255,0.00)",
     // The fixed semantic hues — 1:1 with the desktop's SEMANTIC_COLORS leg.
     danger: "#ef4444",
     success: "#22c55e",
     warning: "#f59e0b",
     running: "#3b82f6",
+    // R117-g1 §2.1 — the deep/bright pairs for status text + tinted badges.
+    successDeep: isDark ? "#4ADE80" : "#15803D",
+    warningDeep: isDark ? "#FBBF24" : "#B45309",
+    dangerDeep: isDark ? "#F87171" : "#DC2626",
+    runningDeep: isDark ? "#93C5FD" : "#1D4ED8",
+    badgeTones,
   };
 }
 
@@ -381,8 +542,10 @@ export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
  * The fixed DATA-VIZ hue set — the dashboard's documented exception to
  * "one accent per screen" (DESIGN.md's semantic-hue family, extended for
  * charts). Muted, clay-compatible, NEVER neon; every hue carries a dark
- * variant tuned for ~4.5:1-ish reads against #26211C. Color rides on BARS,
+ * variant tuned for ~4.5:1-ish reads against #211B16. Color rides on BARS,
  * DOTS, and ICON CHIPS only — resting surfaces stay card-colored.
+ * R117-g1 §2.1: output light #6F9E90 → #5E8E7E (the sage bars were below
+ * the 3:1 non-text floor at 2.96:1; now 3.65:1 vs card).
  */
 export interface ChartHue {
   light: string;
@@ -393,7 +556,7 @@ export const CHART_HUES = {
   /** Input tokens — the theme accent terracotta (the dominant mass). */
   input: { light: "#C4653F", dark: "#D98A63" },
   /** Output tokens — a cool sage teal, the in/out contrast hue. */
-  output: { light: "#6F9E90", dark: "#8FBFAD" },
+  output: { light: "#5E8E7E", dark: "#8FBFAD" },
   /** The peak-day tile's violet-ish 4th stat hue. */
   peak: { light: "#7C6A9E", dark: "#9C8CC2" },
   /** Per-model leaderboard hues, assigned BY RANK (rank 0 = first).
@@ -476,6 +639,12 @@ export const fontFamily = {
 
 /** 28 / 800 — display: the large titles (home hero, wizard headlines). */
 export const TYPE_DISPLAY = 28;
+/**
+ * 28 / mono-medium — stat & data numbers (R117-g1 §2.1, AMENDMENT 4): the
+ * dashboard's headline figures render at the display SIZE on the mono face
+ * (letterSpacing −0.5). A named slot, not a new size — same 28 as display.
+ */
+export const TYPE_STAT = 28;
 /** 20 / 700 — title: pushed screens' compact headers. */
 export const TYPE_TITLE = 20;
 /** 16 / 700 — heading: section headers on scrolling screens. */
@@ -486,6 +655,13 @@ export const TYPE_BODY = 15;
 export const TYPE_CAPTION = 12.5;
 /** 11 / 600 — micro: badges, labels, uppercase kickers. */
 export const TYPE_MICRO = 11;
+/**
+ * 11.5 — the tab-label floor (R117-g1 §2.1, AMENDMENT 4): unselected tab
+ * labels were TYPE_MICRO − 0.5 = 10.5px, below the ladder's own 11px floor.
+ * Wave 2 wires tab-bar.tsx's label + measurement row to this TOGETHER
+ * (byte-identical recipes, or the morph mis-measures).
+ */
+export const TYPE_TAB_LABEL = 11.5;
 /** 13 / 400 mono — commands, tool output, fingerprints, PINs. */
 export const TYPE_MONO = 13;
 /**
