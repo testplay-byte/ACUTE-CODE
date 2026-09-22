@@ -72,6 +72,12 @@ import { getNotificationBus } from "./lib/notification-bus.js";
 // project creations, and settings PUTs all ride it
 // (lib/events-bus.ts; served by GET /api/v1/events/stream).
 import { getEventsBus } from "./lib/events-bus.js";
+// R117-e: the diagnostics SINK — the seam non-HTTP capture points (process
+// crash handlers, notification delivery failures, unverified tool-result
+// shapes in chat.ts) write through into THIS server's ring. Registered per
+// buildServer below; a pure leaf module (no imports) so the agents/lib
+// layers can depend on it without cycles.
+import { recordDiagnostic, registerDiagnosticSink } from "./lib/diagnostics-sink.js";
 import {
   countUnreadNotifications,
   listNotifications,
@@ -224,6 +230,20 @@ function scrubDiagnosticText(text: string): string {
   return out;
 }
 
+/**
+ * R117-e: one-line description of a notification-delivery failure for the
+ * ring (Error → name + message; anything else → JSON/toString). The ring's
+ * scrubber + cap apply at capture, exactly like every other entry.
+ */
+function describeNotificationFailure(error: unknown): string {
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  try {
+    return JSON.stringify(error) ?? String(error);
+  } catch {
+    return String(error);
+  }
+}
+
 /** Constant-time bearer comparison; the token is per-spawn and loopback-only. */
 function isAuthorized(header: unknown, token: string): boolean {
   if (typeof header !== "string") return false;
@@ -373,10 +393,20 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       try {
         sendPushToAll(db, n);
       } catch (err) {
+        // R117-e: a web-push fan-out failure is an ENGINE error the owner
+        // must SEE — route it into the diagnostics ring (the Console tab)
+        // beside the belt that always was the stderr line.
         console.error("[web-push] fanout threw:", err);
+        recordDiagnostic("notification", `web-push fanout failed: ${describeNotificationFailure(err)}`);
       }
       // R106-S1: the FCM leg — ping-only payloads someday, a no-op today.
-      void publishFcm(dataDir, n);
+      // R117-e: the promise is explicitly caught — publishFcm never rejects
+      // by contract, but an unhandledRejection would now be FATAL (the
+      // R117-e crash handlers exit on it), so the belt costs one line.
+      void publishFcm(dataDir, n).catch((err: unknown) => {
+        console.error("[fcm] publish rejected:", err);
+        recordDiagnostic("notification", `fcm publish failed: ${describeNotificationFailure(err)}`);
+      });
     });
   }
 
@@ -508,6 +538,34 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // pass through and never pollute the ring.
   const diagnosticsRing: SidecarDiagnosticError[] = [];
   /**
+   * R117-e: the ONE ring-push helper — both capture-point shapes (the HTTP
+   * recorder below, the non-HTTP sink registration) build their entry and
+   * funnel through here, so the scrub + newest-first + cap-drop rules can
+   * never drift apart. Behavior-identical to the pre-R117 inline push.
+   */
+  const pushDiagnosticEntry = (entry: {
+    kind: string;
+    statusCode: number;
+    code: string;
+    message: string;
+    method: string;
+    url: string;
+  }): void => {
+    diagnosticsRing.unshift({
+      id: randomUUID(),
+      ts: new Date().toISOString(),
+      source: "sidecar",
+      kind: entry.kind,
+      statusCode: entry.statusCode,
+      code: entry.code,
+      message: scrubDiagnosticText(entry.message),
+      method: entry.method,
+      url: entry.url,
+      count: 1,
+    });
+    if (diagnosticsRing.length > DIAGNOSTICS_RING_CAP) diagnosticsRing.pop();
+  };
+  /**
    * R59-E + DECISION (from the live battery): record ONLY status ≥ 500 —
    * 4xx is client noise (bad input, unknown ids, wrong token), not an
    * engine error, and the console would drown in them on every owner typo.
@@ -522,22 +580,34 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     message: string,
   ): void => {
     if (statusCode < 500) return;
-    diagnosticsRing.unshift({
-      id: randomUUID(),
-      ts: new Date().toISOString(),
-      source: "sidecar",
+    pushDiagnosticEntry({
       kind: "http",
       statusCode,
       code,
-      message: scrubDiagnosticText(message),
+      message,
       method: request.method,
       // Strip the query string — params (e.g. ?url= on the browser proxy)
       // are request data, not diagnostics.
       url: request.url.split("?")[0],
-      count: 1,
     });
-    if (diagnosticsRing.length > DIAGNOSTICS_RING_CAP) diagnosticsRing.pop();
   };
+  // R117-e: the NON-HTTP capture points' write. Same ring, same scrub + cap,
+  // same newest-first + cap-drop — only the entry shape differs (no request
+  // to read method/url from, so they render as "—"; the Console's expand
+  // line reads "— — → HTTP 500 (code)" for these, and the kind chip
+  // ("sidecar/crash", "sidecar/notification", "sidecar/tool-shape") is
+  // what actually identifies the row). The last buildServer wins, mirroring
+  // the process-wide singleton buses.
+  registerDiagnosticSink((entry) => {
+    pushDiagnosticEntry({
+      kind: entry.kind,
+      statusCode: entry.statusCode ?? 500,
+      code: entry.code ?? "INTERNAL",
+      message: entry.message,
+      method: "—",
+      url: "—",
+    });
+  });
   app.setErrorHandler((error: FastifyError, request, reply) => {
     const status = error.statusCode ?? 500;
     // R59-E: the diagnostics ring capture point (status ≥ 500 only).

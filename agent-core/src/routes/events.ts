@@ -61,25 +61,63 @@ export function registerEventsRoutes(scope: FastifyInstance, ctx: RouteContext):
       "x-accel-buffering": "no",
       ...corsHeadersFor(request.headers.origin),
     });
+    // ── ROUND-117 (R117-e): the WRITE GUARD ─────────────────────────────
+    // The subscriber's res.write was previously unguarded: a destroyed
+    // socket (the watcher's window killed mid-frame) THREW inside the bus
+    // subscriber — the bus's publish try/catch swallowed it, but the
+    // subscription + heartbeat survived, so every later frame re-threw and
+    // stderr collected the same dead-socket error forever. This is the
+    // sse.ts send() idiom (~230-235) applied here: a failing or
+    // already-ended write marks the stream dead, tears the heartbeat + bus
+    // subscription down IMMEDIATELY (the socket may never emit 'close' —
+    // the R112-a lesson), and the close handler stays as the normal-path
+    // cleanup. The bus's try/catch remains the belt (events-bus.ts publish).
+    let socketDead = false;
+    // Assigned immediately after their declarations below — every guarded
+    // write happens strictly after (bus frames + timer ticks are async).
+    let unsubscribe: () => void = () => {};
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    const stopWriting = (): void => {
+      socketDead = true;
+      if (heartbeat !== undefined) clearInterval(heartbeat);
+      unsubscribe();
+    };
+    const guardedWrite = (chunk: string): void => {
+      if (socketDead) return;
+      if (res.writableEnded || res.destroyed) {
+        stopWriting();
+        return;
+      }
+      try {
+        res.write(chunk);
+      } catch {
+        // The socket died mid-write — the sse.ts send() idiom: stop writing,
+        // drop the subscription, let the close handler finish the teardown.
+        stopWriting();
+      }
+    };
     // The hello frame — live-batteries the stream the instant the route
     // runs (writeHead alone assigns headers; nothing reaches the socket
     // until the first write) and tells the client the channel is open.
     // Semantics for clients: "resync everything" — refetch your state, then
     // follow the frames (the reconnect contract: whatever landed between
     // the last received frame and the hello is caught by that refetch).
-    res.write(`data: ${JSON.stringify({ type: "hello" })}\n\n`);
-    const unsubscribe = getEventsBus().subscribe((frame) => {
-      if (!res.writableEnded) res.write(`data: ${JSON.stringify(frame)}\n\n`);
+    // R117-e: also guarded — a socket that died between the request and the
+    // first byte has nothing to stream and nothing to clean yet.
+    try {
+      res.write(`data: ${JSON.stringify({ type: "hello" })}\n\n`);
+    } catch {
+      return;
+    }
+    unsubscribe = getEventsBus().subscribe((frame) => {
+      guardedWrite(`data: ${JSON.stringify(frame)}\n\n`);
     });
     // R112-a pattern: the 10 s comment heartbeat — SSE-legal no-op frames
     // that keep NAT/proxy/Wi-Fi power-save from reaping the idle stream.
-    const heartbeat = setInterval(() => {
-      if (res.writableEnded) return;
-      try {
-        res.write(": ping\n\n");
-      } catch {
-        // The socket died mid-write — the close handler cleans up.
-      }
+    // R117-e: rides the SAME guard — a failing ping write tears down exactly
+    // like a failing frame write (one dead socket, one teardown).
+    heartbeat = setInterval(() => {
+      guardedWrite(": ping\n\n");
     }, 10_000);
     res.on("close", () => {
       clearInterval(heartbeat);

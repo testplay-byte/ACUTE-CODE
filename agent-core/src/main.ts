@@ -20,6 +20,15 @@ import { startServer } from "./server.js";
 // = SIGTERM — Fastify's onClose hooks never run on a bare signal, so without
 // this handler every persistent shell (bash/pty children) would be orphaned.
 import { terminalSessionsDisposeAll } from "./terminal-sessions.js";
+// ROUND-117 (R117-e): process-level crash handlers — an uncaughtException or
+// unhandledRejection anywhere outside a route previously killed the sidecar
+// with Node's default spew (no ring entry, no honest sidecar.log line). Now:
+// scrub → diagnostics ring (best-effort) + sidecar.log → CONTROLLED exit(1)
+// (the boot sweep recovers crash-orphaned `running` sessions on restart, so
+// a clean death beats a zombie). lib/crash-handlers.ts owns the semantics;
+// every effect is injected there and unit-tested in isolation.
+import { installCrashHandlers } from "./lib/crash-handlers.js";
+import { recordDiagnostic } from "./lib/diagnostics-sink.js";
 
 const token = process.env.ACUTE_TOKEN;
 const dbPath = process.env.ACUTE_DB_PATH;
@@ -27,6 +36,22 @@ if (!token || !dbPath) {
   console.error("ACUTE_TOKEN and ACUTE_DB_PATH are required");
   process.exit(1);
 }
+
+// R117-e: installed FIRST — before any async work — so even the startup
+// window is covered. The ring sink is a no-op until startServer builds the
+// server (lib/diagnostics-sink.ts's contract); sidecar.log + exit(1) fire
+// regardless. The exit fn gives stderr a beat to flush when PIPED (the
+// shell's sidecar.log): process.exit() truncates pending pipe writes, so
+// exitCode is set immediately (nonzero even if the loop drains) and the
+// unref'd timer is the forced exit once the log line has landed.
+installCrashHandlers({
+  record: (message) => recordDiagnostic("crash", message),
+  log: (...args) => console.error(...args),
+  exit: (code) => {
+    process.exitCode = code;
+    setTimeout(() => process.exit(code), 250).unref();
+  },
+});
 
 const fixedPort = Number(process.env.ACUTE_PORT ?? 0);
 startServer({ port: Number.isInteger(fixedPort) && fixedPort > 0 ? fixedPort : 0, token, dbPath }).catch((error: unknown) => {

@@ -214,6 +214,19 @@ export function readOverrideProviderId(
 }
 
 /**
+ * ROUND-117 (R117-e): the MESSAGE CONTENT CAP — the honest upper bound on
+ * one send's `content` field, enforced at ALL THREE ingress legs (the sync
+ * send + the queue POST here, the streamed send in routes/sse.ts). The
+ * bound is 262,144 characters (2^18 — 256KiB of text): generous for real
+ * long prompts (the biggest legitimate pastes — whole files pasted into the
+ * composer — live comfortably under it; attachments carry their own 128KB
+ * per-file text cap) while stopping the abuse/silent-bloat vector the
+ * R117-plan silent-failure list flagged (no cap existed at all). The honest
+ * 400 names the exact number so a client can pre-validate.
+ */
+export const MESSAGE_CONTENT_CAP = 262_144;
+
+/**
  * ROUND-50 (R50-c1): validate the composer's extra send fields shared by
  * BOTH send routes (POST /sessions/:id/messages and /messages/stream):
  * - `thinkingLevel` — optional; when present it must be one of the 4
@@ -1238,6 +1251,15 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
         }),
       );
     }
+    // R117-e: the content cap — the sync-send leg of the shared policy
+    // (MESSAGE_CONTENT_CAP above).
+    if (content.length > MESSAGE_CONTENT_CAP) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", `content exceeds ${MESSAGE_CONTENT_CAP} characters`, {
+          field: "body.content",
+        }),
+      );
+    }
     const modelOverride =
       typeof raw.model === "string" && raw.model.trim() !== "" ? raw.model : undefined;
     // ROUND-82 (R82, the owner's custom-provider routing fix): the send's
@@ -1353,6 +1375,16 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
     if (typeof content !== "string" || content.trim() === "") {
       return reply.code(400).send(
         errorBody("VALIDATION", "content must be a non-empty string", {
+          field: "body.content",
+        }),
+      );
+    }
+    // R117-e: the content cap — the queue leg of the shared policy
+    // (MESSAGE_CONTENT_CAP above); a queued monster message must not
+    // bypass the cap the send routes enforce.
+    if (content.length > MESSAGE_CONTENT_CAP) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", `content exceeds ${MESSAGE_CONTENT_CAP} characters`, {
           field: "body.content",
         }),
       );

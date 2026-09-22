@@ -73,7 +73,7 @@ import {
   registerTurn,
   unregisterTurn,
 } from "../lib/turn-registry.js";
-import { readComposerSendFields, readOverrideProviderId } from "./sessions.js";
+import { readComposerSendFields, readOverrideProviderId, MESSAGE_CONTENT_CAP } from "./sessions.js";
 import type { RouteContext } from "./context.js";
 import { errorBody } from "./helpers.js";
 
@@ -107,6 +107,18 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
     if (typeof content !== "string" || content.trim() === "") {
       return reply.code(400).send(
         errorBody("VALIDATION", "content must be a non-empty string", {
+          field: "body.content",
+        }),
+      );
+    }
+    // R117-e: the content cap — the streamed-send leg of the shared policy
+    // (routes/sessions.ts's MESSAGE_CONTENT_CAP, the same bound the sync +
+    // queue routes enforce). Checked BEFORE the concurrent-turn gate +
+    // hijack, so an oversized send gets the honest 400 — never a hijacked
+    // stream or a persisted monster message.
+    if (content.length > MESSAGE_CONTENT_CAP) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", `content exceeds ${MESSAGE_CONTENT_CAP} characters`, {
           field: "body.content",
         }),
       );

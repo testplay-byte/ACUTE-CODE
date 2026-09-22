@@ -14,6 +14,10 @@ import type {
   ThinkingLevel,
 } from "shared";
 import { scrubSecretShapes } from "../lib/secret-shapes.js";
+// ROUND-117 (R117-e): the missing-ok fold's diagnostics hook — an
+// unverified tool-result shape lands in the sidecar's error ring (pure leaf
+// module; no-op until a server registers its ring).
+import { recordDiagnostic } from "../lib/diagnostics-sink.js";
 
 export interface ChatTurnMessage {
   role: "user" | "assistant";
@@ -732,21 +736,80 @@ function extractToolCalls(steps: Array<unknown>): ChatToolCall[] {
     if (!Array.isArray(responses)) continue;
     for (const r of responses) {
       if (typeof r.toolName !== "string") continue;
+      // ROUND-117 (R117-e): the missing-ok honesty fold — see foldToolOk.
+      const folded = foldToolOk(r.output, r.toolName);
       calls.push({
         name: r.toolName,
         argsSummary: summarizeArgs(r.input),
         // ROUND-96 (R96-B): the RAW input rides the call — the loop guard's
         // exact-match identity (see ChatToolCall.args). Never persisted.
         args: r.input,
-        ok:
-          typeof r.output === "object" && r.output !== null && "ok" in r.output
-            ? Boolean((r.output as { ok: unknown }).ok)
-            : true,
-        outputSummary: summarizeToolOutput(r.output, r.toolName),
+        ok: folded.ok,
+        outputSummary: summarizeToolOutput(r.output, r.toolName) + folded.summaryTag,
       });
     }
   }
   return calls;
+}
+
+// ── ROUND-117 (R117-e): the MISSING-OK HONESTY FOLD ─────────────────────────
+// Pre-R117 a tool result whose output lacked an `ok` field silently folded
+// to SUCCESS (the R117-plan silent-failure list's third item). The least-lie
+// policy, applied at BOTH folds (extractToolCalls + the streamed tool-result
+// part):
+//   - object WITH ok      → the honest boolean (unchanged);
+//   - object WITHOUT ok   → ok stays TRUE (absence of evidence is not
+//                           failure) but the outputSummary is TAGGED
+//                           " (result shape unverified)" so the MODEL and the
+//                           transcript both know the shape was never
+//                           confirmed — the tag rides assembleHistory's
+//                           `<tool_results>` line verbatim;
+//   - string / primitive  → ok:true, UNTAGGED — the historical convention
+//                           (the SDK's own string-result tools and the test
+//                           suites treat plain strings as successes BY
+//                           DESIGN; deliberately narrowed to objects per the
+//                           R117-e brief after reading those tests).
+// The first occurrence per tool name is logged once (console.warn) and
+// recorded into the diagnostics ring (kind "tool-shape"); a runaway plugin
+// re-reports only at powers of ten (10th, 100th, …) with the running count,
+// so the 200-row ring can never be flooded but a persistent offender stays
+// visible.
+
+/** The marker appended to every unverified-shape summary (model-visible). */
+const UNVERIFIED_RESULT_TAG = "(result shape unverified)";
+
+/** Per-tool occurrence counts for unverified shapes (log-once + re-report at
+ * powers of ten). */
+const unverifiedShapeCounts = new Map<string, number>();
+
+/** Test hook — reset the warn-once memory (the module is a singleton). */
+export function resetUnverifiedShapeTrackingForTest(): void {
+  unverifiedShapeCounts.clear();
+}
+
+function reportUnverifiedShape(toolName: string): void {
+  const count = (unverifiedShapeCounts.get(toolName) ?? 0) + 1;
+  unverifiedShapeCounts.set(toolName, count);
+  const atPowerOfTen = count === 1 || (count % 10 === 0 && Number.isInteger(Math.log10(count)));
+  if (!atPowerOfTen) return;
+  const occurrence = count === 1 ? "first occurrence" : `${count} occurrences`;
+  console.warn(
+    `[chat] tool "${toolName}" returned a result without an ok field — shape unverified, ok defaulted to true (${occurrence})`,
+  );
+  recordDiagnostic(
+    "tool-shape",
+    `tool "${toolName}" returned a result without an ok field — shape unverified, ok defaulted to true (${occurrence})`,
+  );
+}
+
+/** The shared fold: the ok boolean + the summary tag for one tool result. */
+function foldToolOk(output: unknown, toolName: string): { ok: boolean; summaryTag: string } {
+  if (typeof output === "object" && output !== null) {
+    if ("ok" in output) return { ok: Boolean((output as { ok: unknown }).ok), summaryTag: "" };
+    reportUnverifiedShape(toolName);
+    return { ok: true, summaryTag: ` ${UNVERIFIED_RESULT_TAG}` };
+  }
+  return { ok: true, summaryTag: "" };
 }
 
 /**
@@ -1096,18 +1159,17 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
         yield { type: "tool-call", toolName: part.toolName, argsSummary, args: part.input };
       } else if (part.type === "tool-result") {
         const output = part.output as unknown;
-        const ok =
-          typeof output === "object" && output !== null && "ok" in output
-            ? Boolean((output as { ok: unknown }).ok)
-            : true;
+        // ROUND-117 (R117-e): the missing-ok honesty fold — see foldToolOk
+        // (the streamed twin of extractToolCalls's fold above).
+        const folded = foldToolOk(output, part.toolName);
         yield {
           type: "tool-result",
           toolName: part.toolName,
           argsSummary: summarizeArgs(part.input),
           // ROUND-96 (R96-B): the raw input for the guard's exact-match identity.
           args: part.input,
-          ok,
-          outputSummary: summarizeToolOutput(part.output, part.toolName),
+          ok: folded.ok,
+          outputSummary: summarizeToolOutput(part.output, part.toolName) + folded.summaryTag,
         };
       } else if (part.type === "finish-step") {
         stepFinishCount += 1;

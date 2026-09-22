@@ -27,6 +27,11 @@ import type { PermissionMode } from "shared";
 // ROUND-83 (R83): the context meter's schema measurement (measureToolSchemaTokens
 // below) — the same estimator every other token estimate uses.
 import { estimateTokens } from "../context.js";
+// ROUND-117 (R117-e): the tool-execute SAFETY NET's scrubber — a failed
+// tool's message can quote env/key material (run_command inherits
+// ACUTE_PROVIDER_* vars); the R82 shared key-shape module is the one
+// scrubber every model-facing surface already trusts.
+import { scrubSecretShapes } from "../lib/secret-shapes.js";
 import {
   BUILT_IN_PLUGINS,
   loadExternalPlugins,
@@ -158,6 +163,95 @@ type JsonSchemaFreeTool = {
   execute: (input: Record<string, unknown>) => Promise<{ ok: boolean; output: string }>;
 };
 
+// ── ROUND-117 (R117-e): the TOOL-EXECUTE SAFETY NET ─────────────────────────
+// Pre-R117 an execute that THREW (an external plugin's stray TypeError, a
+// busted MCP bridge) surfaced as an SDK error part that KILLED THE WHOLE
+// TURN as a provider failure — the R117-plan silent-failure list's second
+// item. Now a thrown error becomes an honest tool RESULT the model can see
+// and route around: {ok:false, output:"<toolName> failed: <scrubbed msg>"}.
+// Built-in tools keep their never-throw convention untouched — this wrapper
+// is the belt around ALL of them.
+
+/** Bound on a failed tool's model-facing message (a thrown error's text can
+ * be a whole stack; summarizeToolOutput re-budgets it at 4000 later). */
+const TOOL_FAILURE_MESSAGE_CAP = 2_000;
+
+/**
+ * Cancellation must PROPAGATE, never fold: the runners signal aborts with
+ * AbortError-named errors (error-classification.ts's first class; chat.ts
+ * wires the turn's AbortSignal into the SDK call), and the runtime's catch
+ * routes any error thrown under `signal.aborted === true` to the honest
+ * ABORTED outcome. Re-throw both shapes so a Stop stays a Stop — the R78
+ * queue tests' stopped-turn semantics depend on it.
+ */
+function isAbortLikeError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+/** One-line description of a thrown value (Error → name + message; else JSON). */
+function describeToolFailure(error: unknown): string {
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  try {
+    return JSON.stringify(error) ?? String(error);
+  } catch {
+    return String(error);
+  }
+}
+
+/** A proper ToolResult: {ok: boolean, output: string} — built-ins always;
+ * externals only by cooperation. */
+function isToolResultShape(result: unknown): result is { ok: boolean; output: string } {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    typeof (result as { ok?: unknown }).ok === "boolean" &&
+    typeof (result as { output?: unknown }).output === "string"
+  );
+}
+
+/**
+ * R117-e: wrap ONE tool definition's execute for the SDK. THREE contracts:
+ *   1. THROWN → {ok:false, output:"<name> failed: <scrubbed message>"} — the
+ *      turn survives a broken tool — EXCEPT abort-shaped errors (or any
+ *      error thrown while the turn's signal is already aborted), which
+ *      re-throw so cancellation reaches the runtime's ABORTED path.
+ *   2. Proper ToolResult → normalized to the exact two-field SDK shape
+ *      (behavior-identical to the pre-R117 wrapper for every built-in).
+ *   3. Non-conforming return (an external plugin is untyped JS): a plain
+ *      STRING is the historical success-by-design shape → {ok:true,
+ *      output:string}; any other OBJECT passes through VERBATIM so
+ *      chat.ts's missing-ok fold can tag it "(result shape unverified)"
+ *      instead of silently defaulting it to success; null/undefined is a
+ *      broken tool → the honest failure result.
+ */
+function wrapToolExecute(
+  definition: ToolDefinition,
+  ctx: ToolBuildContext,
+): (input: Record<string, unknown>) => Promise<{ ok: boolean; output: string }> {
+  return async (input) => {
+    let raw: unknown;
+    try {
+      raw = await definition.execute(input, ctx);
+    } catch (error) {
+      if (isAbortLikeError(error) || ctx.toolDeps?.signal?.aborted === true) {
+        throw error;
+      }
+      const described = scrubSecretShapes(describeToolFailure(error));
+      const message =
+        described.length > TOOL_FAILURE_MESSAGE_CAP
+          ? `${described.slice(0, TOOL_FAILURE_MESSAGE_CAP)}… (truncated ${described.length - TOOL_FAILURE_MESSAGE_CAP} chars)`
+          : described;
+      return { ok: false, output: `${definition.name} failed: ${message}` };
+    }
+    if (isToolResultShape(raw)) return { ok: raw.ok, output: raw.output };
+    if (typeof raw === "string") return { ok: true, output: raw };
+    if (typeof raw === "object" && raw !== null) {
+      return raw as unknown as { ok: boolean; output: string };
+    }
+    return { ok: false, output: `${definition.name} failed: returned no result` };
+  };
+}
+
 /**
  * Build the model-facing tool set for one project root: every plugin's
  * tools (built-ins first, then external plugins when enabled), filtered by
@@ -203,16 +297,16 @@ export async function buildProjectTools(
   // Assemble the SDK toolset; the allowlist filter applies to built-ins AND
   // externals uniformly (ADR-0019: an agent must be granted the names; the
   // default [] agent = ALL tools, externals included).
+  // ROUND-117 (R117-e): every execute rides the SAFETY NET wrapper above —
+  // built-ins keep their never-throw convention (the wrapper is a no-op for
+  // them), and one broken external tool can never kill the whole turn.
   const tools: Record<string, JsonSchemaFreeTool> = {};
   for (const definition of definitions) {
     if (allow !== null && !allow.has(definition.name)) continue;
     tools[definition.name] = {
       description: definition.description,
       inputSchema: definition.inputSchema,
-      execute: async (input) => {
-        const result = await definition.execute(input, ctx);
-        return { ok: result.ok, output: result.output };
-      },
+      execute: wrapToolExecute(definition, ctx),
     };
   }
 
