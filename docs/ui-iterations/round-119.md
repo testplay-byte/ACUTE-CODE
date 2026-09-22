@@ -1,7 +1,7 @@
-<!-- last-reviewed: 2026-09-23 round-119 -->
+<!-- last-reviewed: 2026-09-22 round-119 -->
 # Round 119 — the v0.112.0 device report: the session center rethink, the queue honesty, and the provider capability probe
 
-Open: 2026-09-23. Baseline: v0.112.0 (2dc83d5). Target release: v0.113.0.
+Open: 2026-09-22. Baseline: v0.112.0 (2dc83d5). Target release: v0.113.0.
 
 The owner's verdict on v0.112.0 was broadly positive — the PC QR flow ("handled better than before"), the homepage ("clean, exactly like how I hoped"), mark-all-read, the bottom navigation ("much, much better"), the projects section, the folder flow ("working properly… a good implementation"), mode/thinking/context selectors, the stop confirmations, and the conditional queue button all passed. The dashboard screen stays deferred ("let's leave it here for the current time being"). This round takes the four areas that did NOT pass plus the deferred §N center work.
 
