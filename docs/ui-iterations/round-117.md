@@ -167,3 +167,30 @@ between tool invocations — run the sidecar + the whole driver INSIDE one bash
 invocation (start → READY-parse → curl sequence → kill); session POST requires
 agentId (no default configured on a fresh DB); project/session responses are
 top-level shapes (not wrapped).
+
+## §6 The v0.111.0 release (R117-i — shipped and end-state verified)
+
+Tag `v0.111.0` at `46abe94` (the release commit `0e53dac` + the CI fix for the events
+route's `prefer-const` finding — semantics byte-identical, the write-guard tests green).
+Both tag workflows ran green: `Release` run `35681866610` (launcher-kit + the Windows
+installer + the two AppImages + the two debs) and `Mobile APK` run `35681866598`
+(the APK attach) — plus the post-fix main CI (`35680496217` / `35680496204`, both
+success). The §g 2c lock-sync proof passed before tagging (`npm ci --dry-run` clean —
+no mobile deps changed this round, a two-field version diff only).
+
+Draft `393431111` carried all 7 assets, then was PUBLISHED (PATCH `draft:false`,
+`make_latest:"true"`, body = the CHANGELOG's 0.111.0 section, no
+`target_commitish` — the §g 6 procedure). End-state verified per §g 6b:
+
+- `/releases/latest` answers `v0.111.0` — **both authenticated and unauthenticated**
+  (the public check is the honest one).
+- 7/7 assets on the published page: the 6 desktop ones (AppImages 134,322,696 /
+  136,595,960 B, debs 68,428,972 / 68,373,060 B, x64-setup.exe 39,342,490 B,
+  launcher-kit 143,876 B) plus `ACUTE-CODE_0.111.0_android-arm64.apk` 56,768,425 B.
+- **APK content check (downloaded via the API, full zip central-directory pass)**:
+  1240 entries; `assets/index.android.bundle` present with the Hermes bytecode magic
+  `c6 1f bc 03` at its head; 3 dex files; `lib/` contains **arm64-v8a only**; gradle
+  app-metadata present. Exact size match against the API-reported asset size.
+
+No stale drafts remain (the sweep: every prior release is published). The round is
+shipped.
