@@ -295,6 +295,15 @@ export interface ChromeButtonProps {
    *  components.md's Primary idiom). Additive + optional: every other
    *  caller renders exactly as before. */
   flat?: boolean;
+  /** R119-P (round-119 §1 item 10 — the provider hero's "Test connection"
+   *  line-broke to "Test"/"connection" at 360dp, where the two flex:1 peers
+   *  leave ~144dp and the 15px bold label measures ~125–135dp plus 40dp of
+   *  padding): opt-in label fitting — the label clamps to ONE line and
+   *  SHRINKS to fit (adjustsFontSizeToFit, minimumFontScale 0.85), and the
+   *  horizontal padding breathes xl(20)→md(12) so the shrink rarely engages
+   *  at all. Default OFF: every other call site renders byte-identical
+   *  (wrapping stays the platform default for long labels). */
+  labelFit?: boolean;
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
   /** Show the busy spinner instead of the label. */
@@ -322,6 +331,7 @@ export function ChromeButton({
   tone = "accent",
   sheen = true,
   flat = false,
+  labelFit = false,
   style,
   textStyle,
   busy = false,
@@ -380,7 +390,9 @@ export function ChromeButton({
           minHeight: 50,
           alignItems: "center",
           justifyContent: "center",
-          paddingHorizontal: spacing.xl,
+          // R119-P: labelFit trades 8dp of chrome per side for label room
+          // (xl 20 → md 12) — the default keeps the R117-g1 breathing.
+          paddingHorizontal: labelFit ? spacing.md : spacing.xl,
           paddingVertical: spacing.md,
           flexDirection: "row",
           gap: spacing.sm,
@@ -420,6 +432,9 @@ export function ChromeButton({
               </View>
             ) : null}
             <Text
+              numberOfLines={labelFit ? 1 : undefined}
+              adjustsFontSizeToFit={labelFit}
+              minimumFontScale={labelFit ? 0.85 : undefined}
               style={[
                 {
                   color: fg,

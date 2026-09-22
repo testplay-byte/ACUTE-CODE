@@ -100,6 +100,7 @@ import {
   modelCapabilityChips,
   modelDraftFromRecord,
   modelEditBody,
+  modelTestToolsLegLine,
   nextFreeKeySlot,
   parseModelNumericField,
   putProviderKeySlot,
@@ -131,9 +132,12 @@ import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import { mobLog, mobWarn } from "@/lib/log";
 
-/** The one-line truth under every action (saved / not saved). */
+/** The one-line truth under every action (saved / not saved). R119-P adds
+ * the CAUTION tone — the model test's tools leg that passed the base checks
+ * but is honest-bad news ("answered in text, not called"): green would
+ * overstate, red would cry wolf. */
 interface ActionNote {
-  kind: "saved" | "error";
+  kind: "saved" | "error" | "caution";
   text: string;
 }
 
@@ -503,13 +507,20 @@ export default function ProviderDetailScreen() {
               {/* Zone divider → the actions: the primary is a PRIMARY —
                   ChromeButton flex 1 (busy swaps the label for the
                   spinner, the a11y label follows the swap) + the quiet
-                  Rename peer, minHeight-matched at 50. */}
+                  Rename peer, minHeight-matched at 50.
+                  R119-P (§1 item 10 — "the Test connection button
+                  line-breaks"): the hero instance opts into labelFit —
+                  the 15px bold label shrinks to fit ONE line (down to
+                  0.85×) instead of wrapping to "Test"/"connection" at
+                  360dp, and the button's horizontal padding breathes
+                  xl→md so the shrink rarely engages at all. */}
               <Hairline />
               <View style={styles.heroActions}>
                 <ChromeButton
                   onPress={() => void runTest()}
                   disabled={testing}
                   busy={testing}
+                  labelFit
                   style={styles.heroAction}
                   accessibilityLabel={testing ? "Testing the connection" : "Test the connection"}
                 >
@@ -1140,6 +1151,10 @@ function ModelActionsSheet({
 
   const [testing, setTesting] = useState(false);
   const [testNote, setTestNote] = useState<ActionNote | null>(null);
+  // R119-P — the tools leg's SECOND verdict line (the agent-readiness
+  // verdict: called echo / answered in text / rejected). Rendered under the
+  // base ok/failed line; null when the leg never ran.
+  const [toolsNote, setToolsNote] = useState<ActionNote | null>(null);
   const [hiding, setHiding] = useState(false);
   const [hideNote, setHideNote] = useState<ActionNote | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -1150,6 +1165,7 @@ function ModelActionsSheet({
   const shownId = shown?.id ?? null;
   useEffect(() => {
     setTestNote(null);
+    setToolsNote(null);
     setHideNote(null);
     setConfirmingDelete(false);
     setDeleteError(null);
@@ -1162,11 +1178,30 @@ function ModelActionsSheet({
     const targetId = shown.id;
     setTesting(true);
     setTestNote(null);
+    setToolsNote(null);
     try {
       const outcome = await testModel(getLinkManager(), targetId, {});
       if (outcome.ok) {
         setTestNote(testResultNote(outcome.data));
-        mobLog("config", "model tested", { id: targetId, ok: outcome.data.ok });
+        // R119-P — the tools leg's own line (the agent-readiness verdict:
+        // the base line stays the chat verdict, this one says whether the
+        // AGENT's tool-carrying call shape works). null when the pong phase
+        // failed first (the base note already tells that story).
+        const toolsLeg = modelTestToolsLegLine(outcome.data);
+        setToolsNote(
+          toolsLeg === null
+            ? null
+            : {
+                kind: toolsLeg.tone === "good" ? "saved" : toolsLeg.tone === "caution" ? "caution" : "error",
+                text: toolsLeg.text,
+              },
+        );
+        mobLog("config", "model tested", {
+          id: targetId,
+          ok: outcome.data.ok,
+          toolsAccepted: outcome.data.checks?.toolsAccepted ?? null,
+          toolCalled: outcome.data.checks?.toolCalled ?? null,
+        });
       } else {
         setTestNote({ kind: "error", text: outcome.error.message });
         mobWarn("config", "model test failed", {
@@ -1312,7 +1347,12 @@ function ModelActionsSheet({
             </View>
           </View>
 
+          {/* R119-P — the base verdict line keeps its exact R116-j format
+              (ok · ms — preview / failed — reason); the tools leg appends
+              as its OWN note line right under it, tone-mapped in
+              NoteLine. */}
           {testNote !== null ? <NoteLine note={testNote} /> : null}
+          {toolsNote !== null ? <NoteLine note={toolsNote} /> : null}
           {hideNote !== null ? <NoteLine note={hideNote} /> : null}
 
           {/* Delete's confirm step lives inline BELOW the grid (never a
@@ -1412,8 +1452,13 @@ function ActionTile({
   );
 }
 
-/** The per-model test verdict line — ok+latency (+ a reply peek) or the
- * honest scrubbed reason. */
+/**
+ * The per-model test verdict line — ok+latency (+ a reply peek) or the
+ * honest scrubbed reason. R119-P: this stays EXACTLY the base (chat)
+ * verdict; the tools leg renders as its own note line beside it
+ * (modelTestToolsLegLine) so "test ✓" never again hides a broken agent
+ * path (the owner's TokenHarbor report).
+ */
 function testResultNote(result: ModelTestResult): ActionNote {
   if (result.ok) {
     const preview =
@@ -2138,14 +2183,14 @@ function blankDraft(): ModelFormDraft {
 
 function NoteLine({ note }: { note: ActionNote }) {
   const { tokens } = useTheme();
-  const isError = note.kind === "error";
+  // R119-P: the caution tone rides warningDeep (the amber text tier) — the
+  // tools leg's "answered in text" verdict; saved/error keep their hues.
+  const color =
+    note.kind === "error" ? tokens.danger : note.kind === "caution" ? tokens.warningDeep : tokens.success;
   return (
     <View style={styles.noteRow}>
-      <StatusDot color={isError ? tokens.danger : tokens.success} />
-      <TypeCaption
-        style={[styles.noteText, { color: isError ? tokens.danger : tokens.success }]}
-        numberOfLines={3}
-      >
+      <StatusDot color={color} />
+      <TypeCaption style={[styles.noteText, { color }]} numberOfLines={3}>
         {note.text}
       </TypeCaption>
     </View>
@@ -2251,7 +2296,9 @@ const styles = StyleSheet.create({
   identityButtons: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
   /** R118-E §2B1 — the hero's action pair: the primary rides flex 1 (the
    *  CTA grammar — a REAL primary, not a quiet peer), the Rename quiet
-   *  button matches it at minHeight 50. */
+   *  button matches it at minHeight 50. R119-P: the primary opts into
+   *  ChromeButton's labelFit so the pair's ~144dp share at 360dp never
+   *  wraps the label (see the hero JSX comment). */
   heroActions: { flexDirection: "row", gap: spacing.sm, alignItems: "stretch" },
   heroAction: { flex: 1 },
   heroQuiet: { flex: 1, minHeight: 50 },

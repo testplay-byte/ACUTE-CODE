@@ -2703,6 +2703,126 @@ describe("Models UI — the R89 overhaul", () => {
     });
     expect(screen.queryByTestId("model-test-busy")).toBeNull();
   });
+
+  // ── R119-P (round-119 §1 item F): the TOOLS leg — the agent-readiness
+  // verdict line both test bands now carry. The owner's TokenHarbor report:
+  // plain chat worked while every agent action failed, and the old probe
+  // (no tools ever sent) said "test ✓". The three honest spellings render
+  // as ONE line in the band's own 11px typography.
+  it("R119-P: a PASS with the model CALLING echo carries 'tools ✓ — called echo' in the band", async () => {
+    providersList = [PROVIDER];
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" })];
+    modelTestAnswer = {
+      ok: true,
+      latencyMs: 432,
+      checks: {
+        http: true,
+        auth: true,
+        modelAccepted: true,
+        nonEmptyContent: true,
+        toolsAccepted: true,
+        toolCalled: true,
+      },
+    };
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByText("GLM 5.2")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("model-test-button"));
+    const section = await screen.findByTestId("model-test-result");
+    await waitFor(() => {
+      expect(section.getAttribute("data-model-test")).toBe("pass");
+    });
+    const toolsLine = within(section).getByTestId("model-test-tools");
+    expect(toolsLine.textContent).toBe("tools ✓ — called echo");
+  });
+
+  it("R119-P: accepted-but-text — the CAUTION line rides a PASS (chat works, the agent's tool calls will not)", async () => {
+    providersList = [PROVIDER];
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" })];
+    modelTestAnswer = {
+      ok: true,
+      latencyMs: 432,
+      checks: {
+        http: true,
+        auth: true,
+        modelAccepted: true,
+        nonEmptyContent: true,
+        toolsAccepted: true,
+        toolCalled: false,
+      },
+      note: "tools accepted — the model answered in text instead of calling the echo tool (\"hello!\") — usable for chat, NOT for agent actions",
+    };
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByText("GLM 5.2")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("model-test-button"));
+    const section = await screen.findByTestId("model-test-result");
+    await waitFor(() => {
+      expect(section.getAttribute("data-model-test")).toBe("pass");
+    });
+    // The band's line is the SHORT verdict (the API's verbose note stays on
+    // the wire for future surfaces): one line, the band's own typography.
+    const toolsLine = within(section).getByTestId("model-test-tools");
+    expect(toolsLine.textContent).toBe("tools accepted — answered in text, not called");
+  });
+
+  it("R119-P: THE TokenHarbor shape — a tools rejection fails the probe and the band names the AGENT verdict distinctly", async () => {
+    providersList = [PROVIDER];
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" })];
+    modelTestAnswer = {
+      ok: false,
+      checks: {
+        http: true,
+        auth: true,
+        modelAccepted: true,
+        nonEmptyContent: true,
+        toolsAccepted: false,
+      },
+      reason:
+        "the agent tools request was rejected (HTTP 400): tools are not supported for model qwen3.8-flash:free on this route — chat works, but every agent action will fail",
+    };
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByText("GLM 5.2")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("model-test-button"));
+    const section = await screen.findByTestId("model-test-result");
+    await waitFor(() => {
+      expect(section.getAttribute("data-model-test")).toBe("fail");
+    });
+    // The scannable verdict line…
+    const toolsLine = within(section).getByTestId("model-test-tools");
+    expect(toolsLine.textContent).toContain("tools rejected — ");
+    expect(toolsLine.textContent).toContain("tools are not supported");
+    // …and the FULL raw reason stays readable below it (the R80 discipline).
+    expect(within(section).getByTestId("model-test-reason").textContent).toContain(
+      "every agent action will fail",
+    );
+  });
+
+  it("R119-P: the config dialog's FOOTER line carries the tools leg too (the compact variant)", async () => {
+    providersList = [PROVIDER];
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" })];
+    modelTestAnswer = {
+      ok: true,
+      latencyMs: 432,
+      checks: {
+        http: true,
+        auth: true,
+        modelAccepted: true,
+        nonEmptyContent: true,
+        toolsAccepted: true,
+        toolCalled: true,
+      },
+    };
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByText("GLM 5.2")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Configure model GLM 5.2" }));
+    const dialog = screen.getByRole("dialog", { name: "Configure model" });
+    fireEvent.click(within(dialog).getByTestId("model-test-button"));
+    await waitFor(() => {
+      expect(
+        within(dialog).getByTestId("model-test-result").getAttribute("data-model-test"),
+      ).toBe("pass");
+    });
+    expect(within(dialog).getByTestId("model-test-tools").textContent).toBe("tools ✓ — called echo");
+  });
 });
 
 // ── R93-A6/A7: the multi-add picker + the hide/show toggle + Test all ───────

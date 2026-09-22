@@ -294,6 +294,21 @@ export type TranscriptItem =
        * (the turn.error payload's additive field since R75; 1 = no ladder).
        * The card renders the attempts line only when > 1. */
       attempts?: number | null;
+      /** R119-P — the provider's RAW error text (the wire's providerError:
+       * ≤4000 chars, already scrubbed server-side since R78/R80). Carried
+       * by BOTH the live error frame's details and the persisted
+       * turn.error payload — the PC's TurnErrorCard already prefers it;
+       * mobile used to DROP it, so a region/auth rejection read as a
+       * generic failure on the phone. null/absent = the wire carried none
+       * (older sidecars, validation refusals) — the card keeps the generic
+       * line only. */
+      providerError?: string | null;
+      /** R119-P — the classified human one-liner (the live error frame's
+       * details.classMessage — "the provider is out of quota" tier). The
+       * persisted fold never carries it; it rides Copy details, never the
+       * card body (the RAW provider text + the generic line already carry
+       * the story). */
+      classMessage?: string | null;
     }
   | { kind: "debug"; key: string; content: string; live: boolean };
 
@@ -548,6 +563,10 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
         // R43/R75 (additive): the classified provider-error class + the
         // retry ladder's exhausted attempt count. Absent/malformed → null
         // (the card renders neither chip; never a guess).
+        // R119-P — the provider's RAW error text: the payload has carried
+        // providerError since R78/R80 and the PC's TurnErrorCard already
+        // prefers it — mobile used to drop it, so a region/auth rejection
+        // read as an unexplained generic failure on the phone.
         items.push({
           kind: "error",
           key: `e${event.seq}`,
@@ -558,6 +577,7 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
             typeof payload.attempts === "number" && Number.isFinite(payload.attempts)
               ? payload.attempts
               : null,
+          providerError: readString(payload, "providerError"),
         });
         break;
       }
@@ -868,12 +888,17 @@ export interface LiveTurn {
 
 /** R117-d2 — the live error frame's payload: code + message + the honesty
  * fields the route's `details` object carries (errorClass/attempts, both
- * additive — absent on validation refusals + older sidecars). */
+ * additive — absent on validation refusals + older sidecars).
+ * R119-P — details.providerError (the provider's RAW scrubbed body —
+ * TokenHarbor's region_blocked verdict, verbatim) + details.classMessage
+ * (the classified human line) now thread through too; both additive. */
 export interface TurnErrorLive {
   code: string;
   message: string;
   errorClass?: string | null;
   attempts?: number | null;
+  providerError?: string | null;
+  classMessage?: string | null;
 }
 
 /** Cap on the live assistant's delta chunks — beyond it the oldest chunks
@@ -1631,6 +1656,11 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
       // (additive: errorClass since the R71 classification, attempts since
       // the R75 ladder; both absent on validation refusals + older
       // sidecars — the card renders neither chip then).
+      // R119-P — details.providerError: the provider's RAW scrubbed body
+      // (the round-119 §1 item F fix — the owner's TokenHarbor report read
+      // as a generic failure on the phone because BOTH mobile reducers
+      // dropped it while the PC showed it). details.classMessage (the
+      // classified human line) rides along when present.
       const details = isRecord(frame.details) ? frame.details : null;
       next.error = {
         code: typeof frame.code === "string" ? frame.code : "ERROR",
@@ -1642,6 +1672,14 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
         attempts:
           details !== null && typeof details.attempts === "number" && Number.isFinite(details.attempts)
             ? details.attempts
+            : null,
+        providerError:
+          details !== null && typeof details.providerError === "string"
+            ? details.providerError
+            : null,
+        classMessage:
+          details !== null && typeof details.classMessage === "string"
+            ? details.classMessage
             : null,
       };
       // R116-m → R118-D — the failed rung: the turn's OWN user card (the
@@ -1672,6 +1710,8 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
         message: next.error.message,
         errorClass: next.error.errorClass ?? null,
         attempts: next.error.attempts ?? null,
+        providerError: next.error.providerError ?? null,
+        classMessage: next.error.classMessage ?? null,
       });
       break;
     }

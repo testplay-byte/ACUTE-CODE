@@ -3191,13 +3191,27 @@ export interface ModelTestChecks {
   auth: boolean;
   modelAccepted: boolean;
   nonEmptyContent: boolean;
+  /** ROUND-119 (R119-P): present ONLY when the TOOLS leg ran (the pong
+   * phase must succeed first — absent = not run). false = the provider
+   * hard-rejected the tool-carrying request (the TokenHarbor
+   * action-failure shape: plain chat works, every agent action fails). */
+  toolsAccepted?: boolean;
+  /** ROUND-119 (R119-P): present when the tools leg ran AND was accepted —
+   * the reply contained a well-formed echo tool call. false = the model
+   * answered in text instead (chat-only; see `note`). */
+  toolCalled?: boolean;
 }
 
 /** POST /models/:id/test response: a probe that RAN and got a NO arrives as
  * HTTP 200 with ok:false + reason (the provider's raw error body, e.g. an
  * EOL'd NIM function's 410) — only transport failures throw (ApiError 502,
  * or 409 when the provider/key is missing). ok:true carries the reply
- * preview + provider-reported usage. */
+ * preview + provider-reported usage.
+ *
+ * ROUND-119 (R119-P): ok now also requires the TOOLS leg to be accepted
+ * (toolsAccepted:false → ok:false, reason carries the raw rejection + the
+ * agent-verdict suffix); toolCalled:false alone does NOT fail the probe —
+ * `note` says the model is chat-only. */
 export interface ModelTestResult {
   ok: boolean;
   latencyMs: number;
@@ -3210,6 +3224,10 @@ export interface ModelTestResult {
   usage?: { inputTokens: number; outputTokens: number };
   /** Present on ok:false — the failing stage's reason. */
   reason?: string;
+  /** ROUND-119 (R119-P): present when the tools leg was accepted but the
+   * model answered in text instead of calling echo — the honest
+   * "usable for chat, NOT for agent actions" line (ok stays true). */
+  note?: string;
 }
 
 /** Test a CONFIGURED model row (the row id from models-config, `mdl_…`) —

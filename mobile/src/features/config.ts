@@ -467,16 +467,70 @@ export interface ModelCatalogResponse {
 }
 
 /** POST /models/:id/test — the real 64-token completion probe (R82). A probe
- * that RAN and got a NO is HTTP 200 {ok:false} — a successful test call. */
+ * that RAN and got a NO is HTTP 200 {ok:false} — a successful test call.
+ * R119-P: after the pong phase passes, the probe runs a SECOND tool-carrying
+ * call (the agent's real shape — the owner's TokenHarbor report: chat worked
+ * while every agent action failed); the tools legs below are ABSENT whenever
+ * the pong phase failed first (not-run, never guessed). */
 export interface ModelTestResult {
   ok: boolean;
   latencyMs: number;
   providerId: string;
   model: string;
-  checks: { http: boolean; auth: boolean; modelAccepted: boolean; nonEmptyContent: boolean };
+  checks: {
+    http: boolean;
+    auth: boolean;
+    modelAccepted: boolean;
+    nonEmptyContent: boolean;
+    /** R119-P — present ONLY when the tools leg ran: the provider accepted
+     * the tool-carrying request. false (with ok:false + reason) = the
+     * TokenHarbor action-failure shape — the provider hard-rejected the
+     * tools request. */
+    toolsAccepted?: boolean;
+    /** R119-P — present when the tools leg ran AND was accepted: the reply
+     * contained a well-formed echo tool call. false = the model answered in
+     * text instead (see note — chat-only, agent actions will fail). */
+    toolCalled?: boolean;
+  };
   contentPreview?: string;
   usage?: { inputTokens: number; outputTokens: number };
   reason?: string;
+  /** R119-P — present when the tools leg was accepted but the model answered
+   * in text: the honest "usable for chat, NOT for agent actions" line. */
+  note?: string;
+}
+
+/**
+ * R119-P — the model-actions sheet's TOOLS-leg verdict line (pure; the
+ * sheet renders it as a SECOND note line under the base ok/failed verdict).
+ * Three honest spellings, exactly the round-119 §2 Track P wording:
+ *   · called            → "tools ✓ (called echo)"                     (good)
+ *   · accepted, no call → "tools accepted — answered in text, not
+ *                          called — usable for chat, not for agent
+ *                          actions"                                    (caution)
+ *   · rejected          → "tools rejected — {reason snippet}"         (bad)
+ * null = the leg never ran (the pong phase failed first — the base note
+ * already tells that story; no second line, never a guess).
+ */
+export function modelTestToolsLegLine(
+  result: Pick<ModelTestResult, "checks" | "reason">,
+): { tone: "good" | "caution" | "bad"; text: string } | null {
+  // Defensive read: `checks` has ridden every R82+ reply, but a malformed
+  // body degrades to not-run (null) — never a crash, never a guess.
+  const accepted = result.checks?.toolsAccepted;
+  if (accepted === undefined) return null;
+  if (!accepted) {
+    const snippet = (result.reason ?? "the provider refused the tools request").slice(0, 110);
+    const ellipsis = (result.reason ?? "").length > 110 ? "…" : "";
+    return { tone: "bad", text: `tools rejected — ${snippet}${ellipsis}` };
+  }
+  if (result.checks.toolCalled === true) {
+    return { tone: "good", text: "tools ✓ (called echo)" };
+  }
+  return {
+    tone: "caution",
+    text: "tools accepted — answered in text, not called — usable for chat, not for agent actions",
+  };
 }
 
 /** The POST /providers apiFormat enum — exactly the three values the route
@@ -637,13 +691,21 @@ export function addProviderModel(
   });
 }
 
-/** R116-j (§1.8): the phone's wait for a model/provider TEST call. The
- * server probes a model for up to 30s (agent-core registry.ts
- * MODEL_TEST_TIMEOUT_MS — "reasoning models are slow to first token"), but
- * acute-net's default callTimeout is 15s — the exchange aborted mid-probe
- * and every honest failure read as "the host dropped". 35s = the server's
- * full budget + travel. */
-const MODEL_TEST_CALL_TIMEOUT_MS = 35_000;
+/** R116-j (§1.8) → R119-P: the phone's wait for a MODEL test call. The
+ * server's per-model probe is now TWO sequential bounded legs — the pong
+ * completion + the TOOLS leg (agent-core registry.ts MODEL_TEST_TIMEOUT_MS
+ * 30s per leg, "reasoning models are slow to first token") — so the
+ * exchange's worst case is 60s. Acute-net's default callTimeout is 15s —
+ * the exchange aborted mid-probe and every honest failure read as "the
+ * host dropped". 65s = BOTH legs' full budget + travel (the R116-j 35s
+ * budget covered only the single-phase probe and would have cut the tools
+ * leg off exactly in the slow-model case it exists for). */
+const MODEL_TEST_CALL_TIMEOUT_MS = 65_000;
+
+/** R119-P: the phone's wait for a PROVIDER test call — the provider-level
+ * probe stays single-phase (agent-core TEST_TIMEOUT_MS 15s + the models
+ * listing), so the R116-j 35s budget stays the right number for it. */
+const PROVIDER_TEST_CALL_TIMEOUT_MS = 35_000;
 
 /** POST /models/:id/test — the per-model probe. {slot} scopes the key used
  * (the R47-b pool contract); omitted = the primary. */
@@ -1052,8 +1114,10 @@ export function testProvider(
     sender,
     `/providers/${encodeURIComponent(id)}/test`,
     // R116-j (§1.8): the 35s test-call budget — the server's own probe can
-    // outlive the 15s acute-net default (see MODEL_TEST_CALL_TIMEOUT_MS).
-    { method: "POST", bodyText: JSON.stringify(body), timeoutMs: MODEL_TEST_CALL_TIMEOUT_MS },
+    // outlive the 15s acute-net default (see PROVIDER_TEST_CALL_TIMEOUT_MS;
+    // the MODEL probe's own budget grew to 65s in R119-P for its second,
+    // tools-carrying leg).
+    { method: "POST", bodyText: JSON.stringify(body), timeoutMs: PROVIDER_TEST_CALL_TIMEOUT_MS },
   );
 }
 

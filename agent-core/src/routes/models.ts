@@ -372,6 +372,17 @@ export function registerModelRoutes(scope: FastifyInstance, ctx: RouteContext): 
   // same key-pool slot contract as POST /providers/:id/test (R47-b);
   // a probe that RAN and got a NO is HTTP 200 {ok:false} — a successful
   // test call, not a server error.
+  //
+  // ROUND-119 (R119-P): the probe now carries a SECOND leg — the TOOLS
+  // call (the agent's real shape; the owner's TokenHarbor report: chat
+  // worked while every agent action failed). The result object flows
+  // through UNCHANGED SHAPE-WISE (no field whitelist here — the registry's
+  // ModelTestResult IS the wire contract), so the new additive fields
+  // (checks.toolsAccepted / checks.toolCalled, note) reach both clients
+  // without a route change: ok:false + reason when the provider
+  // hard-rejects the tools request; ok:true + note when the model answers
+  // in text instead of calling (chat-only); the legs absent entirely when
+  // the pong phase failed first.
   scope.post("/models/:id/test", async (request, reply) => {
     const { id } = request.params as Record<string, string>;
     const modelRow = getModel(db, id);
