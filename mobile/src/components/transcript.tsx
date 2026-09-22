@@ -317,7 +317,7 @@ function DeliveryTick({ status }: { status: UserDeliveryStatus }) {
             strokeWidth={2.4}
             style={{ marginRight: -TICK_DOUBLE_OFFSET }}
           />
-          <Check size={12} color={tokens.accent} strokeWidth={2.4} />
+          <Check size={12} color={tokens.accentDeep} strokeWidth={2.4} />
         </View>
       );
     case "failed":
@@ -349,8 +349,10 @@ function UserBubble({
   // chat.md — the accent-TINTED clay fill (never a solid accent slab): the
   // accent mixed ~10% over the card, with a slightly deeper tint edge. This
   // is the PC chat's own bubble math, ported through mixHex.
-  const tintedFill = mixHex(tokens.card, tokens.accent, 0.1);
-  const tintedEdge = mixHex(tokens.card, tokens.accent, 0.22);
+  // round-117-elevation §2.2: the tint deepens (0.16 fill / 0.34 edge) — the
+  // bubble reads as the sender's accent clay, not a near-card wash.
+  const tintedFill = mixHex(tokens.card, tokens.accent, 0.16);
+  const tintedEdge = mixHex(tokens.card, tokens.accent, 0.34);
   // R116-m — the failed rung's subtle danger border tint (the same 22% mix
   // depth the accent edge uses, danger over card — the fill stays honest).
   const failedEdge = mixHex(tokens.card, tokens.danger, 0.22);

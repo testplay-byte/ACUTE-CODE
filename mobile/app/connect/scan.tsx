@@ -500,7 +500,7 @@ function PhotoResultCard({ ok, line }: { ok: boolean; line: string }) {
   return (
     <View style={styles.resultWrap}>
       <ClayCard elevated testID={ok ? "scan-result-ok" : "scan-result-fail"}>
-        <View style={[styles.resultPad, { backgroundColor: mixHex(hue, tokens.card, 0.08) }]}>
+        <View style={[styles.resultPad, { backgroundColor: mixHex(hue, tokens.card, 0.12) }]}>
           {ok ? (
             <Check size={22} color={tokens.success} strokeWidth={2.4} />
           ) : (

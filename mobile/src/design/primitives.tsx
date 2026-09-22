@@ -703,7 +703,7 @@ export interface StatusDotProps {
 }
 
 /** The state dot — a steady fill, or a calm 1.2s pulse when probing. */
-export function StatusDot({ color, pulse = false, size = 8 }: StatusDotProps) {
+export function StatusDot({ color, pulse = false, size = 10 }: StatusDotProps) {
   const opacity = useSharedValue(1);
   useEffect(() => {
     if (!pulse) {

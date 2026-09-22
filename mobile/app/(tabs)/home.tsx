@@ -201,6 +201,19 @@ export default function HomeScreen() {
   // The connection row's pinned vocabulary (copy.md): the word + the
   // word-pair name read as one line — "Live · Confused Coconut".
   const statusWord = connected ? "Live" : probing ? "Looking for the host…" : "Offline";
+  // round-117-elevation: the deep status hues (spec §2.3 — readable at a glance).
+  const isDark = tokens.isDark;
+  const statusHue = connected
+    ? isDark
+      ? "#4ADE80"
+      : "#15803D"
+    : probing
+      ? isDark
+        ? "#FBBF24"
+        : "#B45309"
+      : isDark
+        ? "#F87171"
+        : "#DC2626";
 
   return (
     <ScreenScaffold title="ACUTE" chrome={false}>
@@ -235,8 +248,20 @@ export default function HomeScreen() {
                 pulse={probing}
               />
               <View style={styles.stripText}>
-                <TypeBodyStrong numberOfLines={1}>{statusWord}</TypeBodyStrong>
-                <TypeCaption numberOfLines={1} style={styles.stripMeta}>
+                {/* round-117-elevation §2.3: the status word carries the DEEP state
+                    hue (the row is the screen's status hero) — Live #15803D-class,
+                    probing #B45309-class, offline #DC2626-class, dark-mode pairs via
+                    the theme's resolved deep tokens. */}
+                <TypeBodyStrong
+                  numberOfLines={1}
+                  style={[styles.stripWord, { color: statusHue }]}
+                >
+                  {statusWord}
+                </TypeBodyStrong>
+                <TypeCaption
+                  numberOfLines={1}
+                  style={[styles.stripMeta, { color: tokens.textSecondary }]}
+                >
                   {`· ${host.hostLabel}${offline ? " · messages will queue" : ""}`}
                 </TypeCaption>
               </View>
@@ -438,7 +463,8 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
-  stripMeta: { flexShrink: 1 },
+  stripWord: { letterSpacing: 0.1 },
+    stripMeta: { flexShrink: 1 },
   // The unread dot at the chip's top-right (the ClayIconChip's overlay slot).
   bellDot: {
     position: "absolute",

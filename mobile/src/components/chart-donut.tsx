@@ -31,7 +31,7 @@
  * MUTUAL HIGHLIGHT (the PC's hover contract, phone-translated): the OWNER of
  * the highlight is the caller (the legend rows — the 44px targets); this
  * component receives `highlighted: number | null` and springs each arc's
- * opacity 1 ↔ DONUT_DIM_OPACITY (0.55) on the house spring. The concentric
+ * opacity 1 ↔ DONUT_DIM_OPACITY (0.35 — round-117: the selected segment pops harder) on the house spring. The concentric
  * strokes themselves are NOT tappable — a bbox hit-test would route every
  * tap to the last-drawn circle, so the legend row is the one honest surface.
  *
@@ -58,10 +58,10 @@ import type { SharedValue } from "react-native-reanimated";
 import { DONUT_SWEEP_MS, SPRING } from "@/design/motion";
 
 /** The ring's stroke width — PC parity (ModelDonut's 6px track). */
-export const DONUT_STROKE = 6;
+export const DONUT_STROKE = 8;
 
 /** The resting opacity of NON-highlighted arcs (the mutual-highlight dim). */
-export const DONUT_DIM_OPACITY = 0.55;
+export const DONUT_DIM_OPACITY = 0.35;
 
 // ── the pure math (exported + table-tested) ─────────────────────────────────
 

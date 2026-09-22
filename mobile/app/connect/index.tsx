@@ -198,14 +198,18 @@ function ConnectPairHero() {
         style={[
           styles.heroChipPhone,
           {
-            backgroundColor: tokens.card,
+            // round-117-elevation §2.3: the phone chip is "you" — the accent
+            // tint + the deep glyph; the desktop chip stays card-colored.
+            backgroundColor: tokens.accentTint,
             borderTopColor: tokens.clayTopEdge,
+            borderColor: tokens.clayRim,
+            borderWidth: StyleSheet.hairlineWidth,
             boxShadow: tokens.clayShadow2,
           },
           phoneStyle,
         ]}
       >
-        <Smartphone size={20} color={tokens.accent} strokeWidth={2.2} />
+        <Smartphone size={20} color={tokens.accentDeep} strokeWidth={2.2} />
       </Animated.View>
     </View>
   );

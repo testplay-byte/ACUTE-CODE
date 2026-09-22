@@ -51,7 +51,7 @@ import Animated, {
 import { X } from "lucide-react-native";
 import { useTheme } from "@/design/theme";
 import { TypeCaption } from "@/design/primitives";
-import { RADIUS_CARD, spacing, TYPE_BODY } from "@/design/tokens";
+import { RADIUS_TILE, spacing, TYPE_BODY } from "@/design/tokens";
 import { SHEET_SPRING } from "@/design/motion";
 
 export interface SheetProps {
@@ -156,7 +156,7 @@ export function Sheet({
           style={[
             StyleSheet.absoluteFill,
             scrim,
-            { backgroundColor: tokens.isDark ? "rgba(0,0,0,0.55)" : "rgba(26,18,10,0.35)" },
+            { backgroundColor: tokens.isDark ? "rgba(0,0,0,0.62)" : "rgba(26,18,10,0.45)" },
           ]}
         >
           <Pressable
@@ -177,6 +177,9 @@ export function Sheet({
               {
                 backgroundColor: tokens.card,
                 borderTopColor: tokens.clayTopEdge,
+                // round-117-elevation §2.2: the panel's upward shadow rides the
+                // theme token (clayShadowSheet) — the hardcoded string is gone.
+                boxShadow: tokens.clayShadowSheet,
                 // R116-b — the skirt: the panel's border box hangs this far
                 // below the fold (sacrificial card pixels), so a mid-animation
                 // dip can never reveal the page background under the sheet.
@@ -241,11 +244,10 @@ const styles = StyleSheet.create({
   },
   panel: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopLeftRadius: RADIUS_CARD,
-    borderTopRightRadius: RADIUS_CARD,
+    borderTopLeftRadius: RADIUS_TILE,
+    borderTopRightRadius: RADIUS_TILE,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
-    boxShadow: "0px -2px 18px rgba(42,32,24,0.18)",
   },
   gripRow: {
     flexDirection: "row",
@@ -255,7 +257,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xs,
   },
   grip: {
-    width: 28,
+    width: 32,
     height: 4,
     borderRadius: 2,
     opacity: 0.6,

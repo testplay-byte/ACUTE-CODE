@@ -718,7 +718,7 @@ export function Composer({
           rise, the dock's animated paddingBottom lifts it together with the
           input row — no offset of its own. */}
       {atToken !== null && atMatches.length > 0 && (
-        <View style={[styles.atPicker, { backgroundColor: tokens.card, borderColor: tokens.border, borderTopColor: tokens.clayTopEdge }]}>
+        <View style={[styles.atPicker, { backgroundColor: tokens.card, borderColor: tokens.border, borderTopColor: tokens.clayTopEdge, boxShadow: tokens.clayShadow2 }]}>
           <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.md, paddingTop: spacing.xs }} numberOfLines={1}>
             project files
           </TypeCaption>
@@ -757,6 +757,7 @@ export function Composer({
                   backgroundColor: tokens.card,
                   borderColor: tokens.border,
                   borderTopColor: tokens.clayTopEdge,
+                  boxShadow: tokens.clayShadowSm,
                 },
               ]}
             >
@@ -828,7 +829,9 @@ export function Composer({
             style={[
               styles.input,
               {
-                backgroundColor: tokens.card,
+                // round-117-elevation §2.2: the input sits in a SURFACE WELL
+                // (not the card plane) — the dock reads as carved, not floated.
+                backgroundColor: tokens.surfaceWell,
                 borderColor: focused ? tokens.accent : tokens.inputBorder,
                 borderTopColor: tokens.clayTopEdge,
                 color: tokens.text,
@@ -915,7 +918,9 @@ export function Composer({
             style={({ pressed }) => [
               styles.sendButton,
               {
-                backgroundColor: canSend ? tokens.accent : tokens.subtleHover,
+                // round-117-elevation §2.2: the send circle rides the DEEP accent
+                // (light) / the theme's dark accent — the pill's icon in accentText.
+                backgroundColor: canSend ? tokens.accentDeep : tokens.subtleHover,
                 transform: [{ scale: pressed && canSend ? 0.96 : 1 }],
               },
             ]}
@@ -1671,7 +1676,6 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingVertical: spacing.xs,
     gap: spacing.xs,
-    boxShadow: "0px 2px 10px rgba(42,32,24,0.12)",
   },
   atRow: {
     flexDirection: "row",
@@ -1693,7 +1697,6 @@ const styles = StyleSheet.create({
     paddingLeft: spacing.md,
     paddingRight: spacing.xs,
     paddingVertical: 6,
-    boxShadow: "0px 1px 2px rgba(42,32,24,0.08)",
   },
   row: {
     flexDirection: "row",

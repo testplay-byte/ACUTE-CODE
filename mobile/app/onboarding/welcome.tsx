@@ -128,14 +128,18 @@ export default function WelcomeScreen() {
             style={[
               styles.logoTile,
               {
-                backgroundColor: tokens.card,
+                // round-117-elevation §2.3: the brand moment — the tile sits in
+                // the accent tint with the warm rim; the glyph in the deep accent.
+                backgroundColor: tokens.accentTint,
                 borderTopColor: tokens.clayTopEdge,
+                borderColor: tokens.clayRim,
+                borderWidth: StyleSheet.hairlineWidth,
                 boxShadow: tokens.clayShadow2,
               },
               tileStyle,
             ]}
           >
-            <Smartphone size={30} color={tokens.accent} strokeWidth={2.2} />
+            <Smartphone size={32} color={tokens.accentDeep} strokeWidth={2.2} />
           </Animated.View>
           <FadeInUp index={1}>
             <TypeDisplay style={styles.title}>ACUTE</TypeDisplay>
