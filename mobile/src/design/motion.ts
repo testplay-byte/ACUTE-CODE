@@ -102,3 +102,24 @@ export const CHART_BAR_STAGGER_MS = 12;
 
 /** The donut's arc sweep (motion.md §4.6 + §7's "deliberate" tier: 500ms). */
 export const DONUT_SWEEP_MS = 500;
+
+// ── the R118 disclosure motion (the owner's round-118 rulings: the expand
+// keeps its bounce but SMOOTHER — one soft settle, no jelly; the collapse
+// NEVER bounces — a timing curve cannot overshoot by construction) ──────────
+
+/**
+ * The accordion/disclosure EXPAND — the house spring one damping step up:
+ * ζ = 24/(2√180) = 0.894 (SPRING's 0.820 settles in 2–3 visible cycles ≈
+ * 1.2s; this settles in one ≈ 0.6s). A 420px well that pogoed ~4.6px now
+ * breathes ~0.8px past — the bounce the owner likes survives as a whisper.
+ */
+export const DISCLOSURE_SPRING: WithSpringConfig = {
+  stiffness: 180,
+  damping: 24,
+};
+
+/** The COLLAPSE timing — 200ms ease-out, zero overshoot by construction. */
+export const DISCLOSURE_COLLAPSE_MS = 200;
+
+/** The collapse's content fade — lands slightly ahead of the height. */
+export const DISCLOSURE_FADE_MS = 150;

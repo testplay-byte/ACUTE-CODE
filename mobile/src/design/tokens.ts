@@ -383,6 +383,11 @@ export interface ResolvedTheme {
    *  mono blocks, skeletons): one step down from the card, warm light /
    *  5% white dark. */
   surfaceWell: string;
+  /** R118-B — the session header's quiet chrome shade: one step off the
+   *  page bg (bg +6% ink light / +30% black dark) so the top bar separates
+   *  from the content below without joining the card ladder (chrome over
+   *  content — the inverse direction of `card`). */
+  surfaceHeader: string;
   /** R117-g1 — the accent's tinted container (icon chips, the tab indicator,
    *  hero tiles): 12% accent into the card light / 18% dark. */
   accentTint: string;
@@ -444,6 +449,9 @@ export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
   // R117-g1 §2.1 — the ink ladder (theme-independent, mode-aware).
   const textSecondary = isDark ? "rgba(255,255,255,0.62)" : "rgba(0,0,0,0.62)";
   const textTertiary = isDark ? "rgba(255,255,255,0.52)" : "rgba(0,0,0,0.57)";
+  // R118-D — the header chrome shade (computed off the resolved bg so every
+  // theme gets it free — no hardcoded hex at call sites, donts #12).
+  const bg = isDark ? theme.bgDark : theme.bgLight;
   // R117-g1 §2.1 — the recessed well + the accent's tinted container.
   const surfaceWell = isDark ? mixHex(card, "#FFFFFF", 0.05) : mixHex(card, "#8A6A55", 0.08);
   const accentTint = mixHex(card, accent, isDark ? 0.18 : 0.12);
@@ -462,7 +470,7 @@ export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
   return {
     theme,
     isDark,
-    bg: isDark ? theme.bgDark : theme.bgLight,
+    bg,
     card,
     text: isDark ? theme.textDark : theme.textLight,
     accent,
@@ -509,6 +517,9 @@ export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
       ? mixHex(card, "#FFFFFF", 0.14)
       : mixHex(card, "#FFFFFF", 0.55),
     surfaceWell,
+    // R118-D — the session header's chrome shade (bg +6% warm ink light /
+    // +30% black dark — #E0E2DC / #17130F on Clay).
+    surfaceHeader: isDark ? mixHex(bg, "#000000", 0.30) : mixHex(bg, "#2A2018", 0.06),
     accentTint,
     surfaceRaised: isDark ? mixHex(card, "#FFFFFF", 0.02) : mixHex(card, "#000000", 0.02),
     // ── mono surfaces ──
@@ -519,7 +530,11 @@ export function resolveTheme(themeId: string, isDark: boolean): ResolvedTheme {
     // dark stop 0.16 finally draws on the white bar; the sheen is a whisper
     // glint at 0.18, not a 2012 gloss band) ──
     chromeEdgeLight: isDark ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.85)",
-    chromeEdgeDark: isDark ? "rgba(255,255,255,0.06)" : "rgba(42,32,24,0.16)",
+    // R118-B (AMENDMENT to tokens.md §2): the base stop deepens 0.16→0.22
+    // light / 0.06→0.08 dark so the metal ramp's grounded edge actually
+    // draws on the white bar (the owner's "improve the border" ruling); the
+    // ramp itself re-cuts VERTICAL in the ChromeEdge primitive.
+    chromeEdgeDark: isDark ? "rgba(255,255,255,0.08)" : "rgba(42,32,24,0.22)",
     sheenTop: isDark ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.18)",
     sheenBottom: "rgba(255,255,255,0.00)",
     // The fixed semantic hues — 1:1 with the desktop's SEMANTIC_COLORS leg.
@@ -721,3 +736,17 @@ export const TOUCH_TARGET = 44;
 export const BAR_MARGIN = 12;
 /** The floating tab bar's height (content row, excluding insets). */
 export const BAR_HEIGHT = 60;
+
+// ── R118 geometry constants (the sheet anatomy + the segmented control +
+// the centered CTA law — tracks A/C/E; pinned so the tests can hold them) ──
+
+/** The Sheet's header row height (the TypeTitle row + the close circle). */
+export const SHEET_HEADER_ROW = 48;
+/** The SegmentedControl's track height (the mode/window selector family). */
+export const SEGMENT_TRACK_H = 52;
+/** The SegmentedControl's track inset (the sliding pill's padding). */
+export const SEGMENT_INSET = 4;
+/** The sheet CTA's minimum width — centered, never full-width (R118 law). */
+export const SHEET_CTA_MIN_W = 200;
+/** The page-level CTA's minimum width — the same law at screen scale. */
+export const PAGE_CTA_MIN_W = 200;

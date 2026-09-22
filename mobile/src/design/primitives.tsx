@@ -36,7 +36,7 @@
  */
 
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useCallback, useEffect } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import type { LucideIcon } from "lucide-react-native";
 import {
   AccessibilityState,
@@ -69,6 +69,8 @@ import {
   RADIUS_CHIP,
   RADIUS_INPUT,
   RADIUS_PILL,
+  SEGMENT_INSET,
+  SEGMENT_TRACK_H,
   TOUCH_TARGET,
   TYPE_BODY,
   TYPE_CAPTION,
@@ -82,7 +84,7 @@ import {
   pressTint,
   spacing,
 } from "./tokens";
-import { ENTRANCE_DELTA, PRESS_SCALE, SPRING, staggerDelay } from "./motion";
+import { ENTRANCE_DELTA, PRESS_SCALE, SPRING, TAB_SPRING, staggerDelay } from "./motion";
 
 // ── ClayCard — the resting clay surface ─────────────────────────────────────
 
@@ -283,6 +285,9 @@ export interface ChromeButtonProps {
   children: React.ReactNode;
   onPress?: () => void;
   disabled?: boolean;
+  /** R118-A — the destructive confirm rides the danger fill
+   *  (dangerDeep + its AA ink); a destructive verb never wears the ember. */
+  tone?: "accent" | "danger";
   /** The quiet vertical sheen (default true — the §2.2 jewelry). */
   sheen?: boolean;
   /** R115: the flat wizard CTA — solid accent, NO sheen gradient, the clay
@@ -296,6 +301,9 @@ export interface ChromeButtonProps {
   busy?: boolean;
   testID?: string;
   accessibilityLabel?: string;
+  /** R118-E — exposes the expand/collapse state on disclosure-style CTAs
+   *  ("Add a provider") to screen readers. */
+  accessibilityExpanded?: boolean;
 }
 
 /**
@@ -311,6 +319,7 @@ export function ChromeButton({
   children,
   onPress,
   disabled = false,
+  tone = "accent",
   sheen = true,
   flat = false,
   style,
@@ -318,6 +327,7 @@ export function ChromeButton({
   busy = false,
   testID,
   accessibilityLabel,
+  accessibilityExpanded,
 }: ChromeButtonProps) {
   const { tokens } = useTheme();
   const pressed = useSharedValue(0);
@@ -330,16 +340,31 @@ export function ChromeButton({
   // R117-g1 §2.2 — the CTA fill is the DEEP accent tier; the label rides
   // accentText (the dark-mode ink flip: warm ink on the salmon — AA in both
   // modes, where the old fill/label pair sat at 3.98:1 dark and 3.98:1
-  // light).
-  const bg = disabled ? pressTint(tokens.card, tokens.isDark) : tokens.accentDeep;
-  const fg = disabled ? tokens.textTertiary : tokens.accentText;
+  // light). R118-A: tone="danger" swaps in dangerDeep (white ink light
+  // 4.83:1 / warm ink dark 6.15:1) — the destructive confirm's grammar.
+  const bg = disabled
+    ? pressTint(tokens.card, tokens.isDark)
+    : tone === "danger"
+      ? tokens.dangerDeep
+      : tokens.accentDeep;
+  const fg = disabled
+    ? tokens.textTertiary
+    : tone === "danger"
+      ? tokens.isDark
+        ? "#211B16"
+        : "#FFFFFF"
+      : tokens.accentText;
 
   return (
     <Pressable
       testID={testID}
       accessibilityLabel={accessibilityLabel ?? (typeof children === "string" ? children : undefined)}
       accessibilityRole="button"
-      accessibilityState={{ disabled: inert, busy }}
+      accessibilityState={{
+        disabled: inert,
+        busy,
+        ...(accessibilityExpanded !== undefined ? { expanded: accessibilityExpanded } : null),
+      }}
       disabled={inert}
       onPress={onPress}
       onPressIn={() => {
@@ -422,6 +447,9 @@ export interface QuietButtonProps {
   disabled?: boolean;
   /** "neutral" outline · "danger" outline in the danger hue. */
   tone?: "neutral" | "danger";
+  /** R118-B — the in-flight state (mirrors ChromeButton's busy idiom): the
+   *  spinner replaces the label and the button stays inert. */
+  busy?: boolean;
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
   testID?: string;
@@ -433,6 +461,7 @@ export function QuietButton({
   onPress,
   disabled = false,
   tone = "neutral",
+  busy = false,
   style,
   textStyle,
   testID,
@@ -445,8 +474,8 @@ export function QuietButton({
       testID={testID}
       accessibilityRole="button"
       accessibilityLabel={typeof children === "string" ? children : undefined}
-      accessibilityState={disabled ? { disabled: true } : undefined}
-      disabled={disabled || !onPress}
+      accessibilityState={disabled || busy ? { disabled: true, busy } : undefined}
+      disabled={disabled || busy || !onPress}
       onPress={onPress}
       style={({ pressed }: PressableStateCallbackType) => [
         {
@@ -464,7 +493,13 @@ export function QuietButton({
         style,
       ]}
     >
-      <Text style={[{ color: fg, fontSize: TYPE_BODY, fontFamily: fontFamily.semibold }, textStyle]}>{children}</Text>
+      {busy ? (
+        <ActivityIndicator color={fg} />
+      ) : (
+        <Text style={[{ color: fg, fontSize: TYPE_BODY, fontFamily: fontFamily.semibold }, textStyle]}>
+          {children}
+        </Text>
+      )}
     </Pressable>
   );
 }
@@ -481,19 +516,26 @@ export interface ChromeEdgeProps {
 }
 
 /**
- * The liquid-chrome hairline — a 1px perpendicular metal ramp
- * (light→dark→light, low alpha) wrapping a surface. Sanctioned for the
- * floating tab bar and selected markers ONLY (DESIGN.md §2).
+ * The liquid-chrome hairline — the tab bar's 1px metal ramp. R118-B
+ * re-cuts the ramp VERTICAL (crown → base): the old diagonal start/end
+ * put chromeEdgeLight at the top-left corner and chromeEdgeDark at the
+ * bottom-right — one visible corner and a smudge at the other three. The
+ * vertical run makes both top corners lit and both base corners grounded
+ * (symmetric), with the R118-B deepened base stop (0.22 light / 0.08 dark)
+ * so the grounded edge actually draws on the white bar. The gradient also
+ * carries `overflow: "hidden"` so the ring's corner anti-aliasing clips
+ * to the radius. Sanctioned for the floating tab bar and selected markers
+ * ONLY (DESIGN.md §2).
  */
 export function ChromeEdge({ children, radius = RADIUS_BAR, style, surface }: ChromeEdgeProps) {
   const { tokens } = useTheme();
   const inner = surface ?? tokens.card;
   return (
     <LinearGradient
-      colors={[tokens.chromeEdgeLight, tokens.chromeEdgeDark, tokens.chromeEdgeLight]}
+      colors={[tokens.chromeEdgeLight, tokens.chromeEdgeDark]}
       start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={[{ borderRadius: radius, padding: 1 }, style]}
+      end={{ x: 0, y: 1 }}
+      style={[{ borderRadius: radius, padding: 1, overflow: "hidden" }, style]}
     >
       <View
         style={{
@@ -821,14 +863,19 @@ export interface SectionHeaderProps {
   action?: string;
   onAction?: () => void;
   style?: StyleProp<ViewStyle>;
+  /** R118-E — the LARGE variant (TypeTitle 20/700, −0.2): registry screens'
+   *  inventory tier ("Your providers") — one ladder step above every other
+   *  section header, the peer of the screen that heads it. */
+  large?: boolean;
 }
 
 /** The 16/700 section heading, with the optional quiet action link.
  *  R117-g2 (AMENDMENT 5 — the rhythm): the header carries `marginTop:
  *  spacing.xl` (20) so a section break reads 32 px (20 + the scaffold's
  *  12 px intra-group gap) while rows knit at 12 — the cadence that replaced
- *  the uniform 16 px beat (round-117-elevation.md §2.1). */
-export function SectionHeader({ children, action, onAction, style }: SectionHeaderProps) {
+ *  the uniform 16 px beat (round-117-elevation.md §2.1). R118-E: `large`
+ *  renders the TypeTitle recipe for inventory-tier headings. */
+export function SectionHeader({ children, action, onAction, style, large = false }: SectionHeaderProps) {
   const { tokens } = useTheme();
   return (
     <View
@@ -845,9 +892,9 @@ export function SectionHeader({ children, action, onAction, style }: SectionHead
       <Text
         style={{
           color: tokens.text,
-          fontSize: TYPE_HEADING,
+          fontSize: large ? TYPE_TITLE : TYPE_HEADING,
           fontFamily: fontFamily.bold,
-          letterSpacing: 0.2,
+          letterSpacing: large ? -0.2 : 0.2,
         }}
       >
         {children}
@@ -874,8 +921,21 @@ export function SectionHeader({ children, action, onAction, style }: SectionHead
 
 // ── Hairline ────────────────────────────────────────────────────────────────
 
-/** The quiet divider: one hairline, theme border color, optional inset. */
-export function Hairline({ inset = 0, style }: { inset?: number; style?: StyleProp<ViewStyle> }) {
+/** The quiet divider: one hairline, theme border color, optional inset.
+ *  R118-B — `strong` renders the VISIBLE clay divider: a full 1dp line in
+ *  borderStrong (0.18 ink) instead of the sub-pixel 0.33dp hairlineWidth in
+ *  borderSubtle (0.06) — the row-separation recipe for home's recent
+ *  activities, More's stats, the dashboard session rows, and the providers
+ *  tier break (one spelling everywhere). */
+export function Hairline({
+  inset = 0,
+  strong = false,
+  style,
+}: {
+  inset?: number;
+  strong?: boolean;
+  style?: StyleProp<ViewStyle>;
+}) {
   const { tokens } = useTheme();
   return (
     <View
@@ -883,8 +943,8 @@ export function Hairline({ inset = 0, style }: { inset?: number; style?: StylePr
       accessibilityLabel="separator"
       style={[
         {
-          height: StyleSheet.hairlineWidth,
-          backgroundColor: tokens.borderSubtle,
+          height: strong ? 1 : StyleSheet.hairlineWidth,
+          backgroundColor: strong ? tokens.borderStrong : tokens.borderSubtle,
           marginLeft: inset,
           marginRight: inset,
         },
@@ -1103,5 +1163,248 @@ export function TypeStat({ children, style, numberOfLines, testID, accessibility
     >
       {children}
     </Text>
+  );
+}
+
+// ── R118: QuietIconButton — the chrome circle (the back/close grammar) ──────
+
+export interface QuietIconButtonProps {
+  /** The lucide glyph (ArrowLeft for back, X for sheet close). */
+  icon: LucideIcon;
+  /** The glyph's size (px). */
+  iconSize: number;
+  onPress: () => void;
+  accessibilityLabel: string;
+  /** The circle's size — 36 (sheet chrome), 40 (screen back), 44 (full). */
+  size?: 36 | 40 | 44;
+  /** Extra hit room beyond the circle (default 4 — 40+4 carries the 44 law). */
+  hitSlop?: number;
+  testID?: string;
+}
+
+const QUIET_ICON_BUTTON_RADIUS: Record<36 | 40 | 44, number> = {
+  36: 18,
+  40: 20,
+  44: 22,
+};
+
+/**
+ * R118-A/D — the quiet chrome circle: the sheet's close button and the
+ * screens' back button share ONE grammar (the owner: the sheet's X "needs
+ * to be handled properly, just like how the back button is in our
+ * application"). A `subtle`-filled circle with the hairline `borderSubtle`
+ * rim and the text-tier glyph (strokeWidth 2.2), pressing to `subtleHover`
+ * + the house 0.98 scale — the R116-b back chip's contract made circular
+ * and shared. 36 = sheet chrome (X 18); 40 = the screen back (ArrowLeft
+ * 22 — "make it a bit more smaller"); 44 = full-target uses.
+ */
+export function QuietIconButton({
+  icon: Icon,
+  iconSize,
+  onPress,
+  accessibilityLabel,
+  size = 40,
+  hitSlop = 4,
+  testID,
+}: QuietIconButtonProps) {
+  const { tokens } = useTheme();
+  const pressed = useSharedValue(0);
+  const animated = useAnimatedStyle(() => {
+    const scale = 1 - pressed.value * (1 - PRESS_SCALE);
+    return { transform: [{ scale }] };
+  });
+  return (
+    <Pressable
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      hitSlop={hitSlop}
+      onPress={onPress}
+      onPressIn={() => {
+        pressed.value = withSpring(1, SPRING);
+      }}
+      onPressOut={() => {
+        pressed.value = withSpring(0, SPRING);
+      }}
+      style={({ pressed: p }: PressableStateCallbackType): StyleProp<ViewStyle> => [
+        {
+          width: size,
+          height: size,
+          borderRadius: QUIET_ICON_BUTTON_RADIUS[size],
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: p ? tokens.subtleHover : tokens.subtle,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: tokens.borderSubtle,
+        },
+      ]}
+    >
+      <Animated.View style={animated}>
+        <Icon size={iconSize} color={tokens.text} strokeWidth={2.2} />
+      </Animated.View>
+    </Pressable>
+  );
+}
+
+// ── R118: SegmentedControl — the one-line N-way selector ────────────────────
+
+export interface SegmentedControlOption<T extends string> {
+  id: T;
+  /** The display label — SHORT (≤4 chars where possible); the full name
+   *  rides `accessibilityLabel` (donts #43: 2–4 mutually exclusive choices
+   *  sit on ONE line, all visible). */
+  label: string;
+  /** The full option name for screen readers. */
+  accessibilityLabel?: string;
+}
+
+export interface SegmentedControlProps<T extends string> {
+  options: ReadonlyArray<SegmentedControlOption<T>>;
+  selectedId: T;
+  onSelect: (id: T) => void;
+  testID?: string;
+}
+
+/**
+ * R118-A — the one-line segmented control (the API-format selector's
+ * three-on-one-row mandate; the appearance mode selector and the
+ * dashboard's period selector converge on the same grammar). Track:
+ * `surfaceWell` fill + hairline `clayRim` (the R117 chip resting surface),
+ * 52 tall / radius 26 / 4 inset. The sliding indicator = the AA-clean
+ * selection pill — `accentDeep` fill, NO border (a filled pill like the
+ * Chip; donts #34 holds — there is no hairline to under-draw), gliding in
+ * index space on TAB_SPRING (the calm slide). Selected label: 15/700 in
+ * `accentText` (4.98:1 light / 6.30:1 dark — AA at any size); unselected:
+ * 15/600 `textSecondary` (6.18:1). Segments carry the 44px touch law.
+ * Deliberately NOT the tab pill's accentTint+2px-border recipe — that pair
+ * computes 4.25:1/3.77:1 as TEXT and is pinned only at the 3:1 chrome
+ * tier; this control's labels are text.
+ */
+export function SegmentedControl<T extends string>({
+  options,
+  selectedId,
+  onSelect,
+  testID,
+}: SegmentedControlProps<T>) {
+  const { tokens } = useTheme();
+  const reduced = useReducedMotion();
+  const [trackWidth, setTrackWidth] = useState(0);
+
+  const activeIndex = Math.max(
+    0,
+    options.findIndex((o) => o.id === selectedId),
+  );
+  const segmentWidth = (trackWidth - SEGMENT_INSET * 2) / Math.max(options.length, 1);
+  const indicatorIndex = useSharedValue(activeIndex);
+
+  useEffect(() => {
+    if (reduced) {
+      indicatorIndex.value = activeIndex;
+      return;
+    }
+    indicatorIndex.value = withSpring(activeIndex, TAB_SPRING);
+  }, [activeIndex, reduced, indicatorIndex]);
+
+  const indicatorStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: indicatorIndex.value * segmentWidth }],
+  }));
+
+  return (
+    <View
+      testID={testID}
+      style={[
+        {
+          height: SEGMENT_TRACK_H,
+          borderRadius: SEGMENT_TRACK_H / 2,
+          padding: SEGMENT_INSET,
+          flexDirection: "row",
+          backgroundColor: tokens.surfaceWell,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: tokens.clayRim,
+        },
+      ]}
+      onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+    >
+      {trackWidth > 0 ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            {
+              position: "absolute",
+              top: SEGMENT_INSET,
+              bottom: SEGMENT_INSET,
+              left: SEGMENT_INSET,
+              width: segmentWidth,
+              borderRadius: (SEGMENT_TRACK_H - SEGMENT_INSET * 2) / 2,
+              backgroundColor: tokens.accentDeep,
+            },
+            indicatorStyle,
+          ]}
+        />
+      ) : null}
+      {options.map((o) => {
+        const selected = o.id === selectedId;
+        return (
+          <Pressable
+            key={o.id}
+            accessibilityRole="button"
+            accessibilityLabel={o.accessibilityLabel ?? o.label}
+            accessibilityState={{ selected }}
+            onPress={() => onSelect(o.id)}
+            style={{
+              flex: 1,
+              minHeight: TOUCH_TARGET,
+              alignItems: "center",
+              justifyContent: "center",
+              paddingHorizontal: spacing.xs,
+            }}
+          >
+            <Text
+              numberOfLines={1}
+              style={{
+                color: selected ? tokens.accentText : tokens.textSecondary,
+                fontSize: TYPE_BODY,
+                fontFamily: selected ? fontFamily.bold : fontFamily.medium,
+              }}
+            >
+              {o.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+// ── R118: LiveCaret — the "still typing" marker, shared ─────────────────────
+
+/**
+ * R118-B — the live caret extracted from transcript.tsx's private recipe
+ * (byte-identical: width 8, height 15, radius 2, opacity 0.25↔1 at 550ms
+ * legs, marginLeft 2 — motion.md §3's own "Live caret" idiom). The home
+ * screen's Happening-now rows append it so the live preview carries the
+ * unique animated presence the owner asked for; the transcript swaps to
+ * this import (reuse, never re-roll). Reduced motion snaps solid.
+ */
+export function LiveCaret({ color, label = "live" }: { color: string; label?: string }) {
+  const reduced = useReducedMotion();
+  const opacity = useSharedValue(1);
+  useEffect(() => {
+    if (reduced) {
+      opacity.value = 1;
+      return;
+    }
+    opacity.value = withRepeat(
+      withSequence(withTiming(0.25, { duration: 550 }), withTiming(1, { duration: 550 })),
+      -1,
+      false,
+    );
+  }, [opacity, reduced]);
+  const animated = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return (
+    <Animated.View
+      accessibilityLabel={label}
+      style={[animated, { width: 8, height: 15, borderRadius: 2, backgroundColor: color, marginLeft: 2 }]}
+    />
   );
 }

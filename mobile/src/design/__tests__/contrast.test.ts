@@ -275,8 +275,11 @@ describe("the spec's pinned token values (round-117-elevation.md §2.1)", () => 
   it("the chrome jewelry stops (the glint, not the gloss band)", () => {
     expect(light.sheenTop).toBe("rgba(255,255,255,0.18)");
     expect(dark.sheenTop).toBe("rgba(255,255,255,0.12)");
-    expect(light.chromeEdgeDark).toBe("rgba(42,32,24,0.16)");
-    expect(dark.chromeEdgeDark).toBe("rgba(255,255,255,0.06)");
+    // R118-B (AMENDMENT to tokens.md §2): the metal ramp's base stop
+    // deepens so the grounded edge draws on the white bar (0.16→0.22 light,
+    // 0.06→0.08 dark) — the owner's "improve the bar's border" ruling.
+    expect(light.chromeEdgeDark).toBe("rgba(42,32,24,0.22)");
+    expect(dark.chromeEdgeDark).toBe("rgba(255,255,255,0.08)");
   });
 
   it("the type floors (AMENDMENT 4)", () => {
