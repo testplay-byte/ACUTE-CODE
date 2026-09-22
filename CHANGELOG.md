@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-21 round-116 -->
+<!-- last-reviewed: 2026-09-22 round-119 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,30 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [0.113.0] — 2026-09-22 — the session-center round (one visual turn, honest queues, providers that prove themselves)
+
+### The session center — one visual turn (mobile)
+- **Thinking, tool calls, and failed calls no longer stack as separate cards.** Each exchange renders as ONE cohesive block: a single activity line up top ("Thought for 8s · 3 actions ▾") that expands to the details — the reasoning text and every action as compact rows (failures marked inline, details one tap away) — with the reply itself below.
+- A running turn streams into the SAME block: the breathing "Thinking…" state, then each action as it starts, then the text — one visual unit from the first frame, not a parade of little cards.
+
+### The composer (mobile)
+- **The text now sits to the LEFT of the attach button in every state** — tall messages no longer wrap around a reserved band under the input — and the whole dock is shorter (the input caps at six clean lines).
+
+### The three-dot menu (mobile)
+- **The model picker is a provider list now**: you see provider names by default; tapping one expands ITS models (one provider open at a time); tapping a model applies and returns. The mode/model/thinking/context rows no longer trail the model list.
+- Switching between menu levels animates — a directional slide as you drill in and back.
+
+### Queued messages — honest on both platforms
+- **On the PC, a queued message renders as a message** — your bubble, slightly dimmed with a small "queued" caption — not an amber notification banner. Send-now and remove ride the hover actions.
+- **The PC duplicate glitch is fixed**: while a queued message waited, the previous exchange's thought process and reply sometimes rendered TWICE (a fold/live double-draw). The transcript now suppresses the folded copy while the live turn is showing.
+- **On mobile, the waiting message renders AFTER the turn in progress** — not below the first message — and stays there.
+
+### Providers that prove themselves
+- **"Test model" now also tests TOOL CALLS** — the one thing that separates "chat works" from "the agent works": after the ping reply, the test sends a minimal tool and reports honestly — "tools ✓ (called echo)" / "tools accepted — the model answered in text" / "tools rejected" with the provider's raw error. The same verdict shows on the PC's model cards and config dialog.
+- **The provider's real error text finally reaches the phone**: when a turn fails, the card now leads with the provider's own message (region blocks, tool rejections, quota walls — verbatim) instead of a generic "call failed" line.
+- The "Test connection" button fits on one line at every width. The sheets' open/close motion is retuned (softer settle in, accelerating departure out) — the Add-Provider sheet included.
+- Screen readers get a capped, useful error label instead of a wall of raw JSON.
 
 ## [0.112.0] — 2026-09-22 — the fit-and-finish round (the owner's device report, answered screen by screen)
 

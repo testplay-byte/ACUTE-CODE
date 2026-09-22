@@ -75,3 +75,34 @@ The §N implementation, as the display-layer unification: **one visual TURN per 
 3. Wave 3: the design-language doc amendments (transcript anatomy, the composer law, the model accordion, the queue rendering law, the tools-probe vocabulary) + the flaw-finding review.
 4. The release: v0.113.0 — full gate ladder (mobile tsc + jest, agent-core tsc + vitest, root vitest + eslint, docs:check), the §g runbook, both workflows, publish, end-state verification.
 5. The closing report: the TokenHarbor finding (region-block on the sandbox; the tools probe as the owner-side diagnostic), the §N anatomy explanation, the deferred items.
+
+## §3 Verification
+
+- **The full gate ladder on the merged tree** (Wave-1's three tracks were built in isolated git worktrees — symlinks are newly
+  blocked in this sandbox, so the per-track gates ran at MERGE time; Wave-2's center track gated in the main tree):
+  mobile tsc clean · jest **40 suites / 870 tests** (baseline 38/811) · agent-core tsc clean · vitest **146 files / 2742**
+  (was 145/2734) · root tsc clean · root vitest **253 files / 4510 passed + 15 skipped** (was 252/4491) · eslint 0 ·
+  docs:check 265/0. One gate-fix landed at merge (the queued-caption test read the wrapper, not the inner mono span — 298a887).
+- **The focused review pass** (a dedicated reviewer agent, leaner after a first full-scope attempt died at the context deadline):
+  **verdict SHIP — no blockers**. All four cross-track seams verified by byte-diff (P's ErrorCard providerError survived A's
+  transcript rewrite; B's menu wiring survived A's display rewrite; C's startedBySeq + P's tools fields coexist in api.ts; the
+  delivery-rung constants + the five interactive cards byte-identical to the v0.112.0 baseline). Its one WARN — the ErrorCard's
+  accessibility label could read a 4000-char raw provider body through TalkBack — was closed in 9c7baf3 (`errorCardA11yLabel`:
+  code + first line + ~120-char cap + the expand cue, pinned 3 ways), together with the chat-prefs header reconciliation and
+  the round-doc wording drift. Its NOTEs: the content-matched twin-drop can transiently under-count identical queued rows
+  (self-healing; the PC twin matches by seq), and a `toolActivity:hidden` live rail reads "Thinking…" while tools run — both
+  recorded as known spellings.
+- **The design-language docs** landed in the same wave (a0cb07d): chat.md (the TurnBlock anatomy + the queued-row law + the
+  single-tier composer + the accordion + the level swaps + the providerError law), components.md (labelFit + the sheet motion
+  supersession + the accordion grammar), motion.md (the {180,24} supersession + the named legs + the rail breath), donts.md
+  (#37 reworded + #49-52), checklist.md (the six round-119 gates), round-117-elevation.md (the supersession notes).
+- **Cannot be verified in this sandbox** (the owner's device checklist): the composer's single-tier feel + the shorter dock at
+  rest; the TurnBlock's live rail/well breath + the collapsed summaries on a real conversation; the accordion's one-open law +
+  the level-slide feel; the PC queued bubble's hover affordances; the TokenHarbor model test's TOOLS verdict from the owner's
+  region (the sandbox is region-blocked — the probe is the owner-side diagnostic by construction); the sheet motion tuning by
+  feel.
+
+## §4 The release (R119-i)
+
+Tag `v0.113.0` at the release-prep commit. The §g 2c lock-sync proof passed before tagging (`npm ci --dry-run` clean — zero
+mobile dep changes this round; the package files are byte-identical to v0.112.0).

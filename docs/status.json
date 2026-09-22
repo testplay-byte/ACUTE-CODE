@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.112.0",
+    "version": "0.113.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -352,25 +352,29 @@
     {
       "date": "2026-09-22",
       "label": "R118 — the twenty-fifth round: the fit-and-finish round (the owner's v0.111.0 device report answered: the adaptive tab bar, the sheet system rebuilt, the in-place kebab, the delivery states on the message body, the vertical dashboard, the provider hero + folder creation + multi-host, the PC's manual-pairing ladder + QR toggle + restart marker) — mobile 38 suites 811/811, agent-core 145/2734, root 252/4491, review-passed — v0.112.0 released"
+    },
+    {
+      "date": "2026-09-22",
+      "label": "R119 — the twenty-sixth round: the session-center round (the owner's v0.112.0 device report: the single-tier composer, the provider-accordion model menu + animated level swaps, the queued message honest on both platforms [PC as-message + duplicate suppressed; mobile after-the-turn], the TurnBlock center [one visual turn per exchange], and the provider capability probe [tools accepted/called/rejected] + the raw providerError on mobile) — mobile 40 suites 870/870, agent-core 146/2742, root 253/4510, review-passed — v0.113.0 released"
     }
   ],
   "quality": {
-    "ci": "LOCAL-GATES TRUTH at the R118 close (the merged tree, every gate re-run fresh): agent-core tsc clean · vitest 145 files 2734/2734 · root tsc clean · root vitest 252 files 4491/4491 · mobile tsc clean · jest 38 suites 811/811 · eslint 0 · docs:check 264/0 (the servo.org HEAD flake is sandbox egress, not content). The five tracks were built in isolated git worktrees by parallel agents, merged, then FULLY re-gated on the merged tree; an independent review agent then walked the owner's report item-by-item against the code (no blockers; both WARNs closed in 59f7514).",
+    "ci": "LOCAL-GATES TRUTH at the R119 close (the merged tree, every gate re-run fresh): agent-core tsc clean · vitest 146 files 2742/2742 · root tsc clean · root vitest 253 files 4510 passed/15 skipped · mobile tsc clean · jest 40 suites 870/870 · eslint 0 · docs:check 265/0 (the servo.org/openrouter HEAD flakes are sandbox egress, not content). The three Wave-1 tracks were built in isolated git worktrees by parallel agents (symlinks newly blocked in the sandbox — the gates ran at merge), the Wave-2 center track gated in the main tree, and the focused review pass returned SHIP with its one WARN (the ErrorCard a11y cap) closed in 9c7baf3.",
     "suites": [
       {
         "name": "frontend",
-        "tests": 4491,
-        "detail": "252 files / 4491 tests at the R118 close (was 4457): the QR pointer-events pins, the restart-marker splash cases, the PC test-model band timers, the pairing-text multi-address format."
+        "tests": 4510,
+        "detail": "253 files / 4510 passed + 15 skipped at the R119 close (was 4491): the queued-as-message idiom pins, the fold/live duplicate-suppression end-to-end (the owner's exact double-draw), the startedBySeq fold anchors, and the model-test tools-leg bands."
       },
       {
         "name": "agent-core",
-        "tests": 2734,
-        "detail": "145 files / 2734 tests at the R118 close (was 2710): the fs-mkdir route suite (20) + the preferred-NIC/APIPA ordering pins."
+        "tests": 2742,
+        "detail": "146 files / 2742 tests at the R119 close (was 2734): the r119-p model-tools suite (the echo probe per format, hard-reject/text-answer/scrub tables) + the extended r82 model-test cases."
       },
       {
         "name": "mobile",
-        "tests": 811,
-        "detail": "38 suites / 811 tests at the R118 close (was 28/616): tab-slots (the adaptive algorithm), the activity bodyText regression pin, host-store multi-host + switchHost, usage-format + sessionStatusBadge, disclosure-motion, the processing-rung pins, the composer v2 surface, confirm-dialog + header-dropdown, the mkdir client, provider-display, time-ago, the sheet-anatomy drift-guards."
+        "tests": 870,
+        "detail": "40 suites / 870 tests at the R119 close (was 38/811): turn-block (33 pins — the grouping partition, activitySummary, orderDisplayItems, the tool-row helpers, the a11y label), the single-tier composer law (146), the kebab direction table, the provider accordion pins, and the ErrorCard a11y cap."
       }
     ],
     "cargoCheck": "green",
@@ -386,7 +390,7 @@
     }
   ],
   "plan": {
-    "current": "R118 LANDED — the fit-and-finish round (the owner's v0.111.0 device report, ~53 items across 16 sections, answered screen-by-screen: the adaptive tab bar + the corner fix, the universal sheet system rebuilt [first-frame law, real header, captions banned, centered CTAs, keyboard-aware], the in-place kebab sub-levels + the two-step stop + the centered confirm, the composer geometry + the delivery states riding the message body, the vertical dashboard + honest session rows + the no-bounce collapse, the provider hero + name-only model rows + the centered CTA law, the folder creation + the mkdir route, the multi-host store + switcher, the PC's pointer-events/shrink-0/manual-pairing-ladder/restart-marker/test-status fixes, and mark-all-read's bodyText root cause) — built on six parallel spec tracks, implemented by five worktree-isolated agents, merged, fully re-gated, and review-passed — v0.112.0 released",
+    "current": "R119 LANDED — the session-center round (the owner's v0.112.0 device report: the composer's text sits LEFT of the attach circle in every state with a shorter dock, the model menu becomes the provider accordion (one provider open at a time, apply-and-return, the root rows never trail) + the kebab's level swaps animate directionally, the queued message renders as a MESSAGE on the PC (the amber banner retired) with the fold/live double-draw suppressed by the startedBySeq anchor, the mobile waiting row rides after the in-progress turn, the transcript center becomes ONE visual TurnBlock per exchange (the §N verdict — the activity rail + the recessed well + tool rows, the standalone thinking/tool cards retired), and the provider stack learns to prove itself: the tools-capability probe on every model test (echo — accepted/called/rejected), the raw providerError line finally reaching the phone, the labelFit hero button, the retuned sheet motion; TokenHarbor's action-failure root-caused code-side — the sandbox itself is region-blocked by tokenharbor.ai, so the probe is the owner-side diagnostic) — three Wave-1 worktree tracks merged + the Wave-2 center + docs + review — v0.113.0 rides the proven pipeline",
     "upcoming": [
       {
         "title": "The owner's round-117 walkthrough on real hardware (v0.111.0)",
@@ -412,8 +416,8 @@
     ]
   },
   "round": {
-    "current": "R118 LANDED — the fit-and-finish round (the owner's v0.111.0 device report, ~53 items across 16 sections, answered screen-by-screen: the adaptive tab bar + the corner fix, the universal sheet system rebuilt [first-frame law, real header, captions banned, centered CTAs, keyboard-aware], the in-place kebab sub-levels + the two-step stop + the centered confirm, the composer geometry + the delivery states riding the message body, the vertical dashboard + honest session rows + the no-bounce collapse, the provider hero + name-only model rows + the centered CTA law, the folder creation + the mkdir route, the multi-host store + switcher, the PC's pointer-events/shrink-0/manual-pairing-ladder/restart-marker/test-status fixes, and mark-all-read's bodyText root cause) — built on six parallel spec tracks, implemented by five worktree-isolated agents, merged, fully re-gated, and review-passed — v0.112.0 released",
+    "current": "R119 LANDED — the session-center round (the owner's v0.112.0 device report: the composer's text sits LEFT of the attach circle in every state with a shorter dock, the model menu becomes the provider accordion (one provider open at a time, apply-and-return, the root rows never trail) + the kebab's level swaps animate directionally, the queued message renders as a MESSAGE on the PC (the amber banner retired) with the fold/live double-draw suppressed by the startedBySeq anchor, the mobile waiting row rides after the in-progress turn, the transcript center becomes ONE visual TurnBlock per exchange (the §N verdict — the activity rail + the recessed well + tool rows, the standalone thinking/tool cards retired), and the provider stack learns to prove itself: the tools-capability probe on every model test (echo — accepted/called/rejected), the raw providerError line finally reaching the phone, the labelFit hero button, the retuned sheet motion; TokenHarbor's action-failure root-caused code-side — the sandbox itself is region-blocked by tokenharbor.ai, so the probe is the owner-side diagnostic) — three Wave-1 worktree tracks merged + the Wave-2 center + docs + review — v0.113.0 rides the proven pipeline",
     "next": "The owner's round-117 walkthrough on real hardware (v0.111.0) — memory across sessions, the elevation's look, the PC transcript's failure visibility, the sub-agent Stop/Retry from the phone; then the standing queue (the updater round, multi-PC, device smoke pass)."
   },
-  "ci": "GREEN — v0.111.0 PUBLISHED (release 393431111, latest, end-state verified: 7/7 assets, APK content-checked [1240 entries, Hermes, arm64-v8a only]); v0.112.0 rides the same proven pipeline (lock-sync proof below)."
+  "ci": "GREEN — v0.112.0 PUBLISHED (release 393949568, latest, end-state verified: 7/7 assets, APK content-checked [1240 entries, Hermes, arm64-v8a only]); v0.113.0 rides the same proven pipeline (lock-sync proof below: no mobile dep changes, npm ci --dry-run clean)."
 }
