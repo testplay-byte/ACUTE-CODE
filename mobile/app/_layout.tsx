@@ -39,6 +39,10 @@ import { Stack } from "expo-router";
 import { StyleSheet, View } from "react-native";
 import { ThemeProvider, useTheme } from "@/design/theme";
 import { BootErrorBoundary } from "@/components/error-boundary";
+// R120-M (round-120 §1 item 16 — the toast law): the app-wide toast
+// provider mounts INSIDE ThemeProvider (the strip reads the resolved
+// tokens) — every screen + sheet reaches it through useToast().
+import { ToastProvider } from "@/components/toast";
 import { startActivity } from "@/features/activity";
 import { startEvents } from "@/features/events";
 import {
@@ -120,7 +124,9 @@ export default function RootLayout() {
       <GestureHandlerRootView style={styles.root}>
         <KeyboardProvider>
           <ThemeProvider>
-            <RootNavigator />
+            <ToastProvider>
+              <RootNavigator />
+            </ToastProvider>
           </ThemeProvider>
         </KeyboardProvider>
       </GestureHandlerRootView>

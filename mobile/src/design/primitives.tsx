@@ -53,6 +53,7 @@ import {
   ViewStyle,
 } from "react-native";
 import Animated, {
+  interpolateColor,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -591,9 +592,21 @@ export function ClayInput({ mono = false, label, caption, containerStyle, style,
       ) : null}
       <TextInput
         placeholderTextColor={tokens.textTertiary}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
         {...inputProps}
+        // R120-M (round-120 §1 item 17 — the model editor's numeric fields
+        // swap to their simplified form ON BLUR and back to full digits ON
+        // FOCUS): the caller's handlers CHAIN after the ring's own state.
+        // Placed AFTER the spread so last-wins cannot let a caller's raw
+        // onFocus/onBlur kill the focus ring (the old order did exactly
+        // that). Additive: callers that pass none render byte-identical.
+        onFocus={(e) => {
+          setFocused(true);
+          inputProps.onFocus?.(e);
+        }}
+        onBlur={(e) => {
+          setFocused(false);
+          inputProps.onBlur?.(e);
+        }}
         style={[
           {
             backgroundColor: tokens.inputBg,
@@ -676,6 +689,79 @@ export function Chip({ children, selected = false, onPress, style, textStyle, te
     </Pressable>
   );
 }
+
+// ── ClaySwitch — the clay toggle (R120-M: moved verbatim from the provider
+// detail screen, which carried the only copy as a private helper — the
+// model-form module + the provider hero both render it now; additive to the
+// shared kit, byte-identical behavior: accent pill + sliding dot, the house
+// spring) ────────────────────────────────────────────────────────────────────
+
+const SWITCH_TRACK_W = 52;
+const SWITCH_TRACK_H = 32;
+const SWITCH_DOT = 24;
+const SWITCH_PAD = 3;
+const SWITCH_TRAVEL = SWITCH_TRACK_W - SWITCH_DOT - SWITCH_PAD * 2;
+
+export interface ClaySwitchProps {
+  value: boolean;
+  onValueChange: (next: boolean) => void;
+  disabled?: boolean;
+  label: string;
+}
+
+export function ClaySwitch({ value, onValueChange, disabled = false, label }: ClaySwitchProps) {
+  const { tokens } = useTheme();
+  const progress = useSharedValue(value ? 1 : 0);
+
+  React.useEffect(() => {
+    progress.value = withSpring(value ? 1 : 0, SPRING);
+  }, [value, progress]);
+
+  const trackStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(progress.value, [0, 1], [tokens.pillBg, tokens.accent]),
+  }));
+  const dotStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: progress.value * SWITCH_TRAVEL }],
+  }));
+
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityLabel={label}
+      accessibilityState={{ checked: value, disabled }}
+      disabled={disabled}
+      onPress={() => onValueChange(!value)}
+      hitSlop={6}
+      style={claySwitchStyles.target}
+    >
+      <Animated.View style={[claySwitchStyles.track, trackStyle, disabled ? { opacity: 0.5 } : null]}>
+        <Animated.View
+          style={[
+            claySwitchStyles.dot,
+            { backgroundColor: value ? tokens.accentText : tokens.textSecondary },
+            dotStyle,
+          ]}
+        />
+      </Animated.View>
+    </Pressable>
+  );
+}
+
+const claySwitchStyles = StyleSheet.create({
+  target: { minWidth: 44, minHeight: 44, alignItems: "flex-end", justifyContent: "center" },
+  track: {
+    width: SWITCH_TRACK_W,
+    height: SWITCH_TRACK_H,
+    borderRadius: SWITCH_TRACK_H / 2,
+    padding: SWITCH_PAD,
+    justifyContent: "center",
+  },
+  dot: {
+    width: SWITCH_DOT,
+    height: SWITCH_DOT,
+    borderRadius: SWITCH_DOT / 2,
+  },
+});
 
 // ── ClayIconChip — the tinted identity chip (R117-g2 §2.2) ─────────────────
 

@@ -15,6 +15,7 @@ import { describe, expect, it } from "@jest/globals";
 import type { ApiSender } from "../api";
 import {
   addProviderModel,
+  applyModelDetailsToDraft,
   catalogEntriesFromStatic,
   catalogPrefillFor,
   cleanModelName,
@@ -25,18 +26,24 @@ import {
   deleteProvider,
   deleteProviderKeySlot,
   fetchModelCatalog,
+  fetchProviderModelDetails,
   fetchProviderKeys,
   fetchProviderModelsConfig,
   modelAddBody,
   modelCapabilityChips,
+  modelDetailsDraftPatch,
   modelDraftFromRecord,
   modelEditBody,
+  modelTestToastText,
   modelTestToolsLegLine,
   newProjectBody,
   nextFreeKeySlot,
+  orderedReasoningEfforts,
   parseModelNumericField,
   presetAddPlan,
   putProviderKeySlot,
+  reasoningSupportDraftValue,
+  remainingReasoningEfforts,
   searchCatalogEntries,
   setProviderKey,
   splitProviders,
@@ -237,6 +244,9 @@ function makeDraft(overrides: Partial<ModelFormDraft> = {}): ModelFormDraft {
     supportsVideoOutput: null,
     supportsAudioOutput: null,
     hidden: false,
+    // R120-M (item 21): the reasoning ladder starts empty/untouched.
+    reasoningEfforts: [],
+    reasoningTouched: false,
     ...overrides,
   };
 }
@@ -946,6 +956,9 @@ describe("modelDraftFromRecord — the edit sheet's hydration (the FULL R87 fiel
       supportsVideoOutput: null,
       supportsAudioOutput: null,
       hidden: true,
+      // R120-M (item 21): the stored ladder rides the round-trip — out of
+      // wire order on purpose (the draft canonicalizes lowest→highest).
+      reasoningSupport: { supported: true, efforts: ["high", "low", "medium"], defaultEffort: "medium" },
     });
     const draft = modelDraftFromRecord(record);
     expect(draft).toEqual({
@@ -967,14 +980,24 @@ describe("modelDraftFromRecord — the edit sheet's hydration (the FULL R87 fiel
       supportsVideoOutput: null,
       supportsAudioOutput: null,
       hidden: true,
+      // R120-M (item 21): the hydration ORDERS the ladder + resets touched.
+      reasoningEfforts: ["low", "medium", "high"],
+      reasoningTouched: false,
     });
     // the round-trip is LOSSLESS through the edit body: the set stays set,
     // the unknown stays unknown.
-    const body = modelEditBody(draft);
+    const body = modelEditBody(draft, record);
     expect(body.supportsTools).toBe(true);
     expect(body.supportsPdf).toBeNull();
     expect(body.sizeLabel).toBe("70B MoE");
     expect(body.inputPriceCachedPerMtok).toBe(0.014);
+    // R120-M: the ladder rides the PATCH canonically ordered, the
+    // defaultEffort surviving on its own rung.
+    expect(body.reasoningSupport).toEqual({
+      supported: true,
+      efforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
+    });
   });
 
   it("nulls become blank strings; an unknown vision reads OFF; supportsThinking never enters the draft", () => {
@@ -1047,6 +1070,8 @@ describe("catalogPrefillFor — the catalog → form prefill", () => {
       supportsVideoOutput: null,
       supportsAudioOutput: null,
       hidden: false,
+      reasoningEfforts: [],
+      reasoningTouched: false,
     });
   });
 
@@ -1076,6 +1101,8 @@ describe("catalogPrefillFor — the catalog → form prefill", () => {
       supportsVideoOutput: null,
       supportsAudioOutput: null,
       hidden: false,
+      reasoningEfforts: [],
+      reasoningTouched: false,
     });
   });
 });
@@ -1167,5 +1194,219 @@ describe("testTransportFailureMessage — the class-based one-liner", () => {
     expect(novel.length).toBeLessThan(140);
     const collapsed = testTransportFailureMessage(netError("unknown", "line\n  broken   tail"));
     expect(collapsed).toBe("The test failed — line broken tail");
+  });
+});
+
+// ── R120-M: the reasoning vocabulary + the ladder editor's derivations ──────
+
+describe("R120-M: orderedReasoningEfforts / remainingReasoningEfforts — the ladder grammar", () => {
+  it("canonicalizes: vocabulary members only, deduped, lowest→highest", () => {
+    expect(orderedReasoningEfforts(["high", "low", "max", "low"])).toEqual(["low", "high", "max"]);
+    expect(orderedReasoningEfforts(["turbo", "minimal"])).toEqual(["minimal"]);
+    expect(orderedReasoningEfforts([])).toEqual([]);
+  });
+
+  it("the remaining list is the vocabulary minus the rungs already configured", () => {
+    expect(remainingReasoningEfforts(["low", "high"])).toEqual(["minimal", "medium", "xhigh", "max"]);
+    expect(remainingReasoningEfforts([])).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+});
+
+describe("R120-M: reasoningSupportDraftValue — the save's write gate (R95-B contract)", () => {
+  it("levels that SHOW ride even untouched — the editor owns the section", () => {
+    expect(reasoningSupportDraftValue(["low", "high"], false, null)).toEqual({
+      supported: true,
+      efforts: ["low", "high"],
+    });
+  });
+
+  it("an untouched EMPTY ladder on an unknown record writes NOTHING (undefined keeps the stored value)", () => {
+    expect(reasoningSupportDraftValue([], false, null)).toBeUndefined();
+    expect(reasoningSupportDraftValue([], false, { reasoningSupport: null })).toBeUndefined();
+  });
+
+  it("a TOUCHED empty ladder is an explicit write: supported keeps the record's bit (false when unknown)", () => {
+    expect(reasoningSupportDraftValue([], true, null)).toEqual({ supported: false, efforts: [] });
+    expect(reasoningSupportDraftValue([], true, { reasoningSupport: { supported: true, efforts: ["low"] } })).toEqual({
+      supported: true,
+      efforts: [],
+    });
+  });
+
+  it("the record's defaultEffort survives only while its rung still stands", () => {
+    expect(
+      reasoningSupportDraftValue(["high"], false, {
+        reasoningSupport: { supported: true, efforts: ["low", "high"], defaultEffort: "high" },
+      }),
+    ).toEqual({ supported: true, efforts: ["high"], defaultEffort: "high" });
+    expect(
+      reasoningSupportDraftValue(["medium"], false, {
+        reasoningSupport: { supported: true, efforts: ["low", "high"], defaultEffort: "high" },
+      }),
+    ).toEqual({ supported: true, efforts: ["medium"] });
+  });
+});
+
+describe("R120-M: applyModelDetailsToDraft / modelDetailsDraftPatch — the smart fetch's apply", () => {
+  const details = {
+    contextWindow: 256000,
+    maxOutputTokens: 230400,
+    inputPricePerMtok: 2.5,
+    outputPricePerMtok: 10,
+    inputPriceCachedPerMtok: 1.25,
+    supportsTools: true,
+    supportsVision: true,
+    supportsAudio: true,
+    supportsVideo: false,
+  };
+  const seeded = catalogPrefillFor({ id: "test/vision", name: "Vision" }, []);
+
+  it("ADD mode: the provider's own numbers OVERRIDE the static prefill", () => {
+    const applied = applyModelDetailsToDraft(seeded, details, false);
+    expect(applied.contextWindow).toBe("256000");
+    expect(applied.maxOutputTokens).toBe("230400");
+    expect(applied.inputPricePerMtok).toBe("2.5");
+    expect(applied.outputPricePerMtok).toBe("10");
+    expect(applied.inputPriceCachedPerMtok).toBe("1.25");
+    expect(applied.supportsVision).toBe(true);
+    expect(applied.supportsTools).toBe(true);
+    expect(applied.supportsAudio).toBe(true);
+    expect(applied.supportsVideo).toBe(false);
+  });
+
+  it("EDIT mode: only BLANK fields take the served value — the owner's saved configuration outranks the catalog", () => {
+    const ownerSet = { ...seeded, contextWindow: "100000", supportsTools: false };
+    const applied = applyModelDetailsToDraft(ownerSet, details, true);
+    expect(applied.contextWindow).toBe("100000");
+    expect(applied.maxOutputTokens).toBe("230400");
+    expect(applied.supportsTools).toBe(false);
+  });
+
+  it("EDIT mode: a record that never said vision (the draft's false) takes the catalog's bit", () => {
+    expect(applyModelDetailsToDraft(seeded, details, true).supportsVision).toBe(true);
+  });
+
+  it("absent fields stay absent — never a fabricated 0", () => {
+    const applied = applyModelDetailsToDraft(seeded, { contextWindow: 131072 }, false);
+    expect(applied.maxOutputTokens).toBe("");
+    expect(applied.supportsTools).toBeNull();
+  });
+
+  it("modelDetailsDraftPatch maps the numerics to strings + the capability hints verbatim", () => {
+    expect(modelDetailsDraftPatch(details)).toEqual({
+      contextWindow: "256000",
+      maxOutputTokens: "230400",
+      inputPricePerMtok: "2.5",
+      inputPriceCachedPerMtok: "1.25",
+      outputPricePerMtok: "10",
+      supportsVision: true,
+      supportsTools: true,
+      supportsAudio: true,
+      supportsVideo: false,
+    });
+    expect(modelDetailsDraftPatch({})).toEqual({});
+  });
+});
+
+describe("R120-M: fetchProviderModelDetails — the smart fetch's wire call", () => {
+  it("GETs /api/v1/providers/:id/models and finds the one entry (details + cached ride along)", async () => {
+    const { sender, calls } = makeRouteSender([
+      {
+        path: "/api/v1/providers/openrouter/models",
+        status: 200,
+        bodyText: JSON.stringify({
+          models: [
+            { id: "test/other", name: "Other" },
+            {
+              id: "test/vision",
+              name: "Vision",
+              details: { contextWindow: 256000, supportsVision: true },
+            },
+          ],
+          cached: false,
+        }),
+      },
+    ]);
+    const outcome = await fetchProviderModelDetails(sender, "openrouter", "test/vision");
+    expect(outcome.ok && outcome.data.entry?.details?.contextWindow).toBe(256000);
+    expect(outcome.ok && outcome.data.cached).toBe(false);
+    expect(calls[0]?.path).toBe("/api/v1/providers/openrouter/models");
+  });
+
+  it("a model the listing does not know answers entry:null — the graceful no-op, not an error", async () => {
+    const { sender } = makeRouteSender([
+      {
+        path: "/api/v1/providers/openrouter/models",
+        status: 200,
+        bodyText: JSON.stringify({ models: [{ id: "test/other", name: "Other" }], cached: true }),
+      },
+    ]);
+    const outcome = await fetchProviderModelDetails(sender, "openrouter", "custom/unknown");
+    expect(outcome.ok && outcome.data.entry).toBeNull();
+    expect(outcome.ok && outcome.data.cached).toBe(true);
+  });
+
+  it("transport errors propagate (the screen's loader owns the offline render)", async () => {
+    const { sender } = makeRouteSender([
+      {
+        path: "/api/v1/providers/openrouter/models",
+        status: 503,
+        bodyText: JSON.stringify({ error: { message: "the sidecar is restarting" } }),
+      },
+    ]);
+    const outcome = await fetchProviderModelDetails(sender, "openrouter", "test/vision");
+    expect(outcome.ok).toBe(false);
+    expect(!outcome.ok && outcome.error.status).toBe(503);
+  });
+});
+
+describe("R120-M: modelTestToastText — the ONE toast line (item 16)", () => {
+  const base = {
+    ok: true,
+    latencyMs: 1234,
+    providerId: "openrouter",
+    model: "z-ai/glm-4.7",
+    checks: { http: true, auth: true, modelAccepted: true, nonEmptyContent: true },
+  } as const;
+
+  it("a clean pass without the tools leg is the saved one-liner", () => {
+    expect(modelTestToastText(base)).toEqual({ kind: "saved", text: "ok · 1234ms" });
+  });
+
+  it("the tools verdict joins the line — called reads saved, text-answered reads caution", () => {
+    expect(
+      modelTestToastText({ ...base, checks: { ...base.checks, toolsAccepted: true, toolCalled: true } }),
+    ).toEqual({ kind: "saved", text: "ok · 1234ms · tools ✓ (called echo)" });
+    expect(
+      modelTestToastText({ ...base, checks: { ...base.checks, toolsAccepted: true, toolCalled: false } }).kind,
+    ).toBe("caution");
+  });
+
+  it("a failed base or a rejected tools leg fails the whole line — the worst news sets the tone", () => {
+    expect(modelTestToastText({ ...base, ok: false, reason: "401 unauthorized" })).toEqual({
+      kind: "error",
+      text: "failed — 401 unauthorized",
+    });
+    expect(
+      modelTestToastText({ ...base, ok: false, reason: "401 unauthorized", checks: { ...base.checks, toolsAccepted: false } }).kind,
+    ).toBe("error");
+  });
+
+  it("the joined line caps at 140 chars — a verdict is a line, never a wall", () => {
+    const long = modelTestToastText({
+      ...base,
+      ok: false,
+      reason: "x".repeat(300),
+      checks: { ...base.checks, toolsAccepted: false },
+    });
+    expect(long.text.length).toBeLessThanOrEqual(140);
+    expect(long.text.endsWith("…")).toBe(true);
   });
 });

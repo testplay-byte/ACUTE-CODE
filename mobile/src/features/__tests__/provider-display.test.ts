@@ -13,8 +13,10 @@ import type { ModelRecord, ProviderKeySlot } from "../config";
 import { TYPE_MONO } from "@/design/tokens";
 import {
   apiFormatLabel,
+  formatCompactCount,
   KEY_SLOT_MONO_LINE,
   KEY_SLOT_MONO_SIZE,
+  keyReferenceText,
   keySlotMetaLine,
   modelFactsLine,
   modelRowLabel,
@@ -193,5 +195,51 @@ describe("KEY_SLOT_MONO — the key-pool meta line's type cut", () => {
     expect(KEY_SLOT_MONO_LINE).toBe(18);
     expect(KEY_SLOT_MONO_SIZE).toBe(TYPE_MONO - 1);
     expect(KEY_SLOT_MONO_LINE).toBe(19 - 1);
+  });
+});
+
+// ── R120-M (round-120 §1): the two new pure seams ───────────────────────────
+
+describe("R120-M: formatCompactCount — the sizing field's simplified BLUR form (item 17)", () => {
+  it("the owner's own examples: 1000000 → 1M, 26000 → 26K, 1000 → 1K", () => {
+    expect(formatCompactCount("1000000")).toBe("1M");
+    expect(formatCompactCount("26000")).toBe("26K");
+    expect(formatCompactCount("1000")).toBe("1K");
+  });
+
+  it("the B/M tiers with ≤2 decimals, trailing zeros stripped", () => {
+    expect(formatCompactCount("1500")).toBe("1.5K");
+    expect(formatCompactCount("1750000")).toBe("1.75M");
+    expect(formatCompactCount("2000000000")).toBe("2B");
+    expect(formatCompactCount("1050000")).toBe("1.05M");
+    expect(formatCompactCount("260000")).toBe("260K");
+  });
+
+  it("below the K tier stays the raw digits", () => {
+    expect(formatCompactCount("999")).toBe("999");
+    expect(formatCompactCount("0")).toBe("0");
+  });
+
+  it("a non-numeric / blank / negative value passes through untouched — the blur display never invents", () => {
+    expect(formatCompactCount("")).toBe("");
+    expect(formatCompactCount("abc")).toBe("abc");
+    expect(formatCompactCount("-5000")).toBe("-5000");
+    expect(formatCompactCount("12,000")).toBe("12,000");
+  });
+});
+
+describe("R120-M: keyReferenceText — the copyable key id (item 14's sensible extra)", () => {
+  it("slot 0 reads 'primary key', pool slots read 'key N', the mask rides after a dot", () => {
+    expect(keyReferenceText({ slot: 0, masked: "sk-a…z9" }, "openrouter")).toBe(
+      "openrouter primary key · sk-a…z9",
+    );
+    expect(keyReferenceText({ slot: 3, masked: "sk-c…q1" }, "openrouter")).toBe(
+      "openrouter key 3 · sk-c…q1",
+    );
+  });
+
+  it("a missing mask degrades to the slot reference alone", () => {
+    expect(keyReferenceText({ slot: 2, masked: null }, "z-ai")).toBe("z-ai key 2");
+    expect(keyReferenceText({ slot: 2, masked: "" }, "z-ai")).toBe("z-ai key 2");
   });
 });
