@@ -246,6 +246,50 @@ describe("R122: the ledger file surface (GET/DELETE /feedback/file)", () => {
     expect(readFeedbackLedger(dataDir).exists).toBe(false);
   });
 
+  // ── ROUND-123 (R123): the PER-ENTRY delete ──────────────────────────────
+  it("R123: DELETE /feedback/file/entry/:index removes EXACTLY one entry; the survivors stay byte-identical", async () => {
+    await appendFeedbackEntry(dataDir, "## Entry — a\n\n- **Turn outcome**: ok\n\n### What I was trying to do\nFirst.");
+    await appendFeedbackEntry(dataDir, "## Entry — b\n\n- **Turn outcome**: ok\n\n### What I was trying to do\nSecond.");
+    await appendFeedbackEntry(dataDir, "## Entry — c\n\n- **Turn outcome**: ok\n\n### What I was trying to do\nThird.");
+    // Delete the MIDDLE entry (index 1).
+    const res = await shellInject("DELETE", "/api/v1/feedback/file/entry/1");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ removed: true, entries: 2 });
+    const after = readFeedbackLedger(dataDir);
+    expect(after.entries).toBe(2);
+    expect(after.content).toContain("## Entry — a");
+    expect(after.content).toContain("## Entry — c");
+    expect(after.content).not.toContain("## Entry — b");
+    expect(after.content).toContain("First.");
+    expect(after.content).toContain("Third.");
+    expect(after.content).not.toContain("Second.");
+    // The file header survives untouched.
+    expect(after.content.startsWith("# ACUTE-CODE")).toBe(true);
+  });
+
+  it("R123: an out-of-range index is the idempotent honest no-op (never a 404); a bad index is a 400", async () => {
+    await appendFeedbackEntry(dataDir, "## Entry — only\n\nsolo");
+    const stale = await shellInject("DELETE", "/api/v1/feedback/file/entry/5");
+    expect(stale.statusCode).toBe(200);
+    expect(stale.json()).toEqual({ removed: false, entries: 1 });
+    expect(readFeedbackLedger(dataDir).entries).toBe(1);
+    const negative = await shellInject("DELETE", "/api/v1/feedback/file/entry/-1");
+    expect(negative.statusCode).toBe(400);
+    expect((negative.json() as { error: { code: string } }).error.code).toBe("VALIDATION");
+    const garbage = await shellInject("DELETE", "/api/v1/feedback/file/entry/abc");
+    expect(garbage.statusCode).toBe(400);
+  });
+
+  it("R123: the AUTH SPLIT rides the entry delete too — a paired device token is 403, the ledger untouched", async () => {
+    await appendFeedbackEntry(dataDir, "## Entry — x\n\nphone cannot delete me");
+    await appendFeedbackEntry(dataDir, "## Entry — y\n\nnor me");
+    const { deviceToken, port } = await pairDevice();
+    const attempt = await deviceRequest(port, deviceToken, "DELETE", "/api/v1/feedback/file/entry/0");
+    expect(attempt.status).toBe(403);
+    expect((attempt.json as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+    expect(readFeedbackLedger(dataDir).entries).toBe(2);
+  });
+
   it("AUTH SPLIT: a paired device token VIEWS the ledger but is 403 on the CLEAR", async () => {
     await appendFeedbackEntry(dataDir, "## Entry — x\n\nthe phone can read me");
     const { deviceToken, port } = await pairDevice();

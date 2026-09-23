@@ -133,6 +133,9 @@ afterEach(async () => {
   // R90-B1: the same hermeticity guarantee on the way out (a test that sets
   // the env var must never leak it into the next one).
   delete process.env.ACUTE_GITHUB_PAT;
+  // R123: the APPIMAGE stub gets the same hermeticity (a test that stubbed
+  // the install-type-aware Linux pick must never leak its machine).
+  delete process.env.APPIMAGE;
   fakeHome.dir = tmpdir();
   // R104: restore the REAL platform/arch (a test that stubbed the
   // platform-aware asset pick must never leak its machine into the next).
@@ -223,51 +226,67 @@ describe("GET /system/updates (R89-A2)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("R90-B1: the ACUTE_GITHUB_PAT env var wins over the planted home file", async () => {
+  it("R90-B1 + R123: the env layer wins over the planted home file — ON THE RETRY LEG (the check itself is anonymous-first)", async () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
-    // The file holds a DIFFERENT token than the env — the Authorization
-    // header must carry the env one: the launcher always exports the token
-    // it resolved (file, env, or fresh prompt), so the env layer can never
-    // be stale relative to the file.
+    // The file holds a DIFFERENT token than the env — the readLauncherGithubPat
+    // precedence (env wins) is now exercised on the TOKEN RETRY leg: the
+    // anonymous check answers 403 (the rate limit), the token leg fires, and
+    // the Authorization header must carry the env one: the launcher always
+    // exports the token it resolved (file, env, or fresh prompt), so the env
+    // layer can never be stale relative to the file.
     plantPat(home, "github_pat_from_the_file");
     process.env.ACUTE_GITHUB_PAT = "github_pat_from_the_env";
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("rate limited", { status: 403 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
     expect(res.statusCode).toBe(200);
-    expect((res.json() as { ok: boolean }).ok).toBe(true);
-    const [, init] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
-    expect(init.headers.Authorization).toBe("Bearer github_pat_from_the_env");
+    const body = res.json() as { ok: boolean; tokenSaved?: boolean };
+    expect(body.ok).toBe(true);
+    // R123: tokenSaved rides every answer — the About tab's token row keys on it.
+    expect(body.tokenSaved).toBe(true);
+    // R123: the FIRST leg is anonymous (the public repo's default) — the
+    // token only rides the retry.
+    const [, first] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
+    const [, second] = fetchMock.mock.calls[1] as [unknown, { headers: Record<string, string> }];
+    expect(first.headers.Authorization).toBeUndefined();
+    expect(second.headers.Authorization).toBe("Bearer github_pat_from_the_env");
     vi.unstubAllGlobals();
   });
 
-  it("R90-B1: a whitespace-only env var falls through to the home file (never shadows it with nothing)", async () => {
+  it("R90-B1 + R123: a whitespace-only env var falls through to the home file on the retry leg (never shadows it with nothing)", async () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
     plantPat(home, "github_pat_from_the_file");
     // A blank export must count as absent — otherwise an accidentally-empty
-    // ACUTE_GITHUB_PAT would brick the check even with a valid saved file.
+    // ACUTE_GITHUB_PAT would brick the retry leg even with a valid saved
+    // file. The anonymous 403 fires the retry; the FILE token must ride it.
     process.env.ACUTE_GITHUB_PAT = "   \n\t ";
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("rate limited", { status: 403 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
     expect(res.statusCode).toBe(200);
     expect((res.json() as { ok: boolean }).ok).toBe(true);
-    const [, init] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
-    expect(init.headers.Authorization).toBe("Bearer github_pat_from_the_file");
+    const [, second] = fetchMock.mock.calls[1] as [unknown, { headers: Record<string, string> }];
+    expect(second.headers.Authorization).toBe("Bearer github_pat_from_the_file");
     vi.unstubAllGlobals();
   });
 
@@ -287,13 +306,16 @@ describe("GET /system/updates (R89-A2)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const up = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
-    const upBody = up.json() as { ok: boolean; latest?: string; updateAvailable?: boolean };
+    const upBody = up.json() as { ok: boolean; latest?: string; updateAvailable?: boolean; tokenSaved?: boolean };
     expect(upBody.ok).toBe(true);
     expect(upBody.latest).toBe(NEWER_VERSION);
     expect(upBody.updateAvailable).toBe(true);
-    // The Authorization header carried the planted PAT (server-side only).
+    // R123: the check ran ANONYMOUSLY (the repo is public — a token is never
+    // attached to the first leg), and the answer honestly reports that a
+    // token IS saved on this machine (the About tab's token row keys on it).
+    expect(upBody.tokenSaved).toBe(true);
     const [, init] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
-    expect(init.headers.Authorization).toBe("Bearer github_pat_test");
+    expect(init.headers.Authorization).toBeUndefined();
 
     // Same tag as the running version → up to date.
     const manifest = await import("../package.json", { with: { type: "json" } });
@@ -658,9 +680,10 @@ describe("R91-E: the in-app update download", () => {
     expect(settled!.path!.endsWith("ACUTE-CODE_9.9.9_x64-setup.exe")).toBe(true);
     expect(settled!.version).toBe("9.9.9");
 
-    // The Authorization header carried the PAT (the private-repo asset).
+    // R123: the download ran ANONYMOUSLY (the public repo's default leg — a
+    // saved token never rides the first fetch anymore).
     const [, init] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
-    expect(init.headers.Authorization).toBe("Bearer github_pat_test");
+    expect(init.headers.Authorization).toBeUndefined();
     // The downloaded installer file is THIS test's litter — remove it (the
     // route keeps it around by design: the shell runs it).
     rmSync(settled!.path!, { force: true });
@@ -721,7 +744,7 @@ describe("R91-E: the in-app update download", () => {
 // frontend's honest copy, the staged file keeps the REAL asset filename,
 // and DELETE /system/updates/download walks a staged download back.
 describe("R104: the platform-aware updater asset", () => {
-  it("the pure matrix: win32→setup.exe, linux+arm64→aarch64.AppImage, linux+x64→amd64.AppImage, darwin→null", () => {
+  it("the pure matrix: win32→setup.exe, linux+APPIMAGE→arch AppImage, linux-packaged→arch deb, darwin→null", () => {
     expect(updaterAssetSuffixForPlatform("win32", "x64")).toEqual({
       suffix: "_x64-setup.exe",
       kind: "windows-setup",
@@ -731,28 +754,49 @@ describe("R104: the platform-aware updater asset", () => {
       kind: "windows-setup",
     });
     // The R101 naming asymmetry: the deb carries dpkg's `arm64`, the
-    // AppImage carries the Rust triple's `aarch64` — the updater wants the
-    // AppImage, so aarch64 it is.
-    expect(updaterAssetSuffixForPlatform("linux", "arm64")).toEqual({
+    // AppImage carries the Rust triple's `aarch64` — an AppImage-launched
+    // install wants the AppImage, so aarch64 it is.
+    expect(updaterAssetSuffixForPlatform("linux", "arm64", "/home/o/ACUTE-CODE.AppImage")).toEqual({
       suffix: "_aarch64.AppImage",
       kind: "linux-appimage",
     });
     // tauri-bundler names BOTH x86_64 Linux bundles `amd64`.
-    expect(updaterAssetSuffixForPlatform("linux", "x64")).toEqual({
+    expect(updaterAssetSuffixForPlatform("linux", "x64", "/tmp/acute.AppImage")).toEqual({
       suffix: "_amd64.AppImage",
       kind: "linux-appimage",
+    });
+    // R123: the INSTALL-TYPE split — a packaged (non-AppImage) Linux install
+    // picks the arch-matched .deb (dpkg's own `arm64` spelling for the
+    // 64-bit ARM port), the pkexec dpkg -i leg's asset.
+    expect(updaterAssetSuffixForPlatform("linux", "arm64", undefined)).toEqual({
+      suffix: "_arm64.deb",
+      kind: "linux-deb",
+    });
+    expect(updaterAssetSuffixForPlatform("linux", "x64", undefined)).toEqual({
+      suffix: "_amd64.deb",
+      kind: "linux-deb",
+    });
+    // A blank/relative APPIMAGE counts as ABSENT (the AppImage runtime
+    // always exports an absolute path — anything else is a packaged run).
+    expect(updaterAssetSuffixForPlatform("linux", "x64", "")).toEqual({
+      suffix: "_amd64.deb",
+      kind: "linux-deb",
+    });
+    expect(updaterAssetSuffixForPlatform("linux", "x64", "relative.AppImage")).toEqual({
+      suffix: "_amd64.deb",
+      kind: "linux-deb",
     });
     // macOS is not shipped — no in-app updater asset at all.
     expect(updaterAssetSuffixForPlatform("darwin", "arm64")).toBeNull();
   });
 
-  it("the route picks THIS machine's asset from a real six-asset release (windows / linux-arm64 / linux-x64 / darwin)", async () => {
+  it("the route picks THIS machine's asset from a real six-asset release (windows / linux-arm64 / linux-x64 / linux-deb / darwin)", async () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
     plantPat(home, null);
     const assets = sixAssetRelease();
     // A FRESH Response per call — a Response body is single-use, and this
-    // test drives four checks through the one mock.
+    // test drives five checks through the one mock.
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation(() =>
@@ -766,8 +810,10 @@ describe("R104: the platform-aware updater asset", () => {
     );
 
     type Pick = { asset?: { url: string; name: string; kind: string } };
-    const pickFor = async (platform: string, arch: string): Promise<Pick> => {
+    const pickFor = async (platform: string, arch: string, appimage?: string): Promise<Pick> => {
       stubPlatform(platform, arch);
+      if (appimage === undefined) delete process.env.APPIMAGE;
+      else process.env.APPIMAGE = appimage;
       const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
       return res.json() as Pick;
     };
@@ -778,15 +824,25 @@ describe("R104: the platform-aware updater asset", () => {
     expect(win.asset?.kind).toBe("windows-setup");
     expect(win.asset?.url).toBe("https://api.github.com/repos/testplay-byte/ACUTE-CODE/releases/assets/101");
 
-    // Linux ARM64 (the owner's machine) → the aarch64 AppImage.
-    const arm = await pickFor("linux", "arm64");
+    // Linux ARM64 running FROM an AppImage → the aarch64 AppImage (the
+    // R104 atomic-replace leg).
+    const arm = await pickFor("linux", "arm64", "/home/o/ACUTE-CODE.AppImage");
     expect(arm.asset?.name).toBe(`ACUTE-CODE_${NEWER_VERSION}_aarch64.AppImage`);
     expect(arm.asset?.kind).toBe("linux-appimage");
 
-    // Linux x64 → the amd64 AppImage.
-    const x64 = await pickFor("linux", "x64");
+    // Linux x64 running from an AppImage → the amd64 AppImage.
+    const x64 = await pickFor("linux", "x64", "/tmp/acute.AppImage");
     expect(x64.asset?.name).toBe(`ACUTE-CODE_${NEWER_VERSION}_amd64.AppImage`);
     expect(x64.asset?.kind).toBe("linux-appimage");
+
+    // R123: Linux PACKAGED (no APPIMAGE env — the .deb install) → the
+    // arch-matched .deb, kind linux-deb (the pkexec dpkg -i leg).
+    const deb64 = await pickFor("linux", "x64");
+    expect(deb64.asset?.name).toBe(`ACUTE-CODE_${NEWER_VERSION}_amd64.deb`);
+    expect(deb64.asset?.kind).toBe("linux-deb");
+    const debArm = await pickFor("linux", "arm64");
+    expect(debArm.asset?.name).toBe(`ACUTE-CODE_${NEWER_VERSION}_arm64.deb`);
+    expect(debArm.asset?.kind).toBe("linux-deb");
 
     // macOS → no in-app updater asset at all (the Releases page remains).
     const mac = await pickFor("darwin", "arm64");
@@ -998,52 +1054,53 @@ describe("R104: the staged download — the name derivation + the discard", () =
   });
 });
 
-// ── ROUND-120 (R120-U): the DEAD-PAT anonymous fallback. The owner rotated
-// his GitHub PAT; readLauncherGithubPat() kept serving the dead token; and
-// GitHub answers 401 to bad credentials EVEN ON PUBLIC REPOS — so the
-// PAT-bearing check died with HTTP 401 while the code, having attached the
-// header, never once tried without it. The fix under test: a 401/403 on the
-// PAT-bearing leg retries ONCE ANONYMOUSLY; the matrix below pins every
-// honest branch the retry can land in.
-describe("R120-U: the dead-PAT anonymous fallback (GET /system/updates)", () => {
-  it("401 on the PAT leg → the ANONYMOUS retry carries the check and the answer rides out with tokenWarning", async () => {
+// ── ROUND-123 (R123): the ANONYMOUS-FIRST check. The owner's directive:
+// "why does it even require a GitHub token? Isn't our GitHub repository
+// public and can't it easily fetch the appropriate version it needs
+// without the GitHub token?" The check's legs are now INVERTED from the
+// R120-U era: the ANONYMOUS fetch is the default (the repo is public — the
+// normal check never attaches a token at all), and the token is a pure
+// RETRY ACCELERATOR that fires only when the anonymous leg answered 403
+// (the rate limit) or 404 (a private-fork shape) AND one is saved. The
+// R120-U dead-token 401 on the first leg is unreachable by construction.
+// The matrix below pins every honest branch the two legs can land in.
+describe("R123: the anonymous-first check (GET /system/updates)", () => {
+  it("a DEAD saved token can never hurt the check — the anonymous leg carries it and the answer carries NO warning (the inversion's key promise)", async () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
     plantPat(home, "github_pat_rotated_dead");
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(new Response("Bad credentials", { status: 401 }))
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      );
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { ok: boolean; latest?: string; tokenWarning?: string };
-    // The check SUCCEEDED — the repo is public, the anonymous leg carried it.
+    const body = res.json() as { ok: boolean; latest?: string; tokenWarning?: string; tokenSaved?: boolean };
+    // The check SUCCEEDED — anonymously, past the dead token, with no
+    // warning: a dead token no longer degrades anything (the R120-U
+    // tokenWarning-on-success shape is RETIRED with the inversion).
     expect(body.ok).toBe(true);
     expect(body.latest).toBe(NEWER_VERSION);
-    // The warning tells the About tab to offer the re-pairing row.
-    expect(body.tokenWarning).toBe(
-      "the saved GitHub token was rejected — a new token is needed for private/rate-limited access",
-    );
-    // The retry leg went out ANONYMOUSLY (the Authorization header dropped).
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(body.tokenWarning).toBeUndefined();
+    // tokenSaved stays honest (the About tab's token row keys on it — the
+    // row's own live probe reports the token's validity).
+    expect(body.tokenSaved).toBe(true);
+    // ONE call, anonymous (the token leg never fired — the anonymous leg
+    // succeeded, so there was nothing to fix).
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, first] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
-    const [, second] = fetchMock.mock.calls[1] as [unknown, { headers: Record<string, string> }];
-    expect(first.headers.Authorization).toBe("Bearer github_pat_rotated_dead");
-    expect(second.headers.Authorization).toBeUndefined();
+    expect(first.headers.Authorization).toBeUndefined();
     vi.unstubAllGlobals();
   });
 
-  it("403 on the PAT leg retries anonymously too (the rate-limit/forbidden twin of the 401 leg)", async () => {
+  it("anonymous 403 + a saved WORKING token → the token retry carries the check (the rate-limit accelerator)", async () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
-    plantPat(home, "github_pat_forbidden");
+    plantPat(home, "github_pat_working");
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response("rate limited", { status: 403 }))
@@ -1056,14 +1113,42 @@ describe("R120-U: the dead-PAT anonymous fallback (GET /system/updates)", () => 
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
-    const body = res.json() as { ok: boolean; tokenWarning?: string };
+    const body = res.json() as { ok: boolean; latest?: string; tokenWarning?: string };
     expect(body.ok).toBe(true);
-    expect(body.tokenWarning).toBeDefined();
+    expect(body.latest).toBe(NEWER_VERSION);
+    expect(body.tokenWarning).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, first] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
+    const [, second] = fetchMock.mock.calls[1] as [unknown, { headers: Record<string, string> }];
+    expect(first.headers.Authorization).toBeUndefined();
+    expect(second.headers.Authorization).toBe("Bearer github_pat_working");
+    vi.unstubAllGlobals();
+  });
+
+  it("anonymous 404 + a saved token → the token retry covers the private-fork shape and carries the check", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, "github_pat_working");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("Not Found", { status: 404 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
+    const body = res.json() as { ok: boolean; latest?: string };
+    expect(body.ok).toBe(true);
+    expect(body.latest).toBe(NEWER_VERSION);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     vi.unstubAllGlobals();
   });
 
-  it("401 then 403 — BOTH legs fail → the honest reason token-rejected with the both-legs copy", async () => {
+  it("anonymous 403 + the token ALSO rejected → the honest reason token-rejected with the both-legs copy", async () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
     plantPat(home, "github_pat_rotated_dead");
@@ -1071,8 +1156,8 @@ describe("R120-U: the dead-PAT anonymous fallback (GET /system/updates)", () => 
       "fetch",
       vi
         .fn()
-        .mockResolvedValueOnce(new Response("Bad credentials", { status: 401 }))
-        .mockResolvedValueOnce(new Response("rate limited", { status: 403 })),
+        .mockResolvedValueOnce(new Response("rate limited", { status: 403 }))
+        .mockResolvedValueOnce(new Response("Bad credentials", { status: 401 })),
     );
 
     const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
@@ -1081,22 +1166,22 @@ describe("R120-U: the dead-PAT anonymous fallback (GET /system/updates)", () => 
     expect(body.ok).toBe(false);
     // The DISTINGUISHED reason — the About tab's re-pairing row keys on it.
     expect(body.reason).toBe("token-rejected");
+    expect(body.error).toContain("the anonymous check answered HTTP 403");
     expect(body.error).toContain("GitHub rejected the saved token (HTTP 401)");
-    expect(body.error).toContain("the anonymous check also failed (HTTP 403)");
-    expect(body.error).toContain("save a new GitHub token");
+    expect(body.error).toContain("remove the saved one");
     expect(body.tokenWarning).toBeDefined();
     vi.unstubAllGlobals();
   });
 
-  it("401 then 404 — the anonymous retry sees no release → the no-release copy says the token was rejected", async () => {
+  it("anonymous 404 + the token leg ALSO 404 → the no-release copy names BOTH legs honestly", async () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
-    plantPat(home, "github_pat_rotated_dead");
+    plantPat(home, "github_pat_working");
     vi.stubGlobal(
       "fetch",
       vi
         .fn()
-        .mockResolvedValueOnce(new Response("Bad credentials", { status: 401 }))
+        .mockResolvedValueOnce(new Response("Not Found", { status: 404 }))
         .mockResolvedValueOnce(new Response("Not Found", { status: 404 })),
     );
 
@@ -1104,27 +1189,57 @@ describe("R120-U: the dead-PAT anonymous fallback (GET /system/updates)", () => 
     const body = res.json() as { ok: boolean; reason?: string; error?: string; tokenWarning?: string };
     expect(body.ok).toBe(false);
     expect(body.reason).toBe("no-release");
-    expect(body.error).toContain("the saved GitHub token was rejected");
-    expect(body.error).toContain("the anonymous check answered 404");
-    expect(body.tokenWarning).toBeDefined();
+    expect(body.error).toContain("the anonymous check (HTTP 404)");
+    expect(body.error).toContain("the saved GitHub token both answered 404");
+    expect(body.tokenWarning).toBeUndefined();
     vi.unstubAllGlobals();
   });
 
-  it("NO token attached + a 403 stays reason github with the ANONYMOUS copy (the anonymous-failure distinction)", async () => {
+  it("anonymous 403 + NO token saved → the distinguished rate-limited reason (the ONE case a token helps)", async () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
     plantPat(home, null);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("rate limited", { status: 403 })));
 
     const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
+    const body = res.json() as { ok: boolean; reason?: string; error?: string; tokenSaved?: boolean };
+    expect(body.ok).toBe(false);
+    expect(body.reason).toBe("rate-limited");
+    expect(body.error).toContain("GitHub's anonymous rate limit answered HTTP 403");
+    expect(body.error).toContain("raises it");
+    expect(body.tokenSaved).toBe(false);
+    // NO retry fired (nothing to attach) — one anonymous call, honestly failed.
+    expect(fetch).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
+  it("NO token saved + a non-403 anonymous failure stays reason github with the anonymous copy", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, null);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("nope", { status: 502 })));
+
+    const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
     const body = res.json() as { ok: boolean; reason?: string; error?: string; tokenWarning?: string };
     expect(body.ok).toBe(false);
     expect(body.reason).toBe("github");
-    // The honest WHICH: no token was saved at all (a token would raise the
-    // anonymous rate limit) — and NO retry fired (nothing to drop).
-    expect(body.error).toContain("HTTP 403 anonymously");
-    expect(body.error).toContain("no GitHub token is saved");
+    expect(body.error).toContain("HTTP 502 anonymously");
+    expect(body.error).toContain("no GitHub token is required");
     expect(body.tokenWarning).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
+  it("a saved token is NOT tried when the anonymous leg fails with a non-retryable status (the token is an accelerator, not a bypass)", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, "github_pat_working");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("bad gateway", { status: 502 })));
+
+    const res = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
+    const body = res.json() as { ok: boolean; reason?: string };
+    expect(body.ok).toBe(false);
+    expect(body.reason).toBe("github");
     expect(fetch).toHaveBeenCalledTimes(1);
     vi.unstubAllGlobals();
   });
@@ -1132,11 +1247,11 @@ describe("R120-U: the dead-PAT anonymous fallback (GET /system/updates)", () => 
   it("a network throw's message is SECRET-SHAPE SCRUBBED (github_pat_… and the R120-U ghp_… belt)", async () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
-    plantPat(home, "github_pat_rotated_dead");
+    plantPat(home, "github_pat_LEAKEDVALUE");
     vi.stubGlobal(
       "fetch",
       vi.fn().mockRejectedValue(
-        new Error("getaddrinfo ENOTFOUND api.github.com — token github_pat_LEAKEDVALUE and ghp_alsolEAKEDvalue12345 rode the error"),
+        new Error("getaddrinfo ENOTFOUND api.github.com — token github_pat_LEAKEDVALUE and ghp_" + "alsolEAKEDvalue0123456789 rode the error"),
       ),
     );
 
@@ -1155,10 +1270,11 @@ describe("R120-U: the dead-PAT anonymous fallback (GET /system/updates)", () => 
   });
 });
 
-// ── ROUND-120 (R120-U): the DOWNLOAD's dead-PAT fallback — the same one-leg
-// anonymous retry the check runs (the api.github.com asset endpoint answers
-// 401 to the dead Bearer even on the public repo's assets).
-describe("R120-U: the dead-PAT anonymous fallback (POST /system/updates/download)", () => {
+// ── ROUND-123 (R123): the DOWNLOAD's anonymous-first legs — the same
+// inversion the check runs. The public repo's assets download anonymously;
+// the Authorization header rides ONLY the retry leg (a 403 rate limit on
+// the anonymous attempt, with a token saved).
+describe("R123: the anonymous-first download (POST /system/updates/download)", () => {
   /** Poll until the single-flight state settles (ready | error). */
   async function settle(): Promise<{ status: string; path: string | null; error: string | null; version: string | null }> {
     for (let i = 0; i < 50; i += 1) {
@@ -1170,13 +1286,13 @@ describe("R120-U: the dead-PAT anonymous fallback (POST /system/updates/download
     throw new Error("the download never settled");
   }
 
-  it("401 on the PAT leg → the ANONYMOUS retry streams the asset and the download lands ready", async () => {
+  it("anonymous 403 + a saved WORKING token → the token retry streams the asset and the download lands ready", async () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
-    plantPat(home, "github_pat_rotated_dead");
+    plantPat(home, "github_pat_working");
 
     // The 11MiB + valid-digest happy stream (the shared harness shape) —
-    // served on the SECOND call only (the first is the dead-token 401).
+    // served on the SECOND call only (the first is the anonymous 403).
     const chunk = new Uint8Array(1024 * 1024).fill(0x64);
     const parts: Uint8Array[] = [];
     for (let i = 0; i < 11; i += 1) parts.push(chunk);
@@ -1191,7 +1307,7 @@ describe("R120-U: the dead-PAT anonymous fallback (POST /system/updates/download
     });
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response("Bad credentials", { status: 401 }))
+      .mockResolvedValueOnce(new Response("rate limited", { status: 403 }))
       .mockResolvedValueOnce(
         new Response(stream, {
           status: 200,
@@ -1216,17 +1332,17 @@ describe("R120-U: the dead-PAT anonymous fallback (POST /system/updates/download
     const settled = await settle();
     expect(settled.status).toBe("ready");
     expect(settled.path).not.toBeNull();
-    // The retry leg went out ANONYMOUSLY.
+    // The retry leg went out with the token (the anonymous leg was rate-limited).
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [, first] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
     const [, second] = fetchMock.mock.calls[1] as [unknown, { headers: Record<string, string> }];
-    expect(first.headers.Authorization).toBe("Bearer github_pat_rotated_dead");
-    expect(second.headers.Authorization).toBeUndefined();
+    expect(first.headers.Authorization).toBeUndefined();
+    expect(second.headers.Authorization).toBe("Bearer github_pat_working");
     rmSync(settled.path!, { force: true });
     vi.unstubAllGlobals();
   });
 
-  it("401 then 403 — both legs fail → the single-flight state lands the honest both-legs error", async () => {
+  it("anonymous 403 then the token leg 401 — both legs fail → the single-flight state lands the honest both-legs error", async () => {
     const home = mkdtempSync(join(tempDir, "home-"));
     useFakeHome(home);
     plantPat(home, "github_pat_rotated_dead");
@@ -1234,8 +1350,8 @@ describe("R120-U: the dead-PAT anonymous fallback (POST /system/updates/download
       "fetch",
       vi
         .fn()
-        .mockResolvedValueOnce(new Response("Bad credentials", { status: 401 }))
-        .mockResolvedValueOnce(new Response("rate limited", { status: 403 })),
+        .mockResolvedValueOnce(new Response("rate limited", { status: 403 }))
+        .mockResolvedValueOnce(new Response("Bad credentials", { status: 401 })),
     );
 
     const start = await app.inject({
@@ -1252,8 +1368,61 @@ describe("R120-U: the dead-PAT anonymous fallback (POST /system/updates/download
 
     const settled = await settle();
     expect(settled.status).toBe("error");
-    expect(settled.error).toContain("GitHub rejected the saved token (HTTP 401)");
-    expect(settled.error).toContain("the anonymous download also failed (HTTP 403)");
+    expect(settled.error).toContain("the anonymous download answered HTTP 403");
+    expect(settled.error).toContain("the saved token's download also failed (HTTP 401)");
+    expect(settled.error).toContain("remove the saved GitHub token");
+    vi.unstubAllGlobals();
+  });
+});
+
+// ── ROUND-123 (R123): the TOKEN REMOVAL — DELETE /system/updates/token. The
+// owner's directive made the token's role explicit: an OPTIONAL accelerator
+// for a public repo must be removable in-app (a launcher-era or rotated-dead
+// ~/.acute/github.pat otherwise sits on the machine forever with no UI to
+// retire it). The removal clears BOTH layers (file + env snapshot) and is
+// idempotently honest about whether either held a token.
+describe("R123: DELETE /system/updates/token (the removal)", () => {
+  it("removes a saved FILE token, drops the env snapshot, and answers removed:true", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, "github_pat_launcher_era");
+    process.env.ACUTE_GITHUB_PAT = "github_pat_env_layer";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.inject({ method: "DELETE", url: "/api/v1/system/updates/token", ...authed() });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, removed: true });
+    // Both layers are GONE: the file unlinked, the env snapshot dropped.
+    expect(existsSync(join(home, ".acute", "github.pat"))).toBe(false);
+    expect(process.env.ACUTE_GITHUB_PAT).toBeUndefined();
+    // The removal is a LOCAL act — zero GitHub round-trips.
+    expect(fetchMock).not.toHaveBeenCalled();
+    // The very next check runs ANONYMOUS by construction (tokenSaved flips).
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const check = await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
+    const body = check.json() as { ok: boolean; tokenSaved?: boolean };
+    expect(body.ok).toBe(true);
+    expect(body.tokenSaved).toBe(false);
+    const [, init] = fetchMock.mock.calls[0] as [unknown, { headers: Record<string, string> }];
+    expect(init.headers.Authorization).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  it("removal from the NO-token state is the idempotent success (200, removed:false — never a 404)", async () => {
+    const home = mkdtempSync(join(tempDir, "home-"));
+    useFakeHome(home);
+    plantPat(home, null);
+    vi.stubGlobal("fetch", vi.fn());
+
+    const res = await app.inject({ method: "DELETE", url: "/api/v1/system/updates/token", ...authed() });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, removed: false });
     vi.unstubAllGlobals();
   });
 });
@@ -1420,16 +1589,25 @@ describe("R120-U: PUT /system/updates/token (the re-pairing write)", () => {
     // The stale env snapshot is GONE — the running sidecar reads the file.
     expect(process.env.ACUTE_GITHUB_PAT).toBeUndefined();
 
-    // The proof: the very NEXT check attaches the FRESH file token (not the
-    // stale env one) — the re-pair is effective without a restart.
-    validationFetch.mockResolvedValue(
+    // The proof (R123 shape): the very NEXT check runs ANONYMOUS-FIRST — and
+    // when its anonymous leg rate-limits, the RETRY rides the FRESH file
+    // token (not the stale env one) — the re-pair is effective without a
+    // restart. The first call after the PUT (call index 1) is the anonymous
+    // check leg; call index 2 is its token retry.
+    validationFetch.mockResolvedValueOnce(new Response("rate limited", { status: 403 }));
+    validationFetch.mockResolvedValueOnce(
       new Response(JSON.stringify({ tag_name: `v${NEWER_VERSION}` }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
     );
     await app.inject({ method: "GET", url: "/api/v1/system/updates", ...authed() });
-    const [, checkInit] = validationFetch.mock.calls[1] as [
+    const [, anonInit] = validationFetch.mock.calls[1] as [
+      unknown,
+      { headers: Record<string, string> },
+    ];
+    expect(anonInit.headers.Authorization).toBeUndefined();
+    const [, checkInit] = validationFetch.mock.calls[2] as [
       unknown,
       { headers: Record<string, string> },
     ];
