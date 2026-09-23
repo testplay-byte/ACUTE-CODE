@@ -5,11 +5,24 @@
  * phone-side). The raw is a PREFIX of valid JSON — it can end mid-string,
  * mid-escape, even mid-key; the scanner must return whatever prefix it
  * decoded, never throw. Zero React Native.
+ *
+ * ROUND-123 (R123-W-m): the WEB families' key pins — `action` / `query` /
+ * `url` join the closed key union so the live rows read an in-flight
+ * browser navigation or web search exactly the way they read an in-flight
+ * write (plus the WEB_TOOLS / BROWSER_TOOLS classification sets).
  */
 
 import { describe, expect, it } from "@jest/globals";
 
-import { extractStringArg, extractWritePreview } from "../streaming-args";
+import {
+  BROWSER_TOOLS,
+  extractStringArg,
+  extractWritePreview,
+  READ_TOOLS,
+  TERMINAL_TOOLS,
+  WEB_TOOLS,
+  WRITE_TOOLS,
+} from "../streaming-args";
 
 describe("extractStringArg — the tolerant scanner", () => {
   it("extracts a COMPLETE string argument", () => {
@@ -70,6 +83,44 @@ describe("extractStringArg — the tolerant scanner", () => {
       found: true,
       value: "deep-research",
     });
+  });
+
+  it("R123-W-m — the WEB families' keys extract exactly like the write family's (query / url / action, complete AND partial)", () => {
+    // web_search's query, complete
+    expect(extractStringArg('{"query":"rust async tokio"}', "query")).toEqual({
+      found: true,
+      value: "rust async tokio",
+    });
+    // web_fetch's url, still STREAMING (the raw ends mid-string)
+    expect(extractStringArg('{"url":"https://docs.foo.dev/gui', "url")).toEqual({
+      found: true,
+      value: "https://docs.foo.dev/gui",
+    });
+    // browser_control's action + url, mid-flight
+    expect(extractStringArg('{"action":"navigate","url":"https://exam', "action")).toEqual({
+      found: true,
+      value: "navigate",
+    });
+    expect(extractStringArg('{"action":"navigate","url":"https://exam', "url")).toEqual({
+      found: true,
+      value: "https://exam",
+    });
+    // absent keys stay absent — never a guess
+    expect(extractStringArg('{"action":"read_dom"}', "url")).toEqual({ found: false, value: "" });
+  });
+});
+
+describe("R123-W-m — the tool-family classification sets", () => {
+  it("the web pair and the browser family are their own sets — disjoint from write/terminal/read", () => {
+    expect(WEB_TOOLS.has("web_search")).toBe(true);
+    expect(WEB_TOOLS.has("web_fetch")).toBe(true);
+    expect(BROWSER_TOOLS.has("browser_control")).toBe(true);
+    // none of them leaked into the older families' sets
+    for (const name of ["web_search", "web_fetch", "browser_control"]) {
+      expect(WRITE_TOOLS.has(name)).toBe(false);
+      expect(TERMINAL_TOOLS.has(name)).toBe(false);
+      expect(READ_TOOLS.has(name)).toBe(false);
+    }
   });
 });
 

@@ -16,6 +16,12 @@
 //                                    split GET from DELETE on one path, so
 //                                    the method split is enforced here,
 //                                    where it lives.
+//   DELETE /api/v1/feedback/file/entry/:index → delete ONE entry by its
+//                                    0-based top-down index (ROUND-123: the
+//                                    viewer's per-entry Delete). SHELL-ONLY
+//                                    (the same wipe-class guard); the answer
+//                                    is idempotent-honest ({removed:false}
+//                                    for a stale index, never a 404).
 //
 // The GET never 404s: a ledger that was never written serves its honest
 // empty state { exists:false, content:"", … } (the mobile-link off-state
@@ -30,7 +36,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { RouteContext } from "./context.js";
 import { deviceAuthOf } from "./context.js";
 import { errorBody } from "./helpers.js";
-import { clearFeedbackLedger, readFeedbackLedger } from "../storage/feedback-ledger.js";
+import {
+  clearFeedbackLedger,
+  deleteFeedbackEntry,
+  readFeedbackLedger,
+} from "../storage/feedback-ledger.js";
 
 /** The settings.ts cloud-connector pattern, verbatim in intent: true =
  * rejected (the 403 reply is already sent). The route-local guard is the
@@ -75,5 +85,32 @@ export function registerFeedbackRoutes(scope: FastifyInstance, ctx: RouteContext
     // the reply — the confirmation line is honest, never assumed.
     const wiped = await clearFeedbackLedger(ctx.dataDir);
     return { cleared: true, entries: wiped.entries };
+  });
+
+  // ROUND-123 (R123): the PER-ENTRY delete — the viewer's per-card Delete
+  // action. The index is the file's own top-down "## Entry — " order (the
+  // same order the viewer renders); a stale index answers the honest
+  // {removed:false} idempotent no-op, never a 404 (the viewer's list may
+  // simply be one refresh behind a fresh append).
+  scope.delete("/feedback/file/entry/:index", async (request, reply) => {
+    if (rejectDeviceTokens(request, reply)) return reply;
+    if (ctx.dataDir === undefined) {
+      return reply.code(503).send(
+        errorBody("SERVICE_UNAVAILABLE", "the feedback ledger requires the machine-scoped data directory", {
+          hint: "the sidecar passes the SQLite file's directory; dev servers without one have no ledger",
+        }),
+      );
+    }
+    const params = request.params as { index?: string };
+    const index = Number.parseInt(params.index ?? "", 10);
+    if (!Number.isInteger(index) || index < 0) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "the entry index must be a non-negative integer", {
+          field: "params.index",
+        }),
+      );
+    }
+    const outcome = await deleteFeedbackEntry(ctx.dataDir, index);
+    return { removed: outcome.removed, entries: outcome.entries };
   });
 }

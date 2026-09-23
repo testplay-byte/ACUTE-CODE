@@ -199,11 +199,29 @@ interface GithubRelease {
 //                        tauri-bundler names BOTH x86_64 bundles `amd64`)
 //   · anything else    → null (no in-app updater asset — the Releases page
 //                        remains the answer; macOS is not shipped)
+//
+// ── ROUND-123 (R123): the LINUX .DEB LEG. The owner's standing report —
+// the in-app update "not working that properly… on Linux" with the exact
+// v0.100.0 symptom shape ("Restarting into vX" → "Connecting to Agent
+// Core" → still the OLD version in About) — recurs VERBATIM on a .deb
+// install: the AppImage replace refuses ("the app is not running from an
+// AppImage"), the invoke rejects, and the R101-B recovery auto-restarts
+// the sidecar — the calm "Connecting…" flash over an un-updated app. The
+// pick is now INSTALL-TYPE-AWARE on Linux: the sidecar inherits the app's
+// `APPIMAGE` environment variable (the AppImage runtime exports it for
+// exactly this purpose), so an AppImage-launched app picks the AppImage
+// (the R104 atomic-replace leg) and EVERYTHING ELSE (the .deb install —
+// and any future package-managed shape) picks the arch-matched .deb (the
+// new pkexec `dpkg -i` leg on the Rust side):
+//   · linux + APPIMAGE set (absolute) + arm64 → _aarch64.AppImage (linux-appimage)
+//   · linux + APPIMAGE set (absolute) + x64/… → _amd64.AppImage  (linux-appimage)
+//   · linux + APPIMAGE absent      + arm64 → _arm64.deb         (linux-deb)
+//   · linux + APPIMAGE absent      + x64/… → _amd64.deb          (linux-deb)
 // The `kind` rides the response so the frontend can speak honestly (the
 // interactive-wizard escape hatch is a windows-setup concern ONLY — there
-// is no wizard for an AppImage) and `name` so the download route can derive
-// the staged file's name from the REAL asset filename.
-type UpdaterAssetKind = "windows-setup" | "linux-appimage";
+// is no wizard for an AppImage or a deb) and `name` so the download route
+// can derive the staged file's name from the REAL asset filename.
+type UpdaterAssetKind = "windows-setup" | "linux-appimage" | "linux-deb";
 
 interface UpdaterAsset {
   url: string;
@@ -215,17 +233,34 @@ interface UpdaterAsset {
 
 /** The asset filename suffix this machine's in-app updater needs, keyed off
  * the SIDECAR's own platform (process.platform/arch — the sidecar ships with
- * the app, so its platform IS the app's platform). Exported for the route
+ * the app, so its platform IS the app's platform). R123: on Linux the
+ * INSTALL TYPE decides the kind — `appimageEnv` defaults to the inherited
+ * `APPIMAGE` variable (an absolute path means the app runs FROM an
+ * AppImage and the atomic replace applies; anything else is a packaged
+ * install and the .deb + pkexec leg applies). Exported for the route
  * tests' platform matrix. */
-export function updaterAssetSuffixForPlatform(platform: string, arch: string): {
+export function updaterAssetSuffixForPlatform(
+  platform: string,
+  arch: string,
+  appimageEnv: string | undefined = process.env.APPIMAGE,
+): {
   suffix: string;
   kind: UpdaterAssetKind;
 } | null {
   if (platform === "win32") return { suffix: "_x64-setup.exe", kind: "windows-setup" };
   if (platform === "linux") {
+    const fromAppImage =
+      typeof appimageEnv === "string" && appimageEnv.trim() !== "" && appimageEnv.startsWith("/");
+    if (fromAppImage) {
+      return arch === "arm64"
+        ? { suffix: "_aarch64.AppImage", kind: "linux-appimage" }
+        : { suffix: "_amd64.AppImage", kind: "linux-appimage" };
+    }
+    // R123: the packaged-install leg — the arch-matched .deb (dpkg's own
+    // `_arm64` spelling for the 64-bit ARM port, `amd64` for x86_64).
     return arch === "arm64"
-      ? { suffix: "_aarch64.AppImage", kind: "linux-appimage" }
-      : { suffix: "_amd64.AppImage", kind: "linux-appimage" };
+      ? { suffix: "_arm64.deb", kind: "linux-deb" }
+      : { suffix: "_amd64.deb", kind: "linux-deb" };
   }
   return null;
 }
@@ -422,61 +457,63 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
   // wall. The fetch is short-lived (8s) so the button can answer honestly
   // fast.
   //
-  // ── ROUND-120 (R120-U): the DEAD-PAT anonymous fallback. The owner's
-  // v0.113.0 report: "Check for updates" answered HTTP 401 — he had rotated
-  // the GitHub PAT, so readLauncherGithubPat() served the now-dead token,
-  // and GitHub rejects bad credentials EVEN ON PUBLIC REPOS (a 401 is a
-  // 401, visibility irrelevant) — while the code, having attached the
-  // header, never once tried without it. The fix is the one-leg retry the
-  // R94-B "optional accelerator" framing always implied: when the
-  // PAT-bearing fetch answers 401 OR 403, retry ONCE ANONYMOUSLY (the
-  // Authorization header dropped). The repo is public, so the anonymous leg
-  // carries the check and the answer rides out with tokenWarning set (the
-  // About tab's quiet "Update GitHub token" row hints at re-pairing); when
-  // BOTH legs fail, the honest reason distinguishes the cases —
-  // "token-rejected" (PAT present and rejected + the anonymous retry also
-  // failed) vs "github" (anonymous-failure: no token was attached at all)
-  // vs "network" (the fetch threw). Both legs share the ONE 8s abort
-  // budget (a dead-token check must answer honestly fast, not double it).
+  // ── ROUND-120 (R120-U, kept as history): the token-FIRST order's dead-PAT
+  // fallback — a rotated PAT killed the check with 401 because the header
+  // was attached before anything else, and GitHub rejects bad credentials
+  // even on public repos. The one-leg anonymous retry fixed the symptom.
+  //
+  // ── ROUND-123 (R123): ANONYMOUS-FIRST — the owner's directive: "why does
+  // it even require a GitHub token? Isn't our GitHub repository public and
+  // can't it easily fetch the appropriate version it needs without the
+  // GitHub token and everything like that?" The inversion is structural:
+  // the ANONYMOUS fetch is now the DEFAULT leg (the repo is public — the
+  // normal check never touches the token at all), and the token is a pure
+  // RETRY ACCELERATOR: it rides only when the anonymous leg failed in a
+  // way a token can actually fix — 403 (the anonymous rate limit) or 404
+  // (a private-fork shape) — AND one is saved. The R120-U dead-token 401
+  // on the first leg is unreachable by construction (nothing is attached
+  // to reject). Every answer carries `tokenSaved` so the About tab renders
+  // the token affordance ONLY when a token exists (or the anonymous check
+  // rate-limits with none); the anonymous rate-limit answer is its own
+  // `rate-limited` reason so that affordance can say exactly why it would
+  // help. Both legs share the ONE 8s abort budget.
   scope.get("/system/updates", async () => {
     const current = appVersion();
-    const base = { current, releasesUrl: GITHUB_RELEASES_PAGE };
     const pat = readLauncherGithubPat();
-    // R94-B: PAT-optional — the repo is public, so the header is attached
-    // only when a token exists; the anonymous call proceeds below either way.
-    const requestHeaders: Record<string, string> = {
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "ACUTE-CODE-update-check",
-    };
-    if (pat !== null) {
-      requestHeaders.Authorization = `Bearer ${pat}`;
-    }
-    // R120-U: the ANONYMOUS header set — identical minus the Authorization
-    // header (built once here so the retry leg is provably header-free
-    // rather than a delete on the mutable requestHeaders object).
+    // R123: tokenSaved rides EVERY answer — the About tab's token row is
+    // conditional on it (the default public-repo experience shows no token
+    // UI anywhere).
+    const base = { current, releasesUrl: GITHUB_RELEASES_PAGE, tokenSaved: pat !== null };
+    // R123: the ANONYMOUS header set — the DEFAULT leg, provably
+    // header-free (built once, never mutated).
     const anonymousHeaders: Record<string, string> = {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": "ACUTE-CODE-update-check",
     };
+    // R123: the token-bearing header set — built only for the retry leg.
+    const requestHeaders: Record<string, string> = {
+      ...anonymousHeaders,
+      ...(pat !== null ? { Authorization: `Bearer ${pat}` } : {}),
+    };
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8_000);
       try {
+        // R123: ANONYMOUS FIRST — the public repo's default experience.
         let response = await fetch(GITHUB_LATEST_RELEASE_URL, {
-          headers: requestHeaders,
+          headers: anonymousHeaders,
           signal: controller.signal,
         });
-        // R120-U: the dead-PAT fallback — one anonymous retry, tracked so
-        // every later branch can speak honestly about WHICH leg answered.
-        let tokenRejected = false;
-        let rejectedStatus = 0;
-        if ((response.status === 401 || response.status === 403) && pat !== null) {
-          tokenRejected = true;
-          rejectedStatus = response.status;
+        // R123: the TOKEN retry — ONLY when the anonymous leg answered 403
+        // (rate limit) or 404 (private-fork shape) AND a token is saved.
+        let tokenLegUsed = false;
+        let anonymousStatus = 0;
+        if ((response.status === 403 || response.status === 404) && pat !== null) {
+          anonymousStatus = response.status;
+          tokenLegUsed = true;
           response = await fetch(GITHUB_LATEST_RELEASE_URL, {
-            headers: anonymousHeaders,
+            headers: requestHeaders,
             signal: controller.signal,
           });
         }
@@ -485,45 +522,45 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
             ...base,
             ok: false,
             reason: "no-release",
-            // R94-B: the anonymous 404 no longer implies "your token cannot
-            // see this repo" — the repo is public, so the honest framing is
-            // reachability/publish state (no token needed for either).
-            // R120-U: after a rejected-token retry the copy says so (the
-            // pre-R120 "to this token yet" line would blame a token GitHub
-            // already refused).
-            error: tokenRejected
-              ? "no published release is visible — the saved GitHub token was rejected and the anonymous check answered 404"
-              : pat === null
-                ? "no published release is visible (the repository is public — no token required; is the network reachable?)"
-                : "no published release is visible to this token yet",
-            ...(tokenRejected ? { tokenWarning: GITHUB_TOKEN_WARNING } : {}),
+            // R123: whichever leg answered, the copy names BOTH honestly
+            // (the repo is public — a token is never required to see it).
+            error: tokenLegUsed
+              ? `no published release is visible — the anonymous check (HTTP ${anonymousStatus}) and the saved GitHub token both answered 404`
+              : "no published release is visible (the repository is public — no token required; is the network reachable?)",
           };
         }
         if (!response.ok) {
-          if (tokenRejected) {
-            // R120-U: PAT-present-and-rejected — BOTH legs failed. The
-            // tokenWarning rides along so the About tab offers the
-            // re-pairing row on this exact answer.
+          if (tokenLegUsed) {
+            // R123: the token leg itself failed — the saved token is dead.
+            // The tokenWarning rides along so the About tab offers the
+            // re-pairing row on exactly this answer (a token IS saved —
+            // the row renders).
             return {
               ...base,
               ok: false,
               reason: "token-rejected",
-              error: `GitHub rejected the saved token (HTTP ${rejectedStatus}) and the anonymous check also failed (HTTP ${response.status}) — save a new GitHub token to restore private/rate-limited access`,
+              error: `the anonymous check answered HTTP ${anonymousStatus} and GitHub rejected the saved token (HTTP ${response.status}) — save a new GitHub token, or remove the saved one to keep checking anonymously`,
               tokenWarning: GITHUB_TOKEN_WARNING,
             };
           }
-          // R120-U: anonymous-failure — nothing was attached (or the
-          // attached token was never rejected); the copy says WHICH, so a
-          // 403 rate limit reads honestly ("no saved token" vs "with the
-          // saved token").
+          // R123: anonymous failure, no token leg was possible. The rate
+          // limit is its own reason — the ONE case where saving an
+          // (optional) token genuinely helps, so the About tab surfaces
+          // the affordance on exactly this answer.
+          if (response.status === 403 && pat === null) {
+            return {
+              ...base,
+              ok: false,
+              reason: "rate-limited",
+              error:
+                "GitHub's anonymous rate limit answered HTTP 403 — saving an optional GitHub token raises it (60 → 5,000 checks/hour)",
+            };
+          }
           return {
             ...base,
             ok: false,
             reason: "github",
-            error:
-              pat === null
-                ? `GitHub answered HTTP ${response.status} anonymously (no GitHub token is saved on this machine — a token raises the anonymous rate limit)`
-                : `GitHub answered HTTP ${response.status}`,
+            error: `GitHub answered HTTP ${response.status} anonymously (no GitHub token is required for this public repository)`,
           };
         }
         const release = (await response.json()) as GithubRelease;
@@ -549,6 +586,14 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
         // truncation marker keep a changelog-sized body from bloating the
         // response ("" for a tag-only release).
         const body = releaseBodyForCard(release.body);
+        // R120-U → R123: the success path carries NO tokenWarning anymore —
+        // with anonymous-first, a dead token can never degrade a successful
+        // check (the anonymous leg carries it), so there is nothing to warn
+        // about; the token row's own live health probe (GET
+        // /system/updates/token) still reports validity when opened. When
+        // the TOKEN leg carried the check (tokenLegUsed + ok — the anonymous
+        // rate limit was hit and the token answered), the answer stays
+        // honest and quiet: tokenSaved already tells the tab a token exists.
         return {
           ...base,
           ok: true,
@@ -571,10 +616,6 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
                 },
               }
             : {}),
-          // R120-U: the check CARRIED (anonymously) past a dead token —
-          // the answer stays ok:true and the warning tells the About tab to
-          // offer the re-pairing row (the check works; the token does not).
-          ...(tokenRejected ? { tokenWarning: GITHUB_TOKEN_WARNING } : {}),
         };
       } finally {
         clearTimeout(timeout);
@@ -650,19 +691,22 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
       // Already in flight — not an error; the UI keeps polling the live one.
       return reply.code(200).send({ ok: true, status: updateDownload.status, alreadyRunning: true });
     }
-    // R104: the staged file's name derives from the REAL asset filename the
-    // check reported (ACUTE-CODE_<v>_x64-setup.exe / …_aarch64.AppImage) so
-    // the extension the Rust side dispatches on is the extension GitHub
-    // named. Sanitized hard: basename only (no separators, no '..'), and the
-    // extension must be one of the updater's two real kinds — anything else
-    // falls back to the platform's own conventional name (the pre-R104
-    // spelling on Windows, the arch-matched AppImage name on Linux).
+    // R104 + R123: the staged file's name derives from the REAL asset
+    // filename the check reported (ACUTE-CODE_<v>_x64-setup.exe /
+    // …_aarch64.AppImage / …_amd64.deb) so the extension the Rust side
+    // dispatches on is the extension GitHub named. Sanitized hard: basename
+    // only (no separators, no '..'), and the extension must be one of the
+    // updater's three real kinds — anything else falls back to the
+    // platform's own conventional name (the pre-R104 spelling on Windows,
+    // the install-type-matched Linux name).
     const stagedDownloadName = (rawName: string): string => {
       const base = rawName.split(/[\\/]/).pop() ?? "";
       if (
         base !== "" &&
         !base.startsWith(".") &&
-        (base.toLowerCase().endsWith(".exe") || base.toLowerCase().endsWith(".appimage"))
+        (base.toLowerCase().endsWith(".exe") ||
+          base.toLowerCase().endsWith(".appimage") ||
+          base.toLowerCase().endsWith(".deb"))
       ) {
         return base;
       }
@@ -675,42 +719,34 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
     void (async () => {
       const dest = join(tmpdir(), stagedDownloadName(assetName));
       try {
-        // R94-B: the PAT is optional — anonymous downloads work on the
-        // public repo; the Authorization header rides along only when a
-        // launcher token exists (raising the rate limit).
-        const downloadHeaders: Record<string, string> = {
-          "User-Agent": "ACUTE-CODE-in-app-updater",
-          Accept: "application/octet-stream",
-        };
-        if (pat !== null) {
-          downloadHeaders.Authorization = `Bearer ${pat}`;
-        }
-        // ── ROUND-120 (R120-U): the download's dead-PAT fallback — the SAME
-        // one-leg anonymous retry the check runs. The owner's rotated PAT
-        // killed the check with 401; it would have killed "Download update"
-        // the same way (the api.github.com asset endpoint answers 401 to the
-        // dead Bearer even on the public repo's assets). A 401/403 on the
-        // PAT-bearing leg re-fetches ONCE with the header dropped — the
-        // 401 response's body is never consumed, so the retry is clean; a
-        // retry that also fails throws the honest BOTH-LEGS message into
-        // the single-flight error state the About tab renders.
+        // ── ROUND-123 (R123): ANONYMOUS-FIRST — the download mirrors the
+        // check's inversion. The public repo's assets download anonymously;
+        // the Authorization header rides ONLY the retry leg (a 403 rate
+        // limit on the anonymous attempt, with a token saved). The R120-U
+        // dead-PAT 401 (the rotated token killed "Download update" exactly
+        // as it killed the check) is unreachable on the first leg by
+        // construction — nothing is attached to reject.
         const anonymousDownloadHeaders: Record<string, string> = {
           "User-Agent": "ACUTE-CODE-in-app-updater",
           Accept: "application/octet-stream",
         };
+        const tokenDownloadHeaders: Record<string, string> = {
+          ...anonymousDownloadHeaders,
+          ...(pat !== null ? { Authorization: `Bearer ${pat}` } : {}),
+        };
         let response = await fetch(url, {
-          headers: downloadHeaders,
+          headers: anonymousDownloadHeaders,
           redirect: "follow",
         });
         if ((response.status === 401 || response.status === 403) && pat !== null) {
-          const rejectedStatus = response.status;
+          const anonymousStatus = response.status;
           response = await fetch(url, {
-            headers: anonymousDownloadHeaders,
+            headers: tokenDownloadHeaders,
             redirect: "follow",
           });
           if (!response.ok || response.body === null) {
             throw new Error(
-              `the asset download failed: GitHub rejected the saved token (HTTP ${rejectedStatus}) and the anonymous download also failed (HTTP ${response.status}) — save a new GitHub token (Settings → About) or download from the Releases page`,
+              `the asset download failed: the anonymous download answered HTTP ${anonymousStatus} and the saved token's download also failed (HTTP ${response.status}) — remove the saved GitHub token (Settings → About) to keep downloading anonymously, or use the Releases page`,
             );
           }
         } else if (!response.ok || response.body === null) {
@@ -744,14 +780,22 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
           }
         }
         const size = statSync(dest).size;
-        // R104: the plausibility floor is EXTENSION-AWARE — the real setup.exe
-        // is ~37 MB (floor 10 MB as since R91-E), the real AppImage is ~130 MB
-        // (floor 50 MB). Both floors exist to refuse a saved error page / JSON
-        // body; the sha256 digest check above is the real integrity gate.
-        const isAppImage = dest.toLowerCase().endsWith(".appimage");
-        const floorBytes = isAppImage ? 50 * 1024 * 1024 : 10 * 1024 * 1024;
+        // R104 + R123: the plausibility floor is EXTENSION-AWARE — the real
+        // setup.exe is ~37 MB (floor 10 MB as since R91-E), the real AppImage
+        // is ~130 MB (floor 50 MB), the real .deb is ~68 MB (floor 20 MB —
+        // the R123 deb leg). All floors exist to refuse a saved error page /
+        // JSON body; the sha256 digest check above is the real integrity gate.
+        const lowerDest = dest.toLowerCase();
+        const isAppImage = lowerDest.endsWith(".appimage");
+        const isDeb = lowerDest.endsWith(".deb");
+        const floorBytes = isAppImage
+          ? 50 * 1024 * 1024
+          : isDeb
+            ? 20 * 1024 * 1024
+            : 10 * 1024 * 1024;
+        const kindName = isAppImage ? "AppImage" : isDeb ? "deb package" : "installer";
         if (size < floorBytes) {
-          throw new Error(`the downloaded file is only ${size} bytes — not a real ${isAppImage ? "AppImage" : "installer"}`);
+          throw new Error(`the downloaded file is only ${size} bytes — not a real ${kindName}`);
         }
         updateDownload.path = dest;
         updateDownload.version = version || null;
@@ -932,6 +976,45 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
     //     start re-exports from the file, restoring the invariant).
     delete process.env.ACUTE_GITHUB_PAT;
     return reply.code(200).send({ ok: true, valid: true });
+  });
+
+  // ── ROUND-123 (R123): DELETE /system/updates/token — the REMOVE affordance.
+  // The owner's directive made the token's role explicit ("why does it even
+  // require a GitHub token? Isn't our GitHub repository public?") — with
+  // anonymous-first checks/downloads the token is a pure optional
+  // accelerator, and an OPTIONAL credential must be removable in-app: a
+  // launcher-era ~/.acute/github.pat (or a rotated dead one) otherwise sits
+  // on the machine forever with no UI to retire it. The removal is
+  // IDEMPOTENT and honest: {removed: true} when either layer held a token,
+  // {removed: false} when none was saved (never a 404 — "already gone" is a
+  // success here, not a miss). Both layers are cleared (the file unlinked,
+  // the env snapshot dropped) so the very next check runs anonymous by
+  // construction; the launcher's next start re-exports from the file only
+  // if the file still exists — it does not, so the removal SURVIVES the
+  // next launcher start. A refusing filesystem answers 500 with the OS's
+  // own scrubbed message (the token stays saved — never silently lost).
+  scope.delete("/system/updates/token", async (_request, reply) => {
+    const patPath = join(homedir(), ".acute", "github.pat");
+    let removed = false;
+    if (existsSync(patPath)) {
+      try {
+        unlinkSync(patPath);
+        removed = true;
+      } catch (err) {
+        const message = scrubSecretShapes(err instanceof Error ? err.message : String(err));
+        return reply.code(500).send(
+          errorBody("INTERNAL", `cannot remove ~/.acute/github.pat: ${message}`),
+        );
+      }
+    }
+    // The env layer — dropped whenever it was set (removed tells the truth
+    // about the FILE; the env var's presence alone also counts as "a token
+    // was saved on this machine" for the response's honesty).
+    if (typeof process.env.ACUTE_GITHUB_PAT === "string" && process.env.ACUTE_GITHUB_PAT !== "") {
+      removed = true;
+      delete process.env.ACUTE_GITHUB_PAT;
+    }
+    return reply.code(200).send({ ok: true, removed });
   });
 
   // ── ROUND-120 (R120-U): the token HEALTH check — present + valid, never

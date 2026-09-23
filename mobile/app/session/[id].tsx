@@ -92,9 +92,12 @@
  * row comes from fetchProjects (cached per mount); a session with no
  * project / a project the registry no longer lists degrades honestly to a
  * neutral avatar + the session's own title with its status label as the
- * subtitle. STATUS WORDS ARE OUT OF THE HEADER — a running turn shows as
- * the thin 2px accent line BREATHING under the bar (reanimated opacity
- * pulse, the live caret's rhythm).
+ * subtitle. STATUS WORDS ARE OUT OF THE HEADER — R123-W-m: the running
+ * turn's tell is the AVATAR'S LIVE EDGE ring alone (AvatarLiveEdge below,
+ * the glowing DP effect the owner described approvingly); the thin 2px
+ * breathing accent LINE that used to sit under the bar is RETIRED at the
+ * owner's explicit re-demand ("a pulsing line below it too, which I
+ * explicitly told you to remove").
  *
  * ROUND-116 (R116-l — the anchored kebab dropdown + the honest couldn't-open
  * recovery): the kebab no longer opens a bottom sheet — it opens the
@@ -129,11 +132,12 @@
  * ROUND-118 (R118-D — the session chrome + the delivery states): the
  * identity bar gains its CHROME COLUMN — a surfaceHeader-filled wrapper
  * pulled up through the status-bar inset (negative margin + compensating
- * padding) with the hairline borderSubtle separator at its bottom edge, and
- * LiveHeaderLine moved INSIDE it, absolutely positioned over that edge (the
- * breathing bar replaces the hairline while a turn runs). The back chip is
- * the shared QuietIconButton (ArrowLeft 22, the 40px circle — the chevron
- * "bracket" is retired). The kebab's menu is now a LEVEL STATE MACHINE
+ * padding) with the hairline borderSubtle separator at its bottom edge.
+ * (R123-W-m: the LiveHeaderLine that used to sit absolutely over that
+ * edge is RETIRED — the owner's explicit re-demand; the separator is the
+ * plain hairline again in every state.) The back chip is the shared
+ * QuietIconButton (ArrowLeft 22, the 40px circle — the chevron "bracket"
+ * is retired). The kebab's menu is now a LEVEL STATE MACHINE
  * (null/main/mode/model/thinking/context) rendered IN the anchored panel
  * through HeaderDropdown's sub-level grammar: picks APPLY AND RETURN to
  * main (the feedback loop closes where the owner looks); Context stays
@@ -187,12 +191,24 @@
  * folded, the tool-frame association + the mid-turn twin dedupe, the
  * collapsed rail's tool hints, the markdown ladder). THIS screen's own
  * piece: the header avatar wears the LIVE EDGE (AvatarLiveEdge below) —
- * while a turn runs (turnLive — the one truth the breathing line, the
+ * while a turn runs (turnLive — the one truth the avatar's live edge, the
  * Stop row, and the composer's running mode already read) a subtle 2dp
  * accent ring breathes on the delivery-edge rhythm over the avatar's
  * box; at rest nothing renders and the layout never shifts. The sent
  * message keeps its delivery rungs (transcript.tsx, pinned); the
  * TurnBlock's own live rail breath is untouched (R119-A anatomy).
+ *
+ * ROUND-123 (R123-W-m — the mobile transcript redesign, the screen's own
+ * piece): THE BREATHING HEADER LINE IS RETIRED — the owner: "there was a
+ * glowing effect around the display picture, but apparently there was a
+ * pulsing line below it too, which I explicitly told you to remove". The
+ * AvatarLiveEdge ring (the glow he described approvingly) STAYS as the
+ * running turn's one chrome tell; the LiveHeaderLine component, its render
+ * site, and its style are deleted (nothing else ever read them — the
+ * stop-row/composer/avatar truths are their own sources). The transcript's
+ * own changes (images above the text, the well's default-open, the web
+ * families' honest rows) live in transcript.tsx + turn-block.ts +
+ * streaming-args.ts.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -212,7 +228,6 @@ import Animated, {
   useSharedValue,
   withRepeat,
   withSequence,
-  withSpring,
   withTiming,
 } from "react-native-reanimated";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -233,7 +248,7 @@ import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
 import { QuietIconButton, TypeBodyStrong, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
 import { warningHaptic } from "@/design/haptics";
 import { useTheme } from "@/design/theme";
-import { DISCLOSURE_FADE_MS, SPRING } from "@/design/motion";
+import { DISCLOSURE_FADE_MS } from "@/design/motion";
 import { mixHex, spacing, TOUCH_TARGET, fontFamily, TYPE_CAPTION } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { getLinkManager } from "@/link/runtime";
@@ -297,9 +312,12 @@ const REMOTE_REHYDRATE_MS = 800;
  * transport, so rehydrate is the screen's whole job here). */
 const AUTO_RETRY_MS = 5_000;
 
-/** The breathing live line's one leg (ms) — the live caret's own rhythm
- * (motion.md §3: opacity 0.25↔1, 550ms each way). Local to this file, the
- * tab-bar's breathe-constants precedent. */
+/** The avatar's breathing live-edge ring's one leg (ms) — the live caret's
+ * own rhythm (motion.md §3: 550ms each way). R123-W-m: this cadence was the
+ * retired LiveHeaderLine's own constant too; the line is gone (the owner's
+ * explicit re-demand) and the AVATAR RING — the glow he kept — is its one
+ * remaining consumer. Local to this file, the tab-bar's breathe-constants
+ * precedent. */
 const LIVE_LINE_LEG_MS = 550;
 
 /** R118-D §2.2 — the Model level's scroll cap (the provider sections scroll
@@ -620,7 +638,7 @@ export default function SessionScreen() {
     const onFrame = (frame: EventsFrame): void => {
       if (frame.type === "session" && frame.sessionId === sessionId) {
         if (frame.kind === "status") {
-          // The breathing live line + the poll's trigger flip LIVE (a
+          // The avatar's live-edge ring + the poll's trigger flip LIVE (a
           // PC-started turn now tells the phone the moment it starts).
           const nextStatus = sessionStatusFromWire(frame.status);
           if (nextStatus !== null) {
@@ -1012,8 +1030,8 @@ export default function SessionScreen() {
   const kebabModeLabel = modeOption(detail?.permissionMode ?? "ask").label;
 
   // A turn runs somewhere (own stream, own overlay, or the row's running
-  // status) — the breathing line + the dropdown's Stop row + the composer's
-  // running mode all read this one truth.
+  // status) — the avatar's live-edge ring + the dropdown's Stop row + the
+  // composer's running mode all read this one truth.
   const turnLive = liveRunning || remoteRunning;
 
   // ── R117-d2 — the error cards' Retry (the screen owns the re-send) ─────────
@@ -1446,12 +1464,13 @@ export default function SessionScreen() {
           surfaceHeader fill, pulled UP through the status-bar inset (the
           negative margin + compensating padding — the fill owns the strip
           behind the status bar too), with the hairline borderSubtle
-          separator at its bottom edge. LiveHeaderLine moved INSIDE, pinned
-          absolutely over that edge — the breathing bar replaces the hairline
-          while a turn runs (its rhythm byte-frozen). THE IDENTITY BAR itself
-          (R115-I — chat.md §Header): [back circle 40px] · [the project's
-          LetterAvatar 36px] · [project name over the session's own name] ·
-          [the kebab ⋮ 44px]. Status words are OUT. */}
+          separator at its bottom edge — the plain hairline in EVERY state
+          (R123-W-m: the breathing accent bar that used to pin over this
+          edge is RETIRED at the owner's explicit re-demand; the avatar's
+          live-edge ring above is the running turn's one tell). THE IDENTITY
+          BAR itself (R115-I — chat.md §Header): [back circle 40px] · [the
+          project's LetterAvatar 36px] · [project name over the session's
+          own name] · [the kebab ⋮ 44px]. Status words are OUT. */}
       <View
         style={[
           styles.headerColumn,
@@ -1515,10 +1534,6 @@ export default function SessionScreen() {
             <Ellipsis size={24} color={tokens.text} strokeWidth={2.4} />
           </Pressable>
         </View>
-        {/* The live-turn indicator — the "live" badge's replacement, now
-            ABSOLUTELY positioned over the column's bottom edge (on top of
-            the hairline separator). */}
-        <LiveHeaderLine live={turnLive} />
       </View>
 
       {/* R115-K — the dock owns the keyboard: NO KeyboardAvoidingView, NO
@@ -1693,13 +1708,16 @@ function ItemSeparator() {
 /** R120-CM (§2 Track C-M — the processing indicators): the avatar's LIVE
  *  edge — an absolutely-positioned 2dp accent ring breathing on the
  *  DELIVERY-EDGE rhythm (mixHex(surfaceHeader, accent, 0.34) ↔ 0.62 at the
- *  house 550ms legs — the same breath the processing bubble's border and
- *  the live header line ride), the static 0.55 mix under reduced motion.
+ *  house 550ms legs — the same breath the processing bubble's border rides),
+ *  the static 0.55 mix under reduced motion.
  *  Alive-but-calm: NO glow, NO spinner (donts #11/#14 — an opacity breathe
  *  is the sanctioned "currently working" idiom, motion.md §4.5's grammar),
  *  and NOTHING renders at rest. The ring draws OUTSIDE the avatar's own box
  *  (top/left −3, +6 size) so the header row's layout is byte-identical in
- *  both states; pointerEvents none — it is chrome, not a control. */
+ *  both states; pointerEvents none — it is chrome, not a control.
+ *  R123-W-m: with the header's breathing LINE retired at the owner's
+ *  explicit re-demand, this ring — the glowing display-picture effect he
+ *  described approvingly — is the running turn's ONE chrome tell. */
 const AVATAR_EDGE_INSET = 3;
 const AVATAR_EDGE_WIDTH = 2;
 const AVATAR_SIZE = 36;
@@ -1797,43 +1815,6 @@ function NeutralAvatar({ label }: { label: string }) {
       </TypeBodyStrong>
     </View>
   );
-}
-
-/** The live-turn indicator — the "live" Badge's replacement (R115-I): a
- * thin 2px accent line under the identity bar, BREATHING while a turn runs
- * (motion.md §3's live-caret rhythm: opacity 0.25↔1, 550ms each way;
- * reduced motion snaps it solid — motion.md §5 — and it springs out when
- * the turn settles). The 2px height is constant so nothing below ever
- * shifts when the state flips. */
-function LiveHeaderLine({ live }: { live: boolean }) {
-  const { tokens } = useTheme();
-  const reduced = useReducedMotion();
-  const opacity = useSharedValue(0);
-
-  useEffect(() => {
-    if (!live) {
-      opacity.value = withSpring(0, SPRING);
-      return;
-    }
-    if (reduced) {
-      opacity.value = 1;
-      return;
-    }
-    opacity.value = withRepeat(
-      withSequence(
-        withTiming(1, { duration: LIVE_LINE_LEG_MS }),
-        withTiming(0.25, { duration: LIVE_LINE_LEG_MS }),
-      ),
-      -1,
-      false,
-    );
-  }, [live, reduced, opacity]);
-
-  const style = useAnimatedStyle(() => ({
-    opacity: Math.min(1, Math.max(0, opacity.value)),
-  }));
-
-  return <Animated.View style={[styles.liveLine, style, { backgroundColor: tokens.accent }]} />;
 }
 
 /** The display chips for a send's overrides (the optimistic user card + the
@@ -2089,7 +2070,9 @@ const styles = StyleSheet.create({
   // ── R115-I — the identity bar (the scaffold's own 56px header-row
   // geometry, restated for the bypassed chrome: 44px side targets, the
   // left-aligned two-line identity — R118-D: it renders inside the chrome
-  // column above, the live line pinned to that column's own bottom edge).
+  // column above; R123-W-m: the breathing live LINE that used to pin to
+  // that column's bottom edge is retired — the column's hairline separator
+  // is the whole bottom edge in every state).
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2123,17 +2106,6 @@ const styles = StyleSheet.create({
   },
   avatarEdge: {
     position: "absolute",
-  },
-  /** R118-D §2.1 — the live line rides INSIDE the chrome column, pinned
-   *  absolutely over its bottom edge — the breathing bar REPLACES the
-   *  hairline separator while a turn runs (2px constant so nothing below
-   *  ever shifts when the state flips). */
-  liveLine: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 2,
   },
   neutralAvatar: {
     alignItems: "center",

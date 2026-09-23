@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-23 round-122 -->
+<!-- last-reviewed: 2026-09-23 round-123 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` +
@@ -3021,3 +3021,60 @@ Pinned by `agent-core/tests/r122-feedback-writer.test.ts` (13),
 `r122-feedback-routes.test.ts` (9 — including the REAL-TLS device-token
 auth split), and `r122-feedback-phase.test.ts` (4 — the route-level
 separation contract: zero feedback frames, zero feedback events).
+
+## ROUND-123 additions (2026-09-23) — anonymous-first updates + the per-entry feedback delete
+
+The owner's directive: "why does it even require a GitHub token? Isn't our
+GitHub repository public?" — the checks and downloads are now ANONYMOUS-FIRST
+(the token is a pure retry accelerator that rides only when the anonymous leg
+answers 403 rate-limit / 404 private-fork AND one is saved); the token's full
+life cycle is in-app (save + REMOVE); the Linux updater learns the `.deb` leg
+(the install-type-aware asset pick: `APPIMAGE` env present → the AppImage,
+absent → the arch-matched deb); the feedback viewer gains the per-entry
+delete.
+
+### `GET /system/updates` (changed shape)
+
+Every answer now carries **`tokenSaved: boolean`** (whether a token is saved
+on this machine, env-or-file — the About tab's token-row visibility truth;
+the row renders ONLY when true or the check rate-limited). The failure
+reasons: **`"rate-limited"`** is new (the anonymous leg answered 403 with no
+token saved — the ONE case saving a token genuinely helps); `"token-rejected"`
+now means the anonymous leg failed 403/404 AND the token retry leg failed
+401/403; `"no-release"` names both legs when both answered 404. The success
+path NEVER carries `tokenWarning` anymore (a dead token can no longer degrade
+a successful anonymous check — the inversion's key promise).
+
+### `DELETE /api/v1/system/updates/token` → `{ok, removed}` (NEW)
+
+The REMOVE affordance — an optional credential must be removable in-app.
+Clears BOTH layers (the `~/.acute/github.pat` file + the sidecar's env
+snapshot) so the very next check runs anonymous by construction, and the
+removal survives the next launcher start (the launcher re-exports from the
+file, which no longer exists). Idempotent-honest: `{removed:false}` when
+neither layer held a token (never a 404); 500 with the OS's scrubbed message
+when the file refuses deletion (the token stays saved — never silently lost).
+
+### `DELETE /api/v1/feedback/file/entry/:index` → `{removed, entries}` (NEW)
+
+The viewer's per-entry Delete. The index counts the file's own `## Entry — `
+occurrences top-down (the same order the viewer renders). The storage's
+split/splice/join runs on the ledger's write chain (a concurrent append can
+never interleave; the survivors stay byte-identical). SHELL-ONLY (the same
+route-local device-token guard as the whole-ledger Clear). The answer is
+idempotent-honest: `{removed:false, entries}` for an out-of-range index (the
+viewer's list may be one refresh behind a fresh append — never a 404), the
+SURVIVING count on success; 400 VALIDATION for a non-integer/negative index.
+
+### The updater asset kinds (changed)
+
+`asset.kind` gains **`"linux-deb"`** — the sidecar's pick is install-type
+aware on Linux: the app's `APPIMAGE` env (inherited by the sidecar) present
+→ the arch-matched AppImage (`linux-appimage`); absent → the arch-matched
+`.deb` (`_amd64.deb` / `_arm64.deb`). The staged-download name gate and the
+plausibility floors learn the kind (20MB deb floor). The SHELL's
+`run_update_installer` dispatches `.deb` on Linux to the new visible
+`pkexec dpkg -i` leg (watched, relaunch-on-success, `update-install-failed`
+on failure); the Windows silent leg tries the OVERLAY install first (the
+self-rename + CreateProcessW watch — the window stays open for the whole
+install) with the `/S /R` flow as the honest fallback.

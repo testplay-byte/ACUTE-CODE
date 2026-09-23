@@ -30,8 +30,10 @@ session turn a separate context-free agent reviews the whole conversation and
 appends one structured entry to the machine's ONE shared ledger file —
 what it was trying to do, what actually happened, every issue and glitch it
 ran into (tools, browser, approvals), where reality fell short, and the
-improvements it would suggest. The dedicated settings section shows the RAW
-file (entries · size · last update, with copy/clear); a paired phone may view
+improvements it would suggest. The dedicated settings section renders each
+entry as a structured card (the parsed view — outcome, placement, the six
+labeled sections) with the RAW file one click away, per-entry delete beside
+the whole-ledger clear, and honest size/update meta; a paired phone may view
 it too. Entries are diagnostics for the app's developers — hand the file
 over when something went wrong; every entry places itself (session, project,
 agent, model, outcome) before it reports. Feedback NEVER enters any
@@ -112,7 +114,7 @@ always worked).
 | Agent, chat, projects, SQLite storage | **Yes** — the sidecar is platform-neutral Node |
 | Provider-key storage | **Yes** — Secret Service (gnome-keyring/KWallet), ADR-0031 |
 | Computer-use desktop automation | **Windows-only** (PowerShell/win32 backends) |
-| One-click in-app updater | **Windows-only** for now — on Linux the AppImage is the auto-update candidate (in-place replace); deb installs should check for updates and open the releases page until tauri-plugin-updater is wired (round-101 follow-up) |
+| One-click in-app updater | All three shipped shapes: Windows (the VISIBLE overlay install — the window stays open on an animated splash for the whole install and restarts into the new version), Linux AppImage (the atomic in-place replace with a pid-wait relaunch), and Linux .deb (the visible `pkexec dpkg -i` leg). Checks and downloads run ANONYMOUSLY first — the repository is public, no GitHub token is required (an optional saved token only raises the rate limit and is removable in-app; round-123) |
 
 ### Troubleshooting (WebKitGTK graphics)
 

@@ -28,9 +28,10 @@
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, NotebookPen, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Copy, FileText, ListCollapse, NotebookPen, RefreshCw, Trash2 } from "lucide-react";
 import {
   clearFeedbackLedger,
+  deleteFeedbackEntry,
   fetchFeedbackLedger,
   fetchFeedbackSettings,
   updateFeedbackSettings,
@@ -62,6 +63,77 @@ function formatUpdatedAt(iso: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+export interface ParsedFeedbackSection {
+  title: string;
+  body: string;
+}
+
+export interface ParsedFeedbackEntry {
+  /** The 0-based top-down index — the DELETE route's coordinate. */
+  index: number;
+  /** The header line's own timestamp text (the ISO string, verbatim). */
+  timestamp: string;
+  session: string | null;
+  project: string | null;
+  agent: string | null;
+  outcome: string | null;
+  transcript: string | null;
+  sections: ParsedFeedbackSection[];
+}
+
+/* ROUND-123 (R123): the ledger PARSER — pure, exported for the tests.
+ * The ledger's own byte grammar (feedback-ledger.ts): the file header, then
+ * one "\n---\n\n## Entry — <timestamp>" separator per entry; the entry's
+ * machine header lines ("- **Session**: …") and its "### " sections follow.
+ * The parser is TOLERANT: a malformed/absent field reads null, a body with
+ * no sections renders as no sections — the raw file always remains the
+ * truth (the Raw toggle), the parse is a VIEW. */
+export function parseFeedbackEntries(content: string): ParsedFeedbackEntry[] {
+  if (content.trim() === "") return [];
+  const parts = content.split("\n---\n\n## Entry — ");
+  const entries: ParsedFeedbackEntry[] = [];
+  for (let i = 1; i < parts.length; i += 1) {
+    const body = parts[i] ?? "";
+    const lines = body.split("\n");
+    // The first line carries the timestamp (the separator ate the prefix).
+    const timestamp = (lines[0] ?? "").trim();
+    const headerFields: Record<string, string | null> = {};
+    let cursor = 1;
+    for (; cursor < lines.length; cursor += 1) {
+      const line = lines[cursor] ?? "";
+      if (line.startsWith("### ")) break;
+      const match = /^- \*\*(.+?)\*\*: (.*)$/.exec(line);
+      if (match !== null) {
+        headerFields[match[1] ?? ""] = match[2] ?? "";
+      }
+    }
+    // The sections: each "### Title" owns the lines until the next one.
+    const sections: ParsedFeedbackSection[] = [];
+    let current: ParsedFeedbackSection | null = null;
+    for (; cursor < lines.length; cursor += 1) {
+      const line = lines[cursor] ?? "";
+      if (line.startsWith("### ")) {
+        if (current !== null) sections.push(current);
+        current = { title: line.slice(4).trim(), body: "" };
+      } else if (current !== null) {
+        current.body = current.body === "" ? line : `${current.body}\n${line}`;
+      }
+    }
+    if (current !== null) sections.push(current);
+    entries.push({
+      index: entries.length,
+      timestamp,
+      session: headerFields["Session"] ?? null,
+      project: headerFields["Project"] ?? null,
+      agent: headerFields["Agent"] ?? null,
+      outcome: headerFields["Turn outcome"] ?? null,
+      transcript: headerFields["Transcript"] ?? null,
+      sections: sections.map((s) => ({ title: s.title, body: s.body.trim() })),
+    });
+  }
+  return entries;
 }
 
 export function SelfFeedbackTab() {
@@ -205,7 +277,18 @@ function SelfFeedbackToggleCard() {
   );
 }
 
-/* ── The ledger viewer — the raw file, as-is. ──────────────────────────────── */
+/* ── The ledger viewer — ROUND-123 (R123): the parsed view (the default)
+ * + the raw view (the R122 file-as-is block, behind a toggle) + per-entry
+ * Delete + the ALWAYS-PRESENT Clear. ────────────────────────────────────────────────── */
+
+/** The entry card's outcome chip color — "ok" reads success, anything with
+ * "fail"/"error" reads danger, the rest (unknown shapes) stays neutral. */
+function outcomeTone(outcome: string | null): "success" | "danger" | "neutral" {
+  const value = (outcome ?? "").toLowerCase();
+  if (value === "ok" || value === "success") return "success";
+  if (value.includes("fail") || value.includes("error")) return "danger";
+  return "neutral";
+}
 
 function FeedbackLedgerCard() {
   const styles = useThemeStyles();
@@ -217,6 +300,13 @@ function FeedbackLedgerCard() {
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const [clearError, setClearError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // R123: the VIEW toggle — "parsed" (the structured cards, the default) or
+  // "raw" (the R122 file-as-is block). The owner's "see the raw file"
+  // contract stands; the parse is the readable default.
+  const [view, setView] = useState<"parsed" | "raw">("parsed");
+  // R123: the PER-ENTRY delete's confirm target (the entry's index).
+  const [entryConfirm, setEntryConfirm] = useState<number | null>(null);
+  const [entryDeleteError, setEntryDeleteError] = useState<string | null>(null);
 
   const clear = useMutation({
     mutationFn: () => clearFeedbackLedger(),
@@ -231,6 +321,22 @@ function FeedbackLedgerCard() {
     },
   });
 
+  // R123: the per-entry delete — DELETE /feedback/file/entry/:index, then the
+  // invalidated query re-reads the file (the surviving entries re-render;
+  // the honest "removed:false" no-op for a stale index simply refetches).
+  const deleteEntry = useMutation({
+    mutationFn: (index: number) => deleteFeedbackEntry(index),
+    onSuccess: () => {
+      setEntryDeleteError(null);
+      void queryClient.invalidateQueries({ queryKey: ["feedback-file"] });
+      setEntryConfirm(null);
+    },
+    onError: (err: Error) => {
+      setEntryDeleteError(err.message);
+      setEntryConfirm(null);
+    },
+  });
+
   const onCopy = (): void => {
     const content = ledgerQuery.data?.content ?? "";
     if (content === "") return;
@@ -241,17 +347,58 @@ function FeedbackLedgerCard() {
   };
 
   const ledger = ledgerQuery.data;
+  const parsed = ledger !== undefined ? parseFeedbackEntries(ledger.content) : [];
 
   return (
     <SectionCard ariaLabel="Feedback ledger" testId="self-feedback-ledger-card">
       <div className="mb-3 flex items-center gap-2">
         <NotebookPen size={13} style={{ color: styles.accent, opacity: 0.7 }} />
         <span className="text-[13px] font-semibold text-ink">Feedback ledger</span>
+        {/* R123: the VIEW TOGGLE — the parsed cards (the default) / the raw
+            file. Two quiet segmented buttons; the raw view keeps the owner's
+            R122 "see the raw file" contract one click away. */}
+        {ledger !== undefined && ledger.exists && ledger.entries > 0 ? (
+          <div
+            className="ml-auto flex items-center rounded-full border p-0.5"
+            style={{ borderColor: bdr("1.5px", styles.border) }}
+            role="tablist"
+            aria-label="Ledger view"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "parsed"}
+              onClick={() => setView("parsed")}
+              className="flex h-6 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium transition-colors"
+              style={{
+                background: view === "parsed" ? withAlpha(styles.accent, 0.14) : "transparent",
+                color: view === "parsed" ? styles.accent : styles.textTertiary,
+              }}
+              data-testid="feedback-view-parsed"
+            >
+              <ListCollapse size={11} /> Parsed
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "raw"}
+              onClick={() => setView("raw")}
+              className="flex h-6 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium transition-colors"
+              style={{
+                background: view === "raw" ? withAlpha(styles.accent, 0.14) : "transparent",
+                color: view === "raw" ? styles.accent : styles.textTertiary,
+              }}
+              data-testid="feedback-view-raw"
+            >
+              <FileText size={11} /> Raw
+            </button>
+          </div>
+        ) : null}
       </div>
       <p className="mb-3 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
-        The raw feedback.md the agents have been writing — newest entries at the bottom. This is exactly the file to
-        hand the developers when something went wrong: every entry places itself (session, project, agent, model,
-        outcome) before it reports.
+        The feedback.md the agents have been writing — newest entries at the bottom. This is exactly the file to hand
+        the developers when something went wrong: every entry places itself (session, project, agent, model, outcome)
+        before it reports. Delete a single entry with its card’s trash button, or the whole ledger with Clear.
       </p>
 
       {ledgerQuery.isError && ledger === undefined ? (
@@ -301,9 +448,9 @@ function FeedbackLedgerCard() {
             what the agent was trying to do, what actually happened, and every issue it ran into.
           </p>
         </div>
-      ) : (
+      ) : view === "raw" ? (
         <>
-          {/* The honest meta line — the file's own numbers, straight from
+          {/* The honest meta line — the file’s own numbers, straight from
               GET /feedback/file (never a client-side recount). */}
           <div
             data-testid="feedback-ledger-meta"
@@ -341,14 +488,151 @@ function FeedbackLedgerCard() {
             {ledger.content}
           </pre>
         </>
+      ) : (
+        <>
+          {/* R123: the PARSED view — one structured card per entry (the meta
+              line + the file’s own numbers ride above the list; the
+              long-list discipline caps the scroll). */}
+          <div
+            data-testid="feedback-ledger-meta"
+            className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]"
+            style={{ color: styles.textTertiary }}
+          >
+            <span>
+              {ledger.entries} {ledger.entries === 1 ? "entry" : "entries"}
+            </span>
+            <span aria-hidden>·</span>
+            <span>{formatBytes(ledger.bytes)}</span>
+            {ledger.updatedAt !== null ? (
+              <>
+                <span aria-hidden>·</span>
+                <span>updated {formatUpdatedAt(ledger.updatedAt)}</span>
+              </>
+            ) : null}
+          </div>
+          <div className="feedback-entry-list flex max-h-96 flex-col gap-2.5 overflow-y-auto pr-1" data-testid="feedback-parsed-list">
+            {parsed.map((entry) => {
+              const tone = outcomeTone(entry.outcome);
+              return (
+                <div
+                  key={`entry-${entry.index}`}
+                  data-testid="feedback-entry-card"
+                  data-entry-index={entry.index}
+                  className="rounded-xl border p-3"
+                  style={{
+                    borderColor: withAlpha(styles.text, 0.12),
+                    background: withAlpha(styles.text, 0.02),
+                  }}
+                >
+                  {/* The entry header — the machine-written placement line. */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono text-[11px] tabular-nums" style={{ color: styles.textTertiary }}>
+                      #{entry.index + 1}
+                    </span>
+                    <span className="font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+                      {formatUpdatedAt(entry.timestamp)}
+                    </span>
+                    {entry.outcome !== null ? (
+                      <span
+                        className="rounded-full px-2 py-0.5 text-[10px] font-medium"
+                        style={{
+                          background:
+                            tone === "success"
+                              ? withAlpha(SEMANTIC_COLORS.success, 0.12)
+                              : tone === "danger"
+                                ? withAlpha(SEMANTIC_COLORS.danger, 0.12)
+                                : withAlpha(styles.text, 0.08),
+                          color:
+                            tone === "success"
+                              ? SEMANTIC_COLORS.success
+                              : tone === "danger"
+                                ? SEMANTIC_COLORS.danger
+                                : styles.textSecondary,
+                        }}
+                        data-testid="feedback-entry-outcome"
+                      >
+                        {entry.outcome}
+                      </span>
+                    ) : null}
+                    {/* R123: the PER-ENTRY DELETE — the owner’s “delete it
+                        completely” refinement: one entry out, the rest stay. */}
+                    <button
+                      type="button"
+                      data-testid="feedback-entry-delete"
+                      onClick={() => setEntryConfirm(entry.index)}
+                      disabled={deleteEntry.isPending}
+                      aria-label={`Delete entry ${entry.index + 1}`}
+                      title="Deletes this one entry from the ledger — the others stay"
+                      className="ml-auto flex h-6 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium transition-opacity hover:opacity-85 disabled:cursor-wait disabled:opacity-60"
+                      style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4), color: SEMANTIC_COLORS.danger }}
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                  {/* The placement meta — session · project · agent (mono,
+                      one line, ellipsized; the transcript size rides the
+                      title attribute for the cold read). */}
+                  <div
+                    className="mt-1.5 truncate font-mono text-[10px]"
+                    style={{ color: styles.textTertiary }}
+                    title={[
+                      entry.session !== null ? `session ${entry.session}` : null,
+                      entry.project !== null ? `project ${entry.project}` : null,
+                      entry.agent !== null ? `agent ${entry.agent}` : null,
+                      entry.transcript !== null ? `transcript ${entry.transcript}` : null,
+                    ]
+                      .filter((part) => part !== null)
+                      .join(" \u00b7 ")}
+                  >
+                    {[
+                      entry.session,
+                      entry.project,
+                      entry.agent,
+                    ]
+                      .filter((part) => part !== null)
+                      .join(" · ")}
+                  </div>
+                  {/* The six sections — labeled blocks, the bodies verbatim. */}
+                  <div className="mt-2 flex flex-col gap-2">
+                    {entry.sections.map((section) => (
+                      <div key={`${entry.index}-${section.title}`}>
+                        <div
+                          className="text-[10px] font-semibold uppercase tracking-[0.08em]"
+                          style={{ color: styles.textTertiary }}
+                        >
+                          {section.title}
+                        </div>
+                        <div
+                          className="mt-0.5 whitespace-pre-wrap break-words text-[12px] leading-relaxed"
+                          style={{ color: styles.textSecondary }}
+                        >
+                          {section.body}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
 
-      {/* The actions row — visible whenever the file state is known. */}
+      {/* The actions row — visible whenever the file state is known. R123:
+          the CLEAR is ALWAYS PRESENT (disabled with the honest empty
+          tooltip when there is nothing to clear — the affordance never
+          appears/vanishes with the data, the owner’s first-sight
+          complaint). */}
       {ledger !== undefined && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {clearError ? (
             <span className="w-full text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
               {clearError}
+            </span>
+          ) : null}
+          {entryDeleteError ? (
+            <span className="w-full text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert" data-testid="feedback-entry-delete-error">
+              {entryDeleteError}
             </span>
           ) : null}
           <button
@@ -375,20 +659,23 @@ function FeedbackLedgerCard() {
             {copyState === "copied" ? <Check size={12} style={{ color: styles.accent }} /> : <Copy size={12} />}
             {copyState === "copied" ? "Copied" : "Copy"}
           </button>
-          {ledger.exists && ledger.entries > 0 ? (
-            <button
-              type="button"
-              data-testid="feedback-clear-button"
-              onClick={() => setConfirmOpen(true)}
-              disabled={clear.isPending}
-              aria-label="Clear the feedback ledger"
-              className="ml-auto flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-3 text-[12px] font-medium transition-opacity hover:opacity-85 disabled:cursor-wait disabled:opacity-60"
-              style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
-            >
-              <Trash2 size={12} />
-              Clear
-            </button>
-          ) : null}
+          <button
+            type="button"
+            data-testid="feedback-clear-button"
+            onClick={() => setConfirmOpen(true)}
+            disabled={clear.isPending || !ledger.exists || ledger.entries === 0}
+            aria-label="Clear the feedback ledger"
+            title={
+              !ledger.exists || ledger.entries === 0
+                ? "Nothing to clear yet — entries appear after completed turns while self-feedback generation is on"
+                : "Deletes the whole ledger file and every entry in it"
+            }
+            className="ml-auto flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-3 text-[12px] font-medium transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+          >
+            <Trash2 size={12} />
+            Clear
+          </button>
         </div>
       )}
 
@@ -407,6 +694,23 @@ function FeedbackLedgerCard() {
           <p className="text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
             The file is rebuilt from scratch by the next completed turn while self-feedback generation is on. This
             cannot be undone.
+          </p>
+        </ConfirmDialog>
+      )}
+
+      {/* R123: the PER-ENTRY delete confirm — the same styled-dialog law for
+          the smaller destructive ask. */}
+      {entryConfirm !== null && ledger !== undefined && (
+        <ConfirmDialog
+          title="Delete this entry"
+          message={`Delete entry #${entryConfirm + 1} from the feedback ledger? The other entries stay.`}
+          confirmLabel="Delete entry"
+          danger
+          onConfirm={() => deleteEntry.mutate(entryConfirm)}
+          onClose={() => setEntryConfirm(null)}
+        >
+          <p className="text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
+            This removes the one entry from the file — everything else is kept byte-identical. This cannot be undone.
           </p>
         </ConfirmDialog>
       )}

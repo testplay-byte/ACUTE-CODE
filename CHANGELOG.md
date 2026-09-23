@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-23 round-122 -->
+<!-- last-reviewed: 2026-09-23 round-123 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,50 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [Unreleased]
+
+### Updates without a token requirement (the repository is public)
+- **Update checks and downloads run ANONYMOUSLY first.** The saved GitHub token — if one exists on
+  your machine — is now a pure optional accelerator: it is attached only when the anonymous check
+  rate-limits (GitHub's 60 checks/hour) and never blocks or degrades anything otherwise. A rotated
+  or dead token can no longer produce "GitHub answered HTTP 401".
+- **The token is fully optional and removable.** The About section shows the token affordance only
+  when one is actually saved (or the anonymous check rate-limited), says plainly that no token is
+  required for this public repository, and offers Remove beside Save.
+
+### The visible install (Windows + Linux)
+- **Windows: the window now stays open for the whole update.** Instead of closing seconds after the
+  install starts, the app shows the animated "Installing vX…" splash while the silent installer
+  runs, and restarts itself the moment the new version is ready — no invisible gap, no guessing
+  whether anything is happening. (On machines where the self-rename the flow relies on is refused,
+  the previous flow runs unchanged.)
+- **Linux: .deb installs update in-app too.** A packaged (non-AppImage) install now downloads its
+  arch-matched .deb and installs it through the system's privileged prompt (polkit) — visibly, with
+  the same staying-open splash — then relaunches the updated app. AppImage installs keep the atomic
+  replace, and the relaunch now waits for the old instance to be fully gone (no more double-window
+  races).
+- **Every waiting state shows motion.** The About card's checking, verifying, and installing states
+  carry spinners and an animated bar — nothing sits still while work is in flight.
+
+### The self-feedback ledger, upgraded
+- **The parsed view (new default).** Each entry renders as a structured card — the outcome, the
+  session/project/agent placement, and the six labeled sections — with the raw file still one click
+  away.
+- **Per-entry delete.** Every entry card has its own delete (with its own confirmation); the
+  whole-ledger Clear remains and is now always present (disabled with an honest hint when there is
+  nothing to clear).
+
+### The conversation surfaces
+- **The desktop quick navigation is a row rail now** — one horizontal row per exchange, the row
+  nearest your pointer grows (with falloff to its neighbors), kept clear of the transcript text by
+  an always-present gutter, and hovering NEAR the rail (not only on it) registers — bounded by a
+  corridor.
+- **The mobile transcript follows the reference grammar**: image attachments render ABOVE the
+  message text; tool calls and file writes stay visible after a turn settles (they no longer fold
+  away behind the activity line); web search / fetch / browser-control rows carry their query, url,
+  or action; the pulsing line under the header avatar is gone (the breathing ring remains); and
+  consecutive text segments keep a consistent rhythm.
 
 ## [0.115.0] — 2026-09-23 — the self-feedback ledger + the Actions economy (the agent reports on itself; fewer CI runs)
 

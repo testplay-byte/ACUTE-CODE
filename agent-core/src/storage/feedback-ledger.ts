@@ -180,3 +180,50 @@ export function clearFeedbackLedger(dataDir: string): Promise<{ entries: number 
     publishLedgerFrame(dataDir);
   });
 }
+
+/** ROUND-123 (R123): the entry separator — the exact byte sequence
+ * appendFeedbackEntry writes before every entry (and the entry header's
+ * own prefix). The split/join round-trip is the deletion's whole truth. */
+const ENTRY_SEPARATOR = "\n---\n\n## Entry — ";
+
+/**
+ * ROUND-123 (R123): Delete ONE entry by its 0-based index (the settings
+ * viewer's per-entry Delete action — the owner's "I should be given an
+ * option to delete it completely" refinement to the whole-ledger Clear).
+ * The index counts the file's own "## Entry — " occurrences top-down,
+ * exactly like readFeedbackLedger's countEntries — the same order the
+ * viewer renders (newest at the bottom). Serialized on the write chain so
+ * a concurrent append can never interleave with the rewrite. The answer is
+ * IDEMPOTENT-honest: { removed:false, entries } for an out-of-range index
+ * (never a 404 — the caller's list may simply be stale by one refresh),
+ * { removed:true, entries } with the SURVIVING count on success.
+ */
+export function deleteFeedbackEntry(
+  dataDir: string,
+  index: number,
+): Promise<{ removed: boolean; entries: number }> {
+  const run = async (): Promise<{ removed: boolean; entries: number }> => {
+    const path = feedbackLedgerPath(dataDir);
+    if (!existsSync(path)) return { removed: false, entries: 0 };
+    const content = readFileSync(path, "utf8");
+    // parts[0] = the file header; parts[1..] = the entries' bodies (each
+    // begins with its timestamp — the "## Entry — " prefix lives in the
+    // separator, so the join restores every survivor byte-identically).
+    const parts = content.split(ENTRY_SEPARATOR);
+    const total = parts.length - 1;
+    if (!Number.isInteger(index) || index < 0 || index >= total) {
+      return { removed: false, entries: total };
+    }
+    parts.splice(index + 1, 1);
+    writeFileSync(path, parts.join(ENTRY_SEPARATOR), { encoding: "utf8" });
+    return { removed: true, entries: total - 1 };
+  };
+  const next = ledgerWriteChain.then(run, run);
+  ledgerWriteChain = next.then(
+    () => {},
+    () => {},
+  );
+  return next.finally(() => {
+    publishLedgerFrame(dataDir);
+  });
+}
