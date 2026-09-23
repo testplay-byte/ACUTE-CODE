@@ -394,6 +394,21 @@ describe("handleEventsFrame (the dispatch)", () => {
     handleEventsFrame(qc, { type: "settings", domain: "some-future-domain", value: {} });
     expect(invalidatedKeys(invalidateSpy)).toContainEqual(["settings"]);
   });
+
+  it("R122: the feedback domain invalidates BOTH the toggle query AND the ledger-file query (a live Self-Feedback tab converges)", () => {
+    const { qc, invalidateSpy } = makeQC();
+    // The frame fires on every settings PUT and on every ledger
+    // append/clear — both cards must refetch, not just the toggle.
+    handleEventsFrame(qc, {
+      type: "settings",
+      domain: "feedback",
+      value: { exists: true, bytes: 4321, updatedAt: "2026-09-23T15:04:06Z", entries: 1 },
+    });
+    const keys = invalidatedKeys(invalidateSpy);
+    expect(keys).toContainEqual(["feedback-settings"]);
+    expect(keys).toContainEqual(["feedback-file"]);
+    expect(keys).not.toContainEqual(["settings"]);
+  });
 // ── ROUND-115 (R115-E2): the DEVICE-SOURCED created frame — the phone
 // minted a session (POST /sessions rode a device token) and the desktop
 // should land in its chat: the session-nav store when idle, the linked

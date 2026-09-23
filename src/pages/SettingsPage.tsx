@@ -77,6 +77,11 @@ import { ImageAnalysisTab } from "../components/settings/ImageAnalysisTab";
 // (the allow-links toggle, the QR+PIN pairing window, the linked-devices
 // list with revoke). Deep-link ?tab=devices.
 import { DevicesTab } from "../components/settings/DevicesTab";
+// ROUND-122 (the owner's self-feedback directive): the SELF-FEEDBACK tab —
+// the ledger's master switch + the raw file viewer (the one shared
+// feedback.md every post-turn reporter appends to). Deep-link
+// ?tab=feedback.
+import { SelfFeedbackTab } from "../components/settings/SelfFeedbackTab";
 import { bdr, withAlpha } from "../components/dashboard/helpers";
 // R100-E1 (research §C2 P1(b)): the round-100 ui/ primitives — the settings
 // page's own cards ride SectionCard, its label+control rows ride SettingsRow,
@@ -179,6 +184,7 @@ export function SettingsPage() {
           {tab === "devices" && <DevicesTab />}
           {tab === "data" && <DataStatsPanel />}
           {tab === "advanced" && <AdvancedTab />}
+          {tab === "feedback" && <SelfFeedbackTab />}
           {tab === "about" && <AboutTab />}
         </div>
       </div>

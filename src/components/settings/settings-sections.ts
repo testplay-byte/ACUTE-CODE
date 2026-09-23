@@ -5,6 +5,7 @@ import {
   Globe,
   Info,
   Monitor,
+  NotebookPen,
   Palette,
   PlugZap,
   ScanEye,
@@ -96,6 +97,11 @@ export const SETTINGS_SECTIONS = [
   // "advanced" (every existing ?tab=advanced link + doc keeps working;
   // the URL contract is load-bearing — changing it would break deep links).
   { id: "advanced", label: "Functionality", icon: SlidersHorizontal, group: "System" },
+  // ROUND-122 (the owner's self-feedback directive): the dedicated
+  // SELF-FEEDBACK section — the ledger's master switch + the raw file
+  // viewer (the one shared feedback.md every post-turn reporter appends
+  // to). Same id discipline (deep-link ?tab=feedback).
+  { id: "feedback", label: "Self-Feedback", icon: NotebookPen, group: "System" },
   // ROUND-87 (R87, owner directive): the dedicated ABOUT section — the app
   // version, the update check (GitHub releases), and the application-wide
   // reset. Deep-link ?tab=about.
@@ -134,6 +140,7 @@ export const SEARCH_KEYWORDS: Record<SettingsSectionId, readonly string[]> = {
   devices: ["device", "phone", "link", "pair", "pairing", "qr", "pin", "android", "companion", "revoke", "last seen"],
   data: ["data", "statistics", "tokens", "heatmap", "model mix", "agent health", "clear data", "usage"],
   advanced: ["retry", "rate limit", "timeout", "network", "thinking loop", "debug", "analyst", "memory", "desktop notifications", "schedule"],
+  feedback: ["self-feedback", "feedback", "ledger", "report", "diagnostics", "improvements", "glitches", "issues", "file", "entries"],
   about: ["version", "update", "reset", "engine", "releases"],
 };
 

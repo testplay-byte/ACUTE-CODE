@@ -230,6 +230,11 @@ const SETTINGS_DOMAIN_QUERY_KEYS: Record<string, readonly (readonly unknown[])[]
   orchestration: [["orchestration-settings"]],
   memory: [["memory-settings"]],
   debug: [["debug-settings"]],
+  // R122: the self-feedback domain — the toggle AND the ledger file
+  // viewer (a settings-domain frame fires on every PUT and on every
+  // ledger append/clear, so an open Self-Feedback tab live-refreshes
+  // both cards — the R113 invalidation pattern applied to the file).
+  feedback: [["feedback-settings"], ["feedback-file"]],
   retry: [["retry-settings"]],
   "thinking-loop": [["thinking-loop-settings"]],
   browser: [["browser-settings"]],
