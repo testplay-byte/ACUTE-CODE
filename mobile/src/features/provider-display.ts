@@ -86,11 +86,66 @@ export const KEY_SLOT_MONO_SIZE = 12;
 export const KEY_SLOT_MONO_LINE = 18;
 
 /**
+ * R120-M (round-120 §1 item 17 — the model editor's numeric fields: "show
+ * the simplified form on blur … 1000000 → '1M', 26000 → '26K', 1000 →
+ * '1K'"; the full digits return on focus): the BLURRED display form of a
+ * numeric field's raw text — K/M/B for the large counts (≥ 1,000), the
+ * raw digits below, and a NON-NUMERIC / blank value passes through
+ * untouched (the save's per-field validation owns that honesty; the blur
+ * display never invents). Lossy by design — the draft keeps the exact
+ * string internally; this is the at-a-glance read. Pure.
+ */
+export function formatCompactCount(raw: string): string {
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
+  if (trimmed === "" || !Number.isFinite(value) || value < 0) return raw;
+  if (value < 1_000) return trimmed;
+  const units: Array<[number, string]> = [
+    [1_000_000_000, "B"],
+    [1_000_000, "M"],
+    [1_000, "K"],
+  ];
+  for (const [unit, suffix] of units) {
+    if (value >= unit) {
+      const scaled = value / unit;
+      // ≤ 2 decimals, trailing zeros stripped ("26K", "1.05M", "1M").
+      const text = `${Math.round(scaled * 100) / 100}`.replace(/\.0+$/, "");
+      return `${text}${suffix}`;
+    }
+  }
+  return trimmed;
+}
+
+/**
+ * R120-M (round-120 §1 item 14 — the key row's bottom-up menu, "other
+ * sensible options (e.g. Copy key id)"): the COPYABLE key reference — the
+ * key's identity as the phone knows it (the provider id + the slot + the
+ * mask), shareable in a bug report or matched against the provider's own
+ * dashboard WITHOUT ever exposing the value (the reveal route is
+ * device-token blocklisted by design — config.ts's security note). A
+ * missing mask degrades to the slot reference alone. Pure.
+ */
+export function keyReferenceText(
+  slot: Pick<ProviderKeySlot, "slot" | "masked">,
+  providerId: string,
+): string {
+  const base = slot.slot === 0 ? `${providerId} primary key` : `${providerId} key ${slot.slot}`;
+  return slot.masked !== null && slot.masked !== "" ? `${base} · ${slot.masked}` : base;
+}
+
+/**
  * The hero card's context line under the provider name: the API format's
  * human name. "" for an absent format AND for an unknown enum value (an
  * older/newer sidecar's field the phone does not know degrades to the
  * omitted line — the honest-omission discipline, never the raw machine
  * token on the identity card). Pure.
+ *
+ * R120-M (§1 item 10 — "Below the provider name it says 'Chat Completion
+ * API' — replace with the base URL directly, no heading"): DEAD on the
+ * provider hero (the base URL itself renders under the name now); zero
+ * production callers remain. Tombstoned, not deleted — the wire vocabulary
+ * + its jest pins survive for whatever next reads apiFormat (a future
+ * wave's deletion is safe).
  */
 export function apiFormatLabel(apiFormat: string | null | undefined): string {
   const format = apiFormat?.trim() ?? "";

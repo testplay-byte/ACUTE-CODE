@@ -47,7 +47,11 @@ vite dev origins.
 keyCount,configured}]}` (`hasKey` pool-aware + `configured` since R113 — see
 the R113 additions at the end) ·
 `POST /providers` (custom openai-compatible) ·
-`GET /providers/:id/models` (5-min cache) ·
+`GET /providers/:id/models` (5-min cache; R120-M — each entry
+additively carries `details` {contextWindow, maxOutputTokens, the
+USD/Mtok pricing trio, supportsTools/Vision/Audio/Video} parsed off the
+provider's OpenRouter-shaped listing fields, absent on plain OpenAI
+listings) ·
 `GET /providers/:id/models-config` (round-19, backfilled R85 — the per-provider
 saved model rows incl. hidden ones; the admin/models-config listing the
 frontend quartet reads; 404 unknown provider) ·

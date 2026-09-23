@@ -281,6 +281,43 @@ export interface ModelSummary {
    * /providers/:id/models (the Add Models dialog) and consumed by the
    * reasoning merge/prefill in routes/providers.ts. */
   reasoningSupport?: ModelReasoningSupport;
+  /** ROUND-120 (R120-M — the mobile model editor's SMART FETCH, §1 item 20:
+   * "fetch the model's real info from the provider … parse context_length /
+   * max_completion_tokens / pricing fields when present"): the per-model
+   * metadata the OpenRouter-shaped /models entries carry — sizing, the
+   * pricing trio (per-token strings scaled to USD/Mtok), and the
+   * modality/tool hints. ABSENT = the entry carried none of these fields
+   * (a plain OpenAI {id, object, owned_by} listing): the phone's configure
+   * screen renders its honest "provider didn't serve model details" line
+   * and never fabricates a value. Served additively by the SAME GET
+   * /providers/:id/models route (rides the 5-minute cache); never written
+   * to the DB by this leg. */
+  details?: ProviderModelDetails;
+}
+
+/** ROUND-120 (R120-M): the per-model catalog details (see
+ * ModelSummary.details) — every field OPTIONAL, set only when the entry
+ * carried the corresponding upstream field. */
+export interface ProviderModelDetails {
+  /** `context_length` — the model's advertised context window (tokens). */
+  contextWindow?: number;
+  /** `top_provider.max_completion_tokens` — the output ceiling. */
+  maxOutputTokens?: number;
+  /** `pricing.prompt` scaled per-token → USD per 1M input tokens. */
+  inputPricePerMtok?: number;
+  /** `pricing.input_cache_read` scaled per-token → USD per 1M cached reads. */
+  inputPriceCachedPerMtok?: number;
+  /** `pricing.completion` scaled per-token → USD per 1M output tokens. */
+  outputPricePerMtok?: number;
+  /** `tools` in `supported_parameters` — a definitive true/false when the
+   * list is present (the list IS the statement), absent otherwise. */
+  supportsTools?: boolean;
+  /** `image` in `architecture.input_modalities` (same presence rule). */
+  supportsVision?: boolean;
+  /** `audio` in `architecture.input_modalities` (same presence rule). */
+  supportsAudio?: boolean;
+  /** `video` in `architecture.input_modalities` (same presence rule). */
+  supportsVideo?: boolean;
 }
 
 export interface ProviderModelsResult {
@@ -335,10 +372,14 @@ function parseModels(body: unknown): ModelSummary[] {
     // catalog carries one (additive — absent for providers without the
     // metadata).
     const reasoning = extractReasoningSupport(record);
+    // ROUND-120 (R120-M): the sizing/pricing/modality details ride along the
+    // same way (absent for the plain OpenAI listing — see extractModelDetails).
+    const details = extractModelDetails(record);
     models.push({
       id,
       name: typeof name === "string" && name !== "" ? name : id,
       ...(reasoning !== null ? { reasoningSupport: reasoning } : {}),
+      ...(details !== null ? { details } : {}),
     });
   }
   return models;
@@ -426,6 +467,93 @@ function extractReasoningSupport(entry: Record<string, unknown>): ModelReasoning
     efforts,
     ...(defaultEffort !== undefined ? { defaultEffort } : {}),
   };
+}
+
+/* ── ROUND-120 (R120-M): the per-model catalog DETAILS extraction ────────── */
+
+/**
+ * ROUND-120 (R120-M — the mobile model editor's smart fetch): read ONE
+ * catalog entry's sizing/pricing/modality metadata, the OpenRouter /models
+ * shape (any OpenAI-compatible gateway that mirrors the fields gets the
+ * same detection for free):
+ *   · context_length: number — the advertised context window;
+ *   · top_provider.max_completion_tokens: number — the output ceiling;
+ *   · pricing: {prompt, completion, input_cache_read} — USD PER-TOKEN
+ *     strings (or numbers), scaled ×1e6 to the USD/Mtok the model rows
+ *     store ("0.0000025" → 2.5); 0 is a REAL value (the free tier);
+ *   · supported_parameters: string[] — `tools` membership → supportsTools;
+ *   · architecture.input_modalities: string[] — image/audio/video
+ *     membership → the input capability trio.
+ * Returns null when the entry carries NONE of these fields (the plain
+ * OpenAI listing) so the wire stays additive — never a details object full
+ * of undefined, never a guessed 0. Malformed values are SKIPPED one by one
+ * (a bad pricing string never takes the context window down with it).
+ */
+function extractModelDetails(entry: Record<string, unknown>): ProviderModelDetails | null {
+  const details: ProviderModelDetails = {};
+
+  const contextLength = entry.context_length;
+  if (typeof contextLength === "number" && Number.isFinite(contextLength) && contextLength > 0) {
+    details.contextWindow = Math.round(contextLength);
+  }
+
+  const topProvider = entry.top_provider;
+  if (typeof topProvider === "object" && topProvider !== null && !Array.isArray(topProvider)) {
+    const maxCompletion = (topProvider as Record<string, unknown>).max_completion_tokens;
+    if (typeof maxCompletion === "number" && Number.isFinite(maxCompletion) && maxCompletion > 0) {
+      details.maxOutputTokens = Math.round(maxCompletion);
+    }
+  }
+
+  const pricing = entry.pricing;
+  if (typeof pricing === "object" && pricing !== null && !Array.isArray(pricing)) {
+    const priceFields: Array<[keyof Pick<ProviderModelDetails, "inputPricePerMtok" | "inputPriceCachedPerMtok" | "outputPricePerMtok">, string]> = [
+      ["inputPricePerMtok", "prompt"],
+      ["inputPriceCachedPerMtok", "input_cache_read"],
+      ["outputPricePerMtok", "completion"],
+    ];
+    for (const [field, upstream] of priceFields) {
+      const raw = (pricing as Record<string, unknown>)[upstream];
+      // Per-token strings ("0.0000025") or bare numbers. A blank string is
+      // NOT a 0 — OpenRouter leaves input_cache_read "" on models without
+      // the tier, and "no tier" must stay ABSENT ("" / null / junk skip).
+      const perToken =
+        typeof raw === "string"
+          ? raw.trim() === ""
+            ? NaN
+            : Number(raw)
+          : typeof raw === "number"
+            ? raw
+            : NaN;
+      if (Number.isFinite(perToken) && perToken >= 0) {
+        const perMtok = perToken * 1_000_000;
+        // Guard the float tail: 2.5000000001-style artifacts round away.
+        details[field] = Math.round(perMtok * 1e6) / 1e6;
+      }
+    }
+  }
+
+  const params = entry.supported_parameters;
+  if (Array.isArray(params)) {
+    details.supportsTools = params.includes("tools");
+  }
+
+  const architecture = entry.architecture;
+  if (
+    typeof architecture === "object" &&
+    architecture !== null &&
+    !Array.isArray(architecture)
+  ) {
+    const modalities = (architecture as Record<string, unknown>).input_modalities;
+    if (Array.isArray(modalities)) {
+      const has = (modality: string): boolean => modalities.includes(modality);
+      details.supportsVision = has("image");
+      details.supportsAudio = has("audio");
+      details.supportsVideo = has("video");
+    }
+  }
+
+  return Object.keys(details).length > 0 ? details : null;
 }
 
 /**

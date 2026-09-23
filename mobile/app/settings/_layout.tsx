@@ -27,6 +27,10 @@ export default function SettingsLayout() {
       <Stack.Screen name="prompts" />
       <Stack.Screen name="providers/index" />
       <Stack.Screen name="providers/[id]" />
+      {/* R120-M (round-120 §1 items 19-22): the model CONFIGURE screen —
+          the Edit-Model surface + the add flow's draft state (the model
+          lands in the list only on the screen's explicit save). */}
+      <Stack.Screen name="providers/[id]/model" />
       <Stack.Screen name="agents/index" />
       <Stack.Screen name="agents/[id]" />
     </Stack>

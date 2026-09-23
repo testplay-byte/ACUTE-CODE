@@ -17,6 +17,7 @@
  */
 
 import { apiJson, apiJsonNoBody, type ApiOutcome, type ApiSender } from "./api";
+import { formatTokens } from "./context-meter";
 import { mobLog } from "@/lib/log";
 
 // ── the wire shapes ─────────────────────────────────────────────────────────
@@ -54,6 +55,30 @@ export interface ModelSummary {
    * ModelReasoningSupport (the old `boolean` read here was never the wire
    * shape). Absent = the catalog said nothing (unknown). */
   reasoningSupport?: { supported: boolean; efforts: string[]; defaultEffort?: string };
+  /** R120-M (round-120 §1 item 20 — the model editor's SMART FETCH): the
+   * per-model catalog metadata the sidecar now parses off the provider's
+   * /models listing (agent-core registry.ts extractModelDetails —
+   * context_length, top_provider.max_completion_tokens, the per-token
+   * pricing trio scaled to USD/Mtok, the supported_parameters/architecture
+   * hints). Absent = the entry carried none of those fields (a plain
+   * OpenAI listing): the editor's auto-populate is a graceful no-op and
+   * never fabricates a value. */
+  details?: ProviderModelDetails;
+}
+
+/** R120-M — the mobile mirror of the registry's ProviderModelDetails (the
+ * wire shape GET /providers/:id/models serves per entry; typed 1:1 — see
+ * agent-core/src/providers/registry.ts, the source of truth). */
+export interface ProviderModelDetails {
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  inputPricePerMtok?: number;
+  inputPriceCachedPerMtok?: number;
+  outputPricePerMtok?: number;
+  supportsTools?: boolean;
+  supportsVision?: boolean;
+  supportsAudio?: boolean;
+  supportsVideo?: boolean;
 }
 
 export interface ModelRecord {
@@ -533,6 +558,77 @@ export function modelTestToolsLegLine(
   };
 }
 
+/**
+ * R120-M (round-120 §1 item 16 — "A failed model test and a Hide-model
+ * action show their details at the bottom of the sheet — they must be a
+ * toast"): the model test's ONE toast line — the base chat verdict joined
+ * with the tools leg's verdict (when it ran), whitespace-collapsed and
+ * capped at 140 chars so the two-line toast never becomes a wall. The
+ * kind is the WORST news on the line (a hard tools rejection fails the
+ * whole test; a text-answer caution never reads green). Pure.
+ */
+export function modelTestToastText(
+  result: Pick<ModelTestResult, "ok" | "latencyMs" | "reason" | "contentPreview" | "checks">,
+): { kind: "saved" | "caution" | "error"; text: string } {
+  const toolsLeg = modelTestToolsLegLine(result);
+  const kind: "saved" | "caution" | "error" = !result.ok
+    ? "error"
+    : toolsLeg?.tone === "bad"
+      ? "error"
+      : toolsLeg?.tone === "caution"
+        ? "caution"
+        : "saved";
+  const parts: string[] = [
+    result.ok
+      ? `ok · ${result.latencyMs}ms`
+      : `failed — ${result.reason ?? "the provider refused"}`,
+  ];
+  if (toolsLeg !== null) parts.push(toolsLeg.text);
+  const joined = parts.join(" · ").replace(/\s+/g, " ").trim();
+  return { kind, text: joined.length > 140 ? `${joined.slice(0, 137)}…` : joined };
+}
+
+/**
+ * R120-M — the per-field validation the model editor screens share (the
+ * old [id].tsx private helper, moved to the client with the form): the
+ * first malformed numeric's inline message, or null when every field
+ * parses. Pure.
+ */
+export function firstNumericError(draft: ModelFormDraft): string | null {
+  for (const [field, raw] of [
+    ["Context window", draft.contextWindow],
+    ["Max output tokens", draft.maxOutputTokens],
+    ["Input price", draft.inputPricePerMtok],
+    ["Output price", draft.outputPricePerMtok],
+    ["Cache read price", draft.inputPriceCachedPerMtok],
+  ] as const) {
+    const parse = parseModelNumericField(field, raw);
+    if (!parse.ok) return parse.message;
+  }
+  return null;
+}
+
+/**
+ * R120-M — the editor's live preview strip (the old [id].tsx private
+ * helper, moved with the form): the draft's key numbers on ONE mono line
+ * (unknown → "—", never a fabricated 0). Pure.
+ */
+export function modelDraftPreview(draft: ModelFormDraft): string {
+  const num = (raw: string): number | null => {
+    const parse = parseModelNumericField("preview", raw);
+    return parse.ok ? parse.value : null;
+  };
+  const tok = (v: number | null): string => (v === null ? "—" : formatTokens(v));
+  const price = (v: number | null): string => (v === null ? "—" : `$${v}`);
+  return [
+    `ctx ${tok(num(draft.contextWindow))}`,
+    `max out ${tok(num(draft.maxOutputTokens))}`,
+    `in ${price(num(draft.inputPricePerMtok))}`,
+    `out ${price(num(draft.outputPricePerMtok))}`,
+    `cache ${price(num(draft.inputPriceCachedPerMtok))}`,
+  ].join(" · ");
+}
+
 /** The POST /providers apiFormat enum — exactly the three values the route
  * accepts (anything else falls back to chat-completions server-side). */
 export type ProviderApiFormat = "chat-completions" | "anthropic-messages" | "responses";
@@ -682,6 +778,10 @@ export function addProviderModel(
     supportsImageOutput?: boolean | null;
     supportsVideoOutput?: boolean | null;
     supportsAudioOutput?: boolean | null;
+    /** R120-M (item 21 — the reasoning-levels editor): the explicit ladder
+     * the upsert has accepted since R95-B; absent = the route's own
+     * live-catalog detection decides for a NEW row. */
+    reasoningSupport?: { supported: boolean; efforts: string[]; defaultEffort?: string } | null;
     hidden?: boolean;
   },
 ): Promise<ApiOutcome<ModelRecord>> {
@@ -758,6 +858,76 @@ export interface ModelFormDraft {
   supportsVideoOutput: boolean | null;
   supportsAudioOutput: boolean | null;
   hidden: boolean;
+  /** R120-M (item 21 — the reasoning-levels editor): the ladder the editor
+   * renders lowest→highest (vocabulary values, canonically ordered — see
+   * orderedReasoningEfforts). Empty = no levels. */
+  reasoningEfforts: string[];
+  /** R120-M: true once the user adds/deletes a level — the save's gate for
+   * whether reasoningSupport rides the body (an unknown record is only
+   * written when the owner expressed intent; a prefilled-but-untouched
+   * ladder still rides because it SHOWS — never a lying state). */
+  reasoningTouched: boolean;
+}
+
+/* ── R120-M (item 21): the reasoning-effort vocabulary ──────────────────
+ *
+ * The shared package owns the truth (REASONING_EFFORT_LEVELS — the wire's
+ * validation source, agent-core routes/models.ts gates every effort
+ * against it); the phone cannot import shared, so this mirrors the list
+ * 1:1 in wire order (lowest → highest). A level outside the vocabulary is
+ * a 400 on save — the editor's add-sheet only ever offers these. */
+export const REASONING_EFFORT_LEVELS: readonly string[] = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+/**
+ * R120-M — canonicalize a levels list: vocabulary members only, deduped,
+ * ordered lowest→highest (the registry's normalizeReasoningEfforts,
+ * mirrored for the editor's render + save). Pure.
+ */
+export function orderedReasoningEfforts(levels: readonly string[]): string[] {
+  return REASONING_EFFORT_LEVELS.filter((level) => levels.includes(level));
+}
+
+/**
+ * R120-M — the add-level sheet's list: the vocabulary levels NOT already
+ * configured (lowest→highest). Pure.
+ */
+export function remainingReasoningEfforts(levels: readonly string[]): string[] {
+  return REASONING_EFFORT_LEVELS.filter((level) => !levels.includes(level));
+}
+
+/**
+ * R120-M — the save's reasoningSupport value (the R95-B PATCH/POST contract:
+ * undefined = keep the stored value, the object = set). WRITES when the
+ * ladder shows levels, the owner touched the editor, or the record already
+ * carried a reasoning object (the editor owns the section — an idempotent
+ * round-trip like displayName). An unknown record with an untouched EMPTY
+ * ladder is never written (no fabricated verdict). `supported` derives
+ * honestly: levels imply supported; an empty ladder keeps the record's own
+ * bit (false when unknown — the owner explicitly emptied what they saw).
+ * The record's defaultEffort survives only while its rung still stands.
+ * Pure.
+ */
+export function reasoningSupportDraftValue(
+  levels: readonly string[],
+  touched: boolean,
+  record: Pick<ModelRecord, "reasoningSupport"> | null,
+): { supported: boolean; efforts: string[]; defaultEffort?: string } | undefined {
+  const efforts = orderedReasoningEfforts(levels);
+  if (efforts.length === 0 && !touched && record?.reasoningSupport == null) return undefined;
+  const supported = efforts.length > 0 ? true : (record?.reasoningSupport?.supported ?? false);
+  const defaultEffort = record?.reasoningSupport?.defaultEffort;
+  return {
+    supported,
+    efforts,
+    ...(defaultEffort !== undefined && efforts.includes(defaultEffort) ? { defaultEffort } : {}),
+  };
 }
 
 /** A blank numeric field, or a non-numeric/negative one. */
@@ -786,14 +956,18 @@ export function parseModelNumericField(field: string, raw: string): ModelNumeric
 }
 
 /**
- * The add sheet's POST body. modelId blank after trim → null (the sheet
+ * The add flow's POST body. modelId blank after trim → null (the flow
  * refuses before the route 400s). Blank numerics are OMITTED (the server's
  * insert defaults + catalog lookups decide — never a fabricated 0); the
- * capability flags ride verbatim (the sheet owns them — tri-state nulls
+ * capability flags ride verbatim (the flow owns them — tri-state nulls
  * included, the route's boolean-or-null contract); supportsThinking is
  * NEVER sent (detected server-side; absent keeps/derives the stored
  * value). displayName and sizeLabel are omitted when blank (the route
- * stores the modelId as the name / leaves the label unspecified). Pure.
+ * stores the modelId as the name / leaves the label unspecified).
+ * R120-M (item 21 — the reasoning-levels editor): the draft's ladder rides
+ * as `reasoningSupport` when the editor has something to say (levels that
+ * SHOW, or the owner touched the ladder) — see reasoningSupportDraftValue;
+ * absent = the route's live-catalog detection decides for a NEW row. Pure.
  */
 export function modelAddBody(
   draft: ModelFormDraft,
@@ -816,9 +990,18 @@ export function modelAddBody(
   supportsVideoOutput: boolean | null;
   supportsAudioOutput: boolean | null;
   hidden: boolean;
+  reasoningSupport?: { supported: boolean; efforts: string[]; defaultEffort?: string };
 } | null {
   const modelId = draft.modelId.trim();
   if (modelId === "") return null;
+  // R120-M (item 21): the editor's ladder, when it carries truth — an
+  // untouched empty ladder on an ADD leaves the field absent so the route's
+  // own live-catalog detection decides (never a fabricated "no reasoning").
+  const reasoningSupport = reasoningSupportDraftValue(
+    draft.reasoningEfforts,
+    draft.reasoningTouched,
+    null,
+  );
   const contextWindow = parseModelNumericField("Context window", draft.contextWindow);
   const maxOutputTokens = parseModelNumericField("Max output tokens", draft.maxOutputTokens);
   const inputPrice = parseModelNumericField("Input price", draft.inputPricePerMtok);
@@ -852,22 +1035,28 @@ export function modelAddBody(
     supportsVideoOutput: draft.supportsVideoOutput,
     supportsAudioOutput: draft.supportsAudioOutput,
     hidden: draft.hidden,
+    ...(reasoningSupport !== undefined ? { reasoningSupport } : {}),
   };
 }
 
 /**
- * The edit sheet's PATCH body — the fields the sheet OWNS, nothing else (the
- * spec's tri-state discipline: caps the sheet does not touch are never
- * sent — supportsThinking is deliberately absent, the detected value
+ * The edit flow's PATCH body — the fields the editor OWNS, nothing else
+ * (the spec's tri-state discipline: caps the editor does not touch are
+ * never sent — supportsThinking is deliberately absent, the detected value
  * keeps). displayName always rides (blank = "no custom name" — the pickers
  * fall back to the modelId); blank numerics ride as NULL (the R50-d
  * clear-to-unknown contract — the desktop dialog's semantics); blank
  * sizeLabel rides as NULL (unspecified); the capability flags ride verbatim
  * (untouched nulls round-trip as null — unknown stays unknown). modelId is
- * identity: read-only on the sheet, absent here. Pure.
+ * identity: read-only on the editor, absent here.
+ * R120-M (item 21): the reasoning ladder rides as `reasoningSupport` —
+ * `record` (the saved row being edited) feeds the defaultEffort survival
+ * + the supported bit on an explicitly-emptied ladder; undefined (an
+ * untouched unknown record) keeps the stored value. Pure.
  */
 export function modelEditBody(
   draft: ModelFormDraft,
+  record: Pick<ModelRecord, "reasoningSupport"> | null = null,
 ): {
   displayName: string;
   sizeLabel: string | null;
@@ -886,15 +1075,22 @@ export function modelEditBody(
   supportsVideoOutput: boolean | null;
   supportsAudioOutput: boolean | null;
   hidden: boolean;
+  reasoningSupport?: { supported: boolean; efforts: string[]; defaultEffort?: string };
 } {
   const contextWindow = parseModelNumericField("Context window", draft.contextWindow);
   const maxOutputTokens = parseModelNumericField("Max output tokens", draft.maxOutputTokens);
   const inputPrice = parseModelNumericField("Input price", draft.inputPricePerMtok);
   const outputPrice = parseModelNumericField("Output price", draft.outputPricePerMtok);
   const cachePrice = parseModelNumericField("Cache read price", draft.inputPriceCachedPerMtok);
-  // The caller validates first (the sheet shows the per-field error); a
+  // The caller validates first (the editor shows the per-field error); a
   // malformed value that reaches here reads as null — never a fabricated 0.
   const num = (parse: ModelNumericParse): number | null => (parse.ok ? parse.value : null);
+  // R120-M (item 21): the editor's ladder against the row being edited.
+  const reasoningSupport = reasoningSupportDraftValue(
+    draft.reasoningEfforts,
+    draft.reasoningTouched,
+    record,
+  );
   return {
     displayName: draft.displayName.trim(),
     sizeLabel: draft.sizeLabel.trim() === "" ? null : draft.sizeLabel.trim(),
@@ -913,10 +1109,11 @@ export function modelEditBody(
     supportsVideoOutput: draft.supportsVideoOutput,
     supportsAudioOutput: draft.supportsAudioOutput,
     hidden: draft.hidden,
+    ...(reasoningSupport !== undefined ? { reasoningSupport } : {}),
   };
 }
 
-/** Hydrate the edit sheet off a saved row (numerics → strings, "" = null).
+/** Hydrate the editor off a saved row (numerics → strings, "" = null).
  * R116-j: the full R87 field set round-trips — untouched tri-state caps
  * keep their stored unknown (null), never a guessed boolean. */
 export function modelDraftFromRecord(record: ModelRecord): ModelFormDraft {
@@ -940,6 +1137,41 @@ export function modelDraftFromRecord(record: ModelRecord): ModelFormDraft {
     supportsVideoOutput: record.supportsVideoOutput,
     supportsAudioOutput: record.supportsAudioOutput,
     hidden: record.hidden,
+    // R120-M (item 21): the record's stored ladder, canonically ordered
+    // (an unknown record hydrates to the empty ladder).
+    reasoningEfforts: orderedReasoningEfforts(record.reasoningSupport?.efforts ?? []),
+    reasoningTouched: false,
+  };
+}
+
+/**
+ * R120-M — the blank draft the editor screen seeds a CUSTOM add from (the
+ * old [id].tsx private helper, moved to the client as the editor's own
+ * seed; text output defaults ON — the chat-completions contract — every
+ * other cap starts unknown, the ladder starts empty). Pure.
+ */
+export function blankModelDraft(): ModelFormDraft {
+  return {
+    modelId: "",
+    displayName: "",
+    sizeLabel: "",
+    contextWindow: "",
+    maxOutputTokens: "",
+    inputPricePerMtok: "",
+    outputPricePerMtok: "",
+    inputPriceCachedPerMtok: "",
+    supportsVision: false,
+    supportsTools: null,
+    supportsAudio: null,
+    supportsVideo: null,
+    supportsPdf: null,
+    supportsTextOutput: true,
+    supportsImageOutput: null,
+    supportsVideoOutput: null,
+    supportsAudioOutput: null,
+    hidden: false,
+    reasoningEfforts: [],
+    reasoningTouched: false,
   };
 }
 
@@ -993,7 +1225,7 @@ export function cleanModelName(modelId: string): string {
  * chat-completions contract); every other cap starts unknown (null). Pure.
  */
 export function catalogPrefillFor(
-  entry: Pick<ModelSummary, "id" | "name">,
+  entry: Pick<ModelSummary, "id" | "name" | "reasoningSupport">,
   staticCatalog: readonly CatalogModelEntry[],
 ): ModelFormDraft {
   const meta = staticCatalog.find((m) => m.modelId === entry.id);
@@ -1022,6 +1254,11 @@ export function catalogPrefillFor(
     supportsVideoOutput: null,
     supportsAudioOutput: null,
     hidden: false,
+    // R120-M (item 20/21): the live entry's DETECTED ladder prefills the
+    // levels editor (the smart fetch's applyModelDetailsToDraft + the
+    // reasoningSupport on the entry carry the same truth).
+    reasoningEfforts: orderedReasoningEfforts(entry.reasoningSupport?.efforts ?? []),
+    reasoningTouched: false,
   };
 }
 
@@ -1069,6 +1306,107 @@ export function fetchProviderModels(
   );
 }
 
+/**
+ * R120-M (round-120 §1 item 20 — the model editor's SMART FETCH): the one
+ * model's LIVE catalog entry, read off the same GET /providers/:id/models
+ * listing (5-minute cache server-side — after the add-model picker's list
+ * fetch this is free). The entry carries the name, the detected reasoning
+ * support, and (since R120-M) the per-model `details` the configure screen
+ * auto-populates from. `entry: null` = the model is not in the provider's
+ * live listing (a custom id, or the listing is empty) — the graceful no-op
+ * the editor renders as its one-line "provider didn't serve model details"
+ * note (never a fabricated value). Transport errors propagate (the screen's
+ * loader owns the offline render).
+ */
+export async function fetchProviderModelDetails(
+  sender: ApiSender,
+  providerId: string,
+  modelId: string,
+): Promise<ApiOutcome<{ entry: ModelSummary | null; cached: boolean }>> {
+  const outcome = await fetchProviderModels(sender, providerId);
+  if (!outcome.ok) return outcome;
+  return {
+    ok: true,
+    data: {
+      entry: outcome.data.models.find((m) => m.id === modelId) ?? null,
+      cached: outcome.data.cached,
+    },
+  };
+}
+
+/**
+ * R120-M — the fetched details as a ModelFormDraft PATCH (the editor's
+ * auto-populate): every present field maps to its draft STRING (numerics —
+ * "" never fabricated; the editor decides blank-vs-override), the
+ * capability hints map to their draft flags. Absent fields stay absent —
+ * the caller's spread only touches what the provider actually served.
+ * Pure.
+ */
+export function modelDetailsDraftPatch(
+  details: ProviderModelDetails,
+): Partial<ModelFormDraft> {
+  const patch: Partial<ModelFormDraft> = {};
+  const num = (v: number | undefined, field: keyof ModelFormDraft): void => {
+    if (v !== undefined) (patch as Record<string, unknown>)[field] = String(v);
+  };
+  num(details.contextWindow, "contextWindow");
+  num(details.maxOutputTokens, "maxOutputTokens");
+  num(details.inputPricePerMtok, "inputPricePerMtok");
+  num(details.inputPriceCachedPerMtok, "inputPriceCachedPerMtok");
+  num(details.outputPricePerMtok, "outputPricePerMtok");
+  if (details.supportsVision !== undefined) patch.supportsVision = details.supportsVision;
+  if (details.supportsTools !== undefined) patch.supportsTools = details.supportsTools;
+  if (details.supportsAudio !== undefined) patch.supportsAudio = details.supportsAudio;
+  if (details.supportsVideo !== undefined) patch.supportsVideo = details.supportsVideo;
+  return patch;
+}
+
+/**
+ * R120-M — apply the fetched details onto an existing draft. ADD mode
+ * (`onlyBlank: false`): the provider's own numbers are the freshest truth —
+ * they OVERRIDE the static-catalog prefill. EDIT mode (`onlyBlank: true`):
+ * a blank numeric stays the owner's UNKNOWN until the provider serves a
+ * real value, and an owner-SET value is NEVER clobbered (the owner's saved
+ * configuration outranks the catalog). Pure.
+ */
+export function applyModelDetailsToDraft(
+  draft: ModelFormDraft,
+  details: ProviderModelDetails,
+  onlyBlank: boolean,
+): ModelFormDraft {
+  const next: ModelFormDraft = { ...draft };
+  const numeric: Array<[keyof ModelFormDraft, number | undefined]> = [
+    ["contextWindow", details.contextWindow],
+    ["maxOutputTokens", details.maxOutputTokens],
+    ["inputPricePerMtok", details.inputPricePerMtok],
+    ["inputPriceCachedPerMtok", details.inputPriceCachedPerMtok],
+    ["outputPricePerMtok", details.outputPricePerMtok],
+  ];
+  for (const [field, value] of numeric) {
+    if (value === undefined) continue;
+    const current = next[field] as string;
+    if (onlyBlank && current.trim() !== "") continue;
+    (next as unknown as Record<string, unknown>)[field] = String(value);
+  }
+  if (details.supportsVision !== undefined && (!onlyBlank || next.supportsVision === false)) {
+    // Edit-mode honesty: only a record that never said vision (the draft's
+    // false) takes the catalog's bit; the sheet's boolean is lossy by
+    // design (the wire's null collapses at hydrate).
+    next.supportsVision = details.supportsVision;
+  }
+  const tri: Array<[keyof ModelFormDraft, boolean | undefined]> = [
+    ["supportsTools", details.supportsTools],
+    ["supportsAudio", details.supportsAudio],
+    ["supportsVideo", details.supportsVideo],
+  ];
+  for (const [field, value] of tri) {
+    if (value === undefined) continue;
+    if (onlyBlank && (next[field] as boolean | null) !== null) continue;
+    (next as unknown as Record<string, unknown>)[field] = value;
+  }
+  return next;
+}
+
 export function fetchConfiguredModels(
   sender: ApiSender,
 ): Promise<ApiOutcome<{ models: ModelRecord[] }>> {
@@ -1096,6 +1434,10 @@ export function updateModel(
     supportsImageOutput?: boolean | null;
     supportsVideoOutput?: boolean | null;
     supportsAudioOutput?: boolean | null;
+    /** R120-M (item 21 — the reasoning-levels editor): the levels list
+     * PATCHes through the R95-B gate (null clears to unknown, the object
+     * sets, absent keeps). */
+    reasoningSupport?: { supported: boolean; efforts: string[]; defaultEffort?: string } | null;
     hidden?: boolean;
   },
 ): Promise<ApiOutcome<ModelRecord>> {

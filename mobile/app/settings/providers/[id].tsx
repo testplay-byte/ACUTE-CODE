@@ -22,6 +22,21 @@
  * anatomy + the name-only model rows + the R118-A sheet migrations (no
  * captions anywhere, SegmentedControl for the mode pair, centered CTAs,
  * the danger tone on the remove confirm).
+ *
+ * R120-M (round-120 §1 items 10-22 — the models overhaul): the hero's
+ * context line IS the base URL (the "Chat Completion API" label is dead —
+ * item 10; the labeled BASE-URL strip zone with it), the "Rename" button
+ * reads "Edit" (12) and the hero pair rides the quiet-solid FLAT CTA
+ * family (13 — the sheen glint is the "weird effect" the owner reported).
+ * The key rows lost their inline Test/Replace buttons — the row tap opens
+ * the KEY ACTIONS sheet (14: Test / Replace / Copy key id / Remove). The
+ * model test + hide verdicts are TOASTS now (16 — the details at the
+ * sheet's bottom are gone; see components/toast.tsx's law), the actions
+ * sheet renders its content off the LIVE record (15 — no first-frame blank
+ * content), and the ADD + EDIT flows both land on the CONFIGURE SCREEN
+ * (19/22 — app/settings/providers/[id]/model.tsx: the tap carries the
+ * id/name in, the model is committed to the list ONLY by that screen's
+ * explicit save; cancel discards the draft).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -33,33 +48,29 @@ import {
   Text,
   View,
 } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import {
   Brain,
+  Copy,
   Eye,
   EyeOff,
   FlaskConical,
   KeyRound,
   PencilLine,
   Plus,
+  RefreshCw,
   Server,
   Trash2,
 } from "lucide-react-native";
-import Animated, {
-  interpolateColor,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from "react-native-reanimated";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { Sheet } from "@/components/sheet";
 import { ErrorState, LoadingState, SkeletonList } from "@/components/list-state";
 import {
   Badge,
-  Chip,
   ChromeButton,
   ClayCard,
   ClayInput,
+  ClaySwitch,
   Hairline,
   PressableCard,
   QuietButton,
@@ -82,27 +93,22 @@ import {
   spacing,
   TYPE_BODY,
 } from "@/design/tokens";
-import { SPRING } from "@/design/motion";
+// R120-M (item 16 — the toast law): the test/hide verdicts fire through the
+// app-wide toast provider; the sheets render their own <ToastHost /> so a
+// verdict fired inside a Modal-hosted sheet is VISIBLE (see toast.tsx).
+import { ToastHost, useToast } from "@/components/toast";
+import * as Clipboard from "expo-clipboard";
 import { selectionHaptic, successHaptic, warningHaptic } from "@/design/haptics";
-import { formatTokens } from "@/features/context-meter";
 import {
-  addProviderModel,
-  catalogEntriesFromStatic,
-  catalogPrefillFor,
   deleteModel,
   deleteProviderKeySlot,
-  fetchModelCatalog,
   fetchProviderKeys,
   fetchProviderModels,
   fetchProviderModelsConfig,
   fetchProviders,
-  modelAddBody,
   modelCapabilityChips,
-  modelDraftFromRecord,
-  modelEditBody,
-  modelTestToolsLegLine,
+  modelTestToastText,
   nextFreeKeySlot,
-  parseModelNumericField,
   putProviderKeySlot,
   searchCatalogEntries,
   setProviderKey,
@@ -111,19 +117,16 @@ import {
   testTransportFailureMessage,
   updateModel,
   updateProvider,
-  type CatalogModelEntry,
-  type ModelFormDraft,
   type ModelRecord,
   type ModelSummary,
-  type ModelTestResult,
   type ProviderKeySlot,
   type ProviderRow,
 } from "@/features/config";
 import { useEventsEpoch } from "@/features/events";
 import {
-  apiFormatLabel,
   KEY_SLOT_MONO_LINE,
   KEY_SLOT_MONO_SIZE,
+  keyReferenceText,
   keySlotMetaLine,
   modelFactsLine,
   modelRowLabel,
@@ -164,17 +167,19 @@ export default function ProviderDetailScreen() {
   const [testing, setTesting] = useState(false);
   const [testNote, setTestNote] = useState<ActionNote | null>(null);
 
-  // The key pool: add (auto slot / primary replace), remove, per-slot test.
+  // The key pool: the per-row ACTIONS SHEET (R120-M item 14 — the inline
+  // Test/Replace buttons are gone; the row tap opens the menu), the add-key
+  // sheet (null slot = the next-free math, a number targets that slot), and
+  // the remove confirm.
+  const [keyMenuSlot, setKeyMenuSlot] = useState<number | null>(null);
   const [addKeyOpen, setAddKeyOpen] = useState(false);
-  const [addKeyReplacePrimary, setAddKeyReplacePrimary] = useState(false);
+  const [addKeySlot, setAddKeySlot] = useState<number | null>(null);
   const [removeKeySlot, setRemoveKeySlot] = useState<number | null>(null);
-  const [slotTestBusy, setSlotTestBusy] = useState<number | null>(null);
-  const [slotTestNote, setSlotTestNote] = useState<({ slot: number } & ActionNote) | null>(null);
 
   // The models: actions sheet (by row id — re-derived off the fresh list so
-  // hide/delete update it live), edit sheet, add sheet.
+  // hide/delete update it live) + the add-model picker (the CONFIGURE
+  // screen owns the editor now — R120-M items 19/22).
   const [actionsModelId, setActionsModelId] = useState<string | null>(null);
-  const [editModelId, setEditModelId] = useState<string | null>(null);
   const [addModelOpen, setAddModelOpen] = useState(false);
 
   // R113-e: the live settings epoch — another device's writes (or our own
@@ -338,48 +343,13 @@ export default function ProviderDetailScreen() {
 
   // ── the key pool actions ──────────────────────────────────────────────────
 
-  async function testSlot(slot: number): Promise<void> {
-    if (providerId === null || slotTestBusy !== null) return;
-    setSlotTestBusy(slot);
-    setSlotTestNote(null);
-    try {
-      const outcome = await testProvider(getLinkManager(), providerId, { slot });
-      if (outcome.ok) {
-        const { ok, latencyMs, message } = outcome.data;
-        setSlotTestNote({
-          slot,
-          kind: ok ? "saved" : "error",
-          text: ok
-            ? `ok · ${latencyMs !== undefined ? `${latencyMs}ms` : "answered"}`
-            : `failed — ${message ?? "the provider refused"}`,
-        });
-        mobLog("config", "provider slot tested", { id: providerId, slot, ok, latencyMs });
-      } else {
-        setSlotTestNote({ slot, kind: "error", text: outcome.error.message });
-        mobWarn("config", "provider slot test failed", {
-          id: providerId,
-          slot,
-          status: outcome.error.status,
-          message: outcome.error.message,
-        });
-      }
-    } catch (err) {
-      setSlotTestNote({
-        slot,
-        kind: "error",
-        text: "the host dropped during the test",
-      });
-      mobWarn("config", "provider slot test transport failure", {
-        message: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      setSlotTestBusy(null);
-    }
-  }
-
-  function openAddKey(replacePrimary: boolean): void {
+  // R120-M (item 14): the per-slot test lives INSIDE the key actions sheet
+  // now (a busy tile + the toast verdict — item 16's law), and the add-key
+  // sheet targets the tapped slot: null = the next-free math, 0 = the
+  // primary replace flow, N = that pool slot.
+  function openAddKey(slot: number | null): void {
     void selectionHaptic();
-    setAddKeyReplacePrimary(replacePrimary);
+    setAddKeySlot(slot);
     setAddKeyOpen(true);
   }
 
@@ -393,9 +363,11 @@ export default function ProviderDetailScreen() {
     () => (models ?? []).find((m) => m.id === actionsModelId) ?? null,
     [models, actionsModelId],
   );
-  const editModel = useMemo(
-    () => (models ?? []).find((m) => m.id === editModelId) ?? null,
-    [models, editModelId],
+  // R120-M (item 14): the key actions sheet reads the LIVE slot row off the
+  // pool (re-derived off the fresh keys so a replace/remove updates it).
+  const keyMenu = useMemo(
+    () => (keys ?? []).find((k) => k.slot === keyMenuSlot) ?? null,
+    [keys, keyMenuSlot],
   );
   const savedModelIds = useMemo(() => new Set((models ?? []).map((m) => m.modelId)), [models]);
 
@@ -404,15 +376,33 @@ export default function ProviderDetailScreen() {
     setActionsModelId(model.id);
   }
 
+  // R120-M (items 19/22): "Edit model" lands on the CONFIGURE SCREEN — the
+  // editor is a screen now (the reasoning ladder + the one-line capability
+  // rows never fit the 0.86 sheet), and the row's truth changes only on
+  // that screen's explicit save.
   function openModelEdit(model: ModelRecord): void {
     setActionsModelId(null);
-    setEditModelId(model.id);
+    if (providerId === null) return;
+    router.push({
+      pathname: "/settings/providers/[id]/model",
+      params: { id: providerId, record: model.id },
+    });
   }
 
   const openAddModel = useCallback(() => {
     void selectionHaptic();
     setAddModelOpen(true);
   }, []);
+
+  // R120-M (item 22): the configure screen commits models on ITS save —
+  // this screen refetches the saved rows the moment it regains focus (the
+  // model writes do not ride the settings-events epoch, so the focus edge
+  // is the refresh; the pull-to-refresh stays the manual backstop).
+  useFocusEffect(
+    useCallback(() => {
+      if (connected) void refreshModels();
+    }, [connected, refreshModels]),
+  );
 
   return (
     <ScreenScaffold
@@ -451,13 +441,14 @@ export default function ProviderDetailScreen() {
         />
       ) : provider !== null ? (
         <>
-          {/* ── the THREE-ZONE HERO (R118-E §2B1): identity + toggle →
-              hairline → the one-honest-line BASE-URL strip → hairline → the
-              Test/Rename pair. The list's name-hash hue carries onto the
-              page (the identity tile); the machine meta line (kind ·
-              apiFormat · keyCount) is GONE — kind lives in the scaffold's
-              subtitle, the format is the context line, key truth is the
-              keys section's own. ── */}
+          {/* ── the hero (R118-E §2B1 → R120-M): identity + base URL +
+              toggle → hairline → the Test/Edit pair. The list's name-hash
+              hue carries onto the page (the identity tile). R120-M item 10:
+              the context line under the name IS THE BASE URL — directly,
+              no heading/title (the "Chat Completion API" label and the
+              labeled BASE-URL strip zone are both dead — one truth, one
+              place); kind lives in the scaffold's subtitle, key truth is
+              the keys section's own. ── */}
           <ClayCard elevated>
             <View style={styles.identityPad}>
               <View style={styles.identityHead}>
@@ -475,13 +466,20 @@ export default function ProviderDetailScreen() {
                   <TypeTitle numberOfLines={1} style={styles.identityName}>
                     {provider.name}
                   </TypeTitle>
-                  {/* The ONE context line — the API format's human name;
-                      omitted when the row carries nothing. */}
-                  {apiFormatLabel(provider.apiFormat) !== "" ? (
-                    <TypeCaption numberOfLines={1}>{apiFormatLabel(provider.apiFormat)}</TypeCaption>
-                  ) : null}
+                  {/* R120-M (item 10 — "Below the provider name it says 'Chat
+                      Completion API' — replace with the base URL itself,
+                      directly, no heading/title"): the ONE context line is
+                      the machine truth itself — TypeMono's own 13/19
+                      recipe, one line, tail-clipped. */}
+                  <TypeMono numberOfLines={1} style={styles.identityBaseUrl}>
+                    {provider.baseUrl}
+                  </TypeMono>
                 </View>
                 <View style={styles.identityToggleWrap}>
+                  {/* R120-M (item 11): the on/off toggle rides the RIGHT of
+                      the title row — the provider-name row — never beside
+                      the base URL (the URL is the context line under the
+                      name, the toggle is the row's trailing control). */}
                   <ClaySwitch
                     value={provider.enabled}
                     onValueChange={(next) => void toggleEnabled(next)}
@@ -492,31 +490,25 @@ export default function ProviderDetailScreen() {
               </View>
               {enabledNote !== null ? <NoteLine note={enabledNote} /> : null}
 
-              {/* Zone divider → the BASE-URL strip: the micro-caps label +
-                  one mono line, tail-ellipsized — the ONLY machine truth on
-                  the identity card. */}
-              <Hairline />
-              <View style={styles.baseUrlZone}>
-                <TypeMicro numberOfLines={1} style={[styles.baseUrlLabel, { color: tokens.textTertiary }]}>
-                  BASE URL
-                </TypeMicro>
-                {/* 13/19 is TypeMono's own recipe — one line, tail-clipped. */}
-                <TypeMono numberOfLines={1}>{provider.baseUrl}</TypeMono>
-              </View>
-
               {/* Zone divider → the actions: the primary is a PRIMARY —
                   ChromeButton flex 1 (busy swaps the label for the
                   spinner, the a11y label follows the swap) + the quiet
-                  Rename peer, minHeight-matched at 50.
+                  Edit peer, minHeight-matched at 50.
                   R119-P (§1 item 10 — "the Test connection button
                   line-breaks"): the hero instance opts into labelFit —
                   the 15px bold label shrinks to fit ONE line (down to
                   0.85×) instead of wrapping to "Test"/"connection" at
                   360dp, and the button's horizontal padding breathes
-                  xl→md so the shrink rarely engages at all. */}
+                  xl→md so the shrink rarely engages at all.
+                  R120-M (item 13 — the "weird effect (the glow family)"):
+                  the sheen glint is OFF — `flat` is the quiet-solid CTA
+                  family (solid accentDeep, NO gradient glint, the clay
+                  elevation; the R115 wizard-CTA verdict, now the settings
+                  CTAs' spelling too). */}
               <Hairline />
               <View style={styles.heroActions}>
                 <ChromeButton
+                  flat
                   onPress={() => void runTest()}
                   disabled={testing}
                   busy={testing}
@@ -526,8 +518,10 @@ export default function ProviderDetailScreen() {
                 >
                   {testing ? "testing…" : "Test connection"}
                 </ChromeButton>
+                {/* R120-M (item 12): "Rename" reads "Edit" — the sheet it
+                    opens edits the name AND the base URL. */}
                 <QuietButton onPress={() => setRenameOpen(true)} style={styles.heroQuiet}>
-                  Rename
+                  Edit
                 </QuietButton>
               </View>
               {testNote !== null ? <NoteLine note={testNote} /> : null}
@@ -544,16 +538,30 @@ export default function ProviderDetailScreen() {
                   tile (surfaceWell + tertiary glyph when empty), the title
                   + "empty" Badge, ONE mono meta line (the mask · the last
                   use — keySlotMetaLine), inset hairlines between the rows
-                  and a final rule, compact quiet actions. */}
+                  and a final rule.
+                  R120-M (item 14 — the right-side inline "Test"/"Replace"
+                  options are REMOVED): the ROW is the affordance — a tap
+                  opens the key actions sheet (Test / Replace / Copy key id
+                  / Remove; an empty slot's menu is its "Add key here"). */}
               <View style={styles.poolPad}>
                 {keys.map((slot, index) => {
-                  const note =
-                    slotTestNote !== null && slotTestNote.slot === slot.slot ? slotTestNote : null;
-                  const busy = slotTestBusy === slot.slot;
                   return (
                     <View key={slot.slot}>
                       {index > 0 ? <Hairline inset={spacing.lg} /> : null}
-                      <View style={styles.slotRow}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          slot.slot === 0 ? "Primary key actions" : `Key ${slot.slot} actions`
+                        }
+                        onPress={() => {
+                          void selectionHaptic();
+                          setKeyMenuSlot(slot.slot);
+                        }}
+                        style={({ pressed }) => [
+                          styles.slotRow,
+                          { backgroundColor: pressed ? tokens.subtle : "transparent" },
+                        ]}
+                      >
                         <View
                           style={[
                             styles.slotIcon,
@@ -580,39 +588,8 @@ export default function ProviderDetailScreen() {
                           <TypeMono numberOfLines={1} style={styles.slotMasked}>
                             {keySlotMetaLine(slot)}
                           </TypeMono>
-                          {note !== null ? <NoteLine note={note} /> : null}
                         </View>
-                        {slot.hasKey ? (
-                          <View style={styles.slotActions}>
-                            <QuietButton
-                              onPress={() => void testSlot(slot.slot)}
-                              busy={busy}
-                              textStyle={styles.actionButtonText}
-                              style={styles.slotActionButton}
-                            >
-                              {busy ? "testing…" : "Test"}
-                            </QuietButton>
-                            {slot.slot === 0 ? (
-                              <QuietButton
-                                onPress={() => openAddKey(true)}
-                                textStyle={styles.actionButtonText}
-                                style={styles.slotActionButton}
-                              >
-                                Replace
-                              </QuietButton>
-                            ) : (
-                              <QuietButton
-                                tone="danger"
-                                onPress={() => setRemoveKeySlot(slot.slot)}
-                                textStyle={styles.actionButtonText}
-                                style={styles.slotActionButton}
-                              >
-                                Remove
-                              </QuietButton>
-                            )}
-                          </View>
-                        ) : null}
-                      </View>
+                      </Pressable>
                     </View>
                   );
                 })}
@@ -623,7 +600,7 @@ export default function ProviderDetailScreen() {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Add an API key"
-                  onPress={() => openAddKey(false)}
+                  onPress={() => openAddKey(null)}
                   style={({ pressed }) => [
                     styles.addKeyRow,
                     { backgroundColor: pressed ? tokens.subtle : "transparent" },
@@ -707,11 +684,27 @@ export default function ProviderDetailScreen() {
           open={addKeyOpen}
           providerId={providerId}
           keys={keys ?? []}
-          replacePrimary={addKeyReplacePrimary}
+          slot={addKeySlot}
           onClose={() => setAddKeyOpen(false)}
           onSaved={() => {
             void refreshKeys();
             void refreshProvider();
+          }}
+        />
+      ) : null}
+      {providerId !== null ? (
+        <KeyActionsSheet
+          open={keyMenuSlot !== null}
+          providerId={providerId}
+          slot={keyMenu}
+          onClose={() => setKeyMenuSlot(null)}
+          onReplace={(slot) => {
+            setKeyMenuSlot(null);
+            openAddKey(slot);
+          }}
+          onRemove={(slot) => {
+            setKeyMenuSlot(null);
+            setRemoveKeySlot(slot);
           }}
         />
       ) : null}
@@ -738,19 +731,12 @@ export default function ProviderDetailScreen() {
           onEdit={openModelEdit}
         />
       ) : null}
-      <EditModelSheet
-        open={editModelId !== null}
-        model={editModel}
-        onClose={() => setEditModelId(null)}
-        onSaved={() => void refreshModels()}
-      />
       {providerId !== null ? (
         <AddModelSheet
           open={addModelOpen}
           providerId={providerId}
           savedModelIds={savedModelIds}
           onClose={() => setAddModelOpen(false)}
-          onSaved={() => void refreshModels()}
         />
       ) : null}
     </ScreenScaffold>
@@ -914,20 +900,23 @@ function RenameProviderSheet({
   );
 }
 
-// ── the add-key sheet (next-free-slot math; primary replace mode) ───────────
+// ── the add-key sheet (next-free-slot math; any-slot replace mode) ──────────
 
 function AddKeySheet({
   open,
   providerId,
   keys,
-  replacePrimary,
+  slot,
   onClose,
   onSaved,
 }: {
   open: boolean;
   providerId: string;
   keys: ProviderKeySlot[];
-  replacePrimary: boolean;
+  /** R120-M (item 14): the TARGET slot — null = the next-free math (the
+   * pool's add row), 0 = the primary replace flow, N = that pool slot
+   * (the key actions sheet's Replace / an empty slot's "Add key here"). */
+  slot: number | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -936,7 +925,17 @@ function AddKeySheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const slot = replacePrimary ? 0 : nextFreeKeySlot(keys);
+  const target = slot ?? nextFreeKeySlot(keys);
+  // The honest title: a replace for a HELD slot, an add for an empty one.
+  const held = keys.find((k) => k.slot === target)?.hasKey === true;
+  const title =
+    slot === null
+      ? "Add an API key"
+      : target === 0
+        ? "Replace the primary key"
+        : held
+          ? `Replace key ${target}`
+          : `Add key ${target}`;
 
   useEffect(() => {
     if (!open) return;
@@ -952,7 +951,7 @@ function AddKeySheet({
       void warningHaptic();
       return;
     }
-    if (slot === -1) {
+    if (target === -1) {
       setError("the pool is full — 31 keys is the server's ceiling");
       void warningHaptic();
       return;
@@ -964,11 +963,11 @@ function AddKeySheet({
       // endpoint; pool slots ride the slot route. Either way the VALUE
       // never comes back: the pool re-reads masked.
       const outcome =
-        slot === 0
+        target === 0
           ? await setProviderKey(getLinkManager(), providerId, key)
-          : await putProviderKeySlot(getLinkManager(), providerId, slot, key);
+          : await putProviderKeySlot(getLinkManager(), providerId, target, key);
       if (outcome.ok) {
-        mobLog("config", "provider key saved", { id: providerId, slot });
+        mobLog("config", "provider key saved", { id: providerId, slot: target });
         void successHaptic();
         setValue("");
         onClose();
@@ -976,7 +975,7 @@ function AddKeySheet({
       } else {
         mobWarn("config", "provider key save failed", {
           id: providerId,
-          slot,
+          slot: target,
           status: outcome.error.status,
           message: outcome.error.message,
         });
@@ -990,15 +989,10 @@ function AddKeySheet({
     } finally {
       setBusy(false);
     }
-  }, [busy, value, slot, providerId, onClose, onSaved]);
+  }, [busy, value, target, providerId, onClose, onSaved]);
 
   return (
-    <Sheet
-      open={open}
-      onClose={onClose}
-      title={replacePrimary ? "Replace the primary key" : "Add an API key"}
-      testID="add-key-sheet"
-    >
+    <Sheet open={open} onClose={onClose} title={title} testID="add-key-sheet">
       <View style={styles.fieldGap}>
         {/* R118-A — the slot-explainer block and the field caption are
             DELETED (sheets ask ONE question with label + input only). The
@@ -1123,6 +1117,178 @@ function RemoveKeySheet({
   );
 }
 
+// ── the key actions sheet (R120-M item 14: the row's bottom-up menu) ────────
+//
+// The house Sheet (the model menu's grammar): the 2×2 ActionTile grid —
+// Test / Replace / Copy key id / Remove (the primary keeps its Replace
+// flow; slot 0 is never removed over HTTP — the 409 the route answers);
+// an EMPTY slot's menu is its one "Add key here" tile. Every action wires
+// an EXISTING route: the per-slot test probe (POST /providers/:id/test
+// {slot}), the slot-targeted key write (PUT /providers/:id/key for 0,
+// PUT /providers/:id/keys/:slot for N), the remove (DELETE
+// /providers/:id/keys/:slot). "Copy key id" copies the key's REFERENCE
+// (provider · slot · mask — provider-display's keyReferenceText): the raw
+// value never crosses to the phone by design (the reveal route is
+// device-token blocklisted — config.ts's security note).
+//
+// The test verdict is a TOAST (item 16's law — the sheet-bottom detail
+// lines are gone); the toast renders through this sheet's own ToastHost
+// (a Modal is its own native window — see toast.tsx's law).
+
+function KeyActionsSheet({
+  open,
+  providerId,
+  slot,
+  onClose,
+  onReplace,
+  onRemove,
+}: {
+  open: boolean;
+  providerId: string;
+  /** The LIVE slot row (null while closed — the snapshot below carries the
+   * content through the close animation). */
+  slot: ProviderKeySlot | null;
+  onClose: () => void;
+  onReplace: (slot: number) => void;
+  onRemove: (slot: number) => void;
+}) {
+  const toast = useToast();
+  const [shown, setShown] = useState<ProviderKeySlot | null>(null);
+  useEffect(() => {
+    if (slot !== null) setShown(slot);
+  }, [slot]);
+  // R120-M (item 15's content law, applied here too): the LIVE row renders
+  // the moment the sheet opens — `slot` re-derives off the fresh pool in
+  // the SAME commit the sheet opens (no first-frame blank content); the
+  // snapshot only carries the close animation.
+  const view = slot ?? shown;
+  const [testing, setTesting] = useState(false);
+
+  const runTest = useCallback(async () => {
+    if (testing || view === null || !view.hasKey) return;
+    const targetSlot = view.slot;
+    setTesting(true);
+    try {
+      const outcome = await testProvider(getLinkManager(), providerId, { slot: targetSlot });
+      if (outcome.ok) {
+        const { ok, latencyMs, message } = outcome.data;
+        toast.show({
+          kind: ok ? "saved" : "error",
+          text: ok
+            ? `key ${targetSlot === 0 ? "primary" : targetSlot} ok · ${latencyMs !== undefined ? `${latencyMs}ms` : "answered"}`
+            : `failed — ${message ?? "the provider refused"}`,
+        });
+        mobLog("config", "provider slot tested", { id: providerId, slot: targetSlot, ok, latencyMs });
+      } else {
+        toast.show({ kind: "error", text: outcome.error.message });
+        mobWarn("config", "provider slot test failed", {
+          id: providerId,
+          slot: targetSlot,
+          status: outcome.error.status,
+          message: outcome.error.message,
+        });
+      }
+    } catch (err) {
+      toast.show({ kind: "error", text: testTransportFailureMessage(err) });
+      mobWarn("config", "provider slot test transport failure", {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setTesting(false);
+    }
+  }, [testing, view, providerId, toast]);
+
+  const copyReference = useCallback(() => {
+    if (view === null) return;
+    const reference = keyReferenceText(view, providerId);
+    void Clipboard.setStringAsync(reference)
+      .then((ok) => {
+        if (ok) {
+          void selectionHaptic();
+          toast.show({ kind: "saved", text: "key reference copied" });
+          mobLog("config", "key reference copied", { id: providerId, slot: view.slot });
+        } else {
+          toast.show({ kind: "error", text: "the clipboard refused the copy" });
+        }
+      })
+      .catch(() => {
+        toast.show({ kind: "error", text: "the clipboard refused the copy" });
+      });
+  }, [view, providerId, toast]);
+
+  const title = view === null ? "Key" : view.slot === 0 ? "Primary key" : `Key ${view.slot}`;
+
+  return (
+    <Sheet open={open} onClose={onClose} title={title} testID="key-actions-sheet">
+      {view !== null ? (
+        <View style={styles.fieldGap}>
+          {/* The toast host — a verdict fired inside this Modal-hosted sheet
+              must render in the sheet's own native window (toast.tsx's law). */}
+          <ToastHost />
+          {/* The head's mono line — the same meta line the row renders. */}
+          <View style={styles.sheetHeadMono}>
+            <TypeMono numberOfLines={1} style={styles.slotMasked}>
+              {keySlotMetaLine(view)}
+            </TypeMono>
+          </View>
+
+          {view.hasKey ? (
+            <View style={styles.actionGrid}>
+              <View style={styles.actionGridRow}>
+                <ActionTile
+                  testID="key-action-test"
+                  icon={FlaskConical}
+                  label={testing ? "testing…" : "Test key"}
+                  busy={testing}
+                  disabled={testing}
+                  onPress={() => void runTest()}
+                  accessibilityLabel={testing ? "Testing the key" : "Test the key"}
+                />
+                <ActionTile
+                  testID="key-action-replace"
+                  icon={RefreshCw}
+                  label="Replace key"
+                  onPress={() => onReplace(view.slot)}
+                  accessibilityLabel="Replace the key"
+                />
+              </View>
+              <View style={styles.actionGridRow}>
+                <ActionTile
+                  testID="key-action-copy"
+                  icon={Copy}
+                  label="Copy key id"
+                  onPress={copyReference}
+                  accessibilityLabel="Copy the key reference"
+                />
+                {view.slot !== 0 ? (
+                  <ActionTile
+                    testID="key-action-remove"
+                    icon={Trash2}
+                    label="Remove key"
+                    tone="danger"
+                    onPress={() => onRemove(view.slot)}
+                    accessibilityLabel="Remove the key"
+                  />
+                ) : null}
+              </View>
+            </View>
+          ) : (
+            <View style={styles.actionGridRow}>
+              <ActionTile
+                testID="key-action-add"
+                icon={Plus}
+                label="Add key here"
+                onPress={() => onReplace(view.slot)}
+                accessibilityLabel="Add a key to this slot"
+              />
+            </View>
+          )}
+        </View>
+      ) : null}
+    </Sheet>
+  );
+}
+
 // ── the model actions sheet (test / edit / hide / delete) ───────────────────
 
 function ModelActionsSheet({
@@ -1144,58 +1310,49 @@ function ModelActionsSheet({
   onEdit: (model: ModelRecord) => void;
 }) {
   const { tokens } = useTheme();
+  const toast = useToast();
   const [shown, setShown] = useState<ModelRecord | null>(null);
   useEffect(() => {
     if (model !== null) setShown(model);
   }, [model]);
+  // R120-M (item 15 — the MODEL-SHEET content law): the LIVE record renders
+  // the moment the sheet opens — `model` is re-derived off the fresh list in
+  // the SAME commit the sheet opens (the old `shown`-only render spent its
+  // first frame on null content: the sheet slid up EMPTY and the grid
+  // popped in a beat late — the re-mount flicker); the snapshot now only
+  // carries the content through the close animation + refetch gaps. The
+  // sheet's shared motion legs (the R119-P content ride) are track S's
+  // retune — this is the content behavior only.
+  const view = model ?? shown;
 
   const [testing, setTesting] = useState(false);
-  const [testNote, setTestNote] = useState<ActionNote | null>(null);
-  // R119-P — the tools leg's SECOND verdict line (the agent-readiness
-  // verdict: called echo / answered in text / rejected). Rendered under the
-  // base ok/failed line; null when the leg never ran.
-  const [toolsNote, setToolsNote] = useState<ActionNote | null>(null);
   const [hiding, setHiding] = useState(false);
-  const [hideNote, setHideNote] = useState<ActionNote | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // Reset the transient verdicts whenever a different model opens.
+  // Reset the transient confirm whenever a different model opens.
   const shownId = shown?.id ?? null;
   useEffect(() => {
-    setTestNote(null);
-    setToolsNote(null);
-    setHideNote(null);
     setConfirmingDelete(false);
     setDeleteError(null);
   }, [shownId]);
 
-  const label = useMemo(() => (shown === null ? "" : modelRowLabel(shown)), [shown]);
+  const label = useMemo(() => (view === null ? "" : modelRowLabel(view)), [view]);
 
   const runTest = useCallback(async () => {
-    if (testing || shown === null) return;
-    const targetId = shown.id;
+    if (testing || view === null) return;
+    const targetId = view.id;
     setTesting(true);
-    setTestNote(null);
-    setToolsNote(null);
     try {
       const outcome = await testModel(getLinkManager(), targetId, {});
       if (outcome.ok) {
-        setTestNote(testResultNote(outcome.data));
-        // R119-P — the tools leg's own line (the agent-readiness verdict:
-        // the base line stays the chat verdict, this one says whether the
-        // AGENT's tool-carrying call shape works). null when the pong phase
-        // failed first (the base note already tells that story).
-        const toolsLeg = modelTestToolsLegLine(outcome.data);
-        setToolsNote(
-          toolsLeg === null
-            ? null
-            : {
-                kind: toolsLeg.tone === "good" ? "saved" : toolsLeg.tone === "caution" ? "caution" : "error",
-                text: toolsLeg.text,
-              },
-        );
+        // R120-M (item 16 — "A failed model test … show their details at
+        // the bottom of the sheet — they must be a toast"): ONE toast line
+        // carrying the base chat verdict joined with the tools leg's
+        // verdict when it ran (modelTestToastText — the worst news on the
+        // line sets the tone; the sheet's bottom note lines are GONE).
+        toast.show(modelTestToastText(outcome.data));
         mobLog("config", "model tested", {
           id: targetId,
           ok: outcome.data.ok,
@@ -1203,7 +1360,7 @@ function ModelActionsSheet({
           toolCalled: outcome.data.checks?.toolCalled ?? null,
         });
       } else {
-        setTestNote({ kind: "error", text: outcome.error.message });
+        toast.show({ kind: "error", text: outcome.error.message });
         mobWarn("config", "model test failed", {
           id: targetId,
           status: outcome.error.status,
@@ -1213,33 +1370,34 @@ function ModelActionsSheet({
     } catch (err) {
       // R116-j (§1.8): the class-based one-liner — never the blanket
       // "the host dropped during the test".
-      setTestNote({ kind: "error", text: testTransportFailureMessage(err) });
+      toast.show({ kind: "error", text: testTransportFailureMessage(err) });
       mobWarn("config", "model test threw", {
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setTesting(false);
     }
-  }, [testing, shown]);
+  }, [testing, view, toast]);
 
   const toggleHidden = useCallback(async () => {
-    if (hiding || shown === null) return;
-    const target = shown;
+    if (hiding || view === null) return;
+    const target = view;
     setHiding(true);
-    setHideNote(null);
     try {
       const outcome = await updateModel(getLinkManager(), target.id, {
         hidden: !target.hidden,
       });
       if (outcome.ok) {
         mobLog("config", "model hidden toggled", { id: target.id, hidden: !target.hidden });
-        setHideNote({
+        // R120-M (item 16 — the Hide action's confirmation rides the toast
+        // too; the sheet's bottom detail lines are gone).
+        toast.show({
           kind: "saved",
           text: outcome.data.hidden ? "hidden — stays out of every picker" : "visible again",
         });
         onChanged();
       } else {
-        setHideNote({ kind: "error", text: outcome.error.message });
+        toast.show({ kind: "error", text: outcome.error.message });
         mobWarn("config", "model hidden PATCH failed", {
           id: target.id,
           status: outcome.error.status,
@@ -1248,16 +1406,16 @@ function ModelActionsSheet({
         warningHaptic();
       }
     } catch {
-      setHideNote({ kind: "error", text: "the host dropped while saving — nothing changed" });
+      toast.show({ kind: "error", text: "the host dropped while saving — nothing changed" });
       mobWarn("config", "model hidden PATCH threw");
     } finally {
       setHiding(false);
     }
-  }, [hiding, shown, onChanged]);
+  }, [hiding, view, onChanged, toast]);
 
   const onDelete = useCallback(async () => {
-    if (deleting || shown === null) return;
-    const targetId = shown.id;
+    if (deleting || view === null) return;
+    const targetId = view.id;
     setDeleting(true);
     setDeleteError(null);
     try {
@@ -1283,16 +1441,21 @@ function ModelActionsSheet({
     } finally {
       setDeleting(false);
     }
-  }, [deleting, shown, onClose, onChanged]);
+  }, [deleting, view, onClose, onChanged]);
 
   return (
     <Sheet open={open} onClose={onClose} title={label} testID="model-actions-sheet">
-      {shown !== null ? (
+      {view !== null ? (
         <View style={styles.fieldGap}>
+          {/* The toast host — a verdict fired inside this Modal-hosted sheet
+              must render in the sheet's own native window (toast.tsx's
+              law). R120-M (item 16): the test/hide verdicts land here as
+              toasts — the sheet-bottom note lines are GONE. */}
+          <ToastHost />
           {/* The head's mono blocks — ONE line each (verdict #40). */}
           <View style={styles.sheetHeadMono}>
             <TypeMono numberOfLines={1} style={styles.modelIdMono}>
-              {shown.modelId}
+              {view.modelId}
             </TypeMono>
             <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
               {providerId}
@@ -1318,20 +1481,20 @@ function ModelActionsSheet({
                 testID="model-action-edit"
                 icon={PencilLine}
                 label="Edit model"
-                onPress={() => onEdit(shown)}
+                onPress={() => onEdit(view)}
                 accessibilityLabel="Edit the model"
               />
             </View>
             <View style={styles.actionGridRow}>
               <ActionTile
                 testID="model-action-hide"
-                icon={shown.hidden ? Eye : EyeOff}
-                label={hiding ? "saving…" : shown.hidden ? "Show model" : "Hide model"}
+                icon={view.hidden ? Eye : EyeOff}
+                label={hiding ? "saving…" : view.hidden ? "Show model" : "Hide model"}
                 busy={hiding}
                 disabled={hiding}
                 onPress={() => void toggleHidden()}
                 accessibilityLabel={
-                  shown.hidden
+                  view.hidden
                     ? "Show the model in the chat picker"
                     : "Hide the model from the chat picker"
                 }
@@ -1347,13 +1510,11 @@ function ModelActionsSheet({
             </View>
           </View>
 
-          {/* R119-P — the base verdict line keeps its exact R116-j format
-              (ok · ms — preview / failed — reason); the tools leg appends
-              as its OWN note line right under it, tone-mapped in
-              NoteLine. */}
-          {testNote !== null ? <NoteLine note={testNote} /> : null}
-          {toolsNote !== null ? <NoteLine note={toolsNote} /> : null}
-          {hideNote !== null ? <NoteLine note={hideNote} /> : null}
+          {/* R120-M (item 16): the verdict lines above the grid are RETIRED —
+              the test verdict + the hide confirmation ride the TOAST now
+              (modelTestToastText joins the base chat verdict with the
+              tools leg — the R119-P honesty survives, one transient line
+              instead of a permanent block at the sheet's bottom). */}
 
           {/* Delete's confirm step lives inline BELOW the grid (never a
               one-tap loss) — the tiles stay for context. R118-A: the
@@ -1452,439 +1613,42 @@ function ActionTile({
   );
 }
 
-/**
- * The per-model test verdict line — ok+latency (+ a reply peek) or the
- * honest scrubbed reason. R119-P: this stays EXACTLY the base (chat)
- * verdict; the tools leg renders as its own note line beside it
- * (modelTestToolsLegLine) so "test ✓" never again hides a broken agent
- * path (the owner's TokenHarbor report).
- */
-function testResultNote(result: ModelTestResult): ActionNote {
-  if (result.ok) {
-    const preview =
-      result.contentPreview !== undefined && result.contentPreview.trim() !== ""
-        ? ` — “${result.contentPreview.trim().slice(0, 60)}”`
-        : "";
-    return { kind: "saved", text: `ok · ${result.latencyMs}ms${preview}` };
-  }
-  return { kind: "error", text: `failed — ${result.reason ?? "the provider refused"}` };
-}
-
-// ── the edit-model sheet (PATCH — the full R87 field set, R116-j) ────────────
-
-function EditModelSheet({
-  open,
-  model,
-  onClose,
-  onSaved,
-}: {
-  open: boolean;
-  /** The LIVE record (null while closed — the snapshot carries the content). */
-  model: ModelRecord | null;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const { tokens } = useTheme();
-  const [shown, setShown] = useState<ModelRecord | null>(null);
-  const [draft, setDraft] = useState<ModelFormDraft>(() => blankDraft());
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // R116-j (§1.9 — THE PRELOAD RACE FIX): the hydrate is keyed on the model
-  // IDENTITY, not the [open] edge alone — `open` and `model` arrive in the
-  // SAME commit (the actions sheet's Edit tile hands both over at once), so
-  // the draft populates the same commit-cycle the sheet opens; the old
-  // [open]-only effect ran against the stale shown === null and opened a
-  // BLANK form. The open-edge discipline holds: hydrate on open + model-id
-  // change — a background refetch while open (a fresh object, SAME id)
-  // never clobbers what's typed.
-  const hydrateId = model?.id ?? null;
-  useEffect(() => {
-    if (open && model !== null) {
-      setShown(model);
-      setDraft(modelDraftFromRecord(model));
-      setError(null);
-    }
-    // `model` is read when the effect runs; `hydrateId` — the record's
-    // identity, never the object — is the dependency (see above).
-  }, [open, hydrateId]);
-
-  const patch = useCallback((next: Partial<ModelFormDraft>) => {
-    setDraft((prev) => ({ ...prev, ...next }));
-  }, []);
-
-  const onSave = useCallback(async () => {
-    if (busy || shown === null) return;
-    // Validate the numerics first — the per-field message shows inline.
-    const numericError = firstNumericError(draft);
-    if (numericError !== null) {
-      setError(numericError);
-      void warningHaptic();
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const outcome = await updateModel(getLinkManager(), shown.id, modelEditBody(draft));
-      if (outcome.ok) {
-        mobLog("config", "model record updated", { id: shown.id, modelId: shown.modelId });
-        void successHaptic();
-        onClose();
-        onSaved();
-      } else {
-        mobWarn("config", "model PATCH failed", {
-          id: shown.id,
-          status: outcome.error.status,
-          message: outcome.error.message,
-        });
-        void warningHaptic();
-        setError(outcome.error.message);
-      }
-    } catch {
-      mobWarn("config", "model PATCH threw");
-      void warningHaptic();
-      setError("the host is offline — the record is unchanged");
-    } finally {
-      setBusy(false);
-    }
-  }, [busy, draft, shown, onClose, onSaved]);
-
-  return (
-    <Sheet open={open} onClose={onClose} title="Edit model" testID="edit-model-sheet" maxHeightFraction={0.86}>
-      {shown !== null ? (
-        /* R115-O — the form's generous rhythm: sections spacing.lg apart
-           (the cluttered-form donts), Save busy, Cancel quiet beneath. */
-        <View style={styles.editFormGap}>
-          {/* modelId is IDENTITY on PATCH — read-only, shown as the mono truth. */}
-          <View style={styles.fieldWrap}>
-            <TypeCaption style={styles.fieldLabel} numberOfLines={1}>
-              Model id (read-only)
-            </TypeCaption>
-            <View style={[styles.readOnlyMono, { borderColor: tokens.borderSubtle, backgroundColor: tokens.inputBg }]}>
-              <TypeMono numberOfLines={1}>{draft.modelId}</TypeMono>
-            </View>
-          </View>
-
-          <ModelFormSections draft={draft} patch={patch} />
-
-          {/* R116-j — the live preview strip: the draft's key numbers, ONE
-              mono line above Save (the PC dialog's R89-C4 summary). */}
-          <View style={[styles.previewStrip, { backgroundColor: tokens.subtle }]}>
-            <TypeMono
-              numberOfLines={1}
-              style={[styles.modelIdMono, { color: tokens.textTertiary }]}
-              testID="edit-model-preview"
-            >
-              {modelDraftPreview(draft)}
-            </TypeMono>
-          </View>
-
-          {error !== null ? (
-            <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
-              {error}
-            </TypeCaption>
-          ) : null}
-          {/* R118-A — the CTA zone: centered, self-sized, minWidth 200; the
-              Cancel escape is a centered QuietButton beneath. */}
-          <ChromeButton
-            onPress={() => void onSave()}
-            disabled={busy}
-            accessibilityLabel={busy ? "Saving the model" : "Save the model"}
-            style={styles.sheetCta}
-          >
-            {busy ? "saving…" : "Save model"}
-          </ChromeButton>
-          <QuietButton onPress={onClose} disabled={busy} style={styles.sheetQuiet}>
-            Cancel
-          </QuietButton>
-        </View>
-      ) : null}
-    </Sheet>
-  );
-}
-
-// ── the shared model-form sections (R116-j) ─────────────────────────────────
-//
-// The edit + add sheets render the SAME form — the PC's one configure
-// dialog ported across both entry points (verdict #43: the full R87 field
-// set — Identity, Sizing, the Pricing trio incl. cache read, the INPUT and
-// OUTPUT capability chips, and the hidden toggle). The "Thinking" toggle is
-// DELETED: the PC has none — "reasoning and tool use are detected
-// automatically" — so the sheet never configures supportsThinking (absent
-// on PATCH = the detected value keeps). Cap chips flip true ↔ false; an
-// untouched null round-trips as null (unknown stays unknown — never a
-// guessed boolean). Text input is locked ON (every chat model accepts
-// text); text output renders ON until turned off (the chat-completions
-// default). supportsTools has NO chip (detected at runtime) — it rides the
-// draft for the lossless round-trip only. R118-A: every field caption and
-// both capability footnotes are GONE — inside sheets, ClayInput is label +
-// input only (the section kickers + the live preview strip carry the rest).
-
-function ModelFormSections({
-  draft,
-  patch,
-}: {
-  draft: ModelFormDraft;
-  patch: (next: Partial<ModelFormDraft>) => void;
-}) {
-  const { tokens } = useTheme();
-  return (
-    <>
-      {/* Identity — the human name + the parameter-size label. */}
-      <View style={styles.formSection}>
-        <TypeCaption style={styles.fieldLabel} numberOfLines={1}>
-          Identity
-        </TypeCaption>
-        <ClayInput
-          label="Display name"
-          value={draft.displayName}
-          onChangeText={(text) => patch({ displayName: text })}
-          autoCapitalize="none"
-          autoCorrect={false}
-          accessibilityLabel="Display name"
-        />
-        <ClayInput
-          label="Size label"
-          value={draft.sizeLabel}
-          onChangeText={(text) => patch({ sizeLabel: text })}
-          autoCapitalize="none"
-          autoCorrect={false}
-          accessibilityLabel="Size label"
-        />
-      </View>
-
-      {/* Sizing — the context window + the max output budget. */}
-      <View style={styles.formSection}>
-        <TypeCaption style={styles.fieldLabel} numberOfLines={1}>
-          Sizing
-        </TypeCaption>
-        <ClayInput
-          label="Context window"
-          mono
-          value={draft.contextWindow}
-          onChangeText={(text) => patch({ contextWindow: text })}
-          keyboardType="number-pad"
-          accessibilityLabel="Context window"
-        />
-        <ClayInput
-          label="Max output tokens"
-          mono
-          value={draft.maxOutputTokens}
-          onChangeText={(text) => patch({ maxOutputTokens: text })}
-          keyboardType="number-pad"
-          accessibilityLabel="Max output tokens"
-        />
-      </View>
-
-      {/* Pricing — the USD-per-Mtok trio (cache read included). */}
-      <View style={styles.formSection}>
-        <TypeCaption style={styles.fieldLabel} numberOfLines={1}>
-          Pricing
-        </TypeCaption>
-        <ClayInput
-          label="Input price / Mtok"
-          mono
-          value={draft.inputPricePerMtok}
-          onChangeText={(text) => patch({ inputPricePerMtok: text })}
-          keyboardType="decimal-pad"
-          accessibilityLabel="Input price per million tokens"
-        />
-        <ClayInput
-          label="Output price / Mtok"
-          mono
-          value={draft.outputPricePerMtok}
-          onChangeText={(text) => patch({ outputPricePerMtok: text })}
-          keyboardType="decimal-pad"
-          accessibilityLabel="Output price per million tokens"
-        />
-        <ClayInput
-          label="Cache read / Mtok"
-          mono
-          value={draft.inputPriceCachedPerMtok}
-          onChangeText={(text) => patch({ inputPriceCachedPerMtok: text })}
-          keyboardType="decimal-pad"
-          accessibilityLabel="Cache read price per million tokens"
-        />
-      </View>
-
-      {/* INPUT capabilities — chip toggles; Text locked ON. */}
-      <View style={styles.formSection}>
-        <TypeCaption style={styles.fieldLabel} numberOfLines={1}>
-          Input capabilities
-        </TypeCaption>
-        <View style={styles.capRow}>
-          <Chip selected testID="model-cap-text-in">
-            Text
-          </Chip>
-          <Chip
-            selected={draft.supportsVision}
-            onPress={() => patch({ supportsVision: !draft.supportsVision })}
-            testID="model-cap-images-in"
-          >
-            Images
-          </Chip>
-          <Chip
-            selected={draft.supportsVideo === true}
-            onPress={() => patch({ supportsVideo: draft.supportsVideo === true ? false : true })}
-            testID="model-cap-video-in"
-          >
-            Video
-          </Chip>
-          <Chip
-            selected={draft.supportsPdf === true}
-            onPress={() => patch({ supportsPdf: draft.supportsPdf === true ? false : true })}
-            testID="model-cap-pdf-in"
-          >
-            PDF
-          </Chip>
-          <Chip
-            selected={draft.supportsAudio === true}
-            onPress={() => patch({ supportsAudio: draft.supportsAudio === true ? false : true })}
-            testID="model-cap-audio-in"
-          >
-            Audio
-          </Chip>
-        </View>
-      </View>
-
-      {/* OUTPUT capabilities — chip toggles (text out defaults ON). */}
-      <View style={styles.formSection}>
-        <TypeCaption style={styles.fieldLabel} numberOfLines={1}>
-          Output capabilities
-        </TypeCaption>
-        <View style={styles.capRow}>
-          <Chip
-            selected={draft.supportsTextOutput !== false}
-            onPress={() =>
-              patch({ supportsTextOutput: draft.supportsTextOutput !== false ? false : true })
-            }
-            testID="model-cap-text-out"
-          >
-            Text out
-          </Chip>
-          <Chip
-            selected={draft.supportsImageOutput === true}
-            onPress={() =>
-              patch({ supportsImageOutput: draft.supportsImageOutput === true ? false : true })
-            }
-            testID="model-cap-images-out"
-          >
-            Images out
-          </Chip>
-          <Chip
-            selected={draft.supportsVideoOutput === true}
-            onPress={() =>
-              patch({ supportsVideoOutput: draft.supportsVideoOutput === true ? false : true })
-            }
-            testID="model-cap-video-out"
-          >
-            Video out
-          </Chip>
-          <Chip
-            selected={draft.supportsAudioOutput === true}
-            onPress={() =>
-              patch({ supportsAudioOutput: draft.supportsAudioOutput === true ? false : true })
-            }
-            testID="model-cap-audio-out"
-          >
-            Audio out
-          </Chip>
-        </View>
-      </View>
-
-      {/* Hide from the chat picker — the one behavioral toggle that stays
-          (R118-A: the toggle's caption is GONE; the toggle's own line IS
-          the label). */}
-      <View style={[styles.toggleCard, { borderColor: tokens.borderSubtle }]}>
-        <View style={styles.toggleRow}>
-          <View style={styles.rowText}>
-            <TypeBodyStrong numberOfLines={1}>Hide from the chat picker</TypeBodyStrong>
-          </View>
-          <ClaySwitch
-            value={draft.hidden}
-            onValueChange={(next) => patch({ hidden: next })}
-            label="Hidden toggle"
-          />
-        </View>
-      </View>
-    </>
-  );
-}
-
-/** The per-field validation the model sheets share — the first malformed
- * numeric's inline message, or null when every field parses. Pure. */
-function firstNumericError(draft: ModelFormDraft): string | null {
-  for (const [field, raw] of [
-    ["Context window", draft.contextWindow],
-    ["Max output tokens", draft.maxOutputTokens],
-    ["Input price", draft.inputPricePerMtok],
-    ["Output price", draft.outputPricePerMtok],
-    ["Cache read price", draft.inputPriceCachedPerMtok],
-  ] as const) {
-    const parse = parseModelNumericField(field, raw);
-    if (!parse.ok) return parse.message;
-  }
-  return null;
-}
-
-/** The sheets' live preview strip — the draft's key numbers on ONE mono
- * line (unknown → "—", never a fabricated 0). Pure. */
-function modelDraftPreview(draft: ModelFormDraft): string {
-  const num = (raw: string): number | null => {
-    const parse = parseModelNumericField("preview", raw);
-    return parse.ok ? parse.value : null;
-  };
-  const tok = (v: number | null): string => (v === null ? "—" : formatTokens(v));
-  const price = (v: number | null): string => (v === null ? "—" : `$${v}`);
-  return [
-    `ctx ${tok(num(draft.contextWindow))}`,
-    `max out ${tok(num(draft.maxOutputTokens))}`,
-    `in ${price(num(draft.inputPricePerMtok))}`,
-    `out ${price(num(draft.outputPricePerMtok))}`,
-    `cache ${price(num(draft.inputPriceCachedPerMtok))}`,
-  ].join(" · ");
-}
-
-// ── the add-model sheet (from the live catalog w/ static prefill, or custom) ─
+// ── the add-model picker (R120-M items 19/22 — search + custom seed; the
+// CONFIGURE SCREEN owns the editor + the commit) ─────────────────────────────
 
 function AddModelSheet({
   open,
   providerId,
   savedModelIds,
   onClose,
-  onSaved,
 }: {
   open: boolean;
   providerId: string;
   savedModelIds: Set<string>;
   onClose: () => void;
-  onSaved: () => void;
 }) {
   const { tokens } = useTheme();
+  const router = useRouter();
   const [mode, setMode] = useState<"catalog" | "custom">("catalog");
   const [query, setQuery] = useState("");
   const [entries, setEntries] = useState<ModelSummary[] | null>(null);
   const [catalogSource, setCatalogSource] = useState<"live" | "static" | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [staticCatalog, setStaticCatalog] = useState<CatalogModelEntry[]>([]);
-  const [draft, setDraft] = useState<ModelFormDraft | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // R120-M (items 19/22): the picker SEEDS the custom id — the editor + the
+  // commit live on the configure screen; nothing is added from this sheet.
+  const [customId, setCustomId] = useState("");
 
   // The catalog loads on open: the LIVE listing first (the provider's own
   // /models — the working path the old screen used), the STATIC catalog as
-  // the fallback when it fails or answers empty. The static rows ride
-  // along either way — they are the prefill's pricing/context/vision source.
+  // the fallback when it fails or answers empty.
   const loadCatalog = useCallback(async () => {
     setEntries(null);
     setCatalogSource(null);
     setCatalogError(null);
     try {
-      const [liveOutcome, staticOutcome] = await Promise.all([
+      const [liveOutcome] = await Promise.all([
         fetchProviderModels(getLinkManager(), providerId),
-        fetchModelCatalog(getLinkManager()),
       ]);
-      if (staticOutcome.ok) setStaticCatalog(staticOutcome.data.models);
       if (liveOutcome.ok && liveOutcome.data.models.length > 0) {
         setEntries(liveOutcome.data.models);
         setCatalogSource("live");
@@ -1892,20 +1656,20 @@ function AddModelSheet({
           providerId,
           count: liveOutcome.data.models.length,
         });
-      } else if (staticOutcome.ok) {
-        setEntries(catalogEntriesFromStatic(staticOutcome.data.models));
-        setCatalogSource("static");
-        mobLog("config", "add-model catalog loaded (static fallback)", {
-          providerId,
-          count: staticOutcome.data.models.length,
-        });
+      } else if (liveOutcome.ok) {
+        // The live listing answered EMPTY — the honest empty catalog (no
+        // static fallback: the entries below only ever carried {id, name},
+        // and the configure screen's own smart fetch + static prefill own
+        // the details now).
+        setEntries([]);
+        setCatalogSource("live");
+        mobLog("config", "add-model catalog empty (live)", { providerId });
       } else {
-        // Both failed — the live error is the honest one to show.
-        const message = liveOutcome.ok
-          ? staticOutcome.error.message
-          : liveOutcome.error.message;
-        setCatalogError(message);
-        mobWarn("config", "add-model catalog failed", { providerId, message });
+        setCatalogError(liveOutcome.error.message);
+        mobWarn("config", "add-model catalog failed", {
+          providerId,
+          message: liveOutcome.error.message,
+        });
       }
     } catch {
       setCatalogError("the host dropped while listing the catalog");
@@ -1917,8 +1681,7 @@ function AddModelSheet({
     if (!open) return;
     setMode("catalog");
     setQuery("");
-    setDraft(null);
-    setError(null);
+    setCustomId("");
     void loadCatalog();
   }, [open, loadCatalog]);
 
@@ -1929,61 +1692,28 @@ function AddModelSheet({
     return searchCatalogEntries(query, entries.filter((e) => !savedModelIds.has(e.id)));
   }, [entries, query, savedModelIds]);
 
-  const patch = useCallback((next: Partial<ModelFormDraft>) => {
-    setDraft((prev) => (prev === null ? prev : { ...prev, ...next }));
-  }, []);
-
-  const pickEntry = useCallback(
-    (entry: ModelSummary) => {
+  // R120-M (item 19 — "tapping a result opens the Edit Model screen for
+  // that model … the tap carries the model id/name into the configure
+  // flow"; item 22 — the model lands in the list only on THAT screen's
+  // explicit save): the tap closes the picker and pushes the configure
+  // screen carrying the entry's id + name.
+  const configure = useCallback(
+    (modelId: string, name?: string) => {
       void selectionHaptic();
-      setDraft(catalogPrefillFor(entry, staticCatalog));
-      setError(null);
+      onClose();
+      router.push({
+        pathname: "/settings/providers/[id]/model",
+        params: {
+          id: providerId,
+          modelId,
+          ...(name !== undefined && name !== "" ? { name } : {}),
+        },
+      });
     },
-    [staticCatalog],
+    [providerId, onClose, router],
   );
 
-  const onSave = useCallback(async () => {
-    if (busy || draft === null) return;
-    // R116-j: the shared per-field validation — the same message the edit
-    // sheet shows, incl. the new sizing/cache fields.
-    const numericError = firstNumericError(draft);
-    if (numericError !== null) {
-      setError(numericError);
-      void warningHaptic();
-      return;
-    }
-    const body = modelAddBody(draft);
-    if (body === null) {
-      setError("a model id is required");
-      void warningHaptic();
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const outcome = await addProviderModel(getLinkManager(), providerId, body);
-      if (outcome.ok) {
-        mobLog("config", "model added", { providerId, modelId: body.modelId });
-        void successHaptic();
-        onClose();
-        onSaved();
-      } else {
-        mobWarn("config", "model add failed", {
-          providerId,
-          status: outcome.error.status,
-          message: outcome.error.message,
-        });
-        void warningHaptic();
-        setError(outcome.error.message);
-      }
-    } catch {
-      mobWarn("config", "model add threw");
-      void warningHaptic();
-      setError("the host is offline — the model was not added");
-    } finally {
-      setBusy(false);
-    }
-  }, [busy, draft, providerId, onClose, onSaved]);
+  const trimmedCustomId = customId.trim();
 
   return (
     <Sheet
@@ -2043,8 +1773,8 @@ function AddModelSheet({
                       <Pressable
                         key={entry.id}
                         accessibilityRole="button"
-                        accessibilityLabel={`Prefill ${entry.name}`}
-                        onPress={() => pickEntry(entry)}
+                        accessibilityLabel={`Configure ${entry.name}`}
+                        onPress={() => configure(entry.id, entry.name)}
                         style={({ pressed }) => [
                           styles.catalogRow,
                           {
@@ -2074,109 +1804,33 @@ function AddModelSheet({
             )}
           </View>
         ) : (
-          // Custom mode without a draft yet — the seed row below IS the
-          // affordance (R118-A: the explainer caption is gone; the seed
-          // row's own two-line anatomy says what it does).
-          null
+          // R120-M (items 19/22): the custom mode is the model-id SEED —
+          // one field + the configure CTA (the editor + the commit live on
+          // the configure screen; R118-A's seed row is retired with the
+          // in-sheet form).
+          <View style={styles.fieldGap}>
+            <ClayInput
+              label="Model id"
+              mono
+              value={customId}
+              onChangeText={setCustomId}
+              autoCapitalize="none"
+              autoCorrect={false}
+              accessibilityLabel="Custom model id"
+            />
+            <ChromeButton
+              onPress={() => configure(trimmedCustomId)}
+              disabled={trimmedCustomId === ""}
+              accessibilityLabel={trimmedCustomId === "" ? "Type a model id first" : "Configure the model"}
+              style={styles.sheetCta}
+            >
+              Configure model
+            </ChromeButton>
+          </View>
         )}
-
-        {/* the form — prefilled after a catalog tap, blank after the custom
-            seed; one form serves both modes (a catalog pick can be tweaked). */}
-        <View style={[styles.fieldGap, styles.formDividerTop, { borderTopColor: tokens.borderSubtle }]}>
-          {draft === null ? (
-            mode === "custom" ? (
-              <SeedCustomDraft onSeed={() => setDraft(blankDraft())} />
-            ) : null
-          ) : (
-            <>
-              {/* R116-j: the add sheet renders the SAME form grammar as the
-                  edit sheet (the PC's one configure dialog) — the catalog
-                  tap prefills sizing/pricing/vision for review, every cap
-                  is editable before the save. */}
-              <ClayInput
-                label="Model id"
-                mono
-                value={draft.modelId}
-                onChangeText={(text) => patch({ modelId: text })}
-                autoCapitalize="none"
-                autoCorrect={false}
-                accessibilityLabel="Model id"
-              />
-              <ModelFormSections draft={draft} patch={patch} />
-              <View style={[styles.previewStrip, { backgroundColor: tokens.subtle }]}>
-                <TypeMono
-                  numberOfLines={1}
-                  style={[styles.modelIdMono, { color: tokens.textTertiary }]}
-                  testID="add-model-preview"
-                >
-                  {modelDraftPreview(draft)}
-                </TypeMono>
-              </View>
-              {error !== null ? (
-                <TypeCaption style={{ color: tokens.danger }} numberOfLines={3}>
-                  {error}
-                </TypeCaption>
-              ) : null}
-              <ChromeButton
-                onPress={() => void onSave()}
-                disabled={busy}
-                accessibilityLabel={busy ? "Saving the model" : "Save the model"}
-                style={styles.sheetCta}
-              >
-                {busy ? "saving…" : "Save model"}
-              </ChromeButton>
-            </>
-          )}
-        </View>
       </View>
     </Sheet>
   );
-}
-
-/** The custom-mode seed — one tap opens the blank form (kept as its own
- * row so the catalog list stays the default surface). */
-function SeedCustomDraft({ onSeed }: { onSeed: () => void }) {
-  const { tokens } = useTheme();
-  return (
-    <PressableCard onPress={onSeed} accessibilityLabel="Start a custom model">
-      <View style={styles.addRowInner}>
-        <View style={[styles.addRowIcon, { backgroundColor: tokens.subtleHover }]}>
-          <Plus size={16} color={tokens.accent} strokeWidth={2.2} />
-        </View>
-        <View style={styles.addRowText}>
-          <TypeBodyStrong numberOfLines={1}>Start a custom model</TypeBodyStrong>
-          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-            blank form — you type the model id
-          </TypeMicro>
-        </View>
-      </View>
-    </PressableCard>
-  );
-}
-
-/** The custom-mode seed (R116-j: the full field set — text output defaults
- * ON, the chat-completions contract; every other cap starts unknown). */
-function blankDraft(): ModelFormDraft {
-  return {
-    modelId: "",
-    displayName: "",
-    sizeLabel: "",
-    contextWindow: "",
-    maxOutputTokens: "",
-    inputPricePerMtok: "",
-    outputPricePerMtok: "",
-    inputPriceCachedPerMtok: "",
-    supportsVision: false,
-    supportsTools: null,
-    supportsAudio: null,
-    supportsVideo: null,
-    supportsPdf: null,
-    supportsTextOutput: true,
-    supportsImageOutput: null,
-    supportsVideoOutput: null,
-    supportsAudioOutput: null,
-    hidden: false,
-  };
 }
 
 // ── small shared pieces ─────────────────────────────────────────────────────
@@ -2215,63 +1869,6 @@ function HostGate({ status }: { status: "unpaired" | "probing" | "offline" }) {
   );
 }
 
-// ── ClaySwitch — the same clay switch as the preferences page, kept local ──
-// (the file-set boundary; accent pill + sliding dot, the house spring).
-
-const SWITCH_TRACK_W = 52;
-const SWITCH_TRACK_H = 32;
-const SWITCH_DOT = 24;
-const SWITCH_PAD = 3;
-const SWITCH_TRAVEL = SWITCH_TRACK_W - SWITCH_DOT - SWITCH_PAD * 2;
-
-function ClaySwitch({
-  value,
-  onValueChange,
-  disabled = false,
-  label,
-}: {
-  value: boolean;
-  onValueChange: (next: boolean) => void;
-  disabled?: boolean;
-  label: string;
-}) {
-  const { tokens } = useTheme();
-  const progress = useSharedValue(value ? 1 : 0);
-
-  useEffect(() => {
-    progress.value = withSpring(value ? 1 : 0, SPRING);
-  }, [value, progress]);
-
-  const trackStyle = useAnimatedStyle(() => ({
-    backgroundColor: interpolateColor(progress.value, [0, 1], [tokens.pillBg, tokens.accent]),
-  }));
-  const dotStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: progress.value * SWITCH_TRAVEL }],
-  }));
-
-  return (
-    <Pressable
-      accessibilityRole="switch"
-      accessibilityLabel={label}
-      accessibilityState={{ checked: value, disabled }}
-      disabled={disabled}
-      onPress={() => onValueChange(!value)}
-      hitSlop={6}
-      style={styles.switchTarget}
-    >
-      <Animated.View style={[styles.switchTrack, trackStyle, disabled ? { opacity: 0.5 } : null]}>
-        <Animated.View
-          style={[
-            styles.switchDot,
-            { backgroundColor: value ? tokens.accentText : tokens.textSecondary },
-            dotStyle,
-          ]}
-        />
-      </Animated.View>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
   identityPad: { padding: spacing.lg, gap: spacing.md },
   identityHead: { flexDirection: "row", alignItems: "center", gap: spacing.md },
@@ -2289,10 +1886,10 @@ const styles = StyleSheet.create({
    *  shrinking before the switch ever moves. */
   identityName: { flexShrink: 1 },
   identityToggleWrap: { alignItems: "flex-end" },
-  /** R118-E §2B1 — the BASE-URL zone: the micro-caps label above one mono
-   *  line (13/19, TypeMono's own recipe — tail-ellipsized by numberOfLines). */
-  baseUrlZone: { gap: 2 },
-  baseUrlLabel: { letterSpacing: 0.8, textTransform: "uppercase" },
+  /** R120-M (item 10) — the ONE context line under the name IS the base
+   *  URL: TypeMono's own 13/19 recipe, one line, tail-clipped by
+   *  numberOfLines. */
+  identityBaseUrl: { fontSize: 13, lineHeight: 19 },
   identityButtons: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
   /** R118-E §2B1 — the hero's action pair: the primary rides flex 1 (the
    *  CTA grammar — a REAL primary, not a quiet peer), the Rename quiet
@@ -2327,10 +1924,6 @@ const styles = StyleSheet.create({
    *  caption size, one step up from the old 11/15 — pinned via
    *  provider-display's KEY_SLOT_MONO pair so the cut cannot drift). */
   slotMasked: { fontSize: KEY_SLOT_MONO_SIZE, lineHeight: KEY_SLOT_MONO_LINE },
-  slotActions: { flexDirection: "row", gap: spacing.xs, alignItems: "center" },
-  /** R118-E §2B2 — the compact quiet actions: minHeight 36, caption-size
-   *  label — a row AFFORDANCE, not a page button. */
-  slotActionButton: { paddingHorizontal: spacing.md, minHeight: 36 },
   addKeyRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2382,33 +1975,11 @@ const styles = StyleSheet.create({
   noteRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   noteText: { flex: 1 },
   fieldGap: { gap: spacing.md },
-  editFormGap: { gap: spacing.lg },
   fieldWrap: { gap: spacing.xs },
-  fieldLabel: { textTransform: "uppercase", letterSpacing: 0.8 },
   /** R118-A §2.4 — the sheet CTA zone: centered, self-sized, minWidth 200;
    *  the quiet escape centers beneath at its natural width. */
   sheetCta: { alignSelf: "center", minWidth: SHEET_CTA_MIN_W },
   sheetQuiet: { alignSelf: "center" },
-  readOnlyMono: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 14,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    minHeight: 44,
-    justifyContent: "center",
-  },
-  toggleCard: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 16,
-    padding: spacing.md,
-    gap: spacing.md,
-  },
-  toggleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    minHeight: 56,
-  },
   // R116-j: the model menu's 2×2 grid — two explicit rows of equal tiles
   // (deterministic halves, never a wrap guess).
   actionGrid: { gap: spacing.md },
@@ -2422,17 +1993,6 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS_INPUT,
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing.sm,
-  },
-  // The shared model form's section: label + fields, breathing room inside.
-  formSection: { gap: spacing.md },
-  // The capability chip rows (chips wrap by design — the single-line law
-  // scopes to descriptions/captions, not chip groups).
-  capRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
-  // The one-line mono preview strip above Save.
-  previewStrip: {
-    borderRadius: RADIUS_INPUT,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
   },
   sheetHeadMono: { gap: 2 },
   confirmBox: {
@@ -2450,19 +2010,5 @@ const styles = StyleSheet.create({
     minHeight: 56,
     borderBottomWidth: StyleSheet.hairlineWidth,
     gap: spacing.sm,
-  },
-  formDividerTop: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: spacing.md },
-  switchTarget: { minWidth: 44, minHeight: 44, alignItems: "flex-end", justifyContent: "center" },
-  switchTrack: {
-    width: SWITCH_TRACK_W,
-    height: SWITCH_TRACK_H,
-    borderRadius: SWITCH_TRACK_H / 2,
-    padding: SWITCH_PAD,
-    justifyContent: "center",
-  },
-  switchDot: {
-    width: SWITCH_DOT,
-    height: SWITCH_DOT,
-    borderRadius: SWITCH_DOT / 2,
   },
 });
