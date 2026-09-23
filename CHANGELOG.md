@@ -19,7 +19,7 @@ number is single-sourced from the root `package.json`
 - **A refresh mid-turn no longer fakes completion.** The working state, the stop button, and the in-flight turn's rendering now derive from the BACKEND's live-turn registry — refresh while the agent works and you come back to the WORKING state (stop button included), not a transcript that looks finished. The session-split-after-recover glitch (the fold showing the same turn twice) is closed at the fold/live seam.
 
 ### The mobile session center
-- **File edits, created files, and tool hints render on mobile too** — every action row carries its path/command/summary, in the live stream and the folded transcript, and the collapsed activity line hints at WHAT ran ("Thought for 8s · 3 actions · src/a.ts, npm test").
+- **File edits, created files, and tool hints render on mobile too** — every action row carries its path/command/summary, in the live stream and the folded transcript, and the collapsed activity line hints at WHAT ran (`Thought for 8s · 3 actions · <a file path>, npm test`).
 - **The response formatting gets the mobile treatment** — a real heading ladder, code blocks with their language label, honest list/inline-code rendering — and the text-order randomness (parallel tool frames landing out of order) is fixed.
 - **Fonts verified bundled and loading** — all seven type tiers resolve to real loaded fonts (the audit is documented; the rendering feel's root cause was elsewhere).
 - **The in-progress state reads alive but calm** — the session avatar gains a subtle breathing accent ring while the agent works; no jarring glows.

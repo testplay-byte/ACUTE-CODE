@@ -28,35 +28,34 @@ const EXCHANGES: TimelineExchange[] = [
 
 /** happy-dom has NO layout — every rect is 0×0 at (0,0). The strip's pointer
  * math reads the strip's + each bar's rect, so the tests program a
- * deterministic geometry: the strip is 10×400 at the origin; bar i rests at
- * top = 20 + i * 12 (8px bar + gap-ish), growing bars report their animated
- * height. */
+ * deterministic geometry KEYED BY ELEMENT (the cycling-counter mock of the
+ * first draft mis-aligned once the pointermove handler itself began reading
+ * rects — the preview's nearest-bar pass must be call-order-independent):
+ * the strip is 10×400 at the origin; bar i rests at top = 20 + i * 12 (8px
+ * bar + gap-ish). programGeometry runs AFTER render (the bars must exist). */
 function programGeometry(heights: number[]): void {
   const stripRect = { top: 0, left: 0, right: 10, bottom: 400, width: 10, height: 400, x: 0, y: 0, toJSON: () => ({}) };
-  const barRects = heights.map((h, i) => ({
-    top: 20 + i * 12,
-    left: 0,
-    right: 10,
-    bottom: 20 + i * 12 + h,
-    width: 10,
-    height: h,
-    x: 0,
-    y: 20 + i * 12,
-    toJSON: () => ({}),
-  }));
-  let barIndex = -1;
+  const rectMap = new WeakMap<HTMLElement, DOMRect>();
+  const strip = document.querySelector('[data-testid="message-timeline"]') as HTMLElement | null;
+  if (strip !== null) rectMap.set(strip, stripRect as DOMRect);
+  for (const [i, bar] of bars().entries()) {
+    const top = 20 + i * 12;
+    rectMap.set(bar, {
+      top,
+      left: 0,
+      right: 10,
+      bottom: top + heights[i % Math.max(heights.length, 1)],
+      width: 10,
+      height: heights[i % Math.max(heights.length, 1)],
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    } as DOMRect);
+  }
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
     this: HTMLElement,
   ) {
-    const isStrip = this.hasAttribute("data-testid") && this.getAttribute("data-testid") === "message-timeline";
-    if (isStrip) return stripRect as DOMRect;
-    const isBar = this.hasAttribute("data-testid") && this.getAttribute("data-testid") === "message-timeline-bar";
-    if (isBar) {
-      barIndex += 1;
-      const idx = barIndex % Math.max(barRects.length, 1);
-      return barRects[idx] as DOMRect;
-    }
-    return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    return rectMap.get(this) ?? ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect);
   });
 }
 
@@ -80,8 +79,8 @@ afterEach(() => {
 
 describe("MessageTimeline structure (ROUND-120 R120-C-PC item 34)", () => {
   it("ONE BAR PER USER EXCHANGE — and every bar is an honest, labeled button", () => {
-    programGeometry([8, 8, 12]);
     renderTimeline();
+    programGeometry([8, 8, 12]);
 
     const strip = document.querySelector('[data-testid="message-timeline"]') as HTMLElement;
     expect(strip).not.toBeNull();
@@ -98,8 +97,8 @@ describe("MessageTimeline structure (ROUND-120 R120-C-PC item 34)", () => {
   });
 
   it("the CURRENT exchange's bar is highlighted — accent fill + data-current", () => {
-    programGeometry([8, 8, 12]);
     renderTimeline();
+    programGeometry([8, 8, 12]);
 
     const list = bars();
     expect(list[0].getAttribute("data-current")).toBe("false");
@@ -132,8 +131,8 @@ describe("MessageTimeline proximity scaling (the hover growth)", () => {
 
   it("the nearest bar grows to the max; falloff with distance; the pointer leaving restores rest", () => {
     // Resting: 8, 8, 12 (the last is current). Bar centers: 24, 36, 50.
-    programGeometry([8, 8, 12]);
     renderTimeline();
+    programGeometry([8, 8, 12]);
     const stripColumn = document.querySelector('[data-testid="message-timeline"] > div') as HTMLElement;
 
     // Pointer EXACTLY on the second bar's center (y = 24 + 36 / 2... bar 1:
@@ -159,12 +158,16 @@ describe("MessageTimeline proximity scaling (the hover growth)", () => {
 });
 
 describe("MessageTimeline preview popover (2 lines user + 2 lines agent)", () => {
-  it("hovering a bar shows the preview — user text + the agent's response", () => {
-    programGeometry([8, 8, 12]);
+  it("riding the strip shows the preview of the NEAREST bar — user text + the agent's response; moving swaps it; leaving hides it", () => {
     renderTimeline();
+    programGeometry([8, 8, 12]);
+    const stripColumn = document.querySelector('[data-testid="message-timeline"] > div') as HTMLElement;
     expect(document.querySelector('[data-testid="message-timeline-preview"]')).toBeNull();
 
-    fireEvent.mouseEnter(bars()[1]);
+    // The pointer rides the strip at bar 1's center (36) — the NEAREST bar
+    // owns the preview (the same bar the magnification grows largest; one
+    // pointer read, no hover pair — the design audit's R5 law).
+    fireEvent.pointerMove(stripColumn, { clientY: 36, clientX: 5 });
     const popover = document.querySelector('[data-testid="message-timeline-preview"]') as HTMLElement;
     expect(popover).not.toBeNull();
     // The USER's message (plain text — full content rides the DOM; the
@@ -179,19 +182,22 @@ describe("MessageTimeline preview popover (2 lines user + 2 lines agent)", () =>
     // Never a hit target — a preview, not a control.
     expect(popover.className).toContain("pointer-events-none");
 
-    fireEvent.mouseLeave(bars()[1]);
-    // The popover follows the hover out (mouseenter/leave pairs fire blur
-    // only for focus — the mouse path clears via the bar swap or leave of
-    // the strip; a second bar's hover SWAPS the preview).
-    fireEvent.mouseEnter(bars()[0]);
+    // The pointer moves UP the strip to bar 0's center (24) — the preview
+    // SWAPS to the nearest bar.
+    fireEvent.pointerMove(stripColumn, { clientY: 24, clientX: 5 });
     const swapped = document.querySelector('[data-testid="message-timeline-preview"]') as HTMLElement;
     expect(swapped.textContent).toContain("first question");
     expect(swapped.textContent).toContain("test/model-9");
+
+    // The pointer LEAVES the strip — the pointer-owned preview hides (a
+    // focus-owned preview would survive the pointer leaving; none here).
+    fireEvent.pointerLeave(stripColumn);
+    expect(document.querySelector('[data-testid="message-timeline-preview"]')).toBeNull();
   });
 
   it("KEYBOARD: focusing a bar shows the preview; blurring hides it", () => {
-    programGeometry([8, 8, 12]);
     renderTimeline();
+    programGeometry([8, 8, 12]);
 
     fireEvent.focus(bars()[0]);
     expect(document.querySelector('[data-testid="message-timeline-preview"]')).not.toBeNull();

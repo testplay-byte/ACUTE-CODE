@@ -22,10 +22,13 @@ import { useReducedMotion } from "framer-motion";
 //     a 200ms CSS height transition on the shared ease);
 //   · the CURRENT exchange's bar is highlighted (accent fill + a taller
 //     resting height);
-//   · HOVERING (or keyboard-focusing) a bar shows a preview popover: the
-//     first 2 lines of the user's message + 2 lines of the agent's response,
-//     plain text, clamped (line-clamp-2 owns the "2 lines" law so long
-//     single lines wrap honestly);
+//   · RIDING THE STRIP (or keyboard-focusing a bar) shows a preview popover:
+//     the bar NEAREST the pointer owns it — the first 2 lines of the user's
+//     message + 2 lines of the agent's response, plain text, clamped
+//     (line-clamp-2 owns the "2 lines" law so long single lines wrap
+//     honestly); the pointer owns the preview through the SAME pointermove
+//     the magnification reads (no JS hover handlers — the design audit's
+//     R5 law: hover is a CSS class or a pointer read, never a hover pair);
 //   · CLICK scrolls the transcript to that exchange (scrollIntoView on the
 //     user bubble's wrapper — the panel stamps chat-item-* ids on every
 //     transcript row for exactly this).
@@ -93,8 +96,16 @@ export function MessageTimeline({ exchanges }: { exchanges: TimelineExchange[] }
    * left. Drives the per-bar target heights (state per pointermove: a tiny
    * component; the bars themselves never re-render the transcript). */
   const [pointerY, setPointerY] = useState<number | null>(null);
+  /** The POINTER-owned preview bar — the bar nearest the pointer (the same
+   * bar the magnification grows largest). The design audit's R5 law: hover
+   * is NOT a JS handler — the pointer column owns the preview, so no
+   * onMouseEnter/Leave anywhere in this file. */
+  const [pointerIndex, setPointerIndex] = useState<number | null>(null);
+  /** The KEYBOARD-owned preview bar (focus/blur on the bar buttons). The
+   * pointer wins while it rides the strip (pointerIndex ?? focusIndex). */
+  const [focusIndex, setFocusIndex] = useState<number | null>(null);
   /** The hovered/focused bar — owns the preview popover. */
-  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const previewIndex = pointerIndex ?? focusIndex;
 
   const restingHeight = useCallback(
     (index: number): number => (index === exchanges.length - 1 ? CURRENT_REST_HEIGHT : REST_HEIGHT),
@@ -122,11 +133,30 @@ export function MessageTimeline({ exchanges }: { exchanges: TimelineExchange[] }
     const strip = stripRef.current;
     if (strip === null) return;
     const rect = strip.getBoundingClientRect();
-    setPointerY(e.clientY - rect.top);
+    const y = e.clientY - rect.top;
+    setPointerY(y);
+    // The preview's pointer owner: the bar whose center is NEAREST the
+    // pointer — the same bar the falloff magnifies largest, so the grown
+    // bar and the popover always agree (one pointer read, no hover pair).
+    let nearest: number | null = null;
+    let best = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < barRefs.current.length; i += 1) {
+      const bar = barRefs.current[i];
+      if (bar === null) continue;
+      const barRect = bar.getBoundingClientRect();
+      const center = barRect.top - rect.top + barRect.height / 2;
+      const distance = Math.abs(y - center);
+      if (distance < best) {
+        best = distance;
+        nearest = i;
+      }
+    }
+    setPointerIndex(nearest);
   };
 
   const onPointerLeave = (): void => {
     setPointerY(null);
+    setPointerIndex(null);
   };
 
   // The popover's top: aligned to the hovered bar's center, clamped inside
@@ -199,9 +229,8 @@ export function MessageTimeline({ exchanges }: { exchanges: TimelineExchange[] }
                 transitionDuration: reduceMotion ? "0ms" : `${GROW_MS}ms`,
                 transitionTimingFunction: "cubic-bezier(0.25, 0.1, 0.25, 1)",
               }}
-              onMouseEnter={() => setPreviewIndex(i)}
-              onFocus={() => setPreviewIndex(i)}
-              onBlur={() => setPreviewIndex(null)}
+              onFocus={() => setFocusIndex(i)}
+              onBlur={() => setFocusIndex(null)}
               onClick={() => jumpTo(ex.anchorId)}
             >
               {/* The visual bar: 4px wide, kind-colored on the CSS-var leg —
