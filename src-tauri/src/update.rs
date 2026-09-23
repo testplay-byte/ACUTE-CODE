@@ -888,6 +888,16 @@ pub(crate) mod overlay {
     const WAIT_OBJECT_0: u32 = 0;
     const WAIT_TIMEOUT: u32 = 0x102;
 
+    /// HANDLE is a raw pointer and therefore not `Send` by default; this
+    /// newtype carries the ownership discipline that makes the move sound:
+    /// the handle came from OUR CreateProcessW call, nobody else holds it,
+    /// and exactly ONE thread (the watcher below) touches it from the move
+    /// until its single CloseHandle. The Win32 handle itself is a plain
+    /// kernel value valid on any thread.
+    struct SendHandle(windows_sys::Win32::Foundation::HANDLE);
+    // SAFETY: see the struct comment — exclusive single-owner discipline.
+    unsafe impl Send for SendHandle {}
+
     /// The installer argument string for the overlay leg: NSIS's `/S`
     /// (silent) with NO `/R` — the relaunch is OURS here (the watcher
     /// relaunches the new exe the moment the install finishes), not the
@@ -1005,12 +1015,12 @@ pub(crate) mod overlay {
         //    precedent; AppHandle is Send).
         let watcher_app = app.clone();
         let watcher_exe = exe.clone();
-        let process = proc_info.hProcess;
+        let process = SendHandle(proc_info.hProcess);
         std::thread::spawn(move || {
             // SAFETY: the handle came from a successful CreateProcessW and
             // is closed exactly once on every path below (the join point of
             // the watcher's lifetime).
-            let wait = unsafe { WaitForSingleObject(process, WAIT_BUDGET_MS) };
+            let wait = unsafe { WaitForSingleObject(process.0, WAIT_BUDGET_MS) };
             match wait {
                 WAIT_OBJECT_0 => {
                     // The install finished — the new exe owns the original
@@ -1029,11 +1039,11 @@ pub(crate) mod overlay {
                                 "the new version is installed, but relaunching it failed: {e} — reopen the app by hand"
                             ),
                         );
-                        unsafe { CloseHandle(process) };
+                        unsafe { CloseHandle(process.0) };
                         return;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(700));
-                    unsafe { CloseHandle(process) };
+                    unsafe { CloseHandle(process.0) };
                     watcher_app.exit(0);
                 }
                 WAIT_TIMEOUT => {
@@ -1050,7 +1060,7 @@ pub(crate) mod overlay {
                         "update-install-failed",
                         "the silent install did not finish within ten minutes — the app keeps running the current version; try the update again (or use the Releases page)",
                     );
-                    unsafe { CloseHandle(process) };
+                    unsafe { CloseHandle(process.0) };
                 }
                 _ => {
                     // WAIT_FAILED (or anything unexpected) — the wait itself
@@ -1063,7 +1073,7 @@ pub(crate) mod overlay {
                         "update-install-failed",
                         "waiting on the installer failed — the app keeps running the current version; try the update again (or use the Releases page)",
                     );
-                    unsafe { CloseHandle(process) };
+                    unsafe { CloseHandle(process.0) };
                 }
             }
         });
