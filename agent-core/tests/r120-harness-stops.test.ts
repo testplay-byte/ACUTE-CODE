@@ -45,7 +45,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { FastifyInstance, LightMyRequestResponse } from "fastify";
+import type { FastifyInstance } from "fastify";
 
 // The real adapter with ONLY the AI SDK mocked at the module boundary (the
 // r58 hermetic pattern) — used by the ROUTE-level test; the runtime-level
@@ -696,7 +696,7 @@ describe("R120-H item 44: the END-TO-END resume turn ('continue' after a mid-wor
     );
 
     expect(turn2.ok).toBe(true);
-    const request = resumeRequest ?? [];
+    const request: Array<{ role: string; content: string }> = resumeRequest ?? [];
     const joined = request.map((m) => m.content).join("\n");
     // (a) The PRIOR TOOL RESULTS ride in-full — the widened window (not the
     // 200-char stubs): the tail marker of the OLDEST read (file 1) is
