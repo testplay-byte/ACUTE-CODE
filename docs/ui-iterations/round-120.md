@@ -163,5 +163,39 @@ The in-sandbox live test: sidecar + PC web build running a REAL project with REA
 
 **The review:** the focused W3 pass returned SHIP — no blockers; the riskiest cross-track seam (an ITERATION_LIMIT-shaped failure double-rendering the error card through the C-PC rehydrate) probed clean in the browser (alerts=1, exactly one card); the R119/R118 do-not-touch laws byte-pinned by the unchanged suites.
 
-## §4 The release
-(filled at close-out)
+## §4 The release (R120-i + R120-j)
+
+Tag `v0.114.0` at `e8a6ac7` (the release-prep commit; the §g 2c lock-sync proof clean before tagging — zero mobile
+dep changes). The two TAG workflows green: the tag `Release` run `35851683437` (launcher-kit + the Windows installer +
+the two AppImages + the two debs) and the tag `Mobile APK` run `35851683476` (the APK attach); the main `Mobile APK`
+run `35851679910` green too — but the main `CI` run `35851679914` came back RED on two steps the pre-push local
+ladder had missed:
+
+- `pnpm docs:check`: the CHANGELOG's mobile-center entry quoted `src/a.ts` as a literal example — check-stale's
+  drift-guard flags path-like tokens that don't exist in the tree.
+- `pnpm verify` → design-audit: R5 32 over the 31 baseline — the timeline minimap's preview popover was driven by a
+  JS `onMouseEnter`/`onMouseLeave` pair (the R5 law: hover is a CSS class or a pointer read, never a hover pair).
+
+Both fixed on main POST-TAG (the R120-j gate-fix, `892fa36`): the popover is now POINTER-OWNED (the same
+`pointermove` the magnification reads resolves the NEAREST bar — the grown bar and the popover can never disagree;
+keyboard focus keeps its own owner, and the pointer wins while it rides the strip), the CHANGELOG example re-wrapped
+as the inline-code placeholder `<a file path>` (the R119 class of fix), and the timeline's tests rewritten to pin the
+new law (the geometry mock keyed BY ELEMENT — call-order-independent; the preview tests ride the strip). The full
+local ladder on the fix tree: root tsc clean, eslint 0, the FULL suite **262 files / 4606 passed** (a superset of
+CI's Windows-skipped subset), design-audit 31/31, check-stale 0. The re-run: main `CI` `35858391134` SUCCESS
+(docs:check 266/0, design-audit clean, 258 files/4564+42skip) + main `Mobile APK` `35858391176` SUCCESS. The tag
+itself keeps its builds — the two defects are functionally harmless in the shipped binaries (the hover pair works;
+the literal is docs-only); the fixes ride main into v0.115.0.
+
+Draft `394572632` carried all 7 assets, then was PUBLISHED (PATCH `draft:false`, `make_latest:"true"`, body = the
+fixed CHANGELOG's 0.114.0 section, no `target_commitish` — the §g 6 procedure). End-state verified per §g 6b:
+
+- `/releases/latest` answers `v0.114.0` authenticated; the PUBLIC check answers the same via the HTML redirect
+  (`/releases/latest` → `/releases/tag/v0.114.0`).
+- 7/7 assets on the published page: AppImages 134,347,272 / 136,620,536 B, debs 68,452,296 / 68,401,090 B,
+  x64-setup.exe 39,370,677 B, launcher-kit 148,934 B, and `ACUTE-CODE_0.114.0_android-arm64.apk` 56,842,097 B.
+- **APK content check** (downloaded via the API with the octet-stream Accept, full zip central-directory pass): 1240
+  entries; `assets/index.android.bundle` present with the Hermes bytecode magic `c6 1f bc 03`; 3 dex files; `lib/`
+  contains **arm64-v8a only**; every CRC good; exact size match.
+
+No stale drafts remain. The round is shipped.
