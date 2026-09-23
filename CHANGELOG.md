@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-119 -->
+<!-- last-reviewed: 2026-09-23 round-120 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,44 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [0.114.0] — 2026-09-23 — the center redo + the honest harness (file edits visible, live turns that survive a refresh, a turn that cannot stop silently)
+
+### The PC session center — the redo
+- **The message timeline replaces the dot rail.** One slim bar per exchange runs down the transcript's left edge: hovering grows the bars (the one nearest your pointer largest, falling off with distance), the current exchange's bar is highlighted, hovering shows a two-line preview of your message and the agent's reply, and clicking jumps to that exchange.
+- **File edits, created files, and streaming finally show in the transcript.** Every write, edit, and create renders as a compact row with the path and what happened — while the turn runs AND after it folds. Previously the center showed none of them.
+- **The "how long this ran" wall is one line.** The 8-9 separate right-side blocks are gone; each turn ends with one compact "Ran 4m 12s · 23 actions · 18.2k tokens" footer (one live clock while it works — live and folded read alike).
+- **Markdown renders like it should.** The heading ladder steps down unmistakably (a `####` was rendering SMALLER than body text — the root cause of "no proper headings"), with code blocks carrying their language label and syntax colors.
+- **A refresh mid-turn no longer fakes completion.** The working state, the stop button, and the in-flight turn's rendering now derive from the BACKEND's live-turn registry — refresh while the agent works and you come back to the WORKING state (stop button included), not a transcript that looks finished. The session-split-after-recover glitch (the fold showing the same turn twice) is closed at the fold/live seam.
+
+### The mobile session center
+- **File edits, created files, and tool hints render on mobile too** — every action row carries its path/command/summary, in the live stream and the folded transcript, and the collapsed activity line hints at WHAT ran ("Thought for 8s · 3 actions · src/a.ts, npm test").
+- **The response formatting gets the mobile treatment** — a real heading ladder, code blocks with their language label, honest list/inline-code rendering — and the text-order randomness (parallel tool frames landing out of order) is fixed.
+- **Fonts verified bundled and loading** — all seven type tiers resolve to real loaded fonts (the audit is documented; the rendering feel's root cause was elsewhere).
+- **The in-progress state reads alive but calm** — the session avatar gains a subtle breathing accent ring while the agent works; no jarring glows.
+
+### The harness — a turn cannot stop silently
+- **The midway stop is dead.** Every exit path of the turn loop now obeys the law: a turn ends ONLY on a real final answer, a labeled user abort, or a surfaced error. Empty model output after tool results now nudges the model to continue instead of ending cleanly; a stream cut mid-tool-call surfaces an error naming the cause; the iteration limit names itself; the stall watchdog no longer reaps healthy long-running tool calls (it now sees streamed command output as live activity).
+- **"Continue" no longer re-reads every file.** The resume path hands the model its working context — prior tool results ride in-full, plus a deterministic resume note naming what was already read/written/run — so continuing picks up where the work stopped.
+
+### The PC updater — surviving a rotated GitHub token
+- **"Check for updates" no longer dies with HTTP 401 when your saved token goes stale.** The check retries anonymously when the token is rejected (the repo is public), and the error copy distinguishes a stale token from reachability failures.
+- **A quiet self-service re-pairing path**: the About tab offers a "GitHub token" row (auto-opens when a token is rejected) that validates and saves a fresh PAT in place — no launcher restart needed for the next check.
+- **The Releases button always opens in your SYSTEM browser** — and the plain "Releases" button (which did nothing on the settings screen) is fixed.
+
+### Android — the providers/models overhaul
+- **The provider page reads clean**: the base URL sits directly under the name (no "Chat Completion API" label), the enabled toggle rides the title row's right, "Rename" is now "Edit", and the glowing/sheened buttons are gone — the quiet-solid family everywhere.
+- **API keys tap into a bottom-up menu** (Test / Replace / Copy key id / Remove) instead of inline per-row buttons — and every verdict is a TOAST that auto-dismisses in ~2s.
+- **Edit Model is a full screen now** (the reasoning ladder and pricing never fit a sheet): number fields simplify on blur ("1M" / "26K" — full digits on focus), capabilities render as color-coded SVG icons on one line, and the reasoning levels ladder orders lowest→highest with add/delete.
+- **Smart model data fetching**: opening a model's configuration fetches its live details from the provider — context window, max output, the pricing trio, capability hints — and auto-populates the form (your saved values always win; the fetch only fills blanks).
+- **A model joins the list ONLY on explicit save** — the add flow lands on the configure screen; cancel discards.
+
+### Android — the session experience
+- **The composer completes its law**: the Add Context control sits INSIDE the input row at the far right, the text wraps around it (never overlaps), and the dock rides the device edge with a proper inset.
+- **Typing @ opens the file-mention menu above the input** with live filtering; tapping inserts the reference.
+- **Attachments get preview chips and a viewer pop-up** — images open large, text opens scrollable.
+- **The kebab menu gains a separator + Task list** — the checklist renders as checkable rows in the same menu family.
+- **The projects/sessions lists polish**: session rows carry their icon and a subtle alternating tint, the New Session button gets its own tier, and "Type a path instead" reads as the real option it is.
 
 ## [0.113.0] — 2026-09-22 — the session-center round (one visual turn, honest queues, providers that prove themselves)
 

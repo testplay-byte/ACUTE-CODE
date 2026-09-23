@@ -141,7 +141,27 @@ Full gate ladder on the merged tree (mobile tsc + jest; agent-core tsc + vitest;
 The in-sandbox live test: sidecar + PC web build running a REAL project with REAL tasks on an OpenRouter model (the provided keys) — the center section, file edits, streaming, timeline, stop/resume verified end-to-end in the browser (agent-browser). Then v0.114.0 per the §g runbook (tag → both workflows → 7/7 assets → publish → end-state) and the closing notification to the owner.
 
 ## §3 Verification
-(filled at close-out)
+
+**The gate ladder (the merged tree, re-run fresh at the close):**
+- mobile `npx tsc --noEmit` clean · `CI=1 npx jest --silent` — **43 suites / 952 passed** (baseline 40/870)
+- agent-core `npx tsc --noEmit` clean · `npx vitest run` — **148 files / 2789 passed** (baseline 146/2742)
+- root `npx tsc --noEmit` clean · `npx eslint .` 0 · `npx vitest run` — **260 files / 4591 passed + 15 skipped** (baseline 253/4510)
+- `node scripts/docs/check-stale.mjs` — **266 docs / 0 failures / 0 warnings**; `node scripts/release/version.mjs check` — all 7 files agree at 0.114.0
+- One gate-fix en route (ee40438): the root tsc's stricter config caught an unused type import + a never-narrowing fallback in r120-harness-stops.test.ts that the worktree's own agent-core gate had missed.
+
+**The live battery (a REAL provider turn through the REAL sidecar):**
+- `agent-core/scripts/live-battery.mjs` on OpenRouter `meta-llama/llama-3.3-70b-instruct` (the sandbox's egress region blocks gpt-4o-mini and rate-limited deepseek upstream — llama-3.3-70b answered): task "Create notes/a.txt with the line 'hello', then read it back and tell me its exact content" → write_file + read_file tool calls streamed with per-frame timestamps, the file verified ON DISK ("hello"), the final answer correct, exit path "final answer" — **VERDICT: PASS** (the item-43 law proven live: the turn ended on a real answer, never a silent stop).
+
+**The agent-browser walkthrough (the PC center end-to-end):**
+- The PC web app (vite :5173, the CORS-sanctioned dev port) against the live sidecar (a scratch DB world): setup wizard walked, the project + session loaded, TWO real turns sent.
+- **Item 34 live**: the "Message timeline" navigation renders — two bars for two exchanges, each with its "Jump to message N of M: <preview>" a11y label; clicking a bar scrolls to the exchange.
+- **Item 35 live**: "Wrote content: 33 chars, path: hello.md — completed" + "Wrote content: 146 chars, path: story.md — completed" render in the FOLDED transcript with "Open hello.md in sidebar" affordances; both files verified on disk with the exact expected content.
+- **Item 36 live**: each turn ends with ONE footer line — "Ran 10.0s · 2 actions · 58k tokens".
+- **Items 37+38 live**: a REFRESH fired mid-turn rehydrated the WORKING state — "Session is working", "Stop generation" back, "Working · 2 actions · 0:07" live section — no split, no fake completion. The refresh-mid-turn rehydrate is the owner's exact symptom, verified dead.
+- The reply rendered with the ordered-list markdown treatment; the transcript reads one exchange → one model line → tool rows → reply → footer.
+- The update-checker's console warnings in-app read as the R120-U honest copy (the sandbox's anonymous GitHub 403 rate-limit, distinguished from a token rejection) — the new error taxonomy observable live.
+
+**The review:** the focused W3 pass returned SHIP — no blockers; the riskiest cross-track seam (an ITERATION_LIMIT-shaped failure double-rendering the error card through the C-PC rehydrate) probed clean in the browser (alerts=1, exactly one card); the R119/R118 do-not-touch laws byte-pinned by the unchanged suites.
 
 ## §4 The release
 (filled at close-out)

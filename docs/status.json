@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.113.0",
+    "version": "0.114.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -356,25 +356,29 @@
     {
       "date": "2026-09-22",
       "label": "R119 — the twenty-sixth round: the session-center round (the owner's v0.112.0 device report: the single-tier composer, the provider-accordion model menu + animated level swaps, the queued message honest on both platforms [PC as-message + duplicate suppressed; mobile after-the-turn], the TurnBlock center [one visual turn per exchange], and the provider capability probe [tools accepted/called/rejected] + the raw providerError on mobile) — mobile 40 suites 870/870, agent-core 146/2742, root 253/4510, review-passed — v0.113.0 released"
+    },
+    {
+      "date": "2026-09-23",
+      "label": "R120 — the twenty-seventh round: the center redo + the honest harness (the owner's v0.113.0 device report: the PC message-timeline minimap replacing the dot rail, file edits/created files/streaming finally rendering in both centers, the one-line turn footer replacing the 8-9 duration blocks, the refresh-mid-turn live-state rehydrate off the backend turn registry [GET /sessions/:id/live + the mirror/detach/retire reconciler], the heading-ladder markdown fixes, the harness's turn-end law [a turn ends ONLY on a real final answer, a labeled abort, or a surfaced error — the midway silent stop dead] + the continue-context resume, the PC updater's dead-token anonymous retry + self-service PAT re-pairing, the Android providers/models overhaul [toast law, smart model fetch, reasoning ladder, save-before-add], the completed composer law [@-mentions, attachment viewers, the Task-list menu], and the live battery script) — mobile 43 suites 952/952, agent-core 148/2789, root 260/4591, review-passed, LIVE-BATTERY PROVEN on a real OpenRouter turn — v0.114.0 released"
     }
   ],
   "quality": {
-    "ci": "LOCAL-GATES TRUTH at the R119 close (the merged tree, every gate re-run fresh): agent-core tsc clean · vitest 146 files 2742/2742 · root tsc clean · root vitest 253 files 4510 passed/15 skipped · mobile tsc clean · jest 40 suites 870/870 · eslint 0 · docs:check 265/0 (the servo.org/openrouter HEAD flakes are sandbox egress, not content). The three Wave-1 tracks were built in isolated git worktrees by parallel agents (symlinks newly blocked in the sandbox — the gates ran at merge), the Wave-2 center track gated in the main tree, and the focused review pass returned SHIP with its one WARN (the ErrorCard a11y cap) closed in 9c7baf3.",
+    "ci": "LOCAL-GATES TRUTH at the R120 close (the merged tree, every gate re-run fresh): agent-core tsc clean · vitest 148 files 2789/2789 · root tsc clean · root vitest 260 files 4591 passed/15 skipped · mobile tsc clean · jest 43 suites 952/952 · eslint 0 · docs:check 266/0 (the servo.org/openrouter HEAD flakes are sandbox egress, not content). Seven implementation tracks (four Wave-1 worktrees + three Wave-2 worktrees, hardlinked node_modules — symlinks stay blocked), the docs wave landed with every value source-verified, the review's riskiest seam (the ITERATION_LIMIT × rehydrate double-error-card) probed clean in the browser, and the LIVE BATTERY ran a real OpenRouter turn end-to-end (write_file + read_file + a final answer, the file verified on disk) plus the agent-browser walkthrough (the timeline bars, the file-mutation rows in the fold, the one-line footer, the refresh-mid-turn rehydrate with the stop button back).",
     "suites": [
       {
         "name": "frontend",
-        "tests": 4510,
-        "detail": "253 files / 4510 passed + 15 skipped at the R119 close (was 4491): the queued-as-message idiom pins, the fold/live duplicate-suppression end-to-end (the owner's exact double-draw), the startedBySeq fold anchors, and the model-test tools-leg bands."
+        "tests": 4591,
+        "detail": "260 files / 4591 passed + 15 skipped at the R120 close (was 4510): the MessageTimeline minimap pins (the falloff, the popover, click-to-scroll), the stream-rehydrate store pins (the mirror/detach/retire reconciler), the fold's file-mutation rows, the one-clock + consolidated-footer law, the AboutTab re-pairing tests, and the tools-leg verdict bands."
       },
       {
         "name": "agent-core",
-        "tests": 2742,
-        "detail": "146 files / 2742 tests at the R119 close (was 2734): the r119-p model-tools suite (the echo probe per format, hard-reject/text-answer/scrub tables) + the extended r82 model-test cases."
+        "tests": 2789,
+        "detail": "148 files / 2789 tests at the R120 close (was 2742): the r120-live-turn route suite (the GET /sessions/:id/live surface), the r120-harness-stops suite (17 tests — the budget fall-out, the mid-tool truncation, the blank-tail nudge, the resume planners, the watchdog live-activity leg), and the r120-model-details suite (the smart-fetch parser)."
       },
       {
         "name": "mobile",
-        "tests": 870,
-        "detail": "40 suites / 870 tests at the R119 close (was 38/811): turn-block (33 pins — the grouping partition, activitySummary, orderDisplayItems, the tool-row helpers, the a11y label), the single-tier composer law (146), the kebab direction table, the provider accordion pins, and the ErrorCard a11y cap."
+        "tests": 952,
+        "detail": "43 suites / 952 tests at the R120 close (was 870): the attachment-viewer suite + the dock-geometry pins, the turn-block tool-hint/reorder pins, the headingTier ladder table, the toast/capability-icons vocab suites, the presetAddPlan + sheet-motion pins, and the sessions fold pins for tool.use rows."
       }
     ],
     "cargoCheck": "green",
@@ -390,7 +394,7 @@
     }
   ],
   "plan": {
-    "current": "R119 LANDED — the session-center round (the owner's v0.112.0 device report: the composer's text sits LEFT of the attach circle in every state with a shorter dock, the model menu becomes the provider accordion (one provider open at a time, apply-and-return, the root rows never trail) + the kebab's level swaps animate directionally, the queued message renders as a MESSAGE on the PC (the amber banner retired) with the fold/live double-draw suppressed by the startedBySeq anchor, the mobile waiting row rides after the in-progress turn, the transcript center becomes ONE visual TurnBlock per exchange (the §N verdict — the activity rail + the recessed well + tool rows, the standalone thinking/tool cards retired), and the provider stack learns to prove itself: the tools-capability probe on every model test (echo — accepted/called/rejected), the raw providerError line finally reaching the phone, the labelFit hero button, the retuned sheet motion; TokenHarbor's action-failure root-caused code-side — the sandbox itself is region-blocked by tokenharbor.ai, so the probe is the owner-side diagnostic) — three Wave-1 worktree tracks merged + the Wave-2 center + docs + review — v0.113.0 rides the proven pipeline",
+    "current": "R120 LANDED \u2014 the center redo + the honest harness (the owner's v0.113.0 device report: the PC message-timeline minimap [one bar per exchange, hover-proximity scaling, the 2+2-line preview popover, click-to-scroll], file edits/created files/streaming rendering in BOTH centers [the fold's FILE-MUTATION family + the mobile tool rows with hints], the one-line turn footer, the refresh-mid-turn live-state rehydrate off the backend turn registry [GET /sessions/:id/live + the rehydrateLiveTurn mirror/detach/retire reconciler \u2014 the stop button survives a refresh, the split-in-two dead], the heading-ladder markdown fixes, the harness's turn-end law [blank-tail nudge, mid-tool truncation surfaced, the watchdog's live-activity leg \u2014 a turn ends ONLY on a real final answer, a labeled abort, or a surfaced error] + the continue-context resume [prior tool results in-full + the deterministic resume note], the PC updater's dead-token anonymous retry + self-service PAT re-pairing + always-external Releases, the Android providers/models overhaul [toast law, smart model fetch, the reasoning ladder, save-before-add, the key-actions sheet], the completed composer law [@-mentions above the input, attachment viewers, the Task-list menu], and the live battery script) \u2014 seven implementation tracks in three waves + docs + review + the LIVE BATTERY on a real OpenRouter turn \u2014 v0.114.0 rides the proven pipeline",
     "upcoming": [
       {
         "title": "The owner's round-117 walkthrough on real hardware (v0.111.0)",
@@ -416,8 +420,8 @@
     ]
   },
   "round": {
-    "current": "R119 LANDED — the session-center round (the owner's v0.112.0 device report: the composer's text sits LEFT of the attach circle in every state with a shorter dock, the model menu becomes the provider accordion (one provider open at a time, apply-and-return, the root rows never trail) + the kebab's level swaps animate directionally, the queued message renders as a MESSAGE on the PC (the amber banner retired) with the fold/live double-draw suppressed by the startedBySeq anchor, the mobile waiting row rides after the in-progress turn, the transcript center becomes ONE visual TurnBlock per exchange (the §N verdict — the activity rail + the recessed well + tool rows, the standalone thinking/tool cards retired), and the provider stack learns to prove itself: the tools-capability probe on every model test (echo — accepted/called/rejected), the raw providerError line finally reaching the phone, the labelFit hero button, the retuned sheet motion; TokenHarbor's action-failure root-caused code-side — the sandbox itself is region-blocked by tokenharbor.ai, so the probe is the owner-side diagnostic) — three Wave-1 worktree tracks merged + the Wave-2 center + docs + review — v0.113.0 rides the proven pipeline",
-    "next": "The owner's round-117 walkthrough on real hardware (v0.111.0) — memory across sessions, the elevation's look, the PC transcript's failure visibility, the sub-agent Stop/Retry from the phone; then the standing queue (the updater round, multi-PC, device smoke pass)."
+    "current": "R120 LANDED \u2014 the center redo + the honest harness (the owner's v0.113.0 device report: the PC message-timeline minimap [one bar per exchange, hover-proximity scaling, the 2+2-line preview popover, click-to-scroll], file edits/created files/streaming rendering in BOTH centers [the fold's FILE-MUTATION family + the mobile tool rows with hints], the one-line turn footer, the refresh-mid-turn live-state rehydrate off the backend turn registry [GET /sessions/:id/live + the rehydrateLiveTurn mirror/detach/retire reconciler \u2014 the stop button survives a refresh, the split-in-two dead], the heading-ladder markdown fixes, the harness's turn-end law [blank-tail nudge, mid-tool truncation surfaced, the watchdog's live-activity leg \u2014 a turn ends ONLY on a real final answer, a labeled abort, or a surfaced error] + the continue-context resume [prior tool results in-full + the deterministic resume note], the PC updater's dead-token anonymous retry + self-service PAT re-pairing + always-external Releases, the Android providers/models overhaul [toast law, smart model fetch, the reasoning ladder, save-before-add, the key-actions sheet], the completed composer law [@-mentions above the input, attachment viewers, the Task-list menu], and the live battery script) \u2014 seven implementation tracks in three waves + docs + review + the LIVE BATTERY on a real OpenRouter turn \u2014 v0.114.0 rides the proven pipeline",
+    "next": "The owner's v0.114.0 device walkthrough (the timeline feel, the rehydrate on real hardware, the harness under real workloads); then the standing queue (the updater round's Linux restart-into-same-version + Windows automation, multi-PC from the phone, the dashboard screen redo the owner deferred, the DASHBOARD repo refresh at lowest priority)."
   },
   "ci": "GREEN — v0.112.0 PUBLISHED (release 393949568, latest, end-state verified: 7/7 assets, APK content-checked [1240 entries, Hermes, arm64-v8a only]); v0.113.0 rides the same proven pipeline (lock-sync proof below: no mobile dep changes, npm ci --dry-run clean)."
 }
