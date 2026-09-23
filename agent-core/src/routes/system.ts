@@ -1197,6 +1197,19 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
       } catch {
         // best-effort — regenerated on next boot
       }
+      // R122: the self-feedback LEDGER file goes with the rest of the
+      // machine's state — a full reset is the journey back to first-run,
+      // and a stale ledger surviving it would attribute fresh sessions to
+      // a wiped world. Best-effort, exactly like vapid.json.
+      const feedbackPath = join(ctx.dataDir, "feedback.md");
+      try {
+        if (existsSync(feedbackPath)) {
+          unlinkSync(feedbackPath);
+          purged.push(feedbackPath);
+        }
+      } catch {
+        // best-effort — regenerated on the first post-reset turn
+      }
     }
 
     return {

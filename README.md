@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-20 round-114 -->
+<!-- last-reviewed: 2026-09-23 round-122 -->
 # ACUTE-CODE
 
 Local-first, closed-source multi-agent engineering workbench for Windows
@@ -22,6 +22,22 @@ Node sidecar; `shared/` holds domain types; `src-tauri/` is the Rust shell.
 - `pnpm verify` — lint + typecheck + test + build + e2e + license audit (mirrors CI, which also runs `pnpm docs:check` first; the local pre-push gate)
 - `pnpm dev` — Vite dev server on port 5173 (UI only)
 - **Desktop app:** `pnpm build`, then from `src-tauri/`: `cargo run` — debug builds load the embedded `../dist`; at launch the shell spawns `agent-core/dist/main.js`, does the stdout ready-line handshake, and injects provider keys from the OS secure store (Windows Credential Manager; the Linux Secret Service — ADR-0031). A `pnpm tauri` script exists (`package.json`), but the documented path remains build-then-cargo.
+
+## The self-feedback ledger (round-122)
+
+Settings → **Self-Feedback** (default OFF). While ON, after each completed
+session turn a separate context-free agent reviews the whole conversation and
+appends one structured entry to the machine's ONE shared ledger file —
+what it was trying to do, what actually happened, every issue and glitch it
+ran into (tools, browser, approvals), where reality fell short, and the
+improvements it would suggest. The dedicated settings section shows the RAW
+file (entries · size · last update, with copy/clear); a paired phone may view
+it too. Entries are diagnostics for the app's developers — hand the file
+over when something went wrong; every entry places itself (session, project,
+agent, model, outcome) before it reports. Feedback NEVER enters any
+conversation: the ledger file is the only persistence, and the reporter runs
+detached after the turn closes. Costs one extra model call per completed
+turn (metered in the usage screens with origin `feedback`).
 
 ## The Android companion (live sync + full inventory — round-114 state)
 

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-23 round-120 -->
+<!-- last-reviewed: 2026-09-23 round-122 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,39 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [Unreleased]
+
+### The self-feedback ledger (the agent reports on itself — for you to hand us later)
+- **Settings → Self-Feedback (new section, default OFF).** While ON, after each completed
+  session turn a separate context-free reviewer reads the WHOLE conversation and appends one
+  structured entry to the machine's one shared feedback file: what it was trying to do, what
+  actually happened, every issue and glitch it ran into (tools, browser, approvals), where
+  reality fell short of expectations, and the concrete improvements it would suggest — plus a
+  machine-written header that places every entry (session, project, agent, model, outcome,
+  transcript size) so the file reads cold, months later, with no other context.
+- **The raw file is right there in the section** — the ledger viewer renders it as-is (entries ·
+  size · last update; copy, refresh, and a confirmed clear). A paired phone can view it too.
+- **Feedback never touches your conversations.** The reporter runs detached after the turn
+  closes: no frames in the chat, nothing in the session history — a follow-up message sees a
+  byte-identical conversation. A failed feedback run changes nothing (it logs and vanishes).
+- **The gate mirrors debug mode's discipline**: deliberate stops and validation errors never
+  report; successful turns, real failures, and crashes do — failure sessions are the most
+  valuable feedback. The reporter's own token spend shows in the usage screens (origin
+  "feedback").
+- **The app-wide reset now clears the ledger** with the rest of the machine's state.
+
+### The GitHub Actions economy (fewer runs, same guarantees)
+- **Docs-only pushes no longer run CI at all** (path filters: docs, markdown, screenshots) —
+  close-out commits stop paying the full Windows verify chain. Code pushes still sweep
+  everything, including the docs tree.
+- **The Android release APK now builds only on version tags and manual dispatch** — the
+  per-push build (an artifact that was rarely consumed) is gone. A release can never miss its
+  APK: tag pushes stay unconditional by design.
+- **A cheap per-push mobile gate replaces it** (version consistency + the mobile test suite,
+  ~3 minutes) and runs only when mobile files actually changed.
+- **The Linux/ARM64 Rust compile gates now run only when the Rust shell changed** (moved to
+  their own path-filtered workflow). A Rust change still compiles on all three platforms.
 
 ## [0.114.0] — 2026-09-23 — the center redo + the honest harness (file edits visible, live turns that survive a refresh, a turn that cannot stop silently)
 

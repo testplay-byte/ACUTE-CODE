@@ -33,9 +33,17 @@ import {
 // session's whole transcript and streams its report back over the SAME
 // still-open SSE before the turn's terminal frame.
 import { runDebugAnalyst } from "../agents/debug-analyst.js";
+// R122: the post-turn CONTEXT-FREE FEEDBACK REPORTER — the ledger writer
+// (no tools, no SSE frames, no session events; the FILE is the only
+// persistence). See runSelfFeedbackPhase below.
+import { runFeedbackWriter } from "../agents/feedback-writer.js";
 import { streamAiSdkChat } from "../agents/chat.js";
 import { resolveProvider } from "../providers/registry.js";
-import { getAgent } from "../storage/agents.js";
+import { getAgent, type Agent } from "../storage/agents.js";
+import type { ProviderKeyring } from "../providers/registry.js";
+import type { SqliteDatabase } from "../storage/db.js";
+import { getProject } from "../storage/projects.js";
+import { readFeedbackLedger } from "../storage/feedback-ledger.js";
 import {
   appendSessionEvent,
   deleteQueuedMessage,
@@ -47,6 +55,7 @@ import {
 } from "../storage/sessions.js";
 import {
   getDebugSettings,
+  getFeedbackSettings,
   getRetrySettings,
 } from "../storage/settings.js";
 import { lookupPricing } from "../storage/models.js";
@@ -76,6 +85,76 @@ import {
 import { readComposerSendFields, readOverrideProviderId, MESSAGE_CONTENT_CAP } from "./sessions.js";
 import type { RouteContext } from "./context.js";
 import { errorBody } from "./helpers.js";
+
+// ── R122: the shared post-turn side-phase model resolution ──────────────────
+//
+// The debug analyst (R66) and the feedback reporter (R122) both need the
+// SAME triple after a turn ends: the session's agent, the provider that
+// actually served the FINAL turn (the R82 rule — an override that named a
+// provider rides with it, else the agent's), its keyring key, and the
+// model (the override's, else the agent's). One resolver, two consumers —
+// extracted verbatim from runDebugAnalystPhase's inline ladder (the
+// reason strings are the analyst's own, so its debug-error frames stay
+// byte-identical); the feedback phase logs them to stderr instead.
+
+/** What both post-turn phases need to launch their side model call. */
+interface SidePhaseModel {
+  session: { id: string; title: string | null; projectId: string | null };
+  agent: Agent;
+  provider: { id: string; baseUrl: string | null; apiFormat?: string };
+  apiKey: string;
+  model: string;
+}
+
+function resolveSidePhaseModel(
+  db: SqliteDatabase,
+  keyring: ProviderKeyring,
+  sessionId: string,
+  override: TurnModelOverride | undefined,
+): { ok: true; value: SidePhaseModel } | { ok: false; reason: string } {
+  const session = getSession(db, sessionId);
+  if (session === undefined || session.agentId === null) {
+    return { ok: false, reason: "the session or its agent is gone" };
+  }
+  const agent = getAgent(db, session.agentId);
+  if (agent === undefined || agent.providerId === null || agent.model === null) {
+    return { ok: false, reason: "the session's agent has no provider/model configured" };
+  }
+  // ROUND-82: the side call mirrors the LAST turn's provider too — an
+  // override that named a provider (the custom-model case) is analyzed
+  // against THAT provider, not the agent's.
+  const providerId =
+    typeof override === "object" && override.providerId !== undefined
+      ? override.providerId
+      : agent.providerId;
+  const provider = resolveProvider(db, providerId);
+  if (provider === undefined || provider.baseUrl === null) {
+    return { ok: false, reason: `provider '${providerId}' is not resolvable` };
+  }
+  const apiKey = keyring.get(provider.id);
+  if (apiKey === undefined) {
+    return { ok: false, reason: `no API key for provider '${provider.id}'` };
+  }
+  // ROUND-82: narrow the union (string | {model, providerId}) — a
+  // bare-string override means the model alone (pre-R82 wire).
+  const overrideModel =
+    typeof override === "object"
+      ? override.model
+      : typeof override === "string"
+        ? override
+        : undefined;
+  const model = overrideModel ?? agent.model;
+  return {
+    ok: true,
+    value: {
+      session: { id: session.id, title: session.title, projectId: session.projectId },
+      agent,
+      provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
+      apiKey,
+      model,
+    },
+  };
+}
 
 export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): void {
   const { db, keyring, chat, corsHeadersFor } = ctx;
@@ -147,6 +226,14 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
     // turn's override (it mirrors the provider that actually served the
     // stream's final turn).
     let currentModelOverride: TurnModelOverride | undefined = turnModelOverride;
+    // R122: the post-turn FEEDBACK outcome — set ONLY by the terminal
+    // branches that completed real work (ok / a ≥500 failure / a route
+    // crash), read by the finally block AFTER the stream closes. Same
+    // OUTSIDE-the-try rationale as currentModelOverride above. A
+    // deliberate stop (ABORTED) and validation conflicts (404/409) never
+    // set it — the debug analyst's exact gate, because a turn that never
+    // ran has nothing to report.
+    let feedbackOutcome: string | null = null;
     // ROUND-50 (R50-c1): the composer's per-send fields (same validation
     // as the sync route — see the comment there).
     const composer = readComposerSendFields(raw, reply);
@@ -283,58 +370,16 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
         // routes use (default OFF → this whole phase is a no-op).
         if (getDebugSettings(db).enabled !== true) return;
         // (c) Minimal provider/model resolution for the session — the
-        // exact helpers prepareTurn uses (session → agent → provider →
-        // keyring key); the model mirrors the TURN's choice (the
-        // per-send override when one was sent, else the agent default).
-        const session = getSession(db, id);
-        if (session === undefined || session.agentId === null) {
-          send({ type: "debug-error", sessionId: id, message: "debug analyst: the session or its agent is gone" });
+        // R122 SHARED resolver (session → agent → provider → keyring key
+        // → model, the R82 override rules inside; extracted verbatim from
+        // this phase's own inline ladder, reason strings included, so the
+        // debug-error frames below are byte-identical to pre-R122).
+        const resolution = resolveSidePhaseModel(db, keyring, id, currentModelOverride);
+        if (!resolution.ok) {
+          send({ type: "debug-error", sessionId: id, message: `debug analyst: ${resolution.reason}` });
           return;
         }
-        const agent = getAgent(db, session.agentId);
-        if (agent === undefined || agent.providerId === null || agent.model === null) {
-          send({
-            type: "debug-error",
-            sessionId: id,
-            message: "debug analyst: the session's agent has no provider/model configured",
-          });
-          return;
-        }
-        // ROUND-82: the debug run mirrors the LAST turn's provider too —
-        // an override that named a provider (the custom-model case)
-        // debugs against THAT provider, not the agent's
-        // (currentModelOverride tracks the queue-continuation loop).
-        const debugProviderId =
-          typeof currentModelOverride === "object" && currentModelOverride.providerId !== undefined
-            ? currentModelOverride.providerId
-            : agent.providerId;
-        const provider = resolveProvider(db, debugProviderId);
-        if (provider === undefined || provider.baseUrl === null) {
-          send({
-            type: "debug-error",
-            sessionId: id,
-            message: `debug analyst: provider '${debugProviderId}' is not resolvable`,
-          });
-          return;
-        }
-        const apiKey = keyring.get(provider.id);
-        if (apiKey === undefined) {
-          send({
-            type: "debug-error",
-            sessionId: id,
-            message: `debug analyst: no API key for provider '${provider.id}'`,
-          });
-          return;
-        }
-        // ROUND-82: narrow the union (string | {model, providerId}) —
-        // a bare-string override means the model alone (pre-R82 wire).
-        const debugOverrideModel =
-          typeof currentModelOverride === "object"
-            ? currentModelOverride.model
-            : typeof currentModelOverride === "string"
-              ? currentModelOverride
-              : undefined;
-        const model = debugOverrideModel ?? agent.model;
+        const { agent, provider, apiKey, model } = resolution.value;
         // (d) The live marker — the frontend opens the dedicated
         // streaming section (loading animation while the analyst works).
         send({ type: "debug-start", sessionId: id });
@@ -412,6 +457,119 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
             error instanceof Error ? error.message : String(error)
           }`.slice(0, 2000),
         });
+      }
+    };
+
+    // ── ROUND-122 (the owner's self-feedback directive): the post-turn
+    // FEEDBACK REPORTER phase — the LEDGER writer. Where the debug
+    // analyst above grades THE TURN for the owner (streamed live before
+    // the terminal frame, persisted as a debug.report event), this
+    // reporter writes for the DEVELOPERS, LATER: after the turn's
+    // TERMINAL frame + stream close (the finally block below, DETACHED —
+    // never awaited by the stream's lifecycle), it launches one
+    // context-free model call over the session's WHOLE transcript and
+    // appends a structured entry to the shared ledger file
+    // (<dataDir>/feedback.md — ONE file for every agent on this machine,
+    // per the owner's design). The entry records what the agent was
+    // trying to do, what actually happened, every issue and glitch
+    // (tools, browser, approvals), expectations vs reality, and concrete
+    // suggested improvements — the report the owner will hand the
+    // developers weeks or months later.
+    //
+    // The separation the owner demanded is STRUCTURAL here: ZERO SSE
+    // frames, ZERO session events — the ledger FILE is the only
+    // persistence, so a follow-up user message can never see feedback
+    // content ("after updating the feedback file … it will just stop, and
+    // then if I chat, then the normal conversation will go and the
+    // feedback info will not be included anywhere"). The phase never
+    // throws; every failure logs to stderr and vanishes — feedback must
+    // never affect the normal flow, including its own failures.
+    const runSelfFeedbackPhase = async (turnOutcome: string): Promise<void> => {
+      try {
+        // (a) The ledger's home — without a machine-scoped dataDir
+        // (hermetic tests, dev servers) there is no file to write.
+        if (ctx.dataDir === undefined) return;
+        // (b) The feedback setting — the same accessor the
+        // /settings/feedback routes use (default OFF → a no-op).
+        if (getFeedbackSettings(db).enabled !== true) return;
+        // (c) The SAME resolution the debug analyst uses (the R122 shared
+        // resolver — the final turn's provider/model, the R82 rules).
+        const resolution = resolveSidePhaseModel(db, keyring, id, currentModelOverride);
+        if (!resolution.ok) {
+          console.error(`[feedback] skipped for session ${id}: ${resolution.reason}`);
+          return;
+        }
+        const { session, agent, provider, apiKey, model } = resolution.value;
+        // The entry header's project line — resolved once, null-safe.
+        const project =
+          session.projectId !== null ? getProject(db, session.projectId) : undefined;
+        // (d) The reporter — a fresh no-tools model call over the whole
+        // transcript; failures come back as { ok: false, error }.
+        const result = await runFeedbackWriter(
+          { db, keyring, chat, dataDir: ctx.dataDir },
+          {
+            sessionId: id,
+            sessionTitle: session.title,
+            projectId: session.projectId,
+            projectName: project?.name ?? null,
+            agentName: agent.name,
+            provider: { id: provider.id, baseUrl: provider.baseUrl, apiFormat: provider.apiFormat },
+            apiKey,
+            model,
+            turnOutcome,
+          },
+        );
+        if (!result.ok) {
+          console.error(`[feedback] reporter failed for session ${id}: ${result.error}`);
+          return;
+        }
+        // (e) R83 discipline: meter the reporter's own spend (origin
+        // "feedback", agentId null — a side model call that must appear
+        // in the usage surfaces like the debug analyst's does). Best-effort.
+        if (result.usage !== undefined && (result.usage.inputTokens > 0 || result.usage.outputTokens > 0)) {
+          try {
+            const pricing = lookupPricing(db, provider.id, model);
+            const inputCost =
+              pricing.inputPricePerMtok === null
+                ? 0
+                : (result.usage.inputTokens / 1_000_000) * pricing.inputPricePerMtok;
+            const outputCost =
+              pricing.outputPricePerMtok === null
+                ? 0
+                : (result.usage.outputTokens / 1_000_000) * pricing.outputPricePerMtok;
+            recordUsage(
+              db,
+              {
+                agentId: null,
+                sessionId: id,
+                provider: provider.id,
+                model,
+                inputTokens: result.usage.inputTokens,
+                outputTokens: result.usage.outputTokens,
+                cachedInputTokens: result.usage.cachedInputTokens,
+                costUsd: inputCost + outputCost,
+                ts: new Date().toISOString(),
+              },
+              0,
+              { providerCalls: 1, origin: "feedback" },
+            );
+          } catch {
+            // Best-effort accounting — never a feedback-phase failure.
+          }
+        }
+        const ledger = readFeedbackLedger(ctx.dataDir);
+        console.error(
+          `[feedback] ledger entry #${ledger.entries} written (session ${id}, outcome ${turnOutcome}, ${ledger.bytes} bytes)`,
+        );
+      } catch (error) {
+        // The phase's own guard — belt-and-suspenders (runFeedbackWriter
+        // never throws by contract); a crash here must never surface
+        // anywhere but stderr.
+        console.error(
+          `[feedback] phase crashed for session ${id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`.slice(0, 300),
+        );
       }
     };
 
@@ -612,6 +770,10 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
             usage: outcome.usage,
             ...(queuedKeptCount > 0 ? { queuedKept: queuedKeptCount } : {}),
           });
+          // R122: the turn completed honestly — the ledger phase runs
+          // detached after the stream closes (the finally block), never
+          // on this frame's critical path.
+          feedbackOutcome = "ok";
         } else if (outcome.code === "ABORTED") {
           // ROUND-42: the user explicitly stopped the turn — a deliberate
           // stop is not a failure; no task_failed notification, and NO
@@ -739,6 +901,10 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
               ...(queuedKeptOnFailure > 0 ? { queuedKept: queuedKeptOnFailure } : {}),
             },
           });
+          // R122: a REAL failure (≥500 — the debug analyst's exact gate)
+          // ran work worth reporting; validation conflicts (404/409) and
+          // deliberate stops leave the flag null (nothing to report).
+          if (outcome.status >= 500) feedbackOutcome = `failed (${outcome.code})`;
         }
         break; // every terminal branch above ends the loop (queue-continue `continue`s are the only loop-around)
       }
@@ -794,9 +960,20 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
            the guaranteed terminal event either way */
       }
       send({ type: "error", status: 500, code: "INTERNAL_ERROR", message });
+      // R122: the route itself crashed AFTER real work may have run — the
+      // persisted turn.error event keeps the transcript honest for the
+      // reporter, exactly as it does for the debug analyst.
+      feedbackOutcome = "failed (INTERNAL_ERROR)";
     } finally {
       unregisterTurn(id, abort);
       clearInterval(heartbeat);
+      // R122: the self-feedback ledger write — AFTER the terminal frame,
+      // the turn registry, and the heartbeat are all closed, DETACHED
+      // from the stream's lifecycle (never awaited: res.end() must not
+      // wait on a model call). runSelfFeedbackPhase never rejects by
+      // construction (its own try/catch is total), so the void is safe
+      // even without a .catch belt.
+      if (feedbackOutcome !== null) void runSelfFeedbackPhase(feedbackOutcome);
       if (!clientGone) {
         try {
           res.end();

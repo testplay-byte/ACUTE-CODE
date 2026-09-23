@@ -29,8 +29,9 @@ Rationale for deferral: nothing in Phases 0–1 research/design compiles Rust; t
 The Linux build (deb + AppImage for BOTH arches — `linux-bundles` on x64,
 `linux-bundles-arm64` on the native ARM64 runner) needs the same Tauri v2
 prerequisites on either arch — the same list CI installs
-(`.github/workflows/release.yml` / `ci.yml`'s `rust-linux` +
-`rust-linux-arm64` jobs; v2.tauri.app/start/prerequisites — the WebKitGTK
+(`.github/workflows/release.yml` / the `rust-linux` +
+`rust-linux-arm64` jobs — `rust-checks.yml` since ROUND-122, path-gated
+on `src-tauri/**`; v2.tauri.app/start/prerequisites — the WebKitGTK
 **4.1** line; the 4.0 series is gone from Ubuntu 24.04's repos, and every
 package below is published for amd64 AND arm64):
 

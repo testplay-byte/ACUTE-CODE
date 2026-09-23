@@ -32,8 +32,9 @@ name: Release
 # Natively, the x64 job's whole recipe runs unmodified (no --target flag,
 # no qemu). COST: the repo is private, so ARM runner minutes are billed —
 # acceptable because this workflow fires only on manual dispatch and v*
-# tags (never per-push), bounding the cost to releases. ci.yml's
-# `rust-linux-arm64` leg carries the per-push compile gate instead.
+# tags (never per-push), bounding the cost to releases. rust-checks.yml's
+# `rust-linux-arm64` leg carries the per-push compile gate instead
+# (ROUND-122: extracted from ci.yml, path-gated on src-tauri/**).
 #
 # Triggers (same for all jobs):
 #   - workflow_dispatch (optionally with a `version` input — when set, it must
@@ -524,7 +525,8 @@ jobs:
   # `linux-arm64.node` prebuild (verified in the tarball), so it still needs
   # no toolchain. COST: the repo is private → ARM runner minutes are billed;
   # acceptable because this workflow fires only on manual dispatch + v*
-  # tags, never per-push (ci.yml's `rust-linux-arm64` is the per-push gate).
+  # tags, never per-push (rust-checks.yml's `rust-linux-arm64` is the
+  # per-push gate since ROUND-122 — path-gated on src-tauri/**).
   linux-bundles-arm64:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30

@@ -39,6 +39,7 @@ import {
   getDebugSettings,
   getDesktopNotificationsSettings,
   getDeviceLinkSettings,
+  getFeedbackSettings,
   getMemorySettings,
   getOrchestrationSettings,
   getRetrySettings,
@@ -56,6 +57,7 @@ import {
   setDebugSettings,
   setDesktopNotificationsSettings,
   setDeviceLinkSettings,
+  setFeedbackSettings,
   setMemorySettings,
   setOrchestrationSettings,
   setRetrySettings,
@@ -257,6 +259,45 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
       });
       broadcastSettings("debug", updated);
+      return updated;
+    } catch (error) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", error instanceof Error ? error.message : "invalid settings", {
+          field: "body",
+        }),
+      );
+    }
+  });
+
+  // ── ROUND-122 (the owner's self-feedback directive): the LEDGER master
+  // switch — same shape/behavior as /settings/debug (the domain's sibling).
+  // While ON, the stream route's post-turn phase launches the context-free
+  // reporter (agents/feedback-writer.ts) after every completed turn; the
+  // ledger FILE surface (GET/DELETE /feedback/file) lives in
+  // routes/feedback.ts. Phone-reachable like every other settings domain
+  // (the R109 config-rights trust level).
+  scope.get("/settings/feedback", async () => {
+    return getFeedbackSettings(db);
+  });
+
+  scope.put("/settings/feedback", async (request, reply) => {
+    const body: unknown = request.body;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body must be a JSON object", { field: "body" }));
+    }
+    const raw = body as Record<string, unknown>;
+    if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
+      return reply
+        .code(400)
+        .send(errorBody("VALIDATION", "body.enabled must be a boolean", { field: "body.enabled" }));
+    }
+    try {
+      const updated = setFeedbackSettings(db, {
+        ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
+      });
+      broadcastSettings("feedback", updated);
       return updated;
     } catch (error) {
       return reply.code(400).send(

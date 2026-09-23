@@ -2874,6 +2874,55 @@ export async function updateDebugSettings(
   });
 }
 
+/** ROUND-122 (the owner's self-feedback directive): the LEDGER master
+ * switch — the debug domain's sibling. While ON, after each completed
+ * session turn a separate context-free agent reviews the whole main
+ * conversation and appends one structured entry to the shared ledger
+ * file (feedback.md in the sidecar's machine-scoped data directory).
+ * The ledger is a diagnostic instrument for the app's developers; it is
+ * NEVER injected into any conversation. Default off (feedback costs one
+ * extra model call per completed turn). */
+export interface FeedbackSettings {
+  enabled: boolean;
+}
+
+export async function fetchFeedbackSettings(): Promise<FeedbackSettings> {
+  return request<FeedbackSettings>("/settings/feedback");
+}
+
+export async function updateFeedbackSettings(
+  patch: Partial<FeedbackSettings>,
+): Promise<FeedbackSettings> {
+  return request<FeedbackSettings>("/settings/feedback", {
+    method: "PUT",
+    json: patch,
+  });
+}
+
+/** ROUND-122: the ledger FILE — what GET /feedback/file serves. The raw
+ * markdown plus honest file meta; exists:false is the never-written
+ * state (the route never 404s — the mobile-link off-state pattern). */
+export interface FeedbackLedgerFile {
+  exists: boolean;
+  content: string;
+  bytes: number;
+  updatedAt: string | null;
+  entries: number;
+}
+
+export async function fetchFeedbackLedger(): Promise<FeedbackLedgerFile> {
+  return request<FeedbackLedgerFile>("/feedback/file");
+}
+
+/** ROUND-122: wipe the ledger (the settings viewer's Clear action —
+ * desktop-token only; the route's device-token guard 403s the phone).
+ * The wiped entry count rides the reply for the honest confirmation. */
+export async function clearFeedbackLedger(): Promise<{ cleared: boolean; entries: number }> {
+  return request<{ cleared: boolean; entries: number }>("/feedback/file", {
+    method: "DELETE",
+  });
+}
+
 /** ROUND-78 (R78-C, owner: "General Settings 重试配置" — per-failure-type
  * auto-retry switches): the runtime's retry-ladder gates. When a switch is
  * off, that failure class NEVER enters the ladder — it fails fast

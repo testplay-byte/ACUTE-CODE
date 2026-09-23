@@ -37,13 +37,27 @@ name: Mobile APK
 #
 # ROUND-103 discipline: every job bounded (timeout-minutes) — a wedged
 # build fails loudly in minutes, never hangs for hours.
+#
+# ROUND-122 (R122-W3, the Actions-economy round — the owner's
+# r110-feedback #8 ruling): the per-push leg is RETIRED. The arm64 APK
+# artifact built on every push to main was rarely consumed (CI already
+# gates the desktop); the per-push mobile GATE continues in the NEW
+# .github/workflows/mobile-ci.yml (version consistency + jest only,
+# paths-filtered to mobile/**) — so the "every push to main" line in the
+# ROUND-108 note above describes the PRE-R122 shape. This workflow now
+# fires ONLY on v* tags + manual dispatch. Tags stay UNCONDITIONAL
+# deliberately — a release must never miss its APK. That is also why the
+# split into TWO workflow files instead of an in-place `paths` filter
+# here: GitHub applies a trigger's `paths` filter to TAG pushes too, so
+# a `paths: mobile/**` filter on this trigger would let a docs-only v*
+# tag SKIP the APK build entirely (a release with no APK). The tag
+# trigger carries no path conditions, on purpose.
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: read
