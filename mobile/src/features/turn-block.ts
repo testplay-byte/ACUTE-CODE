@@ -28,6 +28,16 @@
  *   · the tool-line word helpers (`runningToolWord`, `writePath`, …) —
  *     moved from transcript.tsx (they were module-private); the rail's
  *     live verb and the well's rows share them.
+ *   · `toolHint` / `toolHintList` — ROUND-120 (R120-CM, §1 item 40): the
+ *     collapsed rail's TOOL HINTS. The owner's verdict on the mobile center
+ *     — "file edits, created files, tool/command hints" were not shown; the
+ *     collapsed rail carried only "3 actions", so a settled turn told the
+ *     owner NOTHING about what ran. The summary line now carries the honest
+ *     glance — the write family's file paths, the terminal family's
+ *     commands, the read family's targets — deduped, capped, riding BOTH
+ *     the visual rail and the a11y label. The well (one tap away) keeps
+ *     the full rows; the hint is the collapsed state's honest teaser,
+ *     never a replacement.
  *
  * Pure TypeScript, zero React Native — unit-tested directly.
  */
@@ -123,6 +133,81 @@ export function runningToolWord(item: ToolItem): string {
     return target !== "" ? `Reading ${target}…` : "Reading…";
   }
   return `${humanizeToolName(item.toolName)}…`;
+}
+
+/**
+ * R120-CM — the TOOL ROW's ONE-line title, extracted from the component so
+ * jest pins the exact grammar the well renders (item 40's "the TurnBlock
+ * renders them" pin — the component stays a thin renderer): the write
+ * family keeps its "Writing {file}… · {n} chars" streaming verb and
+ * "Wrote/Edited {file}" settle, every other family the "verb · target"
+ * one-line law. Pure.
+ */
+export function toolRowTitle(item: ToolItem): string {
+  const running = item.ok === null;
+  if (WRITE_TOOLS.has(item.toolName)) {
+    const path = writePath(item);
+    const verbRunning = item.toolName === "write_file" ? "Writing" : "Editing";
+    const verbDone = item.toolName === "write_file" ? "Wrote" : "Edited";
+    if (running) {
+      if (path === null) return `${verbRunning}…`;
+      if (item.inputRaw === null) return `${verbRunning} ${path}…`;
+      const preview = extractWritePreview(item.inputRaw);
+      return `${verbRunning} ${path}… · ${preview.chars.toLocaleString()} chars`;
+    }
+    return path !== null ? `${verbDone} ${path}` : humanizeToolName(item.toolName);
+  }
+  const summary = READ_TOOLS.has(item.toolName)
+    ? readTargetSegment(item)
+    : genericOneLineSummary(item);
+  return summary !== ""
+    ? `${humanizeToolName(item.toolName)} · ${summary}`
+    : humanizeToolName(item.toolName);
+}
+
+// ── the rail's collapsed tool hints (R120-CM, item 40) ──────────────────────
+
+/** How many hints the collapsed rail carries before the "+N more" tail — one
+ *  line, glance-sized (the well behind the tap owns the full story). */
+export const TOOL_HINT_MAX = 3;
+
+/**
+ * R120-CM — one call's COMPACT HINT for the collapsed rail: the write
+ * family's file path ("src/a.ts" — the edit/create verdict the owner asked
+ * to see), the terminal family's command ("npm test"), the read family's
+ * target. Everything else answers null — a generic verb adds no information
+ * the "N actions" count doesn't already carry. Pure.
+ */
+export function toolHint(item: ToolItem): string | null {
+  if (WRITE_TOOLS.has(item.toolName)) {
+    const path = writePath(item);
+    return path !== null && path !== "" ? path : null;
+  }
+  if (TERMINAL_TOOLS.has(item.toolName)) {
+    const command = genericOneLineSummary(item);
+    return command !== "" ? command : null;
+  }
+  if (READ_TOOLS.has(item.toolName)) {
+    const target = readTargetSegment(item);
+    return target !== "" ? target : null;
+  }
+  return null;
+}
+
+/** The hint list for the rail — the calls' hints, ORDER-PRESERVING deduped
+ *  (two edits of one file hint once), capped at TOOL_HINT_MAX with an honest
+ *  "+N more" tail. Pure + exported for the tests. */
+export function toolHintList(items: ToolItem[]): string[] {
+  const seen = new Set<string>();
+  const hints: string[] = [];
+  for (const item of items) {
+    const hint = toolHint(item);
+    if (hint === null || seen.has(hint)) continue;
+    seen.add(hint);
+    hints.push(hint);
+  }
+  if (hints.length <= TOOL_HINT_MAX) return hints;
+  return [...hints.slice(0, TOOL_HINT_MAX), `+${hints.length - TOOL_HINT_MAX} more`];
 }
 
 // ── the turn partition (the display-layer grouping) ─────────────────────────
@@ -276,6 +361,10 @@ export interface TurnActivityFacts {
   runningToolWord: string | null;
   /** While live: the reply's text has started streaming. */
   writing: boolean;
+  /** R120-CM — the collapsed rail's TOOL HINTS (pref-applied with the rows:
+   *  empty when hidden — the summary never teases content the well will not
+   *  show). Deduped + capped by `toolHintList`. */
+  toolHints: string[];
 }
 
 /** The turn's thinking text — the assistant members' `thinking` segments
@@ -345,6 +434,7 @@ export function turnActivityFacts(group: TurnGroup, activity: ToolActivity): Tur
     runningToolWord:
       group.live && runningTool !== undefined ? runningToolWord(runningTool) : null,
     writing: group.live && turnReplyText(group.items) !== "",
+    toolHints: toolHintList(tools),
   };
 }
 
@@ -364,9 +454,13 @@ function thoughtSeconds(thoughtMs: number): number {
  *             tools / "3 actions" when no thinking / "Thought" when the
  *             wire carried no measured span (the PC's fallback word) /
  *             "· N failed" appended when calls failed (visible at a
- *             glance while collapsed). null when the turn has NO activity
- *             at all (no thinking text, no tools) — the block renders as
- *             the clean document, no rail.
+ *             glance while collapsed) / R120-CM: the TOOL HINTS segment
+ *             ("· src/a.ts, npm test +1 more") between the actions count
+ *             and the failed tail — the files touched and the commands run
+ *             ride the collapsed rail itself, so a settled turn tells the
+ *             owner WHAT ran at one glance. null when the turn has NO
+ *             activity at all (no thinking text, no tools) — the block
+ *             renders as the clean document, no rail.
  */
 export function activitySummary(facts: TurnActivityFacts): string | null {
   if (facts.live) {
@@ -382,6 +476,9 @@ export function activitySummary(facts: TurnActivityFacts): string | null {
   }
   if (facts.toolCount > 0) {
     segments.push(`${facts.toolCount} action${facts.toolCount === 1 ? "" : "s"}`);
+  }
+  if (facts.toolHints.length > 0) {
+    segments.push(facts.toolHints.join(", "));
   }
   if (facts.failedCount > 0) {
     segments.push(`${facts.failedCount} failed`);
@@ -406,7 +503,9 @@ function replyPreview(replyText: string): string | null {
  *   · live — "Assistant turn — thinking" / the running verb / "writing".
  *   · settled — "Assistant turn — thought 8 seconds, 3 actions" (+
  *             "N failed" when calls failed), "Assistant reply" when the
- *             turn carries no activity at all.
+ *             turn carries no activity at all. R120-CM: the tool hints
+ *             ride as a parenthetical ("3 actions (src/a.ts, npm test)") —
+ *             the screen reader hears what the glance sees.
  *   · the reply rides as a final "Reply: {≤60 chars}" clause when present.
  */
 export function turnBlockA11yLabel(input: TurnActivityFacts & { replyText: string }): string {
@@ -424,7 +523,10 @@ export function turnBlockA11yLabel(input: TurnActivityFacts & { replyText: strin
       );
     }
     if (input.toolCount > 0) {
-      words.push(`${input.toolCount} action${input.toolCount === 1 ? "" : "s"}`);
+      const actions = `${input.toolCount} action${input.toolCount === 1 ? "" : "s"}`;
+      words.push(
+        input.toolHints.length > 0 ? `${actions} (${input.toolHints.join(", ")})` : actions,
+      );
     }
     if (input.failedCount > 0) {
       words.push(`${input.failedCount} failed`);

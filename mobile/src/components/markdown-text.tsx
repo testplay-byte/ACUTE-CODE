@@ -15,14 +15,28 @@
  * untouched): headings breathe one step more above them (sm), list rows
  * gain 2px of rhythm, and the code tile's radius now reads the token
  * contract (RADIUS_INPUT) instead of a bare 14.
+ *
+ * ROUND-120 (R120-CM, §1 item 41 — "the AI responses are badly
+ * formatted"): the AUDIT's verdict + fixes. What was flat: (1) headings
+ * carried inline sizes (21/18/16/15) outside the type ladder — donts #12
+ * — and level 4 rendered at plain-body weight; the ladder mapping now
+ * lives in the PURE `headingTier` (features/markdown.ts: H1 Title 20/700,
+ * H2 Heading 16/700, H3 16/600, H4 BodyStrong 15/600) and the heading
+ * Text carries accessibilityRole="header". (2) code blocks dropped the
+ * parser's `lang` on the floor — the tile now leads with the mono micro
+ * language label (the wire's own spelling, never transformed) and the
+ * block's a11y label names it. (3) inline code / lists / bold / italic /
+ * links audited GREEN (mono+bg tiles, markers, nested weights, the
+ * accent underline) — untouched. Dense + textScale keep the R114-d law:
+ * the heading ladder and the mono/code tokens are the calibration marks.
  */
 
 import { useMemo } from "react";
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useTheme } from "@/design/theme";
 import { Hairline } from "@/design/primitives";
-import { fontFamily, RADIUS_INPUT, spacing } from "@/design/tokens";
-import { parseMarkdown, type Block, type Inline, type ListItem } from "@/features/markdown";
+import { fontFamily, RADIUS_INPUT, spacing, TYPE_MICRO } from "@/design/tokens";
+import { headingTier, parseMarkdown, type Block, type HeadingTier, type Inline, type ListItem } from "@/features/markdown";
 import { mobWarn } from "@/lib/log";
 
 export interface MarkdownTextProps {
@@ -70,16 +84,29 @@ function BlockView({
     case "paragraph":
       return <InlineText inlines={block.inlines} ink={ink} dense={dense} textScale={textScale} />;
     case "heading": {
-      const size = block.level === 1 ? 21 : block.level === 2 ? 18 : block.level === 3 ? 16 : dense ? 14 : 15;
+      // R120-CM — the house Type ladder (the pure headingTier table): H1
+      // Title 20/700, H2 Heading 16/700, H3 16/600, H4 BodyStrong 15/600.
+      // dense/textScale never demote it (the R114-d calibration-mark law).
       return (
         <View style={styles.heading}>
-          <InlineText inlines={block.inlines} ink={ink} dense={dense} headingSize={size} />
+          <InlineText inlines={block.inlines} ink={ink} headingTier={headingTier(block.level)} />
         </View>
       );
     }
     case "code":
       return (
-        <View style={[styles.codeBlock, { backgroundColor: tokens.monoBg, borderColor: tokens.monoBorder }]}>
+        <View
+          accessibilityLabel={block.lang !== null ? `code block, ${block.lang}` : "code block"}
+          style={[styles.codeBlock, { backgroundColor: tokens.monoBg, borderColor: tokens.monoBorder }]}
+        >
+          {block.lang !== null && block.lang !== "" && (
+            // R120-CM — the parser's carried language, finally rendered: the
+            // wire's own spelling (never uppercased, never guessed), mono
+            // micro tertiary — the tile's quiet header line.
+            <Text style={[styles.codeLang, { color: tokens.textTertiary }]} numberOfLines={1}>
+              {block.lang}
+            </Text>
+          )}
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <View>
               {block.lines.map((line, i) => (
@@ -165,30 +192,37 @@ function InlineText({
   ink,
   dense,
   textScale,
-  headingSize,
+  headingTier: tier,
   marker,
 }: {
   inlines: Inline[];
   ink: string;
   dense?: boolean;
   textScale?: number;
-  headingSize?: number;
+  headingTier?: HeadingTier;
   marker?: string;
 }) {
   // R114-d — the chatTextSize scale rides the PARAGRAPH body (and the dense
-  // variant); headings keep their own ladder, and the mono/code tokens the
-  // renderer owns stay UNSCALED (the calibration marks).
+  // variant); headings keep their own ladder (R120-CM: the pure headingTier
+  // table), and the mono/code tokens the renderer owns stay UNSCALED (the
+  // calibration marks).
   const scale = textScale ?? 1;
-  const size = headingSize ?? Math.round((dense ? 13 : 15) * scale);
+  const size = tier?.size ?? Math.round((dense ? 13 : 15) * scale);
   const lineHeight =
-    headingSize !== undefined ? Math.round(size * 1.38) : Math.round((dense ? 18.5 : 22) * scale);
+    tier !== undefined ? Math.round(size * 1.38) : Math.round((dense ? 18.5 : 22) * scale);
   return (
     <Text
+      accessibilityRole={tier !== undefined ? "header" : undefined}
       style={{
         color: ink,
         fontSize: size,
         lineHeight,
-        fontFamily: headingSize !== undefined ? fontFamily.bold : fontFamily.regular,
+        fontFamily:
+          tier !== undefined
+            ? tier.weight === 700
+              ? fontFamily.bold
+              : fontFamily.semibold
+            : fontFamily.regular,
       }}
     >
       {marker}
@@ -267,6 +301,12 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
     marginVertical: spacing.xs,
+  },
+  codeLang: {
+    fontFamily: fontFamily.mono,
+    fontSize: TYPE_MICRO,
+    letterSpacing: 0.6,
+    marginBottom: spacing.xs,
   },
   codeLine: {
     fontFamily: fontFamily.mono,

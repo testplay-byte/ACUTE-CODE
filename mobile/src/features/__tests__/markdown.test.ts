@@ -5,7 +5,8 @@
 
 import { describe, expect, it } from "@jest/globals";
 
-import { parseInline, parseMarkdown } from "../markdown";
+import { TYPE_BODY, TYPE_HEADING, TYPE_TITLE } from "@/design/tokens";
+import { headingTier, parseInline, parseMarkdown } from "../markdown";
 
 describe("parseInline", () => {
   it("plain text passes through as one token", () => {
@@ -174,5 +175,50 @@ describe("parseMarkdown blocks", () => {
 
   it("CRLF input normalizes", () => {
     expect(parseMarkdown("a\r\n\r\nb")).toHaveLength(2);
+  });
+});
+
+// ── R120-CM: the heading tier recipe (§1 item 41 — "no proper headings") ────
+
+describe("headingTier — the markdown heading → house Type ladder table", () => {
+  it("H1 is the TITLE tier (20/700 — the document's one headline; Display 28 stays wizard-only)", () => {
+    expect(headingTier(1)).toEqual({ size: TYPE_TITLE, weight: 700 });
+    expect(TYPE_TITLE).toBe(20);
+  });
+
+  it("H2 is the HEADING tier at full title weight (16/700)", () => {
+    expect(headingTier(2)).toEqual({ size: TYPE_HEADING, weight: 700 });
+    expect(TYPE_HEADING).toBe(16);
+  });
+
+  it("H3 is the HEADING tier one weight down (16/600 — the ladder's row-title weight, a visible step without a rogue size)", () => {
+    expect(headingTier(3)).toEqual({ size: TYPE_HEADING, weight: 600 });
+  });
+
+  it("H4 is the BODYSTRONG tier (15/600 — the run-in heading; never plain-body weight again)", () => {
+    expect(headingTier(4)).toEqual({ size: TYPE_BODY, weight: 600 });
+    expect(TYPE_BODY).toBe(15);
+  });
+
+  it("every level steps DOWN or stays — the hierarchy is strictly visible: H1 > H2 ≥ H3 > H4", () => {
+    const tiers = [headingTier(1), headingTier(2), headingTier(3), headingTier(4)];
+    for (let i = 1; i < tiers.length; i += 1) {
+      const prev = tiers[i - 1];
+      const curr = tiers[i];
+      expect(prev !== undefined && curr !== undefined).toBe(true);
+      if (prev === undefined || curr === undefined) continue;
+      // size never grows downward, and size+weight together strictly step down
+      expect(curr.size).toBeLessThanOrEqual(prev.size);
+      expect(curr.size * 10 + curr.weight).toBeLessThan(prev.size * 10 + prev.weight);
+    }
+  });
+
+  it("the parser and the recipe agree on the vocabulary — levels 1-4 are the only headings", () => {
+    const blocks = parseMarkdown("# a\n## b\n### c\n#### d\n");
+    const levels = blocks.filter((b) => b.t === "heading").map((b) => (b.t === "heading" ? b.level : 0));
+    expect(levels).toEqual([1, 2, 3, 4]);
+    for (const level of levels) {
+      expect(() => headingTier(level as 1 | 2 | 3 | 4)).not.toThrow();
+    }
   });
 });
