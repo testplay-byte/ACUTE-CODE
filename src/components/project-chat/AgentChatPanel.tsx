@@ -63,6 +63,11 @@ import {
 } from "./WorkingSection";
 // R88 (owner: the floating to-do widget — top-right of the chat window).
 import { TodoFloat } from "./TodoFloat";
+// ROUND-120 (R120-C-PC, item 34): the MESSAGE TIMELINE — the slim bar strip
+// that replaces the R101-D dot rail + spine (one bar per user exchange,
+// hover-proximity growth, the current exchange highlighted, hover previews,
+// click-to-scroll).
+import { MessageTimeline, type TimelineExchange } from "./MessageTimeline";
 import { AcuteLogo } from "../shell/Sidebar";
 import { ClampedText } from "../shared/ClampedText";
 import { SkeletonBlock } from "../shared/Skeletons";
@@ -153,13 +158,11 @@ import {
  * anatomy (model badge on the assistant row, VS Code/Claude convention).
  */
 
-/** R101-D: JUST the graduated horizontal padding leg of CONTENT_COL_CLASS
- * (above), extracted so the TIMELINE SPINE (TimelineSpine below) can carry
- * the exact same inset — the spine is an absolutely-positioned overlay of
- * the items wrapper, and its normal-flow hairline child lands exactly at
- * the reading column's rail center at every tier BY CONSTRUCTION (edit one,
- * both move). Declared FIRST: CONTENT_COL_CLASS composes it at module load.
- * Never use this alone for content — CONTENT_COL_CLASS is the column. */
+/** R87-A1/R101-D: JUST the graduated horizontal padding leg of
+ * CONTENT_COL_CLASS (above). It stays a named constant because the composer
+ * dock + the empty-state slot compose against it (one spelling, one place
+ * to step the tiers). Never use this alone for content — CONTENT_COL_CLASS
+ * is the column. */
 const CONTENT_H_PAD_CLASS =
   "px-6 md:px-12 xl:px-16 @max-[560px]:px-4 @max-[420px]:px-2.5";
 
@@ -183,8 +186,7 @@ const CONTENT_H_PAD_CLASS =
  * eating it (the min-width floor is 240px; at that width the panel is
  * pill-first, not prose-first).
  * R101-D: the horizontal padding leg is extracted (CONTENT_H_PAD_CLASS just
- * above) so the timeline spine can mirror the EXACT same inset — the column
- * and the spine move together by construction. */
+ * above) so nested slots compose against the column's inset exactly once. */
 const CONTENT_COL_CLASS = `mx-auto w-full max-w-[1080px] ${CONTENT_H_PAD_CLASS}`;
 
 /** R87-A1: the column WITHOUT the graduated horizontal padding — for NESTED
@@ -192,23 +194,6 @@ const CONTENT_COL_CLASS = `mx-auto w-full max-w-[1080px] ${CONTENT_H_PAD_CLASS}`
  * composer), so the inset is applied exactly once while the cap/centering
  * (and the “shares the reading column” layout contract) still hold. */
 const CONTENT_COL_PADLESS_CLASS = "mx-auto w-full max-w-[1080px]";
-
-/** R101-D (owner: "I was hoping to see a timeline on the very left side of
- * the chat window area to see the timeline of the things"): the TIMELINE
- * RAIL — every transcript item renders as a two-column grid, a fixed 28px
- * RAIL cell (TimelineNode's dot) + the existing content cell, gap-x-3. The
- * rail narrows to 20px under the 560px container floor alongside the column
- * padding (the spine's offset tracks it — see TimelineSpine). The content
- * itself is NOT otherwise modified — this is additive structure. */
-const TIMELINE_ITEM_CLASS =
-  "grid grid-cols-[28px_minmax(0,1fr)] gap-x-3 @max-[560px]:grid-cols-[20px_minmax(0,1fr)]";
-
-/** R101-D: the left inset for live-transcript blocks that belong to the
- * timeline COLUMN but carry no node (the stopped-turn status card, the
- * kept-queue notice): 28px rail + 12px gap = ml-10, and 20 + 12 = ml-8 under
- * the 560px floor — the same content edge the railed items align to, so the
- * spine passes cleanly beside them with no layout seam. */
-const TIMELINE_INDENT_CLASS = "ml-10 @max-[560px]:ml-8";
 
 const msgVariants: Variants = {
   initial: { opacity: 0, y: 12 },
@@ -915,9 +900,9 @@ function UserMessage({
   const bubbleBorder = withAlpha(styles.accent, 0.18);
   return (
     <motion.div
-      // R101-D: min-w-0 — the row is a GRID ITEM now (the timeline rail's
-      // content cell); flex/grid items clamp at min-width:auto, and the row's
-      // own max-w cap + inner min-w-0 already handled the old block parent.
+      // min-w-0 — the row is a flex item of the transcript column; flex
+      // items clamp at min-width:auto, and the row's own max-w cap + inner
+      // min-w-0 handled the old block parent.
       className="flex justify-end group min-w-0"
       variants={msgVariants}
       initial="initial"
@@ -1752,8 +1737,10 @@ export function TurnStoppedCard({ ts }: { ts: string }) {
  *   · because hover-only state hides on touch, the SAME clock+queued caption
  *     also renders BELOW the bubble, right-aligned, mono 10px textTertiary —
  *     always visible, never louder than the message it waits behind.
- * The timeline rail keeps its honest hollow dot + "Queued message" label for
- * the folded rows (TimelineNode) — that part was already right.
+ * R120-C-PC (item 34): the old rail's queued dot is retired with the rail —
+ * the MESSAGE TIMELINE renders no bar for a queued chip (it is not an
+ * exchange yet); the bar appears when the message is delivered and folds as
+ * its own user row.
  */
 export function QueuedUserMessage({
   entry,
@@ -1854,109 +1841,6 @@ export function QueuedUserMessage({
   );
 }
 
-/** R101-D: the rail node's accessible label — the item's identity plus the
- * same "Aug 26 · 10:00" timestamp grammar TimestampChip speaks (today
- * renders the clock alone), falling back to the kind alone when the item
- * carries no usable ts. Pure; feeds the dot's title and the sr-only span. */
-function timelineNodeLabel(kind: ProjectChatItem["kind"], ts: string | undefined): string {
-  const kindLabel =
-    kind === "user"
-      ? "You"
-      : kind === "turn"
-        ? "Assistant turn"
-        : kind === "queued"
-          ? "Queued message"
-          : "Error";
-  if (ts === undefined || ts === "") return kindLabel;
-  const date = new Date(ts);
-  if (Number.isNaN(date.getTime())) return kindLabel;
-  const today = new Date().toDateString() === date.toDateString();
-  const time = today
-    ? formatTime(ts)
-    : `${date.toLocaleDateString([], { month: "short", day: "numeric" })} · ${formatTime(ts)}`;
-  return `${kindLabel}, ${time}`;
-}
-
-/** ── ROUND-101 (R101-D): the timeline RAIL NODE ─────────────────────────────
- * The 9px dot at the top of every transcript item's rail cell (mt-[7px] —
- * level with the item's first line). One dot per item kind:
- *   user    → SOLID accent (you spoke)
- *   turn    → HOLLOW accent — 2px accent border on the card background
- *   error   → SOLID danger (SEMANTIC_COLORS — the documented exception set)
- *   queued  → HOLLOW muted (text-tertiary border on the card background)
- * EVERY dot carries a 2.5px punch-out ring in the transcript's background
- * (the panel paints styles.card — the same value --ac-card bridges) so the
- * spine visually TERMINATES at the dot instead of passing through it.
- *
- * A11y: the dot is decorative (aria-hidden) but the rail cell also renders
- * an sr-only span with the label, and the dot carries a native title (hover
- * affordance) — the timeline is perceivable without the visuals. */
-function TimelineNode({ kind, ts }: { kind: ProjectChatItem["kind"]; ts?: string }) {
-  const styles = useThemeStyles();
-  const label = timelineNodeLabel(kind, ts);
-  // The punch-out ring: the page background the transcript actually paints.
-  const punchOut = `0 0 0 2.5px ${styles.card}`;
-  const dotStyle: React.CSSProperties =
-    kind === "user"
-      ? { background: styles.accent, boxShadow: punchOut }
-      : kind === "error"
-        ? { background: SEMANTIC_COLORS.danger, boxShadow: punchOut }
-        : kind === "queued"
-          ? { background: styles.card, border: `2px solid ${styles.textTertiary}`, boxShadow: punchOut }
-          : { background: styles.card, border: `2px solid ${styles.accent}`, boxShadow: punchOut };
-  return (
-    <div data-timeline-node data-timeline-kind={kind}>
-      {/* mx-auto centers the dot on the rail column's axis (the spine). */}
-      <span
-        aria-hidden="true"
-        title={label}
-        className="mx-auto mt-[7px] block size-[9px] rounded-full"
-        style={dotStyle}
-      />
-      <span className="sr-only">{label}</span>
-    </div>
-  );
-}
-
-/** ── ROUND-101 (R101-D): the timeline SPINE ─────────────────────────────────
- * One continuous 1px vertical hairline (var(--ac-border) — the same token
- * every hairline speaks) running the height of the items wrapper, centered
- * under the rail column, BOTH ENDS FADED by a 32px gradient mask so the line
- * never hard-cuts at the top/bottom of the scroll content (it dissolves
- * under the top fade and above the composer).
- *
- * Alignment, by construction: the outer overlay carries the SAME graduated
- * horizontal padding as the reading column (CONTENT_H_PAD_CLASS), so its
- * normal-flow child sits exactly 14px into the content box — the 28px rail
- * column's center, where TimelineNode's dot lives — at every padding tier
- * (24/48/64px) and in both squish tiers (the 560px floor narrows the rail
- * to 20px and the offset to ml-2.5 in lockstep). -translate-x-1/2 centers
- * the 1px line exactly on that axis.
- *
- * aria-hidden + pointer-events-none: pure decoration, never a hit target.
- * The panel renders it ONLY when the transcript has content (an empty chat
- * is a greeting, not a timeline). */
-function TimelineSpine() {
-  return (
-    <div
-      aria-hidden="true"
-      data-timeline-spine
-      className={`pointer-events-none absolute bottom-3 top-3 left-0 right-0 ${CONTENT_H_PAD_CLASS}`}
-    >
-      <div
-        className="h-full w-px -translate-x-1/2 ml-3.5 @max-[560px]:ml-2.5"
-        style={{
-          background: "var(--ac-border)",
-          maskImage:
-            "linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent)",
-          WebkitMaskImage:
-            "linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent)",
-        }}
-      />
-    </div>
-  );
-}
-
 /** Direct child of AnimatePresence mode="popLayout": framer-motion attaches a
  * measurement ref to this element (React 18 requires forwardRef — the demo
  * could skip it on React 19). The wrapper div is the presence child.
@@ -2012,6 +1896,12 @@ const MessageRenderer = memo(
       queuedLive?: boolean;
       /** R117-f (deliverable 2): the optimistic echo's delivery rung. */
       delivery?: "sending" | "sent";
+      /** ROUND-120 (R120-C-PC, item 34): the row's MESSAGE-TIMELINE anchor —
+       * the id the timeline bar's click scrolls to (the exchange's user
+       * bubble). Folded rows stamp `chat-item-${seq}` automatically; the
+       * LIVE rows (echo / remote opener / delivered-queued) pass their own
+       * stable ids. */
+      anchorId?: string;
     }
   >(function MessageRenderer(
     {
@@ -2030,19 +1920,22 @@ const MessageRenderer = memo(
       queuedBusy,
       queuedLive,
       delivery,
+      anchorId,
     },
     ref,
   ) {
+    // R120-C-PC (item 34): the R101-D rail grid is RETIRED — every row is a
+    // plain min-w-0 block in the reading column again (the dot rail + spine
+    // died with the owner's round-120 verdict). The wrapper div stays the
+    // AnimatePresence popLayout child (the ref is framer-motion's
+    // measurement hook); scroll-mt-1 keeps a timeline jump from parking a
+    // row flush under the scroller's edge.
+    const rowId = anchorId ?? (item.seq >= 0 ? `chat-item-${item.seq}` : undefined);
+    const rowClass = "min-w-0 scroll-mt-1";
     switch (item.kind) {
-      // R101-D: EVERY item renders in the TIMELINE RAIL grid (TIMELINE_ITEM_
-      // CLASS): the 28px rail cell (TimelineNode's dot, kind-coded) + the
-      // existing content cell, untouched. The wrapper div stays the
-      // AnimatePresence popLayout child (the ref is framer-motion's measurement
-      // hook — display:grid composes with its absolute exit positioning).
       case "user":
         return (
-          <div ref={ref} className={TIMELINE_ITEM_CLASS}>
-            <TimelineNode kind="user" ts={item.ts} />
+          <div ref={ref} id={rowId} className={rowClass}>
             <UserMessage
               content={item.content}
               ts={item.ts}
@@ -2062,8 +1955,7 @@ const MessageRenderer = memo(
         // queued-user bubble the live store renders mid-stream, with the
         // panel-bound affordances riding its hover cluster (R119-C).
         return (
-          <div ref={ref} className={TIMELINE_ITEM_CLASS}>
-            <TimelineNode kind="queued" ts={item.ts} />
+          <div ref={ref} id={rowId} className={rowClass}>
             <QueuedUserMessage
               entry={item}
               busy={queuedBusy ?? false}
@@ -2082,8 +1974,7 @@ const MessageRenderer = memo(
         );
       case "turn":
         return (
-          <div ref={ref} className={TIMELINE_ITEM_CLASS}>
-            <TimelineNode kind="turn" ts={item.ts} />
+          <div ref={ref} id={rowId} className={rowClass}>
             <AssistantTurn
               item={item}
               sessionId={sessionId}
@@ -2095,8 +1986,7 @@ const MessageRenderer = memo(
         );
       case "error":
         return (
-          <div ref={ref} className={TIMELINE_ITEM_CLASS}>
-            <TimelineNode kind="error" ts={item.ts} />
+          <div ref={ref} id={rowId} className={rowClass}>
             {/* R97-D: the thinking-loop guard's stop is NOT an error — the amber
                 ThinkingStoppedCard replaces the red TurnErrorCard for the
                 thinking_loop class (the owner's "should not be shown as errors
@@ -2724,6 +2614,72 @@ export function AgentChatPanel({
       ts: new Date(remoteStartedMs ?? Date.now()).toISOString(),
     };
   }, [remoteUserText, remoteStartedMs, items]);
+
+  // ── ROUND-120 (R120-C-PC, item 34): the MESSAGE TIMELINE's bars — ONE
+  //    exchange per user message. The fold walks in order: every folded
+  // `user` row opens an exchange (a delivered queued message is an ordinary
+  // user row by then — its own exchange, honestly); the FIRST response
+  // block after it (the answering turn's finalText — or its first working
+  // narration when the answer never landed — / the error card's message)
+  // becomes that exchange's agent preview. Queued rows are chips, not
+  // exchanges — skipped. The LIVE opener (own echo or remote mirror — at
+  // most one renders, the mirrorOwnsEcho law) opens the CURRENT exchange
+  // carrying the live stream's partial answer; when NO live opener renders
+  // (a rehydrated mirror anchored on the fold's own user row — the fold
+  // owns the opener), the LAST folded exchange IS the live one and takes
+  // the live response. Delivered-queued live bubbles ride after it (user
+  // messages mid-flight, their response not started). ──
+  const timelineExchanges = useMemo<TimelineExchange[]>(() => {
+    const list: TimelineExchange[] = [];
+    for (const it of items) {
+      if (it.kind === "user") {
+        list.push({
+          anchorId: `chat-item-${it.seq}`,
+          userText: it.content,
+          ts: it.ts,
+          agentText: "",
+        });
+        continue;
+      }
+      const owner = list.length > 0 ? list[list.length - 1] : null;
+      if (owner === null || owner.agentText !== "") continue;
+      if (it.kind === "turn") {
+        owner.agentText =
+          it.finalText !== ""
+            ? it.finalText
+            : (it.working.find((w) => w.type === "text")?.content ?? "");
+        if (it.model !== undefined) owner.agentLabel = it.model;
+      } else if (it.kind === "error") {
+        owner.agentText = it.message;
+      }
+    }
+    const liveOpener = pendingEchoItem ?? remoteUserItem;
+    if (liveOpener !== null) {
+      list.push({
+        anchorId: liveOpener === remoteUserItem ? "chat-item-remote" : "chat-item-echo",
+        userText: liveOpener.content,
+        ts: liveOpener.ts,
+        agentText: liveTurn !== null ? liveTurn.streamText : "",
+        ...(liveTurn?.model !== undefined ? { agentLabel: liveTurn.model } : {}),
+      });
+    } else if (liveOverlayActive) {
+      // The fold owns the opener row (the rehydrated-mirror anchor case):
+      // the last folded exchange is the running one.
+      const last = list.length > 0 ? list[list.length - 1] : null;
+      if (last !== null && last.agentText === "") {
+        last.agentText = liveTurn?.streamText ?? "";
+        if (liveTurn?.model !== undefined) last.agentLabel = liveTurn.model;
+      }
+    }
+    for (let i = 0; i < deliveredQueuedItems.length; i++) {
+      const d = deliveredQueuedItems[i];
+      list.push({ anchorId: `chat-item-dq-${i}`, userText: d.content, ts: d.ts, agentText: "" });
+    }
+    return list;
+    // Primitives + memoized snapshots only (the R119-C/R117-f discipline —
+    // a per-SSE-delta liveTurn object dependency would rebuild this list on
+    // every frame; the two primitive lenses carry everything that changes).
+  }, [items, pendingEchoItem, remoteUserItem, deliveredQueuedItems, liveOverlayActive, liveTurn?.streamText, liveTurn?.model]);
   useScrollFade(scrollRef);
 
   // ── R94-D2 (owner: "While the agent is doing its work, I should be able
@@ -3676,11 +3632,11 @@ export function AgentChatPanel({
     return rendered;
   })();
 
-  // R101-D: the timeline spine renders ONLY when the transcript has content —
-  // the greeting/skeleton/load-error empty states carry no timeline (an empty
-  // chat is a welcome, not a line of dots). Every source of a railed row
-  // counts: folded items, the optimistic echo, delivered-queued bubbles, the
-  // live turn, and the live error card.
+  // R120-C-PC (item 34): the message timeline renders ONLY when the
+  // transcript has content — the greeting/skeleton/load-error empty states
+  // carry no timeline (an empty chat is a welcome, not a stack of bars).
+  // Every source of a user row counts: folded items, the optimistic echo,
+  // delivered-queued bubbles, the live turn, and the live error card.
   const hasTimelineContent =
     items.length > 0 ||
     pendingEcho !== null ||
@@ -3754,9 +3710,10 @@ export function AgentChatPanel({
               R87-A1: horizontal padding lives IN CONTENT_COL_CLASS now
               (graduated px-6/md:px-12/xl:px-16 — see its doc note), so the
               density classes here carry py only.
-              R101-D: the wrapper is `relative` and hosts the TIMELINE SPINE —
-              one continuous hairline behind every item's rail column (see
-              TimelineSpine; rendered only while the transcript has content). */}
+              R120-C-PC (item 34): the old R101-D rail/spine are RETIRED —
+              the reading column hosts the rows directly, and the MESSAGE
+              TIMELINE (the bar strip) docks over the scroll viewport's left
+              edge from the scroll-body wrapper below). */}
           <div
             className={`${density === "compact" ? "py-4" : "py-5"} ${CONTENT_COL_CLASS} relative min-h-full flex flex-col gap-5`}
             style={
@@ -3766,11 +3723,6 @@ export function AgentChatPanel({
             }
             data-chat-size={chatTextSize}
           >
-            {/* R101-D: the timeline spine — FIRST child so every rail dot
-                paints above it (the punch-out rings terminate the line AT
-                each node). aria-hidden decoration; never with an empty
-                transcript. */}
-            {hasTimelineContent ? <TimelineSpine /> : null}
             {/* ROUND-50 (R50-c2, owner: "When there is nothing, the very first
                 chat… almost centered but a bit more towards the bottom half of
                 the screen"): the greeting + suggestion chips sit ABOVE the
@@ -3911,6 +3863,7 @@ export function AgentChatPanel({
                   sessionId={null}
                   projectId={projectId}
                   delivery={echoDelivery}
+                  anchorId="chat-item-echo"
                   {...(pendingEchoAttachments !== null ? { attachments: pendingEchoAttachments } : {})}
                 />
               ) : null}
@@ -3923,12 +3876,13 @@ export function AgentChatPanel({
                 trick (once the folded log carries the same content, the live
                 copy drops out — no double bubble). R117-f: the item snapshot
                 is memoized (deliveredQueuedItems) — persisted rows, no glyph. ── */}
-            {deliveredQueuedItems.map((d) => (
+            {deliveredQueuedItems.map((d, i) => (
               <MessageRenderer
                 key={`delivered-q-${d.seq}`}
                 item={d}
                 sessionId={null}
                 projectId={projectId}
+                anchorId={`chat-item-dq-${i}`}
               />
             ))}
 
@@ -3952,6 +3906,7 @@ export function AgentChatPanel({
                 sessionId={null}
                 projectId={projectId}
                 delivery="sent"
+                anchorId="chat-item-remote"
               />
             ) : null}
 
@@ -3960,16 +3915,11 @@ export function AgentChatPanel({
                 timeline as a full answer block the moment a tool lands —
                 ROUND-64 R64-c segmentation). ── */}
             {liveTurn !== null ? (
-              // R101-D: the LIVE turn rides the SAME rail grid as the folded
-              // items — without it the streaming block would start at the
-              // reading column's left edge (40px wider than every other row)
-              // and the spine would slice through its cards. The node is the
-              // assistant-turn dot (hollow accent) pinned to the turn's
-              // wall-clock start, so the live→folded handoff keeps the exact
-              // same dot + column (header → header, node → node).
-              <div className={TIMELINE_ITEM_CLASS}>
-                <TimelineNode kind="turn" ts={new Date(liveTurn.startedAtMs).toISOString()} />
-                <div aria-live="polite" aria-atomic="false" className="group min-w-0">
+              // R120-C-PC (item 34): the rail grid is retired — the live
+              // block is a plain min-w-0 child of the reading column, the
+              // exact same geometry every folded row renders in (the
+              // live→folded handoff stays seamless: header → header).
+              <div aria-live="polite" aria-atomic="false" className="group min-w-0">
                 {/* ROUND-68 (R68-A): the R67-D screenshot THUMBNAIL strip that
                     rendered here is GONE — captures now ride INSIDE liveSection
                     as `screenshot` WorkingEntry rows, rendered by WorkingSection
@@ -4159,7 +4109,6 @@ export function AgentChatPanel({
                   </div>
                 ) : null}
                 </div>
-              </div>
             ) : null}
 
             {/* ── ROUND-58 (R58-cf): the deliberate user stop — a QUIET status
@@ -4168,9 +4117,9 @@ export function AgentChatPanel({
                 and the composer grew a Continue affordance. Hidden while a
                 new turn streams (startStream resets the signal). ── */}
             {lastTurnStoppedByUser && !streamBusy && lastTurnStoppedTs !== null ? (
-              // R101-D: live-only status chrome — aligned to the timeline
-              // COLUMN (no node of its own; the spine passes beside it).
-              <div className={TIMELINE_INDENT_CLASS}>
+              // R120-C-PC: live-only status chrome — a plain min-w-0 row in
+              // the reading column (the rail indent died with the rail).
+              <div className="min-w-0">
                 <TurnStoppedCard ts={lastTurnStoppedTs} />
               </div>
             ) : null}
@@ -4182,11 +4131,10 @@ export function AgentChatPanel({
                 R97-D: the thinking_loop class renders the AMBER
                 ThinkingStoppedCard instead (never "generation failed"). ── */}
             {liveError !== null && !liveErrorSuperseded ? (
-              // R101-D: the live error rides the SAME rail + error node as the
-              // folded turn.error item that replaces it on refetch — the swap
-              // is seamless (same column, same dot) instead of a 40px jump.
-              <div className={TIMELINE_ITEM_CLASS}>
-                <TimelineNode kind="error" ts={liveError.ts} />
+              // R120-C-PC: the live error rides the same plain column the
+              // folded turn.error item that replaces it on refetch renders
+              // in — the swap is seamless (same column) instead of a jump.
+              <div className="min-w-0">
                 {liveError.errorClass === "thinking_loop" ? (
                   <ThinkingStoppedCard
                     error={liveError}
@@ -4213,10 +4161,9 @@ export function AgentChatPanel({
             {queueKeptNotice !== null && queueKeptNotice > 0 && !streamBusy ? (
               <div
                 data-testid="queue-kept-notice"
-                // R101-D: live-only notice chrome — aligned to the timeline
-                // COLUMN like TurnStoppedCard (no node; the spine passes
-                // beside it).
-                className={`${TIMELINE_INDENT_CLASS} mt-2 rounded-xl border px-3 py-2 text-[12px] font-semibold flex items-center gap-2`}
+                // R120-C-PC: live-only notice chrome — a plain row in the
+                // reading column (the rail indent died with the rail).
+                className="mt-2 rounded-xl border px-3 py-2 text-[12px] font-semibold flex items-center gap-2"
                 style={{
                   borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.35),
                   background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.08 : 0.05),
@@ -4230,6 +4177,16 @@ export function AgentChatPanel({
             ) : null}
           </div>
         </div>
+
+        {/* ── ROUND-120 (R120-C-PC, item 34): the MESSAGE TIMELINE — the slim
+            bar strip that REPLACES the old left rail. Docked at the transcript
+            viewport's left edge (NOT inside the scroller — it is a fixed
+            navigational minimap: every exchange stays reachable while reading
+            deep history), one bar per user exchange, hover-proximity growth,
+            the current exchange highlighted, hover/focus previews, and
+            click-to-scroll through the chat-item-* anchors the rows stamp.
+            Never rendered on an empty transcript (hasTimelineContent). ── */}
+        {hasTimelineContent ? <MessageTimeline exchanges={timelineExchanges} /> : null}
 
         {/* ── R94-D2 (owner: "It should only auto-scroll if I have moved to
             the very bottom"): the JUMP-TO-LATEST pill — floats near the

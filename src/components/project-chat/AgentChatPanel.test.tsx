@@ -1809,15 +1809,18 @@ describe("AgentChatPanel remote turn.started (ROUND-114 R114-e)", () => {
   });
 });
 
-// ── ROUND-101 (R101-D): the LEFT TIMELINE RAIL ───────────────────────────────
-// Owner (v0.98.0): "I was hoping to see a timeline on the very left side of the
-// chat window area to see the timeline of the things." Every transcript item
-// renders in a 28px rail grid (20px under the 560px container floor); the items
-// wrapper paints one continuous faded spine behind the rail column.
-describe("AgentChatPanel timeline rail (ROUND-101 R101-D)", () => {
+// ── ROUND-120 (R120-C-PC, item 34): the MESSAGE TIMELINE — the dot rail +
+//    spine are RETIRED (the owner's round-120 verdict: "remove the current
+//    left timeline entirely"); the slim bar strip replaces them. The pins:
+//    the old rail is GONE (no nodes, no spine, no two-column rail grid —
+//    the rows are plain reading-column blocks again); ONE BAR PER USER
+//    EXCHANGE with the CURRENT exchange's bar highlighted; the live turn's
+//    opener gets its own bar (the current one); an empty transcript carries
+//    no timeline at all. The strip's own interaction grammar (proximity
+//    growth, previews, click-to-scroll) is pinned in MessageTimeline.test.tsx.
+describe("AgentChatPanel message timeline (ROUND-120 R120-C-PC)", () => {
   const SLOW = { timeout: 5000 };
 
-  /** Chat event exactly as the backend writes it (payload mirrors agentId + ts). */
   function messageEvent(
     seq: number,
     role: "user" | "assistant",
@@ -1844,7 +1847,7 @@ describe("AgentChatPanel timeline rail (ROUND-101 R101-D)", () => {
           agentId: "agt_scribe",
           mode: "single",
           status: "completed",
-          title: "R101 timeline probe",
+          title: "R120 timeline probe",
           createdAt: "2026-08-26T10:00:00Z",
           updatedAt: "2026-08-26T10:05:00Z",
         },
@@ -1855,6 +1858,12 @@ describe("AgentChatPanel timeline rail (ROUND-101 R101-D)", () => {
             ms: 4200,
             usage: { inputTokens: 1200, outputTokens: 850 },
           }),
+          messageEvent(3, "user", "second question", "2026-08-26T10:01:10Z"),
+          messageEvent(4, "assistant", "second answer", "2026-08-26T10:01:20Z", {
+            model: "test/model-9",
+            ms: 4200,
+            usage: { inputTokens: 1300, outputTokens: 950 },
+          }),
         ],
       },
     ]);
@@ -1862,82 +1871,52 @@ describe("AgentChatPanel timeline rail (ROUND-101 R101-D)", () => {
     await screen.findByText("first question", {}, SLOW);
   }
 
-  it("every transcript item rides the RAIL GRID — 28px rail cell + content, kind-coded nodes, one node per item", async () => {
+  it("the OLD rail is GONE — no spine, no nodes, no two-column rail grid (the rows are plain reading-column blocks)", async () => {
     await renderTimelineConversation();
 
-    // The rail grids: the user bubble AND the assistant turn both render in
-    // the two-column grid (28px rail + content; the 560px squish tier narrows
-    // it to 20px in lockstep with the column padding).
-    const grids = Array.from(document.querySelectorAll("div")).filter((el) =>
-      el.className.includes("grid-cols-[28px_minmax(0,1fr)]"),
-    );
-    expect(grids.length).toBeGreaterThanOrEqual(2);
-    for (const grid of grids) {
-      expect(grid.className).toContain("gap-x-3");
-      expect(grid.className).toContain("@max-[560px]:grid-cols-[20px_minmax(0,1fr)]");
-      // First cell = the rail node; the content follows UNTOUCHED.
-      expect(grid.querySelector("[data-timeline-node]")).not.toBeNull();
-    }
-
-    // The kind-coded dots: solid accent for the user, hollow accent (2px
-    // border on the card background) for the assistant turn.
-    const nodes = Array.from(document.querySelectorAll("[data-timeline-node]"));
-    expect(nodes).toHaveLength(2);
-    const [userNode, turnNode] = nodes as HTMLElement[];
-    expect(userNode.dataset.timelineKind).toBe("user");
-    const userDot = userNode.querySelector("span[aria-hidden='true']") as HTMLElement;
-    expect(userDot.style.background).not.toBe("");
-    expect(userDot.style.border).toBe("");
-    expect(turnNode.dataset.timelineKind).toBe("turn");
-    const turnDot = turnNode.querySelector("span[aria-hidden='true']") as HTMLElement;
-    expect(turnDot.style.border).toContain("2px solid");
-    // Every dot carries the punch-out ring in the transcript background so
-    // the spine terminates AT the node, plus the 9px size + 7px offset.
-    for (const dot of [userDot, turnDot]) {
-      expect(dot.className).toContain("size-[9px]");
-      expect(dot.className).toContain("mt-[7px]");
-      expect(dot.className).toContain("rounded-full");
-      expect(dot.style.boxShadow).toContain("2.5px");
-    }
-
-    // A11y: the dots are decorative, but the rail carries an sr-only label
-    // AND a hover title — the timeline is perceivable without the visuals.
-    expect(userNode.querySelector(".sr-only")?.textContent).toContain("You");
-    expect(turnNode.querySelector(".sr-only")?.textContent).toContain("Assistant turn");
-    expect(userDot.title).toContain("You");
-    expect(turnDot.title).toContain("Assistant turn");
-  });
-
-  it("the SPINE: one continuous faded hairline over the rail axis — and NEVER on an empty transcript", async () => {
-    await renderTimelineConversation();
-    const spine = document.querySelector("[data-timeline-spine]") as HTMLElement | null;
-    expect(spine).not.toBeNull();
-    // Pure decoration: aria-hidden, no hit target.
-    expect(spine!.getAttribute("aria-hidden")).toBe("true");
-    expect(spine!.className).toContain("pointer-events-none");
-    // The spine overlay carries the SAME graduated padding as the reading
-    // column, so the hairline sits on the rail axis at every tier.
-    expect(spine!.className).toContain("px-6");
-    const line = spine!.firstElementChild as HTMLElement;
-    expect(line.className).toContain("w-px");
-    expect(line.className).toContain("ml-3.5");
-    expect(line.className).toContain("@max-[560px]:ml-2.5");
-    // Both ends fade (the mask) — the line never hard-cuts.
-    expect(line.style.maskImage).toContain("linear-gradient");
-
-    // The empty chat is a greeting, not a timeline: no spine at rest.
-    cleanup();
-    const projects = await getFixtureProjects().list();
-    customBackend.backend = createFixtureSessions([]);
-    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
-    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy(), SLOW);
+    // The retired chrome is fully absent — the owner's "remove the current
+    // left timeline entirely".
     expect(document.querySelector("[data-timeline-spine]")).toBeNull();
     expect(document.querySelector("[data-timeline-node]")).toBeNull();
+    const railGrids = Array.from(document.querySelectorAll("div")).filter((el) =>
+      el.className.includes("grid-cols-[28px_minmax(0,1fr)]"),
+    );
+    expect(railGrids).toHaveLength(0);
   });
 
-  it("the LIVE turn rides the same rail (the spine never slices the streaming block)", async () => {
+  it("ONE BAR PER USER EXCHANGE — and the CURRENT exchange's bar is highlighted", async () => {
     await renderTimelineConversation();
-    // Arm a live turn exactly like the caret suite does.
+
+    const strip = await waitFor(() => {
+      const el = document.querySelector('[data-testid="message-timeline"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    }, SLOW);
+    expect(strip.getAttribute("role")).toBe("navigation");
+    expect(strip.getAttribute("aria-label")).toBe("Message timeline");
+
+    // Two user exchanges → exactly TWO bars; the LAST (the current
+    // exchange) carries the accent-highlight flag.
+    const bars = Array.from(document.querySelectorAll('[data-testid="message-timeline-bar"]'));
+    expect(bars).toHaveLength(2);
+    expect(bars[0].getAttribute("data-current")).toBe("false");
+    expect(bars[1].getAttribute("data-current")).toBe("true");
+    // The current bar's visual bar rides the accent fill; the resting one
+    // the quiet muted neutral.
+    const restFill = bars[0].querySelector("span") as HTMLElement;
+    const currentFill = bars[1].querySelector("span") as HTMLElement;
+    expect(restFill.className).toContain("bg-muted");
+    expect(currentFill.className).toContain("bg-accent");
+    // Every bar is an honest, labeled button (the timeline is perceivable
+    // without the visuals).
+    for (const bar of bars) {
+      expect(bar.tagName).toBe("BUTTON");
+      expect(bar.getAttribute("aria-label")).toContain("Jump to message");
+    }
+  });
+
+  it("the LIVE turn's opener gets a bar — the current one (the strip tracks the running exchange)", async () => {
+    await renderTimelineConversation();
     const liveTurn: LiveTurn = {
       startedAtMs: Date.now(),
       working: [],
@@ -1958,7 +1937,7 @@ describe("AgentChatPanel timeline rail (ROUND-101 R101-D)", () => {
           streamBusy: true,
           sendError: null,
           liveError: null,
-          pendingEcho: null,
+          pendingEcho: "a live third question",
           lastLiveEndMs: 0,
           lastTurnStoppedByUser: false,
           lastTurnStoppedTs: null,
@@ -1970,16 +1949,22 @@ describe("AgentChatPanel timeline rail (ROUND-101 R101-D)", () => {
       },
     });
     await screen.findByText(/the live answer/, {}, SLOW);
+    await screen.findByText("a live third question", {}, SLOW);
 
-    // The live block wraps in the SAME grid with an assistant-turn node —
-    // without it the streaming content would start 40px left of every other
-    // row and the spine would cut through it.
-    const liveGrid = Array.from(document.querySelectorAll("div"))
-      .filter((el) => el.className.includes("grid-cols-[28px_minmax(0,1fr)]"))
-      .find((el) => el.querySelector('[aria-live="polite"]') !== null);
-    expect(liveGrid).toBeTruthy();
-    const liveNode = liveGrid!.querySelector("[data-timeline-node]") as HTMLElement;
-    expect(liveNode.dataset.timelineKind).toBe("turn");
+    // THREE bars now — the two folded exchanges + the live opener, which is
+    // the CURRENT one.
+    const bars = Array.from(document.querySelectorAll('[data-testid="message-timeline-bar"]'));
+    expect(bars).toHaveLength(3);
+    expect(bars[2].getAttribute("data-current")).toBe("true");
+    expect(bars[2].getAttribute("aria-label")).toContain("a live third question");
+  });
+
+  it("an EMPTY transcript carries no timeline (a greeting is not a stack of bars)", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy(), SLOW);
+    expect(document.querySelector('[data-testid="message-timeline"]')).toBeNull();
   });
 });
 
@@ -2896,10 +2881,11 @@ describe("AgentChatPanel queued-message honesty (ROUND-119 R119-C)", () => {
     expect(screen.getByRole("button", { name: "Send the queued message now" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Remove the queued message" })).toBeTruthy();
 
-    // The rail keeps its honest queued node (hollow dot + sr-only label).
-    const node = document.querySelector('[data-timeline-kind="queued"]');
-    expect(node).not.toBeNull();
-    expect(node?.querySelector(".sr-only")?.textContent).toContain("Queued message");
+    // R120-C-PC: the rail's queued dot is retired with the rail — a queued
+    // chip is NOT an exchange, so it renders NO timeline bar (the bar comes
+    // when the message is delivered and folds as its own user row).
+    const bars = Array.from(document.querySelectorAll('[data-testid="message-timeline-bar"]'));
+    expect(bars).toHaveLength(1); // only the exchange the queued chip waits behind
 
     // The affordances still FIRE through the new chrome: X-remove → DELETE
     // /sessions/:id/queue/:seq.
