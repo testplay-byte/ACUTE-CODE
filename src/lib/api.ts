@@ -4393,6 +4393,60 @@ export async function fetchComputerFrameRaster(frameId: string): Promise<Blob> {
 }
 
 /**
+ * ROUND-121 (R121-b): GET /projects/:id/attachments/bytes — the pixels
+ * round's PC half. A user-sent image attachment's display bytes, fetched on
+ * demand (the R67 law keeps bytes OFF the message wire; this route is the
+ * door they come back out of). Same bearer-auth + blob shape as the raster
+ * fetch above; a 404 (deleted file / foreign project) is the caller's
+ * "render the honest frame" signal, not a crash.
+ */
+export async function fetchAttachmentBytes(projectId: string, path: string): Promise<Blob> {
+  const { baseUrl, token } = useConfigStore.getState();
+  let res: Response;
+  try {
+    res = await fetch(
+      `${baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/attachments/bytes?path=${encodeURIComponent(path)}`,
+      {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      },
+    );
+  } catch (cause) {
+    throw new ApiError(
+      0,
+      "NETWORK",
+      `Could not reach agent-core at ${baseUrl} (${String(cause)})`,
+    );
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    let body: unknown;
+    try {
+      body = text ? JSON.parse(text) : undefined;
+    } catch {
+      body = undefined;
+    }
+    const envelope = parseEnvelope(body);
+    throw new ApiError(
+      res.status,
+      envelope?.code ?? "UNKNOWN",
+      envelope?.message ?? `Attachment bytes fetch failed with HTTP ${res.status}`,
+    );
+  }
+  return res.blob();
+}
+
+/** The display-image extension test (the bytes route's allowlist, mirrored
+ * client-side so non-images never spawn a doomed fetch). Same set as the
+ * route: the raster formats; SVG deliberately absent. */
+export function isDisplayableImageAttachment(path: string | undefined, name: string): boolean {
+  const candidate = path ?? name;
+  const dot = candidate.lastIndexOf(".");
+  if (dot < 0) return false;
+  const ext = candidate.slice(dot + 1).toLowerCase();
+  return ext === "png" || ext === "jpg" || ext === "jpeg" || ext === "gif" || ext === "webp" || ext === "bmp";
+}
+
+/**
  * ROUND-62 (D8): POST /browser-commands/:commandId/result — the agent-browser
  * bridge's answer channel. The browser_control tool (agent-core) sends a
  * live command through the turn's SSE stream; this app executes it (eval in

@@ -181,6 +181,14 @@ import type {
   UserDeliveryStatus,
 } from "@/features/sessions";
 
+/**
+ * ROUND-121 (R121-c — the pixels round): the screen-injected image-bytes
+ * resolver — fetchAttachmentImageFile over the link, threaded down to the
+ * user bubble's image thumbnails. Absent in tests / fixture contexts: the
+ * honest frame stands, byte-identical to the pre-R121 render.
+ */
+export type AttachmentImageResolver = (a: AttachmentView) => Promise<string | null>;
+
 // ── local drawing constants (chat.md's own geometry — the file's class) ─────
 
 /** chat.md — the image radius: r12 on thumbnails + screenshot tiles. */
@@ -292,6 +300,7 @@ export function TranscriptList({
   onAnswerQuestion,
   subagentLive,
   onRetryError,
+  attachmentImageResolver,
 }: {
   items: TranscriptItem[];
   onApprovalDecide?: (approvalId: string) => void;
@@ -300,6 +309,8 @@ export function TranscriptList({
   subagentLive?: Record<string, SubAgentLiveEntry>;
   /** R117-d2 — the error card's Retry (the screen owns the re-send). */
   onRetryError?: () => void;
+  /** R121-c — the image-bytes resolver (the pixels round); see the type. */
+  attachmentImageResolver?: AttachmentImageResolver;
 }) {
   const rows = groupDisplayRows(orderDisplayItems(items));
   return (
@@ -312,6 +323,7 @@ export function TranscriptList({
           onAnswerQuestion={onAnswerQuestion}
           subagentLive={subagentLive}
           onRetryError={onRetryError}
+          attachmentImageResolver={attachmentImageResolver}
         />
       ))}
     </View>
@@ -328,6 +340,7 @@ export function TranscriptRowView({
   onAnswerQuestion,
   subagentLive,
   onRetryError,
+  attachmentImageResolver,
 }: {
   row: DisplayRow;
   onApprovalDecide?: (approvalId: string) => void;
@@ -339,6 +352,8 @@ export function TranscriptRowView({
   /** R117-d2 — the error card's Retry (zero-arg: the SCREEN binds the failed
    * turn's user message before calling — the PC's own contract). */
   onRetryError?: () => void;
+  /** R121-c — the image-bytes resolver (the pixels round); see the type. */
+  attachmentImageResolver?: AttachmentImageResolver;
 }) {
   if (row.kind === "turn") {
     return <TurnBlock group={row} />;
@@ -350,6 +365,7 @@ export function TranscriptRowView({
       onAnswerQuestion={onAnswerQuestion}
       subagentLive={subagentLive}
       onRetryError={onRetryError}
+      attachmentImageResolver={attachmentImageResolver}
     />
   );
 }
@@ -364,6 +380,7 @@ export function TranscriptItemView({
   onAnswerQuestion,
   subagentLive,
   onRetryError,
+  attachmentImageResolver,
 }: {
   item: StandaloneTranscriptItem;
   onApprovalDecide?: (approvalId: string) => void;
@@ -375,6 +392,8 @@ export function TranscriptItemView({
   /** R117-d2 — the error card's Retry (zero-arg: the SCREEN binds the failed
    * turn's user message before calling — the PC's own contract). */
   onRetryError?: () => void;
+  /** R121-c — the image-bytes resolver (the pixels round); see the type. */
+  attachmentImageResolver?: AttachmentImageResolver;
 }) {
   switch (item.kind) {
     case "user":
@@ -385,6 +404,7 @@ export function TranscriptItemView({
           attachments={item.attachments}
           ts={item.ts}
           status={item.status}
+          attachmentImageResolver={attachmentImageResolver}
         />
       );
     case "approval":
@@ -462,6 +482,7 @@ function UserBubble({
   attachments,
   ts,
   status,
+  attachmentImageResolver,
 }: {
   content: string;
   queued: boolean;
@@ -470,6 +491,8 @@ function UserBubble({
   /** R116-m → R118-D — the delivery ladder's rung (optional: undefined =
    *  the settled shape — clean history). */
   status: UserDeliveryStatus | undefined;
+  /** R121-c — the image-bytes resolver (the pixels round); see the type. */
+  attachmentImageResolver?: AttachmentImageResolver;
 }) {
   const { tokens } = useTheme();
   // R114-d — the chat prefs: density shrinks the bubble's VERTICAL padding;
@@ -562,7 +585,11 @@ function UserBubble({
         {content}
       </Text>
       {images.map((a) => (
-        <UserImageThumb key={`img-${a.name}-${a.path ?? ""}`} attachment={a} />
+        <UserImageThumb
+          key={`img-${a.name}-${a.path ?? ""}`}
+          attachment={a}
+          resolveImage={attachmentImageResolver}
+        />
       ))}
       {files.length > 0 && (
         <View style={styles.userAttachRow}>
@@ -665,19 +692,48 @@ function UserBubble({
 /**
  * One image attachment — a PROPER rounded thumbnail (chat.md: r12, ~64% of
  * the column, aspect-kept; donts #16 bans the squinted tiny tile). With
- * pixels (a renderable URI on the model) the image draws at its measured
- * aspect and taps into the full-screen viewer; without pixels (today's
- * name/path/size wire) the same geometry renders the honest image frame —
- * icon + name + size — never a fabricated photo.
+ * pixels (a renderable URI on the model, or the R121-c RESOLVER's fetched
+ * cache-file URI) the image draws at its measured aspect and taps into the
+ * full-screen viewer; without pixels (no resolver, or an honest miss) the
+ * same geometry renders the honest image frame — icon + name + size —
+ * never a fabricated photo.
  */
-function UserImageThumb({ attachment }: { attachment: AttachmentView }) {
+function UserImageThumb({
+  attachment,
+  resolveImage,
+}: {
+  attachment: AttachmentView;
+  /** ROUND-121 (R121-c — the pixels round): the screen-injected bytes
+   * resolver (fetchAttachmentImageFile over the link); absent in tests /
+   * fixture contexts — the frame stands, exactly as before. */
+  resolveImage?: AttachmentImageResolver;
+}) {
   const { tokens } = useTheme();
-  const uri = attachmentImageUri(attachment);
+  const wireUri = attachmentImageUri(attachment);
+  const [resolvedUri, setResolvedUri] = useState<string | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [aspect, setAspect] = useState<number | null>(null);
 
-  // Aspect-kept: measure the image's TRUE ratio once per uri (fallback 4:3
-  // covers a failed measure — the tile never guesses wrong twice).
+  // ROUND-121 (R121-c): the seam's second leg — when the wire carries no
+  // URI but a resolver is injected, fetch the bytes once per attachment
+  // (the resolver's cache-file keying makes re-renders free). A miss or an
+  // absent resolver leaves the honest frame — never a fabricated photo.
+  useEffect(() => {
+    if (wireUri !== null || resolveImage === undefined) return;
+    let cancelled = false;
+    resolveImage(attachment)
+      .then((uri) => {
+        if (!cancelled && uri !== null) setResolvedUri(uri);
+      })
+      .catch(() => {
+        // An honest miss — the frame stands (never a crash).
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wireUri, resolveImage, attachment]);
+
+  const uri = wireUri ?? resolvedUri;
   useEffect(() => {
     if (uri === null) return;
     let cancelled = false;

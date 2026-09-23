@@ -59,6 +59,15 @@ const rasterMock = vi.hoisted(() => ({
   fetchComputerFrameRaster: null as unknown as ReturnType<typeof vi.fn>,
 }));
 
+/** ROUND-121 (R121-b — the pixels round): the attachment display-bytes
+ * fetch, mocked the same way — the transcript's image thumbnails call it
+ * lazily; the mock keeps them off the network. The DEFAULT resolves a
+ * small PNG blob so every pre-existing render is inert (a resolved thumb
+ * never changes the pinned geometry); the tests below program verdicts. */
+const attachmentBytesMock = vi.hoisted(() => ({
+  fetchAttachmentBytes: null as unknown as ReturnType<typeof vi.fn>,
+}));
+
 /** ROUND-73 (R73-c) / ROUND-81: the stream send, mocked — streamSessionMessage
  * lets the send tests run a full deterministic turn without a sidecar. (The
  * task-mode client fns fetchProjectModes/patchSessionActiveMode were retired
@@ -102,6 +111,7 @@ vi.mock("../../lib/api", async () => {
   ratingsMock.deleteRating = vi.fn();
   debugSettingsMock.fetchDebugSettings = vi.fn();
   rasterMock.fetchComputerFrameRaster = vi.fn();
+  attachmentBytesMock.fetchAttachmentBytes = vi.fn();
   streamMock.streamSessionMessage = vi.fn();
   queueMock.queueSessionMessage = vi.fn();
   queueMock.dequeueSessionMessage = vi.fn();
@@ -116,6 +126,7 @@ vi.mock("../../lib/api", async () => {
     deleteRating: ratingsMock.deleteRating,
     fetchDebugSettings: debugSettingsMock.fetchDebugSettings,
     fetchComputerFrameRaster: rasterMock.fetchComputerFrameRaster,
+    fetchAttachmentBytes: attachmentBytesMock.fetchAttachmentBytes,
     streamSessionMessage: streamMock.streamSessionMessage,
     queueSessionMessage: queueMock.queueSessionMessage,
     dequeueSessionMessage: queueMock.dequeueSessionMessage,
@@ -177,6 +188,14 @@ beforeEach(() => {
   sessionLiveMock.fetchSessionLive.mockReset();
   sessionLiveMock.fetchSessionLive.mockImplementation(
     () => new Promise<{ live: boolean }>(() => {}),
+  );
+  // R121-b: the attachment display-bytes fetch starts as a REJECTION — a
+  // thumbnail that cannot fetch renders the honest placeholder frame, so
+  // every pre-existing transcript render is byte-identical to before the
+  // pixels round (the R121 describe below programs resolved verdicts).
+  attachmentBytesMock.fetchAttachmentBytes.mockReset();
+  attachmentBytesMock.fetchAttachmentBytes.mockRejectedValue(
+    new Error("not fetched in this suite"),
   );
 });
 
@@ -2222,6 +2241,122 @@ describe("AgentChatPanel inline screenshots (ROUND-68 R68-A)", () => {
     // The strip (header, count, horizontal scroller) no longer renders.
     expect(screen.queryByTestId("screenshot-strip")).toBeNull();
     expect(screen.queryByText("Screenshots")).toBeNull();
+  });
+});
+
+// ── ROUND-121 (R121-b — the pixels round): the transcript's image thumbnails ──
+describe("AgentChatPanel attachment image thumbnails (ROUND-121 R121-b)", () => {
+  const SLOW = { timeout: 5000 };
+  // happy-dom implements neither — the object-URL lifecycle is this pair.
+  const createObjectURL = vi.fn(() => "blob:panel-att");
+  const revokeObjectURL = vi.fn();
+
+  beforeEach(() => {
+    URL.createObjectURL = createObjectURL as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL as unknown as typeof URL.revokeObjectURL;
+    createObjectURL.mockClear();
+    revokeObjectURL.mockClear();
+  });
+
+  /** A persisted user message whose payload carries ONE image + ONE
+   * non-image attachment — the exact shape the send routes persist. */
+  async function renderPanelWithAttachments(): Promise<void> {
+    const projects = await getFixtureProjects().list();
+    const backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r121_pixels",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "Pixels probe",
+          createdAt: "2026-09-23T10:00:00Z",
+          updatedAt: "2026-09-23T10:05:00Z",
+        },
+        events: [
+          {
+            seq: 1,
+            type: "message.user",
+            agentId: "agt_scribe",
+            payload: {
+              role: "user",
+              content: "here is the screenshot and the log",
+              agentId: "agt_scribe",
+              ts: "2026-09-23T10:00:10Z",
+              attachments: [
+                { name: "shot.png", path: "attachments/shot.png", size: 2048 },
+                { name: "debug.log", path: "attachments/debug.log", size: 512 },
+              ],
+            },
+            ts: "2026-09-23T10:00:10Z",
+          },
+          {
+            seq: 2,
+            type: "message.assistant",
+            agentId: "agt_scribe",
+            payload: {
+              role: "assistant",
+              content: "got both",
+              agentId: "agt_scribe",
+              ts: "2026-09-23T10:00:30Z",
+            },
+            ts: "2026-09-23T10:00:30Z",
+          },
+        ],
+      },
+    ]);
+    customBackend.backend = backend;
+    renderWithProviders(
+      <AgentChatPanel projectId={projects[0].id} project={projects[0]} />,
+    );
+  }
+
+  it("an image attachment fetches its bytes and renders the PIXEL thumbnail; the non-image stays a chip", async () => {
+    attachmentBytesMock.fetchAttachmentBytes.mockResolvedValue(
+      new Blob(["\x89PNG-att-bytes"], { type: "image/png" }),
+    );
+    await renderPanelWithAttachments();
+    expect(await screen.findByText("here is the screenshot and the log", {}, SLOW)).toBeTruthy();
+
+    // The IMAGE leg: the placeholder frame mounts first, the fetch fires,
+    // then the pixel <img> takes over with the object URL.
+    await waitFor(() => {
+      expect(attachmentBytesMock.fetchAttachmentBytes).toHaveBeenCalledWith(
+        expect.any(String),
+        "attachments/shot.png",
+      );
+    });
+    const img = await screen.findByTestId("attachment-image-thumb", {}, SLOW);
+    expect(img.getAttribute("src")).toBe("blob:panel-att");
+    expect(img.getAttribute("alt")).toBe("shot.png");
+
+    // The NON-IMAGE leg: the ordinary chip (name + size) — never a fetch.
+    expect(screen.getByText(/debug\.log/)).toBeTruthy();
+    expect(attachmentBytesMock.fetchAttachmentBytes).toHaveBeenCalledTimes(1);
+  });
+
+  it("a fetch failure keeps the honest placeholder frame — never a crash, never a fabricated photo", async () => {
+    attachmentBytesMock.fetchAttachmentBytes.mockRejectedValue(
+      new Error("404 — no attachment at 'attachments/shot.png'"),
+    );
+    await renderPanelWithAttachments();
+    expect(await screen.findByText("here is the screenshot and the log", {}, SLOW)).toBeTruthy();
+
+    // The frame stands with the name; the pixel thumb never mounts.
+    const frame = await screen.findByTestId("attachment-image-frame", {}, SLOW);
+    expect(frame.textContent).toContain("shot.png");
+    expect(screen.queryByTestId("attachment-image-thumb")).toBeNull();
+  });
+
+  it("unmounting the transcript REVOKES the object URL (the ScreenshotRow lifecycle law)", async () => {
+    attachmentBytesMock.fetchAttachmentBytes.mockResolvedValue(
+      new Blob(["\x89PNG-att-bytes"], { type: "image/png" }),
+    );
+    await renderPanelWithAttachments();
+    expect(await screen.findByTestId("attachment-image-thumb", {}, SLOW)).toBeTruthy();
+    cleanup();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:panel-att");
   });
 });
 

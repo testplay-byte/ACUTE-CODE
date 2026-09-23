@@ -30,7 +30,7 @@
  * which stay injectable for the screen.
  */
 
-import { apiJson, type ApiOutcome, type ApiSender } from "./api";
+import { API_PREFIX, apiJson, type ApiOutcome, type ApiSender } from "./api";
 
 // ── the wire shapes ─────────────────────────────────────────────────────────
 
@@ -304,3 +304,79 @@ export async function fetchProjectTree(
 // task-mode picker (R115-i) — it had no remaining production consumer. The
 // endpoint itself still exists for the desktop's own picker; mobile re-adds
 // a client only if a future wave needs it.
+
+// ── ROUND-121 (R121-c — the pixels round): the display bytes ────────────────
+
+/** One image-attachment fetch outcome — the raw display bytes, or the
+ * honest miss. The CACHE-FILE write is the screen's half (the RN-touching
+ * seam this file's header pins) — this module stays pure TS. */
+export type AttachmentImageBytes = { base64: string | null; miss: boolean };
+
+/** The cache-file name for one fetched attachment — content-keyed (path
+ * slug + size): the upload route's dedupe-never-overwrite law makes a
+ * path's bytes stable, so a re-render of the same attachment hits the same
+ * cache file. Exported for the screen + the tests. */
+export function attachmentCacheFileName(path: string, size?: number): string {
+  const dot = path.lastIndexOf(".");
+  const ext = dot >= 0 ? path.slice(dot + 1).toLowerCase() : "img";
+  const slug = path.replaceAll("/", "-").replaceAll("..", "");
+  return `att-${slug}${size !== undefined ? `-${size}` : ""}.${ext}`;
+}
+
+/**
+ * ROUND-121 (R121-c): GET /projects/:id/attachments/bytes?path=<rel> — one
+ * user-sent image attachment's display bytes, fetched through the link as
+ * base64 (`responseBase64` — the R113-c native leg the rasters proved; the
+ * default UTF-8 bodyText would mojibake PNG bytes).
+ *
+ * A NON-IMAGE path never fetches (the route's allowlist mirrored
+ * client-side — a doomed fetch for a .log is a wasted round trip). A 404
+ * (deleted file / foreign project) resolves MISS (permanent — the frame
+ * stands); a transport failure resolves base64-null / not-miss so the
+ * caller may retry on its own cadence. The screen's resolver writes the
+ * bytes into the cache directory and feeds RN <Image> the file URI (data
+ * URIs carry a size ceiling on Android; a cache file does not).
+ */
+export async function fetchAttachmentImageBase64(
+  sender: ApiSender,
+  projectId: string,
+  path: string,
+): Promise<AttachmentImageBytes> {
+  // Only DISPLAY-IMAGE paths ride this fetch — the route's allowlist is the
+  // same set, and a doomed fetch for a .log is a wasted round trip.
+  const dot = path.lastIndexOf(".");
+  if (dot < 0) return { base64: null, miss: true };
+  const ext = path.slice(dot + 1).toLowerCase();
+  if (ATTACHMENT_IMAGE_MIME[ext] === undefined) return { base64: null, miss: true };
+
+  let res;
+  try {
+    res = await sender.api(
+      `${API_PREFIX}/projects/${encodeURIComponent(projectId)}/attachments/bytes?path=${encodeURIComponent(path)}`,
+      { responseBase64: true },
+    );
+  } catch {
+    // Transport loss — transient; the caller may retry on its own cadence.
+    return { base64: null, miss: false };
+  }
+  if (!res.ok) {
+    // The honest 404 (and any other refusal) — no pixels for this one.
+    return { base64: null, miss: true };
+  }
+  const base64 = res.bodyBase64;
+  if (base64 === undefined || base64 === "") {
+    return { base64: null, miss: true };
+  }
+  return { base64, miss: false };
+}
+
+/** The display-image MIME by extension — the bytes route's allowlist,
+ * mirrored client-side so non-images never spawn a doomed fetch. */
+const ATTACHMENT_IMAGE_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+};

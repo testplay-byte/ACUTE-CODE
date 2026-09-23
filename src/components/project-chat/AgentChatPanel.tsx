@@ -22,6 +22,7 @@ import {
   FolderOpen,
   GitBranch,
   History,
+  Image as ImageIcon,
   Info,
   ListChecks,
   MessageSquareText,
@@ -104,6 +105,10 @@ import {
   // ROUND-120 (R120-C-PC, items 37+38 — the sync/state law): the backend
   // live-turn truth read (GET /sessions/:id/live — the turn registry).
   fetchSessionLive,
+  // ROUND-121 (R121-b — the pixels round): the user-sent image attachment's
+  // display bytes + the client-side image test (the bytes route's mirror).
+  fetchAttachmentBytes,
+  isDisplayableImageAttachment,
   resolveAgentQuestion,
   toProjectChatItems,
 } from "../../lib/api";
@@ -874,6 +879,79 @@ function DeliveryTick({ status }: { status: "sending" | "sent" }) {
 }
 
 /**
+ * ROUND-121 (R121-b — the pixels round): one user-sent IMAGE attachment,
+ * rendered with pixels. The bytes come from GET
+ * /projects/:id/attachments/bytes (the R67 law keeps bytes OFF the message
+ * wire — the display route is the door they come back out of), fetched
+ * LAZY on mount through an object URL that is REVOKED on unmount (the
+ * ScreenshotRow lifecycle law — no leaks across refetches).
+ *
+ * The frame-first shape mirrors the mobile UserImageThumb grammar exactly:
+ * until the bytes land (and honestly, forever if they never do — a deleted
+ * file, a foreign project) the SAME geometry renders the calm placeholder
+ * (icon + name), never a fabricated photo and never a layout shift when
+ * the pixels arrive.
+ */
+function AttachmentImageThumb({
+  projectId,
+  attachment,
+}: {
+  projectId: string;
+  attachment: AttachmentRef;
+}) {
+  const styles = useThemeStyles();
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const path = attachment.path ?? attachment.name;
+
+  useEffect(() => {
+    let cancelled = false;
+    let url: string | null = null;
+    fetchAttachmentBytes(projectId, path)
+      .then((blob) => {
+        if (cancelled || blob.size === 0) return;
+        url = URL.createObjectURL(blob);
+        setObjectUrl(url);
+      })
+      .catch(() => {
+        // Honest no-pixels (404 / network) — the placeholder frame stands.
+      });
+    return () => {
+      cancelled = true;
+      if (url !== null) URL.revokeObjectURL(url);
+    };
+  }, [projectId, path]);
+
+  if (objectUrl !== null) {
+    return (
+      <img
+        data-testid="attachment-image-thumb"
+        src={objectUrl}
+        alt={attachment.name}
+        title={`${attachment.name}${attachment.size !== undefined ? ` · ${fmtBytes(attachment.size)}` : ""}`}
+        className="rounded-lg max-w-[220px] max-h-[160px] object-cover"
+        style={{ border: `1px solid ${withAlpha(styles.accent, 0.18)}` }}
+      />
+    );
+  }
+  // The placeholder frame — the mobile UserImageThumb's no-pixels leg,
+  // ported: a quiet bordered frame with the image glyph + the name.
+  return (
+    <span
+      data-testid="attachment-image-frame"
+      title={`${attachment.name}${attachment.size !== undefined ? ` · ${fmtBytes(attachment.size)}` : ""}`}
+      className="inline-flex items-center gap-1.5 h-9 px-2 rounded-lg font-mono text-[10px] max-w-[220px]"
+      style={{
+        border: `1px dashed ${withAlpha(styles.accent, 0.25)}`,
+        color: styles.textTertiary,
+      }}
+    >
+      <ImageIcon size={12} className="shrink-0" aria-hidden style={{ color: styles.accent }} />
+      <span className="truncate">{attachment.name}</span>
+    </span>
+  );
+}
+
+/**
  * ROUND-44 (R44-c, owner directive: "complete the whole agentic coding
  * environment"): a user bubble's hover actions — Copy (round-16) plus Revert,
  * which rewinds the session's event log to THIS message (the reply and every
@@ -889,6 +967,7 @@ function UserMessage({
   revertDisabled,
   delivery,
   hoverActions,
+  projectId,
 }: {
   content: string;
   /** ROUND-50 (R50-c2): display-only attachment chips (name/path/size) on
@@ -912,6 +991,11 @@ function UserMessage({
    * the body stays a message) instead of the old amber banner's always-on
    * chrome. Optional + last so every existing call site is untouched. */
   hoverActions?: ReactNode;
+  /** ROUND-121 (R121-b — the pixels round): the owning project's id — when
+   * present, IMAGE attachments render through AttachmentImageThumb (bytes
+   * from the display route); absent (fixture/echo contexts without a
+   * project), images fall back to the ordinary chips. */
+  projectId?: string;
 }) {
   const styles = useThemeStyles();
   // ROUND-38 (owner: "the messages which I sent… look bad and ugly. Their
@@ -996,23 +1080,40 @@ function UserMessage({
               className="flex flex-wrap gap-1 pb-1.5 mb-1.5 border-b"
               style={{ borderColor: bubbleBorder }}
             >
-              {attachments.map((a, i) => (
-                <span
-                  key={`${a.path ?? a.name}-${i}`}
-                  title={a.path ?? a.name}
-                  className="inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-lg font-mono text-[10px] max-w-[220px]"
-                  style={{
-                    background: withAlpha(styles.accent, styles.isDark ? 0.14 : 0.1),
-                    color: styles.textSecondary,
-                  }}
-                >
-                  <File size={10} className="shrink-0" style={{ color: styles.accent }} />
-                  <span className="truncate">
-                    {a.name}
-                    {a.size !== undefined ? ` · ${fmtBytes(a.size)}` : ""}
+              {/* ROUND-121 (R121-b — the pixels round): IMAGE attachments
+                  render with pixels (the bytes route's display door); every
+                  other attachment stays the ordinary chip. The split keeps
+                  the group's a11y label honest — both rows are attachments. */}
+              {projectId !== undefined
+                ? attachments
+                    .filter((a) => isDisplayableImageAttachment(a.path, a.name))
+                    .map((a, i) => (
+                      <AttachmentImageThumb
+                        key={`${a.path ?? a.name}-img-${i}`}
+                        projectId={projectId}
+                        attachment={a}
+                      />
+                    ))
+                : null}
+              {attachments
+                .filter((a) => !isDisplayableImageAttachment(a.path, a.name))
+                .map((a, i) => (
+                  <span
+                    key={`${a.path ?? a.name}-${i}`}
+                    title={a.path ?? a.name}
+                    className="inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-lg font-mono text-[10px] max-w-[220px]"
+                    style={{
+                      background: withAlpha(styles.accent, styles.isDark ? 0.14 : 0.1),
+                      color: styles.textSecondary,
+                    }}
+                  >
+                    <File size={10} className="shrink-0" style={{ color: styles.accent }} />
+                    <span className="truncate">
+                      {a.name}
+                      {a.size !== undefined ? ` · ${fmtBytes(a.size)}` : ""}
+                    </span>
                   </span>
-                </span>
-              ))}
+                ))}
             </div>
           ) : null}
           <ClampedText
@@ -1777,6 +1878,7 @@ export function QueuedUserMessage({
   busy,
   onRemove,
   onSendNow,
+  projectId,
 }: {
   entry: Pick<QueuedMessage, "seq" | "content" | "ts" | "attachments">;
   /** Hides "Send now" while a turn runs (the queue itself will deliver). */
@@ -1785,6 +1887,9 @@ export function QueuedUserMessage({
   onRemove?: () => void;
   /** Live-mode send-now affordance (undefined while busy / fixture mode). */
   onSendNow?: () => void;
+  /** ROUND-121 (R121-b — the pixels round): threaded to UserMessage so a
+   * queued image attachment also renders pixels (absent in fixture mode). */
+  projectId?: string;
 }) {
   const styles = useThemeStyles();
   // The queued state's hover cluster node — one ReactNode threaded into
@@ -1851,6 +1956,7 @@ export function QueuedUserMessage({
           attachments={entry.attachments}
           ts={entry.ts}
           hoverActions={hoverActions}
+          projectId={projectId}
         />
       </div>
       {/* The always-visible waiting caption — BELOW the bubble, right-aligned
@@ -1977,6 +2083,7 @@ const MessageRenderer = memo(
               revertDisabled={revertDisabled}
               attachments={attachments ?? item.attachments}
               delivery={delivery}
+              projectId={projectId}
             />
           </div>
         );
@@ -1989,6 +2096,7 @@ const MessageRenderer = memo(
             <QueuedUserMessage
               entry={item}
               busy={queuedBusy ?? false}
+              projectId={projectId}
               onRemove={
                 queuedLive === true && onQueuedRemove !== undefined
                   ? () => onQueuedRemove(item.seq)
@@ -4023,6 +4131,7 @@ export function AgentChatPanel({
                         key={`live-q-${q.seq}`}
                         entry={q}
                         busy={busy}
+                        projectId={projectId}
                         onRemove={
                           liveMode && activeSessionId !== null
                             ? () => void removeQueuedMessage(q.seq)

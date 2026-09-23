@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { ChartPie } from "lucide-react";
 import type { ThemeStyles } from "../../lib/themes";
 import type { UsageStatsModel } from "../../lib/api";
@@ -13,6 +13,14 @@ import { formatCompactTokens, formatCost, modelColor, shortModelName } from "./u
  * its share), and segment ↔ legend-row MUTUAL hover-highlight — hovering
  * either lights that model and dims every other segment AND row (the
  * round-97 context-bar contract, generalized).
+ *
+ * R121-d (the chart-hover ratchet leg): the highlight is now POINTER-OWNED
+ * — ONE onPointerMove on the card resolves the hovered index from the DOM
+ * hit (`[data-donut-idx]` on the arcs AND the legend rows — the browser's
+ * own hit-testing does the geometry; the design audit's R5 law: hover is a
+ * CSS class or a pointer read, never a hover pair). The mutual highlight
+ * is unchanged: the same `hovered` state drives both surfaces, so the arc
+ * and its row can never disagree.
  *
  * R99-E (anti-jitter kit): the card reserves its final height
  * (min-h-[184px]/md:192px — header + the fixed 120px ring); legend rows
@@ -40,6 +48,16 @@ export function ModelDonut({
   const { card, border, text, textSecondary, textTertiary, accent, softShadow, isDark } = styles;
   const [hovered, setHovered] = useState<number | null>(null);
 
+  // R121-d: the ONE pointer read — the browser's own hit-testing resolves
+  // which arc or legend row the pointer is on (data-donut-idx on both), so
+  // the mutual highlight rides a single handler pair on the CARD (never a
+  // per-row hover pair). Pointer-out clears.
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const hit = (e.target as Element).closest("[data-donut-idx]");
+    setHovered(hit !== null ? Number(hit.getAttribute("data-donut-idx")) : null);
+  }, []);
+  const onPointerLeave = useCallback(() => setHovered(null), []);
+
   const { segments, totalTokens } = useMemo(() => {
     const total = models.reduce((sum, m) => sum + m.tokens, 0);
     let start = 0; // accumulated share fraction
@@ -65,6 +83,8 @@ export function ModelDonut({
   return (
     <div
       data-testid="model-donut"
+      onPointerMove={onPointerMove}
+      onPointerLeave={onPointerLeave}
       className="flex min-h-[184px] flex-col rounded-2xl border-[1.5px] p-4 md:min-h-[192px] md:p-5"
       style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
     >
@@ -115,8 +135,7 @@ export function ModelDonut({
                       transform={`rotate(${(-90 + seg.start * 360).toFixed(3)} ${SIZE / 2} ${SIZE / 2})`}
                       opacity={hovered === null || hovered === i ? 1 : 0.3}
                       data-donut-model={seg.model}
-                      onMouseEnter={() => setHovered(i)}
-                      onMouseLeave={() => setHovered(null)}
+                      data-donut-idx={i}
                       style={{ cursor: "pointer" }}
                     >
                       <title>{`${seg.model} · ${Math.round(seg.share * 100)}% · ${seg.tokens.toLocaleString()} tokens`}</title>
@@ -144,8 +163,7 @@ export function ModelDonut({
                 key={seg.model}
                 data-donut-model={seg.model}
                 data-donut-row={seg.model}
-                onMouseEnter={() => setHovered(i)}
-                onMouseLeave={() => setHovered(null)}
+                data-donut-idx={i}
                 className="flex items-center gap-2 rounded-md px-1 -mx-1 transition-opacity"
                 style={{
                   cursor: "default",

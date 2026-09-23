@@ -135,7 +135,16 @@ export function UsageActivityChart({
         // (30/90 days, narrow phones) scroll INSIDE the card instead of
         // breaking the page layout. w-fit + mx-auto centers when it fits.
         <div className="custom-scrollbar overflow-x-auto">
-          <div className="relative mx-auto w-fit">
+          <div
+            className="relative mx-auto w-fit"
+            onPointerMove={(e) => {
+              // R121-d: the ONE pointer read (the R5 law — hover is a pointer
+              // read, never a per-bar hover pair).
+              const hit = (e.target as Element).closest("[data-bar-idx]");
+              setHoveredIdx(hit !== null ? Number(hit.getAttribute("data-bar-idx")) : null);
+            }}
+            onPointerLeave={() => setHoveredIdx(null)}
+          >
             <svg
               width={chartWidth}
               height={CHART_HEIGHT + LABEL_AREA}
@@ -190,8 +199,7 @@ export function UsageActivityChart({
                         height={CHART_HEIGHT}
                         fill="transparent"
                         style={{ cursor: "pointer" }}
-                        onMouseEnter={() => setHoveredIdx(i)}
-                        onMouseLeave={() => setHoveredIdx(null)}
+                        data-bar-idx={i}
                       />
                       <motion.rect
                         x={x}
