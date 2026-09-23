@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.115.0",
+    "version": "0.116.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -363,22 +363,22 @@
     }
   ],
   "quality": {
-    "ci": "LOCAL-GATES TRUTH at the R122 close (the merged tree, every gate re-run fresh): agent-core tsc clean · vitest 153 files 2825/2825 · root tsc clean · root vitest 268 files 4661/4661 · eslint 0 · design-audit clean at the re-pinned R2 1611 (the +23 documented-ladder instances of the new Self-Feedback tab; the two genuine violations fixed first — the 11.5px half-pixel and the inline kicker duplicate) · build green (mermaid chunk ok) · e2e 12/12 · license clean (299 deps) · docs:check 268/0/0. The LIVE PROOF: the dist booted on a scratch DB — the settings round-trip, the ledger's honest empty state, a real entry through the real dist module into the sidecar's own dataDir served by the live route (exists/entries/bytes exact), the DELETE's honest count, and the 400/401 negative legs. All four workflow files YAML-validated; the Actions economy verified against the runs data (18 CI + 18 Mobile APK per-push runs before; docs-only pushes now run zero).",
+    "ci": "Local gates at the R123 close: agent-core tsc + 153/2833; root tsc + eslint 0 + 268/4676 + design-audit clean (re-pinned 1611→1626: the four genuine violations fixed — the 10.5/11.5px half-pixels, max-h-[480px], tracking 0.06em — the remaining +15 are documented TOKENS §2 ladder steps, the math in round-123.md §5) + build green (mermaid chunk ok) + e2e 12/12 + license clean (299 deps); mobile tsc + 44 suites/969. LIVE PROOFS: the anonymous-first check against real GitHub (rate-limited + tokenSaved:false answered verbatim), DELETE token idempotence + file removal, the per-entry feedback delete through the real dist module + route. Rust: no local toolchain (CI gates it — the Windows cargo check rides ci.yml, the Linux legs rust-checks.yml, both triggered by the src-tauri/** change).",
     "suites": [
       {
         "name": "frontend",
-        "tests": 4661,
-        "detail": "268 files / 4661 passed at the R122 close (was 4609 at R121): the SelfFeedbackTab suite (10 — the registry entry, the default-OFF switch + the stated separation contract, the PUT round-trip and honest failure line, the empty/raw/error ledger states, the clipboard copy, the styled Clear confirm with convergence) + the events-stream feedback-domain pin (both query keys invalidated) + the R121 pixels suites riding the release."
+        "tests": 4676,
+        "detail": "268 files / 4676 passed at the R123 close (was 4661): AboutTab 27 (the anonymous-first row visibility + rate-limited auto-open + Remove flow + processing-animation pins), SelfFeedbackTab 12 (the parser grammar pins, the per-entry delete with survivor re-render, the always-present-disabled Clear), MessageTimeline 10 (the row grammar + corridor + gutter + magnification math), ConnectionGate 13 (the overlay-era splash pins)."
       },
       {
         "name": "agent-core",
-        "tests": 2825,
-        "detail": "153 files / 2825 tests at the R122 close (was 2799): the r122-feedback-writer suite (13 — the entry header format incl. null-safe branches, first-append header creation, whole-entry serialization under 8 concurrent appends, the scrub + skip paths, the bus frames), the r122-feedback-routes suite (9 — incl. the REAL-TLS device-token AUTH SPLIT: view 200 / clear 403), and the r122-feedback-phase suite (4 — the route-level separation contract: zero feedback frames, zero feedback events, usage origin row, done still last)."
+        "tests": 2833,
+        "detail": "153 files / 2833 tests at the R123 close (was 2825): r89-updates rewritten to the anonymous-first contract (46 — the dead-token-never-degrades pin, the retry matrix, rate-limited, the download inversion, DELETE /system/updates/token, the install-type asset matrix incl. the .deb rows) + r122-feedback-routes +3 (the per-entry delete: split/splice/join, stale no-op, device 403)."
       },
       {
         "name": "mobile",
-        "tests": 959,
-        "detail": "43 suites / 959 tests at the R121 close, unchanged in R122 (the round touched no mobile source; the per-push mobile gate now rides mobile-ci.yml — version check + jest, path-gated mobile/**)."
+        "tests": 969,
+        "detail": "44 suites / 969 tests at the R123 close (was 43/959): the new transcript-turn suite (the images-above-text body plan + the well-default-open law) + the turn-block/streaming-args web+browser family extensions."
       }
     ],
     "cargoCheck": "green",
@@ -394,11 +394,11 @@
     }
   ],
   "plan": {
-    "current": "R122 LANDED — the self-feedback ledger + the GitHub Actions economy (the owner's two-letter directive): (1) THE SELF-FEEDBACK SYSTEM — Settings → Self-Feedback (default OFF), the dedicated section with the master switch + the RAW ledger viewer; while ON, after each completed session turn a context-free reporter with the WHOLE main-conversation context appends one structured entry (machine header: session/project/agent·model/outcome/transcript + six model sections: What I was trying to do / What actually happened / Issues encountered / Glitches noticed / Expectations vs reality / Suggested improvements) to the ONE shared <dataDir>/feedback.md [whole-entry appends serialized on a promise chain]; the separation is STRUCTURAL — the phase runs detached in the stream route's finally, ZERO SSE frames, ZERO session events, the FILE is the only persistence, so a follow-up message can never see feedback; the gate mirrors the debug analyst (ok / ≥500 failures / crashes report; ABORTED + validation never do); the reporter's spend meters origin 'feedback'; GET /feedback/file is phone-reachable, DELETE is shell-only; the app-wide reset purges the ledger. (2) THE ACTIONS ECONOMY — docs-only pushes run ZERO workflows (ci.yml paths-ignore), the Linux Rust compile gates extract to rust-checks.yml (path-gated src-tauri/**), the per-push Android APK build is RETIRED (mobile.yml now tags + dispatch only; tags stay unconditional so a release can never miss its APK — the GitHub tags+paths semantics gotcha documented in-file), and mobile-ci.yml carries the cheap per-push gate (version + jest, path-gated mobile/**). The 'branches: ain]' YAML-rot scare was DISPROVEN at the byte level (the sandbox display artifact the repo has documented twice — the filter always read [main]) and is recorded so it cannot fool another round. 26+28 new tests across four suites, the live proof closed the routes end-to-end, v0.115.0 rides the round",
+    "current": "R123 LANDED — the updater overhaul + the mobile transcript per the owner's references: (1) ANONYMOUS-FIRST UPDATES — the check and the download run anonymous-first (the token is a pure retry accelerator on 403/404, never the default leg; a dead token can no longer 401 a public-repo check); every answer carries tokenSaved; the rate-limited reason is its own honest case; DELETE /system/updates/token makes the optional credential removable in-app; the About tab's token row renders only when a token exists or the check rate-limited. (2) THE VISIBLE INSTALL — Windows: the OVERLAY flow (self-rename to .old + CreateProcessW with an owned handle + the window STAYS OPEN on the animated splash for the whole install + the watcher relaunches the new exe and exits; /S /R is the fallback; update-installed / update-install-failed events drive the splash + recovery; .old cleaned at startup). Linux: the .DEB LEG (the install-type-aware asset pick via the APPIMAGE env; pkexec dpkg -i watched visibly; failure leaves the app alive) + the AppImage relauncher now waits for the old pid (no double-window race). The About card's checking/verifying/installing states carry real spinners + an indeterminate bar. (3) THE SELF-FEEDBACK VIEWER — the PARSED view (one structured card per entry: outcome chip + placement meta + the six labeled sections) with the Raw toggle; the PER-ENTRY delete (DELETE /feedback/file/entry/:index, split/splice/join on the write chain, idempotent-honest) and the ALWAYS-PRESENT Clear (disabled with the honest empty tooltip). (4) THE MOBILE TRANSCRIPT per the owner's seven reference screenshots — images above the text; tool rows visible in settled turns (the well no longer auto-collapses when it carries tools); web/browser tool families render their query/url/action; the pulsing line under the avatar REMOVED (the ring stays); the segment rhythm pass. Plus the DESKTOP QUICK-NAV redesign (rows with dock magnification on both legs, the always-present left gutter, the 32px hover-near corridor with the falloff limit). 48 new tests across the suites; live proofs: the anonymous-first check against real GitHub, the token removal, the per-entry delete.",
     "upcoming": [
       {
-        "title": "The owner's v0.115.0 walkthrough + the first real feedback ledger read",
-        "detail": "The Self-Feedback toggle on real hardware (does the ledger read cold after real sessions? are the six sections earning their place?), the Actions economy observed on real pushes (do docs-only close-outs really skip?), and the standing deferred queue: the release-flow speed round (r110-feedback #8's 45-60min -> <20min target), the menu-timer hover ratchet (21 pairs, the exact surface in round-121.md §3), the mobile mirror of the Self-Feedback viewer, the updater round (needs a real Linux install)."
+        "title": "The owner's v0.116.0 walkthrough + the real-install updater verdicts",
+        "detail": "The overlay install on real Windows (does the self-rename survive the owner's AV? does the splash hold for the whole install? does the relaunch feel instant?), the .deb leg on real Linux (does pkexec's prompt behave? the AppImage pid-wait relaunch), the mobile transcript against the reference screenshots on the owner's phone, the quick-nav row rail feel, and the standing deferred queue: the release-flow speed round (r110-feedback #8), the menu-timer hover ratchet (21 pairs), the mobile mirror of the Self-Feedback viewer."
       },
       {
         "title": "The owner's round-117 walkthrough on real hardware (v0.111.0)",
