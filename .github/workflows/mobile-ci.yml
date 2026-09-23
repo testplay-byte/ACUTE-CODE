@@ -1,0 +1,64 @@
+name: Mobile CI
+
+# ROUND-122 (R122-W3, the Actions-economy round): the per-push leg of the
+# old Mobile APK workflow, slimmed to the REAL gate. Until this round a
+# push to main paid the full Android release build (expo prebuild +
+# gradle assembleRelease) for an arm64 APK artifact that was rarely
+# consumed — the owner's r110-feedback #8 ruling: "Mobile APK per-push →
+# only on tag + manual dispatch (the per-push arm64 artifact is rarely
+# consumed; CI already gates the desktop)". What per-push actually needs
+# is the cheap gate: version consistency (incl. the APK versionName) +
+# the mobile jest suite. NO JDK, NO gradle, NO expo prebuild — the
+# expensive release APK build rides mobile.yml on v* tags + manual
+# dispatch, where its artifact is actually consumed (the release).
+#
+# Paths-filtered to mobile/** (plus this file itself): a desktop-only or
+# docs-only push doesn't pay even this cheap gate.
+#
+# ROUND-103 discipline carried over: the job is bounded (timeout-minutes)
+# — a wedged gate fails loudly in minutes, never hangs for hours.
+
+on:
+  push:
+    branches: [main]
+    paths: ["mobile/**", ".github/workflows/mobile-ci.yml"]
+  pull_request:
+    paths: ["mobile/**", ".github/workflows/mobile-ci.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mobile-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      # The version gate BEFORE any minutes are spent (carried over from
+      # mobile.yml): the APK's versionName (app.json) + versionCode
+      # (derived) must agree with the repo's seven version files
+      # (stdlib-only script — no install needed).
+      - name: Version consistency (incl. the APK versionName)
+        run: node scripts/release/version.mjs check
+
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: npm ci
+
+      # The jest suite BEFORE any expensive minutes are spent (the
+      # mobile.yml lesson, carried over): a red suite fails in ~1 minute
+      # instead of after the full Android build (the isolation lesson:
+      # each workspace's tests run in its own runner). In THIS workflow
+      # there is no Android build at all — jest is the gate; the expensive
+      # leg (prebuild + gradle) rides mobile.yml on tags + dispatch.
+      - name: Mobile test suite (jest)
+        working-directory: mobile
+        run: npm test -- --ci

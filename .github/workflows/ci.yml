@@ -2,8 +2,35 @@ name: CI
 
 on:
   push:
+    # ROUND-122 (R122-W3): byte-verified — this filter reads `branches:
+    # [main]` and always has (first commit 6d200e2, blob c559bd0). The
+    # long-suspected "branches: ain] YAML rot" is the sandbox DISPLAY
+    # artifact on record since R43 (ORCHESTRATION-WORKLOG: "[m-sequence
+    # stripping … NO yaml edits; byte-verified"; R97's '[hoverSeg' phantom
+    # is the same class) — a terminal that eats the "[m" of "[main]" and
+    # renders "ain]". No fix was ever needed; R122 re-verified at the byte
+    # level and leaves this note so the phantom cannot fool another round.
     branches: [main]
+    # ROUND-122 (R122-W3): skip the full verify sweep when ONLY docs changed
+    # (the owner's r110-feedback #8: "Consider path filters on CI (skip full
+    # verify when only docs/ changed)"). Honest accounting: docs:check in
+    # this CI is continue-on-error warn-only, so no enforcement is lost; a
+    # non-docs push still sweeps the whole docs tree, so drift introduced
+    # by a docs-only commit is caught on the next code push.
+    # `.github/workflows/**` is deliberately NOT ignored — workflow edits
+    # must be validated by CI.
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "**/*.md"
+      - "shots/**"
   pull_request:
+    # ROUND-122: the same docs-only skip on the PR leg.
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "**/*.md"
+      - "shots/**"
   workflow_dispatch:
 
 jobs:
@@ -57,91 +84,15 @@ jobs:
       - name: Type-check the Rust shell
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
-  # ROUND-100 (R100-B, ADR-0031): the Linux compile gate. The verify job
-  # above runs on windows-latest, so until now NOTHING checked that the Rust
-  # shell (and its platform-gated deps — keyring/secret-service/zbus since
-  # the Linux key store, windows-sys never) compiles on Linux; the class
-  # surfaced only when the linux-bundles release job was added. Deliberately
-  # minimal: no pnpm, no frontend build, no tests — the Rust shell compile
-  # is the whole point (the committed src-tauri/staging/sidecar/README.md
-  # placeholder keeps tauri-build's resource validation green on a fresh
-  # checkout, same as the Windows job).
-  rust-linux:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      # The Tauri v2 prerequisites (v2.tauri.app/start/prerequisites):
-      # WebKitGTK 4.1 (the 4.0 series is gone from Ubuntu 24.04's repos) +
-      # the bundler's system libs. `pkg-config` ships with the runner image.
-      - name: Install WebKitGTK + shell deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
-            curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
-            librsvg2-dev
-
-      # R100 hotfix 2: `tauri::generate_context!` panics when frontendDist
-      # ("../dist") doesn't exist — the Windows verify job always has the
-      # built frontend, but THIS job is deliberately frontend-less. The
-      # stub dist (one index.html) satisfies the path check without paying
-      # the pnpm build (the real dist is what the release job packs).
-      - name: Stub the frontend dist for generate_context!
-        run: |
-          mkdir -p dist
-          printf '<!doctype html><title>stub</title>' > dist/index.html
-
-      - name: Type-check the Rust shell on Linux
-        run: cargo check --manifest-path src-tauri/Cargo.toml
-
-  # ROUND-101 (R101-E): the ARM64 Linux compile gate — the ARM twin of
-  # rust-linux above. The release workflow now builds ARM64 bundles on
-  # ubuntu-24.04-arm, so the same class needs a per-push check: the Rust
-  # shell and its platform-gated deps (keyring/secret-service/zbus) must
-  # compile on aarch64 too, not just x86_64. Deliberately minimal (same
-  # shape as rust-linux: no pnpm, no frontend build, no tests — the compile
-  # is the whole point). COST NOTE: the repo is private → this leg bills
-  # ARM runner minutes on every push/PR; kept minimal to bound that cost.
-  # If it ever hurts, gate it behind a paths filter (src-tauri/**) or
-  # dispatch-only — the release workflow's `linux-bundles-arm64` job
-  # remains the hard gate either way.
-  rust-linux-arm64:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      # Same Tauri v2 prerequisites as rust-linux — every package here is
-      # published for arm64 in Ubuntu 24.04's repos (WebKitGTK 4.1 included).
-      - name: Install WebKitGTK + shell deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
-            curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
-            librsvg2-dev
-
-      # R100 hotfix 2 (same as rust-linux): `tauri::generate_context!`
-      # panics when frontendDist ("../dist") doesn't exist — this job is
-      # deliberately frontend-less; the stub dist satisfies the path check
-      # without paying the pnpm build (the real dist is what the release
-      # job packs).
-      - name: Stub the frontend dist for generate_context!
-        run: |
-          mkdir -p dist
-          printf '<!doctype html><title>stub</title>' > dist/index.html
-
-      - name: Type-check the Rust shell on Linux ARM64
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+  # ROUND-122 (R122-W3): the `rust-linux` and `rust-linux-arm64` jobs moved
+  # OUT of this file into .github/workflows/rust-checks.yml — the R122
+  # Actions-economy move (the owner's r110-feedback #8): they now run only
+  # when src-tauri/** (or their own workflow file) changes, instead of on
+  # every push. The R101-E cost note that rode the ARM64 job anticipated
+  # exactly this: "If it ever hurts, gate it behind a paths filter
+  # (src-tauri/**) or dispatch-only — the release workflow's
+  # `linux-bundles-arm64` job remains the hard gate either way." The
+  # Windows-side `cargo check` still runs in the verify job above on every
+  # non-docs push, so a src-tauri change remains compile-gated on Windows
+  # too. The full job bodies (provenance comments intact) live on in
+  # rust-checks.yml.
