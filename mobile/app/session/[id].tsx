@@ -163,10 +163,27 @@
  * marker survives (thinkingPlaceholderVisible's honesty rules unchanged)
  * but renders as the TurnBlock's own breathing rail state, not a card; the
  * toolActivity pref applies INSIDE the block (see transcript.tsx).
+ *
+ * ROUND-120 (R120-P — the composer's edge + the kebab's Task list): the
+ * owner's §H item 28 — the composer "rides the device edge — no bottom
+ * spacing" — lands in THE DOCK EXPRESSION: paddingBottom =
+ * max(insetsBottom, kbHeight) + COMPOSER_EDGE_BEAT (the safe-area inset
+ * PLUS the house's 8dp beat, so the flat case (no inset) still breathes
+ * and the home-indicator case never kisses the bar). Item 33 — "The kebab
+ * menu gains a separator + 'Task list' option at the bottom" — the root
+ * level carries the strong-rule separator row (HeaderDropdown's
+ * `separator` flag) over a live-valued "Task list — {done}/{total}" row,
+ * and the TASKS level renders the session's todo list IN THE PANEL (the
+ * same menu family), CHECKABLE through POST /sessions/:id/todo (the R88
+ * owner-write route — source "user", so the agent sees the edit): a tap
+ * optimistically flips the row (toggleTodoAt), the POST carries the whole
+ * list, and the fold catches up through the todo-updated frame (a live
+ * turn) or the rehydrate (none). The data source is the display item
+ * stream's ONE todo card — the same list the transcript's TodoCard shows.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, AppState, FlatList, Pressable, RefreshControl, StyleSheet, View } from "react-native";
+import { ActivityIndicator, AppState, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import {
   AndroidSoftInputModes,
   KeyboardController,
@@ -194,9 +211,10 @@ import { LetterAvatar } from "@/components/letter-avatar";
 import { TranscriptRowView } from "@/components/transcript";
 import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
 import { QuietIconButton, TypeBodyStrong, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
+import { warningHaptic } from "@/design/haptics";
 import { useTheme } from "@/design/theme";
 import { DISCLOSURE_FADE_MS, SPRING } from "@/design/motion";
-import { spacing, TOUCH_TARGET } from "@/design/tokens";
+import { spacing, TOUCH_TARGET, fontFamily, TYPE_CAPTION } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { getLinkManager } from "@/link/runtime";
 import type { SseStream } from "@/link/connection";
@@ -216,6 +234,7 @@ import {
   patchSessionSelectedModel,
   postQueue,
   postResolveQuestion,
+  postSessionTodo,
   postStop,
   rebaseRemoteTurn,
   reduceRemoteTurnFrame,
@@ -223,11 +242,13 @@ import {
   sessionStatusLabel,
   sessionTitle,
   thinkingPlaceholderVisible,
+  toggleTodoAt,
   type AttachmentView,
   type LiveTurn,
   type SessionDetailWire,
   type SessionStatus,
   type SendOverrides,
+  type TodoItemView,
   type TranscriptItem,
 } from "@/features/sessions";
 import { groupDisplayRows, orderDisplayItems, type DisplayRow } from "@/features/turn-block";
@@ -257,6 +278,16 @@ const LIVE_LINE_LEG_MS = 550;
 const MODEL_LEVEL_MAX_HEIGHT = 360;
 /** R118-D §2.2 — the Context level's scroll cap (the read-only readout). */
 const CONTEXT_LEVEL_MAX_HEIGHT = 320;
+/** ── ROUND-120 (why): ── the owner's item 33 — the Task list level's scroll
+ *  cap (up to 30 todos ride the panel's own scroll; the R88 route's own
+ *  ceiling). */
+const TASK_LEVEL_MAX_HEIGHT = 320;
+/** ── ROUND-120 (why): ── the owner's item 28 — "the composer rides the
+ *  device edge — add a proper bottom inset": the house beat ADDED to the
+ *  dock expression's max(insetsBottom, kbHeight). The flat case (a device
+ *  reporting no bottom inset) still gets the beat alone; the home-indicator
+ *  case gets inset + beat — the composer never kisses the edge or the bar. */
+const COMPOSER_EDGE_BEAT = spacing.sm;
 
 /** R115-I → R118-D — the session screen's open COMPOSER sheet, NARROWED to
  * the attach pair (the kebab's rows no longer open sheets — the menu renders
@@ -266,8 +297,9 @@ type SessionSheet = ComposerSheet | null;
 /** R118-D — the kebab menu's LEVEL state machine: null = closed, "main" =
  *  the four control rows + the conditional Stop, and one level per control
  *  (rendered inside the anchored panel through HeaderDropdown's sub-level
- *  grammar — back chevron + title row + content). */
-type SessionMenu = null | "main" | "mode" | "model" | "thinking" | "context";
+ *  grammar — back chevron + title row + content). R120-P adds "tasks" —
+ *  the session's todo list (the owner's item 33). */
+type SessionMenu = null | "main" | "mode" | "model" | "thinking" | "context" | "tasks";
 
 export default function SessionScreen() {
   const { tokens } = useTheme();
@@ -303,6 +335,15 @@ export default function SessionScreen() {
   /** R118-D — the composer's stop confirmation (the centered ConfirmDialog);
    *  the kebab's armed row needs no dialog — its two-step IS the confirm. */
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
+  // ── ROUND-120 (why): ── the owner's item 33 — the kebab's Task list, with
+  // CHECKABLE rows (the R88 owner-write route exists). The OPTIMISTIC list
+  // the moment a tap flips a row (null = show the fold's own truth); it
+  // clears when the fold catches up (the todo-updated frame or the
+  // post-write rehydrate) and on every menu close — a failed write reverts
+  // it with the honest error caption.
+  const [todoOverride, setTodoOverride] = useState<TodoItemView[] | null>(null);
+  const [todoBusy, setTodoBusy] = useState(false);
+  const [todoError, setTodoError] = useState<string | null>(null);
   /** The composer's live control values (the menu's rows + levels render
    *  these); the honest pre-report defaults show until the first snapshot —
    *  the model ladder's floor is "—" (R116-l: the "Agent default" rung is
@@ -864,6 +905,25 @@ export default function SessionScreen() {
   // stays stable across frames).
   const displayRows = useMemo<DisplayRow[]>(() => groupDisplayRows(displayItems), [displayItems]);
 
+  // ── ROUND-120 (why): ── the owner's item 33 — the kebab's Task list reads
+  // the session's ONE todo card out of the display item stream (the same
+  // list the transcript's TodoCard renders — the persisted fold's latest
+  // snapshot or the live reducer's, whichever is in play).
+  const todoItem = useMemo(() => {
+    for (const item of displayItems) {
+      if (item.kind === "todo") return item.todos;
+    }
+    return null;
+  }, [displayItems]);
+  const sessionTodos = todoOverride ?? todoItem;
+  // The override retires the moment the fold's own truth equals it (the
+  // frame/rehydrate caught up) — never a stale mirror over a fresh write.
+  useEffect(() => {
+    if (todoOverride === null) return;
+    if (todoItem === null) return;
+    if (todosEqual(todoOverride, todoItem)) setTodoOverride(null);
+  }, [todoOverride, todoItem]);
+
   const composerMode: ComposerMode =
     status !== "connected" ? "offline" : liveRunning || remoteRunning ? "running" : "compose";
 
@@ -967,11 +1027,49 @@ export default function SessionScreen() {
   // ── R118-D — the kebab menu's level helpers ───────────────────────────
 
   /** Close the whole menu: level → null + the armed stop resets (the
-   *  two-step never survives a dismissal). */
+   *  two-step never survives a dismissal). R120-P: the Task list's
+   *  optimistic override + error die with the menu too — a reopened list
+   *  always reads the fold's own truth. */
   const closeMenu = useCallback((): void => {
     setMenu(null);
     setStopArmed(false);
+    setTodoOverride(null);
+    setTodoError(null);
   }, []);
+
+  // ── ROUND-120 (why): ── the owner's item 33 — the Task list's CHECKABLE
+  // rows. A tap optimistically flips the row (toggleTodoAt — pure), the
+  // POST carries the WHOLE list (the R88 route's contract), and the fold
+  // catches up through the todo-updated frame (a live turn is registered)
+  // or the post-write rehydrate; a failure reverts the override with the
+  // honest one-line error (never a silent un-flip).
+  const toggleSessionTodo = useCallback(
+    (index: number): void => {
+      if (sessionTodos === null || todoBusy) return;
+      const next = toggleTodoAt(sessionTodos, index);
+      setTodoOverride(next);
+      setTodoError(null);
+      setTodoBusy(true);
+      void postSessionTodo(getLinkManager(), sessionId, next)
+        .then((outcome) => {
+          setTodoBusy(false);
+          if (outcome.ok) {
+            void rehydrate();
+          } else {
+            setTodoOverride(null);
+            setTodoError("couldn't update the task list");
+            void warningHaptic();
+          }
+        })
+        .catch(() => {
+          setTodoBusy(false);
+          setTodoOverride(null);
+          setTodoError("couldn't reach the host");
+          void warningHaptic();
+        });
+    },
+    [sessionTodos, todoBusy, sessionId, rehydrate],
+  );
 
   /** Back to the main level (the sub-levels' back chevron). */
   const backToMain = useCallback((): void => {
@@ -1011,7 +1109,9 @@ export default function SessionScreen() {
           ? "Thinking level"
           : menu === "context"
             ? "Context usage"
-            : "Session options";
+            : menu === "tasks"
+              ? "Task list"
+              : "Session options";
 
   const menuItems: HeaderDropdownItem[] =
     menu === "mode"
@@ -1043,7 +1143,12 @@ export default function SessionScreen() {
             }))
           : menu === "context"
             ? [] // read-only — the back chevron is the way out
-            : menuLevelRendersRootRows(menu)
+            : menu === "tasks"
+              ? // ── ROUND-120 (why): ── the owner's item 33 — the Task list
+                // renders its OWN content (the checkable rows ride
+                // `children`); the root control rows never trail the list.
+                []
+              : menuLevelRendersRootRows(menu)
               ? [
                   {
                     key: "mode",
@@ -1089,6 +1194,24 @@ export default function SessionScreen() {
                         },
                       ]
                     : []),
+                  // ── ROUND-120 (why): ── the owner's item 33 — "The kebab menu
+                  // gains a separator + 'Task list' option at the bottom":
+                  // the strong inset rule (HeaderDropdown's `separator`)
+                  // breaks the session's own tools out of the control tier,
+                  // and the live value is the honest "done/total" count (no
+                  // value when the session has no list yet — the level says
+                  // so in its empty caption).
+                  {
+                    key: "tasks",
+                    label: "Task list",
+                    separator: true,
+                    ...(sessionTodos !== null
+                      ? {
+                          value: `${sessionTodos.filter((t) => t.status === "completed").length}/${sessionTodos.length}`,
+                        }
+                      : {}),
+                    onPress: () => setMenu("tasks"),
+                  },
                 ]
               : [];
 
@@ -1132,6 +1255,21 @@ export default function SessionScreen() {
         </View>
       ) : (
         <ContextLevelReadout report={controls.contextReport} />
+      )
+    ) : menu === "tasks" ? (
+      // ── ROUND-120 (why): ── the owner's item 33 — the session's Task list
+      // IN THE SAME MENU FAMILY (the anchored panel's own level, the
+      // back-chevron grammar every other level rides). CHECKABLE rows: the
+      // R88 owner-write route exists, so a tap toggles + POSTs the whole
+      // list; the honest error line + the busy guard live with the rows.
+      sessionTodos === null ? (
+        <View style={styles.menuCaptionRow}>
+          <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={1}>
+            no tasks in this session yet
+          </TypeCaption>
+        </View>
+      ) : (
+        <TaskLevelRows todos={sessionTodos} busy={todoBusy} error={todoError} onToggle={toggleSessionTodo} />
       )
     ) : null;
 
@@ -1202,8 +1340,15 @@ export default function SessionScreen() {
   // closed → max(inset, 0) = the gesture-bar inset; open → max(inset, kb) =
   // the full keyboard height. One smooth UI-thread rise; the inverted
   // FlatList above reflows on its own; nothing else offsets anything.
+  // ── ROUND-120 (why): ── the owner's item 28 — "the composer rides the
+  // device edge — add a proper bottom inset": the house beat (8dp) rides
+  // ON TOP of the max() in BOTH states — the flat case (a device reporting
+  // no bottom inset) gets the beat alone, the home-indicator case gets
+  // inset + beat, and the open-keys case keeps the same breathing gap over
+  // the IME. The composer itself never pads its own bottom (the dock owns
+  // the keyboard architecture — R115-K's ONE-expression law).
   const dockStyle = useAnimatedStyle(() => ({
-    paddingBottom: Math.max(insetsBottom, kbHeight.value),
+    paddingBottom: Math.max(insetsBottom, kbHeight.value) + COMPOSER_EDGE_BEAT,
   }));
 
   const data = useMemo(() => [...displayRows].reverse(), [displayRows]);
@@ -1312,10 +1457,11 @@ export default function SessionScreen() {
       {/* R115-K — the dock owns the keyboard: NO KeyboardAvoidingView, NO
           offsets, NO window resize (the window is ADJUST_NOTHING while this
           screen lives). The only thing that moves is the dock's own animated
-          paddingBottom (dockStyle — max(insetsBottom, kbHeight)); the whole
-          composer — offline/outbox/note rows, the @-picker popup, chips, the
-          R119-B single-tier input bar with its attach circle BESIDE the
-          input — rides INSIDE it, and the inverted FlatList above (flex:1)
+          paddingBottom (dockStyle — max(insetsBottom, kbHeight) + the
+          R120-P edge beat); the whole composer — offline/outbox/note rows,
+          the @-picker popup, chips, the single-tier input bar with its
+          DOCKED Add Context control inside the input's own surface — rides
+          INSIDE it, and the inverted FlatList above (flex:1)
           reflows on its own. The list keeps
           keyboardShouldPersistTaps="handled" so a transcript tap while the
           keys are up never dismiss-focus-then-refocus jarringly. */}
@@ -1434,7 +1580,13 @@ export default function SessionScreen() {
           onBack={menu === null || menu === "main" ? undefined : backToMain}
           testID="session-dropdown"
           contentMaxHeight={
-            menu === "model" ? MODEL_LEVEL_MAX_HEIGHT : menu === "context" ? CONTEXT_LEVEL_MAX_HEIGHT : undefined
+            menu === "model"
+              ? MODEL_LEVEL_MAX_HEIGHT
+              : menu === "context"
+                ? CONTEXT_LEVEL_MAX_HEIGHT
+                : menu === "tasks"
+                  ? TASK_LEVEL_MAX_HEIGHT
+                  : undefined
           }
           items={menuItems}
           level={menu ?? MAIN_LEVEL_KEY}
@@ -1557,6 +1709,17 @@ function overrideAttachmentViews(overrides: SendOverrides): AttachmentView[] | n
     ...(a.size !== undefined ? { size: a.size } : {}),
   }));
   return views.length > 0 ? views : null;
+}
+
+/** ── ROUND-120 (why): ── the Task list's optimistic override retires when
+ *  the fold's own list equals it — content + status, item by item (the
+ *  todo-updated frame's or the rehydrate's catch-up). Pure. */
+function todosEqual(a: TodoItemView[], b: TodoItemView[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i]?.content !== b[i]?.content || a[i]?.status !== b[i]?.status) return false;
+  }
+  return true;
 }
 
 // ── R118-D — the kebab's IN-PANEL levels (spec §2.2) ───────────────────────
@@ -1685,6 +1848,95 @@ function ContextLevelReadout({ report }: { report: SessionContextReport }) {
   );
 }
 
+/** ── ROUND-120 (why): ── the owner's item 33 — "tapping shows the task
+ *  list in the same menu family": the session's todos as the panel's
+ *  CHECKABLE level. The row's checkbox is the transcript TodoCard's own
+ *  glyph family restated for the panel (the owner's favorite card, frozen
+ *  as-is — one spelling of "a todo" everywhere): the 15dp square r4, the
+ *  success fill + white Check when done, the accent dot while the agent
+ *  works it, borderStrong at rest; the content line at TYPE_CAPTION + 0.5
+ *  carries the line-through on done and WRAPS (todo content is data, not
+ *  copy — the single-line law governs descriptions, never a task's own
+ *  words). A tap rides `toggleSessionTodo` (optimistic flip +
+ *  POST /sessions/:id/todo — the R88 owner-write route, the whole list at
+ *  once); the busy guard blocks rapid double-writes, and the level's
+ *  footer line is the honest "done/total" count or the failure's
+ *  one-liner — never both. */
+function TaskLevelRows({
+  todos,
+  busy,
+  error,
+  onToggle,
+}: {
+  todos: TodoItemView[];
+  busy: boolean;
+  error: string | null;
+  onToggle: (index: number) => void;
+}) {
+  const { tokens } = useTheme();
+  const done = todos.filter((todo) => todo.status === "completed").length;
+  return (
+    <View>
+      {todos.map((todo, i) => {
+        const isDone = todo.status === "completed";
+        const isActive = todo.status === "in_progress";
+        return (
+          <Pressable
+            key={i}
+            accessibilityLabel={`${isDone ? "Done" : isActive ? "In progress" : "Pending"}: ${todo.content}`}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: isDone, disabled: busy }}
+            disabled={busy}
+            testID={`session-task-row-${i}`}
+            onPress={() => onToggle(i)}
+            style={({ pressed }) => [
+              styles.menuRow,
+              styles.taskRow,
+              { backgroundColor: pressed ? tokens.subtleHover : "transparent" },
+            ]}
+          >
+            <View
+              style={[
+                styles.taskCheckbox,
+                {
+                  borderColor: isDone ? tokens.success : isActive ? tokens.accent : tokens.borderStrong,
+                  backgroundColor: isDone ? tokens.success : "transparent",
+                },
+              ]}
+            >
+              {isDone ? (
+                <Check size={10} color="#FFFFFF" strokeWidth={3.4} />
+              ) : isActive ? (
+                <View style={[styles.taskActiveDot, { backgroundColor: tokens.accent }]} />
+              ) : null}
+            </View>
+            <Text
+              style={{
+                flex: 1,
+                color: isDone ? tokens.textTertiary : isActive ? tokens.text : tokens.textSecondary,
+                fontSize: TYPE_CAPTION + 0.5,
+                fontFamily: isActive ? fontFamily.semibold : fontFamily.regular,
+                lineHeight: 18,
+                textDecorationLine: isDone ? "line-through" : "none",
+              }}
+            >
+              {todo.content}
+            </Text>
+          </Pressable>
+        );
+      })}
+      <View style={styles.menuCaptionRow}>
+        <TypeCaption
+          style={{ color: error !== null ? tokens.danger : tokens.textTertiary }}
+          numberOfLines={1}
+        >
+          {error !== null ? error : `${done} of ${todos.length} done`}
+        </TypeCaption>
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   body: {
     flex: 1,
@@ -1776,6 +2028,29 @@ const styles = StyleSheet.create({
   menuCaptionRow: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
+  },
+  /** ── ROUND-120 (why): ── the Task level's CHECKABLE row — the menuRow's
+   *  press geometry with the TodoCard's own flex-start alignment (a wrapping
+   *  todo keeps its checkbox on the FIRST line, the card's spelling). */
+  taskRow: {
+    alignItems: "flex-start",
+  },
+  /** The 15dp checkbox square — the transcript TodoCard's own glyph
+   *  (r4, 1.5dp border, the success fill + white Check when done, the
+   *  6dp accent dot while the agent works it). One spelling everywhere. */
+  taskCheckbox: {
+    width: 15,
+    height: 15,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 1.5,
+  },
+  taskActiveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   /** The Context level's compact readout (the meter + its three lines). */
   contextReadout: {

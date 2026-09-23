@@ -487,6 +487,20 @@ function upsertTodoItem(
   return [...rest, { kind: "todo", key: TODO_ITEM_KEY, todos, source }];
 }
 
+/** ── ROUND-120 (why): ── the owner's item 33 — the kebab's Task list entry
+ *  with CHECKABLE rows (the R88 owner-write route exists, so the rows act).
+ *  The tap transition: completed → pending, pending/in_progress → completed
+ *  (a checkbox's own semantics — the in_progress dot is the AGENT's word,
+ *  never the owner's lever). Pure + exported for the tests. */
+export function toggleTodoAt(todos: TodoItemView[], index: number): TodoItemView[] {
+  if (index < 0 || index >= todos.length) return todos;
+  return todos.map((todo, i) =>
+    i === index
+      ? { ...todo, status: todo.status === "completed" ? "pending" : "completed" }
+      : todo,
+  );
+}
+
 /** Fold the persisted event log → transcript items (pure, order-preserving).
  * Unknown event types render as dim meta lines (forward compatibility — the
  * phone never crashes on a frame the desktop learned after it). */
@@ -2180,6 +2194,23 @@ export async function postResolveQuestion(
         ...(sources !== undefined ? { sources } : {}),
       }),
     },
+  );
+}
+
+/** ── ROUND-120 (why): ── POST /sessions/:id/todo — the owner's manual todo
+ *  write (the R88 route the desktop's floating widget rides; the body is
+ *  {todos: [{content, status}]}, the whole list at once, source:"user" so
+ *  the agent SEES the owner's edit on its next turn). 200 carries the
+ *  persisted list back; 404 = unknown session; 409 = no bound agent. */
+export async function postSessionTodo(
+  sender: ApiSender,
+  sessionId: string,
+  todos: TodoItemView[],
+): Promise<ApiOutcome<{ ok: boolean; todos: TodoItemView[] }>> {
+  return apiJson<{ ok: boolean; todos: TodoItemView[] }>(
+    sender,
+    `/sessions/${encodeURIComponent(sessionId)}/todo`,
+    { method: "POST", bodyText: JSON.stringify({ todos }) },
   );
 }
 

@@ -34,6 +34,7 @@ import {
   patchSessionSelectedModel,
   postQueue,
   postResolveQuestion,
+  postSessionTodo,
   postStop,
   postSubAgentRetry,
   queueBody,
@@ -47,9 +48,11 @@ import {
   sessionTitle,
   shortModelId,
   thinkingPlaceholderVisible,
+  toggleTodoAt,
   type LiveTurn,
   type SessionEventWire,
   type SessionRow,
+  type TodoItemView,
   type TranscriptItem,
 } from "../sessions";
 import type { SseStream } from "@/link/connection";
@@ -301,6 +304,39 @@ describe("sessions — the persisted event fold", () => {
       event(1, "todo.update", { todos: [{ content: "a", status: "completed" }], source: "user" }),
     ]);
     expect(items[0]?.kind === "todo" && items[0].source).toBe("user");
+  });
+
+  it("R120-P: toggleTodoAt — the kebab's checkable rows (completed ↔ pending; in_progress → completed)", () => {
+    // the owner's item 33: the tap transition is a checkbox's own
+    // semantics — the in_progress dot is the AGENT's word, never the
+    // owner's lever, so tapping it completes (never reverts to pending).
+    const todos: TodoItemView[] = [
+      { content: "read the brief", status: "completed" },
+      { content: "write the code", status: "in_progress" },
+      { content: "ship it", status: "pending" },
+    ];
+    expect(toggleTodoAt(todos, 0)).toEqual([
+      { content: "read the brief", status: "pending" },
+      { content: "write the code", status: "in_progress" },
+      { content: "ship it", status: "pending" },
+    ]);
+    expect(toggleTodoAt(todos, 1)).toEqual([
+      { content: "read the brief", status: "completed" },
+      { content: "write the code", status: "completed" },
+      { content: "ship it", status: "pending" },
+    ]);
+    expect(toggleTodoAt(todos, 2)).toEqual([
+      { content: "read the brief", status: "completed" },
+      { content: "write the code", status: "in_progress" },
+      { content: "ship it", status: "completed" },
+    ]);
+    // the input list is never mutated (the optimistic override is a new array)
+    expect(todos[1]?.status).toBe("in_progress");
+    // out-of-range indices are a no-op (the SAME array back), never a crash
+    expect(toggleTodoAt(todos, -1)).toBe(todos);
+    expect(toggleTodoAt(todos, 3)).toBe(todos);
+    const empty: TodoItemView[] = [];
+    expect(toggleTodoAt(empty, 0)).toBe(empty);
   });
 
   it("an EMPTY todo.update (the R88 clear) REMOVES the card", () => {
@@ -771,6 +807,38 @@ describe("sessions — the typed client", () => {
     const bare = await postResolveQuestion(sender, "q_2", ["no"]);
     expect(bare.ok).toBe(true);
     expect(JSON.parse(calls[1]?.init.bodyText ?? "")).toEqual({ answers: ["no"] });
+  });
+
+  it("R120-P: posts the owner's whole todo list through POST /sessions/:id/todo (the R88 write route)", async () => {
+    const { sender, calls } = makeApiSender(() => ({
+      status: 200,
+      bodyText: JSON.stringify({
+        ok: true,
+        todos: [
+          { content: "read the brief", status: "completed" },
+          { content: "ship it", status: "pending" },
+        ],
+      }),
+    }));
+    const outcome = await postSessionTodo(sender, "sess 1", [
+      { content: "read the brief", status: "completed" },
+      { content: "ship it", status: "pending" },
+    ]);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.data.ok).toBe(true);
+      expect(outcome.data.todos).toHaveLength(2);
+    }
+    expect(calls[0]?.path).toBe("/api/v1/sessions/sess%201/todo");
+    expect(calls[0]?.init.method).toBe("POST");
+    // the WHOLE list rides the body — the route's contract ({todos}, no
+    // source field: the server writes source:"user" itself)
+    expect(JSON.parse(calls[0]?.init.bodyText ?? "")).toEqual({
+      todos: [
+        { content: "read the brief", status: "completed" },
+        { content: "ship it", status: "pending" },
+      ],
+    });
   });
 
   it("PATCHes the per-session operating mode + task mode (desktop parity)", async () => {

@@ -71,6 +71,20 @@
  * carry the model NAME (cleanModelName of the session's selectedModel) in
  * the meta line; the 1dp inset dividers ride the STRONG recipe (the
  * dashboard's recessed-well spelling — one spelling everywhere).
+ *
+ * ROUND-120 (R120-P — the owner's §G list polish, items 24-27): item 24 —
+ * "Type a path instead" is the sheet's OPTION-ROW family now (Keyboard 16 +
+ * the accentDeep label + the subtle press fill — "Create a folder here"'s
+ * own grammar, a real 46dp bordered target, never a bare text micro-line).
+ * Item 25 — every session row carries the ClayIconChip identity glyph on
+ * the left (MessageSquare 17, the house tinted chip — the row reads as a
+ * SESSION before its first line is parsed). Item 26 — the New session CTA
+ * owns its own TIER: the R118-B strong inset rule breaks it out of the row
+ * rhythm, md over / sm under. Item 27 — the ODD session rows carry the
+ * resting `subtle` wash (4% ink, a step below the subtleHover press tier)
+ * so consecutive sessions stay distinguishable. (Item 23 — the sheet
+ * ANIMATIONS — rides the shared Sheet primitive; Track S owns this round's
+ * sheet-motion retune and the projects flow inherits it at merge.)
  */
 
 import { useRouter } from "expo-router";
@@ -98,6 +112,8 @@ import {
   Folder,
   FolderGit2,
   FolderPlus,
+  Keyboard,
+  MessageSquare,
   X,
 } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
@@ -107,6 +123,7 @@ import { EmptyState, ErrorState, SkeletonList } from "@/components/list-state";
 import {
   Badge,
   ChromeButton,
+  ClayIconChip,
   ClayInput,
   Hairline,
   PressableCard,
@@ -554,7 +571,7 @@ function ProjectRowCard({
                     (borderStrong, inset md — the dashboard's recessed-well
                     spelling; one spelling everywhere). */}
                 {index > 0 ? <Hairline strong inset={spacing.md} /> : null}
-                <SessionRow row={row} onOpen={() => onOpenSession(row)} />
+                <SessionRow row={row} shaded={index % 2 === 1} onOpen={() => onOpenSession(row)} />
               </View>
             ))
           )}
@@ -570,6 +587,15 @@ function ProjectRowCard({
               </TypeMicro>
             </Pressable>
           ) : null}
+          {/* ── ROUND-120 (why): ── the owner's item 26 — "The New Session
+              button needs more separation from the session list": the R118-B
+              STRONG inset rule is the visible TIER BREAK between the
+              session rows and the well's closing action (the divider law's
+              own "visible break between tiers" arm — the CTA is not a row),
+              and the CTA's own margins grew with it (md above, sm below —
+              the closing action finally reads as its own group, not the
+              last row's tailgater). */}
+          <Hairline strong inset={spacing.md} />
           {/* R118-E §2C3 — the well's closing action is the centered CTA
               (the tinted full-width row is deleted; same grammar as every
               page CTA, minWidth 200). */}
@@ -589,7 +615,19 @@ function ProjectRowCard({
 
 // ── the compact session row (inside the expansion) ──────────────────────────
 
-function SessionRow({ row, onOpen }: { row: SessionRow; onOpen: () => void }) {
+function SessionRow({
+  row,
+  shaded,
+  onOpen,
+}: {
+  row: SessionRow;
+  /** ── ROUND-120 (why): ── the owner's item 27 — "Each session row gets a
+   *  slight shade/tint so consecutive sessions are distinguishable": the
+   *  ODD rows carry the resting `subtle` wash (4% ink — a step BELOW the
+   *  subtleHover press tier, so pressing a tinted row still reads). */
+  shaded: boolean;
+  onOpen: () => void;
+}) {
   const { tokens } = useTheme();
   const tone = sessionStatusTone(row.status);
   const running = isTurnRunning(row);
@@ -611,11 +649,25 @@ function SessionRow({ row, onOpen }: { row: SessionRow; onOpen: () => void }) {
       onPress={onOpen}
       style={({ pressed }) => [
         styles.sessionRow,
-        // subtleHover — a step ABOVE the well's surfaceWell tint, so the
-        // pressed row still reads on the recessed surface (R116-k).
-        { backgroundColor: pressed ? tokens.subtleHover : "transparent" },
+        // subtleHover — a step ABOVE both the well's surfaceWell tint and
+        // the R120-P alternating shade, so the pressed row still reads on
+        // the recessed surface (R116-k).
+        {
+          backgroundColor: pressed
+            ? tokens.subtleHover
+            : shaded
+              ? tokens.subtle
+              : "transparent",
+        },
       ]}
     >
+      {/* ── ROUND-120 (why): ── the owner's item 25 — "Each session row gets
+          an icon on the left": the ClayIconChip — the house identity chip
+          for list rows (round-117-elevation §2.2: accentTint fill + clayRim
+          hairline + clayShadowSm, the accentDeep glyph) — carrying the
+          chat/session glyph. The row reads as a SESSION before its first
+          line is parsed. */}
+      <ClayIconChip icon={MessageSquare} iconSize={17} />
       <View style={styles.sessionMain}>
         <TypeBody numberOfLines={1} style={styles.sessionTitle}>
           {sessionTitle(row)}
@@ -1161,18 +1213,33 @@ function NewProjectSheet({
           {/* the power-user escape hatch — collapsed by default, ONE line
               when open; the keyboard's return key commits the path. The
               manual field rides ClayInput mono (R118-A's field law: label +
-              input, NO caption — the focus ring comes with it). */}
+              input, NO caption — the focus ring comes with it).
+              ── ROUND-120 (why): ── the owner's item 24 — "'Type a path
+              instead' reads like plain dead text — highlight it as a real
+              option": the affordance is the sheet's own OPTION-ROW family
+              (the "Create a folder here" grammar — icon + accentDeep label
+              + the subtle press fill), the Keyboard glyph the house already
+              uses for "type it in instead" (the connect flow's manual
+              pairing). A real bordered target at 46dp, never a bare text
+              micro-line. */}
           <View style={styles.fieldWrap}>
             <Pressable
               accessibilityRole="button"
               accessibilityState={{ expanded: manual }}
               onPress={() => setManual((prev) => !prev)}
-              hitSlop={8}
               testID="new-project-manual-toggle"
+              style={({ pressed }) => [
+                styles.pathOptionRow,
+                {
+                  backgroundColor: pressed ? tokens.subtle : "transparent",
+                  borderColor: tokens.borderSubtle,
+                },
+              ]}
             >
-              <TypeMicro style={{ color: tokens.accent }}>
+              <Keyboard size={16} color={tokens.accentDeep} strokeWidth={2.2} />
+              <TypeBody numberOfLines={1} style={[styles.pathOptionLabel, { color: tokens.accentDeep }]}>
                 {manual ? "Hide the path field" : "Type a path instead"}
-              </TypeMicro>
+              </TypeBody>
             </Pressable>
             {manual ? (
               <ClayInput
@@ -1377,9 +1444,12 @@ const styles = StyleSheet.create({
   /** R118-E §2C1 — the page-level CTA law: centered, self-sized, minWidth
    *  200 (supersedes the half-width outlined NewProjectActionRow). */
   pageCta: { alignSelf: "center", minWidth: PAGE_CTA_MIN_W },
-  /** R118-E §2C3 — the same CTA grammar inside the sessions well (marginTop
-   *  sm separates it from the rows/dividers above). */
-  wellCta: { alignSelf: "center", minWidth: PAGE_CTA_MIN_W, marginTop: spacing.sm },
+  /** R118-E §2C3 → R120-P — the same CTA grammar inside the sessions well:
+   *  the owner's item 26 ("the New Session button needs more separation
+   *  from the session list") grows the margins around the R118-B strong
+   *  TIER BREAK above it — md over the rule, sm under the button, its own
+   *  visual group. */
+  wellCta: { alignSelf: "center", minWidth: PAGE_CTA_MIN_W, marginTop: spacing.md, marginBottom: spacing.sm },
   /** R118-A — the sheet CTA law: centered, self-sized, minWidth 200; the
    *  quiet escape centers beneath at its natural width. */
   sheetCta: { alignSelf: "center", minWidth: SHEET_CTA_MIN_W },
@@ -1429,6 +1499,21 @@ const styles = StyleSheet.create({
   fieldGap: { gap: spacing.md, paddingTop: spacing.xs },
   fieldWrap: { gap: 6 },
   fieldLabel: { paddingLeft: spacing.xs },
+  /** ── ROUND-120 (why): ── the owner's item 24 — the manual-path escape
+   *  as the sheet's OPTION-ROW family ("Create a folder here"'s own
+   *  grammar): 46 tall, hairline-bordered, RADIUS_INPUT corners so the
+   *  affordance floats as its own chip-row target (a REAL option, never
+   *  dead text). */
+  pathOptionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    height: 46,
+    borderRadius: RADIUS_INPUT,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  pathOptionLabel: { fontSize: 14 },
 
   // ── the folder browser ──
   chosenRoot: {

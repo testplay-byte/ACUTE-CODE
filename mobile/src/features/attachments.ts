@@ -88,6 +88,16 @@ export interface ComposerAttachment {
    * at a REAL file (the desktop's R67-A pipeline, mirrored).
    */
   dataBase64?: string | null;
+  /**
+   * ── ROUND-120 (why): ── the owner's item 32 — "image attachments get a
+   * real preview chip" + "tapping ANY attachment opens a viewer pop-up".
+   * A DEVICE-PICKED file's own local URI (the document picker's cache
+   * file) — the ONLY bytes the phone ever holds natively. Project-read
+   * files never carry one (their bytes live on the desktop host; the wire
+   * gives the phone a text head, never pixels) — their chips stay glyph
+   * chips and their viewer stays the honest name/size card.
+   */
+  localUri?: string;
 }
 
 /** The backend caps a message at 20 attachments — mirrored (the send 400s above). */
@@ -147,6 +157,51 @@ export function stageAttachments(
     fresh.push(chip);
   }
   return [...staged, ...fresh].slice(0, MAX_ATTACHMENTS);
+}
+
+/** ── ROUND-120 (why): ── the owner's item 32 — image attachments get "a
+ *  real preview chip". The image-extension test over the chip's display
+ *  name — the same family the transcript's user-bubble thumbnails use.
+ *  Pure. */
+const IMAGE_FILE_RE = /\.(png|jpe?g|webp|gif|avif|bmp)$/i;
+
+export function isImageFileName(name: string): boolean {
+  return IMAGE_FILE_RE.test(name);
+}
+
+/** ── ROUND-120 (why): ── tapping ANY attachment "opens a viewer pop-up"
+ *  (item 32) — this pure classifier picks WHICH viewer a staged chip opens:
+ *
+ *    "image" — an image-extension file whose bytes the phone actually holds
+ *              (a picked localUri) → the large ImageViewer preview;
+ *    "text"  — a chip carrying a head (picked or server-read) → the
+ *              scrollable text view;
+ *    "info"  — anything else (a binary over the wire, an image the phone
+ *              has no bytes for) → the honest name + size + type card —
+ *              never a preview that pretends to have pixels it does not.
+ *
+ *  Pure. */
+export type AttachmentPreviewKind = "image" | "text" | "info";
+
+export function attachmentPreviewKind(chip: ComposerAttachment): AttachmentPreviewKind {
+  if (chip.localUri !== undefined && isImageFileName(chip.name)) return "image";
+  if (chip.text !== null) return "text";
+  return "info";
+}
+
+/** ── ROUND-120 (why): ── the owner's item 31 — "Typing @ opens a results
+ *  menu ABOVE the input, filtering as the query continues". Android fires
+ *  onChangeText BEFORE onSelectionChange, so a caret captured at the last
+ *  selection event trails the character just typed — typing "@" into an
+ *  empty field read caret 0 and the menu NEVER opened (detectAtToken needs
+ *  the caret PAST the "@"). This advances the remembered caret by the
+ *  value's length delta (typing inserts at the caret), clamped to the new
+ *  length; the authoritative onSelectionChange re-detects right behind it.
+ *  Pure. */
+export function advancedCaret(prevCaret: number, prevValue: string, nextValue: string): number {
+  const delta = nextValue.length - prevValue.length;
+  if (delta > 0) return Math.min(prevCaret + delta, nextValue.length);
+  return Math.max(0, Math.min(prevCaret, nextValue.length));
 }
 
 /** "2.4 MB" / "812 KB" — the chip's size caption (pure). */

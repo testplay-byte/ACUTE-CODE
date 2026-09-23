@@ -25,6 +25,14 @@
  * nextOpenModelProvider (the accordion's ONE-open-at-a-time transition)
  * and menuLevelRendersRootRows (the root rows render ONLY at the root —
  * the R118-D "model"-branch bug pinned so it can never trail the list).
+ *
+ * R120-P (round-120.md §1 items 29+30): the Add Context control DOCKS
+ * INSIDE the input's own visual surface — the 40dp quiet circle pinned at
+ * the input's BOTTOM-RIGHT corner (inset 4 / bottom 2), the input's
+ * paddingRight reserving the control's column (ATTACH_DOCK_PADDING_RIGHT
+ * = 4 + 40 + 8 = 52) so no text line can EVER overlap it — the RN spelling
+ * of the owner's wrap law ("the text will never overlap with the 'Add
+ * Context' button").
  */
 
 import { describe, expect, it, jest } from "@jest/globals";
@@ -54,6 +62,10 @@ jest.mock("@/link/runtime", () => ({
 
 import {
   ATTACH_CIRCLE_SIZE,
+  ATTACH_DOCK_BOTTOM_INSET,
+  ATTACH_DOCK_INSET,
+  ATTACH_DOCK_PADDING_RIGHT,
+  ATTACH_DOCK_TEXT_GAP,
   INPUT_MAX_LINES,
   INPUT_TALL_THRESHOLD,
   MAX_INPUT_HEIGHT,
@@ -235,6 +247,33 @@ describe("Composer — the R119-B single-tier growth geometry (round-119 §2)", 
     // deleted it with the overlay it served. A resurrected export (or a
     // rename that reintroduces reserved-space thinking) fails here.
     expect(Object.keys(ComposerModule)).not.toContain("ATTACH_BAND");
+    expect(Object.prototype.hasOwnProperty.call(ComposerModule, "ATTACH_BAND")).toBe(false);
+  });
+});
+
+describe("Composer — the R120-P docked Add Context control (round-120 §1 items 29+30)", () => {
+  it("the dock geometry pins: right inset 4, bottom inset 2, the text gap 8, the reserved column 52", () => {
+    expect(ATTACH_DOCK_INSET).toBe(4);
+    expect(ATTACH_DOCK_BOTTOM_INSET).toBe(2);
+    expect(ATTACH_DOCK_TEXT_GAP).toBe(8);
+    // the wrap law's reservation — the SUM is the contract
+    expect(ATTACH_DOCK_PADDING_RIGHT).toBe(ATTACH_DOCK_INSET + ATTACH_CIRCLE_SIZE + ATTACH_DOCK_TEXT_GAP);
+    expect(ATTACH_DOCK_PADDING_RIGHT).toBe(52);
+  });
+
+  it("the reserved column covers the WHOLE circle — no text line can reach the dock (never overlap)", () => {
+    // The owner's exact law: "the text will never overlap with the 'Add
+    // Context' button." The paddingRight minus the right inset must cover
+    // the circle's full 40dp footprint with the gap to spare.
+    expect(ATTACH_DOCK_PADDING_RIGHT - ATTACH_DOCK_INSET).toBeGreaterThanOrEqual(ATTACH_CIRCLE_SIZE);
+    // and the control centers in the 44px resting pill: 40 + 2×2
+    expect(ATTACH_CIRCLE_SIZE + 2 * ATTACH_DOCK_BOTTOM_INSET).toBe(44);
+  });
+
+  it("the single-tier law STANDS under the dock: no band vocabulary returns", () => {
+    // The R119-B kill stays dead — the dock is not a reserved BAND under
+    // tall text (the two-tier geometry the owner rejected); it shares the
+    // input's LAST line at every height.
     expect(Object.prototype.hasOwnProperty.call(ComposerModule, "ATTACH_BAND")).toBe(false);
   });
 });
