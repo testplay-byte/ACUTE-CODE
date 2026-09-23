@@ -9,7 +9,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
-## [Unreleased]
+## [0.115.0] — 2026-09-23 — the self-feedback ledger + the Actions economy (the agent reports on itself; fewer CI runs)
 
 ### The self-feedback ledger (the agent reports on itself — for you to hand us later)
 - **Settings → Self-Feedback (new section, default OFF).** While ON, after each completed
