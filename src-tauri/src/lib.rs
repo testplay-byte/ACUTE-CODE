@@ -40,6 +40,12 @@ pub fn run() {
         // double-fire.
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            // ROUND-123 (R123): the overlay-install flow's `.old` startup
+            // cleanup — remove any stale <exe>.old a previous update flow
+            // left behind (crash mid-install / power loss). Windows-only by
+            // cfg; best-effort (a second live instance keeps its own .old —
+            // its next startup clears it).
+            update::cleanup_renamed_exe();
             sidecar::start(app.handle());
             Ok(())
         })

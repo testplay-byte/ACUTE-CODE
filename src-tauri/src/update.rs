@@ -14,6 +14,50 @@
 //! half: taking the verified file the sidecar produced and making it THE
 //! APP — the one thing only the OS-side process can do.
 //!
+//! ── ROUND-123 (R123): THE VISIBLE INSTALL — no more dark period.
+//!
+//! The owner's report: "it does not show me any kind of animation while it
+//! is processing… I feel like that nothing is happening and it won't auto
+//! start but it does auto start with some delay, which is not ideal", plus
+//! "the update system… not working that properly both on Windows and both
+//! on Linux". Two structural answers this round:
+//!
+//!  · WINDOWS — THE OVERLAY INSTALL (mod overlay): the app renames its own
+//!    exe to `<exe>.old` (the Chrome/VS Code trick — a running exe CAN
+//!    rename itself, which frees the install path for NSIS to write the
+//!    new exe), launches the installer via CreateProcessW to OWN its
+//!    handle, and then STAYS OPEN showing the animated Restarting splash
+//!    while a watcher thread waits on the install — the whole 10-40s
+//!    silent stretch is VISIBLE, and when it ends WE relaunch the new exe
+//!    and exit: no invisible gap, no template-timer relaunch delay. A
+//!    refusing rename (AV/fileystem lock) falls back to the R99-C flow
+//!    verbatim (ShellExecuteW /S /R + the 1.5s exit). A launch failure
+//!    after a successful rename RESTORES the exe's name before erroring —
+//!    the app stays runnable. A watcher timeout emits the honest
+//!    `update-install-failed` event for the frontend's recovery instead of
+//!    exiting. `<exe>.old` left behind by a crash mid-flow is cleaned up
+//!    best-effort at every startup (cleanup_renamed_exe, wired in lib.rs).
+//!
+//!  · LINUX — THE .DEB LEG (mod deb): a .deb install's "Restarting into
+//!    vX… → Connecting to Agent Core → still the old version" symptom was
+//!    the AppImage replace refusing ("the app is not running from an
+//!    AppImage") + the R101-B recovery restarting the engine over an
+//!    un-updated app. The sidecar now picks the arch-matched .deb for a
+//!    packaged install (APPIMAGE env absent), and this module installs it
+//!    VISIBLY: `pkexec dpkg -i <staged.deb>` (polkit's own GUI prompt is
+//!    the only interaction) runs while the app STAYS OPEN on the Restarting
+//!    splash — Linux can replace a running binary's file, so the current
+//!    process is never at risk — then a watcher thread waits on dpkg,
+//!    relaunches the exe at its now-updated path, and exits. A failed
+//!    dpkg (cancelled prompt, dependency error) emits
+//!    `update-install-failed` and the app LIVES ON untouched (the frontend
+//!    recovery restarts the engine; the old binary is still the running
+//!    one — dpkg's failure left the package unpacked-but-unconfigured at
+//!    worst, never a half-written binary). The AppImage replace leg is
+//!    unchanged except its relauncher now WAITS for the old pid to exit
+//!    (the R104 fixed 3s guess retired — no WebKitGTK cache/data-dir race,
+//!    no double window, ever).
+//!
 //! ROUND-104 (R104): THE LINUX LEG. The owner's v0.100.0 report: "It was
 //! saying 'Restarting into 0.100.0' and then it said 'Connecting to Agent
 //! Core' but apparently it did not get updated… It was version 0.99.0 in
@@ -112,6 +156,18 @@ use tauri::{AppHandle, Emitter};
 /// by mistake — refuse to execute it.
 const MIN_INSTALLER_BYTES: u64 = 10 * 1024 * 1024;
 
+/// ROUND-123 (R123): the minimum plausible .deb (bytes) — the real bundle
+/// is ~68 MB; the sidecar enforces the same floor at verify time, this is
+/// the shell-side belt (the file could have been swapped).
+const MIN_DEB_BYTES: u64 = 20 * 1024 * 1024;
+
+/// ROUND-123 (R123): the overlay watcher's budget — how long the watcher
+/// thread waits on the installer process before declaring the install
+/// hung (the real silent install is 10-40s; ten minutes is ~15x headroom
+/// for a slow disk or an AV scan, and past it the honest answer is a
+/// failure the app can recover from, not an eternal splash).
+const INSTALL_WAIT_BUDGET_SECS: u64 = 600;
+
 /// `run_update_installer(path, silent?)` — install the downloaded update
 /// and schedule the app's exit. See the module header for the contract.
 /// R99-C: `silent: Some(true)` runs the NSIS installer with `/S /R` (silent
@@ -137,19 +193,21 @@ pub async fn run_update_installer(
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
 
-    // R104: the kind dispatch + PLATFORM COHERENCE. The sidecar now picks
-    // the platform's own asset (setup.exe on Windows, the arch-matched
-    // AppImage on Linux), but a stale staged file from a pre-R104 download
-    // (or a hand-typed invoke) must still be refused honestly instead of
-    // launching a Windows installer on Linux — the exact v0.100.0 report
-    // ("Restarting into 0.100.0" → "Connecting to Agent Core" → still
-    // 0.99.0) was this module accepting the .exe path and failing deep
-    // inside the Windows-only launch.
+    // R104 + R123: the kind dispatch + PLATFORM COHERENCE. The sidecar now
+    // picks the platform's own asset (setup.exe on Windows, the
+    // arch-matched AppImage on an AppImage-launched Linux, the arch-matched
+    // .deb on a packaged Linux install — R123), but a stale staged file
+    // from a pre-R104 download (or a hand-typed invoke) must still be
+    // refused honestly instead of launching a Windows installer on Linux —
+    // the exact v0.100.0 report ("Restarting into 0.100.0" → "Connecting to
+    // Agent Core" → still 0.99.0) was this module accepting the .exe path
+    // and failing deep inside the Windows-only launch.
     let is_appimage = ext == "appimage";
     let is_windows_setup = ext == "exe";
-    if !is_appimage && !is_windows_setup {
+    let is_linux_deb = ext == "deb";
+    if !is_appimage && !is_windows_setup && !is_linux_deb {
         return Err(format!(
-            "refusing to run \"{path}\" — only this platform's update installer (.exe on Windows, .AppImage on Linux) can be launched"
+            "refusing to run \"{path}\" — only this platform's update installer (.exe on Windows, .AppImage or .deb on Linux) can be launched"
         ));
     }
     if is_windows_setup && !cfg!(windows) {
@@ -157,8 +215,8 @@ pub async fn run_update_installer(
             "the Windows setup.exe cannot install on this platform — run \"Check for updates\" to pick this machine's update, or use the Releases page".to_string(),
         );
     }
-    if is_appimage && !cfg!(target_os = "linux") {
-        return Err("the AppImage update only installs on Linux — use the Releases page".to_string());
+    if (is_appimage || is_linux_deb) && !cfg!(target_os = "linux") {
+        return Err("the Linux update (.AppImage / .deb) only installs on Linux — use the Releases page".to_string());
     }
 
     let meta = std::fs::metadata(parsed)
@@ -166,12 +224,15 @@ pub async fn run_update_installer(
     if !meta.is_file() {
         return Err(format!("\"{path}\" is not a regular file"));
     }
-    // R104: the plausibility floor rides the KIND — the setup.exe is ~37 MB
-    // (10 MB floor, unchanged since R91-E), the AppImage is ~130 MB (50 MB
-    // floor). The sidecar already enforced the same floor at verify time;
-    // this is the shell-side belt (the file could have been swapped).
+    // R104 + R123: the plausibility floor rides the KIND — the setup.exe is
+    // ~37 MB (10 MB floor, unchanged since R91-E), the AppImage is ~130 MB
+    // (50 MB floor), the .deb is ~68 MB (20 MB floor). The sidecar already
+    // enforced the same floor at verify time; this is the shell-side belt
+    // (the file could have been swapped).
     let floor = if is_appimage {
         appimage::MIN_APPIMAGE_BYTES
+    } else if is_linux_deb {
+        MIN_DEB_BYTES
     } else {
         MIN_INSTALLER_BYTES
     };
@@ -193,15 +254,28 @@ pub async fn run_update_installer(
     // the store, and the `let _` keeps a dead-webview edge non-fatal.
     let _ = app.emit("update-installing", ());
 
-    // ROUND-104 (R104): THE LINUX APPIMAGE REPLACE — stage → kill → rename
-    // → delayed relaunch. Everything before the kill can fail harmlessly
-    // (the app + engine live on untouched); the kill is inside the module
-    // so the Windows ordering contract stays the single place it lives.
+    // ROUND-104 (R104) + ROUND-123 (R123): THE LINUX LEGS — the AppImage
+    // replace (stage → kill → rename → pid-wait relaunch) and the .deb
+    // install (kill → pkexec dpkg -i watched → relaunch). Everything
+    // before the kill can fail harmlessly (the app + engine live on
+    // untouched); the kill is inside the module so the Windows ordering
+    // contract stays the single place it lives.
     #[cfg(target_os = "linux")]
     {
         if is_appimage {
             appimage::install(&app, parsed)?;
             schedule_exit(&app);
+            return Ok(());
+        }
+        if is_linux_deb {
+            deb::install(&app, parsed)?;
+            // R123: the deb leg's WATCHER owns the exit — dpkg runs while
+            // this window stays open on the Restarting splash, and the
+            // relaunch + exit fire only after a successful install (a
+            // failed dpkg emits update-install-failed and the app LIVES
+            // ON — the recovery restarts the engine over the still-running
+            // old binary). No schedule_exit here: the invoke's Ok reply
+            // lands while the splash owns the screen.
             return Ok(());
         }
     }
@@ -225,15 +299,37 @@ pub async fn run_update_installer(
     ));
 
     // The OS handoff — R99-C's two legs. SILENT (the one-click default
-    // the frontend sends): ShellExecuteW with "/S /R" — the NSIS silent
-    // flag + tauri's template restart flag (see the module header: the
-    // relaunch rides the template's .onInstSuccess RunAsUser, and the
-    // launch is as detached as the interactive leg the shell plugin
-    // serves). INTERACTIVE (absent/false — the About tab's fallback
-    // button): the shell plugin's Rust-side open (the same entry
+    // the frontend sends): R123 tries THE OVERLAY INSTALL first (the app
+    // renames its own exe, launches the installer with an OWNED handle,
+    // and STAYS OPEN on the animated Restarting splash for the whole
+    // install — see mod overlay); a refusing self-rename (AV/filesystem
+    // lock) falls back to the R99-C leg verbatim: ShellExecuteW with
+    // "/S /R" — the NSIS silent flag + tauri's template restart flag (see
+    // the module header: the relaunch rides the template's .onInstSuccess
+    // RunAsUser, and the launch is as detached as the interactive leg the
+    // shell plugin serves). INTERACTIVE (absent/false — the About tab's
+    // fallback button): the shell plugin's Rust-side open (the same entry
     // open_external_url uses; a LOCAL path needs no ACL walk, and the
     // extension/existence gates above are the path-escape guard).
     if silent.unwrap_or(false) {
+        match overlay::install_with_overlay(&app, parsed) {
+            Ok(true) => {
+                // The overlay flow is LIVE: the watcher thread owns the
+                // install's visibility, the relaunch, and this process's
+                // exit — no schedule_exit (the window must SURVIVE until
+                // the new exe is ready to take over).
+                crate::sidecar::log_line(
+                    "update: the OVERLAY install is live — the window stays open until the new version is ready",
+                );
+                return Ok(());
+            }
+            Ok(false) => {
+                crate::sidecar::log_line(
+                    "update: the overlay rename was refused — falling back to the /S /R silent flow",
+                );
+            }
+            Err(e) => return Err(e),
+        }
         silent_launch::open_with_parameters(&path, silent_launch::ARGS)
             .map_err(|e| format!("launching the silent installer failed: {e}"))?;
     } else {
@@ -334,11 +430,11 @@ mod appimage {
     /// error page or a truncated download.
     pub const MIN_APPIMAGE_BYTES: u64 = 50 * 1024 * 1024;
 
-    /// How long the relauncher waits before starting the new AppImage
-    /// (seconds) — the old app exits 1.5s after this command replies, so 3s
-    /// clears the dying instance with margin (the sidecar is already dead;
-    /// this guards the webview/data-dir side).
-    const RELAUNCH_DELAY_SECS: u64 = 3;
+    /// R123: the post-exit settle (seconds) the relauncher waits AFTER the
+    /// old pid is confirmed gone — a small WebKitGTK cache-flush grace,
+    /// deliberately NOT the whole wait (the old process's EXIT is what the
+    /// relauncher waits for now, not a guessed delay).
+    const RELAUNCH_SETTLE_SECS: u64 = 1;
 
     /// The current AppImage's path, from the runtime's own `APPIMAGE`
     /// export. An absolute path is required — anything else (missing,
@@ -415,12 +511,18 @@ mod appimage {
         }
         crate::sidecar::log_line("update: the AppImage was replaced — scheduling the relaunch");
 
-        // 5. The DELAYED RELAUNCH: `sh -c 'sleep 3; exec <path>'`, detached,
-        // null stdio. The shell outlives this app's exit; the new AppImage
-        // starts after the old instance is gone.
+        // 5. The PID-WAIT RELAUNCH (R123): `sh -c 'while kill -0 <pid>
+        //    2>/dev/null; do sleep 0.2; done; sleep 1; exec <path>'`,
+        //    detached, null stdio. The shell outlives this app's exit and
+        //    starts the new AppImage only AFTER the old instance is really
+        //    gone — the R104 fixed 3s guess could lose the race to a slow
+        //    WebKitGTK teardown (two instances briefly alive, cache/data
+        //    contention); waiting on the pid is deterministic, and the 1s
+        //    settle after it covers the cache flush.
         let script = format!(
-            "sleep {}; exec {}",
-            RELAUNCH_DELAY_SECS,
+            "while kill -0 {} 2>/dev/null; do sleep 0.2; done; sleep {}; exec {}",
+            std::process::id(),
+            RELAUNCH_SETTLE_SECS,
             sh_single_quoted(&target.to_string_lossy())
         );
         match Command::new("sh")
@@ -436,6 +538,168 @@ mod appimage {
                 "the AppImage update is installed, but scheduling the relaunch failed: {e} — reopen the app by hand to run the new version"
             )),
         }
+    }
+}
+
+// ── ROUND-123 (R123): the LINUX .DEB leg ─────────────────────────────────────
+//
+// The packaged-install twin of the AppImage replace: the sidecar picks the
+// arch-matched .deb when the APPIMAGE env is absent (a .deb install, a
+// future package-managed shape), and this leg installs it VISIBLY:
+//
+//   1. Resolve the CURRENT exe path (std::env::current_exe — on a packaged
+//      install this is the real /usr/bin (or /opt) path dpkg will replace).
+//   2. KILL the sidecar tree (the shared ordering contract — dpkg's file
+//      replacements include $INSTDIR-sidecar files only on the AppImage
+//      shape, but the SQLite data files the fresh instance will open are
+//      held by the sidecar either way).
+//   3. LAUNCH `pkexec dpkg -i <staged.deb>` detached — polkit's own GUI
+//      prompt (the ONLY interaction: the owner's password) — and WAIT on
+//      it from a watcher thread while this window stays open on the
+//      Restarting splash. Linux can replace a running binary's file, so
+//      THIS process is never at risk while dpkg works.
+//   4. On success the watcher relaunches the exe at its (now updated)
+//      path, detached, and exits this process after the reply's splash
+//      leg. On failure (cancelled prompt, dependency error, timeout) the
+//      watcher emits `update-install-failed` with dpkg's honest exit
+//      status and the app LIVES ON: the frontend's recovery clears
+//      updateInFlight and restarts the engine over the still-running old
+//      binary (dpkg's failure leaves the package unpacked-but-unconfigured
+//      at worst — never a half-written executable).
+//
+// The staged .deb itself is the sidecar's verified temp file — nothing is
+// copied or moved (dpkg reads it as root through pkexec; the tmp dir is
+// world-readable by default).
+#[cfg(target_os = "linux")]
+mod deb {
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+    use tauri::{AppHandle, Emitter};
+
+    /// How long the watcher waits on `pkexec dpkg -i` before declaring the
+    /// install hung — the PARENT MODULE's shared INSTALL_WAIT_BUDGET_SECS
+    /// (one budget for every watched install leg: the Windows overlay's
+    /// WaitForSingleObject and this try_wait loop; a real dpkg -i is
+    /// seconds, but polkit can wait on the owner's password input, so the
+    /// budget is generous while the splash honestly says "installing").
+    const DPKG_WAIT_BUDGET_SECS: u64 = super::INSTALL_WAIT_BUDGET_SECS;
+
+    /// Single-quote a path for the `sh -c` script (the appimage module's
+    /// canonical POSIX-safe form).
+    fn sh_single_quoted(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+
+    /// The .deb install — kill → pkexec dpkg -i (watched) → relaunch.
+    /// Returns Ok once the WATCHER owns the flow (the caller's Ok reply
+    /// renders while the splash owns the screen); every pre-spawn failure
+    /// is an honest Err the frontend's recovery maps (engine restart over
+    /// the untouched running binary).
+    pub fn install(app: &AppHandle, downloaded: &Path) -> Result<(), String> {
+        // 1. The exe path dpkg will replace (resolved BEFORE anything dies).
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("resolving the running executable's path failed: {e}"))?;
+
+        // 2. KILL — the shared ordering contract (graceful ask → bounded
+        //    wait → force-kill → reap; see sidecar::shutdown_before_install).
+        let kill_outcome = crate::sidecar::shutdown_before_install(app);
+        crate::sidecar::log_line(&format!(
+            "update: deb install proceeding after pre-install kill — {}",
+            kill_outcome.describe()
+        ));
+
+        // 3. LAUNCH the watched install: `sh -c 'exec pkexec dpkg -i <deb>'`
+        //    detached with null stdio. The SHELL is what the watcher waits
+        //    on — its exit code IS dpkg's (exec replaces the shell), and a
+        //    cancelled polkit prompt surfaces as a non-zero exit exactly
+        //    like a failed dpkg.
+        let script = format!("exec pkexec dpkg -i {}", sh_single_quoted(&downloaded.to_string_lossy()));
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| {
+                // The spawn itself refused (no sh — unreachable in practice,
+                // or a fork failure). Nothing has been installed; the Err
+                // maps to the frontend recovery (engine restart).
+                format!(
+                    "launching pkexec dpkg -i failed: {e} — is polkit installed on this desktop?"
+                )
+            })?;
+        crate::sidecar::log_line("update: pkexec dpkg -i launched — the watcher owns the flow");
+
+        // 4. The WATCHER: wait on the install, then relaunch or fail
+        //    honestly. A plain OS thread (the schedule_exit precedent —
+        //    AppHandle is Send; tauri's runtime carries the emit).
+        let watcher_app = app.clone();
+        let watcher_exe = exe.clone();
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now()
+                + std::time::Duration::from_secs(DPKG_WAIT_BUDGET_SECS);
+            let status = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Some(status),
+                    Ok(None) => {
+                        if std::time::Instant::now() >= deadline {
+                            break None;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                    }
+                    Err(_) => break None,
+                }
+            };
+            match status {
+                Some(status) if status.success() => {
+                    crate::sidecar::log_line("update: dpkg -i succeeded — relaunching the new version");
+                    let _ = watcher_app.emit("update-installed", ());
+                    // The relaunch: the exe at its (now updated) path,
+                    // detached, null stdio — the shell outlives this exit.
+                    let relaunch = Command::new("sh")
+                        .arg("-c")
+                        .arg(format!("exec {}", sh_single_quoted(&watcher_exe.to_string_lossy())))
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn();
+                    match relaunch {
+                        Ok(_) => {
+                            std::thread::sleep(std::time::Duration::from_millis(700));
+                            watcher_app.exit(0);
+                        }
+                        Err(e) => {
+                            // The package IS installed — the honest answer is
+                            // the reopen-by-hand line, and the app LIVES ON
+                            // (running the old binary from memory; the next
+                            // manual start runs the new one).
+                            let _ = watcher_app.emit(
+                                "update-install-failed",
+                                format!(
+                                    "the new version is installed, but relaunching it failed: {e} — reopen the app by hand"
+                                ),
+                            );
+                        }
+                    }
+                }
+                maybe_status => {
+                    // dpkg failed (cancelled prompt / dependency error) or
+                    // the wait budget expired. The app is UNTOUCHED — emit
+                    // the honest failure for the frontend's recovery.
+                    let detail = match maybe_status {
+                        Some(status) => format!("dpkg exited with status {status}"),
+                        None => "the install did not finish within the wait budget".to_string(),
+                    };
+                    crate::sidecar::log_line(&format!("update: the deb install failed — {detail}"));
+                    let _ = watcher_app.emit(
+                        "update-install-failed",
+                        format!("the .deb install failed — {detail}; the app keeps running the current version (the Releases page always has the latest)"),
+                    );
+                }
+            }
+        });
+        Ok(())
     }
 }
 
@@ -559,3 +823,302 @@ pub(crate) mod silent_launch {
         Err("the silent installer launch is only available in the packaged Windows app".to_string())
     }
 }
+
+// ── ROUND-123 (R123): THE WINDOWS OVERLAY INSTALL ────────────────────────────
+//
+// The owner's report: "it does not show me any kind of animation while it is
+// processing… I feel like that nothing is happening and it won't auto start
+// but it does auto start with some delay, which is not ideal." The R99-C
+// flow exits the app 1.5s after launching the silent NSIS installer, so the
+// 10-40s install runs COMPLETELY INVISIBLY (no window, no progress — the
+// "delay" before the template's /R relaunch), and the only visible moments
+// were the pre-exit splash and the post-relaunch "Setting up" splash.
+//
+// The overlay flow makes the WHOLE install visible:
+//   1. RENAME the running exe to `<exe>.old` — the Chrome/VS Code update
+//      trick: a running executable CAN rename its own file on Windows
+//      (the file stays locked, but the NAME is free), which frees the
+//      install path for NSIS to write the new exe while THIS process
+//      lives on. A refusing rename (an AV/filesystem lock on the entry)
+//      is not an error — the caller falls back to the R99-C flow.
+//   2. LAUNCH the installer with CreateProcessW (NOT ShellExecuteW) to
+//      OWN the process handle: `"<installer>" /S` — no /R, because HERE
+//      the relaunch is OURS (the watcher below), not the template's
+//      timer. DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP keeps the
+//      installer off this console and out of Ctrl+C groups.
+//   3. KEEP THE APP OPEN: the webview is already showing the animated
+//      Restarting splash (updateInFlight was set before the invoke), and
+//      it now stays alive for the WHOLE install — the watcher thread
+//      waits on the installer handle (WaitForSingleObject, bounded by
+//      INSTALL_WAIT_BUDGET_SECS).
+//   4. ON SUCCESS the watcher emits `update-installed` (the splash swaps
+//      its line to "installed — restarting now"), relaunches the NEW exe
+//      at the original path via ShellExecuteW (the detached shell-open
+//      family the interactive leg has ridden since R91), and exits this
+//      process 700ms later (the new instance's "Setting up vX" splash,
+//      via the R118-F marker, takes over seamlessly).
+//   5. ON FAILURE the watcher emits `update-install-failed` with the
+//      honest message and LEAVES THE APP ALIVE: the frontend's recovery
+//      clears updateInFlight and restarts the engine — the running
+//      (renamed) binary keeps serving; whatever NSIS managed to write
+//      before failing is at the original path for the next manual start.
+//
+// The `.old` file this flow leaves behind is deletable only after this
+// process exits (a running exe's file stays locked) —
+// `cleanup_renamed_exe` (wired into lib.rs's setup) removes any stale
+// `<current_exe>.old` at every startup, best-effort.
+#[cfg(windows)]
+pub(crate) mod overlay {
+    use std::path::Path;
+    use tauri::{AppHandle, Emitter};
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, WaitForSingleObject, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
+        PROCESS_INFORMATION, STARTUPINFOW,
+    };
+
+    /// The watcher's wait budget, imported from the parent module's
+    /// INSTALL_WAIT_BUDGET_SECS (one shared constant for the Windows
+    /// overlay and the Linux deb watcher — the deb module reads it
+    /// directly from its own scope).
+    const WAIT_BUDGET_MS: u32 = super::INSTALL_WAIT_BUDGET_SECS * 1000;
+
+    /// WaitForSingleObject's own return codes (winbase.h).
+    const WAIT_OBJECT_0: u32 = 0;
+    const WAIT_TIMEOUT: u32 = 0x102;
+
+    /// The installer argument string for the overlay leg: NSIS's `/S`
+    /// (silent) with NO `/R` — the relaunch is OURS here (the watcher
+    /// relaunches the new exe the moment the install finishes), not the
+    /// template's .onInstSuccess timer (which would race US to it).
+    const OVERLAY_ARGS: &str = "/S";
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// The suffix appended to the renamed exe (the `.old` file
+    /// cleanup_renamed_exe removes at startup).
+    pub const RENAMED_SUFFIX: &str = ".old";
+
+    /// Try the overlay install. Returns:
+    ///   · Ok(true)  — the flow is LIVE (rename done, installer launched,
+    ///                 watcher owns the exit); the caller must NOT exit.
+    ///   · Ok(false) — the self-rename refused (AV/filesystem lock); the
+    ///                 caller falls back to the R99-C /S /R flow verbatim.
+    ///   · Err(e)    — the installer launch failed AFTER a successful
+    ///                 rename; the exe's name has been RESTORED and the
+    ///                 app is fully alive — the frontend's recovery maps
+    ///                 this exactly like a rejected /S /R launch.
+    ///
+    /// The sidecar kill has ALREADY happened (the command's shared
+    /// ordering contract) — every path here runs with the engine down,
+    /// and every non-live path relies on the frontend's recovery to bring
+    /// it back.
+    pub fn install_with_overlay(app: &AppHandle, installer: &Path) -> Result<bool, String> {
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("resolving the running executable's path failed: {e}"))?;
+        let exe_old = {
+            let mut p = exe.clone().into_os_string();
+            p.push(RENAMED_SUFFIX);
+            std::path::PathBuf::from(p)
+        };
+
+        // 1. THE SELF-RENAME. Windows locks a running exe's FILE, but the
+        //    directory ENTRY is renamable — after this, NSIS can write a
+        //    brand-new exe at the original path while we keep running from
+        //    the renamed one. A pre-existing .old (a prior overlay whose
+        //    process is gone) is removable; one still held by ANOTHER live
+        //    instance (two apps running) makes the rename fail → the
+        //    honest fallback (that machine updates the R99-C way).
+        if let Err(e) = std::fs::rename(&exe, &exe_old) {
+            // Best-effort: clear a stale .old from a previous run, then
+            // retry once (the common case — a crash mid-flow last time).
+            let _ = std::fs::remove_file(&exe_old);
+            if let Err(e2) = std::fs::rename(&exe, &exe_old) {
+                crate::sidecar::log_line(&format!(
+                    "update: the overlay self-rename refused ({e}, retry {e2}) — the silent /S /R fallback applies"
+                ));
+                return Ok(false);
+            }
+        }
+        crate::sidecar::log_line("update: the overlay self-rename landed — the install path is free");
+
+        // 2. LAUNCH the installer with an OWNED handle. CreateProcessW's
+        //    command line must be MUTABLE UTF-16 (the documented contract)
+        //    with the executable path QUOTED (spaces in $TMP paths).
+        let cmdline = format!("\"{}\" {}", installer.to_string_lossy(), OVERLAY_ARGS);
+        let mut cmdline_wide = wide(&cmdline);
+        let mut startup = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            ..Default::default()
+        };
+        let mut proc_info = PROCESS_INFORMATION {
+            hProcess: INVALID_HANDLE_VALUE,
+            hThread: INVALID_HANDLE_VALUE,
+            dwProcessId: 0,
+            dwThreadId: 0,
+        };
+        // SAFETY: every argument is either null (the four optional
+        // attribute/environment/directory pointers) or a live, NUL-bearing
+        // buffer this frame owns; the two OUT structs are zero-initialized
+        // locals of the exact windows-sys types; the creation flags are
+        // plain constants. The returned BOOL is checked before any handle
+        // is used.
+        let ok = unsafe {
+            CreateProcessW(
+                std::ptr::null(),
+                cmdline_wide.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut proc_info,
+            )
+        };
+        if ok == 0 {
+            // RESTORE the exe's name before erroring — the install never
+            // started, and the app must stay normally launchable.
+            let _ = std::fs::rename(&exe_old, &exe);
+            let code = unsafe { GetLastError() };
+            let err = std::io::Error::from_raw_os_error(code as i32);
+            return Err(format!(
+                "launching the installer failed: {err} — the running app is untouched"
+            ));
+        }
+        // The thread handle is not needed (we only wait on the process).
+        unsafe { CloseHandle(proc_info.hThread) };
+
+        // R123: tell the webview WHICH flow is live — the splash's subline
+        // is flow-dependent ("this window stays open while it installs" vs
+        // the fallback's "the window will close for a moment"). The `let _`
+        // keeps a dead-webview edge non-fatal.
+        let _ = app.emit("update-overlay", ());
+
+        // 3+4+5. THE WATCHER — a plain OS thread (the schedule_exit
+        //    precedent; AppHandle is Send).
+        let watcher_app = app.clone();
+        let watcher_exe = exe.clone();
+        let process = proc_info.hProcess;
+        std::thread::spawn(move || {
+            // SAFETY: the handle came from a successful CreateProcessW and
+            // is closed exactly once on every path below (the join point of
+            // the watcher's lifetime).
+            let wait = unsafe { WaitForSingleObject(process, WAIT_BUDGET_MS) };
+            match wait {
+                WAIT_OBJECT_0 => {
+                    // The install finished — the new exe owns the original
+                    // path. Tell the splash, relaunch, exit.
+                    crate::sidecar::log_line(
+                        "update: the overlay install finished — relaunching the new version",
+                    );
+                    let _ = watcher_app.emit("update-installed", ());
+                    if let Err(e) = relaunch_detached(&watcher_exe) {
+                        // The new version IS installed at the path — the
+                        // honest answer is the reopen-by-hand line; the app
+                        // LIVES ON (this process still runs from .old).
+                        let _ = watcher_app.emit(
+                            "update-install-failed",
+                            format!(
+                                "the new version is installed, but relaunching it failed: {e} — reopen the app by hand"
+                            ),
+                        );
+                        unsafe { CloseHandle(process) };
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(700));
+                    unsafe { CloseHandle(process) };
+                    watcher_app.exit(0);
+                }
+                WAIT_TIMEOUT => {
+                    // The budget expired. The installer MIGHT still be
+                    // running (a huge AV scan) — the honest answer is the
+                    // failure event: the app recovers, the owner retries
+                    // when the machine calms down. The installer process
+                    // itself is left alone (killing a mid-write NSIS is
+                    // worse than letting it finish late).
+                    crate::sidecar::log_line(
+                        "update: the overlay install exceeded the wait budget — recovering",
+                    );
+                    let _ = watcher_app.emit(
+                        "update-install-failed",
+                        "the silent install did not finish within ten minutes — the app keeps running the current version; try the update again (or use the Releases page)",
+                    );
+                    unsafe { CloseHandle(process) };
+                }
+                _ => {
+                    // WAIT_FAILED (or anything unexpected) — the wait itself
+                    // broke; treat it exactly like the timeout (the app
+                    // recovers over the still-running old binary).
+                    crate::sidecar::log_line(
+                        "update: waiting on the installer failed — recovering",
+                    );
+                    let _ = watcher_app.emit(
+                        "update-install-failed",
+                        "waiting on the installer failed — the app keeps running the current version; try the update again (or use the Releases page)",
+                    );
+                    unsafe { CloseHandle(process) };
+                }
+            }
+        });
+        Ok(true)
+    }
+
+    /// Relaunch the (newly installed) exe at `path` — ShellExecuteW with
+    /// the plain open verb (the SAME detachment family the interactive
+    /// installer leg has ridden since R91: the launched process outlives
+    /// this app's exit and joins no job object).
+    fn relaunch_detached(path: &Path) -> Result<(), String> {
+        super::silent_launch::open_with_parameters(&path.to_string_lossy(), "")
+    }
+}
+
+/// Non-Windows dev checkouts: the overlay is a packaged-Windows-app concern
+/// (the wincred.rs imp-stub pattern — the call site stays honest: the
+/// fallback leg runs, exactly like a Windows machine whose rename refused).
+#[cfg(not(windows))]
+pub(crate) mod overlay {
+    use std::path::Path;
+    use tauri::AppHandle;
+
+    pub fn install_with_overlay(_app: &AppHandle, _installer: &Path) -> Result<bool, String> {
+        Ok(false)
+    }
+}
+
+/// ROUND-123 (R123): the `.old` startup cleanup — remove any stale
+/// `<current_exe>.old` left behind by a previous overlay flow (a crash
+/// mid-install, or a machine that powered off before the exit). The file
+/// is deletable only when no process runs from it: this runs at STARTUP,
+/// before any rename happens this session, so a leftover is always stale
+/// UNLESS two instances are running (the remove simply fails then —
+/// best-effort by design, never a startup blocker). Called from lib.rs's
+/// setup on Windows only.
+#[cfg(windows)]
+pub(crate) fn cleanup_renamed_exe() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut old = exe.into_os_string();
+    old.push(overlay::RENAMED_SUFFIX);
+    let old = std::path::PathBuf::from(old);
+    if old.exists() {
+        match std::fs::remove_file(&old) {
+            Ok(()) => {
+                crate::sidecar::log_line("update: removed a stale .old exe from a previous update flow");
+            }
+            Err(_) => {
+                // A live instance may still run from it (two apps open) —
+                // its own next startup will clear it. Silence is honest.
+            }
+        }
+    }
+}
+
+/// Non-Windows builds: the cleanup is a Windows-only concern (the overlay
+/// flow's .old file); the call site in lib.rs is cfg-gated to match.
+#[cfg(not(windows))]
+pub(crate) fn cleanup_renamed_exe() {}
