@@ -39,6 +39,7 @@ import {
   fetchSystemUpdates,
   fetchUpdateDownloadProgress,
   fetchUpdateTokenStatus,
+  removeUpdateToken,
   resetApplication,
   saveUpdateToken,
   startUpdateDownload,
@@ -58,6 +59,7 @@ import { AboutTab } from "./AboutTab";
 
 vi.mock("../../lib/api", () => ({
   fetchSystemUpdates: vi.fn(),
+  removeUpdateToken: vi.fn(),
   fetchUpdateDownloadProgress: vi.fn(),
   discardUpdateDownload: vi.fn(),
   resetApplication: vi.fn(),
@@ -102,6 +104,9 @@ beforeEach(() => {
   // test that opens the row overrides what it needs to pin).
   vi.mocked(fetchUpdateTokenStatus).mockReset().mockResolvedValue({ present: false, valid: null });
   vi.mocked(saveUpdateToken).mockReset().mockResolvedValue({ ok: true, valid: true });
+  // R123: the removal route's default answer — nothing removed (each test
+  // that exercises the Remove flow overrides what it needs to pin).
+  vi.mocked(removeUpdateToken).mockReset().mockResolvedValue({ ok: true, removed: false });
   sidecarConnectionMock.retryConnection.mockClear();
 });
 
@@ -805,14 +810,15 @@ describe("AboutTab R99-C/R104: the two-stage update hand-shake", () => {
 // available behind the footer disclosure, saved through the SIDECAR (the
 // PAT never touches the webview's fetch), and confirmed by a re-run of the
 // check itself.
-describe("AboutTab R120-U: the GitHub token re-pairing row", () => {
-  it("a tokenWarning answer (the anonymous retry CARRIED the check) renders the amber hint + AUTO-OPENS the row — the check still succeeds", async () => {
+describe("AboutTab R120-U → R123: the optional GitHub token row (anonymous-first)", () => {
+  it("a tokenWarning answer (the saved token rejected on the retry leg) renders the amber hint + AUTO-OPENS the row — the check still answers its state", async () => {
     vi.mocked(fetchSystemUpdates).mockResolvedValue({
       current: APP_VERSION,
       releasesUrl: "x",
       ok: true,
       latest: APP_VERSION,
       updateAvailable: false,
+      tokenSaved: true,
       tokenWarning: "the saved GitHub token was rejected — a new token is needed for private/rate-limited access",
     });
     renderWithProviders(<AboutTab />);
@@ -823,24 +829,31 @@ describe("AboutTab R120-U: the GitHub token re-pairing row", () => {
     await waitFor(() => {
       expect(screen.getByTestId("update-state").textContent).toContain("Up to date");
     });
-    // The amber hint line rides below the state line...
+    // The amber hint line rides below the state line (the R123 copy names
+    // both honest ways out: replace it, or remove it to run anonymously).
     await waitFor(() => {
       expect(screen.getByTestId("update-token-warning").textContent).toContain(
-        "The saved GitHub token was rejected — this check ran anonymously",
+        "The saved GitHub token was rejected",
+      );
+      expect(screen.getByTestId("update-token-warning").textContent).toContain(
+        "remove it to keep checking anonymously",
       );
     });
     // ...and the re-pairing row is ALREADY open (no toggle click needed).
     expect(screen.getByTestId("update-token-row")).toBeTruthy();
+    // The Remove affordance renders (a token IS saved — tokenSaved:true).
+    expect(screen.getByTestId("update-token-remove")).toBeTruthy();
   });
 
-  it("a token-rejected check (BOTH legs failed) renders the honest error + the auto-opened row", async () => {
+  it("a token-rejected check (both legs failed) renders the honest error + the auto-opened row", async () => {
     vi.mocked(fetchSystemUpdates).mockResolvedValue({
       current: APP_VERSION,
       releasesUrl: "x",
       ok: false,
       reason: "token-rejected",
       error:
-        "GitHub rejected the saved token (HTTP 401) and the anonymous check also failed (HTTP 403) — save a new GitHub token to restore private/rate-limited access",
+        "the anonymous check answered HTTP 403 and GitHub rejected the saved token (HTTP 401) — save a new GitHub token, or remove the saved one to keep checking anonymously",
+      tokenSaved: true,
       tokenWarning: "the saved GitHub token was rejected — a new token is needed for private/rate-limited access",
     });
     renderWithProviders(<AboutTab />);
@@ -856,6 +869,53 @@ describe("AboutTab R120-U: the GitHub token re-pairing row", () => {
     expect(screen.getByTestId("update-token-row")).toBeTruthy();
   });
 
+  it("R123: the DEFAULT public-repo answer (no token saved, check ok) renders NO token UI at all", async () => {
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: APP_VERSION,
+      releasesUrl: "x",
+      ok: true,
+      latest: APP_VERSION,
+      updateAvailable: false,
+      tokenSaved: false,
+    });
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-state").textContent).toContain("Up to date");
+    });
+    // The owner's "why does it even require a GitHub token?" answered
+    // structurally: no toggle, no row, no warning — the anonymous check is
+    // the whole experience.
+    expect(screen.queryByTestId("update-token-toggle")).toBeNull();
+    expect(screen.queryByTestId("update-token-row")).toBeNull();
+    expect(screen.queryByTestId("update-token-warning")).toBeNull();
+  });
+
+  it("R123: a RATE-LIMITED anonymous check (no token saved) auto-opens the row with the save affordance — and no Remove button (nothing is saved)", async () => {
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: APP_VERSION,
+      releasesUrl: "x",
+      ok: false,
+      reason: "rate-limited",
+      error:
+        "GitHub's anonymous rate limit answered HTTP 403 — saving an optional GitHub token raises it (60 → 5,000 checks/hour)",
+      tokenSaved: false,
+    });
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-row")).toBeTruthy();
+    });
+    // The ONE case a token genuinely helps: the row is the suggestion.
+    expect(screen.getByTestId("update-state").textContent).toContain("rate limit");
+    // No token is saved — the Remove affordance does not render.
+    expect(screen.queryByTestId("update-token-remove")).toBeNull();
+    // The optionality line is the row's own first line.
+    expect(screen.getByTestId("update-token-row").textContent).toContain("Optional");
+  });
+
   it("Save PUTs the token through the SIDECAR, re-runs the check, and shows the saved note (the fresh answer is the feedback)", async () => {
     // First answer: both legs failed (the rotated-PAT state). Second
     // answer: the re-paired token answers clean — no warning field at all.
@@ -865,7 +925,8 @@ describe("AboutTab R120-U: the GitHub token re-pairing row", () => {
         releasesUrl: "x",
         ok: false,
         reason: "token-rejected",
-        error: "GitHub rejected the saved token (HTTP 401) and the anonymous check also failed (HTTP 403)",
+        error: "the anonymous check answered HTTP 403 and GitHub rejected the saved token (HTTP 401)",
+        tokenSaved: true,
         tokenWarning: "the saved GitHub token was rejected — a new token is needed for private/rate-limited access",
       })
       .mockResolvedValue({
@@ -874,6 +935,7 @@ describe("AboutTab R120-U: the GitHub token re-pairing row", () => {
         ok: true,
         latest: APP_VERSION,
         updateAvailable: false,
+        tokenSaved: true,
       });
     renderWithProviders(<AboutTab />);
 
@@ -912,13 +974,67 @@ describe("AboutTab R120-U: the GitHub token re-pairing row", () => {
     expect(screen.getByTestId("update-state").textContent).toContain("Up to date");
   });
 
+  it("R123: Remove DELETEs the token through the SIDECAR, re-runs the check, and the fresh anonymous answer retires the row", async () => {
+    // First answer: a token IS saved (the launcher-era state). Second
+    // answer (after the removal): no token saved — the anonymous check
+    // carried, and tokenRowVisible flips false with it.
+    vi.mocked(fetchSystemUpdates)
+      .mockResolvedValueOnce({
+        current: APP_VERSION,
+        releasesUrl: "x",
+        ok: true,
+        latest: APP_VERSION,
+        updateAvailable: false,
+        tokenSaved: true,
+      })
+      .mockResolvedValue({
+        current: APP_VERSION,
+        releasesUrl: "x",
+        ok: true,
+        latest: APP_VERSION,
+        updateAvailable: false,
+        tokenSaved: false,
+      });
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-toggle")).toBeTruthy();
+    });
+    // The row auto-opens? No — a healthy saved token stays collapsed; open it.
+    fireEvent.click(screen.getByTestId("update-token-toggle"));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-row")).toBeTruthy();
+    });
+
+    // Remove: the DELETE fires, then the check re-runs.
+    fireEvent.click(screen.getByTestId("update-token-remove"));
+    await waitFor(() => {
+      expect(vi.mocked(removeUpdateToken)).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(vi.mocked(fetchSystemUpdates)).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-saved").textContent).toContain(
+        "GitHub token removed — checks run anonymously",
+      );
+    });
+    // The fresh answer's tokenSaved:false retires the toggle (the row was
+    // seen this mount, but the row block itself collapses with the answer).
+    await waitFor(() => {
+      expect(screen.queryByTestId("update-token-toggle")).toBeNull();
+    });
+  });
+
   it("a REFUSED save renders the honest thrown message and does NOT re-run the check", async () => {
     vi.mocked(fetchSystemUpdates).mockResolvedValue({
       current: APP_VERSION,
       releasesUrl: "x",
       ok: false,
       reason: "token-rejected",
-      error: "GitHub rejected the saved token (HTTP 401) and the anonymous check also failed (HTTP 403)",
+      error: "the anonymous check answered HTTP 403 and GitHub rejected the saved token (HTTP 401)",
+      tokenSaved: true,
       tokenWarning: "the saved GitHub token was rejected — a new token is needed for private/rate-limited access",
     });
     // The sidecar's 401 UNAUTHORIZED refusal — the ApiError's message
@@ -950,12 +1066,28 @@ describe("AboutTab R120-U: the GitHub token re-pairing row", () => {
     expect(screen.queryByTestId("update-token-saved")).toBeNull();
   });
 
-  it("the footer disclosure opens the row ANY time (no check needed) and renders the health line from GET /system/updates/token", async () => {
-    // A saved, ACCEPTED token — the health line's success spelling.
+  it("the footer disclosure opens the row after a tokenSaved answer (the row is conditional) and renders the health line from GET /system/updates/token", async () => {
+    // A saved, ACCEPTED token — the health line's success spelling. The
+    // check's answer carries tokenSaved:true so the toggle renders.
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: APP_VERSION,
+      releasesUrl: "x",
+      ok: true,
+      latest: APP_VERSION,
+      updateAvailable: false,
+      tokenSaved: true,
+    });
     vi.mocked(fetchUpdateTokenStatus).mockResolvedValue({ present: true, valid: true });
     renderWithProviders(<AboutTab />);
 
-    // Collapsed by default — the power-user affordance stays quiet.
+    // No toggle before any check — the default experience shows no token UI.
+    expect(screen.queryByTestId("update-token-toggle")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-toggle")).toBeTruthy();
+    });
+
+    // Collapsed — the power-user affordance stays quiet.
     expect(screen.queryByTestId("update-token-row")).toBeNull();
     fireEvent.click(screen.getByTestId("update-token-toggle"));
 
@@ -972,18 +1104,30 @@ describe("AboutTab R120-U: the GitHub token re-pairing row", () => {
         "A GitHub token is saved and GitHub accepts it",
       );
     });
-    // And NO update check ran — the disclosure is independent of the check.
-    expect(vi.mocked(fetchSystemUpdates)).not.toHaveBeenCalled();
+    // The check ran exactly once (the disclosure adds no second check).
+    expect(vi.mocked(fetchSystemUpdates)).toHaveBeenCalledTimes(1);
   });
 
-  it("the health line's REJECTED spelling (a saved token GitHub refuses) renders the replace-me copy", async () => {
+  it("the health line's REJECTED spelling (a saved token GitHub refuses) renders the replace-or-remove copy", async () => {
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: APP_VERSION,
+      releasesUrl: "x",
+      ok: true,
+      latest: APP_VERSION,
+      updateAvailable: false,
+      tokenSaved: true,
+    });
     vi.mocked(fetchUpdateTokenStatus).mockResolvedValue({ present: true, valid: false });
     renderWithProviders(<AboutTab />);
 
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-toggle")).toBeTruthy();
+    });
     fireEvent.click(screen.getByTestId("update-token-toggle"));
     await waitFor(() => {
       expect(screen.getByTestId("update-token-health").textContent).toContain(
-        "A GitHub token is saved but GitHub rejected it — replace it below",
+        "A GitHub token is saved but GitHub rejected it — replace it below, or remove it to run anonymously",
       );
     });
   });

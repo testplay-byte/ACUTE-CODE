@@ -55,6 +55,13 @@ export type ConnectionPhase = "connecting" | "connected" | "offline";
  */
 export interface UpdateInFlight {
   version: string | null;
+  /** ROUND-123 (R123): true once the shell's `update-overlay` event says a
+   * WATCHED install leg is live (the Windows overlay / the Linux .deb
+   * watcher) — the Restarting splash's subline switches from "the window
+   * will close for a moment" (the /S /R fallback's truth) to "this window
+   * stays open while it installs" (the overlay's truth). Absent/false on
+   * the fallback path. */
+  overlay?: boolean;
 }
 
 interface ConfigState {
@@ -71,6 +78,23 @@ interface ConfigState {
   /** R101-B: non-null while an update install is in flight (see UpdateInFlight). */
   updateInFlight: UpdateInFlight | null;
   setUpdateInFlight: (update: UpdateInFlight | null) => void;
+  /** ROUND-123 (R123): non-null when a WATCHED install leg (the Windows
+   * overlay / the Linux .deb watcher) reports the install DONE — the
+   * Restarting splash swaps its line to "installed — restarting now" for
+   * the last visible moment before the Rust side relaunches + exits. The
+   * flag is set by ConnectionGate's event listener and read by the splash;
+   * it is deliberately process-local (like updateInFlight — it describes
+   * this process's final seconds). */
+  updateInstalled: boolean;
+  setUpdateInstalled: (installed: boolean) => void;
+  /** ROUND-123 (R123): non-null when a WATCHED install leg reports FAILURE
+   * — the watcher emitted `update-install-failed` (payload: the honest
+   * message), the flag + message are set by ConnectionGate's listener, and
+   * AboutTab reads them to flip its install card to the honest error state
+   * while the recovery restarts the engine. Cleared when a new install
+   * attempt starts (AboutTab) or on the flag's own read (one-shot surface). */
+  updateInstallError: string | null;
+  setUpdateInstallError: (message: string | null) => void;
   setBaseUrl: (url: string) => void;
   setToken: (token: string | null) => void;
   setDemoData: (on: boolean) => void;
@@ -97,6 +121,11 @@ export const useConfigStore = create<ConfigState>()(
       connectionError: null,
       updateInFlight: null,
       setUpdateInFlight: (updateInFlight) => set({ updateInFlight }),
+      // R123: the watched-install legs' flags (see the interface comments).
+      updateInstalled: false,
+      setUpdateInstalled: (updateInstalled) => set({ updateInstalled }),
+      updateInstallError: null,
+      setUpdateInstallError: (updateInstallError) => set({ updateInstallError }),
       setBaseUrl: (baseUrl) => set({ baseUrl: baseUrl.replace(/\/+$/, "") }),
       setToken: (token) => set({ token }),
       setDemoData: (demoData) => set({ demoData }),

@@ -22,19 +22,33 @@
  *    `path` key (the extractor answers whichever the call carried — the
  *    truth wins over either vocabulary).
  *
+ * ROUND-123 (R123-W-m — the owner's "no tool calls were shown to me" round):
+ * the WEB families join the classification. browser_control / web_search /
+ * web_fetch are tools the agent ACTUALLY runs, and the R119 generic row
+ * rendered their raw "action: navigate, url: …" key:value dump verbatim —
+ * the shapeless rendering the owner reported. The key union grows the
+ * families' own argument names (`action`, `query`, `url`) so the live
+ * extractor answers an in-flight browser navigation's URL exactly the way
+ * it answers an in-flight write's path; the row/hint grammar that consumes
+ * them lives in features/turn-block.ts.
+ *
  * Pure TypeScript — zero React Native (unit-tested directly).
  */
 
 /** The argument keys the live write preview + the compact tool rows read (a
  * closed set — the tools' real schemas, plus the `file_path` spelling the
- * R114-d spec named and the skills' `name`). */
+ * R114-d spec named, the skills' `name`, and the R123-W-m web families'
+ * `action`/`query`/`url`). */
 export type StreamingArgKey =
+  | "action"
   | "content"
   | "file_path"
   | "name"
   | "newString"
   | "oldString"
-  | "path";
+  | "path"
+  | "query"
+  | "url";
 
 /** Whitespace tolerated between a key and its value (JSON's own set). */
 const JSON_WHITESPACE = /[ \t\r\n]/;
@@ -148,6 +162,16 @@ export const TERMINAL_TOOLS: ReadonlySet<string> = new Set(["run_command", "bash
 
 /** The compact-read tools (one-line rows; the args dump stays collapsed). */
 export const READ_TOOLS: ReadonlySet<string> = new Set(["read_skill", "search_skills", "read_file"]);
+
+/** R123-W-m — the WEB pair (web_search's `query`, web_fetch's `url`): the
+ * honest one-line target family the owner's reference screenshots show as
+ * first-class rows ("Searched …" / "Fetched …" on the PC). */
+export const WEB_TOOLS: ReadonlySet<string> = new Set(["web_search", "web_fetch"]);
+
+/** R123-W-m — the EMBEDDED BROWSER family (browser_control): the row's target
+ * is the call's own `action` (+ its `url` when the action carries one) —
+ * never the raw "action: navigate, url: …" key:value dump. */
+export const BROWSER_TOOLS: ReadonlySet<string> = new Set(["browser_control"]);
 
 /**
  * The LIVE WRITE PREVIEW's distilled view of a running/staged write call:

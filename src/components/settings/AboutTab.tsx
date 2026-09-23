@@ -106,8 +106,10 @@ import {
   ExternalLink,
   Info,
   KeyRound,
+  Loader2,
   PackageOpen,
   ShieldAlert,
+  Trash2,
 } from "lucide-react";
 import { APP_NAME, APP_VERSION, PHASE } from "../../lib/version";
 import { isTauri } from "../../lib/sidecar";
@@ -122,6 +124,7 @@ import {
   fetchSystemUpdates,
   fetchUpdateDownloadProgress,
   fetchUpdateTokenStatus,
+  removeUpdateToken,
   resetApplication,
   saveUpdateToken,
   startUpdateDownload,
@@ -346,22 +349,28 @@ function VersionCard() {
   // the same store the startup check + the sidebar dot read).
   const autoCheck = useUpdateCheckerStore((s) => s.autoCheck);
   const setAutoCheck = useUpdateCheckerStore((s) => s.setAutoCheck);
-  // ── ROUND-120 (R120-U): the token re-pairing row's state. Kept visually
-  // QUIET by design — this is the power-user affordance for the next PAT
-  // rotation, not a headline feature; it auto-opens ONLY when a check
-  // answer says the saved token was rejected (tokenWarning / reason
-  // "token-rejected") and otherwise lives behind the small "GitHub token"
-  // disclosure at the card footer. The input is type=password + never
-  // echoed; the save leg re-runs the check so the feedback is the card's
-  // own fresh answer.
+  // ── ROUND-120 (R120-U) → ROUND-123 (R123): the token row's state. R123
+  // makes the row CONDITIONAL: it renders ONLY when a token is actually
+  // saved on this machine (tokenSavedSeen === true — the optional
+  // credential's management affordance) or the latest anonymous check
+  // rate-limited with no token (the one case saving one genuinely helps,
+  // surfaced as reason "rate-limited"). The default public-repo experience
+  // shows NO token UI anywhere (the owner's "why does it even require a
+  // GitHub token?" answered structurally: it doesn't — the checks and
+  // downloads run anonymous-first server-side). The visibility truth is
+  // the CHECK'S OWN ANSWER — nothing latches — so a successful Remove
+  // retires the row on the re-run answer while the removal NOTE (rendered
+  // outside the conditional, below) stays readable.
   const [tokenRowOpen, setTokenRowOpen] = useState(false);
+  const [tokenSavedSeen, setTokenSavedSeen] = useState<boolean | null>(null);
   const [tokenInput, setTokenInput] = useState("");
   const [tokenSaving, setTokenSaving] = useState(false);
+  const [tokenRemoving, setTokenRemoving] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [tokenSavedNote, setTokenSavedNote] = useState<string | null>(null);
-  // The dead-token hint line (rides BELOW the update-state line whenever
-  // the latest check carried tokenWarning — the check WORKED anonymously;
-  // the hint points at the row below).
+  // The dead-token hint line (rides BELOW the update-state line when the
+  // saved token was rejected on the retry leg — the check itself already
+  // failed honestly; the hint points at the row below).
   const [tokenWarning, setTokenWarning] = useState<string | null>(null);
   // The row's live health line (GET /system/updates/token — fetched when
   // the row OPENS, never on mount: the probe is a real GitHub round-trip
@@ -369,6 +378,13 @@ function VersionCard() {
   // a save — setting null re-triggers the effect below).
   const [tokenStatus, setTokenStatus] = useState<SystemUpdateTokenStatus | null>(null);
   const [tokenStatusFailed, setTokenStatusFailed] = useState(false);
+  // R123: the anonymous check's RATE-LIMITED flag (reason "rate-limited" —
+  // the ONE case a saved token genuinely helps); renders the token row
+  // even when none is saved.
+  const [rateLimited, setRateLimited] = useState(false);
+  // R123: the row renders exactly when the check's own answer says it
+  // should — a token is saved, or the anonymous check rate-limited.
+  const tokenRowVisible = tokenSavedSeen === true || rateLimited;
 
   // R104: THE MOUNT-RESUME — a staged download outlives the About tab (and
   // the check that announced it): the sidecar's single-flight state keeps
@@ -442,12 +458,22 @@ function VersionCard() {
     try {
       const result: SystemUpdateCheck = await fetchSystemUpdates();
       syncPendingVersionFromResult(result);
+      // R123: the token row's visibility truth — tokenSaved rides every
+      // answer; the rate-limited reason is the one token-less case where
+      // the row (with its save affordance) renders.
+      setTokenSavedSeen(result.tokenSaved === true);
+      setRateLimited(result.reason === "rate-limited");
       // R120-U: the dead-token signals — the warning line + the AUTO-OPEN
-      // of the re-pairing row (the check either carried anonymously past
-      // the rejected token or died on it; either way the fix is the same
-      // quiet row). Set BEFORE the !ok throw so both shapes land.
+      // of the re-pairing row (the anonymous check rate-limited or 404'd
+      // and the token leg failed; either way the fix is the same quiet
+      // row). Set BEFORE the !ok throw so both shapes land.
       setTokenWarning(result.tokenWarning ?? null);
       if (result.reason === "token-rejected" || result.tokenWarning !== undefined) {
+        setTokenRowOpen(true);
+      }
+      // R123: a rate-limited anonymous check AUTO-OPENS the row too — the
+      // suggestion is the row itself (save a token to raise the limit).
+      if (result.reason === "rate-limited") {
         setTokenRowOpen(true);
       }
       if (!result.ok) {
@@ -516,6 +542,10 @@ function VersionCard() {
       return;
     }
     useConfigStore.getState().setUpdateInFlight({ version });
+    // R123: a fresh attempt resets the watched legs' flags (a previous
+    // watcher's completion/failure must never leak into this install).
+    useConfigStore.getState().setUpdateInstalled(false);
+    useConfigStore.getState().setUpdateInstallError(null);
     // R118-F (round-118 §1 item 50): the update-restart marker — written
     // BESIDE the in-flight flag, BEFORE the invoke. The flag deliberately
     // dies with this process (the NSIS /S install runs UI-less for 10-40s
@@ -707,6 +737,22 @@ function VersionCard() {
     };
   }, [tokenRowOpen, tokenStatus]);
 
+  // ── ROUND-123 (R123): the WATCHED legs' async failure — the Windows
+  // overlay / the Linux .deb watcher report through the
+  // `update-install-failed` shell event (ConnectionGate parks the message
+  // in the config store + runs the engine recovery); this card mirrors it
+  // into its own install state so the honest error + the wizard escape
+  // hatch render exactly like a rejected invoke.
+  const updateInstallError = useConfigStore((s) => s.updateInstallError);
+  useEffect(() => {
+    if (updateInstallError === null) return;
+    setInstall({
+      kind: "error",
+      message: updateInstallError,
+      offerWizard: false,
+    });
+  }, [updateInstallError]);
+
   // ── ROUND-120 (R120-U): SAVE the token — validate + persist through the
   // sidecar (PUT /system/updates/token: a LIVE repo check server-side, the
   // value never crossing this boundary), then RE-RUN the update check so
@@ -730,6 +776,31 @@ function VersionCard() {
       setTokenError(err instanceof Error ? err.message : String(err));
     } finally {
       setTokenSaving(false);
+    }
+  };
+
+  // ── ROUND-123 (R123): REMOVE the token — DELETE /system/updates/token
+  // (both layers cleared server-side: the ~/.acute/github.pat file + the
+  // sidecar's env snapshot), then RE-RUN the check so the success feedback
+  // is this card's own fresh ANONYMOUS answer (tokenSaved flips false in
+  // the check's response, retiring the row honestly on the next render).
+  // The button only renders when a token is believed saved, so the
+  // route-side idempotent removed:false answer is a quiet no-op here.
+  const removeToken = async () => {
+    if (tokenRemoving) return;
+    setTokenRemoving(true);
+    setTokenError(null);
+    setTokenSavedNote(null);
+    try {
+      await removeUpdateToken();
+      setTokenInput("");
+      setTokenStatus(null);
+      setTokenSavedNote("GitHub token removed — checks run anonymously (the repository is public)");
+      await checkForUpdates();
+    } catch (err) {
+      setTokenError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTokenRemoving(false);
     }
   };
 
@@ -764,10 +835,21 @@ function VersionCard() {
             type="button"
             onClick={() => void checkForUpdates()}
             disabled={update.kind === "checking"}
-            className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 disabled:opacity-60"
+            className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 disabled:opacity-60 inline-flex items-center gap-1.5"
             style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
+            data-testid="update-check-button"
           >
-            {update.kind === "checking" ? "Checking…" : "Check for updates"}
+            {/* R123 (the processing-animation round): the checking state
+                carries a REAL spinner now — the owner's "it does not show
+                me any kind of animation while it is processing" verdict on
+                every static waiting line this card used to render. */}
+            {update.kind === "checking" ? (
+              <>
+                <Loader2 size={13} className="animate-spin" /> Checking…
+              </>
+            ) : (
+              "Check for updates"
+            )}
           </button>
           {/* ── ROUND-120 (R120-U): ONE Releases button — ALWAYS the external
               system browser. The R99-A pair (the in-app default + the
@@ -902,9 +984,26 @@ function VersionCard() {
                   </span>
                 </div>
               ) : install.kind === "verifying" ? (
-                <span className="text-[11px] font-medium" style={{ color: styles.textSecondary }} data-testid="update-verifying">
-                  Verifying the update's checksum…
-                </span>
+                /* R123 (the processing-animation round): the verify state
+                   carries a spinner + an ANIMATED INDETERMINATE bar now —
+                   the owner's "no animation while it is processing" verdict.
+                   The bar is honestly indeterminate (the sha256 has no
+                   progress metric); motion-reduce renders it static. */
+                <div className="flex items-center gap-2.5 max-w-[420px]" data-testid="update-verifying">
+                  <Loader2 size={13} className="animate-spin shrink-0" style={{ color: styles.accent }} />
+                  <div
+                    className="flex-1 h-1.5 rounded-full overflow-hidden motion-reduce:animate-none animate-pulse"
+                    style={{ background: withAlpha(styles.text, styles.isDark ? 0.08 : 0.06) }}
+                  >
+                    <div
+                      className="h-full w-full rounded-full"
+                      style={{ background: withAlpha(styles.accent, 0.45) }}
+                    />
+                  </div>
+                  <span className="text-[11px] font-medium shrink-0" style={{ color: styles.textSecondary }}>
+                    Verifying the update's checksum…
+                  </span>
+                </div>
               ) : install.kind === "ready" ? (
                 /* R104: STAGE 2 — the verified download sits staged and the
                    flow STOPS here: the install happens ONLY when the owner
@@ -928,17 +1027,16 @@ function VersionCard() {
             Could not check for updates ({update.message}) — the Releases page always has the latest.
           </span>
         ) : null}
-        {/* ── ROUND-120 (R120-U): the dead-token hint — the check CARRIED
-            (anonymously) or failed with the token rejected; either way the
-            re-pairing row below is the fix, and the amber line points at
-            it without failing anything the anonymous leg already did. */}
+        {/* ── ROUND-120 (R120-U) → R123: the dead-token hint — the saved
+            token was rejected on the retry leg; the amber line points at
+            the row below (which renders — a token IS saved). */}
         {tokenWarning !== null && (
           <span
             className="mt-1 text-[11px] flex items-center gap-1.5"
             style={{ color: SEMANTIC_COLORS.warning }}
             data-testid="update-token-warning"
           >
-            <KeyRound size={12} /> The saved GitHub token was rejected — this check ran anonymously. Update the token below for rate-limit headroom.
+            <KeyRound size={12} /> The saved GitHub token was rejected — replace it below, or remove it to keep checking anonymously.
           </span>
         )}
         {/* R104: the INSTALL-PHASE states, SHARED by both entry paths — the
@@ -950,7 +1048,17 @@ function VersionCard() {
         (install.kind === "installing" || install.kind === "launched" || install.kind === "error") ? (
           <div className={update.kind === "available" ? "" : "mt-2.5"}>
             {install.kind === "installing" ? (
-              <span className="text-[11px] font-medium" style={{ color: styles.textSecondary }} data-testid="update-installing">
+              /* R123: the installing state carries the spinner too — the
+                 silent install's long quiet stretch now READS as working
+                 (the overlay flow keeps the Restarting splash alive for the
+                 whole install on Windows; this line is the card's own
+                 belt while the splash takes over). */
+              <span
+                className="text-[11px] font-medium inline-flex items-center gap-1.5"
+                style={{ color: styles.textSecondary }}
+                data-testid="update-installing"
+              >
+                <Loader2 size={13} className="animate-spin" style={{ color: styles.accent }} />
                 {install.silent
                   ? "Installing — the app restarts itself when ready"
                   : "Launching the setup wizard — it closes this app and takes over"}
@@ -1031,12 +1139,20 @@ function VersionCard() {
           testId="update-auto-check"
         />
       </div>
-      {/* ── ROUND-120 (R120-U): the quiet TOKEN affordance — the card
-          footer's collapsible "GitHub token" disclosure. ALWAYS available
-          (the next PAT rotation is self-service), visually quiet by
-          design: tertiary ink, 11px, one hairline above; the row itself
-          opens on click OR auto-opens when a check answer says the saved
-          token was rejected. */}
+      {/* ── ROUND-120 (R120-U) → ROUND-123 (R123): the token affordance —
+          the card footer's collapsible "GitHub token" disclosure, now
+          CONDITIONAL: it renders ONLY when a token is actually saved on
+          this machine or the latest anonymous check rate-limited (reason
+          "rate-limited" — the one case saving one genuinely helps). The
+          DEFAULT public-repo experience shows no token UI at all — the
+          owner's "why does it even require a GitHub token?" answered
+          structurally (the checks and downloads run anonymous-first
+          server-side; the token is an optional rate-limit accelerator, not
+          a requirement). Still visually quiet by design when it does
+          render: tertiary ink, 11px, one hairline above; the row opens on
+          click OR auto-opens when a check answer says the saved token was
+          rejected / the anonymous check rate-limited. */}
+      {tokenRowVisible ? (
       <div
         className="mt-2 pt-2 border-t-[1.5px] flex flex-col gap-2"
         style={{ borderColor: bdr("1.5px", styles.border) }}
@@ -1045,12 +1161,13 @@ function VersionCard() {
           type="button"
           onClick={() => setTokenRowOpen((v) => !v)}
           aria-expanded={tokenRowOpen}
-          title="The saved GitHub token the update checks use — validate and replace it without leaving the app"
+          title="The optional GitHub token the update checks can use — the repository is public and no token is required; one only raises GitHub's rate limit (or serves a private fork)"
           className="self-start h-7 px-1.5 -mx-1.5 text-[11px] font-medium inline-flex items-center gap-1.5 transition-colors hover:opacity-80"
           style={{ color: styles.textTertiary }}
           data-testid="update-token-toggle"
         >
           <KeyRound size={12} /> GitHub token
+          {tokenSavedSeen === true ? " (optional — saved)" : " (optional)"}
           <ChevronDown
             size={12}
             className={`transition-transform duration-200 ${tokenRowOpen ? "rotate-180" : ""}`}
@@ -1082,7 +1199,7 @@ function VersionCard() {
                 style={{ color: SEMANTIC_COLORS.warning }}
                 data-testid="update-token-health"
               >
-                <KeyRound size={12} /> A GitHub token is saved but GitHub rejected it — replace it below.
+                <KeyRound size={12} /> A GitHub token is saved but GitHub rejected it — replace it below, or remove it to run anonymously.
               </span>
             ) : tokenStatus.present ? (
               <span className="text-[11px]" style={{ color: styles.textTertiary }} data-testid="update-token-health">
@@ -1093,15 +1210,18 @@ function VersionCard() {
                 No GitHub token is saved — update checks run anonymously (the repository is public).
               </span>
             )}
+            {/* R123: the optionality is the ROW'S OWN FIRST LINE now — the
+                token is never required for this public repo; saving one
+                only raises GitHub's rate limit (or serves a private fork). */}
             <span className="text-[11px]" style={{ color: styles.textSecondary }}>
-              Update the token update checks use (starts with github_pat_ or ghp_) — validated against the repository and saved to this machine only.
+              Optional — the repository is public, so checks and downloads run anonymously without any token. Save one only to raise GitHub's rate limit (60 → 5,000/hour); it starts with github_pat_ or ghp_, is validated against the repository, and is saved to this machine only.
             </span>
             <div className="flex items-center gap-2 flex-wrap">
               <input
                 type="password"
                 value={tokenInput}
                 onChange={(e) => setTokenInput(e.target.value)}
-                disabled={tokenSaving}
+                disabled={tokenSaving || tokenRemoving}
                 placeholder="github_pat_… or ghp_…"
                 autoComplete="off"
                 spellCheck={false}
@@ -1111,13 +1231,13 @@ function VersionCard() {
                   background: withAlpha(styles.text, styles.isDark ? 0.3 : 0.03),
                   color: styles.text,
                 }}
-                aria-label="The GitHub token for update checks"
+                aria-label="The optional GitHub token for update checks"
                 data-testid="update-token-input"
               />
               <button
                 type="button"
                 onClick={() => void saveToken()}
-                disabled={tokenSaving || tokenInput.trim() === ""}
+                disabled={tokenSaving || tokenRemoving || tokenInput.trim() === ""}
                 title="Validates the token against the repository, saves it to ~/.acute/github.pat, and re-runs the update check"
                 className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 disabled:opacity-40"
                 style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
@@ -1125,29 +1245,53 @@ function VersionCard() {
               >
                 {tokenSaving ? "Saving…" : "Save token"}
               </button>
+              {/* ── R123: the REMOVE affordance — an optional credential must
+                  be removable in-app (a launcher-era or rotated-dead
+                  ~/.acute/github.pat otherwise sits on the machine forever).
+                  Renders only while a token is believed saved; DELETE clears
+                  both layers server-side and the re-run check retires the
+                  row honestly. */}
+              {tokenSavedSeen === true && (
+                <button
+                  type="button"
+                  onClick={() => void removeToken()}
+                  disabled={tokenSaving || tokenRemoving}
+                  title="Removes the saved GitHub token (~/.acute/github.pat) — update checks and downloads return to anonymous, which needs no token for this public repository"
+                  className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 disabled:opacity-40 inline-flex items-center gap-1.5"
+                  style={{ borderColor: bdr("1.5px", styles.border), color: styles.textSecondary }}
+                  data-testid="update-token-remove"
+                >
+                  <Trash2 size={13} /> {tokenRemoving ? "Removing…" : "Remove token"}
+                </button>
+              )}
             </div>
-            {tokenError !== null ? (
-              <span
-                className="text-[11px]"
-                style={{ color: SEMANTIC_COLORS.danger }}
-                role="alert"
-                data-testid="update-token-error"
-              >
-                {tokenError}
-              </span>
-            ) : null}
-            {tokenSavedNote !== null ? (
-              <span
-                className="text-[11px]"
-                style={{ color: SEMANTIC_COLORS.success }}
-                data-testid="update-token-saved"
-              >
-                {tokenSavedNote}
-              </span>
-            ) : null}
           </div>
         ) : null}
       </div>
+      ) : null}
+      {/* ── R123: the token flow's NOTE + ERROR render OUTSIDE the whole
+          conditional row — a successful Remove retires the row (the re-run
+          answer's tokenSaved:false) while its confirmation note stays
+          readable below the retired footer. */}
+      {tokenError !== null ? (
+        <span
+          className="mt-2 text-[11px]"
+          style={{ color: SEMANTIC_COLORS.danger }}
+          role="alert"
+          data-testid="update-token-error"
+        >
+          {tokenError}
+        </span>
+      ) : null}
+      {tokenSavedNote !== null ? (
+        <span
+          className="mt-2 text-[11px]"
+          style={{ color: SEMANTIC_COLORS.success }}
+          data-testid="update-token-saved"
+        >
+          {tokenSavedNote}
+        </span>
+      ) : null}
     </SectionCard>
   );
 }

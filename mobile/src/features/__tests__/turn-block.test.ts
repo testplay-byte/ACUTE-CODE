@@ -21,12 +21,19 @@
  * (humanizeToolName, writePath, writeLineDiff's +A/−B parser,
  * genericOneLineSummary, readTargetSegment, runningToolWord). Zero React
  * Native — the module is pure TypeScript, unit-tested directly.
+ *
+ * ROUND-123 (R123-W-m — the web families' honest rows): webTargetSegment /
+ * browserTargetSegment + their toolRowTitle / runningToolWord / toolHint
+ * pins — browser_control / web_search / web_fetch read their own
+ * action/query/url targets, never the raw key:value dump (the shapeless
+ * generic rendering behind the owner's "no tool calls were shown to me").
  */
 
 import { describe, expect, it } from "@jest/globals";
 
 import {
   activitySummary,
+  browserTargetSegment,
   genericOneLineSummary,
   groupDisplayRows,
   humanizeToolName,
@@ -42,6 +49,7 @@ import {
   turnReplyText,
   turnThinkingText,
   turnThoughtMs,
+  webTargetSegment,
   writeLineDiff,
   writePath,
   type ToolItem,
@@ -238,7 +246,7 @@ describe("turn-block — the tool-line word helpers", () => {
     expect(readTargetSegment(toolItem("t5", { argsSummary: "" }))).toBe("");
   });
 
-  it("runningToolWord — the rail's LIVE verb per family (write keeps Writing/Editing, terminal leads with its command, read with its target, else the humanized verb)", () => {
+  it("runningToolWord — the rail's LIVE verb per family (write keeps Writing/Editing, terminal leads with its command, read with its target, the web pair with its query/url, the browser with its url/action, else the humanized verb)", () => {
     expect(
       runningToolWord(
         toolItem("t1", { toolName: "write_file", ok: null, inputRaw: '{"path":"src/a.ts","content":"' }),
@@ -268,10 +276,82 @@ describe("turn-block — the tool-line word helpers", () => {
     expect(
       runningToolWord(toolItem("t8", { toolName: "read_skill", ok: null, argsSummary: "" })),
     ).toBe("Reading…");
+    // R123-W-m — the web pair's own verbs (live off the raw, settled off the summary)
+    expect(
+      runningToolWord(
+        toolItem("tw1", { toolName: "web_search", ok: null, inputRaw: '{"query":"rust async' }),
+      ),
+    ).toBe("Searching rust async…");
+    expect(
+      runningToolWord(toolItem("tw2", { toolName: "web_search", ok: null, argsSummary: "" })),
+    ).toBe("Searching…");
+    expect(
+      runningToolWord(
+        toolItem("tw3", { toolName: "web_fetch", ok: null, argsSummary: "url: https://docs.foo.dev" }),
+      ),
+    ).toBe("Fetching https://docs.foo.dev…");
+    // R123-W-m — the browser family: the URL leads while one rides, else the action word
+    expect(
+      runningToolWord(
+        toolItem("tb1", {
+          toolName: "browser_control",
+          ok: null,
+          inputRaw: '{"action":"navigate","url":"https://exam',
+        }),
+      ),
+    ).toBe("Browsing https://exam…");
+    expect(
+      runningToolWord(
+        toolItem("tb2", { toolName: "browser_control", ok: null, argsSummary: "action: read_dom" }),
+      ),
+    ).toBe("read_dom…");
+    expect(
+      runningToolWord(toolItem("tb3", { toolName: "browser_control", ok: null, argsSummary: "" })),
+    ).toBe("Browsing…");
     // the generic fallback — the humanized verb alone
     expect(
       runningToolWord(toolItem("t9", { toolName: "search_web", ok: null })),
     ).toBe("search web…");
+  });
+
+  it("R123-W-m — webTargetSegment / browserTargetSegment: the honest targets, live-first then settled, never a guess", () => {
+    // web_search's query — live raw wins while one streams
+    expect(
+      webTargetSegment(
+        toolItem("w1", { toolName: "web_search", inputRaw: '{"query":"tokio spawn"' }),
+      ),
+    ).toBe("tokio spawn");
+    // settled: the argsSummary's own query segment (a later segment never bleeds in)
+    expect(
+      webTargetSegment(toolItem("w2", { toolName: "web_search", argsSummary: "query: react compiler, max: 8" })),
+    ).toBe("react compiler");
+    // web_fetch's url — settled, commas inside the value read WHOLE
+    expect(
+      webTargetSegment(
+        toolItem("w3", { toolName: "web_fetch", argsSummary: "url: https://x.dev/a?b=1, c: no" }),
+      ),
+    ).toBe("https://x.dev/a?b=1");
+    // neither source carries one → "" (never a guess)
+    expect(webTargetSegment(toolItem("w4", { toolName: "web_search", argsSummary: "" }))).toBe("");
+    expect(
+      webTargetSegment(toolItem("w5", { toolName: "web_search", inputRaw: '{"max":' })),
+    ).toBe("");
+    // browser_control: action + url (live or settled)
+    expect(
+      browserTargetSegment(
+        toolItem("b1", {
+          toolName: "browser_control",
+          inputRaw: '{"action":"navigate","url":"https://example.com",',
+        }),
+      ),
+    ).toBe("navigate https://example.com");
+    expect(
+      browserTargetSegment(
+        toolItem("b2", { toolName: "browser_control", argsSummary: "action: click, selector: #go" }),
+      ),
+    ).toBe("click");
+    // no action anywhere → "" (the row falls back to the family noun)
+    expect(browserTargetSegment(toolItem("b3", { toolName: "browser_control", argsSummary: "" }))).toBe("");
   });
 });
 
@@ -715,7 +795,7 @@ describe("turn-block — toolRowTitle (R120-CM — the well row's ONE-line gramm
     expect(toolRowTitle(toolItem("t6", { toolName: "edit_file", argsSummary: "" }))).toBe("edit file");
   });
 
-  it("the read/terminal/generic families: the verb · target one-line law", () => {
+  it("the read/terminal/generic families: the verb · target one-line law; R123-W-m — the web pair and the browser family read their own targets", () => {
     expect(toolRowTitle(toolItem("t7", { toolName: "read_file", argsSummary: "path: src/a.ts" }))).toBe(
       "read file · src/a.ts",
     );
@@ -727,11 +807,37 @@ describe("turn-block — toolRowTitle (R120-CM — the well row's ONE-line gramm
     ).toBe("search · query: radius law");
     // an empty summary never rides a dangling separator
     expect(toolRowTitle(toolItem("t10", { toolName: "bash", argsSummary: "" }))).toBe("bash");
+    // R123-W-m — web_search's query (live, still streaming)
+    expect(
+      toolRowTitle(
+        toolItem("tw1", { toolName: "web_search", ok: null, inputRaw: '{"query":"clay palette' }),
+      ),
+    ).toBe("web search · clay palette");
+    // R123-W-m — web_fetch's url (settled)
+    expect(
+      toolRowTitle(toolItem("tw2", { toolName: "web_fetch", argsSummary: "url: https://docs.foo.dev" })),
+    ).toBe("web fetch · https://docs.foo.dev");
+    // R123-W-m — browser_control's action + url (settled), the action alone when no url rides
+    expect(
+      toolRowTitle(
+        toolItem("tb1", {
+          toolName: "browser_control",
+          argsSummary: "action: navigate, url: https://example.com",
+        }),
+      ),
+    ).toBe("browser control · navigate https://example.com");
+    expect(
+      toolRowTitle(toolItem("tb2", { toolName: "browser_control", argsSummary: "action: read_dom" })),
+    ).toBe("browser control · read_dom");
+    // nothing readable anywhere → the family noun alone, never a guess
+    expect(toolRowTitle(toolItem("tb3", { toolName: "browser_control", argsSummary: "" }))).toBe(
+      "browser control",
+    );
   });
 });
 
 describe("turn-block — toolHint / toolHintList (R120-CM — the collapsed rail's glance)", () => {
-  it("the hint families: the write PATH, the terminal COMMAND, the read TARGET — everything else null", () => {
+  it("the hint families: the write PATH, the terminal COMMAND, the read TARGET — and R123-W-m the web QUERY/URL + the browser ACTION — everything else null", () => {
     expect(toolHint(toolItem("h1", { toolName: "edit_file", argsSummary: "path: src/a.ts" }))).toBe(
       "src/a.ts",
     );
@@ -745,9 +851,31 @@ describe("turn-block — toolHint / toolHintList (R120-CM — the collapsed rail
     expect(toolHint(toolItem("h4", { toolName: "read_file", argsSummary: "path: src/a.ts" }))).toBe(
       "src/a.ts",
     );
+    // R123-W-m — the web pair hints its query/url (the row's own target)
+    expect(toolHint(toolItem("hw1", { toolName: "web_search", argsSummary: "query: clay palette" }))).toBe(
+      "clay palette",
+    );
+    expect(
+      toolHint(toolItem("hw2", { toolName: "web_fetch", argsSummary: "url: https://docs.foo.dev" })),
+    ).toBe("https://docs.foo.dev");
+    // R123-W-m — the browser family hints its action (+url when one rides)
+    expect(
+      toolHint(
+        toolItem("hb1", {
+          toolName: "browser_control",
+          argsSummary: "action: navigate, url: https://example.com",
+        }),
+      ),
+    ).toBe("navigate https://example.com");
+    expect(toolHint(toolItem("hb2", { toolName: "browser_control", argsSummary: "action: screenshot" }))).toBe(
+      "screenshot",
+    );
+    // a genuinely unknown tool still teases nothing — the count already carries it
     expect(toolHint(toolItem("h5", { toolName: "search", argsSummary: "query: x" }))).toBeNull();
     // a write with no readable path teases nothing (never a guess)
     expect(toolHint(toolItem("h6", { toolName: "edit_file", argsSummary: "" }))).toBeNull();
+    // a web call with nothing readable yet teases nothing either
+    expect(toolHint(toolItem("hw3", { toolName: "web_search", argsSummary: "" }))).toBeNull();
   });
 
   it("toolHintList dedupes ORDER-PRESERVING (two edits of one file hint once) and keeps call order", () => {

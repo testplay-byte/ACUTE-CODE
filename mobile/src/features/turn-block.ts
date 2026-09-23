@@ -39,14 +39,30 @@
  *     the full rows; the hint is the collapsed state's honest teaser,
  *     never a replacement.
  *
+ * ROUND-123 (R123-W-m — the mobile transcript redesign): the web families
+ * join the grammar. browser_control / web_search / web_fetch are tools the
+ * agent ACTUALLY runs, and the generic row rendered their raw key:value
+ * argsSummary verbatim ("action: navigate, url: …") — the shapeless
+ * rendering behind the owner's "no tool calls were shown to me". The new
+ * `webTargetSegment` (query/url) and `browserTargetSegment` (action +url)
+ * feed the SAME three surfaces every family speaks — `toolRowTitle`,
+ * `runningToolWord`, `toolHint` — live off the streaming raw (the tolerant
+ * extractor's new action/query/url keys) and settled off the argsSummary's
+ * own segments. The PC's tool-args.ts `argValue` tolerance is ported as
+ * `summarySegment` (values run to the next ", key: " boundary, so a URL
+ * with commas reads whole).
+ *
  * Pure TypeScript, zero React Native — unit-tested directly.
  */
 
 import type { ToolActivity } from "@/design/theme";
 import {
+  BROWSER_TOOLS,
+  extractStringArg,
   extractWritePreview,
   READ_TOOLS,
   TERMINAL_TOOLS,
+  WEB_TOOLS,
   WRITE_TOOLS,
 } from "./streaming-args";
 import type { TranscriptItem } from "./sessions";
@@ -111,12 +127,69 @@ export function readTargetSegment(item: ToolItem): string {
   return segment.replace(/^[a-zA-Z_]+:\s*/, "").trim();
 }
 
+// ── R123-W-m — the web families' honest one-line targets ────────────────────
+
+/**
+ * One `key: value` segment of the SETTLED argsSummary (the summarizeArgs
+ * "key: value, key: value" display string — the PC's own tool-args.ts
+ * `argValue` tolerance, ported): the value runs to the next ", key: "
+ * boundary or end-of-string, so a URL with commas still reads whole. null
+ * when the key never rides the summary. */
+function summarySegment(argsSummary: string, key: string): string | null {
+  const match = new RegExp(`(?:^|, )${key}: ([\\s\\S]+?)(?=, [A-Za-z_]+: |$)`).exec(argsSummary);
+  return match !== null ? match[1] : null;
+}
+
+/**
+ * R123-W-m — the LIVE half of the web targets: the tolerant extractor over
+ * the accumulated PARTIAL-JSON raw (the args stream in flight — a URL that
+ * is still being typed answers its typed-so-far prefix, exactly the write
+ * family's own live behavior). Empty string when the raw carries nothing
+ * usable yet. */
+function liveStringArg(item: ToolItem, key: "action" | "query" | "url"): string {
+  if (item.inputRaw === null) return "";
+  const arg = extractStringArg(item.inputRaw, key);
+  return arg.found ? arg.value.trim() : "";
+}
+
+/**
+ * R123-W-m — the WEB pair's one-line target: web_search's QUERY,
+ * web_fetch's URL (the PC's own "Searched {query}" / "Fetched {url}"
+ * honesty, in the mobile rows' noun · target grammar). Live calls read the
+ * streaming raw first (the tolerant extractor), settled calls the
+ * argsSummary's own segment; "" when neither source carries one (never a
+ * guess). Pure. */
+export function webTargetSegment(item: ToolItem): string {
+  const key = item.toolName === "web_search" ? "query" : "url";
+  const live = liveStringArg(item, key);
+  if (live !== "") return live;
+  return summarySegment(item.argsSummary, key)?.trim() ?? "";
+}
+
+/**
+ * R123-W-m — the EMBEDDED BROWSER family's one-line target: the call's own
+ * ACTION (+ its URL when the action carries one — "navigate
+ * https://example.com", "read_dom", "click"). The action is the verb the
+ * owner's reference rows lead with; the raw key:value dump is retired.
+ * "" when neither source carries an action (never a guess). Pure. */
+export function browserTargetSegment(item: ToolItem): string {
+  let action = liveStringArg(item, "action");
+  if (action === "") action = summarySegment(item.argsSummary, "action")?.trim() ?? "";
+  if (action === "") return "";
+  let url = liveStringArg(item, "url");
+  if (url === "") url = summarySegment(item.argsSummary, "url")?.trim() ?? "";
+  return url !== "" ? `${action} ${url}` : action;
+}
+
 /**
  * R119-A — the rail's LIVE verb while a tool runs ("Reading src/a.ts…"),
  * the one line the collapsed rail breathes (never the thinking card AND a
  * tool card — ONE line). The write family keeps its "Writing {file}…"
  * grammar, the terminal family leads with its command, the read family
- * with its target, everything else the humanized verb.
+ * with its target, everything else the humanized verb. R123-W-m: the web
+ * pair carries its own verbs ("Searching {query}…" / "Fetching {url}…")
+ * and the browser family leads with its URL while one rides ("Browsing
+ * {url}…", else the action word — "read_dom…").
  */
 export function runningToolWord(item: ToolItem): string {
   if (WRITE_TOOLS.has(item.toolName)) {
@@ -132,6 +205,17 @@ export function runningToolWord(item: ToolItem): string {
     const target = readTargetSegment(item);
     return target !== "" ? `Reading ${target}…` : "Reading…";
   }
+  if (WEB_TOOLS.has(item.toolName)) {
+    const target = webTargetSegment(item);
+    const verb = item.toolName === "web_search" ? "Searching" : "Fetching";
+    return target !== "" ? `${verb} ${target}…` : `${verb}…`;
+  }
+  if (BROWSER_TOOLS.has(item.toolName)) {
+    const url = liveStringArg(item, "url") || summarySegment(item.argsSummary, "url")?.trim() || "";
+    if (url !== "") return `Browsing ${url}…`;
+    const action = liveStringArg(item, "action") || summarySegment(item.argsSummary, "action")?.trim() || "";
+    return action !== "" ? `${action}…` : "Browsing…";
+  }
   return `${humanizeToolName(item.toolName)}…`;
 }
 
@@ -141,7 +225,9 @@ export function runningToolWord(item: ToolItem): string {
  * renders them" pin — the component stays a thin renderer): the write
  * family keeps its "Writing {file}… · {n} chars" streaming verb and
  * "Wrote/Edited {file}" settle, every other family the "verb · target"
- * one-line law. Pure.
+ * one-line law. R123-W-m: the web pair and the browser family join with
+ * their own honest targets (query / url / action+url) — the raw
+ * "query: …" key:value dump never rides a row again. Pure.
  */
 export function toolRowTitle(item: ToolItem): string {
   const running = item.ok === null;
@@ -157,9 +243,16 @@ export function toolRowTitle(item: ToolItem): string {
     }
     return path !== null ? `${verbDone} ${path}` : humanizeToolName(item.toolName);
   }
-  const summary = READ_TOOLS.has(item.toolName)
-    ? readTargetSegment(item)
-    : genericOneLineSummary(item);
+  let summary: string;
+  if (READ_TOOLS.has(item.toolName)) {
+    summary = readTargetSegment(item);
+  } else if (WEB_TOOLS.has(item.toolName)) {
+    summary = webTargetSegment(item);
+  } else if (BROWSER_TOOLS.has(item.toolName)) {
+    summary = browserTargetSegment(item);
+  } else {
+    summary = genericOneLineSummary(item);
+  }
   return summary !== ""
     ? `${humanizeToolName(item.toolName)} · ${summary}`
     : humanizeToolName(item.toolName);
@@ -175,8 +268,10 @@ export const TOOL_HINT_MAX = 3;
  * R120-CM — one call's COMPACT HINT for the collapsed rail: the write
  * family's file path ("src/a.ts" — the edit/create verdict the owner asked
  * to see), the terminal family's command ("npm test"), the read family's
- * target. Everything else answers null — a generic verb adds no information
- * the "N actions" count doesn't already carry. Pure.
+ * target. R123-W-m: the web pair hints its query/url and the browser
+ * family its action (+url) — the row's own target, the same law every
+ * other hint family follows. Everything else answers null — a generic verb
+ * adds no information the "N actions" count doesn't already carry. Pure.
  */
 export function toolHint(item: ToolItem): string | null {
   if (WRITE_TOOLS.has(item.toolName)) {
@@ -189,6 +284,14 @@ export function toolHint(item: ToolItem): string | null {
   }
   if (READ_TOOLS.has(item.toolName)) {
     const target = readTargetSegment(item);
+    return target !== "" ? target : null;
+  }
+  if (WEB_TOOLS.has(item.toolName)) {
+    const target = webTargetSegment(item);
+    return target !== "" ? target : null;
+  }
+  if (BROWSER_TOOLS.has(item.toolName)) {
+    const target = browserTargetSegment(item);
     return target !== "" ? target : null;
   }
   return null;

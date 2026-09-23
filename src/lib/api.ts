@@ -2923,6 +2923,22 @@ export async function clearFeedbackLedger(): Promise<{ cleared: boolean; entries
   });
 }
 
+/** ROUND-123 (R123): delete ONE ledger entry by its 0-based top-down index
+ * (the viewer's per-entry Delete). The answer is idempotent-honest —
+ * {removed:false} for a stale index (the viewer's list may be one refresh
+ * behind a fresh append), {removed:true, entries} with the SURVIVING
+ * count on success. Throws ApiError on 400 (bad index) / 403 (device
+ * token — the wipe-class guard) / 503 (no dataDir). */
+export async function deleteFeedbackEntry(index: number): Promise<{
+  removed: boolean;
+  entries: number;
+}> {
+  return request<{ removed: boolean; entries: number }>(
+    `/feedback/file/entry/${index}`,
+    { method: "DELETE" },
+  );
+}
+
 /** ROUND-78 (R78-C, owner: "General Settings 重试配置" — per-failure-type
  * auto-retry switches): the runtime's retry-ladder gates. When a switch is
  * off, that failure class NEVER enters the ladder — it fails fast
@@ -4665,28 +4681,39 @@ export interface SystemUpdateCheck {
    * an honest truncation marker by the route; "" for a tag-only release) —
    * feeds the About tab's "What's new" block. */
   body?: string;
-  /** R91-E + R104: THIS MACHINE'S updater asset (present when the release
-   * has one for this platform) — feeds the in-app "Download update" flow.
-   * R104: the pick is platform-aware (the setup.exe on Windows, the
-   * arch-matched AppImage on Linux) and carries the kind (the frontend
-   * gates its interactive-wizard escape hatch on it — there is no wizard
-   * for an AppImage) + the REAL asset filename (the staged file's name). */
+  /** R91-E + R104 + R123: THIS MACHINE'S updater asset (present when the
+   * release has one for this platform) — feeds the in-app "Download
+   * update" flow. R104: the pick is platform-aware (the setup.exe on
+   * Windows, the arch-matched AppImage on Linux); R123 adds the
+   * install-type split (an AppImage-launched Linux picks the AppImage, a
+   * packaged Linux install picks the .deb) and the kind gains
+   * "linux-deb" — the frontend gates its interactive-wizard escape hatch
+   * on the kind (there is no wizard for an AppImage or a deb) and the
+   * staged file's name rides along. */
   asset?: {
     url: string;
     size: number;
     digest: string | null;
-    kind: "windows-setup" | "linux-appimage";
+    kind: "windows-setup" | "linux-appimage" | "linux-deb";
     name: string;
   };
   /** Only meaningful when ok === false: */
   reason?: string;
   error?: string;
   /** ROUND-120 (R120-U): present when the saved GitHub token was REJECTED
-   * (401/403) but the ANONYMOUS retry carried the check — ok stays true (or
-   * carries the no-release reason) while this warning tells the About tab
-   * to offer the quiet "Update GitHub token" re-pairing row. Absent when
-   * no token was attached or the token answered fine. */
+   * on the retry leg (the anonymous check rate-limited or 404'd and the
+   * token leg failed 401/403) — ok stays false with reason
+   * "token-rejected" while this warning tells the About tab to offer the
+   * quiet "GitHub token" re-pairing row. R123 (anonymous-first): the
+   * success path NEVER carries this anymore — a dead token can no longer
+   * degrade a successful anonymous check. */
   tokenWarning?: string;
+  /** ROUND-123 (R123): ALWAYS present — whether a GitHub token is saved on
+   * this machine (env or file). The About tab renders the token row ONLY
+   * when this is true (or the check's reason is "rate-limited" — the one
+   * case a token genuinely helps); the default public-repo experience
+   * shows no token UI anywhere. */
+  tokenSaved?: boolean;
 }
 
 export async function fetchSystemUpdates(): Promise<SystemUpdateCheck> {
@@ -4763,6 +4790,19 @@ export async function saveUpdateToken(pat: string): Promise<{ ok: boolean; valid
   return request<{ ok: boolean; valid: boolean }>("/system/updates/token", {
     method: "PUT",
     json: { pat },
+  });
+}
+
+/** ROUND-123 (R123): DELETE /system/updates/token — the REMOVE affordance.
+ * The token is a pure OPTIONAL accelerator for a public repo (the checks
+ * and downloads run anonymous-first), so an optional credential must be
+ * removable in-app: this clears BOTH layers (the ~/.acute/github.pat file
+ * and the sidecar's env snapshot) and answers {removed} honestly (true
+ * when either layer held a token, false when none was saved — the
+ * idempotent success). The very next check runs anonymous by construction. */
+export async function removeUpdateToken(): Promise<{ ok: boolean; removed: boolean }> {
+  return request<{ ok: boolean; removed: boolean }>("/system/updates/token", {
+    method: "DELETE",
   });
 }
 

@@ -33,8 +33,9 @@
  *   - PROCESSING: the three-dot Thinking card BREATHES (opacity 0.85↔1,
  *     ~1.2s cycle) and enters with the house fade-in-up the moment the turn
  *     starts; the first real delta retires it (the screen's synthetic item —
- *     that logic is untouched). With the header's breathing accent line this
- *     is the whole "processing" story — no spinner anywhere.
+ *     that logic is untouched). With the header's avatar live-edge ring (the
+ *     R123-retired breathing LINE's survivor — see the screen) this is the
+ *     whole "processing" story — no spinner anywhere.
  *   - question / todo / subagent / approval-mini / meta / error / debug
  *     cards keep their logic, restyled to one visual idea per region (the
  *     error card is compact: one-line code head + the message clamped to 3
@@ -68,7 +69,7 @@
  * filter exists and expo-blur is not installed); sent/delivered = the
  * settled tint byte-identical to today; processing = the normal fill with
  * a BREATHING accent edge (borderColor mixHex(card, accent, 0.34)↔0.62 at
- * the house 550ms legs — the caret/LiveHeaderLine rhythm; reduced motion
+ * the house 550ms legs — the live caret's rhythm; reduced motion
  * holds the static 0.55 mix); failed = the normal fill + the 0.22 danger
  * edge with NO glyph (the error card below carries the alert + Retry). The
  * a11y label appends the rung word; `deliveryVisualRung` is exported for
@@ -105,6 +106,26 @@
  * applies INSIDE the block: hidden = no tool rows + no rail unless the
  * turn carries thinking text (the clean document); compact = one-line rows,
  * no expansion; detailed = the full anatomy.
+ *
+ * ROUND-123 (R123-W-m — the mobile transcript redesign, per the owner's 7
+ * reference screenshots + his report): the tool rows become FIRST-CLASS
+ * VISIBLE stream elements. (1) THE WELL'S DEFAULT IS OPEN: the R119
+ * settle-collapse hid every tool row behind the one-line rail the moment a
+ * turn settled — the owner watched his agent's turn settle and "no tool
+ * calls were shown to me… No file writes were shown to me". `wellDefaultOpen`
+ * (pure, exported) answers the new law: OPEN for every turn whose well
+ * renders tool rows (live turns keep today's open behavior; a user's tap
+ * still wins for the block's lifetime; a thinking-ONLY well keeps the R119
+ * settle-collapse — the §N verdict on the thinking wall stands). (2) THE
+ * USER BUBBLE'S IMAGES RIDE ABOVE THE TEXT — the owner: "the image was
+ * supposed to be shown at the top of the text… In the PC, it was shown
+ * properly" — `userBubbleBodyPlan` (pure, exported) is the ordering contract
+ * (images → text → file chips). (3) THE RHYTHM: consecutive assistant text
+ * segments inside one TurnBlock carry a consistent extra gap (never one wall
+ * of text), and the tool rows' icon+verb+meta grammar gains the web families
+ * (Globe icon; browser/search/fetch rows read their own action/query/url
+ * targets — see features/turn-block.ts's R123 note). The toolActivity pref
+ * and the well's Reveal entrance stay exactly as they were.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -121,7 +142,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { BookOpenText, Check, ChevronDown, ChevronUp, CircleX, Copy, FileCode2, ImageIcon, RefreshCw, Square, SquareTerminal, Wrench } from "lucide-react-native";
+import { BookOpenText, Check, ChevronDown, ChevronUp, CircleX, Copy, FileCode2, Globe, ImageIcon, RefreshCw, Square, SquareTerminal, Wrench } from "lucide-react-native";
 import { useTheme, useChatPrefs } from "@/design/theme";
 import { decisionHaptic, selectionHaptic, warningHaptic } from "@/design/haptics";
 import { Badge, Hairline, LiveCaret, Skeleton, TypeBody, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
@@ -138,9 +159,11 @@ import {
   toolActivityVisibility,
 } from "@/features/chat-prefs";
 import {
+  BROWSER_TOOLS,
   extractWritePreview,
   READ_TOOLS,
   TERMINAL_TOOLS,
+  WEB_TOOLS,
   WRITE_TOOLS,
 } from "@/features/streaming-args";
 import {
@@ -476,6 +499,32 @@ function attachmentImageUri(a: AttachmentView): string | null {
   return /^(data:|file:|content:|https?:)/i.test(p) ? p : null;
 }
 
+/**
+ * R123-W-m — the user bubble's BODY PLAN (pure, exported for the tests):
+ * the bubble's ordered content regions. IMAGES RIDE ABOVE THE TEXT — the
+ * owner's report: "the image was supposed to be shown at the top of the
+ * text, but it was shown below the text. In the PC, it was shown properly" —
+ * and the FILE CHIPS stay below the text (chat.md's own law, unchanged).
+ * The component renders the plan's order verbatim; this function IS the
+ * ordering contract, so jest pins what the owner demanded.
+ */
+export type UserBubbleBodyPart =
+  | { role: "images"; attachments: AttachmentView[] }
+  | { role: "text" }
+  | { role: "files"; attachments: AttachmentView[] };
+
+export function userBubbleBodyPlan(
+  attachments: AttachmentView[] | null,
+): UserBubbleBodyPart[] {
+  const images = attachments?.filter(isImageAttachment) ?? [];
+  const files = attachments?.filter((a) => !isImageAttachment(a)) ?? [];
+  return [
+    ...(images.length > 0 ? [{ role: "images" as const, attachments: images }] : []),
+    { role: "text" as const },
+    ...(files.length > 0 ? [{ role: "files" as const, attachments: files }] : []),
+  ];
+}
+
 function UserBubble({
   content,
   queued,
@@ -514,8 +563,9 @@ function UserBubble({
   const failedEdge = mixHex(tokens.card, tokens.danger, DELIVERY_FAILED_EDGE);
   const chipFill = mixHex(tokens.card, tokens.accent, 0.18);
   const chipEdge = mixHex(tokens.card, tokens.accent, 0.32);
-  const images = attachments?.filter(isImageAttachment) ?? [];
-  const files = attachments?.filter((a) => !isImageAttachment(a)) ?? [];
+  // R123-W-m — the bubble's ordered content regions (pure — the images ride
+  // ABOVE the text, the file chips below it; the plan is the contract).
+  const bodyPlan = userBubbleBodyPlan(attachments);
   // R118-D (§2.7) — the four body treatments, keyed on the STATUS (the old
   // code keyed its neutral arm on the queued FLAG):
   //   (a) sending — the queued arm's neutral clay (card fill, border edge,
@@ -535,7 +585,7 @@ function UserBubble({
 
   // R118-D (c) — the processing edge's breath: the bubble's borderColor
   // interpolates mixHex(card, accent, 0.34) ↔ 0.62 on the house 550ms legs
-  // (the caret/LiveHeaderLine rhythm); reduced motion holds the static 0.55
+  // (the live caret's rhythm); reduced motion holds the static 0.55
   // mix. The bubble's View becomes an Animated.View for this row only —
   // every other rung renders the plain View, byte-identical to R117.
   const reduced = useReducedMotion();
@@ -565,6 +615,11 @@ function UserBubble({
   }));
 
   // The bubble's content — shared by the plain and the animated shells.
+  // R123-W-m: the body renders the PLAN's order — the image thumbnails ride
+  // ABOVE the message text (the PC's own ordering, the owner's report), the
+  // file chips stay below it. The image block carries its own bottom beat so
+  // the text never kisses the thumbnail (the bubble's xs gap + the beat =
+  // the house 8dp rhythm).
   const body = (
     <>
       {queued && (
@@ -572,54 +627,63 @@ function UserBubble({
           <Badge tone="neutral">queued</Badge>
         </View>
       )}
-      <Text
-        style={{
-          // (a) sending — textSecondary (the desaturation half of the dull
-          // arm; the veil below is the other half).
-          color: sending ? tokens.textSecondary : tokens.text,
-          fontSize: Math.round(TYPE_BODY * scale),
-          fontFamily: fontFamily.regular,
-          lineHeight: Math.round(22 * scale),
-        }}
-      >
-        {content}
-      </Text>
-      {images.map((a) => (
-        <UserImageThumb
-          key={`img-${a.name}-${a.path ?? ""}`}
-          attachment={a}
-          resolveImage={attachmentImageResolver}
-        />
-      ))}
-      {files.length > 0 && (
-        <View style={styles.userAttachRow}>
-          {files.map((a) => (
-            <View
-              key={`${a.name}-${a.path ?? ""}`}
-              accessibilityLabel={`Attachment ${a.name}`}
-              style={[
-                styles.userAttachChip,
-                {
-                  backgroundColor: queued ? tokens.subtle : chipFill,
-                  borderColor: queued ? tokens.borderSubtle : chipEdge,
-                },
-              ]}
-            >
-              <ImageIcon size={11} color={queued ? tokens.textTertiary : tokens.accent} strokeWidth={2.2} />
-              <Text
-                style={{
-                  color: tokens.textSecondary,
-                  fontSize: TYPE_CAPTION - 1,
-                  fontFamily: fontFamily.medium,
-                }}
-                numberOfLines={1}
-              >
-                {a.name}
-              </Text>
+      {bodyPlan.map((part) => {
+        if (part.role === "images") {
+          return part.attachments.map((a) => (
+            <UserImageThumb
+              key={`img-${a.name}-${a.path ?? ""}`}
+              attachment={a}
+              resolveImage={attachmentImageResolver}
+            />
+          ));
+        }
+        if (part.role === "files") {
+          return (
+            <View key="files" style={styles.userAttachRow}>
+              {part.attachments.map((a) => (
+                <View
+                  key={`${a.name}-${a.path ?? ""}`}
+                  accessibilityLabel={`Attachment ${a.name}`}
+                  style={[
+                    styles.userAttachChip,
+                    {
+                      backgroundColor: queued ? tokens.subtle : chipFill,
+                      borderColor: queued ? tokens.borderSubtle : chipEdge,
+                    },
+                  ]}
+                >
+                  <ImageIcon size={11} color={queued ? tokens.textTertiary : tokens.accent} strokeWidth={2.2} />
+                  <Text
+                    style={{
+                      color: tokens.textSecondary,
+                      fontSize: TYPE_CAPTION - 1,
+                      fontFamily: fontFamily.medium,
+                    }}
+                    numberOfLines={1}
+                  >
+                    {a.name}
+                  </Text>
+                </View>
+              ))}
             </View>
-          ))}
-        </View>
-      )}
+          );
+        }
+        return (
+          <Text
+            key="text"
+            style={{
+              // (a) sending — textSecondary (the desaturation half of the dull
+              // arm; the veil below is the other half).
+              color: sending ? tokens.textSecondary : tokens.text,
+              fontSize: Math.round(TYPE_BODY * scale),
+              fontFamily: fontFamily.regular,
+              lineHeight: Math.round(22 * scale),
+            }}
+          >
+            {content}
+          </Text>
+        );
+      })}
       {/* chat.md — the clock lives INSIDE the bubble's bottom-right corner
           (10px tertiary), never floating below it. R118-D — the clock row
           renders ONLY the clock (the tick ladder is retired; the timestampsMode
@@ -810,8 +874,8 @@ function UserImageThumb({
 //     word (the retired placeholder's own dots + model micro-mono) or the
 //     RUNNING TOOL's verb ("Reading src/a.ts…") — one line, never the
 //     thinking card AND a tool card stacked;
-//   · the ACTIVITY WELL the rail expands: the recessed surfaceWell container
-//     (the usage-cards' own recipe: surfaceWell + hairline clayRim +
+//   · the ACTIVITY WELL the rail summarizes: the recessed surfaceWell
+//     container (the usage-cards' own recipe: surfaceWell + hairline clayRim +
 //     RADIUS_INPUT) carrying the thinking text (the retired ThinkingBlock's
 //     mono-dim voice, its 20-line settled cap + Show all) over the R118
 //     strong-Hairline divider, then the TOOL ROWS — one compact row per
@@ -822,9 +886,26 @@ function UserImageThumb({
 //     chunk, the MarkdownText, the shared LiveCaret while streaming).
 // The toolActivity pref applies INSIDE (hidden: no tool rows, the rail only
 // while thinking text exists — the clean document; compact: one-line rows,
-// no expansion; detailed: the full anatomy). The well's open state rides the
-// PC's own discipline (WorkingSection): live → open (the work streams into
-// view), the settle → collapse, a user's tap always wins.
+// no expansion; detailed: the full anatomy). R123-W-m: the well's open
+// state is DEFAULT-OPEN for every turn that renders tool rows (the owner's
+// "no tool calls were shown to me" — the R119 settle-collapse hid them);
+// see `wellDefaultOpen` below. The Reveal entrance stays.
+
+/**
+ * R123-W-m — the ACTIVITY WELL's default open state (pure, exported for the
+ * tests): OPEN for every turn whose well renders TOOL ROWS — the owner's
+ * report made the law ("No tool calls were shown to me… No file writes were
+ * shown to me": the R119 auto-collapse retired every row behind the
+ * one-line rail the moment a turn settled, and the owner's 7 reference
+ * screenshots show tool rows as first-class VISIBLE stream elements). Live
+ * turns keep today's open behavior; a turn with NO tool rows (the pref's
+ * hidden rung, or a thinking-only turn) keeps the R119 default — collapsed
+ * until the user taps. A user's manual tap still wins for the block's
+ * lifetime (the component's userTouched discipline).
+ */
+export function wellDefaultOpen(live: boolean, toolRowCount: number): boolean {
+  return live || toolRowCount > 0;
+}
 
 export function TurnBlock({ group }: { group: TurnGroup }) {
   const { tokens } = useTheme();
@@ -848,6 +929,9 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
   const summary = activitySummary(facts);
   const showToolRows = !visibility.hidden;
   const wellHasContent = thinkingText !== null || (showToolRows && toolItems.length > 0);
+  // R123-W-m — the tool-row count the well actually renders (pref-applied:
+  // 0 under `hidden` — the clean document keeps the collapsed default).
+  const toolRowCount = showToolRows ? toolItems.length : 0;
 
   // ── the body (the retired AssistantBlock's grammar, over the segments) ──
   const textSegments = assistantItems.filter((seg) => {
@@ -860,18 +944,28 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
   const firstContentTs = textSegments[0]?.ts ?? null;
   const clock = timestampsVisible(prefs.timestampsMode) ? messageClock(firstContentTs) : null;
 
-  // ── the well's open state — the PC's discipline, verbatim in spirit:
-  // live → open, the settle → collapse, a user's tap wins (userTouched).
-  const [open, setOpen] = useState(group.live);
+  // ── the well's open state — R123-W-m: THE ROWS STAY VISIBLE. The R119
+  // settle-collapse (live → open, settle → collapse) hid every tool row
+  // behind the one-line rail the moment a turn settled — the owner's "no
+  // tool calls were shown to me… No file writes were shown to me". The
+  // default is now OPEN for every turn whose well renders tool rows
+  // (`wellDefaultOpen`, pure + pinned); live turns keep today's open
+  // behavior; a thinking-ONLY well keeps the R119 settle-collapse (the §N
+  // verdict on the thinking wall stands); a user's tap always wins for the
+  // block's lifetime (userTouched). The rail stays the summary + collapse
+  // control — a reader who wants the clean document taps once.
+  const [open, setOpen] = useState(wellDefaultOpen(group.live, toolRowCount));
   const userTouched = useRef(false);
   const prevLive = useRef(group.live);
   useEffect(() => {
     if (!userTouched.current) {
       if (group.live) setOpen(true);
-      else if (prevLive.current !== group.live) setOpen(false);
+      // A turn with tool rows stays open THROUGH the settle; only a
+      // tool-less well (thinking-only) keeps the R119 collapse-on-settle.
+      else if (prevLive.current !== group.live && toolRowCount === 0) setOpen(false);
     }
     prevLive.current = group.live;
-  }, [group.live]);
+  }, [group.live, toolRowCount]);
   const toggleWell = (): void => {
     userTouched.current = true;
     setOpen((value) => !value);
@@ -993,10 +1087,17 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
       )}
       {textSegments.map((seg, index) => {
         const liveText = seg.live && seg.chunks !== null ? seg.chunks.join("") : "";
+        // R123-W-m — the rhythm law: consecutive segments of one turn are
+        // SEPARATE utterances (the owner: "there was no separation with the
+        // elements… it was looking off"), so every segment after the first
+        // carries the extra gap — the block's own 8dp beat on top of the
+        // turnBlock gap, double the markdown paragraph's internal rhythm,
+        // never one wall of text.
+        const segmentGap = index > 0 ? styles.assistantSegmentGap : undefined;
         if (liveText !== "") {
           const isLast = index === textSegments.length - 1;
           return (
-            <View key={seg.key} style={styles.assistantLive}>
+            <View key={seg.key} style={[styles.assistantLive, segmentGap]}>
               <MarkdownText content={liveText} textScale={scale} />
               {/* R118-B — the shared LiveCaret (the private recipe's exact
                   extraction; reuse, never re-roll). */}
@@ -1005,7 +1106,9 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
           );
         }
         return seg.content !== "" ? (
-          <MarkdownText key={seg.key} content={seg.content} textScale={scale} />
+          <View key={seg.key} style={segmentGap}>
+            <MarkdownText content={seg.content} textScale={scale} />
+          </View>
         ) : null;
       })}
     </View>
@@ -1133,6 +1236,16 @@ function ToolRow({ item, expandable }: { item: ToolItem; expandable: boolean }) 
   const isWrite = WRITE_TOOLS.has(item.toolName);
   const isTerminal = TERMINAL_TOOLS.has(item.toolName);
   const isRead = READ_TOOLS.has(item.toolName);
+  // R123-W-m — the WEB families join the row grammar: the web pair
+  // (web_search/web_fetch) and the embedded browser (browser_control) are
+  // tools the agent ACTUALLY runs, and the generic Wrench + raw key:value
+  // dump was the shapeless rendering behind the owner's "no tool calls
+  // were shown to me". The families wear the PC's own Globe icon in the
+  // read family's accent2 voice (the exploration register the reference
+  // screenshots' "Explore" rows speak), and their targets come from the
+  // pure extractors (features/turn-block.ts's R123 note).
+  const isWeb = WEB_TOOLS.has(item.toolName);
+  const isBrowser = BROWSER_TOOLS.has(item.toolName);
 
   // The head's ONE line — the families' existing grammar, moved from the
   // retired cards: the write family keeps its "Writing {file}… · {n} chars"
@@ -1149,6 +1262,8 @@ function ToolRow({ item, expandable }: { item: ToolItem; expandable: boolean }) 
     <SquareTerminal size={13} color={tokens.accent} strokeWidth={2.2} />
   ) : isRead ? (
     <BookOpenText size={13} color={tokens.accent2} strokeWidth={2.2} />
+  ) : isWeb || isBrowser ? (
+    <Globe size={13} color={tokens.accent2} strokeWidth={2.2} />
   ) : (
     <Wrench size={13} color={tokens.textSecondary} strokeWidth={2.2} />
   );
@@ -2409,13 +2524,17 @@ const styles = StyleSheet.create({
     maxWidth: 180,
   },
   /** chat.md — the user image thumbnail: r12, ~64% of the COLUMN (72% of the
-   * 88% bubble), aspect-kept, quiet border. */
+   * 88% bubble), aspect-kept, quiet border. R123-W-m: the tile carries its
+   * own bottom beat — riding ABOVE the text now, the thumbnail needs the
+   * house 8dp rhythm below it (the bubble's xs gap + this beat) so the text
+   * never kisses the image. */
   userImageTile: {
     width: "72%",
     alignSelf: "flex-start",
     borderRadius: RADIUS_IMAGE,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: "hidden",
+    marginBottom: spacing.xs,
   },
   userImageFill: {
     width: "100%",
@@ -2485,6 +2604,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-end",
     flexWrap: "wrap",
+  },
+  /** R123-W-m — the inter-segment beat: every assistant segment after the
+   *  first carries this marginTop (the block's own gap rides on top — 8dp +
+   *  8dp, double the markdown paragraph's internal rhythm) so consecutive
+   *  utterances of one turn read as separate beats, never one wall of
+   *  text (the owner's "no separation with the elements" report). */
+  assistantSegmentGap: {
+    marginTop: spacing.sm,
   },
   thinking: {
     borderRadius: RADIUS_INPUT,

@@ -156,6 +156,44 @@ export function ConnectionGate({ children }: { children: ReactNode }) {
           }
         })
         .catch(() => {});
+      // ── ROUND-123 (R123): the WATCHED install legs' events (the Windows
+      // overlay + the Linux .deb watcher — see update.rs). "update-installed"
+      // flips the splash's final line; "update-install-failed" (payload: the
+      // honest message) runs the SAME recovery as a rejected invoke — clear
+      // the in-flight flag, remove the update-restart marker, restart the
+      // engine — and parks the message in the store for the About tab's
+      // card (the app tree that comes back shows the honest error, never a
+      // stuck splash).
+      void maybeListen
+        .call(shellEvent, "update-overlay", () => {
+          // R123: merge the flag into the in-flight update (the version may
+          // already be set by the About tab) — the splash reads it for its
+          // flow-honest subline.
+          const current = useConfigStore.getState().updateInFlight;
+          useConfigStore.getState().setUpdateInFlight({
+            version: current?.version ?? null,
+            overlay: true,
+          });
+        })
+        .catch(() => {});
+      void maybeListen
+        .call(shellEvent, "update-installed", () => {
+          useConfigStore.getState().setUpdateInstalled(true);
+        })
+        .catch(() => {});
+      void maybeListen
+        .call(shellEvent, "update-install-failed", (ev: { payload: unknown }) => {
+          const message = typeof ev.payload === "string" ? ev.payload : "the install did not complete";
+          useConfigStore.getState().setUpdateInstallError(message);
+          useConfigStore.getState().setUpdateInFlight(null);
+          try {
+            window.localStorage.removeItem(UPDATE_RESTART_KEY);
+          } catch {
+            /* best-effort — a stale marker is validated away at relaunch anyway */
+          }
+          void retryConnection().catch(() => {});
+        })
+        .catch(() => {});
     }
   }, []);
 
@@ -184,6 +222,10 @@ export function ConnectionGate({ children }: { children: ReactNode }) {
  * when the version is unknown).
  */
 function RestartingSplash({ update }: { update: UpdateInFlight }) {
+  // R123: the watched legs' completion flag — "update-installed" from the
+  // Rust watcher swaps the splash to its final line for the last visible
+  // moment before the relaunch + exit.
+  const updateInstalled = useConfigStore((s) => s.updateInstalled);
   return (
     <div
       className="flex h-full w-full flex-col items-center justify-center gap-6"
@@ -197,13 +239,27 @@ function RestartingSplash({ update }: { update: UpdateInFlight }) {
         <div className="flex items-center gap-2.5">
           <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--ac-accent)" }} />
           <span className="text-sm font-medium" style={{ color: "var(--ac-text-secondary)" }}>
-            {update.version !== null ? `Restarting into ${update.version}…` : "Restarting into the new version…"}
+            {updateInstalled
+              ? update.version !== null
+                ? `v${update.version} is installed — restarting now…`
+                : "The new version is installed — restarting now…"
+              : update.overlay === true
+                ? update.version !== null
+                  ? `Installing v${update.version}…`
+                  : "Installing the new version…"
+                : update.version !== null
+                  ? `Restarting into ${update.version}…`
+                  : "Restarting into the new version…"}
           </span>
         </div>
         <span className="text-xs" style={{ color: "var(--ac-text-tertiary)" }}>
-          {update.version !== null
-            ? `the window will close for a moment while v${update.version} installs — it reopens by itself`
-            : "the window will close for a moment while the new version installs — it reopens by itself"}
+          {updateInstalled
+            ? "one moment — the fresh instance is starting"
+            : update.overlay === true
+              ? "this window stays open while the update installs — the app restarts itself when ready"
+              : update.version !== null
+                ? `the window will close for a moment while v${update.version} installs — it reopens by itself`
+                : "the window will close for a moment while the new version installs — it reopens by itself"}
         </span>
       </div>
     </div>
