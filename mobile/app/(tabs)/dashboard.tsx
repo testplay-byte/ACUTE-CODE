@@ -23,7 +23,9 @@
  * terracotta / output sage, dashed gridlines, thin capped bars centered in
  * their columns, weekday ticks + the "today" anchor in the 14-day window,
  * tap a bar for its day) → MODELS — the R117 donut + the ranked list in ONE
- * card (cap 8 + the honest "+N more models") → TOOLS → KEYS — the
+ * card (cap 8 + the honest "+N more models"; R120-S — the ring STRETCHES to
+ * the card's full content width, the fixed 120px centered ring's dead side
+ * bands are gone) → TOOLS → KEYS — the
  * whole-history leaderboards with 1px row dividers → PROJECTS — the
  * drill-down rows with the inline sessions well (the honest status law:
  * queued shows NO badge) → the footer clock.
@@ -960,6 +962,15 @@ export default function DashboardScreen() {
   // HALVED when the chart pairs beside the models card on tablets.
   const pairWidth = Math.floor((bodyWidth - spacing.lg) / 2);
   const chartWidth = Math.max(120, Math.floor((wide ? pairWidth : bodyWidth) - spacing.md * 2));
+  // ── ROUND-120 (why): ── the donut's ring STRETCHES to its card's full
+  // content width (the owner: the chart had "a lot of empty area on the
+  // right sides and the left sides" — the fixed 120px ring sat centered in
+  // a ~304dp content box with ~92dp dead bands on each side). The models
+  // card's inner width is the SAME responsive figure the daily chart rides
+  // (both cards pad md inside; on tablets both live in an equal pairCol),
+  // so the one constant stretches BOTH charts to the identical full content
+  // width — the daily chart already filled it, the ring now does too.
+  const donutSize = chartWidth;
 
   const refreshControl = (
     <RefreshControl
@@ -1036,11 +1047,12 @@ export default function DashboardScreen() {
                 testID="dashboard-donut"
                 segments={donutSegmentsInput}
                 dataKey={donutKey}
+                size={donutSize}
                 highlighted={highlightedModel}
                 trackColor={tokens.monoBg}
                 accessibilityLabel={`model usage donut — top model ${shortModelName(models[0].model)} at ${Math.round((modelShares[0] ?? 0) * 100)}% of tokens`}
                 center={
-                  <View style={styles.donutCenterWrap}>
+                  <View style={[styles.donutCenterWrap, { maxWidth: Math.round(donutSize / 2) }]}>
                     <TypeMono numberOfLines={1} style={styles.donutCenterName}>
                       {shortModelName(models[0].model)}
                     </TypeMono>
@@ -1279,7 +1291,10 @@ const styles = StyleSheet.create({
   // the dividers own the rows' rhythm).
   donutPad: { padding: spacing.md, gap: spacing.md },
   donutRow: { alignItems: "center" },
-  donutCenterWrap: { alignItems: "center", maxWidth: 84 },
+  /** ── ROUND-120 (why): ── the center slot's maxWidth is now responsive
+   *  (half the stretched ring — was the fixed 84 the 120px ring needed),
+   *  passed inline off donutSize; the hole itself grew with the ring. */
+  donutCenterWrap: { alignItems: "center" },
   donutCenterName: { textAlign: "center" },
   donutCenterPct: { textAlign: "center" },
   footer: { textAlign: "center" },

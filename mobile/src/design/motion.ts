@@ -74,10 +74,22 @@ export const PAIRING_FADE_MS = 150;
  * ROUND-119 (R119-P, the owner's round-119 verdict — the Add-Provider sheet's
  * "animations were not that good"): tuned to the house DISCLOSURE settle
  * {180, 24} (ζ ≈ 0.894 — one soft settle, ~0.6s), superseding R116-b's stiffer
- * {210, 30}. The stiffer pair read as a snap-cut; the disclosure settle is the
- * panel grammar the rest of the app already speaks. The keyboard ride shares
- * this constant (its MECHANICS are untouched — R118-E's law; it simply
- * inherits the same settle).
+ * {210, 30}. The keyboard ride shares this constant (its MECHANICS are
+ * untouched — R118-E's law; it simply inherits the same settle).
+ *
+ * ROUND-120 (R120-S — the round's sheet-motion authority): the spring VALUE
+ * STANDS. The R119 retune was aimed at the right curve but the wrong defect —
+ * the round-120 diagnosis (the owner: "they are stuttering, and they do not
+ * play in the proper time when needed") found the stutter in the START RACE
+ * and the TRAVEL, not the spring pair: the entrance was armed in the same
+ * effect that mounts the Modal, so the spring burned its fastest frames while
+ * Android was still creating the dialog window (the sheet surfaced part-way
+ * up and finished its settle — "opens, then replays"), and the travel was
+ * computed off maxHeightFraction (~0.78 × window + 48 ≈ 670dp on a tall
+ * phone) instead of the panel's real height, so a settle tuned for a
+ * 300-400dp disclosure ran at ~2× velocity. sheet.tsx now arms from the
+ * Modal's own onShow (the window exists — frame one) and travels the
+ * MEASURED panel height; see the legs below.
  */
 export const SHEET_SPRING: WithSpringConfig = {
   stiffness: 180,
@@ -85,22 +97,49 @@ export const SHEET_SPRING: WithSpringConfig = {
 };
 
 /**
- * ROUND-119 (R119-P) — the sheet's TIMED legs (the scrim fade + the close
- * departure + the content ride), named + pinned so the anatomy test can hold
- * them: the scrim eases OUT over 200ms (was 160 linear — a dim that completes
- * as the panel crosses the fold); the close rides 200ms with an ease-IN curve
- * (an accelerating departure reads natural — was 180 linear); the content
- * row fades in over 120ms starting 40ms after the panel begins to move (the
- * subtle ride — the header lands first, the body follows).
+ * ROUND-120 (R120-S) — the sheet's TIMED legs, retuned to ONE coordinated
+ * timeline (the R119 200/200 pair + the 120ms/40ms content ride read wrong
+ * once the start was fixed):
+ *
+ *   · SCRIM OPEN 240ms ease-out cubic — starts on the SAME frame as the panel
+ *     (frame one — never a separate pipeline) and completes as the settle
+ *     lands (~300ms), so the dim and the rise read as one motion.
+ *   · CLOSE 220ms ease-out cubic on BOTH legs — the dismissal departs on
+ *     frame one (the R119 ease-IN quad covered only 2.7% of the travel in two
+ *     frames — the sheet lingered visibly before leaving, "not the proper
+ *     time") and decelerates into the fold; the exact-220 callback owns the
+ *     unmount, so the Modal can never zombie past its own exit eating taps.
+ *   · The R119 content ride (a 120ms fade starting 40ms late) is RETIRED — it
+ *     was a patch on the start race; with the panel rising its own measured
+ *     height the fold itself reveals the content top-first, and a late fade
+ *     read as a pop (on close the pre-blank emptied the sheet before it
+ *     moved). The panel's opacity is 1 throughout; the two retired constants
+ *     are DELETED from this module (sheet-anatomy.test.ts pins their absence).
+ *   · ARM FALLBACK 150ms — the entrance arms from the Modal's onShow (Android
+ *     wires the Dialog's own OnShowListener), with this JS timeout as the
+ *     guard so a platform that never fires onShow can never leave the sheet
+ *     hanging below the fold.
  */
-/** The scrim's open fade (ms) — ease-out cubic in sheet.tsx. */
-export const SHEET_SCRIM_OPEN_MS = 200;
-/** The close departure (ms) — panel + scrim together, ease-in quad. */
-export const SHEET_CLOSE_MS = 200;
-/** The content row's fade-in duration (ms). */
-export const SHEET_CONTENT_FADE_MS = 120;
-/** The content row's fade-in delay after the panel starts (ms). */
-export const SHEET_CONTENT_FADE_DELAY_MS = 40;
+/** The scrim's open fade (ms) — ease-out cubic in sheet.tsx, frame one. */
+export const SHEET_SCRIM_OPEN_MS = 240;
+/** The close departure (ms) — panel + scrim together, ease-out cubic. */
+export const SHEET_CLOSE_MS = 220;
+/** The onShow guard (ms) — arm the entrance even if the platform's onShow
+ *  never lands (the sheet can never hang below the fold). */
+export const SHEET_SHOW_ARM_FALLBACK_MS = 150;
+
+/**
+ * ROUND-120 (R120-S) — the panel's ENTRANCE TRAVEL: the measured panel height
+ * once layout has reported (the settle is tuned for a 300-400dp disclosure —
+ * the old maxHeightFraction × window + 48 travel, ~670dp on a tall phone, ran
+ * the same settle at ~2× velocity: the "zip" the owner read as ugly), falling
+ * back to that fraction-based bound only for the pre-layout frames (the panel
+ * is fully below the fold either way — the swap is invisible). Pure
+ * (table-tested in sheet-anatomy.test.ts).
+ */
+export function sheetPanelTravelPx(measuredPanelHeight: number, fallbackTravel: number): number {
+  return measuredPanelHeight > 0 ? Math.round(measuredPanelHeight) : Math.round(fallbackTravel);
+}
 
 /**
  * The TAB spring — the calm indicator slide (motion.md §1): over-damped so

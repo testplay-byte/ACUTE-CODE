@@ -2,15 +2,14 @@
  * Sheet — the reusable BOTTOM SHEET, built from the house primitives +
  * Reanimated inside a RN <Modal> (R113-c; NO new dependency): a scrim that
  * fades in, a clay panel that slides up under the over-damped SHEET spring
- * (R116-b: 210/30 — panels never bounce), and the honest close affordances
- * (the scrim tap, the X circle, Android's back button — the Modal's own
- * onRequestClose). The Modal host
- * keeps the sheet above EVERYTHING (keyboard included) without position
- * tricks inside the composer's subtree. The design language stays Clay
- * Studio — the elevated card surface, the matte top edge, the house radii —
- * exactly like the preferences/provider screens' expand patterns, just
- * anchored to the bottom. Every row the callers render must keep the 44px
- * touch discipline.
+ * (R116-b: panels never bounce), and the honest close affordances (the scrim
+ * tap, the X circle, Android's back button — the Modal's own
+ * onRequestClose). The Modal host keeps the sheet above EVERYTHING (keyboard
+ * included) without position tricks inside the composer's subtree. The
+ * design language stays Clay Studio — the elevated card surface, the matte
+ * top edge, the house radii — exactly like the preferences/provider screens'
+ * expand patterns, just anchored to the bottom. Every row the callers render
+ * must keep the 44px touch discipline.
  *
  * R115 — the ghost-panel fix: the panel now enters FULLY OPAQUE, sliding its
  * whole height from below the fold. The scrim rides its own faster timing
@@ -52,23 +51,74 @@
  * under-reports on inset devices).
  *
  * R119-P (the owner's round-119 verdict — the Add-Provider sheet's UI was
- * right but "the animations were not that good"): the entrance now rides the
- * house DISCLOSURE settle (SHEET_SPRING {180, 24} — motion.ts, superseding
- * R116-b's stiffer 210/30 snap), the scrim fades in 200ms ease-out cubic
- * (was 160 linear), the close is a 200ms ease-in-quad DEPARTURE on both legs
- * (was 180/160 linear), and the content row (below the header) gains a
- * 120ms fade-in starting 40ms after the panel begins to move — the header
- * lands first, the body follows (reduced motion snaps it, the Entrance
- * idiom). The first-frame static-pose law, SHEET_CHROME/SHEET_HEADER_ROW,
- * SKIRT_PX, the keyboard-ride mechanics, and maxHeightFraction are all
- * untouched (frozen this round).
+ * right but "the animations were not that good"): the entrance moved to the
+ * house DISCLOSURE settle (SHEET_SPRING {180, 24}), the scrim's timed legs
+ * were re-curved, and the content row gained a delayed fade-in. All of that
+ * is SUPERSEDED by R120-S below (the spring VALUE survives; the legs and the
+ * content ride do not).
+ *
+ * R120-S (the owner's round-120 verdict — the round's sheet-motion authority:
+ * "the animations are bad, they look ugly, they are stuttering, and they do
+ * not play in the proper time when needed"). The DIAGNOSIS — the motion was
+ * already native (Reanimated runs every spring/timing here on its UI thread;
+ * there is no JS-driven Animated anywhere in this file), so the stutter was
+ * never the driver. Three real defects:
+ *
+ *   (1) THE START RACE. The entrance was armed in the SAME effect that calls
+ *       setRendered(true) — i.e. the spring started BEFORE the Modal's
+ *       Android dialog window existed. Reanimated begins animating the
+ *       shared value at assignment; the dialog's window creation + first
+ *       composite land several frames later, so the sheet SURFACED
+ *       mid-rise (at {180,24} it had already covered a third of its travel
+ *       by the time it was visible) and finished its settle from there —
+ *       "opens, then replays", the exact R118 artifact wearing a new mask.
+ *       The frames that DID show ran concurrently with the window-creation
+ *       work on the native threads — the stutter. FIX: the entrance arms
+ *       from the Modal's own onShow (Android wires the Dialog's
+ *       OnShowListener — the window EXISTS when it fires), with a 150ms JS
+ *       timeout guard so a platform that never fires onShow cannot leave
+ *       the sheet hanging below the fold. The static pose holds every
+ *       pre-arm frame, so the owner now sees 100% of the rise, on frame one.
+ *   (2) THE OVER-TRAVEL. panelTravel was maxHeightFraction × window + 48
+ *       (~670dp on a tall phone) regardless of the panel's real content
+ *       height — a settle tuned for a 300-400dp disclosure ran at ~2x
+ *       velocity, the "zip" that read as ugly. FIX: the travel is the
+ *       panel's MEASURED height (the fraction bound only holds the
+ *       pre-layout frames, while the panel is fully below the fold either
+ *       way). Height updates are accepted only while the progress is at
+ *       rest (0 or 1) so a mid-flight layout — the keyboard remainder
+ *       growing the scroller's padding — can never re-base the travel under
+ *       a moving panel, while a level swap that grows the panel at rest
+ *       still updates the close's travel (the exit always hides the WHOLE
+ *       panel).
+ *   (3) THE CLOSE + THE CONTENT RIDE. The R119 close was an ease-IN quad:
+ *       it covered 2.7% of its travel in the first two frames — the sheet
+ *       visibly LINGERED after the dismissal tap ("do not play in the
+ *       proper time"), and the content pre-faded out (120ms) while the
+ *       panel still sat there — the sheet emptied itself, then left. FIX:
+ *       one coordinated timeline — the close departs on frame one
+ *       (ease-OUT cubic, 220ms, BOTH legs, the exact callback owning the
+ *       unmount so the Modal can never zombie past its own exit eating
+ *       taps), the content never fades (the fold reveals it on the way in,
+ *       the panel carries it away on the way out), and the R119 content
+ *       ride (120ms fade, 40ms late) is DELETED — it was a patch on the
+ *       start race and read as a late pop now that the rise is whole.
+ *
+ * Frozen this round (verified untouched): the R118-A first-frame static
+ * poses, SHEET_CHROME/SHEET_HEADER_ROW, SKIRT_PX, the clamp + skirt +
+ * overScrollMode, maxHeightFraction, and the R118-E keyboard-ride mechanics
+ * (the ride inherits the same SHEET_SPRING). Reduced motion: the panel
+ * never travels — it snaps to its rest pose and the SCRIM fades (the only
+ * leg that is a pure fade); the close snaps both and unmounts on the
+ * scrim's callback.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Keyboard,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -83,7 +133,6 @@ import Animated, {
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
-  withDelay,
   withSpring,
   withTiming,
 } from "react-native-reanimated";
@@ -93,10 +142,10 @@ import { QuietIconButton } from "@/design/primitives";
 import { RADIUS_TILE, SHEET_HEADER_ROW, spacing, TYPE_TITLE, fontFamily } from "@/design/tokens";
 import {
   SHEET_CLOSE_MS,
-  SHEET_CONTENT_FADE_DELAY_MS,
-  SHEET_CONTENT_FADE_MS,
   SHEET_SCRIM_OPEN_MS,
+  SHEET_SHOW_ARM_FALLBACK_MS,
   SHEET_SPRING,
+  sheetPanelTravelPx,
 } from "@/design/motion";
 
 export interface SheetProps {
@@ -140,25 +189,114 @@ export function Sheet({
   const maxContentHeight =
     Math.max(240, Math.round(windowHeight * maxHeightFraction) - SHEET_CHROME) +
     skirtDepth;
-  // R115 — two independent values: the panel spring and the scrim's faster
-  // timing. Mount/unmount discipline: the panel springs IN on open, times OUT
+  // R115 — two independent values: the panel spring and the scrim's timed
+  // fade. Mount/unmount discipline: the panel springs IN on open, times OUT
   // on close, and the Modal unmounts only after the exit settles — one clean
   // animation, never a hard cut, never a flash of unanimated content.
+  // R120-S — the values are armed from the Modal's own onShow (see the
+  // R120-S header note (1)): the spring never burns frames against a window
+  // that does not exist yet.
   const panelProgress = useSharedValue(0);
   const scrimProgress = useSharedValue(0);
-  // R119-P — the CONTENT RIDE: a third value fading the children container
-  // (below the header row) in 40ms after the panel begins to move (120ms,
-  // ease-out) — the header lands first, the body follows; the read is "the
-  // sheet settles onto its content" instead of one flat block snapping up.
-  // Driven in the SAME open/close effect as the panel (one effect, three
-  // values — no second animation pipeline).
-  const contentProgress = useSharedValue(0);
   const [rendered, setRendered] = useState(open);
-  // The content ride honors the house reduced-motion pattern (the
-  // primitives' Entrance idiom: snap to the end state, never a fade). The
-  // panel/scrim legs stay always-on exactly as R115/R116-b/R118-A left
-  // them — their laws are frozen this round.
   const reducedMotion = useReducedMotion();
+
+  // R120-S — the frame-one law's plumbing: `openRef` (the arm reads the LIVE
+  // open state — native events land between renders), `armedRef` (one arm
+  // per open cycle), `shownRef` (this Modal instance's window is up — the
+  // reopen-during-close shortcut), and the fallback timer (the onShow
+  // guard). `renderedRef` mirrors the state for the effect's branch reads.
+  const openRef = useRef(open);
+  const armedRef = useRef(false);
+  const shownRef = useRef(false);
+  const renderedRef = useRef(open);
+  const armTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const hideRendered = useCallback(() => {
+    // The race guard: a close callback that was already dispatched when the
+    // owner re-opened must NOT tear the window down under the rising panel.
+    if (openRef.current) return;
+    renderedRef.current = false;
+    shownRef.current = false;
+    setRendered(false);
+  }, []);
+
+  const clearArmTimer = useCallback(() => {
+    if (armTimerRef.current !== null) {
+      clearTimeout(armTimerRef.current);
+      armTimerRef.current = null;
+    }
+  }, []);
+
+  // R120-S — THE ENTRANCE, armed on the first frame the window exists. Both
+  // legs start together (one coordinated timeline): the scrim fades in over
+  // SHEET_SCRIM_OPEN_MS ease-out cubic (completing as the settle lands) while
+  // the panel rises its own measured height on the SHEET spring. Reduced
+  // motion snaps the panel to rest — the scrim's fade is the only leg left.
+  const armEntrance = useCallback(() => {
+    if (armedRef.current || !openRef.current) return;
+    armedRef.current = true;
+    clearArmTimer();
+    scrimProgress.value = withTiming(1, {
+      duration: SHEET_SCRIM_OPEN_MS,
+      easing: Easing.out(Easing.cubic),
+    });
+    panelProgress.value = reducedMotion ? 1 : withSpring(1, SHEET_SPRING);
+  }, [reducedMotion, clearArmTimer, scrimProgress, panelProgress]);
+
+  useEffect(() => {
+    openRef.current = open;
+    if (open) {
+      armedRef.current = false;
+      if (shownRef.current) {
+        // The window is already up — a close was interrupted mid-flight (no
+        // second onShow will fire for the live window): arm immediately.
+        armEntrance();
+        return;
+      }
+      renderedRef.current = true;
+      setRendered(true);
+      // The onShow guard: if the platform's onShow never lands, arm anyway —
+      // the sheet can never hang below the fold.
+      clearArmTimer();
+      armTimerRef.current = setTimeout(() => armEntrance(), SHEET_SHOW_ARM_FALLBACK_MS);
+      return;
+    }
+    // R120-S — THE CLOSE: one coordinated departure on frame one (the R119
+    // ease-in linger died — it covered 2.7% of the travel in two frames, the
+    // sheet sat there before leaving). Both legs ride SHEET_CLOSE_MS
+    // ease-out cubic; the panel's exact callback owns the unmount so the
+    // transparent Modal can never outlive its own exit and eat taps.
+    clearArmTimer();
+    if (!renderedRef.current) return;
+    if (reducedMotion) {
+      // motion.md §5 — reduced motion: the panel never travels. Both legs
+      // snap; the scrim's fade carries the exit and its callback unmounts.
+      panelProgress.value = 0;
+      scrimProgress.value = withTiming(
+        0,
+        { duration: SHEET_CLOSE_MS, easing: Easing.out(Easing.cubic) },
+        (finished) => {
+          if (finished) runOnJS(hideRendered)();
+        },
+      );
+      return;
+    }
+    scrimProgress.value = withTiming(0, {
+      duration: SHEET_CLOSE_MS,
+      easing: Easing.out(Easing.cubic),
+    });
+    panelProgress.value = withTiming(
+      0,
+      { duration: SHEET_CLOSE_MS, easing: Easing.out(Easing.cubic) },
+      (finished) => {
+        if (finished) runOnJS(hideRendered)();
+      },
+    );
+  }, [open, reducedMotion, armEntrance, clearArmTimer, hideRendered, panelProgress, scrimProgress]);
+
+  // The fallback timer must never outlive the component.
+  useEffect(() => clearArmTimer, [clearArmTimer]);
 
   // R118-E — the keyboard ride: how far the panel lifts when the IME shows
   // (clamped to the headroom between the panel's resting top and the screen
@@ -169,57 +307,21 @@ export function Sheet({
   const [panelRestTopY, setPanelRestTopY] = useState(windowHeight);
   const [kbRemainder, setKbRemainder] = useState(0);
 
-  useEffect(() => {
-    if (open) {
-      setRendered(true);
-      // R119-P: the scrim eases OUT over 200ms (was 160 linear) — the dim
-      // completes as the panel crosses the fold, without the abrupt tail
-      // the linear cut left.
-      scrimProgress.value = withTiming(1, {
-        duration: SHEET_SCRIM_OPEN_MS,
-        easing: Easing.out(Easing.cubic),
-      });
-      // R116-b: the over-damped SHEET spring — heavy and settled, no bounce.
-      // R119-P: SHEET_SPRING is now the house DISCLOSURE settle {180, 24}
-      // (the owner's "animations were not that good" verdict — the R116-b
-      // 210/30 pair read as a snap-cut; see motion.ts).
-      panelProgress.value = withSpring(1, SHEET_SPRING);
-      // R119-P: the content ride — delayed 40ms so the panel's rise leads,
-      // then a 120ms ease-out fade (or the instant snap under reduced
-      // motion — never a fade for the reduced-motion reader).
-      contentProgress.value = reducedMotion
-        ? 1
-        : withDelay(
-            SHEET_CONTENT_FADE_DELAY_MS,
-            withTiming(1, { duration: SHEET_CONTENT_FADE_MS, easing: Easing.out(Easing.cubic) }),
-          );
-      return;
-    }
-    // R119-P: the close is an accelerating DEPARTURE — 200ms ease-in quad
-    // on both legs (was 180ms linear panel + 160ms linear scrim): the sheet
-    // gathers itself and leaves, matching how a dismissal feels. The scrim
-    // matches the panel's duration + curve so the dim and the slide read as
-    // ONE exit.
-    scrimProgress.value = withTiming(0, {
-      duration: SHEET_CLOSE_MS,
-      easing: Easing.in(Easing.quad),
-    });
-    panelProgress.value = withTiming(
-      0,
-      { duration: SHEET_CLOSE_MS, easing: Easing.in(Easing.quad) },
-      (finished) => {
-        if (finished) runOnJS(setRendered)(false);
-      },
-    );
-    contentProgress.value = withTiming(0, {
-      duration: SHEET_CONTENT_FADE_MS,
-      easing: Easing.in(Easing.quad),
-    });
-  }, [open, panelProgress, scrimProgress, contentProgress, reducedMotion]);
+  // R120-S — the panel's MEASURED height (the travel tuning): accepted only
+  // while the progress sits at a rest end (0 or 1) so a mid-flight layout
+  // (the keyboard remainder growing the scroller's padding) can never
+  // re-base the travel under a moving panel — while a content swap that
+  // grows the panel AT REST still updates it, so the close always hides the
+  // whole panel.
+  const [panelHeight, setPanelHeight] = useState(0);
+  const acceptMeasuredHeight = useCallback(
+    (height: number) => {
+      const atRest = panelProgress.value === 0 || panelProgress.value === 1;
+      if (atRest) setPanelHeight(height);
+    },
+    [panelProgress],
+  );
 
-  // R118-E — RN-core Keyboard events fire from the window hosting the
-  // focused TextInput (the Modal's own dialog window on Android), so the
-  // feed is guaranteed inside the sheet with zero library plumbing.
   useEffect(() => {
     if (!rendered) return;
     const show = Keyboard.addListener("keyboardDidShow", (e) => {
@@ -245,19 +347,18 @@ export function Sheet({
     }
   }, [rendered, rise]);
 
-  // The panel's slide travel: at least its own maximum height, so the sheet
-  // enters from fully below the fold — the background is never visible
-  // through or beneath the rising panel.
-  const panelTravel = Math.round(windowHeight * maxHeightFraction) + 48;
+  // R120-S — the panel's slide travel: its OWN measured height once layout
+  // has reported (the settle is tuned for a 300-400dp disclosure — the old
+  // maxHeightFraction × window + 48 bound ran the same settle at ~2x
+  // velocity, the "zip" the owner read as ugly). The fraction bound holds
+  // only the pre-layout frames, while the panel is fully below the fold
+  // either way — the swap to the measured travel is invisible.
+  const panelTravel = sheetPanelTravelPx(
+    panelHeight,
+    Math.round(windowHeight * maxHeightFraction) + 48,
+  );
 
   const scrim = useAnimatedStyle(() => ({ opacity: scrimProgress.value }));
-  // R119-P — the content ride's style (the children container below the
-  // header row). The STATIC zero-opacity pose placed BEFORE the animated
-  // style is the R118-A first-frame law applied to the new value: the
-  // Modal's first composited frame(s) must find the content hidden exactly
-  // as they find the panel below the fold (last-wins takes over once the
-  // worklet reports).
-  const contentFade = useAnimatedStyle(() => ({ opacity: contentProgress.value }));
   // R116-b — the clamp: the progress is interpolated on [0,1] with
   // Extrapolation.CLAMP, so even if a spring ever overshoots 1 the translateY
   // can never go positive past the resting position. R118-E — the keyboard
@@ -277,6 +378,16 @@ export function Sheet({
     ],
   }));
 
+  // R120-S — the Modal's own onShow (Android wires the Dialog's
+  // OnShowListener): the window EXISTS when this fires, so arming here means
+  // the spring's first visible frame is its first animated frame. The
+  // SHEET_SHOW_ARM_FALLBACK_MS timer in the open effect is the guard if a
+  // platform never delivers the event.
+  const onModalShown = useCallback(() => {
+    shownRef.current = true;
+    armEntrance();
+  }, [armEntrance]);
+
   return (
     <Modal
       visible={rendered}
@@ -285,6 +396,7 @@ export function Sheet({
       statusBarTranslucent
       navigationBarTranslucent
       onRequestClose={onClose}
+      onShow={onModalShown}
       testID={testID}
     >
       <View style={StyleSheet.absoluteFill}>
@@ -316,6 +428,9 @@ export function Sheet({
               // transform, so y is stable at rest) — the keyboard ride's
               // headroom reference.
               setPanelRestTopY(e.nativeEvent.layout.y);
+              // R120-S — the measured height (see acceptMeasuredHeight for
+              // the at-rest gate).
+              acceptMeasuredHeight(e.nativeEvent.layout.height);
             }}
             style={[
               styles.panel,
@@ -360,13 +475,14 @@ export function Sheet({
                 accessibilityLabel="Close"
               />
             </View>
-            {/* R119-P — the CONTENT RIDE: the scroller (everything below the
-                header row) fades in 40ms after the panel begins its rise —
-                the header lands first, the body follows. The scroller keeps
-                its R114 pixel clamp + the R116-b/R118-E padding laws
-                byte-identical; only the opacity rides. */}
-            <Animated.ScrollView
-              style={[{ maxHeight: maxContentHeight }, { opacity: 0 }, contentFade]}
+            {/* R120-S — the R119 content ride is DELETED (a 120ms fade
+                starting 40ms late — a patch on the start race that read as a
+                pop): the panel is fully opaque and the fold itself reveals
+                the content top-first as the panel rises its own height. The
+                scroller keeps its R114 pixel clamp + the R116-b/R118-E
+                padding laws byte-identical. */}
+            <ScrollView
+              style={{ maxHeight: maxContentHeight }}
               contentContainerStyle={[
                 styles.content,
                 {
@@ -387,7 +503,7 @@ export function Sheet({
               overScrollMode="never"
             >
               {children}
-            </Animated.ScrollView>
+            </ScrollView>
           </Animated.View>
         </View>
       </View>
