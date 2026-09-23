@@ -171,8 +171,21 @@ describe("streamAiSdkChat tool-input forwarding (ROUND-58 R58-c)", () => {
     const sessionId = await createSession();
     const seen: unknown[] = [];
     const chatStream = async function* (): AsyncGenerator<StreamChatEvent> {
+      // ROUND-120 (R120-H): the mock now models the REAL wire — every
+      // tool-input-start completes with its tool-call (and the call with its
+      // tool-result) before the stream ends. A dangling input-start is a
+      // dropped connection, which the runtime's mid-tool truncation
+      // invariant now correctly refuses to treat as a clean iteration end.
       yield { type: "tool-input-start", toolCallId: "call-1", toolName: "write_file" };
       yield { type: "tool-input-delta", toolCallId: "call-1", inputTextDelta: '{"path":"a.txt"' };
+      yield { type: "tool-call", toolName: "write_file", argsSummary: "path: a.txt" };
+      yield {
+        type: "tool-result",
+        toolName: "write_file",
+        argsSummary: "path: a.txt",
+        ok: true,
+        outputSummary: "wrote 2 bytes",
+      };
       yield { type: "text-delta", delta: "Writing your file now." };
       yield { type: "finish", usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 } };
     };
