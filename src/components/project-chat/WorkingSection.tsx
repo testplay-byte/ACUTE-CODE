@@ -107,10 +107,17 @@ import { withAlpha } from "../dashboard/helpers";
  *     tools, thoughts, narration, approvals, captures — pluralized honestly)
  *     · failure count — "· N failed" in the danger color when N > 0 (R117-f);
  *     · tool count — "· N tools" only when tools > 0;
- *     · duration — the right-aligned mono tabular-nums chip (mm:ss — the
- *       same formatClock the live clock speaks). LIVE rows keep "● Working"
- *     with the actions counter + elapsed clock right-aligned instead.
- *
+ *     · ROUND-120 (R120-C-PC, item 36): NO duration — the per-section
+ *       right-aligned clock chip is GONE (the owner's "8-9 separate
+ *       right-side blocks"); the turn footer's ONE consolidated
+ *       "Ran 4m 12s · 23 actions · 18.2k tokens" block owns the answer, and
+ *       a LIVE turn renders ONE clock (clockVisible gates it to the turn's
+ *       FIRST live work section).
+ *     · ROUND-120 (R120-C-PC, item 35): the FILE-MUTATION rows (write/
+ *       edit/create/delete) render OUTSIDE the collapse — the mutations the
+ *       agent made to the project are never hidden behind the expand (the
+ *       owner: "file edits, created files… are not shown — the center never
+ *       renders them").
  *   FULL (expanded — the complete timeline, in order): every ThoughtRow
  *     (one-line, expandable, fence-aware), NarrationRow interjections, each
  *     ToolLine pill (leading outcome glyph ✓/✗/◌ + verb + target + the
@@ -213,13 +220,13 @@ const TOOL_LABELS: Record<string, string> = {
  * fresh [] there would re-render on every store tick). */
 const EMPTY_STREAMING_INPUTS: StreamingToolInput[] = [];
 
-/** Elapsed seconds between two ISO stamps (0 when unparseable). */
-function elapsedSeconds(start: string, end: string): number {
-  const a = Date.parse(start);
-  const b = Date.parse(end);
-  if (Number.isNaN(a) || Number.isNaN(b)) return 0;
-  return Math.max(0, Math.round((b - a) / 1000));
-}
+/** ROUND-120 (R120-C-PC, item 35): the FILE-MUTATION family — the tool rows
+ * that stay VISIBLE under a COLLAPSED section (folded or live): the owner's
+ * round-120 verdict was that "file edits, created files… are not shown —
+ * the center never renders them", and the R38 fold-by-default design was
+ * exactly what hid them. Reads/searches/commands stay behind the expand;
+ * the mutations the agent made to the project NEVER hide. */
+export const FILE_MUTATION_TOOLS = new Set(["write_file", "edit_file", "create_dir", "delete_file"]);
 
 /** ROUND-52 (R52-c): the amber warning tone for the stalled-watch line
  * (same value SubAgentPanel uses — a semantic, theme-stable warning color). */
@@ -2230,13 +2237,12 @@ export function WorkingSection({
   entries,
   sessionId,
   projectId,
-  ts,
-  endTs,
   live = false,
   startedAtMs,
   stopped = false,
   liveEntryIndex,
   defaultOpen,
+  clockVisible = true,
   onApprovalDecision,
   onQuestionAnswer,
 }: {
@@ -2245,10 +2251,6 @@ export function WorkingSection({
   /** ROUND-40: the chat panel's project id — threaded down to SubAgentCard
    * so clicking a sub-agent task opens its tab in the right sidebar. */
   projectId: string;
-  /** Turn start (folded turns). */
-  ts?: string;
-  /** Turn end (folded turns). */
-  endTs?: string;
   /** Streaming now — the header counts up and pulses. */
   live?: boolean;
   /** Wall-clock turn start for the live timer. */
@@ -2264,8 +2266,14 @@ export function WorkingSection({
    * preference — unless collapseHint says the turn was just watched live.
    * ROUND-38: the Detailed/Compact/Hidden toggle is gone; folded turns
    * now start COLLAPSED (the owner's "Worked for Ns → click to expand"
-   * design), live turns start expanded. */
+   * design), live turns start expanded.
+   * ROUND-120 (R120-C-PC, item 36): the turn renders ONE live clock — the
+   * panel passes clockVisible only on the turn's FIRST live work section
+   * (before, every segmented live section painted its own right-aligned
+   * elapsed clock — the owner's "8-9 separate right-side blocks"). */
   defaultOpen?: boolean;
+  /** R120-C-PC (item 36): gates the live elapsed clock (default true). */
+  clockVisible?: boolean;
   onApprovalDecision?: (approvalId: string, decision: ApprovalDecisionChoice, remember: ApprovalRemember) => void;
   /** ROUND-87 (R87): resolve a pending ask_user card (answers aligned per
    * question, sources = option-pick vs custom-typed). Wired on LIVE sections
@@ -2294,7 +2302,6 @@ export function WorkingSection({
   }, [live]);
 
   const liveSeconds = useLiveSeconds(startedAtMs, live && !stopped);
-  const foldedSeconds = ts !== undefined && endTs !== undefined ? elapsedSeconds(ts, endTs) : 0;
 
   // ROUND-58 (R58-cf): in-flight tool-ARG streaming — write_file/edit_file
   // calls whose JSON args the model is still generating (a tool-input-start
@@ -2312,6 +2319,15 @@ export function WorkingSection({
 
   const toolCount = entries.filter((e) => e.type === "tool").length;
   const pendingApproval = entries.some((e) => e.type === "approval" && e.status === "pending");
+  // R120-C-PC (item 35): the rows that ride OUTSIDE the collapse — every
+  // file-mutation entry (write/edit/create/delete), plus — while LIVE — the
+  // PENDING streaming write inputs (a file being written right now is never
+  // hidden by a fold). Derived once so the collapsed block renders ONLY when
+  // it has something to show (no phantom padding on a read-only fold).
+  const fileMutationRows: WorkingEntry[] = entries.filter(
+    (e) => e.type === "tool" && FILE_MUTATION_TOOLS.has(e.tool.toolName),
+  );
+  const showFoldFileRows = fileMutationRows.length > 0 || (live && pendingWriteInputs.length > 0);
 
   // ── ROUND-64 (R64-c): claim-match the parent's live children to THIS
   // section's delegate_task rows. WorkingSection maps every tool row of the
@@ -2329,12 +2345,14 @@ export function WorkingSection({
   );
 
   // ── R99-B: the header grammar (the COMPRESSED/FULL matrix in the file
-  // docblock). FOLDED: ✓ success glyph + "Completed N steps" + "· N tools" +
-  // the right-aligned duration chip. LIVE: ● pulsing accent dot + "Working"
-  // (+ the amber waiting note) with the actions counter + elapsed clock
-  // right-aligned. Every number is mono tabular-nums — counts and clocks
-  // grow without width jitter (the owner's anti-jitter discipline). A
-  // stopped live section keeps the Square glyph (the TurnStoppedCard mark).
+  // docblock). FOLDED: ✓ success glyph + "Completed N steps" + "· N tools".
+  // LIVE: ● pulsing accent dot + "Working" (+ the amber waiting note) with
+  // the actions counter + elapsed clock right-aligned — R120-C-PC (item 36):
+  // the clock renders only on the turn's FIRST live work section
+  // (clockVisible) so one turn paints ONE clock, never a stack of them.
+  // Every number is mono tabular-nums — counts and clocks grow without
+  // width jitter (the owner's anti-jitter discipline). A stopped live
+  // section keeps the Square glyph (the TurnStoppedCard mark).
   // The status word rides the aria-label — the row button's aria-label
   // REPLACES interior content for assistive tech, so an interior sr-only
   // span would never be announced; the label says it outright.
@@ -2357,17 +2375,19 @@ export function WorkingSection({
   const failedSuffix = !live && failedToolCount > 0 ? ` · ${failedToolCount} failed` : "";
   const liveActionLabel =
     live && toolCount > 0 ? `${toolCount} ${toolCount === 1 ? "action" : "actions"}` : "";
+  // R120-C-PC (item 36): ONE live clock per turn (clockVisible — the panel
+  // passes it only on the first live work section); folded sections carry
+  // no duration at all anymore (the turn footer's consolidated block owns
+  // the "how long it ran" answer).
   const liveClock =
-    live && !stopped && startedAtMs !== undefined ? formatClock(liveSeconds * 1000) : null;
-  const foldedClock =
-    !live && ts !== undefined && endTs !== undefined ? formatClock(foldedSeconds * 1000) : null;
+    live && !stopped && startedAtMs !== undefined && clockVisible
+      ? formatClock(liveSeconds * 1000)
+      : null;
   const ariaSummary = live
     ? `${headerLabel}${liveActionLabel !== "" ? ` · ${liveActionLabel}` : ""}${
         liveClock !== null ? ` · ${liveClock}` : ""
       }`
-    : `${headerLabel}${toolSuffix}${failedSuffix}${
-        foldedClock !== null ? ` · ${foldedClock}` : ""
-      }`;
+    : `${headerLabel}${toolSuffix}${failedSuffix}`;
 
   return (
     <div className="min-w-0">
@@ -2443,20 +2463,43 @@ export function WorkingSection({
             {liveClock}
           </span>
         ) : null}
-        {!live && foldedClock !== null ? (
-          <span
-            data-testid="work-duration-chip"
-            className="shrink-0 font-mono text-[10px] tabular-nums px-1.5 py-0.5 rounded-full"
-            style={{ background: styles.subtle, color: styles.textTertiary }}
-            title="How long this work section ran"
-          >
-            {foldedClock}
-          </span>
-        ) : null}
         <motion.span animate={{ rotate: expanded ? 0 : -90 }} transition={{ duration: 0.18, ease: [0.25, 0.1, 0.25, 1] }} className="shrink-0">
           <ChevronDown size={12} style={{ color: styles.textTertiary }} />
         </motion.span>
       </div>
+      {/* ── ROUND-120 (R120-C-PC, item 35): the FILE-MUTATION rows ride
+          OUTSIDE the collapse. The owner's verdict — "file edits, created
+          files… are not shown — the center never renders them" — was the
+          R38 fold-by-default design hiding every write/edit/create/delete
+          behind the "Completed N steps" header. Now those rows render as
+          the SAME compact ToolLine rows the expanded body speaks (path
+          pill + status glyph + the one-line summary — the PC vocabulary,
+          reused verbatim), visible whether the section is collapsed or
+          not; expanding swaps them into the full timeline in place (never
+          a duplicate). Reads/searches/commands keep their home behind the
+          expand. While LIVE and collapsed, the PENDING streaming writes
+          ride here too (the honest live center: a file being written is
+          never hidden by a fold). ── */}
+      {!expanded && showFoldFileRows ? (
+        <div className="py-0.5 flex flex-col gap-0.5" data-testid="fold-file-rows">
+          {fileMutationRows.map((entry) =>
+            entry.type === "tool" ? (
+              <ToolLine
+                key={`fold-file-${entry.tool.seq}`}
+                tool={entry.tool}
+                sessionId={sessionId}
+                live={live}
+                projectId={projectId}
+              />
+            ) : null,
+          )}
+          {live
+            ? pendingWriteInputs.map((si) => (
+                <LiveWritePendingRow key={`sw-${si.toolCallId}`} toolName={si.toolName} raw={si.raw} />
+              ))
+            : null}
+        </div>
+      ) : null}
       <AnimatePresence initial={false}>
         {expanded && (
           <motion.div

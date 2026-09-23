@@ -239,10 +239,13 @@ describe("ChatMarkdown block rendering", () => {
     // R117-f re-pin (deliverable 4): the heading LADDER is back — h1–h3
     // scale off the 13px body in EM (1.5 / 1.3 / 1.15 — the chat's text-size
     // setting tracks them through .chat-prose's calc) with a 700 / 650 / 600
-    // weight run; h4–h6 ≈ 0.9em/600. The weights moved from the old
-    // font-semibold class to inline styles so the per-level ladder can
-    // speak (R100-D's anti-staircase was about no-huge-jumps, not
-    // no-hierarchy — h1 at 1.5em never touches the 24px title tier).
+    // weight run. R120-C-PC (item 39) floors h4–h6 at 1em — the R117-f
+    // 0.9em rungs rendered a `####` heading SMALLER than its own body text
+    // (the owner's "no proper headings"); a heading never goes under body.
+    // The weights moved from the old font-semibold class to inline styles so
+    // the per-level ladder can speak (R100-D's anti-staircase was about
+    // no-huge-jumps, not no-hierarchy — h1 at 1.5em never touches the 24px
+    // title tier).
     for (const text of ["Big", "Medium", "Small", "Tiny"]) {
       expect(blockFor(text).style.fontWeight).not.toBe("");
       expect(Number(blockFor(text).style.fontWeight)).toBeGreaterThanOrEqual(600);
@@ -255,7 +258,7 @@ describe("ChatMarkdown block rendering", () => {
     expect(blockFor("Medium").style.fontWeight).toBe("650");
     expect(blockFor("Small").style.fontSize).toBe("1.15em");
     expect(blockFor("Small").style.fontWeight).toBe("600");
-    expect(blockFor("Tiny").style.fontSize).toBe("0.9em");
+    expect(blockFor("Tiny").style.fontSize).toBe("1em");
     expect(blockFor("Tiny").style.fontWeight).toBe("600");
     // The taller rungs carry the tighter 1.3 measure (body 1.65 at 20px
     // reads as padding, not rhythm).
@@ -459,6 +462,15 @@ describe("CodeBlock direct render (moved from AgentChatPanel)", () => {
   it("R95-F: no `lang` (or empty) renders NO badge", () => {
     renderWithProviders(<CodeBlock code={"x"} />);
     expect(document.querySelector("[data-code-lang]")).toBeNull();
+  });
+
+  it("R120-C-PC (item 39): the code body carries the house CODE-SURFACE tint (the block never reads as flat prose on the card)", () => {
+    renderWithProviders(<CodeBlock code={"x"} lang="ts" />);
+    const pre = document.querySelector("pre.acute-code-hl") as HTMLElement;
+    expect(pre).not.toBeNull();
+    // The TerminalDetail/LiveWritePreview idiom, verbatim: dark → the 30%
+    // black well, light → the 3% wash (the test theme pins nova + dark).
+    expect(pre.style.background).toBe("rgba(0, 0, 0, 0.3)");
   });
 });
 

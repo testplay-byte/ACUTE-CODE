@@ -16,7 +16,13 @@ import type { ReactElement } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
-import { BareWorkingEntries, WorkingSection, assignDelegateChildren, toolStatusDetail } from "./WorkingSection";
+import {
+  BareWorkingEntries,
+  FILE_MUTATION_TOOLS,
+  WorkingSection,
+  assignDelegateChildren,
+  toolStatusDetail,
+} from "./WorkingSection";
 import {
   ApiError,
   fetchComputerFrameRaster,
@@ -1600,19 +1606,16 @@ describe("R99-B working-section summaries + tool-row anatomy", () => {
     { type: "tool", tool: { seq: 22, toolName: "run_command", argsSummary: "cmd: pnpm test", ok: true, ts: "2026-09-06T10:00:40Z", outputSummary: "3 passed\n[exit code: 0]" } },
   ];
 
-  it("the FOLDED summary row: ✓ success glyph + 'Completed N steps' + '· N tools' + the right-aligned mm:ss duration chip (tabular-nums)", () => {
+  it("the FOLDED summary row: ✓ success glyph + 'Completed N steps' + '· N tools' — NO duration (R120-C-PC item 36: the turn footer's ONE consolidated block owns it)", () => {
     renderWithProviders(
-      <WorkingSection
-        entries={FOLDED_ENTRIES}
-        sessionId={SESSION_ID}
-        projectId="proj_probe"
-        ts="2026-09-06T10:00:00Z"
-        endTs="2026-09-06T10:01:12Z"
-      />,
+      <WorkingSection entries={FOLDED_ENTRIES} sessionId={SESSION_ID} projectId="proj_probe" />,
     );
 
-    // The compressed grammar: 3 steps · 2 tools · 1:12 (72s → m:ss, the live
-    // clock's own formatClock formatting).
+    // The compressed grammar: 3 steps · 2 tools — and NOTHING else. The
+    // per-section right-aligned duration chip is GONE (the owner's
+    // "8-9 separate right-side blocks"); the turn footer's ONE consolidated
+    // "Ran … · N actions · … tokens" block (AgentChatPanel's ReplyStats)
+    // owns the how-long answer for the whole turn.
     const header = screen.getByTestId("work-section-header");
     expect(header.textContent).toContain("Completed 3 steps");
     expect(header.textContent).toContain("· 2 tools");
@@ -1622,20 +1625,17 @@ describe("R99-B working-section summaries + tool-row anatomy", () => {
     expect(glyphSvg).not.toBeNull();
     expect(glyphSvg!.style.color).toBe(SEMANTIC_COLORS.success);
     // The row announces the outcome in its label (aria-label replaces
-    // interior content for AT — the word rides the label).
-    expect(header.getAttribute("aria-label")).toContain("Completed 3 steps · 2 tools · 1:12.");
-    // The duration chip: right-aligned, mono tabular-nums, m:ss.
-    const chip = screen.getByTestId("work-duration-chip");
-    expect(chip.textContent).toBe("1:12");
-    expect(chip.className).toContain("tabular-nums");
-    expect(chip.className).toContain("font-mono");
-    // The chip sits AFTER the flex-1 spacer → right-aligned.
-    const spacer = header.querySelector("span.flex-1");
-    expect(spacer).toBeTruthy();
-    expect(spacer!.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // interior content for AT — the word rides the label) — duration-free.
+    expect(header.getAttribute("aria-label")).toContain("Completed 3 steps · 2 tools.");
+    expect(header.getAttribute("aria-label")).not.toContain("1:12");
+    // The retired chip is REALLY gone — never a phantom right-side block.
+    expect(screen.queryByTestId("work-duration-chip")).toBeNull();
+    // Item 35's law, the negative leg: this fold carries only reads/commands
+    // (no file mutations) → NO fold-file-rows block renders at all.
+    expect(screen.queryByTestId("fold-file-rows")).toBeNull();
   });
 
-  it("honest pluralization + no duration when the fold carries no timestamps (never an invented 0:00)", () => {
+  it("honest pluralization — ONE entry + ONE tool reads '1 step · 1 tool', and no duration ever rides the fold now", () => {
     renderWithProviders(
       <WorkingSection
         entries={[{ type: "tool", tool: { seq: 31, toolName: "list_dir", argsSummary: "path: .", ok: true, ts: "t" } }]}
@@ -1647,7 +1647,8 @@ describe("R99-B working-section summaries + tool-row anatomy", () => {
     // ONE entry + ONE tool: "1 step · 1 tool" — pluralized honestly.
     expect(header.textContent).toContain("Completed 1 step");
     expect(header.textContent).toContain("· 1 tool");
-    // No ts/endTs on the section → no duration chip, never a fake 0:00.
+    // R120-C-PC (item 36): the folded duration is gone ENTIRELY (the
+    // ts/endTs props died with it) — never a fake 0:00, never any clock.
     expect(screen.queryByTestId("work-duration-chip")).toBeNull();
   });
 
@@ -1780,6 +1781,184 @@ describe("R99-B working-section summaries + tool-row anatomy", () => {
   });
 });
 
+// ── ROUND-120 (R120-C-PC): item 35 — the file-mutation rows ride OUTSIDE the
+//    collapse; item 36 — ONE live clock per turn (clockVisible) ──────────────
+// The owner's round-120 verdict: "file edits, created files… are not shown —
+// the center never renders them" — the R38 fold-by-default design hid every
+// write/edit/create/delete behind the "Completed N steps" header. Now the
+// FILE-MUTATION family renders as the same compact ToolLine rows the expanded
+// body speaks, visible whether the section is collapsed or not; reads/
+// searches/commands keep their home behind the expand.
+describe("R120-C-PC item 35: file-mutation rows outside the collapse", () => {
+  /** A folded section with one write, one edit, one create_dir — and reads/
+   *  commands that must stay behind the expand. */
+  const MUTATION_ENTRIES: WorkingEntry[] = [
+    { type: "tool", tool: { seq: 101, toolName: "read_file", argsSummary: "path: src/app.ts", ok: true, ts: "t1", outputSummary: "of 42 total" } },
+    { type: "tool", tool: { seq: 102, toolName: "write_file", argsSummary: "path: src/new-file.ts, content: 120 chars", ok: true, ts: "t2", outputSummary: "wrote 120 chars" } },
+    { type: "tool", tool: { seq: 103, toolName: "edit_file", argsSummary: "path: src/app.ts, content: 40 chars", ok: true, ts: "t3", outputSummary: "+3 −1" } },
+    { type: "tool", tool: { seq: 104, toolName: "create_dir", argsSummary: "path: src/lib/generated", ok: true, ts: "t4" } },
+    { type: "tool", tool: { seq: 105, toolName: "run_command", argsSummary: "cmd: pnpm test", ok: true, ts: "t5", outputSummary: "3 passed\n[exit code: 0]" } },
+  ];
+
+  it("COLLAPSED: every write/edit/create/delete row renders outside the collapse — reads and commands stay behind the expand", () => {
+    renderWithProviders(
+      <WorkingSection entries={MUTATION_ENTRIES} sessionId={SESSION_ID} projectId="proj_probe" />,
+    );
+    // The fold-file-rows block exists and carries EXACTLY the three
+    // file-mutation rows (the write, the edit, the create_dir).
+    const fold = screen.getByTestId("fold-file-rows");
+    const rows = fold.querySelectorAll('[data-testid="tool-line"]');
+    expect(rows).toHaveLength(3);
+    // The rows are the SAME compact ToolLines the expanded body speaks:
+    // verb label + clickable path pill + status glyph.
+    expect(fold.textContent).toContain("Wrote");
+    expect(fold.textContent).toContain("Edited");
+    expect(fold.textContent).toContain("Created");
+    expect(fold.querySelectorAll('[data-tool-status-kind="ok"]')).toHaveLength(3);
+    const writeRow = screen.getByRole("button", { name: /Wrote path: src\/new-file\.ts, content: 120 chars — completed$/ });
+    expect(writeRow.closest('[data-testid="fold-file-rows"]')).not.toBeNull();
+    // Reads and commands NEVER ride outside the collapse (the fold block
+    // carries no "Read"/"Ran" row — they stay behind the expand).
+    expect(fold.textContent).not.toContain("Read");
+    expect(fold.textContent).not.toContain("Ran");
+    expect(screen.queryByRole("button", { name: /Read path: src\/app\.ts — completed$/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Ran cmd: pnpm test — completed$/ })).toBeNull();
+  });
+
+  it("EXPANDING swaps the rows into the full timeline IN PLACE — never a duplicate, and the fold block is gone", async () => {
+    renderWithProviders(
+      <WorkingSection entries={MUTATION_ENTRIES} sessionId={SESSION_ID} projectId="proj_probe" />,
+    );
+    // Collapsed: the three mutation rows live in the fold block, the read +
+    // command rows are hidden.
+    expect(screen.getAllByTestId("tool-line")).toHaveLength(3);
+    fireEvent.click(screen.getByTestId("work-section-header"));
+    // Expanded: the fold block is GONE and the full timeline renders all
+    // FIVE rows exactly once (the mutations moved in place, not duplicated).
+    // The body mounts through framer-motion's height animation — wait for
+    // the fold block to be gone rather than asserting synchronously.
+    await waitFor(() => expect(screen.queryByTestId("fold-file-rows")).toBeNull());
+    expect(screen.getAllByTestId("tool-line")).toHaveLength(5);
+    expect(screen.getByRole("button", { name: /Read path: src\/app\.ts — completed$/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ran cmd: pnpm test — completed$/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Wrote path: src\/new-file\.ts, content: 120 chars — completed$/ })).toBeTruthy();
+    // Collapsing again brings the fold block back (the swap is reversible)
+    // — after the body's AnimatePresence EXIT settles (never both at once).
+    fireEvent.click(screen.getByTestId("work-section-header"));
+    expect(screen.getByTestId("fold-file-rows")).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByTestId("tool-line")).toHaveLength(3));
+  });
+
+  it("a LIVE section the user collapsed keeps the PENDING streaming write visible (a file being written is never hidden by a fold)", async () => {
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: {
+          liveTurn: {
+            startedAtMs: Date.now(),
+            working: [
+              { type: "tool", tool: { seq: 201, toolName: "write_file", argsSummary: "path: src/gen.ts, content: 80 chars", ok: true, ts: "t1", outputSummary: "wrote 80 chars" } },
+            ],
+            streamText: "",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [
+              {
+                toolCallId: "call_r120",
+                toolName: "write_file",
+                raw: '{"path":"src/streaming.ts","content":"export const A = 1;',
+              },
+            ],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: 0,
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: false,
+        },
+      },
+    });
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: { seq: 201, toolName: "write_file", argsSummary: "path: src/gen.ts, content: 80 chars", ok: true, ts: "t1", outputSummary: "wrote 80 chars" } }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+      />,
+    );
+    // Live sections auto-expand — collapse it by hand (the owner's own
+    // tap wins over the auto-expand), then wait for the body's exit to
+    // settle so exactly ONE pending row remains.
+    fireEvent.click(screen.getByTestId("work-section-header"));
+    await waitFor(() => expect(screen.getAllByTestId("live-write-pending-row")).toHaveLength(1));
+    // The fold block carries BOTH the settled write row AND the pending
+    // streaming write row (with its live preview).
+    const fold = screen.getByTestId("fold-file-rows");
+    expect(fold.querySelectorAll('[data-testid="tool-line"]')).toHaveLength(1);
+    const pending = screen.getByTestId("live-write-pending-row");
+    expect(fold.contains(pending)).toBe(true);
+    expect(pending.textContent).toContain("Writing");
+    expect(screen.getByTestId("live-write-preview").textContent).toContain("export const A = 1;");
+  });
+
+  it("FILE_MUTATION_TOOLS is exactly the write/edit/create/delete family — reads, commands and searches are NOT members", () => {
+    expect(FILE_MUTATION_TOOLS.has("write_file")).toBe(true);
+    expect(FILE_MUTATION_TOOLS.has("edit_file")).toBe(true);
+    expect(FILE_MUTATION_TOOLS.has("create_dir")).toBe(true);
+    expect(FILE_MUTATION_TOOLS.has("delete_file")).toBe(true);
+    expect(FILE_MUTATION_TOOLS.has("read_file")).toBe(false);
+    expect(FILE_MUTATION_TOOLS.has("run_command")).toBe(false);
+    expect(FILE_MUTATION_TOOLS.has("search_code")).toBe(false);
+    expect(FILE_MUTATION_TOOLS.has("list_dir")).toBe(false);
+  });
+});
+
+describe("R120-C-PC item 36: ONE live clock per turn (clockVisible)", () => {
+  it("clockVisible=false renders NO elapsed clock on the live header (the turn's first section owns the ONE clock)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        startedAtMs={Date.now() - 5_000}
+        clockVisible={false}
+      />,
+    );
+    const header = screen.getByTestId("work-section-header");
+    // No mono span matching the m:ss clock shape (a ~5s turn would render
+    // 0:0x while the clock were on).
+    const monoSpans = Array.from(header.querySelectorAll("span.font-mono"));
+    expect(monoSpans.find((s) => /^0:0\d$/.test(s.textContent ?? ""))).toBeUndefined();
+    expect(header.getAttribute("aria-label")).not.toMatch(/0:0\d/);
+  });
+
+  it("clockVisible defaults to true — the first live section still renders the elapsed clock", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        startedAtMs={Date.now() - 5_000}
+      />,
+    );
+    const header = screen.getByTestId("work-section-header");
+    const monoSpans = Array.from(header.querySelectorAll("span.font-mono"));
+    expect(monoSpans.find((s) => /^0:0\d$/.test(s.textContent ?? ""))).toBeTruthy();
+  });
+});
+
 // ── ROUND-101 (R101-F, DEFECT 4): mermaid fences in the thinking area ─────────
 // Owner (v0.98.0): "in the chat area it was not showing me the properly
 // rendered flow diagrams" — the ANSWER leg rendered diagrams since R98-D, but
@@ -1855,13 +2034,7 @@ describe("R117-f failure visibility (the folded header + the failed row)", () =>
 
   it("the folded header tells the truth: ✗ danger glyph + 'Completed N steps' + '· 1 failed' (never a clean ✓ over failed work)", () => {
     renderWithProviders(
-      <WorkingSection
-        entries={FAILED_ENTRIES}
-        sessionId={SESSION_ID}
-        projectId="proj_probe"
-        ts="2026-09-21T10:00:00Z"
-        endTs="2026-09-21T10:00:52Z"
-      />,
+      <WorkingSection entries={FAILED_ENTRIES} sessionId={SESSION_ID} projectId="proj_probe" />,
     );
     const header = screen.getByTestId("work-section-header");
     // The step + tool counts keep their grammar; the failure count joins in
@@ -1877,19 +2050,13 @@ describe("R117-f failure visibility (the folded header + the failed row)", () =>
     expect(glyphSvg).not.toBeNull();
     expect(glyphSvg!.style.color).toBe(SEMANTIC_COLORS.danger);
     // The aria-label carries the failure too (the label REPLACES interior
-    // content for AT).
-    expect(header.getAttribute("aria-label")).toContain("Completed 3 steps · 2 tools · 1 failed · 0:52.");
+    // content for AT) — duration-free since R120-C-PC item 36.
+    expect(header.getAttribute("aria-label")).toContain("Completed 3 steps · 2 tools · 1 failed.");
   });
 
   it("a clean folded section keeps the green ✓ grammar — no failure chip (the no-regression pin)", () => {
     renderWithProviders(
-      <WorkingSection
-        entries={FAILED_ENTRIES.slice(0, 2)}
-        sessionId={SESSION_ID}
-        projectId="proj_probe"
-        ts="2026-09-21T10:00:00Z"
-        endTs="2026-09-21T10:00:52Z"
-      />,
+      <WorkingSection entries={FAILED_ENTRIES.slice(0, 2)} sessionId={SESSION_ID} projectId="proj_probe" />,
     );
     const header = screen.getByTestId("work-section-header");
     expect(header.textContent).toContain("Completed 2 steps");

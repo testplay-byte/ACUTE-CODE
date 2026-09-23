@@ -145,8 +145,16 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
       <pre
         // R100-D (research §C4.4): 11.5→12px mono body (the ladder's no
         // half-pixel rule); the 10px tertiary gutter stays frozen.
+        // R120-C-PC (item 39): the body carries the house CODE-SURFACE tint
+        // (the TerminalDetail/LiveWritePreview idiom) — before, the block's
+        // body sat on the card surface and read as flat prose with a header
+        // strip, the owner's "no color highlighting" verdict on the whole
+        // block family.
         className="acute-code-hl overflow-x-auto p-3 font-mono text-[12px] leading-[1.6]"
-        style={{ color: styles.text }}
+        style={{
+          background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)",
+          color: styles.text,
+        }}
       >
         {highlightedLines !== null
           ? highlightedLines.map((html, i) => (
@@ -845,12 +853,19 @@ export function parseMarkdownBlocks(content: string): MdBlock[] {
  * scaled in EM off the container's 13px body so the chat's text-size
  * setting (Settings → Appearance → Text Size, .chat-prose's calc) scales
  * headings with the body: h1 ~1.5em/700, h2 ~1.3em/650, h3 ~1.15em/600,
- * h4–h6 ~0.9em/600 (≈ today's 12px, now scale-tracking). Restrained by
+ * h4–h6 1em/600 (R120-C-PC item 39 raised the old 0.9em rungs to the
+ * body floor — a heading never renders SMALLER than its own body text).
+ * Restrained by
  * design — the R100-D anti-staircase verdict was about no-huge-jumps
  * between evenly-spaced sub-14px steps, not about flattening hierarchy:
  * answers get their document shape back without ever touching the 24px
  * `title` tier (the greeting's own). */
-const HEADING_SIZES: Record<number, string> = { 1: "1.5em", 2: "1.3em", 3: "1.15em", 4: "0.9em", 5: "0.9em", 6: "0.9em" };
+// R120-C-PC (item 39): the h4–h6 rungs sit at 1em — the BODY floor — never
+// below it (the R117-f 0.9em spelling rendered a `####` heading SMALLER
+// than its own body text, the owner's "no proper headings" verdict on the
+// deep rungs; a small-caps-weight line at body size is the quietest legal
+// heading, still unmistakably a heading).
+const HEADING_SIZES: Record<number, string> = { 1: "1.5em", 2: "1.3em", 3: "1.15em", 4: "1em", 5: "1em", 6: "1em" };
 const HEADING_WEIGHTS: Record<number, number> = { 1: 700, 2: 650, 3: 600, 4: 600, 5: 600, 6: 600 };
 const HEADING_MARGINS: Record<number, string> = { 1: "mt-3 mb-1", 2: "mt-2.5 mb-1", 3: "mt-2 mb-0.5", 4: "mt-1.5 mb-0.5", 5: "mt-1.5 mb-0.5", 6: "mt-1.5 mb-0.5" };
 

@@ -283,35 +283,64 @@ function CopyButton({
   );
 }
 
-/** Per-reply stats — R99-B: ONE mono tabular-nums line (time · in · out ·
- * tok/s), middle-dot separated, subtle textTertiary, NO per-stat chip
- * borders (the old chip strip bordered every number; the flattened line is
- * the footer's quiet grammar — the model identity moved to the turn
- * header). tabular-nums holds digit width steady while live values grow. */
+/** ROUND-120 (R120-C-PC, item 36): the turn's ONE consolidated "how it ran"
+ * block — "Ran 4m 12s · 23 actions · 18.2k tokens". The owner's verdict was
+ * the "8-9 separate right-side blocks": every segmented work section painted
+ * its own right-aligned duration (plus the old per-section folded chips),
+ * so one turn read as a stack of tiny clocks. Now the SECTION headers carry
+ * no duration at all (folded) and ONE live clock (the panel gates it with
+ * clockVisible on the turn's first live section), and THIS block at the
+ * turn's foot answers "how long did this run" once: duration + actions +
+ * total tokens, middle-dot separated, mono tabular-nums, textTertiary — the
+ * R99-B flattened-line grammar, superseded in content only. The full
+ * breakdown (input ↑ / output ↓ / tok/s — the old line's whole payload)
+ * rides the title so no data is lost to the consolidation. */
+export function formatRanDuration(ms: number): string {
+  const s = Math.max(0, ms / 1000);
+  if (s < 10) return `${s.toFixed(1)}s`;
+  const whole = Math.round(s);
+  if (whole < 60) return `${whole}s`;
+  const m = Math.floor(whole / 60);
+  if (m < 60) return `${m}m ${String(whole % 60).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
 function ReplyStats({
   usage,
   ms,
+  actions,
 }: {
   usage?: { inputTokens: number; outputTokens: number };
   ms?: number;
+  /** R120-C-PC (item 36): the turn's tool-call count ("23 actions") — the
+   * same count the live header's actions counter speaks. */
+  actions?: number;
 }) {
   const styles = useThemeStyles();
-  if (usage === undefined && ms === undefined) return null;
+  if (usage === undefined && ms === undefined && actions === undefined) return null;
   const seconds = ms !== undefined ? ms / 1000 : undefined;
   const tps =
     usage && seconds && seconds > 0 ? usage.outputTokens / seconds : undefined;
   const parts: string[] = [];
-  if (seconds !== undefined) parts.push(`${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`);
-  if (usage) {
-    parts.push(`↑ ${fmtTokens(usage.inputTokens)}`);
-    parts.push(`↓ ${fmtTokens(usage.outputTokens)}`);
+  if (ms !== undefined) parts.push(`Ran ${formatRanDuration(ms)}`);
+  if (actions !== undefined && actions > 0) {
+    parts.push(`${actions} ${actions === 1 ? "action" : "actions"}`);
   }
-  if (tps !== undefined) parts.push(`${tps < 10 ? tps.toFixed(1) : Math.round(tps)} tok/s`);
+  if (usage) parts.push(`${fmtTokens(usage.inputTokens + usage.outputTokens)} tokens`);
+  // The full detail on hover — nothing is lost to the one-line consolidation.
+  const detail: string[] = [];
+  if (seconds !== undefined) detail.push(`${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`);
+  if (usage) {
+    detail.push(`↑ ${fmtTokens(usage.inputTokens)}`);
+    detail.push(`↓ ${fmtTokens(usage.outputTokens)}`);
+  }
+  if (tps !== undefined) detail.push(`${tps < 10 ? tps.toFixed(1) : Math.round(tps)} tok/s`);
   return (
     <span
       data-reply-stats
       className="ml-auto pl-2 shrink-0 font-mono text-[10px] tabular-nums whitespace-nowrap"
       style={{ color: styles.textTertiary }}
+      title={detail.length > 0 ? detail.join(" · ") : undefined}
     >
       {parts.join(" · ")}
     </span>
@@ -347,6 +376,7 @@ function TurnFooter({
   copyText,
   usage,
   ms,
+  actions,
   fullCopyText,
 }: {
   sessionId: string | null;
@@ -356,6 +386,9 @@ function TurnFooter({
   copyText: string;
   usage?: { inputTokens: number; outputTokens: number };
   ms?: number;
+  /** R120-C-PC (item 36): the turn's tool-call count — the consolidated
+   * "Ran … · N actions · … tokens" block's middle segment. */
+  actions?: number;
   /** ROUND-67 (R67-B, owner directive #2): the FULL-turn export text
    * (thinking + tool calls + outputs + final answer + model — built by
    * lib/turn-copy). Present ONLY when debug mode is enabled in Advanced
@@ -548,7 +581,7 @@ function TurnFooter({
             ) : null}
           </div>
         ) : null}
-        <ReplyStats usage={usage} ms={ms} />
+        <ReplyStats usage={usage} ms={ms} actions={actions} />
       </div>
       {noteOpen ? (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5" data-rating-note>
@@ -1011,15 +1044,11 @@ function UserMessage({
  * response vanished behind the folded work summary. Pure; exported for tests. */
 export type WorkingSegment =
   | { kind: "text"; content: string; ts: string }
-  | { kind: "work"; entries: WorkingEntry[]; firstIndex: number; lastIndex: number; startTs: string; endTs: string };
+  | { kind: "work"; entries: WorkingEntry[]; firstIndex: number; lastIndex: number };
 
 /** The ts of a working entry (tool entries carry it on the tool; every
  * other kind — thinking/text/approval and the R68-A screenshot capture
  * markers — carries it on the entry itself). */
-function workingEntryTs(entry: WorkingEntry): string {
-  return entry.type === "tool" ? entry.tool.ts : entry.ts;
-}
-
 /** Split a turn's working entries into ordered segments: intermediate TEXT
  * entries become standalone answer blocks; every contiguous run of the
  * OTHER entries (tool/thinking/approval — and, ROUND-68 R68-A, the `screenshot`
@@ -1037,8 +1066,6 @@ export function segmentWorkingEntries(entries: WorkingEntry[]): WorkingSegment[]
       entries: run,
       firstIndex: runStart,
       lastIndex: endIndex,
-      startTs: workingEntryTs(run[0]),
-      endTs: workingEntryTs(run[run.length - 1]),
     });
     run = [];
     runStart = -1;
@@ -1109,6 +1136,10 @@ function AssistantTurn({
   const styles = useThemeStyles();
   const segments = segmentWorkingEntries(item.working);
   const hasToolWork = item.working.some((e) => e.type === "tool");
+  // R120-C-PC (item 36): the turn's tool-call count — the consolidated
+  // "Ran … · N actions · … tokens" block's middle segment (the same count
+  // the live header's actions counter speaks, so live→folded reads alike).
+  const actionCount = item.working.filter((e) => e.type === "tool").length;
   return (
     <motion.div variants={msgVariants} initial="initial" animate="animate" className="group min-w-0">
       {/* R99-B: the TURN HEADER — identity + timestamp above everything the
@@ -1130,8 +1161,6 @@ function AssistantTurn({
             entries={seg.entries}
             sessionId={sessionId}
             projectId={projectId}
-            ts={seg.startTs}
-            endTs={seg.endTs}
             defaultOpen={collapseHint === true ? false : undefined}
           />
         ) : (
@@ -1162,6 +1191,7 @@ function AssistantTurn({
         copyText={item.finalText}
         usage={item.usage}
         ms={item.ms}
+        actions={actionCount}
         fullCopyText={
           debugMode === true
             ? buildFullTurnText({
@@ -3557,6 +3587,12 @@ export function AgentChatPanel({
     // trailing section when the turn ends on flushed text) hosts them, so
     // the owner still sees the file being written the moment it starts.
     const lastWorkSegIdx = segments.map((s) => s.kind === "work").lastIndexOf(true);
+    // R120-C-PC (item 36): ONE live clock per turn — the prior design let
+    // every segmented live work section paint its own right-aligned elapsed
+    // clock (the owner's "8-9 separate right-side blocks"); now the FIRST
+    // rendered live work section owns the single clock (clockVisible), the
+    // rest render their headers + rows without it.
+    let liveClockTaken = false;
     const rendered = segments.map((seg, i) => {
       if (seg.kind === "text") {
         return (
@@ -3592,6 +3628,10 @@ export function AgentChatPanel({
           liveEntryIdx !== undefined && liveEntryIdx >= seg.firstIndex && liveEntryIdx <= seg.lastIndex
             ? liveEntryIdx - seg.firstIndex
             : undefined;
+        // R120-C-PC (item 36): the FIRST live work section owns the turn's
+        // ONE elapsed clock.
+        const clockVisible = !liveClockTaken;
+        liveClockTaken = true;
         return (
           <WorkingSection
             key={`live-seg-work-${i}`}
@@ -3602,6 +3642,7 @@ export function AgentChatPanel({
             startedAtMs={liveTurn.startedAtMs}
             stopped={liveTurn.stopped}
             liveEntryIndex={segLiveIdx}
+            clockVisible={clockVisible}
             onApprovalDecision={(id, decision, remember) => void onApprovalDecision(id, decision, remember)}
             onQuestionAnswer={(id, answers, sources) => void onQuestionAnswer(id, answers, sources)}
           />
@@ -3625,6 +3666,10 @@ export function AgentChatPanel({
           live
           startedAtMs={liveTurn.startedAtMs}
           stopped={liveTurn.stopped}
+          // R120-C-PC (item 36): the tail section owns the clock ONLY when no
+          // earlier live work section rendered (segments.length === 0 — a
+          // write started before anything else).
+          clockVisible={!liveClockTaken}
           onApprovalDecision={(id, decision, remember) => void onApprovalDecision(id, decision, remember)}
         />,
       );
@@ -4075,6 +4120,13 @@ export function AgentChatPanel({
                     sessionId={session?.id ?? null}
                     assistantSeq={liveTurn.lastAssistantSeq}
                     copyText={liveTurn.streamText}
+                    // R120-C-PC (item 36): the consolidated "Ran …" block gets
+                    // real numbers on the live-completed turn too — the live
+                    // clock's own duration + the working entries' tool count
+                    // (the refetched folded log takes over with the persisted
+                    // usage shortly; until then the block stays honest).
+                    ms={Date.now() - liveTurn.startedAtMs}
+                    actions={liveTurn.working.filter((e) => e.type === "tool").length}
                     fullCopyText={
                       // ROUND-67 (R67-B): the live-completed turn gets the
                       // same second copy option. R114-e: the model is the

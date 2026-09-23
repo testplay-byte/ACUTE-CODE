@@ -18,7 +18,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { AgentChatPanel } from "./AgentChatPanel";
+import { AgentChatPanel, formatRanDuration } from "./AgentChatPanel";
 import { getFixtureProjects } from "../../lib/project-fixtures";
 import { createFixtureSessions } from "../../lib/session-fixtures";
 import type { MessageRating, Project, Session, SessionEvent, SessionsBackend } from "../../lib/api";
@@ -1419,7 +1419,7 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
     useThemeStore.setState({ timestampsMode: "hidden" });
   });
 
-  it("the footer's stats cluster is ONE mono tabular-nums line (time · in · out · tok/s) — no per-stat chips, no model", async () => {
+  it("the footer's stats cluster is the turn's ONE consolidated block — 'Ran … · N actions · … tokens' (R120-C-PC item 36; the full detail rides the title)", async () => {
     await renderHeaderConversation();
 
     const stats = await waitFor(() => {
@@ -1427,13 +1427,19 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
       expect(el).not.toBeNull();
       return el as HTMLElement;
     }, SLOW);
-    // The flattened grammar: 4.2s · ↑ 1.2k · ↓ 850 · 202 tok/s (middle-dot
-    // separated — ONE text node, never bordered chips).
-    expect(stats.textContent).toBe("4.2s · ↑ 1.2k · ↓ 850 · 202 tok/s");
+    // The consolidated grammar: "Ran 4.2s · 2.0k tokens" (4200ms; 1200+850
+    // total tokens — the R99-B time·in·out·tok/s line superseded by the
+    // owner's round-120 "combine the 8-9 right-side blocks into one").
+    // This turn has no tool calls → no actions segment (0 actions is the
+    // absence of data, never noise).
+    expect(stats.textContent).toBe("Ran 4.2s · 2.0k tokens");
     expect(stats.className).toContain("font-mono");
     expect(stats.className).toContain("tabular-nums");
     // Right-aligned in the footer row.
     expect(stats.className).toContain("ml-auto");
+    // KEEP ALL DATA: the old line's whole payload (in ↑ / out ↓ / tok/s)
+    // rides the title — the consolidation loses nothing.
+    expect(stats.getAttribute("title")).toBe("4.2s · ↑ 1.2k · ↓ 850 · 202 tok/s");
     // The model identity lives in the HEADER now — the footer never repeats it.
     const footer = document.querySelector("[data-rating-footer]");
     expect(footer).not.toBeNull();
@@ -1572,6 +1578,162 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
       // The streamed text itself stays.
       expect(screen.getByText(/still arriving/)).toBeTruthy();
     }, SLOW);
+  });
+});
+
+// ── ROUND-120 (R120-C-PC): the center redo's live-clock law + the folded
+//    file-mutation law, end-to-end through the panel. ──
+describe("AgentChatPanel R120-C-PC center redo (items 35 + 36)", () => {
+  const SLOW = { timeout: 5000 };
+
+  it("formatRanDuration — the consolidated block's duration vocabulary (pure)", () => {
+    // Sub-10s keeps one decimal; whole seconds to the minute; m 12s past it;
+    // hours only past the hour (the house example 'Ran 4m 12s').
+    expect(formatRanDuration(4_200)).toBe("4.2s");
+    expect(formatRanDuration(9_490)).toBe("9.5s");
+    expect(formatRanDuration(42_000)).toBe("42s");
+    expect(formatRanDuration(252_000)).toBe("4m 12s");
+    expect(formatRanDuration(61_000)).toBe("1m 01s");
+    expect(formatRanDuration(3_732_000)).toBe("1h 02m");
+    // Never a negative duration (a clock skew answers 0.0s, not -0.1s).
+    expect(formatRanDuration(-100)).toBe("0.0s");
+  });
+
+  it("a LIVE turn with MULTIPLE work sections renders exactly ONE elapsed clock (the first section owns it — the '8-9 right-side blocks' are dead)", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r120_clock",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "R120 clock probe",
+          createdAt: "2026-09-23T10:00:00Z",
+          updatedAt: "2026-09-23T10:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy(), SLOW);
+
+    // A segmented live turn: tool run → interim text → tool run (the R64
+    // segmentation renders TWO work sections + one intermediate answer).
+    useStreamStore.setState({
+      bySession: {
+        sess_r120_clock: {
+          liveTurn: {
+            startedAtMs: Date.now() - 5_000,
+            working: [
+              { type: "tool", tool: { seq: 1, toolName: "read_file", argsSummary: "path: a.ts", ok: true, ts: "t1", outputSummary: "of 10 total" } },
+              { type: "text", content: "Interim note between the runs.", ts: "t2" },
+              { type: "tool", tool: { seq: 2, toolName: "read_file", argsSummary: "path: b.ts", ok: true, ts: "t3", outputSummary: "of 20 total" } },
+            ],
+            streamText: "",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: false,
+        },
+      },
+    });
+
+    // TWO work sections render (the segmentation law)…
+    await waitFor(
+      () => expect(document.querySelectorAll('[data-testid="work-section-header"]')).toHaveLength(2),
+      SLOW,
+    );
+    // …but exactly ONE m:ss clock across them (the FIRST section owns the
+    // turn's single clock — every later section renders its header + rows
+    // without one; the actions counters are not clocks).
+    const clocks = Array.from(
+      document.querySelectorAll('[data-testid="work-section-header"] span.font-mono'),
+    ).filter((s) => /^\d+:\d\d$/.test(s.textContent ?? ""));
+    expect(clocks).toHaveLength(1);
+  });
+
+  it("a FOLDED turn's write renders in the CENTER without expanding anything (item 35 end-to-end: the write row + the answer, no phantom reads)", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r120_fold",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "R120 fold probe",
+          createdAt: "2026-09-23T10:00:00Z",
+          updatedAt: "2026-09-23T10:05:00Z",
+        },
+        events: [
+          {
+            seq: 1,
+            type: "message.user",
+            agentId: "agt_scribe",
+            payload: { role: "user", content: "create the module", agentId: "agt_scribe", ts: "2026-09-23T10:00:10Z" },
+            ts: "2026-09-23T10:00:10Z",
+          },
+          {
+            seq: 2,
+            type: "tool.use",
+            agentId: "agt_scribe",
+            payload: {
+              role: "tool",
+              toolName: "write_file",
+              argsSummary: "path: src/module.ts, content: 240 chars",
+              ok: true,
+              outputSummary: "wrote 240 chars",
+            },
+            ts: "2026-09-23T10:00:30Z",
+          },
+          {
+            seq: 3,
+            type: "message.assistant",
+            agentId: "agt_scribe",
+            payload: { role: "assistant", content: "Created the module.", agentId: "agt_scribe", ts: "2026-09-23T10:00:40Z" },
+            ts: "2026-09-23T10:00:40Z",
+          },
+        ],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+
+    // The turn folds (tool.use survives the fold into a WorkingEntry) and
+    // the section starts COLLAPSED (the R38 default) — yet the write row
+    // renders OUTSIDE the collapse: the owner sees the file mutation in the
+    // center without touching anything.
+    const fold = await waitFor(() => {
+      const el = document.querySelector('[data-testid="fold-file-rows"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    }, SLOW);
+    expect(fold.textContent).toContain("Wrote");
+    const writeRow = screen.getByRole("button", { name: /Wrote path: src\/module\.ts, content: 240 chars — completed$/ });
+    expect(writeRow.closest('[data-testid="fold-file-rows"]')).not.toBeNull();
+    // The answer renders below (folding never hid it)…
+    expect(screen.getByText("Created the module.")).toBeTruthy();
+    // …and the consolidated turn block answers "how long" ONCE (the events
+    // carry no usage/ms → the block simply stays absent here; the grammar
+    // itself is pinned above).
   });
 });
 
