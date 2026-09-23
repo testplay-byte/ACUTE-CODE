@@ -1340,6 +1340,27 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
       unregisterTurn(id, abort);
     }
   });
+  // ROUND-120 (R120-C-PC, items 37+38 — the sync/state law): the LIVE-TURN
+  // truth surface. The frontend's working/stop state used to derive from SSE
+  // frame ARRIVAL ("no frames lately" → looks done), so a refresh mid-turn
+  // rendered a finished transcript while the backend kept working and the
+  // stop button vanished. The turn registry (lib/turn-registry.ts — the SAME
+  // map registerTurn/unregisterTurn/abortTurn maintain for the stop route
+  // and the queue route's notifyTurn) is the honest source: this route
+  // answers, for any session, whether a turn is registered RIGHT NOW. The
+  // PC panel polls it on load + on a sane interval while idle to REHYDRATE
+  // a live turn (a refresh mid-turn reopens the working state instead of
+  // pretending completion), and to retire a remote mirror whose terminal
+  // frame was missed. One boolean, no session mutation, no event writes —
+  // a read-only view of the registry, additive to the route set.
+  scope.get("/sessions/:id/live", async (request, reply) => {
+    const { id } = request.params as Record<string, string>;
+    const session = getSession(db, id);
+    if (session === undefined) {
+      return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
+    }
+    return { live: getTurnController(id) !== undefined };
+  });
   // ROUND-42 → R52-b: explicit stop. The UI's Stop button aborts its local
   // fetch AND calls this — the server-side turn aborts, pending approvals
   // deny on abort, and the stream route resolves with {type:'stopped'}.

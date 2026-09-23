@@ -1,9 +1,13 @@
 import { create } from "zustand";
 import type { MessageAttachment, ThinkingLevel } from "shared";
 import {
+  fetchSessionLive,
   streamSessionMessage,
   stopSessionTurn,
+  toProjectChatItems,
   type AttachmentRef,
+  type SessionDetail,
+  type SessionEvent,
   type StreamTurnEvent,
   type SubAgentInnerEvent,
   type ToolUseEntry,
@@ -570,6 +574,27 @@ interface StreamStore {
    * remote turns and never touches the queryClient; ONE place owns
    * refetches: src/lib/events-stream.ts). */
   ingestRemoteFrame: (sessionId: string, frame: StreamTurnEvent) => void;
+  /** ROUND-120 (R120-C-PC, items 37+38 — the sync/state law): reconcile the
+   * session's live-turn state with the BACKEND's turn registry (the GET
+   * /sessions/:id/live truth). Called by the panel's poll (mount + interval
+   * while the panel is live) and by the own stream's failure tail (the
+   * detach check). Three honest moves, no others:
+   *   live:true + no liveTurn  → REHYDRATE a remote mirror from the folded
+   *     log's trailing turn (a refresh mid-turn reopens the WORKING state —
+   *     stop button, working section, the fold's copy suppressed by the
+   *     R119-C interlock — instead of a transcript that pretends the turn
+   *     finished);
+   *   live:true + a FROZEN failure (stopped, not by user, liveError set) →
+   *     DETACH onto the mirror path: the own fetch died (network/proxy)
+   *     while the turn survived server-side (the R42 law), so the events
+   *     bus's mirrored frames keep rendering it — never a false "Generation
+   *     failed" over a turn that is still running;
+   *   live:false + an open mirror with NO pending retire → the terminal
+   *     frame was missed (an events-stream reconnect gap): retire the
+   *     mirror NOW and let the folded log take over.
+   * Anything else is a no-op (an own stream in flight owns the render; an
+   * open running mirror already tells the truth). */
+  rehydrateLiveTurn: (sessionId: string, live: boolean) => void;
 }
 
 /** Module-level controllers + seq counters (NOT React state — they don't
@@ -1171,6 +1196,28 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
       // its animation). If the panel is still mounted, its isRunning effect
       // also fires stop (idempotent).
       useActiveStreams.getState().stop(sessionId);
+      // ROUND-120 (R120-C-PC, item 37 — the sync/state law): a NON-deliberate
+      // failure just froze the turn locally — but the R42 law says the turn
+      // SURVIVES client disconnects server-side, so "Generation failed" may
+      // be a lie. Ask the backend's turn registry (GET /sessions/:id/live):
+      // live:true → rehydrateLiveTurn's DETACH leg flips this slice onto the
+      // remote-mirror path (the events bus keeps publishing every frame the
+      // dead socket would have received), retracting the false failure and
+      // keeping the stop affordance. live:false → the failure is real and
+      // stands. Fire-and-forget: the finally must never block the stream's
+      // own teardown, and a poll re-checks either way.
+      if (errored) {
+        void fetchSessionLive(sessionId)
+          .then((truth) => {
+            if (truth.live) {
+              useStreamStore.getState().rehydrateLiveTurn(sessionId, true);
+            }
+          })
+          .catch(() => {
+            /* the sidecar is unreachable — the frozen failure UX stands;
+               the panel's live poll retries when connectivity returns. */
+          });
+      }
     }
   },
 
@@ -1399,6 +1446,192 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
     // and the queue chips work identically; turn-scoped frames find the
     // remote liveTurn opened above).
     handleStreamEvent(sessionId, frame);
+  },
+
+  // ── ROUND-120 (R120-C-PC, items 37+38 — the sync/state law) ─────────────
+  rehydrateLiveTurn: (sessionId, live) => {
+    const cur = get().bySession[sessionId];
+
+    if (live) {
+      // (1) An OWN stream is in flight → its reader owns the render; the
+      // backend's "live" answer is redundant (it is live BECAUSE this
+      // fetch is running or the turn is resolving post-terminal-frame).
+      if (cur?.streamBusy === true) return;
+
+      // (2) A FROZEN FAILURE with the backend still working → DETACH onto
+      // the mirror path. The own fetch died non-deliberately (network /
+      // proxy / socket teardown — the startStream catch armed liveError +
+      // the finally froze the turn), but the R42 law says the turn keeps
+      // running server-side, and the events bus mirrors EVERY frame the
+      // initiating socket would have received (publishTurnFrame rides
+      // BEFORE the clientGone guard in the route's send()). Flipping the
+      // slice to a remote mirror keeps the transcript LIVE and the stop
+      // affordance honest — never a false "Generation failed" under a turn
+      // that is still working. The userText anchor is the turn's own
+      // opening message (startStream's text — the same content the
+      // pendingEcho rendered), so the R119-C fold/live interlock suppresses
+      // the folded copy of this exact turn from the moment of the detach.
+      if (
+        cur?.liveTurn !== null &&
+        cur !== undefined &&
+        cur.liveTurn !== null &&
+        cur.liveTurn.stopped &&
+        !cur.liveTurn.stoppedByUser &&
+        cur.liveError !== null
+      ) {
+        patchSession(sessionId, {
+          remote: true,
+          liveError: null,
+          sendError: null,
+          // The echo hands its render to the mirror's userText bubble —
+          // BOTH would render the opener until the refetched fold carries
+          // the persisted row (each dedupes against the fold, not against
+          // each other), so the detach clears the echo it just consumed.
+          pendingEcho: null,
+          liveTurn: {
+            ...cur.liveTurn,
+            stopped: false,
+            stoppedByUser: false,
+            // The interlock anchor: the opening user content this own turn
+            // streamed (absent only when the caller passed no text —
+            // then the fold owns the opener's render and nothing splits).
+            ...(cur.pendingEcho !== null ? { userText: cur.pendingEcho } : {}),
+          },
+        });
+        useActiveStreams.getState().start(sessionId);
+        return;
+      }
+
+      // (3) A liveTurn already renders → the state already tells the truth,
+      // EXCEPT the one re-seed case: a MINIMAL mirror (opened by an earlier
+      // poll that ran before the folded log loaded — a cold start right
+      // into a running turn) still carries no content and no interlock
+      // anchor, so the fold's copy of the running turn renders beside it
+      // (the split-half look). Once the panel's session detail query lands,
+      // the next poll re-seeds that mirror from the fold — content, model,
+      // the userText anchor — and from then on the guard below applies.
+      // Anything landed through a frame (text, tools, a turn.started stamp)
+      // permanently disqualifies the re-seed: frames are fresher than any
+      // refetch, and re-seeding under them could move content backwards.
+      if (cur !== undefined && cur.liveTurn !== null) {
+        const lt = cur.liveTurn;
+        const minimal =
+          cur.remote === true &&
+          lt.working.length === 0 &&
+          lt.streamText === "" &&
+          lt.streamThinking === "" &&
+          lt.userText === undefined;
+        if (!minimal) return;
+      }
+
+      // (4) No liveTurn (or the minimal mirror above) + the backend working
+      // → REHYDRATE the mirror from
+      // the folded log. The panel's ["session","live",id] cache holds the
+      // refetched events; the fold's TRAILING turn IS the in-flight turn's
+      // already-persisted content (the runtime writes every event as it
+      // completes), so the mirror opens carrying it: working entries, the
+      // partial streamed text, the resolved model. userText = the LAST
+      // folded user item's content — the R119-C interlock anchor: while
+      // this mirror renders, the fold's copy of the same turn (and any
+      // delivered-queued continuation) is suppressed by startedBySeq >=
+      // anchorSeq, so a refresh mid-turn can never render TWO halves of
+      // the running exchange. Frames that arrive later (the events bus)
+      // append through the shared reducer exactly like any mirror.
+      const qc = getQueryClient();
+      const detail = qc?.getQueryData<SessionDetail>(["session", "live", sessionId]);
+      const events: SessionEvent[] = detail?.events ?? [];
+      const items = toProjectChatItems(events);
+      const trailing = items.length > 0 ? items[items.length - 1] : undefined;
+      // The anchor: the LAST user item (a running turn's opener is the most
+      // recent message.user row — prepareTurn persists it before any turn
+      // event; a delivered queued message flipped in place mid-turn is
+      // STILL the last user row, and >= anchorSeq covers the continuation).
+      let lastUser: { seq: number; content: string } | null = null;
+      for (const it of items) {
+        if (it.kind === "user") lastUser = { seq: it.seq, content: it.content };
+      }
+      // The queued chips of the in-flight turn's span (seq past the anchor)
+      // ride the mirror's queue so they render in the overlay exactly like
+      // the own path (the interlock drops their folded rows by seq).
+      const mirrorQueued = items
+        .filter(
+          (it): it is Extract<(typeof items)[number], { kind: "queued" }> =>
+            it.kind === "queued" && lastUser !== null && it.seq > lastUser.seq,
+        )
+        .map((it) => ({
+          seq: it.seq,
+          content: it.content,
+          ts: it.ts,
+          ...(it.attachments !== undefined ? { attachments: it.attachments } : {}),
+        }));
+      const freshTurn = {
+        startedAtMs:
+          trailing !== undefined && trailing.kind === "turn" && !Number.isNaN(Date.parse(trailing.ts))
+            ? Date.parse(trailing.ts)
+            : Date.now(),
+        working: trailing !== undefined && trailing.kind === "turn" ? trailing.working : [],
+        streamText: trailing !== undefined && trailing.kind === "turn" ? trailing.finalText : "",
+        streamThinking: "",
+        stopped: false,
+        stoppedByUser: false,
+        streamingToolInputs: [],
+        debugReport: null,
+        browserCheckpoint: null,
+        retry: null,
+        note: null,
+        ...(trailing !== undefined && trailing.kind === "turn" && trailing.model !== undefined
+          ? { model: trailing.model }
+          : {}),
+        ...(lastUser !== null ? { userText: lastUser.content } : {}),
+      };
+      patchSession(sessionId, {
+        liveTurn: freshTurn,
+        // A rehydrated mirror never owns a fetch (streamBusy false) — the
+        // panel's busy union flips on remoteRunning (remote + liveTurn +
+        // !stopped), which is exactly the WORKING state the owner's refresh
+        // must see again: stop button, queue-path sends, no false "done".
+        streamBusy: false,
+        remote: true,
+        liveError: null,
+        sendError: null,
+        queued: mirrorQueued,
+        deliveredQueued: [],
+        queueKeptNotice: null,
+        lastTurnStoppedByUser: false,
+        lastTurnStoppedTs: null,
+      });
+      useActiveStreams.getState().start(sessionId);
+      return;
+    }
+
+    // live === false ── the mirror-retire leg. A REMOTE mirror still open
+    // with NO pending retire means the terminal frame never arrived here
+    // (an events-stream reconnect gap ate it): the backend says the turn
+    // is over, so retire the mirror NOW — the same handoff the retire
+    // timer performs — and refetch the folded log so it takes over the
+    // render. Own-path slices are untouchable here (remote stays false);
+    // a pending retire means the terminal frame DID land and the timer
+    // owns the beat.
+    if (
+      cur !== undefined &&
+      cur.remote === true &&
+      cur.liveTurn !== null &&
+      !remoteRetireTimers.has(sessionId)
+    ) {
+      patchSession(sessionId, {
+        liveTurn: null,
+        remote: false,
+        lastLiveEndMs: Date.now(),
+        queued: [],
+        deliveredQueued: [],
+      });
+      useActiveStreams.getState().stop(sessionId);
+      const qc = getQueryClient();
+      if (qc) {
+        void qc.invalidateQueries({ queryKey: ["session"] });
+        void qc.invalidateQueries({ queryKey: ["sessions"] });
+      }
+    }
   },
 }));
 

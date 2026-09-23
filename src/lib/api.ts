@@ -4047,6 +4047,30 @@ export async function stopSessionTurn(sessionId: string): Promise<void> {
   }
 }
 
+/**
+ * ROUND-120 (R120-C-PC, items 37+38 — the sync/state law): the LIVE-TURN
+ * truth read. GET /sessions/:id/live answers {live: boolean} straight off
+ * the sidecar's shared turn registry (agent-core/src/lib/turn-registry.ts —
+ * the same map the stop route and the queue route's notifyTurn ride), so the
+ * frontend's working/stop state can derive from the BACKEND's word instead
+ * of "no SSE frames arrived lately".
+ *
+ * Consumers (stream-store.rehydrateLiveTurn + the panel's live poll):
+ *  · a refresh mid-turn → live:true with no local liveTurn → the store
+ *    REHYDRATES the working state (the stop button returns; the trailing
+ *    folded turn is suppressed by the fold/live interlock instead of
+ *    pretending the turn finished);
+ *  · a remote mirror whose terminal frame was missed (an events-stream
+ *    reconnect gap) → live:false retires the mirror honestly;
+ *  · the own stream's non-deliberate death → live:true DETACHES the slice
+ *    onto the remote-mirror path (the events bus keeps publishing every
+ *    frame the initiating socket would have received, so the turn keeps
+ *    rendering live instead of claiming a failure the backend never had).
+ */
+export async function fetchSessionLive(sessionId: string): Promise<{ live: boolean }> {
+  return request<{ live: boolean }>(`/sessions/${sessionId}/live`);
+}
+
 /** ROUND-78 (R78-D) queue result: the persisted message.queued event's seq —
  * the chip's identity (the user.queued frame + the fold + this optimistic
  * return all join on it). */

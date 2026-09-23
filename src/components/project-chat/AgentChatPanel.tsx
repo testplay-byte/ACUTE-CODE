@@ -96,6 +96,9 @@ import {
   patchSessionSelectedModel,
   queueSessionMessage,
   rateReply,
+  // ROUND-120 (R120-C-PC, items 37+38 — the sync/state law): the backend
+  // live-turn truth read (GET /sessions/:id/live — the turn registry).
+  fetchSessionLive,
   resolveAgentQuestion,
   toProjectChatItems,
 } from "../../lib/api";
@@ -219,6 +222,18 @@ const msgVariants: Variants = {
  * re-fold of the whole event log while the composer types). A module-level
  * constant keeps "no queue" referentially stable. */
 const NO_QUEUED_MESSAGES: QueuedMessage[] = [];
+
+/**
+ * ROUND-120 (R120-C-PC, items 37+38): the live-truth poll interval (ms).
+ * Long enough that an idle panel costs ~nothing against the local sidecar,
+ * short enough that a refresh mid-turn reopens the working state (stop
+ * button + working section) within a beat — and that a remote mirror whose
+ * terminal frame was missed retires before the owner wonders why the spinner
+ * persists. The poll skips itself while an own stream runs (the SSE reader
+ * is fresher) and only ever READS; the store's rehydrateLiveTurn owns every
+ * state move.
+ */
+const SESSION_LIVE_POLL_MS = 5_000;
 
 /** Round-30 empty-state suggestion chips (fill the composer on click). */
 const SUGGESTIONS: Array<{ label: string; prompt: string; icon: LucideIcon }> = [
@@ -2649,11 +2664,24 @@ export function AgentChatPanel({
   const busy =
     createSession.isPending || sendMessage.isPending || pendingUser !== null || streamBusy || remoteRunning;
 
+  // R113-b/R120-C-PC: the REMOTE mirror's opener text — hoisted above the
+  // echo computation so the two live-render sources for the SAME message can
+  // never double (a DETACHED mirror carries the echo's content as its
+  // userText; each source dedupes against the FOLD, not against each other).
+  const remoteUserText = remoteRunning ? liveTurn?.userText : undefined;
+  const remoteStartedMs = liveTurn?.startedAtMs;
   // Optimistic echo lives only until the refetched log contains it (ChatView pattern).
   // ROUND-39: prefer the stream store's pendingEcho (survives remounts); fall
   // back to local pendingUser for fixture mode.
-  const pendingEcho =
-    (streamPendingEcho !== null && !items.some((it) => it.kind === "user" && it.content === streamPendingEcho))
+  // R120-C-PC: a mirror whose userText IS the echo's content owns the
+  // opener's live render — the echo (store OR local) drops out so exactly
+  // ONE bubble paints until the fold's persisted row takes over.
+  const mirrorOwnsEcho =
+    remoteUserText !== undefined &&
+    (remoteUserText === streamPendingEcho || remoteUserText === pendingUser);
+  const pendingEcho = mirrorOwnsEcho
+    ? null
+    : (streamPendingEcho !== null && !items.some((it) => it.kind === "user" && it.content === streamPendingEcho))
       ? streamPendingEcho
       : pendingUser !== null && !items.some((it) => it.kind === "user" && it.content === pendingUser)
         ? pendingUser
@@ -2686,8 +2714,6 @@ export function AgentChatPanel({
         .map((d) => ({ kind: "user" as const, seq: -1, content: d.content, ts: d.ts })),
     [deliveredQueued, items],
   );
-  const remoteUserText = remoteRunning ? liveTurn?.userText : undefined;
-  const remoteStartedMs = liveTurn?.startedAtMs;
   const remoteUserItem = useMemo(() => {
     if (remoteUserText === undefined || remoteUserText === "") return null;
     if (items.some((it) => it.kind === "user" && it.content === remoteUserText)) return null;
@@ -2914,6 +2940,54 @@ export function AgentChatPanel({
     if (isRunning) startStream(activeSessionId);
     else stopStream(activeSessionId);
   }, [isRunning, activeSessionId, startStream, stopStream]);
+
+  // ── ROUND-120 (R120-C-PC, items 37+38 — the sync/state law): the LIVE
+  //    truth poll. The working/stop state must derive from the BACKEND's
+  //    turn registry (GET /sessions/:id/live — registerTurn/
+  //    unregisterTurn's map), never from "no SSE frames arrived lately":
+  //    a refresh mid-turn used to render a finished transcript (the fold
+  //    owns the persisted partial) while the backend kept working, and the
+  //    stop button vanished until the next agent frame happened to arrive.
+  //    The poll runs on session switch + every SESSION_LIVE_POLL_MS while
+  //    THIS panel is live-mode mounted, and reconciles through the store's
+  //    rehydrateLiveTurn: live:true + no local liveTurn → the REHYDRATED
+  //    remote mirror (working state + stop button + the interlock that
+  //    kills the fold's copy of the running turn — no split halves);
+  //    live:false + a mirror still open → the missed-terminal-frame retire.
+  //    Skipped while an OWN stream runs (its reader owns the render) and in
+  //    demo mode (no sidecar). A failed poll is silent — the next tick
+  //    retries; nothing here can claim completion on its own. ──
+  // The poll re-fires when the folded log FIRST lands (a cold start right
+  // into a running turn: the opening poll ran before the detail query
+  // resolved, so the store opened the MINIMAL mirror — this flip upgrades
+  // it with the fold's content + the interlock anchor). Later refetches
+  // (identity churn during streaming) do NOT re-arm — hasDetail stays true.
+  const hasSessionDetail = sessionDetail.data !== undefined;
+  useEffect(() => {
+    if (!liveMode || activeSessionId === null) return;
+    let cancelled = false;
+    const poll = () => {
+      if (cancelled) return;
+      // The own stream's SSE reader is the freshest possible truth — skip
+      // the round-trip while it holds the session (rehydrateLiveTurn
+      // no-ops on streamBusy anyway; this just saves the fetch).
+      if (useStreamStore.getState().bySession[activeSessionId]?.streamBusy === true) return;
+      fetchSessionLive(activeSessionId)
+        .then((truth) => {
+          if (cancelled) return;
+          useStreamStore.getState().rehydrateLiveTurn(activeSessionId, truth.live);
+        })
+        .catch(() => {
+          /* sidecar unreachable — the next tick retries */
+        });
+    };
+    poll();
+    const timer = setInterval(poll, SESSION_LIVE_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [liveMode, activeSessionId, hasSessionDetail]);
 
   // Auto-scroll: new items, busy transitions, the live section's entry count,
   // and the growing streaming text (review fix #4 + R37 amendment #11).
@@ -3188,7 +3262,19 @@ export function AgentChatPanel({
           // Stopped card + Continue affordance persist until the next send.
           const liveSlice = useStreamStore.getState().bySession[sid];
           const wasUserStopped = liveSlice?.liveTurn?.stoppedByUser === true;
-          if (liveSlice?.liveTurn && (!liveSlice.liveTurn.stopped || wasUserStopped)) {
+          // R120-C-PC (item 37): a DETACHED mirror (remote:true — the own
+          // fetch died but the backend turn survived; see the store's
+          // rehydrateLiveTurn) owns its own lifecycle now: the events bus's
+          // mirrored frames keep rendering it and the retire machinery (the
+          // terminal frame's timer + the live poll) closes it. Clearing it
+          // here would strand the running turn's transcript twice — the
+          // frozen failure the detach just retracted, back as a vanishing
+          // overlay while the backend still works.
+          if (
+            liveSlice?.liveTurn &&
+            liveSlice.remote !== true &&
+            (!liveSlice.liveTurn.stopped || wasUserStopped)
+          ) {
             // The folded turn owns the render now; clear the live section.
             useStreamStore.getState().clearStream(sid);
             useActiveStreams.getState().stop(sid);

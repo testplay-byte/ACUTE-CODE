@@ -21,7 +21,8 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { AgentChatPanel } from "./AgentChatPanel";
 import { getFixtureProjects } from "../../lib/project-fixtures";
 import { createFixtureSessions } from "../../lib/session-fixtures";
-import type { MessageRating, Session, SessionEvent, SessionsBackend } from "../../lib/api";
+import type { MessageRating, Project, Session, SessionEvent, SessionsBackend } from "../../lib/api";
+import type { QueryClient } from "@tanstack/react-query";
 import { ApiError } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
 import { useThemeStore } from "../../lib/theme-store";
@@ -82,6 +83,16 @@ const selectedModelMock = vi.hoisted(() => ({
   patchSessionSelectedModel: null as unknown as ReturnType<typeof vi.fn>,
 }));
 
+/** ROUND-120 (R120-C-PC, items 37+38): the LIVE-TURN truth read, mocked the
+ * same way — the panel's live poll calls fetchSessionLive on mount + every
+ * 5s. The DEFAULT never resolves: a pending poll is inert (its .then never
+ * fires), so every pre-existing test renders exactly as before; the
+ * rehydrate tests below program resolved verdicts to drive the
+ * reconciliation through the REAL store path. */
+const sessionLiveMock = vi.hoisted(() => ({
+  fetchSessionLive: null as unknown as ReturnType<typeof vi.fn>,
+}));
+
 vi.mock("../../lib/api", async () => {
   const mod = await import("../../lib/api");
   const agentsFx = await import("../../lib/agent-fixtures");
@@ -95,6 +106,7 @@ vi.mock("../../lib/api", async () => {
   queueMock.queueSessionMessage = vi.fn();
   queueMock.dequeueSessionMessage = vi.fn();
   selectedModelMock.patchSessionSelectedModel = vi.fn();
+  sessionLiveMock.fetchSessionLive = vi.fn();
   return {
     ...mod,
     getAgentsBackend: () => agentsFx.getFixtureAgents(),
@@ -108,6 +120,7 @@ vi.mock("../../lib/api", async () => {
     queueSessionMessage: queueMock.queueSessionMessage,
     dequeueSessionMessage: queueMock.dequeueSessionMessage,
     patchSessionSelectedModel: selectedModelMock.patchSessionSelectedModel,
+    fetchSessionLive: sessionLiveMock.fetchSessionLive,
   };
 });
 
@@ -159,6 +172,12 @@ beforeEach(() => {
   });
   // R78: the store starts clean (the queue slices are per-session state).
   useStreamStore.setState({ bySession: {}, subagentsLive: {} });
+  // R120-C-PC: the live poll starts INERT (a never-resolving read) — only
+  // the rehydrate describe programs real verdicts.
+  sessionLiveMock.fetchSessionLive.mockReset();
+  sessionLiveMock.fetchSessionLive.mockImplementation(
+    () => new Promise<{ live: boolean }>(() => {}),
+  );
 });
 
 async function renderPanel() {
@@ -3547,5 +3566,241 @@ describe("AgentChatPanel R117-f delivery ticks + breathing placeholder", () => {
     // …and the turn's resolved model in micro mono (the stream knows it —
     // the turn.started stamp).
     expect(placeholder.textContent).toContain("z-ai/glm-4.7");
+  });
+});
+
+// ── ROUND-120 (R120-C-PC, items 37+38 — the sync/state law) ─────────────────
+// The panel's live-truth poll + the store's rehydrateLiveTurn reconcile the
+// working state with the BACKEND's turn registry. The pins below are the
+// owner's exact symptoms:
+//  · a refresh mid-turn renders the WORKING state (the stop button returns,
+//    the fold's copy of the running turn is suppressed by the R119-C
+//    interlock — never two halves of the running exchange, never a
+//    transcript that pretends the turn finished);
+//  · a non-deliberate stream death with the turn alive server-side DETACHES
+//    onto the mirror path — the false "Generation failed" retracts and the
+//    stop affordance comes back (the R42 law: turns survive disconnects);
+//  · the truth read runs against the panel's OWN query cache (the
+//    queryClient singleton is registered the way main.tsx registers it).
+describe("AgentChatPanel live-turn rehydrate (ROUND-120 R120-C-PC)", () => {
+  const SLOW = { timeout: 5000 };
+  const SESSION_ID = "sess_r120_rehydrate";
+
+  /** A running session whose folded log carries the IN-FLIGHT turn's
+   * already-persisted events (the trailing OPEN turn) — the exact snapshot
+   * the debounced refetch serves mid-turn. The prior exchange (seq 1-2)
+   * proves the fold ALSO renders past turns beside the rehydrated mirror. */
+  const RUNNING_EVENTS: SessionEvent[] = [
+    messageEvent(1, "user", "an earlier exchange", "2026-09-23T09:00:10Z"),
+    messageEvent(2, "assistant", "The earlier answer.", "2026-09-23T09:00:30Z", {
+      model: "test/earlier-model",
+    }),
+    messageEvent(3, "user", "please build the thing", "2026-09-23T10:00:10Z"),
+    messageEvent(4, "assistant", "Let me inspect the project first.", "2026-09-23T10:00:20Z", {
+      model: "test/folded-model",
+    }),
+    messageEvent(5, "assistant", "The file is ready so far.", "2026-09-23T10:00:50Z", {
+      model: "test/folded-model",
+    }),
+  ];
+
+  function messageEvent(
+    seq: number,
+    role: "user" | "assistant",
+    content: string,
+    ts: string,
+    extra: Record<string, unknown> = {},
+  ): SessionEvent {
+    return {
+      seq,
+      type: role === "user" ? "message.user" : "message.assistant",
+      agentId: "agt_scribe",
+      payload: { role, content, agentId: "agt_scribe", ts, ...extra },
+      ts,
+    };
+  }
+
+  /** Render the panel with the queryClient REGISTERED as the app singleton
+   * (main.tsx's setQueryClient boot call — the rehydrate reads the fold
+   * through it, so the test must mirror the real wiring). */
+  async function renderPanelWithSingletonClient(projects: Project[]) {
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const { MemoryRouter } = await import("react-router");
+    const { render } = await import("@testing-library/react");
+    const { setQueryClient } = await import("../../lib/query-client");
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    setQueryClient(qc);
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <AgentChatPanel projectId={projects[0].id} project={projects[0]} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return () => setQueryClient(null as unknown as QueryClient);
+  }
+
+  it("R120-C-PC: a refresh MID-TURN (backend live, no local liveTurn) rehydrates the WORKING state — stop button back, the running exchange rendered ONCE", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: SESSION_ID,
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "running",
+          title: "R120 rehydrate probe",
+          createdAt: "2026-09-23T10:00:00Z",
+          updatedAt: "2026-09-23T10:05:00Z",
+        },
+        events: RUNNING_EVENTS,
+      },
+    ]);
+    // The backend's turn registry says the turn is LIVE.
+    sessionLiveMock.fetchSessionLive.mockResolvedValue({ live: true });
+
+    const restore = await renderPanelWithSingletonClient(projects);
+
+    // The rehydrated mirror opens from the fold: the trailing turn's content
+    // rides the live overlay (its model stamp — the fold's own copy is
+    // suppressed by the interlock, so exactly ONE header carries it).
+    await waitFor(
+      () => {
+        const headers = Array.from(document.querySelectorAll('[data-testid="turn-header"]'));
+        // TWO headers total: the EARLIER exchange's fold + the RUNNING turn's
+        // rehydrated mirror — never two for the running exchange.
+        expect(headers).toHaveLength(2);
+        const live = headers.find((h) => h.textContent?.includes("test/folded-model"));
+        expect(live).toBeTruthy();
+      },
+      SLOW,
+    );
+    // The running exchange's content renders ONCE (the mirror's copy; the
+    // fold's trailing turn is suppressed — the split-half bug is dead).
+    await waitFor(() => expect(screen.getAllByText(/The file is ready so far/)).toHaveLength(1), SLOW);
+    expect(screen.getAllByText("please build the thing")).toHaveLength(1);
+    // THE STOP BUTTON — the owner's vanished affordance, back by
+    // construction: remoteRunning (the mirror is open, not stopped) joins
+    // the busy union.
+    expect(screen.getByRole("button", { name: "Stop generation" })).toBeTruthy();
+
+    restore();
+  });
+
+  it("R120-C-PC: the truth read RETIRES a mirror the events stream left hanging (live:false) — the fold takes over, the stop button goes", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: SESSION_ID,
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "running",
+          title: "R120 retire probe",
+          createdAt: "2026-09-23T10:00:00Z",
+          updatedAt: "2026-09-23T10:05:00Z",
+        },
+        events: RUNNING_EVENTS,
+      },
+    ]);
+    sessionLiveMock.fetchSessionLive.mockResolvedValue({ live: true });
+    const restore = await renderPanelWithSingletonClient(projects);
+
+    // The mirror opened (the previous test's contract).
+    await waitFor(
+      () => expect(screen.getByRole("button", { name: "Stop generation" })).toBeTruthy(),
+      SLOW,
+    );
+
+    // The reconnect gap ate the terminal frame; the next poll's truth read
+    // says the turn is over. Drive the store reconciler directly (the
+    // panel's interval is 5s — the store leg is what the poll calls).
+    useStreamStore.getState().rehydrateLiveTurn(SESSION_ID, false);
+
+    // The mirror retires; the FOLD takes over — the trailing turn renders
+    // from the event log exactly once, and the busy state (stop button) is
+    // gone because nothing is running anywhere.
+    await waitFor(
+      () => {
+        expect(screen.queryByRole("button", { name: "Stop generation" })).toBeNull();
+        const headers = Array.from(document.querySelectorAll('[data-testid="turn-header"]'));
+        expect(headers).toHaveLength(2); // earlier fold + the now-folded turn
+      },
+      SLOW,
+    );
+    await waitFor(() => expect(screen.getAllByText(/The file is ready so far/)).toHaveLength(1), SLOW);
+
+    restore();
+  });
+
+  it("R120-C-PC: a NON-deliberate stream death with the turn alive server-side DETACHES — the false 'Generation failed' retracts and the stop button returns", async () => {
+    const projects = await getFixtureProjects().list();
+    // A PRIOR exchange only — the failed send's message never persisted (the
+    // fetch died before the backend answered... the fixture never grows).
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: SESSION_ID,
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "running",
+          title: "R120 detach probe",
+          createdAt: "2026-09-23T10:00:00Z",
+          updatedAt: "2026-09-23T10:05:00Z",
+        },
+        events: [
+          messageEvent(1, "user", "an earlier exchange", "2026-09-23T09:00:10Z"),
+          messageEvent(2, "assistant", "The earlier answer.", "2026-09-23T09:00:30Z", {
+            model: "test/earlier-model",
+          }),
+        ],
+      },
+    ]);
+    // The stream dies the NON-deliberate way (a network/proxy failure), but
+    // the R42 law keeps the turn running server-side: the registry says LIVE.
+    streamMock.streamSessionMessage.mockImplementation(
+      (_sid: string, _text: string, onEvent: (e: { type: string; delta?: string }) => void) =>
+        new Promise<void>((_resolve, reject) => {
+          // Some partial work streams first (the frozen turn has content)…
+          onEvent({ type: "text-delta", delta: "partial answer" });
+          setTimeout(() => reject(new Error("socket died mid-turn")), 30);
+        }),
+    );
+    // The truth read answers LIVE, but only after a beat — the failure state
+    // must be OBSERVABLE first (the detach's retraction is the very thing
+    // under test; an instant read would erase it before waitFor can see it).
+    sessionLiveMock.fetchSessionLive.mockImplementation(
+      () => new Promise<{ live: boolean }>((resolve) => setTimeout(() => resolve({ live: true }), 250)),
+    );
+    const restore = await renderPanelWithSingletonClient(projects);
+
+    await screen.findByText("an earlier exchange", {}, SLOW);
+    // Send the doomed turn (the composer's Enter send path).
+    fireEvent.change(screen.getByLabelText("Message composer"), { target: { value: "please build the thing" } });
+    fireEvent.keyDown(screen.getByLabelText("Message composer"), { key: "Enter" });
+
+    // First the failure surfaces (the frozen card — the pre-detach state)…
+    await waitFor(
+      () => expect(screen.getByRole("alert")).toBeTruthy(),
+      SLOW,
+    );
+    // …then the backend's truth retracts it: the slice detaches onto the
+    // mirror path (the events bus keeps publishing the surviving turn's
+    // frames), the error card vanishes and the STOP affordance returns.
+    await waitFor(
+      () => {
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(screen.getByRole("button", { name: "Stop generation" })).toBeTruthy();
+      },
+      SLOW,
+    );
+    // The optimistic user bubble survives the detach (the interlock's
+    // pendingEcho anchor moved onto the mirror's userText).
+    expect(screen.getAllByText("please build the thing")).toHaveLength(1);
+
+    restore();
   });
 });
