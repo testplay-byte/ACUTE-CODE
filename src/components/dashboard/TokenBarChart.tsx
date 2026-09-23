@@ -132,7 +132,17 @@ export function TokenBarChart({
           </p>
         </div>
       ) : (
-        <div className="relative flex justify-center">
+        <div
+          className="relative flex justify-center"
+          onPointerMove={(e) => {
+            // R121-d: the ONE pointer read (the R5 law — hover is a pointer
+            // read, never a per-bar hover pair): the browser's own hit
+            // testing resolves the bar under the pointer.
+            const hit = (e.target as Element).closest("[data-bar-idx]");
+            setHoveredIdx(hit !== null ? Number(hit.getAttribute("data-bar-idx")) : null);
+          }}
+          onPointerLeave={() => setHoveredIdx(null)}
+        >
           <svg
             width={chartWidth}
             height={CHART_HEIGHT + LABEL_AREA}
@@ -187,8 +197,7 @@ export function TokenBarChart({
                       height={CHART_HEIGHT}
                       fill="transparent"
                       style={{ cursor: "pointer" }}
-                      onMouseEnter={() => setHoveredIdx(i)}
-                      onMouseLeave={() => setHoveredIdx(null)}
+                      data-bar-idx={i}
                     />
                     <motion.rect
                       x={x}

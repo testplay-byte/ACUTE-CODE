@@ -36,6 +36,8 @@ function chip(overrides: Partial<ComposerAttachment>): ComposerAttachment {
     name: "photo.png",
     size: 95,
     text: null,
+    truncated: false,
+    source: "picker",
     ...overrides,
   };
 }

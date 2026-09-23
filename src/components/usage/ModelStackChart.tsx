@@ -145,7 +145,16 @@ export function ModelStackChart({
         </div>
       ) : (
         <div className="custom-scrollbar overflow-x-auto">
-          <div className="relative mx-auto w-fit">
+          <div
+            className="relative mx-auto w-fit"
+            onPointerMove={(e) => {
+              // R121-d: the ONE pointer read (the R5 law — hover is a pointer
+              // read, never a per-bar hover pair).
+              const hit = (e.target as Element).closest("[data-bar-idx]");
+              setHoveredIdx(hit !== null ? Number(hit.getAttribute("data-bar-idx")) : null);
+            }}
+            onPointerLeave={() => setHoveredIdx(null)}
+          >
             <svg
               width={Y_AXIS + chartWidth}
               height={CHART_HEIGHT + LABEL_AREA}
@@ -209,8 +218,7 @@ export function ModelStackChart({
                         height={CHART_HEIGHT}
                         fill="transparent"
                         style={{ cursor: "pointer" }}
-                        onMouseEnter={() => setHoveredIdx(i)}
-                        onMouseLeave={() => setHoveredIdx(null)}
+                        data-bar-idx={i}
                       />
                       {segments.map(
                         (seg) =>
