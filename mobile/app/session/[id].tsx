@@ -227,6 +227,7 @@ import {
   DELIVERY_EDGE_LOW,
   DELIVERY_EDGE_STATIC,
   TranscriptRowView,
+  type AttachmentImageResolver,
 } from "@/components/transcript";
 import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
 import { QuietIconButton, TypeBodyStrong, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
@@ -238,6 +239,15 @@ import { useLink } from "@/link/use-link";
 import { getLinkManager } from "@/link/runtime";
 import type { SseStream } from "@/link/connection";
 import { fetchProjects, type ProjectRow } from "@/features/config";
+// R121-c (the pixels round): the image-attachment display-bytes fetch —
+// the resolver the transcript's thumbnails ride. The cache-file write (the
+// RN-touching half the feature module's header pins to the screen) rides
+// expo-file-system HERE — screens are not unit-tested; the pure half is.
+import { File, Paths } from "expo-file-system";
+import {
+  attachmentCacheFileName,
+  fetchAttachmentImageBase64,
+} from "@/features/attachments";
 import { CLASSIC_THINKING_OPTIONS, MODE_OPTIONS, modeOption } from "@/features/composer-state";
 import { contextPercent, contextPressure, formatTokens, type SessionContextReport } from "@/features/context-meter";
 import {
@@ -946,6 +956,36 @@ export default function SessionScreen() {
   const composerMode: ComposerMode =
     status !== "connected" ? "offline" : liveRunning || remoteRunning ? "running" : "compose";
 
+  // ── R121-c (the pixels round) — the transcript's image-bytes resolver ─────
+  // Built over the link manager (the ApiSender) + the session's projectId:
+  // the user bubble's image thumbnails fetch their display bytes through
+  // GET /projects/:id/attachments/bytes (responseBase64), and THIS screen
+  // persists them as cache files (data URIs carry an Android size ceiling;
+  // a cache file does not — the raster.ts lesson). The cache name is
+  // content-keyed (attachmentCacheFileName), so re-renders hit the same
+  // file. Absent (no project yet) → the honest frame, byte-identical to
+  // the pre-R121 render.
+  const attachmentImageResolver: AttachmentImageResolver | undefined = useMemo(() => {
+    if (detail?.projectId == null) return undefined;
+    const projectId = detail.projectId;
+    return async (a) => {
+      const bytes = await fetchAttachmentImageBase64(
+        getLinkManager(),
+        projectId,
+        a.path ?? a.name,
+      );
+      if (bytes.base64 === null) return null;
+      try {
+        const file = new File(Paths.cache, attachmentCacheFileName(a.path ?? a.name, a.size));
+        file.write(bytes.base64, { encoding: "base64" });
+        return file.uri;
+      } catch {
+        // The write failed — an honest miss (never blocks the transcript).
+        return null;
+      }
+    };
+  }, [detail?.projectId]);
+
   // ── R115-I — the identity bar's honest identity ladder ────────────────────
 
   // The project row (fetchProjects cached per mount): the session's
@@ -1542,6 +1582,7 @@ export default function SessionScreen() {
                     ? () => onRetryFailedTurn(row.item.key)
                     : undefined
                 }
+                attachmentImageResolver={attachmentImageResolver}
               />
             )}
             ItemSeparatorComponent={ItemSeparator}

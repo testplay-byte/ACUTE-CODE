@@ -38,6 +38,22 @@ const ATTACHMENT_UPLOAD_BODY_LIMIT_BYTES = 12 * 1024 * 1024;
 const ATTACHMENT_SUFFIX_CAP = 100;
 
 /**
+ * ROUND-121 (R121-a): the display-image extension allowlist for GET
+ * /projects/:id/attachments/bytes — the raster formats every consumer of
+ * this route renders (the PC's <img>, RN's <Image>, the vision tool's own
+ * accepted set). SVG is deliberately absent: RN <Image> does not raster it,
+ * and the PC transcript's <img> keeps scripting surfaces out of the app.
+ */
+const ATTACHMENT_IMAGE_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+};
+
+/**
  * ROUND-67 (R67-A): the dedupe-suffixed form of an attachment name —
  * "photo.png" → "photo-2.png" (the EXTENSION survives so analyze_image's
  * extension gate still passes); extension-less names just append. Conservative
@@ -394,4 +410,102 @@ export function registerAttachmentRoutes(scope: FastifyInstance, ctx: RouteConte
       }
     },
   );
+
+  // ── ROUND-121 (R121-a): attachment BYTES for display ─────────────────
+  // GET /projects/:id/attachments/bytes?path=<project-relative>
+  //
+  // The pixels round's server half. Until now a user-sent image rendered
+  // as a text chip on every surface (PC composer + transcript, the phone's
+  // transcript frame) because the MESSAGE WIRE deliberately carries no
+  // bytes (the R67 law: "no byte field rides the wire — bytes go straight
+  // to the upload route, never into the event log"). This route completes
+  // that law's other half: bytes come BACK out through their own door,
+  // fetched on demand — exactly the shape the raster frames
+  // (GET /computer-use/frames/:frameId/raster) proved for screenshots.
+  //
+  //   · Containment: resolveInsideRoot(project.rootPath, path) — the SAME
+  //     resolver the read route uses; escapes are refused (400).
+  //   · IMAGES ONLY: the extension allowlist png/jpg/jpeg/gif/webp/bmp —
+  //     display-safe raster formats. No SVG (RN <Image> does not raster it;
+  //     the PC <img> keeps scripting surfaces out of the transcript), no
+  //     arbitrary binaries (this is a DISPLAY route, not a download route —
+  //     the browser-save affordance owns that surface when it exists).
+  //   · 8MB cap: the upload cap's mirror (MAX_ATTACHMENT_UPLOAD_BYTES) —
+  //     nothing this route serves was ever stored larger.
+  //   · The upload route's dedupe law means a path's bytes are
+  //     CONTENT-STABLE (never overwritten) — so the private cache headers
+  //     are honest; `no-store` would just re-send 8MB for nothing.
+  //   · Device tokens: NOT on the R109 blocklist (the exact/prefix/suffix/
+  //     infix families don't match this path) — the phone's thumbnails are
+  //     the whole point of the round.
+  scope.get("/projects/:id/attachments/bytes", async (request, reply) => {
+    const { id } = request.params as Record<string, string>;
+    const rawPath = (request.query as Record<string, unknown>).path;
+    if (typeof rawPath !== "string" || rawPath.trim() === "") {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "query parameter 'path' is required", {
+          field: "query.path",
+        }),
+      );
+    }
+    const project = getProject(db, id);
+    if (project === undefined) {
+      return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
+    }
+    const resolved = resolveInsideRoot(project.rootPath, rawPath);
+    if ("error" in resolved) {
+      return reply.code(400).send(errorBody("VALIDATION", resolved.error, { field: "query.path" }));
+    }
+    const abs = resolved.abs;
+
+    // The extension allowlist — checked on the PATH's own extension (the
+    // upload route preserves extensions through dedupe, so this is the
+    // stored file's extension too).
+    const ext = abs.slice(abs.lastIndexOf(".") + 1).toLowerCase();
+    const mime = ATTACHMENT_IMAGE_MIME[ext];
+    if (mime === undefined) {
+      return reply.code(400).send(
+        errorBody(
+          "VALIDATION",
+          `'${rawPath}' is not a displayable image — the bytes route serves png/jpg/jpeg/gif/webp/bmp only`,
+          { field: "query.path" },
+        ),
+      );
+    }
+
+    try {
+      const stats = statSync(abs);
+      if (stats.isDirectory()) {
+        return reply.code(400).send(
+          errorBody("VALIDATION", `'${rawPath}' is a directory`, { field: "query.path" }),
+        );
+      }
+      if (stats.size > MAX_ATTACHMENT_UPLOAD_BYTES) {
+        return reply.code(400).send(
+          errorBody(
+            "VALIDATION",
+            `'${rawPath}' is ${stats.size} bytes — above the 8MB image limit`,
+            { field: "query.path" },
+          ),
+        );
+      }
+      const bytes = readFileSync(abs);
+      // Content-stable by the dedupe law → private caching is honest. The
+      // ETag is the weak size+ext form: cheap, collision-safe enough for a
+      // display cache (the name is already content-stable).
+      return reply
+        .code(200)
+        .headers({
+          "content-type": mime,
+          "content-length": String(bytes.length),
+          "cache-control": "private, max-age=300",
+          etag: `W/"att-${bytes.length}-${ext}"`,
+        })
+        .send(bytes);
+    } catch {
+      return reply.code(404).send(
+        errorBody("NOT_FOUND", `no attachment at '${rawPath}' in this project`),
+      );
+    }
+  });
 }

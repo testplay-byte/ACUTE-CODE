@@ -27,6 +27,8 @@ import {
   attachmentFromRead,
   attachmentPreviewKind,
   detectAtToken,
+  attachmentCacheFileName,
+  fetchAttachmentImageBase64,
   fetchProjectTree,
   filterProjectFiles,
   flattenTreeFiles,
@@ -321,5 +323,95 @@ describe("attachments — the typed clients", () => {
     expect(tree.ok && tree.data.rootPath).toBe("/tmp/proj");
     expect(calls[0]?.path).toBe("/api/v1/projects/proj%201/tree");
     expect(calls[0]?.init.method).toBeUndefined(); // a plain GET
+  });
+});
+
+
+// ── ROUND-121 (R121-c — the pixels round): the display-bytes client ─────────
+
+describe("attachments — fetchAttachmentImageBase64 (ROUND-121 R121-c)", () => {
+  function makeBinarySender(
+    respond: (path: string, init: { responseBase64?: boolean }) => {
+      status: number;
+      bodyBase64?: string;
+    },
+  ) {
+    const calls: Array<{ path: string; init: { responseBase64?: boolean } }> = [];
+    const sender: ApiSender = {
+      async api(path, init = {}) {
+        calls.push({ path, init });
+        const r = respond(path, init as { responseBase64?: boolean });
+        return {
+          ok: r.status >= 200 && r.status < 300,
+          status: r.status,
+          headers: {},
+          bodyText: "",
+          ...(r.bodyBase64 !== undefined ? { bodyBase64: r.bodyBase64 } : {}),
+        };
+      },
+    };
+    return { sender, calls };
+  }
+
+  it("a display-image path fetches with responseBase64 — the base64 comes back raw", async () => {
+    const { sender, calls } = makeBinarySender(() => ({
+      status: 200,
+      bodyBase64: "aVBORw==",
+    }));
+    const bytes = await fetchAttachmentImageBase64(sender, "proj_1", "attachments/shot.png");
+    expect(bytes).toEqual({ base64: "aVBORw==", miss: false });
+    expect(calls[0]?.path).toBe(
+      "/api/v1/projects/proj_1/attachments/bytes?path=attachments%2Fshot.png",
+    );
+    expect(calls[0]?.init.responseBase64).toBe(true);
+  });
+
+  it("a 404 answers the honest MISS (permanent — the frame stands)", async () => {
+    const { sender } = makeBinarySender(() => ({ status: 404 }));
+    const bytes = await fetchAttachmentImageBase64(sender, "proj_1", "attachments/gone.png");
+    expect(bytes).toEqual({ base64: null, miss: true });
+  });
+
+  it("a transport throw answers base64-null / NOT-miss (the caller may retry)", async () => {
+    const sender: ApiSender = {
+      async api() {
+        throw new Error("link down");
+      },
+    };
+    const bytes = await fetchAttachmentImageBase64(sender, "proj_1", "attachments/shot.png");
+    expect(bytes).toEqual({ base64: null, miss: false });
+  });
+
+  it("a NON-IMAGE path never fetches (the client-side allowlist mirror)", async () => {
+    const { sender, calls } = makeBinarySender(() => ({ status: 200, bodyBase64: "eHg=" }));
+    const log = await fetchAttachmentImageBase64(sender, "proj_1", "attachments/debug.log");
+    expect(log).toEqual({ base64: null, miss: true });
+    const svg = await fetchAttachmentImageBase64(sender, "proj_1", "attachments/vector.svg");
+    expect(svg).toEqual({ base64: null, miss: true });
+    const bare = await fetchAttachmentImageBase64(sender, "proj_1", "attachments/README");
+    expect(bare).toEqual({ base64: null, miss: true });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("an empty bodyBase64 answers the honest miss (never fabricated pixels)", async () => {
+    const { sender } = makeBinarySender(() => ({ status: 200, bodyBase64: "" }));
+    const bytes = await fetchAttachmentImageBase64(sender, "proj_1", "attachments/shot.png");
+    expect(bytes).toEqual({ base64: null, miss: true });
+  });
+});
+
+describe("attachments — attachmentCacheFileName (ROUND-121 R121-c)", () => {
+  it("content-keys the cache name: path slug + size + the extension lowercased", () => {
+    expect(attachmentCacheFileName("attachments/shot.png", 2048)).toBe(
+      "att-attachments-shot.png-2048.png",
+    );
+    expect(attachmentCacheFileName("attachments/Photo.JPG")).toBe("att-attachments-Photo.JPG.jpg");
+  });
+
+  it("collapses separators + dots (a safe cache filename) and survives extension-less", () => {
+    expect(attachmentCacheFileName("attachments/../notes/shot.png")).toBe(
+      "att-attachments--notes-shot.png.png",
+    );
+    expect(attachmentCacheFileName("README")).toBe("att-README.img");
   });
 });
