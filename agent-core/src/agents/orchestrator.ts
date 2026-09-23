@@ -473,6 +473,15 @@ export function sampleChildWatch(
   stallTimeoutMs: number,
   todosDone: number,
   todosTotal: number,
+  /** ROUND-120 (R120-H, item 43): wall-clock timestamp of the child's LAST
+   * LIVE emit activity (every event the forwarding emit pushed — tool-output
+   * chunks, text/thinking deltas, tool calls/results), or undefined when the
+   * child runs channel-less. Live output is POSITIVE liveness evidence the
+   * event log cannot see: run_command streams terminal chunks over SSE while
+   * it runs (its timeout_ms cap is 600 s) but persists NOTHING until the
+   * command finishes — so a healthy long tool run can out-silence the event-
+   * log stall threshold (default 300 s). The watchdog must not reap it. */
+  liveActivityAt?: number,
 ): SubAgentWatchSample {
   const events = listSessionEvents(db, childId);
   const last = events[events.length - 1];
@@ -510,7 +519,19 @@ export function sampleChildWatch(
     // child (every event post-dates startedAt) the min() is a no-op —
     // lastEventAgeMs ≤ elapsedMs always — so the R52-b semantics are
     // byte-identical where they already held.
-    stalled: Math.min(lastEventAgeMs, elapsedMs) > stallTimeoutMs,
+    // R120-H (item 43): the LIVE-ACTIVITY leg — a child whose forwarding
+    // emit produced anything within the threshold is alive by construction
+    // (the healthy-long-run_command reap fix: run_command streams terminal
+    // chunks over SSE while it runs but persists nothing until it finishes,
+    // so the event log alone would call a healthy 6-minute command
+    // "stalled" at the 5-minute threshold). Channel-less children pass no
+    // timestamp and keep the exact R107-b semantics.
+    stalled:
+      Math.min(
+        lastEventAgeMs,
+        elapsedMs,
+        ...(liveActivityAt !== undefined ? [Math.max(0, Date.now() - liveActivityAt)] : []),
+      ) > stallTimeoutMs,
   };
 }
 
@@ -1622,6 +1643,16 @@ class Orchestrator {
     setSessionStatus(db, child.id, "running");
 
     const runStartedAt = Date.now();
+    // ROUND-120 (R120-H, item 43): the LIVE-ACTIVITY witness — updated by the
+    // forwarding emit below on EVERY child event (tool-output chunks, text /
+    // thinking deltas, tool calls / results). The stall watchdog reads it
+    // through sampleChildWatch's liveActivityAt leg: a child that is still
+    // STREAMING is alive by construction, even when a single long tool
+    // (run_command, bounded at 600 s) has not yet persisted an event past the
+    // stall threshold — the pre-R120-H watchdog reaped exactly that healthy
+    // shape at the 300 s default. Channel-less runs (no emit) leave it at the
+    // run start, where the R107-b elapsedMs leg already dominates.
+    let lastChildEmitAt = runStartedAt;
     const watchdog = setInterval(() => {
       if (childAbort.signal.aborted) return;
       const progress = this.progressOf(db, child.id);
@@ -1632,6 +1663,8 @@ class Orchestrator {
         orchestration.childStallTimeoutMs,
         progress.todosDone,
         progress.todosTotal,
+        // R120-H: the live-activity witness rides the stall signal.
+        lastChildEmitAt,
       );
       // ROUND-75 (R75): a child in a TRANSIENT-API retry wait is ALIVE by
       // construction (the ladder's waitForRetry holds it between provider
@@ -1678,13 +1711,18 @@ class Orchestrator {
       //     the final status poll. This is the "manage them properly / make
       //     them function properly" the owner asked for.
       const wrappedEmit = emit
-        ? (event: unknown) =>
+        ? (event: unknown) => {
+            // R120-H (item 43): the forwarding emit is the LIVE-ACTIVITY
+            // witness — every child event it pushes proves the child is
+            // alive (the stall watchdog's sampleChildWatch leg above).
+            lastChildEmitAt = Date.now();
             emit({
               type: "subagent-event",
               sessionId: child.id,
               parentSessionId,
               inner: event,
-            })
+            });
+          }
         : undefined;
       // ROUND-50 (R50-b, owner: "It should be streamed live just like how it
       // gets handled on the main agent"): when the delegating turn runs the
@@ -1988,6 +2026,11 @@ class Orchestrator {
     setSessionStatus(db, childId, "running");
 
     const runStartedAt = Date.now();
+    // R120-H (item 43): the same LIVE-ACTIVITY witness runChildTurn carries —
+    // the forwarding emit below updates it, the watchdog feeds it to
+    // sampleChildWatch's liveActivityAt leg, and a retried child that is
+    // still streaming (a healthy long tool mid-run) is never stall-reaped.
+    let lastChildEmitAt = runStartedAt;
     const watchdog = setInterval(() => {
       if (childAbort.signal.aborted) return;
       const progress = this.progressOf(db, childId);
@@ -1998,6 +2041,8 @@ class Orchestrator {
         orchestration.childStallTimeoutMs,
         progress.todosDone,
         progress.todosTotal,
+        // R120-H: the live-activity witness rides the stall signal.
+        lastChildEmitAt,
       );
       // ROUND-75 (R75): a retried child in a TRANSIENT-API retry wait is
       // ALIVE by construction — never stall-kill it; surface the wait (the
@@ -2030,13 +2075,16 @@ class Orchestrator {
       // ROUND-40: same live-forwarding as delegateTask — wrap the parent's
       // emit so the retried child's tool/text events ride the SSE channel.
       const wrappedEmit = emit
-        ? (event: unknown) =>
+        ? (event: unknown) => {
+            // R120-H (item 43): the live-activity witness (see runChildTurn).
+            lastChildEmitAt = Date.now();
             emit({
               type: "subagent-event",
               sessionId: childId,
               parentSessionId,
               inner: event,
-            })
+            });
+          }
         : undefined;
       // ROUND-50 (R50-b): same streamed-vs-sync branch as delegateTask. The
       // HTTP retry route passes neither chatStream nor emit (no SSE channel

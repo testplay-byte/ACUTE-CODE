@@ -45,6 +45,7 @@ import {
   latestTodoSnapshot,
   listSessionEvents,
   listUndeliveredQueuedMessages,
+  type SessionEvent,
   maybeAutoTitleSession,
   // ROUND-117 (R117-b): the memory-policy 'on-start' first-turn probe + the
   // turn-end "memories saved this session" counter.
@@ -167,6 +168,198 @@ const ASSISTANT_LAST_SHAPE_NUDGE =
 
 /** API.md §5.4: these session statuses refuse follow-up turns. */
 const TERMINAL_STATUSES: readonly SessionStatus[] = ["completed", "failed", "cancelled"];
+
+// ── ROUND-120 (R120-H, owner items 43 + 44): the turn-end honesty laws ──────
+//
+// Item 43 ("The agent stops midway — mid-command, mid-file-read, mid-write —
+// with no model error and no visible cause"): the audit of every exit path of
+// runStreamedAgentTurn found exactly three SILENT exits — the outer-loop
+// budget falling out mid-tool-work (ok:true + an empty assistant marker + an
+// SSE-only meta.continuation_complete frame the PC stream-store ignores), a
+// stream that ends CLEANLY mid-tool-call (a tool-call event whose result
+// never arrived — the R80 truncation guard in chat.ts only catches the
+// zero-finish-step shape, so a cut after an earlier step's finish-step
+// slipped through and the model's call silently vanished), and a blank final
+// iteration over an UNFINISHED todo plan (the R77 carve-out reads the whole
+// turn, so whitespace after real tool work ended the turn with no nudge).
+// All three are closed below; the law they now obey: a turn ends ONLY on
+// (a) a real final answer, (b) a user abort (labeled as such), or (c) a
+// surfaced error (turn.error + the 502 envelope + the notification).
+// ────────────────────────────────────────────────────────────────────────────
+
+/** R120-H: the ITERATION_LIMIT stop's message — the R80 REQUEST_LIMIT
+ * precedent's shape (the honest budget stop: name the cap, name the
+ * affordance, never pretend the mid-work turn completed). */
+function iterationLimitMessage(sessionId: string, maxOuterLoops: number): string {
+  return (
+    `the turn hit its continuation budget (${maxOuterLoops} model calls × the agent's maxTurns steps) ` +
+    `while still mid-work for session ${sessionId} — the work done so far is preserved in the transcript; ` +
+    'send a follow-up message (e.g. "continue") to resume from where it stopped'
+  );
+}
+
+/** R120-H: the MID-TOOL truncation error — thrown when a provider stream ends
+ * CLEANLY with tool-call events that never received their results (and/or a
+ * tool-input-start whose arguments never completed). The wording carries the
+ * NETWORK_PATTERNS phrase ("connection closed") so the classifier reads it as
+ * `network` — transient, the retry ladder owns it — exactly like the R80
+ * zero-finish-step truncation sibling in chat.ts. */
+function midToolTruncationError(unresolvedCalls: number, openInputs: number): Error {
+  const parts: string[] = [];
+  if (unresolvedCalls > 0) {
+    parts.push(`${unresolvedCalls} tool call${unresolvedCalls === 1 ? "" : "s"} streamed without results`);
+  }
+  if (openInputs > 0) {
+    parts.push(`${openInputs} tool call argument stream${openInputs === 1 ? "" : "s"} never completed`);
+  }
+  return new Error(
+    `provider stream ended mid-tool-call — ${parts.join("; ")}; the connection closed before the call completed (truncated output)`,
+  );
+}
+
+/** R120-H (item 43): the ONE blank-tail continuation's nudge — fired when a
+ * final iteration returns NO text and NO tools while the todo plan is
+ * UNFINISHED (positive incompleteness evidence, the same evidence class the
+ * R96-B todos-continuation reads). The R77 carve-out ("a tool-using turn
+ * with no final text stays legitimate — the tools did the work") is
+ * preserved for the no-plan / finished shapes; this only refuses to let
+ * whitespace end a turn the plan itself says is mid-work. */
+const BLANK_TAIL_CONTINUATION_NUDGE =
+  "Your previous response in this turn was empty (no text, no tool calls) while the task is still unfinished. " +
+  "Continue the task now — call the tools you need. When everything is done, reply with a short final summary " +
+  'ending with the line: Task complete.';
+
+// ── ROUND-120 (R120-H, item 44): the RESUME path — hand the model its working
+// context instead of resetting it into re-discovery ──────────────────────────
+//
+// "'Continue' re-reads every file from scratch." The audit: a follow-up turn
+// re-assembles history through assembleHistory, whose R58-c fidelity window
+// keeps FULL tool-result summaries for only the last RECENT_TOOL_RESULTS=8
+// tool.use events (everything older stubs to 200 chars) — so after a long
+// mid-work turn, the model's "continue" rode a history where most of what it
+// had already read was a stub, and re-reading was the honest move. The fix:
+// on a resume-shaped send (a bare "continue"-vocabulary message) after a turn
+// that did tool work, the assembly widens the fidelity window (bounded by the
+// same MAX_TOOL_BLOCK_CHARS block cap) and rides ONE deterministic,
+// never-persisted resume note that names what the prior turn already read /
+// wrote / ran and tells the model not to redo it. No LLM call, no new event
+// type — the note rides the in-memory nudge channel (pendingNudge's shape),
+// and the event log stays byte-identical. ───────────────────────────────────
+
+/** R120-H: the bare-resume vocabulary (single-phrase sends only — "continue",
+ * "go on", "继续"…; a message that carries real content is a NEW instruction,
+ * not a resume, and gets the ordinary assembly). */
+const RESUME_REQUEST_PATTERN =
+  /^(?:continue|go\s+on|keep\s+going|carry\s+on|resume|proceed|继续|继续任务|接着做|接着继续)[.!?。！？]*$/i;
+
+/** R120-H: is this send a bare resume request? Exported for tests. */
+export function isResumeRequest(content: string): boolean {
+  return RESUME_REQUEST_PATTERN.test(content.trim());
+}
+
+/** R120-H: the resume turn's tool-result fidelity window (vs the default 8).
+ * Bounded by assembleHistory's MAX_TOOL_BLOCK_CHARS block cap — the wider
+ * window only decides WHICH lines escape the per-line 200-char stub. */
+const RESUME_RECENT_TOOL_RESULTS = 40;
+
+/** R120-H: cap on the resume note's per-tool lines (the note names the prior
+ * work; the full list lives in the tool_results blocks above it). */
+const RESUME_NOTE_TOOL_CAP = 30;
+
+interface ResumeTurnContext {
+  /** The deterministic resume note (rides every iteration of the turn). */
+  note: string;
+  /** The widened fidelity window for this turn's assemblies. */
+  recentToolResults: number;
+}
+
+/** R120-H: best-effort path extraction from a persisted argsSummary — the
+ * display string ("path: notes/a.txt, content: 12 chars") is the only
+ * persisted argument record by design (raw args never persist). */
+function pathFromArgsSummary(argsSummary: string): string | null {
+  const match = /(?:^|,\s*)path:\s*([^,]+)/.exec(argsSummary);
+  const path = match?.[1]?.trim();
+  return path !== undefined && path !== "" ? path : null;
+}
+
+/** R120-H: the read-family (context the model already holds) vs the
+ * write-family (work that already succeeded) vs commands. */
+const RESUME_READ_TOOLS = new Set(["read_file", "list_dir", "search_files", "grep", "glob"]);
+const RESUME_WRITE_TOOLS = new Set(["write_file", "edit_file", "create_dir", "delete_file"]);
+
+/** R120-H: build the deterministic resume note from the PRIOR turn's
+ * tool.use events (pure — exported for tests). */
+export function buildResumeContextNote(
+  priorToolUses: ReadonlyArray<{ toolName: string; argsSummary: string }>,
+  recentToolResults: number,
+): string {
+  const read: string[] = [];
+  const wrote: string[] = [];
+  const ran: string[] = [];
+  const other: string[] = [];
+  for (const call of priorToolUses.slice(0, RESUME_NOTE_TOOL_CAP)) {
+    const path = pathFromArgsSummary(call.argsSummary);
+    const label = path ?? call.argsSummary.slice(0, 80);
+    if (RESUME_READ_TOOLS.has(call.toolName)) read.push(`${call.toolName}: ${label}`);
+    else if (RESUME_WRITE_TOOLS.has(call.toolName)) wrote.push(`${call.toolName}: ${label}`);
+    else if (call.toolName === "run_command") ran.push(label);
+    else other.push(`${call.toolName}: ${label}`);
+  }
+  const overflow = priorToolUses.length - Math.min(priorToolUses.length, RESUME_NOTE_TOOL_CAP);
+  const lines: string[] = [];
+  if (read.length > 0) lines.push(`- already read (contents above): ${read.join("; ")}`);
+  if (wrote.length > 0) lines.push(`- already wrote/edited: ${wrote.join("; ")}`);
+  if (ran.length > 0) lines.push(`- commands already run: ${ran.join("; ")}`);
+  if (other.length > 0) lines.push(`- other tools already run: ${other.join("; ")}`);
+  if (overflow > 0) lines.push(`- (and ${overflow} more earlier tool calls — see the tool_results blocks above)`);
+  return (
+    "[Resume context — the previous turn's work is preserved in the tool_results blocks above; do NOT restart the task from scratch.]\n" +
+    "What the previous turn already did:\n" +
+    lines.join("\n") +
+    `\nThe most recent ${recentToolResults} tool results above are in full; older ones may be truncated. ` +
+    "Continue the task from where that work stopped: do not re-read files whose contents you already have " +
+    "(unless you changed them or need fresh content), and do not redo work that already succeeded. " +
+    "Read a file again only when its content is genuinely absent from the context above."
+  );
+}
+
+/** R120-H: plan the resume context for THIS turn — null unless the send is a
+ * bare resume request AND the previous turn did tool work (there is working
+ * context to hand over). Pure — exported for tests. `preTurnEvents` is the
+ * event log snapshot taken BEFORE this turn's user message is appended. */
+export function planResumeTurnContext(
+  preTurnEvents: readonly SessionEvent[],
+  content: string,
+): ResumeTurnContext | null {
+  if (!isResumeRequest(content)) return null;
+  // The PRIOR turn's events: everything after the last message.user (a
+  // queued-message flip keeps its original seq, so the last message.user by
+  // list order is the prior turn's own opener — this turn's is not appended
+  // yet by construction).
+  let lastUserIdx = -1;
+  for (let i = preTurnEvents.length - 1; i >= 0; i -= 1) {
+    if (preTurnEvents[i].type === "message.user") {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  const tail = lastUserIdx === -1 ? preTurnEvents : preTurnEvents.slice(lastUserIdx + 1);
+  const priorToolUses: Array<{ toolName: string; argsSummary: string }> = [];
+  for (const ev of tail) {
+    if (ev.type !== "tool.use") continue;
+    const payload = (ev.payload ?? {}) as Record<string, unknown>;
+    if (typeof payload.toolName !== "string") continue;
+    priorToolUses.push({
+      toolName: payload.toolName,
+      argsSummary: typeof payload.argsSummary === "string" ? payload.argsSummary : "",
+    });
+  }
+  if (priorToolUses.length === 0) return null;
+  return {
+    note: buildResumeContextNote(priorToolUses, RESUME_RECENT_TOOL_RESULTS),
+    recentToolResults: RESUME_RECENT_TOOL_RESULTS,
+  };
+}
 
 // ── ROUND-49: nested delegation (sub-agents may delegate too) ───────────────
 
@@ -703,7 +896,12 @@ export type TurnOutcome =
         | "LOOP_GUARD"
         | "NO_OUTPUT"
         | "CONTEXT_LIMIT"
-        | "REQUEST_LIMIT";
+        | "REQUEST_LIMIT"
+        /** ROUND-120 (R120-H, item 43): the outer-loop budget ran out while
+         * the model was still mid-work (tools-only final iteration) — the
+         * honest stop (persisted turn.error + 502) that replaced the silent
+         * ok:true fall-out. */
+        | "ITERATION_LIMIT";
       message: string;
       details?: Record<string, unknown>;
     };
@@ -842,18 +1040,30 @@ interface PendingToolLine {
   sticky: boolean;
 }
 
-export function assembleHistory(db: SqliteDatabase, sessionId: string): SeqMessage[] {
+export function assembleHistory(
+  db: SqliteDatabase,
+  sessionId: string,
+  /** ROUND-120 (R120-H, item 44): the tool-result fidelity window — how many
+   * of the NEWEST tool.use events keep their full output summaries (the rest
+   * stub to OLD_TOOL_STUB_CHARS). Absent = the R58-c default of 8; a resume
+   * turn passes the wider RESUME_RECENT_TOOL_RESULTS window so the model's
+   * "continue" rides its actual working context instead of 200-char stubs
+   * (the "re-reads every file" regression). */
+  opts?: { recentToolResults?: number },
+): SeqMessage[] {
   const events = listSessionEvents(db, sessionId);
   const messages: SeqMessage[] = [];
   let pendingToolLines: PendingToolLine[] = [];
   let pendingToolSeq = 0;
   // ROUND-58 (R58-c): seqs of the last RECENT_TOOL_RESULTS tool.use events —
   // these keep full output summaries in the replay; everything older stubs.
+  // ROUND-120 (R120-H): the window is the caller's opt (default unchanged).
+  const recentWindow = Math.max(1, opts?.recentToolResults ?? RECENT_TOOL_RESULTS);
   const toolUseSeqs: number[] = [];
   for (const ev of events) {
     if (ev.type === "tool.use") toolUseSeqs.push(ev.seq);
   }
-  const recentToolSeqs = new Set(toolUseSeqs.slice(-RECENT_TOOL_RESULTS));
+  const recentToolSeqs = new Set(toolUseSeqs.slice(-recentWindow));
 
   const flushTools = () => {
     if (pendingToolLines.length === 0) return;
@@ -1997,6 +2207,12 @@ export async function runSingleAgentTurn(
   // events exactly where they were queued.
   deliverAllQueuedMessages(db, session.id);
 
+  // ROUND-120 (R120-H, item 44): the resume planner's pre-turn snapshot (the
+  // sync twin of the streamed runner's — the sync REST route can carry a
+  // user's "continue" just as well as the SSE route does).
+  const preTurnEvents = listSessionEvents(db, session.id);
+  const resumeTurnContext = planResumeTurnContext(preTurnEvents, content);
+
   const userEvent = appendSessionEvent(db, session.id, {
     type: "message.user",
     agentId: agent.id,
@@ -2122,6 +2338,13 @@ export async function runSingleAgentTurn(
   // persist turn.warning events + nudge the next iteration; nothing stops.
   const loopGuard = createLoopGuard();
   let guardNudge: ChatTurnMessage | null = null;
+  // ROUND-120 (R120-H, item 43): the ITERATION_LIMIT + blank-tail flags —
+  // the sync twin of the streamed runner's (a sub-agent child hitting the
+  // cap mid-work used to return ok:true to the parent, which marked the
+  // half-done child completed — the exact R75 "sub-agent completed" lie
+  // pattern; the honest stop mirrors the streamed law).
+  let loopCapMidWork = false;
+  let blankTailContinuationUsed = false;
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
     // ROUND-48 (R48-e1): a child whose parent was stopped finishes the
@@ -2138,7 +2361,14 @@ export async function runSingleAgentTurn(
     // ROUND-34: history INCLUDES tool results (multi-step fix — Cline parity).
     // Re-assembled each iteration so the model sees the prior iteration's
     // tool results + assistant text.
-    const rawMessages = assembleHistory(db, session.id);
+    // ROUND-120 (R120-H, item 44): the resume turn's widened fidelity window
+    // (the streamed twin's contract — the sync REST route's "continue" rides
+    // the same working-context hand-over).
+    const rawMessages = assembleHistory(
+      db,
+      session.id,
+      resumeTurnContext !== null ? { recentToolResults: resumeTurnContext.recentToolResults } : undefined,
+    );
     // ROUND-83 (R83): the shared budget — resolveTurnBudget honors the
     // owner's per-model max_output_tokens (the audit's §2.8) and is the
     // SAME number the context meter reports (§2.5: one truth).
@@ -2181,6 +2411,11 @@ export async function runSingleAgentTurn(
     if (guardNudge !== null) {
       messages.push(guardNudge);
       guardNudge = null;
+    }
+    // ROUND-120 (R120-H, item 44): the resume note rides every iteration of
+    // the resume turn (in-memory only — the streamed twin's contract).
+    if (resumeTurnContext !== null) {
+      messages.push({ role: "user", content: resumeTurnContext.note });
     }
     // ROUND-96 (R96-B): the MESSAGES-SHAPE GUARANTEE — no provider call ever
     // goes out assistant-last (DeepSeek@OpenRouter rejects the shape with a
@@ -2806,6 +3041,22 @@ export async function runSingleAgentTurn(
         pendingNudge = { role: "user", content: TOOL_INTENT_NUDGE };
         continue;
       }
+      // ROUND-120 (R120-H, item 43): the BLANK-TAIL continuation — the sync
+      // twin of the streamed runner's rule (a blank final iteration over an
+      // UNFINISHED todo plan gets ONE feed-the-condition-back nudge; the R77
+      // carve-out stands for the no-plan / finished shapes).
+      if (
+        result.text.trim() === "" &&
+        turnToolCalls > 0 &&
+        !blankTailContinuationUsed &&
+        !latestTodosAllDone(db, session.id) &&
+        // A retry iteration must REMAIN (the recovery paths' rule).
+        outerIter < maxOuterLoops - 1
+      ) {
+        blankTailContinuationUsed = true;
+        pendingNudge = { role: "user", content: BLANK_TAIL_CONTINUATION_NUDGE };
+        continue;
+      }
       break;
     }
 
@@ -2842,6 +3093,13 @@ export async function runSingleAgentTurn(
     // loop re-invokes with the re-assembled history.
     // ROUND-40: announce the continuation so the parent UI can show the
     // child is still working (another tool round-trip incoming).
+    // ROUND-120 (R120-H, item 43): reaching this branch on the LAST iteration
+    // is the fall-out shape — the model is mid-work and the budget just ran
+    // out. The flag routes the post-loop exit through the honest
+    // ITERATION_LIMIT stop (the streamed twin's law).
+    if (outerIter === maxOuterLoops - 1) {
+      loopCapMidWork = true;
+    }
     if (emit !== undefined) {
       emit({ type: "meta.continuation", sessionId: session.id, iteration: outerIter + 1, maxOuterLoops });
     }
@@ -2996,6 +3254,69 @@ export async function runSingleAgentTurn(
       keySecrets,
     });
     return fallback;
+  }
+
+  // ROUND-120 (R120-H, item 43): the ITERATION_LIMIT stop — the sync twin
+  // (sub-agent children + the sync REST route). Pre-R120-H a child that hit
+  // the maxOuterLoops cap mid-work returned ok:true, the orchestrator marked
+  // it completed, and the parent model was told the half-done work SUCCEEDED
+  // — the R75 "sub-agent completed" lie pattern, back through the budget
+  // cap. The honest stop mirrors the streamed law: persist turn.error,
+  // record the real spend, return the 502 (autoRetryClassOf reads a non-
+  // PROVIDER_ERROR code as never-retryable, matching CONTEXT_LIMIT's rule).
+  if (loopCapMidWork && lastError === null) {
+    const iterationLimitMessageText = iterationLimitMessage(session.id, maxOuterLoops);
+    persistTurnError(db, {
+      sessionId: session.id,
+      agentId: agent.id,
+      userSeq: userEvent.seq,
+      code: "ITERATION_LIMIT",
+      message: iterationLimitMessageText,
+      model,
+      providerId: provider.id,
+      providerError: iterationLimitMessageText,
+      keySecrets,
+    });
+    if (totalInputTokens > 0 || totalOutputTokens > 0) {
+      recordUsage(
+        db,
+        {
+          agentId: agent.id,
+          sessionId: session.id,
+          provider: provider.id,
+          model,
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
+          costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+          ts: lastAssistantEvent.ts,
+        },
+        activeKeySlot,
+        { providerCalls: totalRequests, origin: "turn" },
+      );
+    }
+    touchSession(db, session.id);
+    logTurnEnd(session.id, false, Date.now() - syncStartedAt, totalInputTokens, totalOutputTokens);
+    log("warn", "turn.iteration_limit", {
+      sessionId: session.id,
+      agentId: agent.id,
+      code: "ITERATION_LIMIT",
+      maxOuterLoops,
+      model,
+      providerId: provider.id,
+    });
+    return {
+      ok: false,
+      status: 502,
+      code: "ITERATION_LIMIT",
+      message: iterationLimitMessageText,
+      details: {
+        providerError: iterationLimitMessageText,
+        model,
+        userSeq: userEvent.seq,
+        maxOuterLoops,
+      },
+    };
   }
 
   // ROUND-43 → ROUND-75 (R75): a provider failure on a LATER iteration
@@ -3319,6 +3640,12 @@ export async function runStreamedAgentTurn(
   // queued.delivered frames for messages queued DURING this turn.
   deliverAllQueuedMessages(db, session.id);
 
+  // ROUND-120 (R120-H, item 44): snapshot the log BEFORE this turn's user
+  // message lands — the resume planner reads the PRIOR turn's events (tool
+  // work to hand over) off this snapshot.
+  const preTurnEvents = listSessionEvents(db, session.id);
+  const resumeTurnContext = planResumeTurnContext(preTurnEvents, content);
+
   const userEvent = appendSessionEvent(db, session.id, {
     type: "message.user",
     agentId: agent.id,
@@ -3427,6 +3754,13 @@ export async function runStreamedAgentTurn(
   // the same `attempts` arithmetic as the other retries.
   let thinkingLoopRetries = 0;
   let effectiveThinkingLevel = prepared.thinkingLevel;
+  // ROUND-120 (R120-H, item 43): set when the loop FALLS OUT at the cap
+  // while the model is still mid-work (a tools-only final iteration — the
+  // old silent ok:true stop; see the ITERATION_LIMIT exit after the loop).
+  let loopCapMidWork = false;
+  // ROUND-120 (R120-H, item 43): the ONE blank-tail continuation (see
+  // BLANK_TAIL_CONTINUATION_NUDGE) — bounded per turn like its siblings.
+  let blankTailContinuationUsed = false;
 
   for (let outerIter = 0; outerIter < maxOuterLoops; outerIter++) {
     // ROUND-78 (R78, owner: "the message QUEUES and is auto-delivered right
@@ -3467,7 +3801,15 @@ export async function runStreamedAgentTurn(
     // Re-assemble messages from the event log — ROUND-34: now WITH tool
     // results, so iteration 2+ sees exactly what its tools did instead of
     // re-planning blind (the multi-step fix).
-    const rawMessages = assembleHistory(db, session.id);
+    // ROUND-120 (R120-H, item 44): a resume turn assembles through the
+    // WIDENED fidelity window — the prior turn's tool results stay in-full
+    // (bounded by the MAX_TOOL_BLOCK_CHARS block cap), so "continue" rides
+    // the working context instead of 200-char stubs.
+    const rawMessages = assembleHistory(
+      db,
+      session.id,
+      resumeTurnContext !== null ? { recentToolResults: resumeTurnContext.recentToolResults } : undefined,
+    );
     // ROUND-46 (R46-b): compaction instead of a silent hard trim — the
     // streamed path surfaces a meta.compaction event so the UI can show
     // that earlier context was summarized. usedTokens derives from the
@@ -3506,6 +3848,12 @@ export async function runStreamedAgentTurn(
     if (guardNudge !== null) {
       messages.push(guardNudge);
       guardNudge = null;
+    }
+    // ROUND-120 (R120-H, item 44): the resume note rides EVERY iteration of
+    // the resume turn (in-memory only, never persisted — the nudge channel's
+    // shape; it names the prior turn's reads/writes and forbids the re-read).
+    if (resumeTurnContext !== null) {
+      messages.push({ role: "user", content: resumeTurnContext.note });
     }
     // ROUND-96 (R96-B): the MESSAGES-SHAPE GUARANTEE — no provider call ever
     // goes out assistant-last (DeepSeek@OpenRouter rejects the shape with a
@@ -3585,6 +3933,14 @@ export async function runStreamedAgentTurn(
     let iterCachedInputTokens = 0;
     let iterSawCached = false;
     let iterToolCalls = 0;
+    // ROUND-120 (R120-H, item 43): the truncation witnesses — every tool-call
+    // event must resolve to a tool-result event (and every tool-input-start
+    // to its completing tool-call) before a stream ends CLEANLY. A mismatch
+    // means the connection dropped mid-call: the guard after the for-await
+    // throws the honest truncation error instead of letting the call vanish.
+    let iterToolCallEvents = 0;
+    let iterToolResultEvents = 0;
+    let iterOpenToolInputs = 0;
     totalRequests++;
 
     /** ROUND-35 (review fix #5): reasoning can run 10s of KB — cap the
@@ -3837,6 +4193,9 @@ export async function runStreamedAgentTurn(
           // file-write preview → tool result), so the persisted event-log
           // ordering matches the live stream. (The tool-call branch below
           // keeps its own flush — idempotent once this one ran.)
+          // R120-H: an input stream OPENED — one more witness (closed by the
+          // completing tool-call below).
+          iterOpenToolInputs += 1;
           if (iterText.trim() !== "" || iterThinking.trim() !== "") {
             flushSegment(false);
             statsCarrierNeeded = true;
@@ -3844,6 +4203,10 @@ export async function runStreamedAgentTurn(
         } else if (event.type === "tool-call") {
           iterToolCalls += 1;
           turnToolCalls += 1;
+          // R120-H: the call ARRIVED (arguments complete) — close the open
+          // input witness and count the call as pending its result.
+          iterOpenToolInputs = 0;
+          iterToolCallEvents += 1;
           // ROUND-35: flush the message-so-far BEFORE the tool runs, so the
           // tool work lands between message segments (owner directive).
           if (iterText.trim() !== "" || iterThinking.trim() !== "") {
@@ -3851,6 +4214,8 @@ export async function runStreamedAgentTurn(
             statsCarrierNeeded = true; // stats attach at iteration end instead
           }
         } else if (event.type === "tool-result") {
+          // R120-H: the pending call RESOLVED (the invariant's happy path).
+          iterToolResultEvents += 1;
           // Persist each tool call the moment it completes (live ordering).
           // ROUND-34 (review fix #3): scrub the output summary BEFORE it is
           // emitted over SSE AND persisted — the UI must never see secrets.
@@ -3919,6 +4284,22 @@ export async function runStreamedAgentTurn(
             iterSawCached = true;
           }
         }
+      }
+      // ROUND-120 (R120-H, item 43): the MID-TOOL truncation invariant. A
+      // CLEAN stream end (no error part, no throw) with tool-call events
+      // that never received results — or a tool-input-start whose arguments
+      // never completed — is a dropped connection the R80 zero-finish-step
+      // guard cannot see (an EARLIER step already emitted its finish-step).
+      // Throwing here routes the condition through the catch: the partial
+      // segment flush, the classifier (network — the wording), the retry
+      // ladder, and on give-up the honest terminal error. The call must
+      // never silently vanish under a normal-looking iteration end.
+      const unresolvedToolCalls = iterToolCallEvents - iterToolResultEvents + iterOpenToolInputs;
+      if (unresolvedToolCalls > 0) {
+        throw midToolTruncationError(
+          iterToolCallEvents - iterToolResultEvents,
+          iterOpenToolInputs,
+        );
       }
       // ROUND-94 (R94-D1): the stream ended cleanly — a healthy stream
       // always ends each step with a finish-step part (the part loop's flush
@@ -4615,6 +4996,24 @@ export async function runStreamedAgentTurn(
         pendingNudge = { role: "user", content: TOOL_INTENT_NUDGE };
         continue;
       }
+      // ROUND-120 (R120-H, item 43): the BLANK-TAIL continuation — a blank
+      // final iteration (no text, no tools) over an UNFINISHED todo plan is
+      // positive mid-work evidence: feed the condition back to the model
+      // ONCE instead of letting whitespace end the turn silently. The R77
+      // carve-out stands for the no-plan / finished shapes (a tool-using
+      // turn with no final text is legitimate — the tools did the work).
+      if (
+        iterAllText.trim() === "" &&
+        turnToolCalls > 0 &&
+        !blankTailContinuationUsed &&
+        !latestTodosAllDone(db, session.id) &&
+        // A retry iteration must REMAIN (the recovery paths' rule).
+        outerIter < maxOuterLoops - 1
+      ) {
+        blankTailContinuationUsed = true;
+        pendingNudge = { role: "user", content: BLANK_TAIL_CONTINUATION_NUDGE };
+        continue;
+      }
       break;
     }
 
@@ -4650,7 +5049,15 @@ export async function runStreamedAgentTurn(
       break;
     }
     // Last iteration — emit a cap-reached event so the UI knows.
+    // ROUND-120 (R120-H, item 43): reaching HERE means the final iteration
+    // ran tools with NO closing text (the only shape that falls out of the
+    // loop instead of breaking) — the model is STILL MID-WORK and the budget
+    // ran out. The flag routes the post-loop exit through the honest
+    // ITERATION_LIMIT stop; the frame stays for the clients that render it
+    // (mobile does; the PC stream-store ignores it — the error card is the
+    // surface BOTH platforms actually show).
     if (outerIter === maxOuterLoops - 1) {
+      loopCapMidWork = true;
       emit({ type: "meta.continuation_complete", iterations: maxOuterLoops });
     }
   }
@@ -4722,6 +5129,68 @@ export async function runStreamedAgentTurn(
       status: 502,
       code: guardStop.code,
       message: guardStop.message,
+    };
+  }
+
+  // ROUND-120 (R120-H, item 43): the ITERATION_LIMIT stop — the loop fell
+  // out at its budget cap while the model was still calling tools (see the
+  // loop-bottom flag). The pre-R120-H behavior: ok:true + the empty-marker
+  // assistant event + the SSE-only meta.continuation_complete frame — the
+  // owner's exact "stops midway — mid-command, mid-file-read, mid-write —
+  // with no model error and no visible cause" report (the PC stream-store
+  // ignores the frame, so the stop was invisible everywhere but mobile).
+  // The R80 REQUEST_LIMIT precedent is the law: the honest stop persists
+  // turn.error (the card's Retry re-sends the message — and the follow-up
+  // "continue" genuinely resumes from the preserved event log, which now
+  // also rides the item-44 resume context), records the real token spend,
+  // and returns the 502 so the route's error branch + the task_failed
+  // notification fire. NEVER a clean-looking empty completion.
+  if (loopCapMidWork && guardStop === null) {
+    const iterationLimitMessageText = iterationLimitMessage(session.id, maxOuterLoops);
+    persistTurnError(db, {
+      sessionId: session.id,
+      agentId: agent.id,
+      userSeq: userEvent.seq,
+      code: "ITERATION_LIMIT",
+      message: iterationLimitMessageText,
+      model,
+      providerId: provider.id,
+      providerError: iterationLimitMessageText,
+      keySecrets,
+    });
+    const capUsage: UsageRecord = {
+      agentId: agent.id,
+      sessionId: session.id,
+      provider: provider.id,
+      model,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      cachedInputTokens: sawCachedReport ? totalCachedInputTokens : null,
+      costUsd: computeCost(db, provider.id, model, totalInputTokens, totalOutputTokens),
+      ts: lastAssistantEvent.ts,
+    };
+    recordUsage(db, capUsage, activeKeySlot, { providerCalls: totalRequests, origin: "turn" });
+    touchSession(db, session.id);
+    logTurnEnd(session.id, false, ms, totalInputTokens, totalOutputTokens);
+    log("warn", "turn.iteration_limit", {
+      sessionId: session.id,
+      agentId: agent.id,
+      code: "ITERATION_LIMIT",
+      maxOuterLoops,
+      model,
+      providerId: provider.id,
+    });
+    return {
+      ok: false,
+      status: 502,
+      code: "ITERATION_LIMIT",
+      message: iterationLimitMessageText,
+      details: {
+        providerError: iterationLimitMessageText,
+        model,
+        userSeq: userEvent.seq,
+        maxOuterLoops,
+      },
     };
   }
 
