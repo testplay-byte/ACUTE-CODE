@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-20 round-114 -->
+<!-- last-reviewed: 2026-09-23 round-122 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` +
@@ -2961,3 +2961,63 @@ DETACHES the frozen failure onto the mirror path; live:false with an open
 mirror and no pending retire RETIRES it (the missed terminal frame). The
 agent-core pin: `tests/r120-live-turn.test.ts` (6); the store pin:
 `src/lib/stream-rehydrate.test.ts` (7).
+
+## ROUND-122 additions (2026-09-23) — the self-feedback ledger
+
+The owner's directive: after each completed session turn (while the setting
+is ON), a separate context-free agent with the WHOLE main-conversation
+context appends one structured entry to the ONE shared ledger file; the
+feedback NEVER touches any conversation (the owner's explicit contract —
+"it will just stop, and then if I chat, then the normal conversation will
+go and the feedback info will not be included anywhere"). MAIN sessions
+live queued⇄running across turns, so the turn's TERMINAL frame is the app's
+"session completed" moment — the reporter hooks the stream route's `finally`
+block, DETACHED (never awaited, zero SSE frames, zero session events; the
+FILE is the only persistence). Deliberate stops (ABORTED) and validation
+conflicts (404/409) never report; ok turns, real failures (≥500 — the
+transcript carries the persisted ERROR line), and route crashes do (the
+debug analyst's exact gate). The reporter's spend is metered with usage
+origin `"feedback"` (the R83 discipline).
+
+### `GET/PUT /settings/feedback` → `{enabled: boolean}`
+
+The DebugSettings pattern verbatim (default OFF — one extra model call per
+completed turn while ON). PUT broadcasts `{type:"settings",
+domain:"feedback"}` on the events bus (the R113 fan-out) — the desktop's
+`SETTINGS_DOMAIN_QUERY_KEYS` invalidates `["feedback-settings"]` AND
+`["feedback-file"]` (the ledger card live-refreshes on every append/clear,
+which publishes the same domain with the file's meta as the value).
+
+### `GET /api/v1/feedback/file` → `{exists, content, bytes, updatedAt, entries}`
+
+The raw ledger (`<dataDir>/feedback.md` — the machine-scoped directory
+beside vapid.json) plus honest meta; never a 404 (`exists:false` is the
+never-written state, the mobile-link off-state pattern). Device tokens
+REACH this route (the R109 view trust — a paired phone may view the
+ledger). `503 SERVICE_UNAVAILABLE` when the server has no dataDir (the R42
+hermetic contract).
+
+### `DELETE /api/v1/feedback/file` → `{cleared: boolean, entries: number}`
+
+The settings viewer's Clear action — SHELL-ONLY: the route-local
+`rejectDeviceTokens` guard (the settings.ts cloud-connector pattern), 403
+for a paired device (the PATH blocklist cannot split GET from DELETE on
+one path, so the method split is enforced where the route lives). The
+wiped entry count rides the reply — the confirmation line is honest, never
+assumed. Serialized on the ledger's write chain (a concurrent append lands
+AFTER the wipe).
+
+**The entry format** (the cold-read contract — the file's header explains
+itself before the first entry): a machine-written metadata block (`## Entry
+— <ISO>` + Session / Project / Agent · provider/model / Turn outcome /
+Transcript size) followed by the model's six sections (What I was trying
+to do · What actually happened · Issues & problems encountered · Glitches
+& anomalies noticed · Expectations vs reality · Suggested improvements).
+Appends are whole-entry and SERIALIZED (a module-level promise chain in
+`storage/feedback-ledger.ts` — concurrent turns can never interleave). The
+app-wide reset purges the file beside vapid.json.
+
+Pinned by `agent-core/tests/r122-feedback-writer.test.ts` (13),
+`r122-feedback-routes.test.ts` (9 — including the REAL-TLS device-token
+auth split), and `r122-feedback-phase.test.ts` (4 — the route-level
+separation contract: zero feedback frames, zero feedback events).

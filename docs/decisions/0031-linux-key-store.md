@@ -116,6 +116,9 @@ re-gated so exactly ONE imp compiles per target triple.
 - New CI gate: `.github/workflows/ci.yml` gains a `rust-linux` job
   (`cargo check` on ubuntu-latest with the WebKitGTK deps) so the Linux
   compile class is caught forever, not just at release time.
+  *(ROUND-122 note: the job now lives in `rust-checks.yml`, path-gated on
+  `src-tauri/**` — the Actions-economy round; the gate itself is
+  unchanged.)*
 - Reversal cost is LOW: delete the imp, the Cargo.toml target-gated dep,
   and this ADR — no data migration (the Secret Service items are simply
   orphaned in the user's keyring, visible/removable via seahorse/KWallet
@@ -213,4 +216,6 @@ disclose.
   real `keyring` 3.6 + libdbus stack on a daemon-less Linux (the harness
   also caught the `PlatformFailure` classification defect before it could
   ship). CI's `rust-linux`/`rust-linux-arm64` `cargo check` legs remain
-  the per-push compile gate.
+  the per-push compile gate. *(ROUND-122: they live in `rust-checks.yml`
+  now, firing only when `src-tauri/**` changes — the Windows-side
+  `cargo check` in ci.yml still runs on every non-docs push.)*

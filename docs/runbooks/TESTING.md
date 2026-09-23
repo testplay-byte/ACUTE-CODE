@@ -724,4 +724,10 @@ pkill -f 'agent-core/dist/main.js'   # teardown, then check for orphans
 `ci.yml` on `main` pushes + PRs: windows-latest, `pnpm verify` +
 `cargo check`. ~4–6 min; a client timeout while polling is not a failure —
 re-query the run (#8). Heavy Rust builds belong on Actions, never the
-owner's machine (ADR-0012).
+owner's machine (ADR-0012). ROUND-122 (the Actions economy): pushes that
+touch ONLY docs/markdown/screenshots skip CI entirely (`paths-ignore` —
+docs:check is warn-only, and a non-docs push still sweeps the whole docs
+tree); the Linux/ARM64 Rust compile gates live in `rust-checks.yml`
+(path-gated on `src-tauri/**`); the mobile per-push gate is `mobile-ci.yml`
+(version check + jest, path-gated on `mobile/**`) — the APK build itself
+rides `mobile.yml` on `v*` tags + dispatch only.
