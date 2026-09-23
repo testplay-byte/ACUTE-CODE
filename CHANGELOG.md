@@ -9,7 +9,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
-## [Unreleased]
+## [0.116.0] — 2026-09-24 — the updater overhaul + the reference-grammar mobile transcript (no token required; the visible install)
 
 ### Updates without a token requirement (the repository is public)
 - **Update checks and downloads run ANONYMOUSLY first.** The saved GitHub token — if one exists on
