@@ -116,8 +116,16 @@ type CoreIsRequired =
 const coreRequired: CoreIsRequired = true;
 
 // The row's vocabulary: the label + the CURRENT value + the danger arm +
-// the R118-D selected marker + the press. Nothing else.
-type ExpectedItemKeys = "key" | "label" | "value" | "danger" | "selected" | "onPress";
+// the R118-D selected marker + the R120-P separator flag + the press.
+// Nothing else.
+type ExpectedItemKeys =
+  | "key"
+  | "label"
+  | "value"
+  | "danger"
+  | "selected"
+  | "separator"
+  | "onPress";
 type ItemKeys = keyof HeaderDropdownItem;
 type ItemVocabularyPinned = Exclude<ItemKeys, ExpectedItemKeys> extends never
   ? Exclude<ExpectedItemKeys, ItemKeys> extends never
@@ -129,6 +137,13 @@ const itemVocabulary: ItemVocabularyPinned = true;
 // The selected marker is OPTIONAL (an unmarked row is the default shape).
 type SelectedIsOptional = undefined extends HeaderDropdownItem["selected"] ? true : never;
 const selectedOptional: SelectedIsOptional = true;
+
+// ── ROUND-120 (why): ── the owner's item 33 — "The kebab menu gains a
+// separator + 'Task list' option at the bottom." The separator flag is
+// OPTIONAL like every row addition before it — a row without it renders
+// byte-identical (every pre-R120 call site unchanged).
+type SeparatorIsOptional = undefined extends HeaderDropdownItem["separator"] ? true : never;
+const separatorOptional: SeparatorIsOptional = true;
 
 describe("HeaderDropdown — the R118-D sub-level grammar", () => {
   it("the prop surface is exactly the anchored panel + the three sub-level additions", () => {
@@ -142,6 +157,10 @@ describe("HeaderDropdown — the R118-D sub-level grammar", () => {
   it("the row carries the selected marker — optional, beside the danger arm", () => {
     expect(itemVocabulary).toBe(true);
     expect(selectedOptional).toBe(true);
+  });
+
+  it("the row carries the R120-P separator flag — optional, additive to every call site", () => {
+    expect(separatorOptional).toBe(true);
   });
 
   it("PANEL_WIDTH is 220 (components.md §Dropdown menus' band)", () => {

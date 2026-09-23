@@ -54,6 +54,13 @@
  *
  * Reduced motion snaps (motion.md §5): the entrance lands at 1 with no spring,
  * the exit unmounts immediately.
+ *
+ * R120-P — THE SEPARATOR (the owner's item 33: "The kebab menu gains a
+ * separator + 'Task list' option at the bottom"): a row carrying
+ * `separator: true` renders the R118-B STRONG inset rule (1dp borderStrong,
+ * gutter-inset) above itself — the visible tier break between the menu's
+ * control rows and the session's own tools. Additive + optional; every
+ * pre-R120 call site renders byte-identical.
  */
 
 import { useEffect, useLayoutEffect, useState } from "react";
@@ -88,6 +95,12 @@ export interface HeaderDropdownItem {
   /** R118-D — the option-list marker: a selected row swaps the ChevronRight
    *  for Check 16 in the accent (the sub-levels' in-place pickers). */
   selected?: boolean;
+  /** ── ROUND-120 (why): ── the owner's item 33 — "The kebab menu gains a
+   *  separator + 'Task list' option at the bottom." A row carrying
+   *  `separator` renders the R118-B STRONG inset rule above itself — the
+   *  visible break between the menu's control tier and the session's own
+   *  tools. Additive + optional: every existing call site is unchanged. */
+  separator?: boolean;
   onPress: () => void;
 }
 
@@ -412,37 +425,47 @@ export function HeaderDropdown({
 
 /** One menu row — label + CURRENT value right-aligned + the chevron (the
  * danger arm carries the stop affordance instead; a R118-D `selected` row
- * carries the accent Check). The old kebab sheet's KebabRow grammar, restated
- * for the anchored menu. */
+ * carries the accent Check; a R120-P `separator` row carries the strong
+ * inset rule above it — the tier break). The old kebab sheet's KebabRow
+ * grammar, restated for the anchored menu. */
 function DropdownRow({ item, testID }: { item: HeaderDropdownItem; testID?: string }) {
   const { tokens } = useTheme();
   const danger = item.danger === true;
   const selected = item.selected === true;
   return (
-    <Pressable
-      testID={testID}
-      accessibilityLabel={item.value !== undefined ? `${item.label} — ${item.value}` : item.label}
-      accessibilityRole="button"
-      accessibilityState={selected ? { selected: true } : undefined}
-      onPress={item.onPress}
-      style={({ pressed }) => [styles.row, { backgroundColor: pressed ? tokens.subtleHover : "transparent" }]}
-    >
-      <TypeBodyStrong style={{ flex: 1, color: danger ? tokens.danger : tokens.text }} numberOfLines={1}>
-        {item.label}
-      </TypeBodyStrong>
-      {item.value !== undefined ? (
-        <TypeCaption style={{ color: tokens.textSecondary, flexShrink: 1 }} numberOfLines={1}>
-          {item.value}
-        </TypeCaption>
+    <View>
+      {item.separator === true ? (
+        // ── ROUND-120 (why): ── the owner's item 33 — "a separator + 'Task
+        // list' at the bottom." The R118-B STRONG recipe: a full 1dp
+        // borderStrong rule inset by the gutter (a hairline divider is
+        // arithmetically invisible — not a divider).
+        <View style={[styles.rowSeparator, { backgroundColor: tokens.borderStrong }]} />
       ) : null}
-      {danger ? (
-        <Square size={13} color={tokens.danger} strokeWidth={2.4} fill={tokens.danger} />
-      ) : selected ? (
-        <Check size={16} color={tokens.accent} strokeWidth={2.4} />
-      ) : (
-        <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
-      )}
-    </Pressable>
+      <Pressable
+        testID={testID}
+        accessibilityLabel={item.value !== undefined ? `${item.label} — ${item.value}` : item.label}
+        accessibilityRole="button"
+        accessibilityState={selected ? { selected: true } : undefined}
+        onPress={item.onPress}
+        style={({ pressed }) => [styles.row, { backgroundColor: pressed ? tokens.subtleHover : "transparent" }]}
+      >
+        <TypeBodyStrong style={{ flex: 1, color: danger ? tokens.danger : tokens.text }} numberOfLines={1}>
+          {item.label}
+        </TypeBodyStrong>
+        {item.value !== undefined ? (
+          <TypeCaption style={{ color: tokens.textSecondary, flexShrink: 1 }} numberOfLines={1}>
+            {item.value}
+          </TypeCaption>
+        ) : null}
+        {danger ? (
+          <Square size={13} color={tokens.danger} strokeWidth={2.4} fill={tokens.danger} />
+        ) : selected ? (
+          <Check size={16} color={tokens.accent} strokeWidth={2.4} />
+        ) : (
+          <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
+        )}
+      </Pressable>
+    </View>
   );
 }
 
@@ -483,5 +506,16 @@ const styles = StyleSheet.create({
     minHeight: TOUCH_TARGET,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs + 2,
+  },
+  /** ── ROUND-120 (why): ── the R118-B STRONG inset rule above a
+   *  `separator` row — the visible tier break (1dp borderStrong, inset
+   *  by the gutter; never after the last row — the flag lives on the row
+   *  that NEEDS the break above it). */
+  rowSeparator: {
+    height: 1,
+    marginLeft: spacing.md,
+    marginRight: spacing.md,
+    marginTop: spacing.xs,
+    marginBottom: 2,
   },
 });

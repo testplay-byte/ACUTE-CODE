@@ -1,9 +1,10 @@
 /**
- * Composer v3 (R113-c → R115-I → R116-l → R118-D → R119-B) — the session
- * screen's minimal dock (chat.md §Composer): EXACTLY THREE visible controls
- * — the ONE growing PILL TextInput (max ~6 lines; the PAPERCLIP rides in
- * its OWN 40px quiet circle BESIDE the bar — R119-B; the R116-l in-bar
- * overlay and the R118-D two-tier band are deleted) · SEND (the sanctioned
+ * Composer v3 (R113-c → R115-I → R116-l → R118-D → R119-B → R120-P) — the
+ * session screen's minimal dock (chat.md §Composer): EXACTLY THREE visible
+ * controls — the ONE growing PILL TextInput (max ~6 lines; the PAPERCLIP
+ * DOCKS INSIDE the input's own surface at its bottom-right corner — R120-P;
+ * the R119-B sibling-beside circle, the R116-l in-bar overlay, and the
+ * R118-D two-tier band are all superseded/deleted) · SEND (the sanctioned
  * chrome circle) / Stop + Queue while a turn runs. THE CONTROL
  * PILL ROW IS DELETED (R115-I): the operating-mode / model / thinking /
  * context controls live in the header's kebab DROPDOWN — and since R118-D
@@ -45,7 +46,8 @@
  * outbox chip keeps its DISMISS affordance. Keyboard-wise the Composer is a
  * PASSENGER of the session screen's dock (R115-K): this root View sits
  * inside the dock's Animated.View whose ONE expression — paddingBottom =
- * max(insetsBottom, kbHeight) — lifts EVERYTHING here clear of the keys.
+ * max(insetsBottom, kbHeight) + the R120-P edge beat — lifts EVERYTHING
+ * here clear of the keys AND off the device edge.
  * R118-D adds exactly ONE keyboard behavior of its own: keyboardDidHide →
  * inputRef.blur() (the selection clear — the draft persists, the handles
  * die). Touch targets ≥ 44px; the send haptic.
@@ -81,10 +83,41 @@
  * spacing.lg), and the growth cap falls 176 → 146 (6 lines × 21 + 2 × 10 —
  * the band is gone). The pill→bar radius swap on `inputTall` STAYS, and the
  * dock's root padding tightens 8/4 → 4/2 (the resting dock was too heavy).
+ *
+ * ROUND-120 (R120-P — the docked Add Context control + the wrap law): the
+ * owner's §H report completes the single-tier law's geometry — "The Add
+ * Context control sits OUTSIDE the 'Message the Agent' area — move it
+ * inside, at the far right of the input row," and the text ADAPTS AROUND
+ * it: "If the text is showing above it (on the line above it), then the
+ * text can show above it because above the 'Add Context' button there is
+ * empty area… But if the text is shown on the same line as the 'Add
+ * Context' button, then the text will be shown on the left side of it…
+ * the text will never overlap with the 'Add Context' button." The control
+ * DOCKS INSIDE the input's own visual surface: the inputWrap (flex:1,
+ * relative) hosts the TextInput and the 40dp attach circle absolutely
+ * pinned at the input's BOTTOM-RIGHT corner (right/bottom inset 4/2 —
+ * centered at rest, riding the last line when tall), and the input's
+ * paddingRight reserves the control's column (ATTACH_DOCK_PADDING_RIGHT =
+ * inset 4 + circle 40 + gap 8 = 52) so text NEVER overlaps it — the RN
+ * spelling of the wrap law (a TextInput has no per-line float, so the
+ * reservation holds on EVERY line; multiline text flows in the region
+ * above/left of the dock, the column over the control stays clear). The
+ * row stays ONE TIER: [input+control (flex:1)][send|queue|stop 50] — no
+ * reserved band, no text-above-the-band. The attach circle keeps its own
+ * testID/hitSlop/quiet-circle grammar (composer-attach). ALSO this round:
+ * the @-mention menu opens RELIABLY (Android fires onChangeText before
+ * onSelectionChange — the stale caret never saw the fresh "@"; the
+ * advancedCaret helper + the selection-change re-detect fix it, and the
+ * menu now shows its busy/no-match rows instead of vanishing), the
+ * attachment chips carry IMAGE THUMBNAILS (a picked image's own localUri)
+ * and tapping ANY chip opens the AttachmentViewer (image → the full-screen
+ * ImageViewer; text → the scrollable mono card; binary → the honest
+ * name/size card), and the dock's bottom beat lives in the session
+ * screen's dock expression (see [id].tsx — item 28).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
@@ -102,8 +135,9 @@ import {
 } from "lucide-react-native";
 import { useTheme } from "@/design/theme";
 import { TypeCaption, TypeMono } from "@/design/primitives";
-import { successHaptic, warningHaptic } from "@/design/haptics";
+import { selectionHaptic, successHaptic, warningHaptic } from "@/design/haptics";
 import { Sheet } from "@/components/sheet";
+import { AttachmentViewer } from "@/components/attachment-viewer";
 import {
   pressTint,
   RADIUS_BAR,
@@ -128,12 +162,14 @@ import {
   type ProviderRow,
 } from "@/features/config";
 import {
+  advancedCaret,
   attachmentFromRead,
   detectAtToken,
   fetchProjectTree,
   filterProjectFiles,
   flattenTreeFiles,
   formatAttachmentSize,
+  isImageFileName,
   MAX_ATTACHMENTS,
   readAttachmentFiles,
   stageAttachments,
@@ -304,8 +340,17 @@ export function Composer({
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [atToken, setAtToken] = useState<{ at: number; end: number; query: string } | null>(null);
   const caretRef = useRef(0);
+  // ── ROUND-120 (why): ── the owner's item 31 — "Typing @ opens a results
+  // menu ABOVE the input". The draft's own ref mirror: onSelectionChange
+  // re-runs the @ detection with the AUTHORITATIVE caret, and it must read
+  // the value the input actually holds even when the event lands before
+  // the setDraft commit re-renders.
+  const draftRef = useRef("");
   const [note, setNote] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  // ── ROUND-120 (why): ── the owner's item 32 — "tapping ANY attachment
+  // opens a viewer pop-up". The chip being viewed (null = closed).
+  const [viewing, setViewing] = useState<ComposerAttachment | null>(null);
 
   // The per-session send controls (persisted per session, desktop parity).
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("default");
@@ -533,6 +578,12 @@ export function Composer({
               truncated: false,
               source: "picker",
               dataBase64,
+              // ── ROUND-120 (why): ── the owner's item 32 — image
+              // attachments get "a real preview chip": the picked file's
+              // OWN local URI is the one byte source the phone holds — the
+              // chip's thumbnail and the viewer's large preview both draw
+              // from it.
+              localUri: asset.uri,
             },
           ]),
         );
@@ -548,6 +599,7 @@ export function Composer({
             text,
             truncated: size > ATTACHMENT_TEXT_CAP,
             source: "picker",
+            localUri: asset.uri,
           },
         ]),
       );
@@ -565,12 +617,28 @@ export function Composer({
     [atToken, treeFiles],
   );
 
+  // ── ROUND-120 (why): ── the owner's item 31 — "Typing @ opens a results
+  // menu ABOVE the input, filtering as the query continues". The ONE
+  // detection path both change events ride (text + selection), so the
+  // token state can never diverge from the caret's truth.
+  const applyAtToken = useCallback(
+    (value: string, caret: number): void => {
+      const token = detectAtToken(value, caret);
+      if (token !== null && treeFiles === null) loadTree();
+      setAtToken(token);
+    },
+    [treeFiles, loadTree],
+  );
+
   const pickAtMention = useCallback(
     (path: string): void => {
       if (atToken === null) return;
       const next = stripAtToken(draft, atToken);
+      draftRef.current = next;
+      caretRef.current = Math.min(caretRef.current, next.length);
       setDraft(next);
       setAtToken(null);
+      void selectionHaptic();
       void attachPaths([path], "at");
     },
     [atToken, draft, attachPaths],
@@ -578,13 +646,19 @@ export function Composer({
 
   const onDraftChange = useCallback(
     (value: string): void => {
+      // Android fires onChangeText BEFORE onSelectionChange — a caret
+      // captured at the last selection event trails the character just
+      // typed, so a fresh "@" in an empty field read caret 0 and the menu
+      // never opened. advancedCaret moves with the edit; the selection
+      // event re-detects with the authoritative caret right behind it.
+      const caret = advancedCaret(caretRef.current, draftRef.current, value);
+      draftRef.current = value;
+      caretRef.current = caret;
       setDraft(value);
       setNote(null);
-      const token = detectAtToken(value, caretRef.current);
-      if (token !== null && treeFiles === null) loadTree();
-      setAtToken(token);
+      applyAtToken(value, caret);
     },
-    [treeFiles, loadTree],
+    [applyAtToken],
   );
 
   // ── send assembly (the desktop's sendStaged pipeline, mirrored) ──────────
@@ -649,6 +723,7 @@ export function Composer({
         setNote("host offline — picked binary files will send as name-only mentions");
       }
       setDraft("");
+      draftRef.current = "";
       setAtToken(null);
       setAttachments([]);
       void successHaptic();
@@ -665,6 +740,7 @@ export function Composer({
     try {
       const staged = await uploadStaged(attachments);
       setDraft("");
+      draftRef.current = "";
       setAtToken(null);
       setAttachments([]);
       onQueue(content, overridesFor(staged));
@@ -805,167 +881,233 @@ export function Composer({
           popup-over-the-caret pattern, restated for the phone's column). It's
           a plain sibling INSIDE the dock's column (R115-K): when the keys
           rise, the dock's animated paddingBottom lifts it together with the
-          input row — no offset of its own. */}
-      {atToken !== null && atMatches.length > 0 && (
+          input row — no offset of its own.
+          ── ROUND-120 (why): ── the owner's item 31 — "Typing @ opens a
+          results menu ABOVE the input, filtering as the query continues;
+          tapping inserts the file reference." The menu now opens the moment
+          an active @ token exists — its busy row while the tree loads, its
+          quiet "no files match" line when the query has no hits — instead
+          of vanishing (a menu that disappears on "@" reads as broken, the
+          exact report that spawned this item). */}
+      {atToken !== null && (
         <View style={[styles.atPicker, { backgroundColor: tokens.card, borderColor: tokens.border, borderTopColor: tokens.clayTopEdge, boxShadow: tokens.clayShadow2 }]}>
           <TypeCaption style={{ color: tokens.textTertiary, paddingHorizontal: spacing.md, paddingTop: spacing.xs }} numberOfLines={1}>
             project files
           </TypeCaption>
-          <ScrollView style={{ maxHeight: 176 }} keyboardShouldPersistTaps="handled">
-            {atMatches.map((path) => (
-              <Pressable
-                key={path}
-                accessibilityLabel={`Attach ${path}`}
-                accessibilityRole="button"
-                onPress={() => pickAtMention(path)}
-                style={({ pressed }) => [
-                  styles.atRow,
-                  { backgroundColor: pressed ? tokens.subtleHover : "transparent" },
-                ]}
-              >
-                <FileText size={13} color={tokens.textSecondary} strokeWidth={2} />
-                <TypeMono style={{ color: tokens.text, flex: 1 }} numberOfLines={1}>
-                  {path}
-                </TypeMono>
-              </Pressable>
-            ))}
-          </ScrollView>
+          {treeFiles === null ? (
+            <View style={styles.atBusy}>
+              <ActivityIndicator size="small" color={tokens.accent} />
+              <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={1}>
+                {projectId === null
+                  ? "this session has no project"
+                  : connected
+                    ? "loading the project tree…"
+                    : "the host is offline"}
+              </TypeCaption>
+            </View>
+          ) : atMatches.length === 0 ? (
+            <View style={styles.atEmpty}>
+              <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={1}>
+                no files match
+              </TypeCaption>
+            </View>
+          ) : (
+            <ScrollView style={{ maxHeight: 176 }} keyboardShouldPersistTaps="handled">
+              {atMatches.map((path) => (
+                <Pressable
+                  key={path}
+                  accessibilityLabel={`Attach ${path}`}
+                  accessibilityRole="button"
+                  onPress={() => pickAtMention(path)}
+                  style={({ pressed }) => [
+                    styles.atRow,
+                    { backgroundColor: pressed ? tokens.subtleHover : "transparent" },
+                  ]}
+                >
+                  <FileText size={13} color={tokens.textSecondary} strokeWidth={2} />
+                  <TypeMono style={{ color: tokens.text, flex: 1 }} numberOfLines={1}>
+                    {path}
+                  </TypeMono>
+                </Pressable>
+              ))}
+            </ScrollView>
+          )}
         </View>
       )}
 
-      {/* Staged attachment chips (cleared on send). */}
+      {/* Staged attachment chips (cleared on send).
+          ── ROUND-120 (why): ── the owner's item 32 — "images get a real
+          preview chip" (a picked image's OWN localUri draws a 28dp rounded
+          thumbnail in place of the glyph — project-read files keep the
+          glyph: their bytes live on the host and never crossed to the
+          phone) and "tapping ANY attachment opens a viewer pop-up" (the
+          whole chip is the affordance; the X keeps its own nested target
+          so a remove never opens the viewer). */}
       {attachments.length > 0 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.attachRow} contentContainerStyle={{ gap: spacing.sm, paddingRight: spacing.md }}>
-          {attachments.map((chip) => (
-            <View
-              key={chip.id}
-              accessibilityLabel={`Attachment ${chip.name}`}
-              style={[
-                styles.attachChip,
-                {
-                  backgroundColor: tokens.card,
-                  borderColor: tokens.border,
-                  borderTopColor: tokens.clayTopEdge,
-                  boxShadow: tokens.clayShadowSm,
-                },
-              ]}
-            >
-              <FileText size={12} color={tokens.textSecondary} strokeWidth={2} />
-              <View style={{ maxWidth: 148 }}>
-                <TypeCaption style={{ color: tokens.text }} numberOfLines={1}>
-                  {chip.name}
-                </TypeCaption>
-                {chip.size > 0 ? (
-                  <TypeCaption style={{ color: tokens.textTertiary, fontSize: TYPE_MICRO - 0.5 }} numberOfLines={1}>
-                    {formatAttachmentSize(chip.size)}
-                    {chip.text === null ? " · binary" : ""}
-                  </TypeCaption>
-                ) : null}
-              </View>
+          {attachments.map((chip) => {
+            const thumb =
+              chip.localUri !== undefined && isImageFileName(chip.name) ? chip.localUri : null;
+            return (
               <Pressable
-                accessibilityLabel={`Remove ${chip.name}`}
+                key={chip.id}
+                accessibilityLabel={`View ${chip.name}`}
                 accessibilityRole="button"
-                hitSlop={8}
-                onPress={() => setAttachments((prev) => prev.filter((a) => a.id !== chip.id))}
-                style={styles.chipX}
+                onPress={() => setViewing(chip)}
+                style={({ pressed }) => [
+                  styles.attachChip,
+                  {
+                    backgroundColor: pressed ? tokens.subtleHover : tokens.card,
+                    borderColor: tokens.border,
+                    borderTopColor: tokens.clayTopEdge,
+                    boxShadow: tokens.clayShadowSm,
+                  },
+                ]}
               >
-                <X size={13} color={tokens.textTertiary} strokeWidth={2.4} />
+                {thumb !== null ? (
+                  <Image source={{ uri: thumb }} style={styles.attachThumb} resizeMode="cover" />
+                ) : (
+                  <FileText size={12} color={tokens.textSecondary} strokeWidth={2} />
+                )}
+                <View style={{ maxWidth: 148 }}>
+                  <TypeCaption style={{ color: tokens.text }} numberOfLines={1}>
+                    {chip.name}
+                  </TypeCaption>
+                  {chip.size > 0 ? (
+                    <TypeCaption style={{ color: tokens.textTertiary, fontSize: TYPE_MICRO - 0.5 }} numberOfLines={1}>
+                      {formatAttachmentSize(chip.size)}
+                      {chip.text === null ? " · binary" : ""}
+                    </TypeCaption>
+                  ) : null}
+                </View>
+                <Pressable
+                  accessibilityLabel={`Remove ${chip.name}`}
+                  accessibilityRole="button"
+                  hitSlop={8}
+                  onPress={() => setAttachments((prev) => prev.filter((a) => a.id !== chip.id))}
+                  style={styles.chipX}
+                >
+                  <X size={13} color={tokens.textTertiary} strokeWidth={2.4} />
+                </Pressable>
               </Pressable>
-            </View>
-          ))}
+            );
+          })}
         </ScrollView>
       )}
 
-      {/* R116-l → R118-D → R119-B — THE SINGLE-TIER PILL BAR (chat.md
-          §Composer amendment): ONE ROW, ALWAYS — [the TextInput (flex:1 —
-          the pill/bar, the text always LEFT of the add-file control)] [the
-          attach CIRCLE 40 — its OWN quiet Pressable BESIDE the input, never
-          an overlay inside it] [send circle / stop+queue 50], the row's
-          alignItems flex-end so the circles ride the input's last line as
-          it grows. The input is a PILL (RADIUS_ROUND) while single-line and
-          switches to the BAR radius (RADIUS_BAR, 28) once the content
-          passes the 24px content threshold; the growth is NATIVE (no
-          controlled height — minHeight 44 / maxHeight 146, a multiline
-          TextInput with only min/max grows on its own and scrolls past the
-          cap), and onContentSizeChange flips ONLY the inputTall boolean
-          (the radius swap + the tall text's top alignment read it). The
-          R118-D two-tier geometry (52/10 resting → 16/40 tall over the
-          40px ATTACH_BAND) is DELETED — the owner's verdict: the tall text
-          went full-width ABOVE the reserved band, and the dock read too
-          heavy at rest. */}
+      {/* R116-l → R118-D → R119-B → R120-P — THE SINGLE-TIER PILL BAR (chat.md
+          §Composer amendment): ONE ROW, ALWAYS — [the inputWrap (flex:1 — the
+          pill/bar input with the attach control DOCKED INSIDE its surface)]
+          [send circle / stop+queue 50], the row's alignItems flex-end so the
+          circles ride the input's last line as it grows. The input is a PILL
+          (RADIUS_ROUND) while single-line and switches to the BAR radius
+          (RADIUS_BAR, 28) once the content passes the 24px content threshold;
+          the growth is NATIVE (no controlled height — minHeight 44 /
+          maxHeight 146, a multiline TextInput with only min/max grows on its
+          own and scrolls past the cap), and onContentSizeChange flips ONLY
+          the inputTall boolean (the radius swap + the tall text's top
+          alignment read it).
+          ── ROUND-120 (why): ── the owner's items 29+30 — "The Add Context
+          control sits OUTSIDE the 'Message the Agent' area — move it
+          inside, at the far right of the input row," with the text
+          adapting around it: same-line text flows LEFT of the control,
+          text above it may occupy the empty area above it, and "the text
+          will never overlap with the 'Add Context' button." The 40dp
+          control is an INLINE-DOCKED element at the input's BOTTOM-RIGHT
+          corner (the R119-B sibling circle superseded — it rode BESIDE the
+          pill); the input's paddingRight reserves its column on every line
+          (ATTACH_DOCK_PADDING_RIGHT — the RN spelling of the wrap law: a
+          TextInput has no per-line float, so the never-overlap guarantee
+          holds on every line and multiline text flows in the region
+          above/left of the dock). The single-tier law itself STANDS: no
+          reserved band under the text, no full-width text above a band —
+          the control shares the LAST line. */}
       <View style={styles.row}>
-        <TextInput
-          ref={inputRef}
-          accessibilityLabel="Message the agent"
-          accessibilityHint={
-            running
-              ? "A turn is running — queue behind it or stop it"
-              : mode === "offline"
-                ? "The host is offline — the message will be sent when it returns"
-                : "Send this message to the agent on the desktop"
-          }
-          multiline
-          value={draft}
-          onChangeText={onDraftChange}
-          onSelectionChange={(event) => {
-            caretRef.current = event.nativeEvent.selection.end;
-          }}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          onContentSizeChange={(event) => {
-            // R118-D — the ONLY survivor of the controlled-height era:
-            // flip the boolean (React bails on the same value, so this
-            // re-renders nothing per keystroke past the swap).
-            setInputTall(event.nativeEvent.contentSize.height > INPUT_TALL_THRESHOLD);
-          }}
-          placeholder={running ? "Queue a message behind the running turn…" : "Message the agent…"}
-          placeholderTextColor={tokens.textTertiary}
-          style={[
-            styles.input,
-            {
-              // round-117-elevation §2.2: the input sits in a SURFACE WELL
-              // (not the card plane) — the dock reads as carved, not floated.
-              backgroundColor: tokens.surfaceWell,
-              // R118-D — the bolder focus ring: 1.5dp while focused (the
-              // hairline rest stays a whisper, the focus finally reads).
-              borderWidth: focused ? 1.5 : StyleSheet.hairlineWidth,
-              borderColor: focused ? tokens.accent : tokens.inputBorder,
-              borderTopColor: tokens.clayTopEdge,
-              color: tokens.text,
-              fontFamily: fontFamily.medium,
-              // R119-B — the padding is CONSTANT (spacing.lg both sides,
-              // INPUT_PADDING_Y top+bottom in the sheet style): the paperclip
-              // no longer lives inside the input, so NOTHING needs reserved
-              // room — the tall text keeps its full width at every height.
-              textAlignVertical: inputTall ? "top" : "center",
-            },
-            // The pill→bar switch: tall once the grown content passes
-            // the threshold.
-            inputTall ? styles.inputTall : null,
-          ]}
-        />
-        {/* R119-B — THE ATTACH CIRCLE: the paperclip in its OWN 40dp
-            quiet circle BESIDE the input (the R116-l in-bar overlay is
-            deleted — the text sits LEFT of the add-file control in every
-            state, single-line AND tall). The QuietIconButton grammar's
-            shape — RADIUS_ROUND, tertiary → accent on press, transparent
-            resting surface — at 40dp so it reads as the row's own control,
-            visually consistent with the 50dp send/stop circles. */}
-        <Pressable
-          accessibilityLabel="Attach a file or choose one from the project"
-          accessibilityRole="button"
-          hitSlop={4}
-          testID="composer-attach"
-          onPress={() => onSheetChange("attach")}
-          style={({ pressed }) => [
-            styles.attachCircle,
-            { backgroundColor: pressed ? tokens.subtle : "transparent" },
-          ]}
-        >
-          {({ pressed }) => (
-            <Paperclip size={19} color={pressed ? tokens.accent : tokens.textTertiary} strokeWidth={2.2} />
-          )}
-        </Pressable>
+        <View style={styles.inputWrap}>
+          <TextInput
+            ref={inputRef}
+            accessibilityLabel="Message the agent"
+            accessibilityHint={
+              running
+                ? "A turn is running — queue behind it or stop it"
+                : mode === "offline"
+                  ? "The host is offline — the message will be sent when it returns"
+                  : "Send this message to the agent on the desktop"
+            }
+            multiline
+            value={draft}
+            onChangeText={onDraftChange}
+            onSelectionChange={(event) => {
+              // ── ROUND-120 (why): ── the authoritative caret event — the
+              // @ detection re-runs HERE too (item 31), so a stale
+              // onChangeText caret can never leave the menu shut.
+              const caret = event.nativeEvent.selection.end;
+              caretRef.current = caret;
+              applyAtToken(draftRef.current, caret);
+            }}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            onContentSizeChange={(event) => {
+              // R118-D — the ONLY survivor of the controlled-height era:
+              // flip the boolean (React bails on the same value, so this
+              // re-renders nothing per keystroke past the swap).
+              setInputTall(event.nativeEvent.contentSize.height > INPUT_TALL_THRESHOLD);
+            }}
+            placeholder={running ? "Queue a message behind the running turn…" : "Message the agent…"}
+            placeholderTextColor={tokens.textTertiary}
+            style={[
+              styles.input,
+              {
+                // round-117-elevation §2.2: the input sits in a SURFACE WELL
+                // (not the card plane) — the dock reads as carved, not floated.
+                backgroundColor: tokens.surfaceWell,
+                // R118-D — the bolder focus ring: 1.5dp while focused (the
+                // hairline rest stays a whisper, the focus finally reads).
+                borderWidth: focused ? 1.5 : StyleSheet.hairlineWidth,
+                borderColor: focused ? tokens.accent : tokens.inputBorder,
+                borderTopColor: tokens.clayTopEdge,
+                color: tokens.text,
+                fontFamily: fontFamily.medium,
+                // R120-P — the padding law's ONLY change: paddingRight
+                // reserves the docked control's column (the sheet style's
+                // ATTACH_DOCK_PADDING_RIGHT); paddingLeft stays spacing.lg
+                // and the vertical padding stays INPUT_PADDING_Y — nothing
+                // else reserves room, no band, no overlay swap.
+                textAlignVertical: inputTall ? "top" : "center",
+              },
+              // The pill→bar switch: tall once the grown content passes
+              // the threshold.
+              inputTall ? styles.inputTall : null,
+            ]}
+          />
+          {/* ── ROUND-120 (why): ── THE DOCKED ADD CONTEXT CONTROL (items
+              29+30) — the paperclip's 40dp quiet circle pinned at the
+              input's BOTTOM-RIGHT corner, INSIDE the input's own visual
+              surface (the R119-B sibling-beside circle is superseded by
+              the owner's §H report). The QuietIconButton grammar's shape
+              — RADIUS_ROUND, tertiary → accent on press, transparent
+              resting surface — with hitSlop 4 carrying the 44px law and
+              the composer-attach testID preserved. It rides the input's
+              LAST line at every height (bottom inset 2: centered at rest
+              in the 44px pill, docked to the bottom-right corner when
+              tall), and the input's paddingRight keeps every text line
+              clear of it — never overlap. */}
+          <Pressable
+            accessibilityLabel="Attach a file or choose one from the project"
+            accessibilityRole="button"
+            hitSlop={4}
+            testID="composer-attach"
+            onPress={() => onSheetChange("attach")}
+            style={({ pressed }) => [
+              styles.attachDock,
+              { backgroundColor: pressed ? tokens.subtle : "transparent" },
+            ]}
+          >
+            {({ pressed }) => (
+              <Paperclip size={19} color={pressed ? tokens.accent : tokens.textTertiary} strokeWidth={2.2} />
+            )}
+          </Pressable>
+        </View>
         {running ? (
           <View style={styles.runningButtons}>
             {/* R118-D — the CONDITIONAL queue: renders ONLY when there is
@@ -1131,6 +1273,18 @@ export function Composer({
           </ScrollView>
         )}
       </Sheet>
+
+      {/* ── ROUND-120 (why): ── the owner's item 32 — "tapping ANY
+          attachment opens a viewer pop-up — images: a large preview; text
+          files: a scrollable text view; non-previewable types get a
+          sensible viewer (name + size + type)." The AttachmentViewer owns
+          the whole family (the image arm delegates to the full-screen
+          ImageViewer the transcript already opens). */}
+      <AttachmentViewer
+        chip={viewing}
+        onClose={() => setViewing(null)}
+        testID="composer-attachment-viewer"
+      />
     </View>
   );
 }
@@ -1271,11 +1425,29 @@ const INPUT_PADDING_Y = 10;
 
 /** §2.4 — the input's line budget (the growth cap's line count). */
 export const INPUT_MAX_LINES = 6;
-/** R119-B — the attach circle's footprint: the paperclip's OWN 40dp quiet
- *  circle BESIDE the input (the QuietIconButton grammar's 40dp arm), no
- *  longer an absolutely-positioned overlay inside the pill. Exported for
- *  the tests (the single-tier row's geometry is the contract). */
+/** R119-B → R120-P — the attach control's footprint: the paperclip's 40dp
+ *  quiet circle. R119-B parked it BESIDE the input as a row peer; R120-P
+ *  DOCKS it inside the input's own surface (the owner's §H report) — the
+ *  size rides unchanged. Exported for the tests (the geometry is the
+ *  contract). */
 export const ATTACH_CIRCLE_SIZE = 40;
+/** ── ROUND-120 (why): ── the DOCKED CONTROL law (items 29+30) — the
+ *  control's inset from the input's RIGHT edge (4dp: inside the pill's
+ *  surface, clear of its curved cap) and from its BOTTOM edge (2dp: the
+ *  40dp circle centers in the 44px resting pill — 40 + 2×2 — and rides
+ *  the last line when the input grows). */
+export const ATTACH_DOCK_INSET = 4;
+export const ATTACH_DOCK_BOTTOM_INSET = 2;
+/** ── ROUND-120 (why): ── the WRAP LAW — the input's paddingRight reserves
+ *  the docked control's column (right inset 4 + circle 40 + the text gap
+ *  8 = 52): text on the control's line flows LEFT of it, text above flows
+ *  in the region above/left of it, and no line can EVER overlap the
+ *  control — the RN spelling of the owner's "the text will never overlap
+ *  with the 'Add Context' button" (a TextInput has no per-line float, so
+ *  the reservation holds on every line). */
+export const ATTACH_DOCK_TEXT_GAP = spacing.sm;
+export const ATTACH_DOCK_PADDING_RIGHT =
+  ATTACH_DOCK_INSET + ATTACH_CIRCLE_SIZE + ATTACH_DOCK_TEXT_GAP;
 /** §2.4 → R119-B — the native-growth cap: 6×21 + 2×10 = 146 (the tall
  *  input owns its full width at every height — nothing reserves a band). */
 export const MAX_INPUT_HEIGHT = INPUT_MAX_LINES * 21 + INPUT_PADDING_Y * 2;
@@ -1373,6 +1545,21 @@ const styles = StyleSheet.create({
     minHeight: TOUCH_TARGET,
     paddingHorizontal: spacing.md,
   },
+  /** ── ROUND-120 (why): ── the @ menu's busy row (the tree loading / the
+   *  no-project honest caption) — the menu OPENS on "@" now instead of
+   *  vanishing, so it needs its own loading/no-match states. */
+  atBusy: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    minHeight: TOUCH_TARGET,
+    paddingHorizontal: spacing.md,
+  },
+  /** The @ menu's quiet no-match line (one line, the single-line law). */
+  atEmpty: {
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.xs,
+  },
   attachRow: {
     flexGrow: 0,
   },
@@ -1383,30 +1570,47 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS_PILL,
     borderWidth: StyleSheet.hairlineWidth,
     borderTopWidth: StyleSheet.hairlineWidth,
-    paddingLeft: spacing.md,
+    paddingLeft: spacing.xs + 2,
     paddingRight: spacing.xs,
     paddingVertical: 6,
+  },
+  /** ── ROUND-120 (why): ── the image chip's REAL thumbnail (the owner's
+   *  item 32): 28dp square, RADIUS_PILL (8) corners, cover-fit — the
+   *  picked file's own localUri. Non-image chips keep the FileText
+   *  glyph (their bytes never crossed to the phone). */
+  attachThumb: {
+    width: 28,
+    height: 28,
+    borderRadius: RADIUS_PILL,
   },
   row: {
     flexDirection: "row",
     alignItems: "flex-end",
     gap: spacing.sm,
   },
-  /** R116-l → R118-D → R119-B — the PILL input: flex:1 (its own row peer —
-   *   the inputWrap container is deleted with the in-bar overlay) and
-   *   RADIUS_ROUND while single-line (inputTall swaps in RADIUS_BAR).
-   *   R118-D — NATIVE growth: only minHeight 44 + maxHeight
-   *   MAX_INPUT_HEIGHT (146) remain — a multiline TextInput with only
-   *   min/max grows on its own and scrolls past the cap. R119-B — the
-   *   padding is CONSTANT: spacing.lg horizontal, INPUT_PADDING_Y vertical
-   *   — the paperclip lives BESIDE the input, so nothing reserves a band
-   *   and the tall text keeps its full width at every height. */
-  input: {
+  /** ── ROUND-120 (why): ── THE INPUT WRAP — the row peer that owns the
+   *   row's flex (the input itself carries only min/max now). It is the
+   *   POSITIONED HOST of the docked Add Context control: its height IS
+   *   the input's height (a column auto-sizing to the TextInput's native
+   *   growth), so the control pinned to ITS bottom-right corner rides the
+   *   input's own bottom-right corner at every height. */
+  inputWrap: {
     flex: 1,
+  },
+  /** R116-l → R118-D → R119-B → R120-P — the PILL input: RADIUS_ROUND
+   *   while single-line (inputTall swaps in RADIUS_BAR). R118-D — NATIVE
+   *   growth: only minHeight 44 + maxHeight MAX_INPUT_HEIGHT (146) remain
+   *   — a multiline TextInput with only min/max grows on its own and
+   *   scrolls past the cap. R120-P — the WRAP LAW's reservation: the
+   *   paddingRight is ATTACH_DOCK_PADDING_RIGHT (52 — the docked control's
+   *   column) while the paddingLeft stays spacing.lg; text on the
+   *   control's line flows LEFT of it and NEVER overlaps it. */
+  input: {
     borderRadius: RADIUS_ROUND,
     borderWidth: StyleSheet.hairlineWidth,
     borderTopWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing.lg,
+    paddingLeft: spacing.lg,
+    paddingRight: ATTACH_DOCK_PADDING_RIGHT,
     paddingTop: INPUT_PADDING_Y,
     paddingBottom: INPUT_PADDING_Y,
     fontSize: TYPE_BODY,
@@ -1419,13 +1623,19 @@ const styles = StyleSheet.create({
   inputTall: {
     borderRadius: RADIUS_BAR,
   },
-  /** R119-B — THE ATTACH CIRCLE: the paperclip's OWN 40dp quiet circle,
-   *   a row peer of the input (the in-bar absolute overlay is deleted).
-   *   RADIUS_ROUND at 40×40 — the QuietIconButton grammar's shape — with
-   *   hitSlop 4 carrying the 44px law and the transparent resting surface
-   *   tinting to `subtle` on press (the icon flips tertiary → accent
-   *   inline). */
-  attachCircle: {
+  /** ── ROUND-120 (why): ── THE DOCKED ADD CONTEXT CONTROL (the owner's
+   *   items 29+30): the paperclip's 40dp quiet circle ABSOLUTELY pinned
+   *   inside the inputWrap at the input's BOTTOM-RIGHT corner (right inset
+   *   4 / bottom inset 2 — centered in the 44px resting pill, riding the
+   *   last line when tall). RADIUS_ROUND at 40×40 — the QuietIconButton
+   *   grammar's shape — with hitSlop 4 carrying the 44px law and the
+   *   transparent resting surface tinting to `subtle` on press (the icon
+   *   flips tertiary → accent inline). The input's paddingRight keeps
+   *   every text line clear of the circle: never overlap. */
+  attachDock: {
+    position: "absolute",
+    right: ATTACH_DOCK_INSET,
+    bottom: ATTACH_DOCK_BOTTOM_INSET,
     width: ATTACH_CIRCLE_SIZE,
     height: ATTACH_CIRCLE_SIZE,
     borderRadius: RADIUS_ROUND,

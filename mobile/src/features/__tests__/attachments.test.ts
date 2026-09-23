@@ -8,6 +8,14 @@
  * /projects/:id/tree) — all against an injected fake sender, zero React
  * Native. (GET /projects/:id/modes lost its last consumer with R115-i's
  * task-mode deletion; the client went with it — R115-p.)
+ *
+ * R120-P (round-120 §1 items 31+32): the @-menu's CARET ADVANCE (Android
+ * fires onChangeText before onSelectionChange — a stale caret never saw
+ * the fresh "@", so the menu never opened; advancedCaret moves with the
+ * edit while the selection event re-detects behind it), the image-name
+ * test, and the preview-kind classifier that picks WHICH viewer a chip
+ * opens (image → the ImageViewer; text → the mono card; info → the honest
+ * name/size card).
  */
 
 import { describe, expect, it } from "@jest/globals";
@@ -15,12 +23,15 @@ import { describe, expect, it } from "@jest/globals";
 import type { ApiSender } from "../api";
 import {
   MAX_ATTACHMENTS,
+  advancedCaret,
   attachmentFromRead,
+  attachmentPreviewKind,
   detectAtToken,
   fetchProjectTree,
   filterProjectFiles,
   flattenTreeFiles,
   formatAttachmentSize,
+  isImageFileName,
   readAttachmentFiles,
   stageAttachments,
   stripAtToken,
@@ -167,6 +178,72 @@ describe("attachments — the @ token (the desktop's detectAtToken)", () => {
 
   it("strips the picked token from the input", () => {
     expect(stripAtToken("look at @src/ma", { at: 8, end: 15, query: "src/ma" })).toBe("look at ");
+  });
+
+  it("R120-P: advancedCaret — the onChangeText leg's caret moves with the edit (Android fires change BEFORE selection)", () => {
+    // the exact bug: typing "@" into an EMPTY field read caret 0 (the last
+    // selection event's value) and the menu NEVER opened — detectAtToken
+    // needs the caret PAST the "@".
+    expect(advancedCaret(0, "", "@")).toBe(1);
+    // continuing the query advances one char at a time
+    expect(advancedCaret(1, "@", "@s")).toBe(2);
+    expect(advancedCaret(2, "@s", "@sr")).toBe(3);
+    // a mid-line insert advances the same way
+    expect(advancedCaret(8, "look at ", "look at @")).toBe(9);
+    // deletions clamp to the shorter value (the caret can never trail the text)
+    expect(advancedCaret(3, "@sr", "@s")).toBe(2);
+    expect(advancedCaret(2, "@s", "@")).toBe(1);
+    expect(advancedCaret(1, "@", "")).toBe(0);
+    // a bulk paste lands the caret at prev + delta, clamped to the length
+    expect(advancedCaret(0, "", "@src/main.ts")).toBe(12);
+    // a bulk delete clamps to the new length, never below 0
+    expect(advancedCaret(12, "@src/main.ts", "")).toBe(0);
+  });
+});
+
+// ── the R120-P preview kinds (which viewer a chip opens) ────────────────────
+
+describe("attachments — the R120-P preview kinds (item 32)", () => {
+  const chip = (overrides: Partial<ComposerAttachment>): ComposerAttachment => ({
+    id: "x",
+    name: "x.bin",
+    size: 10,
+    text: null,
+    truncated: false,
+    source: "picker",
+    ...overrides,
+  });
+
+  it("isImageFileName — the image-extension test over the display name", () => {
+    expect(isImageFileName("photo.png")).toBe(true);
+    expect(isImageFileName("photo.JPG")).toBe(true);
+    expect(isImageFileName("photo.jpeg")).toBe(true);
+    expect(isImageFileName("photo.webp")).toBe(true);
+    expect(isImageFileName("photo.gif")).toBe(true);
+    expect(isImageFileName("photo.avif")).toBe(true);
+    expect(isImageFileName("photo.bmp")).toBe(true);
+    expect(isImageFileName("main.ts")).toBe(false);
+    expect(isImageFileName("notes.txt")).toBe(false);
+    expect(isImageFileName("archive.png.gz")).toBe(false);
+    expect(isImageFileName("")).toBe(false);
+  });
+
+  it("attachmentPreviewKind — image ONLY when the phone holds the bytes (a picked localUri)", () => {
+    expect(attachmentPreviewKind(chip({ name: "photo.png", localUri: "file:///cache/photo.png" }))).toBe("image");
+    // an image whose bytes live on the host (no localUri) is NOT a preview
+    expect(attachmentPreviewKind(chip({ name: "photo.png" }))).toBe("info");
+  });
+
+  it("attachmentPreviewKind — text when the chip carries a head, whatever the name", () => {
+    expect(attachmentPreviewKind(chip({ name: "notes.txt", text: "hello" }))).toBe("text");
+    expect(attachmentPreviewKind(chip({ name: "main.ts", text: "export {}" }))).toBe("text");
+    // an image-name file WITH text (a server-side text head) reads as text
+    expect(attachmentPreviewKind(chip({ name: "weird.png", text: "# not pixels" }))).toBe("text");
+  });
+
+  it("attachmentPreviewKind — info for everything else (the honest name/size card)", () => {
+    expect(attachmentPreviewKind(chip({ name: "data.bin", text: null }))).toBe("info");
+    expect(attachmentPreviewKind(chip({ name: "data.bin", text: null, localUri: undefined }))).toBe("info");
   });
 });
 
