@@ -880,8 +880,9 @@ pub(crate) mod overlay {
     /// The watcher's wait budget, imported from the parent module's
     /// INSTALL_WAIT_BUDGET_SECS (one shared constant for the Windows
     /// overlay and the Linux deb watcher — the deb module reads it
-    /// directly from its own scope).
-    const WAIT_BUDGET_MS: u32 = super::INSTALL_WAIT_BUDGET_SECS * 1000;
+    /// directly from its own scope; the cast is width-honest: 600s * 1000
+    /// fits u32 with orders of magnitude to spare).
+    const WAIT_BUDGET_MS: u32 = super::INSTALL_WAIT_BUDGET_SECS as u32 * 1000;
 
     /// WaitForSingleObject's own return codes (winbase.h).
     const WAIT_OBJECT_0: u32 = 0;
@@ -947,12 +948,14 @@ pub(crate) mod overlay {
         // 2. LAUNCH the installer with an OWNED handle. CreateProcessW's
         //    command line must be MUTABLE UTF-16 (the documented contract)
         //    with the executable path QUOTED (spaces in $TMP paths).
+        //    STARTUPINFOW: windows-sys does not derive Default for it, so
+        //    the classic Win32 zero-init applies (an all-zero C struct of
+        //    plain integers/pointers — the documented-safe shape) with cb
+        //    set to the struct's own size (the Win32 contract).
         let cmdline = format!("\"{}\" {}", installer.to_string_lossy(), OVERLAY_ARGS);
         let mut cmdline_wide = wide(&cmdline);
-        let mut startup = STARTUPINFOW {
-            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
-            ..Default::default()
-        };
+        let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+        startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
         let mut proc_info = PROCESS_INFORMATION {
             hProcess: INVALID_HANDLE_VALUE,
             hThread: INVALID_HANDLE_VALUE,
