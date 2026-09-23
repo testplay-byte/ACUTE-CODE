@@ -23,6 +23,9 @@
  * both the Rust handoff and the web-mode window.open fallback); AboutTab
  * is a GLOBAL surface, so with no project context openLink honestly falls
  * back to the system browser (open-link's no-project leg).
+ * [SUPERSEDED by ROUND-120 below — release links now ALWAYS open in the
+ * external system browser; the in-app default + the separate escape-hatch
+ * button are retired for the Releases surface.]
  *
  * ROUND-99 (R99-C): THE ONE-CLICK UPDATE (owner: "I click the update
  * button in the application and everything else happens automatically
@@ -68,6 +71,31 @@
  *    round adds (lib/update-checker.ts); the manual button also refreshes
  *    the sidebar's pending-update dot from every answer (both paths ride
  *    syncPendingVersionFromResult).
+ *
+ * ROUND-120 (R120-U) — the updater's PAT-rotation resilience (the owner's
+ * v0.113.0 report, §1 A):
+ *  · THE 401: the owner rotated his GitHub PAT; the sidecar served the
+ *    dead token; GitHub answers 401 to bad credentials EVEN ON PUBLIC
+ *    REPOS. The check now retries ANONYMOUSLY server-side (system.ts) and
+ *    answers with `tokenWarning` / reason "token-rejected" — this card
+ *    renders the warning line and AUTO-OPENS the re-pairing row below.
+ *  · THE TOKEN RE-PAIRING ROW (the quiet power-user affordance, not a
+ *    headline feature): a password input + Save that PUTs the token to
+ *    /system/updates/token (validated LIVE against the repo server-side,
+ *    persisted to ~/.acute/github.pat — the value never crosses this
+ *    boundary), then RE-RUNS the check so the success feedback is the
+ *    card's own fresh answer. Always reachable via the small "GitHub
+ *    token" disclosure at the card footer.
+ *  · THE RELEASES BUTTONS: the plain "Releases" button no-oped for the
+ *    owner (the R99-A router's in-app leg opens a browser TAB in the
+ *    ACTIVE project's right sidebar — from the Settings surface that tab
+ *    lands somewhere he is not looking, so nothing visibly happens; and
+ *    when it did open, it opened the EMBEDDED browser: "that is not a good
+ *    experience"). ONE code path now: the Releases button ALWAYS opens the
+ *    EXTERNAL system browser (openLink forceExternal — the Tauri
+ *    open_external_url handoff, window.open in web mode); the separate
+ *    external-escape-hatch icon button is retired (it WAS the one button
+ *    that worked, and now the plain button does exactly what it did).
  */
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -77,6 +105,7 @@ import {
   Download,
   ExternalLink,
   Info,
+  KeyRound,
   PackageOpen,
   ShieldAlert,
 } from "lucide-react";
@@ -92,9 +121,12 @@ import {
   discardUpdateDownload,
   fetchSystemUpdates,
   fetchUpdateDownloadProgress,
+  fetchUpdateTokenStatus,
   resetApplication,
+  saveUpdateToken,
   startUpdateDownload,
   type SystemUpdateCheck,
+  type SystemUpdateTokenStatus,
 } from "../../lib/api";
 // R99-C: the auto-check toggle + the badge sync (one store, two surfaces).
 // R104: isNewerVersion also gates the mount-resume adoption + the stale
@@ -114,14 +146,27 @@ import { bdr, withAlpha } from "../dashboard/helpers";
 
 const RELEASES_URL = "https://github.com/testplay-byte/ACUTE-CODE/releases";
 
-/** R99-A: the Releases link through the CENTRAL link router — the app's
- * own embedded browser by default (the owner's native-browser directive);
- * `forceExternal` is the deliberate escape hatch to the device's browser.
- * Replaces the R89-A3 inline `__TAURI__` invoke (open-link owns the Rust
- * open_external_url handoff AND the web-mode window.open fallback now).
- * The result is logged — never swallowed — when the system leg fails. */
-async function openReleasesPage(forceExternal: boolean): Promise<void> {
-  const result = await openLink(RELEASES_URL, { forceExternal });
+/** ROUND-120 (R120-U): the Releases page — ONE code path, ALWAYS the
+ * EXTERNAL SYSTEM BROWSER (openLink with forceExternal: the Tauri
+ * open_external_url handoff inside the shell, window.open in web mode).
+ *
+ * WHY the plain "Releases" button had to change (the owner: "when I clicked
+ * on 'Releases', it did nothing there… And I know that clicking 'Releases'
+ * actually opens up the Releases page in the application browser itself,
+ * but that is not a good experience"): the R99-A router's IN-APP leg
+ * resolves the ACTIVE project and lands the link as a browser TAB in that
+ * project's right sidebar — from the Settings surface (a global page) the
+ * tab lands in a sidebar the owner is not looking at, so the click reads as
+ * a no-op; and whenever a project surface IS open the EMBEDDED browser
+ * opens instead, which he rejected outright. A release page is an
+ * OS-browser document (login state, downloads, external links), never an
+ * in-app panel — so the embedded browser is retired for release links and
+ * both buttons collapse into this one always-external path (the separate
+ * external-escape-hatch icon button is gone: the plain button now does
+ * exactly what it did). Still routed through the central link router for
+ * the scheme gate + the honest error result (logged, never swallowed). */
+async function openReleasesPage(): Promise<void> {
+  const result = await openLink(RELEASES_URL, { forceExternal: true });
   if (result.outcome === "error") {
     console.error("[about] opening the releases page failed:", result.message);
   }
@@ -301,6 +346,29 @@ function VersionCard() {
   // the same store the startup check + the sidebar dot read).
   const autoCheck = useUpdateCheckerStore((s) => s.autoCheck);
   const setAutoCheck = useUpdateCheckerStore((s) => s.setAutoCheck);
+  // ── ROUND-120 (R120-U): the token re-pairing row's state. Kept visually
+  // QUIET by design — this is the power-user affordance for the next PAT
+  // rotation, not a headline feature; it auto-opens ONLY when a check
+  // answer says the saved token was rejected (tokenWarning / reason
+  // "token-rejected") and otherwise lives behind the small "GitHub token"
+  // disclosure at the card footer. The input is type=password + never
+  // echoed; the save leg re-runs the check so the feedback is the card's
+  // own fresh answer.
+  const [tokenRowOpen, setTokenRowOpen] = useState(false);
+  const [tokenInput, setTokenInput] = useState("");
+  const [tokenSaving, setTokenSaving] = useState(false);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+  const [tokenSavedNote, setTokenSavedNote] = useState<string | null>(null);
+  // The dead-token hint line (rides BELOW the update-state line whenever
+  // the latest check carried tokenWarning — the check WORKED anonymously;
+  // the hint points at the row below).
+  const [tokenWarning, setTokenWarning] = useState<string | null>(null);
+  // The row's live health line (GET /system/updates/token — fetched when
+  // the row OPENS, never on mount: the probe is a real GitHub round-trip
+  // and the row is opt-in). null = not fetched (or re-probe pending after
+  // a save — setting null re-triggers the effect below).
+  const [tokenStatus, setTokenStatus] = useState<SystemUpdateTokenStatus | null>(null);
+  const [tokenStatusFailed, setTokenStatusFailed] = useState(false);
 
   // R104: THE MOUNT-RESUME — a staged download outlives the About tab (and
   // the check that announced it): the sidecar's single-flight state keeps
@@ -374,6 +442,14 @@ function VersionCard() {
     try {
       const result: SystemUpdateCheck = await fetchSystemUpdates();
       syncPendingVersionFromResult(result);
+      // R120-U: the dead-token signals — the warning line + the AUTO-OPEN
+      // of the re-pairing row (the check either carried anonymously past
+      // the rejected token or died on it; either way the fix is the same
+      // quiet row). Set BEFORE the !ok throw so both shapes land.
+      setTokenWarning(result.tokenWarning ?? null);
+      if (result.reason === "token-rejected" || result.tokenWarning !== undefined) {
+        setTokenRowOpen(true);
+      }
       if (!result.ok) {
         throw new Error(result.error ?? result.reason ?? "the update check failed");
       }
@@ -607,6 +683,56 @@ function VersionCard() {
     setInstall({ kind: "idle" });
   };
 
+  // ── ROUND-120 (R120-U): the token row's live health line — fetched when
+  // the row opens (toggle OR auto-open) and re-fetched after a save (the
+  // handler nulls tokenStatus, which re-triggers this effect). Never on
+  // mount and never polled: the probe is a real GitHub round-trip and the
+  // row is an opt-in affordance. A dead sidecar answers the honest
+  // "cannot check" line, never a guessed status.
+  useEffect(() => {
+    if (!tokenRowOpen || tokenStatus !== null) return;
+    let cancelled = false;
+    fetchUpdateTokenStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setTokenStatusFailed(false);
+          setTokenStatus(status);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTokenStatusFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tokenRowOpen, tokenStatus]);
+
+  // ── ROUND-120 (R120-U): SAVE the token — validate + persist through the
+  // sidecar (PUT /system/updates/token: a LIVE repo check server-side, the
+  // value never crossing this boundary), then RE-RUN the update check so
+  // the success feedback is this card's own fresh answer (the route also
+  // clears the stale env snapshot server-side, so the re-run rides the
+  // fresh token for real). Every refusal surfaces as the honest thrown
+  // message (400 shape / 401 rejected / 503 upstream / 500 persist).
+  const saveToken = async () => {
+    const pat = tokenInput.trim();
+    if (pat === "" || tokenSaving) return;
+    setTokenSaving(true);
+    setTokenError(null);
+    setTokenSavedNote(null);
+    try {
+      await saveUpdateToken(pat);
+      setTokenInput("");
+      setTokenStatus(null);
+      setTokenSavedNote("GitHub token saved — re-running the check");
+      await checkForUpdates();
+    } catch (err) {
+      setTokenError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTokenSaving(false);
+    }
+  };
+
   // R99-C: the byte-true percent — only when the total is known (the real
   // chunk data only; no fabricated indeterminate percentage).
   const downloadPct =
@@ -643,31 +769,24 @@ function VersionCard() {
           >
             {update.kind === "checking" ? "Checking…" : "Check for updates"}
           </button>
+          {/* ── ROUND-120 (R120-U): ONE Releases button — ALWAYS the external
+              system browser. The R99-A pair (the in-app default + the
+              external escape-hatch icon beside it) is retired: the plain
+              button no-oped from the Settings surface (the in-app leg lands
+              the tab in the active project's sidebar, out of sight) and the
+              embedded browser itself was the owner's verdict ("not a good
+              experience"). The ExternalLink glyph now rides INSIDE the one
+              button — the affordance says what it does. */}
           <button
             type="button"
-            onClick={() => void openReleasesPage(false)}
-            title="The releases page — opens in ACUTE-CODE's built-in browser (your device's browser when no project is open)"
+            onClick={() => void openReleasesPage()}
+            title="The releases page in your device's browser"
             className="h-9 px-3.5 rounded-full text-[11px] font-semibold border-[1.5px] flex items-center gap-1.5 transition-colors hover:opacity-80"
             style={{ borderColor: bdr("1.5px", styles.border), color: styles.textSecondary }}
-            aria-label="Open the releases page"
+            aria-label="Open the releases page in your device's browser"
             data-testid="about-releases-button"
           >
-            Releases
-          </button>
-          {/* R99-A: the explicit escape hatch — the user can ALWAYS reach the
-              device's browser deliberately (forceExternal beats every
-              preference; the BrowserPanel's own Open-externally control is
-              the same gesture inside the browser). */}
-          <button
-            type="button"
-            onClick={() => void openReleasesPage(true)}
-            aria-label="Open the releases page in your device's browser"
-            title="Open the releases page in your device's browser (explicit action)"
-            data-testid="about-releases-external"
-            className="h-9 w-9 grid place-items-center rounded-full border-[1.5px] transition-colors hover:opacity-80"
-            style={{ borderColor: bdr("1.5px", styles.border), color: styles.textSecondary }}
-          >
-            <ExternalLink size={12} />
+            <ExternalLink size={12} /> Releases
           </button>
         </div>
       </div>
@@ -809,6 +928,19 @@ function VersionCard() {
             Could not check for updates ({update.message}) — the Releases page always has the latest.
           </span>
         ) : null}
+        {/* ── ROUND-120 (R120-U): the dead-token hint — the check CARRIED
+            (anonymously) or failed with the token rejected; either way the
+            re-pairing row below is the fix, and the amber line points at
+            it without failing anything the anonymous leg already did. */}
+        {tokenWarning !== null && (
+          <span
+            className="mt-1 text-[11px] flex items-center gap-1.5"
+            style={{ color: SEMANTIC_COLORS.warning }}
+            data-testid="update-token-warning"
+          >
+            <KeyRound size={12} /> The saved GitHub token was rejected — this check ran anonymously. Update the token below for rate-limit headroom.
+          </span>
+        )}
         {/* R104: the INSTALL-PHASE states, SHARED by both entry paths — the
             available-update card's own confirm AND the mount-resumed
             standalone staged row (which has no available card to render
@@ -898,6 +1030,123 @@ function VersionCard() {
           title="A silent check once a day at app start — a pending update shows as a dot on Settings and one toast; failures are never surfaced"
           testId="update-auto-check"
         />
+      </div>
+      {/* ── ROUND-120 (R120-U): the quiet TOKEN affordance — the card
+          footer's collapsible "GitHub token" disclosure. ALWAYS available
+          (the next PAT rotation is self-service), visually quiet by
+          design: tertiary ink, 11px, one hairline above; the row itself
+          opens on click OR auto-opens when a check answer says the saved
+          token was rejected. */}
+      <div
+        className="mt-2 pt-2 border-t-[1.5px] flex flex-col gap-2"
+        style={{ borderColor: bdr("1.5px", styles.border) }}
+      >
+        <button
+          type="button"
+          onClick={() => setTokenRowOpen((v) => !v)}
+          aria-expanded={tokenRowOpen}
+          title="The saved GitHub token the update checks use — validate and replace it without leaving the app"
+          className="self-start h-7 px-1.5 -mx-1.5 text-[11px] font-medium inline-flex items-center gap-1.5 transition-colors hover:opacity-80"
+          style={{ color: styles.textTertiary }}
+          data-testid="update-token-toggle"
+        >
+          <KeyRound size={12} /> GitHub token
+          <ChevronDown
+            size={12}
+            className={`transition-transform duration-200 ${tokenRowOpen ? "rotate-180" : ""}`}
+          />
+        </button>
+        {tokenRowOpen ? (
+          <div className="flex flex-col gap-2" data-testid="update-token-row">
+            {/* The live health line (GET /system/updates/token — fetched on
+                open, re-fetched after a save; never the token's value). */}
+            {tokenStatusFailed ? (
+              <span className="text-[11px]" style={{ color: styles.textTertiary }}>
+                Cannot check the saved token right now — the engine is unreachable.
+              </span>
+            ) : tokenStatus === null ? (
+              <span className="text-[11px]" style={{ color: styles.textTertiary }}>
+                Checking the saved GitHub token…
+              </span>
+            ) : tokenStatus.valid === true ? (
+              <span
+                className="text-[11px] flex items-center gap-1.5"
+                style={{ color: SEMANTIC_COLORS.success }}
+                data-testid="update-token-health"
+              >
+                <CheckCircle2 size={12} /> A GitHub token is saved and GitHub accepts it.
+              </span>
+            ) : tokenStatus.valid === false ? (
+              <span
+                className="text-[11px] flex items-center gap-1.5"
+                style={{ color: SEMANTIC_COLORS.warning }}
+                data-testid="update-token-health"
+              >
+                <KeyRound size={12} /> A GitHub token is saved but GitHub rejected it — replace it below.
+              </span>
+            ) : tokenStatus.present ? (
+              <span className="text-[11px]" style={{ color: styles.textTertiary }} data-testid="update-token-health">
+                A GitHub token is saved; its validity could not be checked.
+              </span>
+            ) : (
+              <span className="text-[11px]" style={{ color: styles.textTertiary }} data-testid="update-token-health">
+                No GitHub token is saved — update checks run anonymously (the repository is public).
+              </span>
+            )}
+            <span className="text-[11px]" style={{ color: styles.textSecondary }}>
+              Update the token update checks use (starts with github_pat_ or ghp_) — validated against the repository and saved to this machine only.
+            </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <input
+                type="password"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+                disabled={tokenSaving}
+                placeholder="github_pat_… or ghp_…"
+                autoComplete="off"
+                spellCheck={false}
+                className="h-9 w-[280px] rounded-full border-[1.5px] px-4 text-[11px] font-mono outline-none"
+                style={{
+                  borderColor: bdr("1.5px", styles.border),
+                  background: withAlpha(styles.text, styles.isDark ? 0.3 : 0.03),
+                  color: styles.text,
+                }}
+                aria-label="The GitHub token for update checks"
+                data-testid="update-token-input"
+              />
+              <button
+                type="button"
+                onClick={() => void saveToken()}
+                disabled={tokenSaving || tokenInput.trim() === ""}
+                title="Validates the token against the repository, saves it to ~/.acute/github.pat, and re-runs the update check"
+                className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 disabled:opacity-40"
+                style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
+                data-testid="update-token-save"
+              >
+                {tokenSaving ? "Saving…" : "Save token"}
+              </button>
+            </div>
+            {tokenError !== null ? (
+              <span
+                className="text-[11px]"
+                style={{ color: SEMANTIC_COLORS.danger }}
+                role="alert"
+                data-testid="update-token-error"
+              >
+                {tokenError}
+              </span>
+            ) : null}
+            {tokenSavedNote !== null ? (
+              <span
+                className="text-[11px]"
+                style={{ color: SEMANTIC_COLORS.success }}
+                data-testid="update-token-saved"
+              >
+                {tokenSavedNote}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </SectionCard>
   );

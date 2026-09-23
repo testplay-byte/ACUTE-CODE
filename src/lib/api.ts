@@ -4554,6 +4554,12 @@ export interface SystemUpdateCheck {
   /** Only meaningful when ok === false: */
   reason?: string;
   error?: string;
+  /** ROUND-120 (R120-U): present when the saved GitHub token was REJECTED
+   * (401/403) but the ANONYMOUS retry carried the check — ok stays true (or
+   * carries the no-release reason) while this warning tells the About tab
+   * to offer the quiet "Update GitHub token" re-pairing row. Absent when
+   * no token was attached or the token answered fine. */
+  tokenWarning?: string;
 }
 
 export async function fetchSystemUpdates(): Promise<SystemUpdateCheck> {
@@ -4597,6 +4603,40 @@ export async function fetchUpdateDownloadProgress(): Promise<SystemUpdateDownloa
  * ApiError, exactly like every other route refusal. */
 export async function discardUpdateDownload(): Promise<{ ok: boolean; status: string }> {
   return request("/system/updates/download", { method: "DELETE" });
+}
+
+/* ── ROUND-120 (R120-U): the GitHub token re-pairing path
+ * (PUT/GET /system/updates/token) — the owner rotated his PAT and
+ * "Check for updates" answered HTTP 401 (GitHub rejects bad credentials
+ * even on public repos); the next rotation must be self-service. The sidecar
+ * validates the token LIVE against the repo before persisting it to
+ * ~/.acute/github.pat (the R90-B1 home location); the token's VALUE never
+ * crosses this boundary in either direction. */
+
+/** GET /system/updates/token — the lightweight token health check.
+ * `present` means something non-blank is saved (env-or-file, shape-free);
+ * `valid` is the live GitHub validation as a plain boolean, null when
+ * nothing is saved (or the wire to GitHub never answered). */
+export interface SystemUpdateTokenStatus {
+  present: boolean;
+  valid: boolean | null;
+}
+
+export async function fetchUpdateTokenStatus(): Promise<SystemUpdateTokenStatus> {
+  return request<SystemUpdateTokenStatus>("/system/updates/token");
+}
+
+/** PUT /system/updates/token {pat} — validate + persist the GitHub token.
+ * Throws ApiError on every refusal: 400 VALIDATION (wrong shape — the token
+ * must start with github_pat_ or ghp_), 401 UNAUTHORIZED (GitHub rejected
+ * it), 503 UNAVAILABLE (GitHub unreachable/answered weird), 500 INTERNAL
+ * (the persist itself failed). The PAT is trimmed server-side, saved
+ * newline-terminated, and never echoed back. */
+export async function saveUpdateToken(pat: string): Promise<{ ok: boolean; valid: boolean }> {
+  return request<{ ok: boolean; valid: boolean }>("/system/updates/token", {
+    method: "PUT",
+    json: { pat },
+  });
 }
 
 /* ── ROUND-66 (R66, B3/B5): the DEDICATED image-analysis (vision) settings ── */

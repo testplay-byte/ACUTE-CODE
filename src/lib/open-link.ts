@@ -36,9 +36,10 @@
  *     validated in Rust); window.open ONLY when window.__TAURI__ is absent
  *     (web dev mode — the same fallback spelling as the pre-R99 call sites).
  *   · ESCAPE HATCHES — opts.forceExternal is the deliberate "device browser,
- *     please" affordance (AboutTab's explicit external button,
- *     BrowserPanel's own Open-externally controls stay on their direct
- *     openExternalUrl paths — explicit user intent, no routing).
+ *     please" affordance (R120-U: AboutTab's Releases button passes it
+ *     ALWAYS — release links never open in-app; BrowserPanel's own
+ *     Open-externally controls stay on their direct openExternalUrl paths
+ *     — explicit user intent, no routing).
  *
  * Every leg returns a typed OpenLinkResult so callers and tests can assert
  * exactly where the link went (and why) — including the honest refusal and

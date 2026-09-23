@@ -2821,3 +2821,106 @@ cwd match against registered roots (exactly ONE match binds; zero or
 many stay projectless). The projects list is advisory — any fetch
 failure degrades to projectless. Memory + session_recall work on the
 CLI surface from R117-b.
+
+## ROUND-120 additions (R120-U, 2026-09-23) — the updater's PAT-rotation resilience
+
+The owner's v0.113.0 report: "Check for updates" answered **HTTP 401**.
+He had rotated his GitHub PAT; the sidecar's `readLauncherGithubPat()`
+kept serving the dead token; and GitHub rejects bad credentials EVEN ON
+PUBLIC REPOS — so the check died while the code, having attached the
+`Authorization` header, never once tried without it.
+
+### GET /api/v1/system/updates — the dead-PAT anonymous fallback (behavior change)
+
+When the PAT-bearing fetch answers **401 or 403**, the route retries
+ONCE ANONYMOUSLY (the `Authorization` header dropped; both legs share
+the one 8 s abort budget). The answer matrix:
+
+- anonymous retry 200 → the normal `ok:true` answer **plus
+  `tokenWarning`** ("the saved GitHub token was rejected — a new token is
+  needed for private/rate-limited access") — the About tab renders the
+  amber hint line and auto-opens the re-pairing row, but the check
+  itself SUCCEEDED;
+- anonymous retry 404 → `ok:false`, reason `no-release` with the
+  rejected-token copy + `tokenWarning`;
+- anonymous retry non-ok → `ok:false`, reason **`token-rejected`** (the
+  new, distinguished reason the About tab's re-pairing row keys on) with
+  the both-legs copy ("GitHub rejected the saved token (HTTP 401) and
+  the anonymous check also failed (HTTP 403) — save a new GitHub token
+  …") + `tokenWarning`;
+- no token attached at all + non-ok → `ok:false`, reason `github` with
+  the honest anonymous copy ("GitHub answered HTTP 403 anonymously (no
+  GitHub token is saved on this machine — a token raises the anonymous
+  rate limit)") — the anonymous-failure distinction, no retry (nothing
+  to drop);
+- fetch throw → `ok:false`, reason `network`, the message
+  **secret-shape scrubbed** (`scrubSecretShapes`).
+
+### POST /api/v1/system/updates/download — the same one-leg fallback
+
+The download leg attaches the PAT identically, so it inherits the same
+dead-PAT wall: a 401/403 on the PAT-bearing asset fetch re-fetches ONCE
+with the header dropped (the 401 response's body is never consumed, so
+the retry is clean). A retry that also fails lands the honest
+both-legs message in the single-flight `error` state ("GitHub rejected
+the saved token (HTTP 401) and the anonymous download also failed (HTTP
+403) — save a new GitHub token (Settings → About) or download from the
+Releases page"); the single-flight error message is secret-shape
+scrubbed.
+
+### PUT /api/v1/system/updates/token — the re-pairing write (NEW)
+
+Body `{pat: string}`. Validates the token LIVE before persisting, then
+writes it to `~/.acute/github.pat` (the R90-B1 home location the
+launcher reads and migrates — never the env var):
+
+- 400 `VALIDATION` (field `body.pat`) — the shape gate: the token must
+  start with `github_pat_` or `ghp_` (both real GitHub PAT spellings);
+  empty/whitespace/non-string refuse the same way;
+- 401 `UNAUTHORIZED` — GitHub answered 401/403 to the token-bearing
+  `GET /repos/testplay-byte/ACUTE-CODE` (the rotated/dead case the route
+  exists for);
+- 503 `UNAVAILABLE` — GitHub unreachable (the network/abort message
+  rides along, secret-shape scrubbed), answered non-200 otherwise, or
+  answered 200 for the WRONG repository (`full_name` mismatch — the
+  token must see THIS repo, not just any 200);
+- 500 `INTERNAL` — the persist itself failed (the OS message, scrubbed);
+- 200 `{ok:true, valid:true}` — validated AND persisted: trimmed,
+  newline-terminated (the launcher's own file grammar), best-effort
+  owner-only perms (0600; near-no-op on Windows).
+
+Side effect on success: `ACUTE_GITHUB_PAT` is cleared in the sidecar's
+environment. The R90-B1 "env wins" invariant holds only while the env
+var mirrors the file; a re-pair through this route proves the
+spawn-time snapshot stale, so the running sidecar drops the dead export
+and the very next `/system/updates` call rides the fresh token (the
+next launcher start re-exports from the file, restoring the invariant).
+The file-layer shape gate in `readLauncherGithubPat()` accepts `ghp_`
+alongside `github_pat_` (before this a re-paired classic token sat in
+the file but never rode the header). **The PAT's value is never
+logged, never returned** — every message this route can emit runs
+through `scrubSecretShapes` as the belt.
+
+TRUST MODEL: a paired phone is a view+input medium with config rights
+(the R109 ruling — the same standing that lets a phone set provider
+keys); the route is deliberately NOT on the device-token blocklist
+(only `/api/v1/system/reset` is blocked under `/system/*`).
+
+### GET /api/v1/system/updates/token — the health probe (NEW)
+
+`200 {present: boolean, valid: boolean|null}` — never the value:
+
+- `present` is SHAPE-FREE ("something non-blank is saved", env-or-file —
+  a garbage-shaped file answers `present:true, valid:false`, never a
+  masquerading "no token");
+- `valid` is the same live repo validation the PUT runs: `true` (200 +
+  `full_name` match), `false` (GitHub rejected it), `null` when nothing
+  is saved to validate OR the wire to GitHub never answered (present but
+  unverifiable is honest, not "invalid").
+
+### Secret-shapes: the classic `ghp_…` spelling joins the scrubber
+
+`agent-core/src/lib/secret-shapes.ts` (`scrubSecretShapes`) gained
+`ghp_[A-Za-z0-9]{20,}` → `ghp_***` beside the existing `github_pat_…`
+rule — the updater now accepts (and persists) classic tokens, so its
+error lines must scrub both spellings (the R80 one-place lesson).

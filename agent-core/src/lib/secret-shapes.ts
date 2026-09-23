@@ -16,10 +16,17 @@
  * A shape match is always replaced, even inside JSON payloads.
  */
 
-/** Scrub recognizable secret shapes (sk-…, nvapi-…, github_pat_…) from text. */
+/** Scrub recognizable secret shapes (sk-…, nvapi-…, github_pat_…, ghp_…)
+ * from text. */
 export function scrubSecretShapes(text: string): string {
   return text
     .replace(/sk-[A-Za-z0-9_-]{16,}/g, "sk-***")
     .replace(/github_pat_[A-Za-z0-9_]+/g, "github_pat_***")
-    .replace(/nvapi-[A-Za-z0-9_-]{16,}/g, "nvapi-***");
+    .replace(/nvapi-[A-Za-z0-9_-]{16,}/g, "nvapi-***")
+    // ROUND-120 (R120-U): the CLASSIC GitHub PAT shape joins the list —
+    // PUT /system/updates/token accepts ghp_… tokens (the fine-grained
+    // github_pat_ spelling is not the only real one), so the updater's
+    // error lines must scrub both spellings. The R80 lesson: a new
+    // key-prefix class lands HERE, in the one place, the round it ships.
+    .replace(/ghp_[A-Za-z0-9]{20,}/g, "ghp_***");
 }

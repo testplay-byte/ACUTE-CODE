@@ -33,7 +33,7 @@
 // The frontend then clears its localStorage stores + react-query cache and
 // reloads — the full journey back to first-run.
 // ─────────────────────────────────────────────────────────────────────────────
-import { rmSync, readdirSync, statSync, existsSync, unlinkSync, readFileSync, createWriteStream, mkdirSync } from "node:fs";
+import { rmSync, readdirSync, statSync, existsSync, unlinkSync, readFileSync, writeFileSync, chmodSync, createWriteStream, mkdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -44,10 +44,25 @@ import { errorBody } from "./helpers.js";
 import { reseedFactoryData, type SqliteDatabase } from "../storage/db.js";
 import { abortTurn, liveTurnIds } from "../lib/turn-registry.js";
 import { terminalSessionsDisposeAll } from "../terminal-sessions.js";
+// R120-U: the secret-shape scrubber — every error line this module can emit
+// that touched the PAT's neighborhood runs through it (the routes never put
+// the PAT in a message by construction; the scrubber is the belt).
+import { scrubSecretShapes } from "../lib/secret-shapes.js";
 
 const GITHUB_REPO = "testplay-byte/ACUTE-CODE";
 const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+const GITHUB_REPO_API_URL = `https://api.github.com/repos/${GITHUB_REPO}`;
 const GITHUB_RELEASES_PAGE = `https://github.com/${GITHUB_REPO}/releases`;
+
+// ── ROUND-120 (R120-U): the dead-PAT warning copy ───────────────────────────
+// The owner rotated their GitHub PAT; the sidecar kept serving the now-dead
+// token; GitHub answers 401 to BAD CREDENTIALS EVEN ON PUBLIC REPOS, so
+// "Check for updates" died with HTTP 401 until this round's anonymous retry.
+// Whenever the PAT-bearing leg is rejected but the anonymous leg carries the
+// check, this warning rides the response so the About tab can hint at
+// re-pairing (the quiet "Update GitHub token" row) without failing anything.
+const GITHUB_TOKEN_WARNING =
+  "the saved GitHub token was rejected — a new token is needed for private/rate-limited access";
 
 // ── R99-C: the release NOTES passthrough cap ─────────────────────────────────
 // The About tab's "What's new" block renders the release body as plain text;
@@ -286,7 +301,17 @@ function versionTuple(v: string): number[] {
  * raises the 60 req/h anonymous rate limit. The launcher's first-run prompt
  * is an optional accelerator, never a gate. Never logged, never returned —
  * read once per /system/updates call and used in the Authorization header
- * only. Returns null when absent/unreadable (proceed anonymously). */
+ * only. Returns null when absent/unreadable (proceed anonymously).
+ * ROUND-120 (R120-U): the FILE layer accepts BOTH real GitHub PAT spellings
+ * — the fine-grained github_pat_… and the classic ghp_… — because PUT
+ * /system/updates/token validates and persists either shape; before this a
+ * re-paired classic ghp_ token sat in the file but never rode the header
+ * (the layer silently dropped it), so the re-pairing path would have been a
+ * no-op for half the world's tokens. The env layer keeps NO shape gate (the
+ * launcher only ever exports a token it resolved itself).
+ * R120-U re-pairing note: PUT /system/updates/token clears the env var after
+ * a successful persist — a re-pair through the app proves the spawn-time
+ * snapshot stale, and the file is the newer truth until the next launch. */
 function readLauncherGithubPat(): string | null {
   // R90-B1: the env var wins FIRST — the launcher only ever exports a token
   // it has already resolved (file, env, or fresh prompt), so this path cannot
@@ -297,8 +322,26 @@ function readLauncherGithubPat(): string | null {
   if (envPat !== "") return envPat;
   try {
     const pat = readFileSync(join(homedir(), ".acute", "github.pat"), "utf8").trim();
-    if (!pat.startsWith("github_pat_")) return null;
-    return pat;
+    if (pat.startsWith("github_pat_") || pat.startsWith("ghp_")) return pat;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** ROUND-120 (R120-U): the RAW saved token — SHAPE-FREE, for the token
+ * health route's `present` field. "Something is saved" must stay honest
+ * even when the saved bytes are not a usable token shape (a garbage file
+ * answers present:true + valid:false, not a masquerading "no token"), so
+ * the GET /system/updates/token probe reads this and validates live. Env
+ * layer first (the readLauncherGithubPat order), then the home file; null
+ * when nothing non-blank is saved on either layer. */
+function readRawGithubPat(): string | null {
+  const envPat = (process.env.ACUTE_GITHUB_PAT ?? "").trim();
+  if (envPat !== "") return envPat;
+  try {
+    const pat = readFileSync(join(homedir(), ".acute", "github.pat"), "utf8").trim();
+    return pat !== "" ? pat : null;
   } catch {
     return null;
   }
@@ -378,6 +421,23 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
   // the fetch is plain anonymous instead of dead-ending in a 409/no-token
   // wall. The fetch is short-lived (8s) so the button can answer honestly
   // fast.
+  //
+  // ── ROUND-120 (R120-U): the DEAD-PAT anonymous fallback. The owner's
+  // v0.113.0 report: "Check for updates" answered HTTP 401 — he had rotated
+  // the GitHub PAT, so readLauncherGithubPat() served the now-dead token,
+  // and GitHub rejects bad credentials EVEN ON PUBLIC REPOS (a 401 is a
+  // 401, visibility irrelevant) — while the code, having attached the
+  // header, never once tried without it. The fix is the one-leg retry the
+  // R94-B "optional accelerator" framing always implied: when the
+  // PAT-bearing fetch answers 401 OR 403, retry ONCE ANONYMOUSLY (the
+  // Authorization header dropped). The repo is public, so the anonymous leg
+  // carries the check and the answer rides out with tokenWarning set (the
+  // About tab's quiet "Update GitHub token" row hints at re-pairing); when
+  // BOTH legs fail, the honest reason distinguishes the cases —
+  // "token-rejected" (PAT present and rejected + the anonymous retry also
+  // failed) vs "github" (anonymous-failure: no token was attached at all)
+  // vs "network" (the fetch threw). Both legs share the ONE 8s abort
+  // budget (a dead-token check must answer honestly fast, not double it).
   scope.get("/system/updates", async () => {
     const current = appVersion();
     const base = { current, releasesUrl: GITHUB_RELEASES_PAGE };
@@ -392,14 +452,34 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
     if (pat !== null) {
       requestHeaders.Authorization = `Bearer ${pat}`;
     }
+    // R120-U: the ANONYMOUS header set — identical minus the Authorization
+    // header (built once here so the retry leg is provably header-free
+    // rather than a delete on the mutable requestHeaders object).
+    const anonymousHeaders: Record<string, string> = {
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "ACUTE-CODE-update-check",
+    };
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8_000);
       try {
-        const response = await fetch(GITHUB_LATEST_RELEASE_URL, {
+        let response = await fetch(GITHUB_LATEST_RELEASE_URL, {
           headers: requestHeaders,
           signal: controller.signal,
         });
+        // R120-U: the dead-PAT fallback — one anonymous retry, tracked so
+        // every later branch can speak honestly about WHICH leg answered.
+        let tokenRejected = false;
+        let rejectedStatus = 0;
+        if ((response.status === 401 || response.status === 403) && pat !== null) {
+          tokenRejected = true;
+          rejectedStatus = response.status;
+          response = await fetch(GITHUB_LATEST_RELEASE_URL, {
+            headers: anonymousHeaders,
+            signal: controller.signal,
+          });
+        }
         if (response.status === 404) {
           return {
             ...base,
@@ -408,18 +488,42 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
             // R94-B: the anonymous 404 no longer implies "your token cannot
             // see this repo" — the repo is public, so the honest framing is
             // reachability/publish state (no token needed for either).
-            error:
-              pat === null
+            // R120-U: after a rejected-token retry the copy says so (the
+            // pre-R120 "to this token yet" line would blame a token GitHub
+            // already refused).
+            error: tokenRejected
+              ? "no published release is visible — the saved GitHub token was rejected and the anonymous check answered 404"
+              : pat === null
                 ? "no published release is visible (the repository is public — no token required; is the network reachable?)"
                 : "no published release is visible to this token yet",
+            ...(tokenRejected ? { tokenWarning: GITHUB_TOKEN_WARNING } : {}),
           };
         }
         if (!response.ok) {
+          if (tokenRejected) {
+            // R120-U: PAT-present-and-rejected — BOTH legs failed. The
+            // tokenWarning rides along so the About tab offers the
+            // re-pairing row on this exact answer.
+            return {
+              ...base,
+              ok: false,
+              reason: "token-rejected",
+              error: `GitHub rejected the saved token (HTTP ${rejectedStatus}) and the anonymous check also failed (HTTP ${response.status}) — save a new GitHub token to restore private/rate-limited access`,
+              tokenWarning: GITHUB_TOKEN_WARNING,
+            };
+          }
+          // R120-U: anonymous-failure — nothing was attached (or the
+          // attached token was never rejected); the copy says WHICH, so a
+          // 403 rate limit reads honestly ("no saved token" vs "with the
+          // saved token").
           return {
             ...base,
             ok: false,
             reason: "github",
-            error: `GitHub answered HTTP ${response.status}`,
+            error:
+              pat === null
+                ? `GitHub answered HTTP ${response.status} anonymously (no GitHub token is saved on this machine — a token raises the anonymous rate limit)`
+                : `GitHub answered HTTP ${response.status}`,
           };
         }
         const release = (await response.json()) as GithubRelease;
@@ -467,16 +571,25 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
                 },
               }
             : {}),
+          // R120-U: the check CARRIED (anonymously) past a dead token —
+          // the answer stays ok:true and the warning tells the About tab to
+          // offer the re-pairing row (the check works; the token does not).
+          ...(tokenRejected ? { tokenWarning: GITHUB_TOKEN_WARNING } : {}),
         };
       } finally {
         clearTimeout(timeout);
       }
     } catch (err) {
+      // R120-U: network-failure — the honest distinction's third leg (no
+      // token verdict is possible when the wire never answered). The
+      // message is secret-shape scrubbed as a belt: a thrown transport
+      // error never embeds the PAT by construction, but the scrubber is
+      // cheap and the route touches credentials.
       return {
         ...base,
         ok: false,
         reason: "network",
-        error: err instanceof Error ? err.message : String(err),
+        error: scrubSecretShapes(err instanceof Error ? err.message : String(err)),
       };
     }
   });
@@ -572,11 +685,35 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
         if (pat !== null) {
           downloadHeaders.Authorization = `Bearer ${pat}`;
         }
-        const response = await fetch(url, {
+        // ── ROUND-120 (R120-U): the download's dead-PAT fallback — the SAME
+        // one-leg anonymous retry the check runs. The owner's rotated PAT
+        // killed the check with 401; it would have killed "Download update"
+        // the same way (the api.github.com asset endpoint answers 401 to the
+        // dead Bearer even on the public repo's assets). A 401/403 on the
+        // PAT-bearing leg re-fetches ONCE with the header dropped — the
+        // 401 response's body is never consumed, so the retry is clean; a
+        // retry that also fails throws the honest BOTH-LEGS message into
+        // the single-flight error state the About tab renders.
+        const anonymousDownloadHeaders: Record<string, string> = {
+          "User-Agent": "ACUTE-CODE-in-app-updater",
+          Accept: "application/octet-stream",
+        };
+        let response = await fetch(url, {
           headers: downloadHeaders,
           redirect: "follow",
         });
-        if (!response.ok || response.body === null) {
+        if ((response.status === 401 || response.status === 403) && pat !== null) {
+          const rejectedStatus = response.status;
+          response = await fetch(url, {
+            headers: anonymousDownloadHeaders,
+            redirect: "follow",
+          });
+          if (!response.ok || response.body === null) {
+            throw new Error(
+              `the asset download failed: GitHub rejected the saved token (HTTP ${rejectedStatus}) and the anonymous download also failed (HTTP ${response.status}) — save a new GitHub token (Settings → About) or download from the Releases page`,
+            );
+          }
+        } else if (!response.ok || response.body === null) {
           throw new Error(`the asset download answered HTTP ${response.status}`);
         }
         const total = Number(response.headers.get("content-length") ?? "0") || 0;
@@ -621,7 +758,10 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
         updateDownload.status = "ready";
       } catch (err) {
         updateDownload.status = "error";
-        updateDownload.error = err instanceof Error ? err.message : String(err);
+        // R120-U: the secret-shape scrub belt — the download errors are
+        // built from HTTP statuses by construction, but the catch also sees
+        // transport throws, and this route attaches a credential header.
+        updateDownload.error = scrubSecretShapes(err instanceof Error ? err.message : String(err));
         try {
           if (existsSync(dest)) unlinkSync(dest);
         } catch {
@@ -670,6 +810,162 @@ export function registerSystemRoutes(scope: FastifyInstance, ctx: RouteContext):
     updateDownload.version = null;
     updateDownload.error = null;
     return reply.code(200).send({ ok: true, status: "idle" });
+  });
+
+  // ── ROUND-120 (R120-U): the TOKEN RE-PAIRING PATH ──────────────────────────
+  // The owner rotated his GitHub PAT and "Check for updates" answered HTTP
+  // 401 (item 1 above); the R120 report's ask is that the NEXT rotation be
+  // self-service instead of another support round. Two routes:
+  //   · PUT /system/updates/token {pat} — validate the token LIVE against
+  //     GET /repos/testplay-byte/ACUTE-CODE (HTTP 200 AND full_name === the
+  //     repo — not just "some 200", the token must see THIS repo), then
+  //     persist it to ~/.acute/github.pat (the R90-B1 home location the
+  //     launcher reads + migrates; mkdir -p; trimmed; newline-terminated).
+  //   · GET /system/updates/token — the lightweight health check: present
+  //     (something non-blank is saved, env-or-file, SHAPE-FREE so a garbage
+  //     file stays honest) + valid (the same live validation, never the
+  //     token's value — the PAT never crosses this REST boundary, matching
+  //     the R89-A2 ruling that moved the check server-side in the first
+  //     place).
+  // TRUST MODEL: a paired phone is a view+input medium with CONFIG rights
+  // (the R109 ruling — the same standing that lets a phone set provider
+  // keys), so neither route joins the device-token blocklist; only
+  // /api/v1/system/reset is blocked under /system/*.
+  // SECRECY: the PAT is validated and persisted, never logged, never
+  // returned — every message this route can emit runs through
+  // scrubSecretShapes as the belt (the R82 scrubber gained the classic
+  // ghp_… shape this round for exactly this route).
+  scope.put("/system/updates/token", async (request, reply) => {
+    const body = (request.body ?? null) as { pat?: unknown } | null;
+    const pat = typeof body?.pat === "string" ? body.pat.trim() : "";
+    // (a) The SHAPE gate — both real GitHub PAT spellings (fine-grained
+    //     github_pat_… and classic ghp_…). 400 with the field named.
+    if (pat === "" || !(pat.startsWith("github_pat_") || pat.startsWith("ghp_"))) {
+      return reply.code(400).send(
+        errorBody("VALIDATION", "body.pat must be a GitHub token (it starts with github_pat_ or ghp_)", {
+          field: "body.pat",
+        }),
+      );
+    }
+    // (b) The LIVE validation — HTTP 200 AND full_name === THIS repo (a
+    //     token that answers 200 for some redirect target or a renamed
+    //     repo is not "valid for the updater"). 401 for a rejected token,
+    //     503 for an unreachable/upstream-weird GitHub, both messages
+    //     scrubbed so the PAT can never ride an error line.
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8_000);
+      let repo: { full_name?: unknown };
+      try {
+        const response = await fetch(GITHUB_REPO_API_URL, {
+          headers: {
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "ACUTE-CODE-token-check",
+            Authorization: `Bearer ${pat}`,
+          },
+          signal: controller.signal,
+        });
+        if (response.status === 401 || response.status === 403) {
+          return reply.code(401).send(
+            errorBody(
+              "UNAUTHORIZED",
+              `GitHub rejected this token (HTTP ${response.status}) — check that it is a valid, unexpired token`,
+              { field: "body.pat" },
+            ),
+          );
+        }
+        if (!response.ok) {
+          return reply.code(503).send(
+            errorBody(
+              "UNAVAILABLE",
+              `GitHub answered HTTP ${response.status} while validating the token — try again`,
+              { field: "body.pat" },
+            ),
+          );
+        }
+        repo = (await response.json()) as { full_name?: unknown };
+      } finally {
+        clearTimeout(timeout);
+      }
+      if (repo.full_name !== GITHUB_REPO) {
+        return reply.code(503).send(
+          errorBody(
+            "UNAVAILABLE",
+            `GitHub answered for the wrong repository — expected ${GITHUB_REPO}`,
+            { field: "body.pat" },
+          ),
+        );
+      }
+    } catch (err) {
+      // Network/abort — the honest upstream-unavailable answer, scrubbed.
+      const message = scrubSecretShapes(err instanceof Error ? err.message : String(err));
+      return reply.code(503).send(
+        errorBody("UNAVAILABLE", `cannot reach GitHub to validate the token: ${message}`),
+      );
+    }
+    // (c) The PERSIST — the R90-B1 home location, mkdir -p, trimmed (the
+    //     shape gate ran on the trimmed value), newline-terminated (the
+    //     launcher's own file grammar), owner-only perms best-effort (a
+    //     near-no-op on Windows, right on Linux).
+    const patPath = join(homedir(), ".acute", "github.pat");
+    try {
+      mkdirSync(join(homedir(), ".acute"), { recursive: true });
+      writeFileSync(patPath, `${pat}\n`, "utf8");
+      try {
+        chmodSync(patPath, 0o600);
+      } catch {
+        // best-effort — a filesystem that refuses chmod keeps the token
+        // saved (the ~/.acute directory is the launcher's own trust zone)
+      }
+    } catch (err) {
+      const message = scrubSecretShapes(err instanceof Error ? err.message : String(err));
+      return reply.code(500).send(
+        errorBody("INTERNAL", `cannot save the token to ~/.acute/github.pat: ${message}`),
+      );
+    }
+    // (d) The env snapshot is now PROVABLY STALE — R90-B1's "env wins"
+    //     invariant holds only while the env var mirrors the file; a
+    //     re-pair through this route just made the file the newer truth, so
+    //     the running sidecar drops the dead export and the very next
+    //     /system/updates call rides the FRESH token (the next launcher
+    //     start re-exports from the file, restoring the invariant).
+    delete process.env.ACUTE_GITHUB_PAT;
+    return reply.code(200).send({ ok: true, valid: true });
+  });
+
+  // ── ROUND-120 (R120-U): the token HEALTH check — present + valid, never
+  // the value. present is SHAPE-FREE (readRawGithubPat: something non-blank
+  // is saved on either layer); valid is the same live validation the PUT
+  // runs, answered as a plain boolean (null when nothing is saved to
+  // validate, or when the wire to GitHub never answered — present but
+  // unverifiable is honest, not "invalid").
+  scope.get("/system/updates/token", async () => {
+    const pat = readRawGithubPat();
+    if (pat === null) return { present: false, valid: null };
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8_000);
+      try {
+        const response = await fetch(GITHUB_REPO_API_URL, {
+          headers: {
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "ACUTE-CODE-token-check",
+            Authorization: `Bearer ${pat}`,
+          },
+          signal: controller.signal,
+        });
+        if (!response.ok) return { present: true, valid: false };
+        const repo = (await response.json()) as { full_name?: unknown };
+        return { present: true, valid: repo.full_name === GITHUB_REPO };
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch {
+      // Network — the token is present but unverifiable this call.
+      return { present: true, valid: null };
+    }
   });
 
   // ── ROUND-114 (R114-b): the FILESYSTEM BROWSE route (see the module-level

@@ -9,12 +9,28 @@
  *       the repo is private; the old anonymous api.github.com fetch from the
  *       webview answered HTTP 404). Up-to-date, update-available, and the
  *       honest-error surfaces all render from the sidecar's answer.
- *  A3 · ROUND-99 (R99-A): the Releases button routes through the CENTRAL
- *       link router — in-app browser by default (a browser tab lands in the
- *       active project's sidebar), the honest no-project fallback to the
- *       device browser, and the EXPLICIT external affordance beside it
- *       (forceExternal) riding the Tauri open_external_url command. The
- *       pre-R99 plain <a target="_blank"> was swallowed by WebView2.
+ *  A3 · ROUND-99 (R99-A) → ROUND-120 (R120-U): the Releases button routes
+ *       through the CENTRAL link router and now ALWAYS takes the
+ *       force-external leg (the Tauri open_external_url command; window.open
+ *       in web mode). The owner's v0.113.0 report: the in-app default
+ *       no-oped from the Settings surface (the tab lands in the active
+ *       project's sidebar, out of sight) and the embedded browser itself
+ *       was "not a good experience" — so release links NEVER open in-app,
+ *       and the separate external escape-hatch icon button is retired (the
+ *       plain button does exactly what it did). The pre-R99 plain
+ *       <a target="_blank"> was swallowed by WebView2.
+ *
+ * ROUND-120 (R120-U) — the updater's PAT-rotation resilience:
+ *  · a check answer carrying tokenWarning (the sidecar's dead-PAT anonymous
+ *    retry carried it) renders the amber hint line + AUTO-OPENS the quiet
+ *    "GitHub token" re-pairing row;
+ *  · a check answer with reason "token-rejected" (both legs failed) does
+ *    the same on the honest error surface;
+ *  · the row's Save PUTs the token through the sidecar (never the webview),
+ *    then RE-RUNS the check — the success feedback is the card's own fresh
+ *    answer; a refused save renders the honest thrown message, no re-run;
+ *  · the footer disclosure opens the row ANY time (the health line rides
+ *    GET /system/updates/token, never the token's value).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -22,7 +38,9 @@ import {
   discardUpdateDownload,
   fetchSystemUpdates,
   fetchUpdateDownloadProgress,
+  fetchUpdateTokenStatus,
   resetApplication,
+  saveUpdateToken,
   startUpdateDownload,
   type SystemUpdateDownload,
 } from "../../lib/api";
@@ -44,6 +62,9 @@ vi.mock("../../lib/api", () => ({
   discardUpdateDownload: vi.fn(),
   resetApplication: vi.fn(),
   startUpdateDownload: vi.fn(),
+  // R120-U: the token re-pairing path's two client fns.
+  fetchUpdateTokenStatus: vi.fn(),
+  saveUpdateToken: vi.fn(),
   // R99-A: open-link.ts imports this from the same module — present in
   // the mock so the import never lands on undefined (hydration is never
   // kicked in these tests; the router’s default cache stands).
@@ -77,6 +98,10 @@ beforeEach(() => {
   vi.mocked(startUpdateDownload).mockReset();
   vi.mocked(fetchUpdateDownloadProgress).mockReset();
   vi.mocked(discardUpdateDownload).mockReset().mockResolvedValue({ ok: true, status: "idle" });
+  // R120-U: the token row's default health answer — no token saved (each
+  // test that opens the row overrides what it needs to pin).
+  vi.mocked(fetchUpdateTokenStatus).mockReset().mockResolvedValue({ present: false, valid: null });
+  vi.mocked(saveUpdateToken).mockReset().mockResolvedValue({ ok: true, valid: true });
   sidecarConnectionMock.retryConnection.mockClear();
 });
 
@@ -194,26 +219,33 @@ describe("AboutTab (ROUND-89 R89-A)", () => {
     Object.defineProperty(window, "location", { value: originalHref, writable: true });
   });
 
-  it("A3/R99-A: the Releases button routes IN-APP — a browser tab lands in the active project's sidebar", async () => {
+  it("A3/R120-U: the Releases button hands the URL to the Tauri open_external_url command — EVEN with an active project (never the in-app tab)", async () => {
+    // The owner's v0.113.0 report: the plain "Releases" button did nothing
+    // from the Settings surface. The root cause: the R99-A router's IN-APP
+    // leg resolves the active project and lands the link as a browser tab
+    // in that project's right sidebar — a tab the owner cannot see from
+    // Settings. The fix under test: the button ALWAYS takes the external
+    // leg, active project or not, and the right-sidebar store stays empty.
     useProjectChatStore.setState({ activeProjectId: "prj_about" });
+    // isTauri() probes `"__TAURI__" in window` — setting the global before
+    // render is the whole mock (sidecar.ts line 38).
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = { core: { invoke } };
     renderWithProviders(<AboutTab />);
 
     fireEvent.click(screen.getByTestId("about-releases-button"));
 
     await waitFor(() => {
-      const tabs = Object.values(useRightSidebarStore.getState().byProject).flatMap((slice) =>
-        slice.tabs.filter((t) => t.type === "browser"),
-      );
-      expect(tabs).toEqual([
-        expect.objectContaining({
-          type: "browser",
-          browserUrl: "https://github.com/testplay-byte/ACUTE-CODE/releases",
-        }),
-      ]);
+      expect(invoke).toHaveBeenCalledWith("open_external_url", {
+        url: "https://github.com/testplay-byte/ACUTE-CODE/releases",
+      });
     });
+    // The in-app leg NEVER fired — release links never open the embedded
+    // browser (the R99-A in-app routing law's one carve-out, this round).
+    expect(Object.values(useRightSidebarStore.getState().byProject)).toHaveLength(0);
   });
 
-  it("A3/R99-A: with NO project context the Releases button falls back to the device browser (window.open in web mode)", async () => {
+  it("A3/R120-U: web mode opens the device browser via window.open (the external leg's fallback)", async () => {
     const openSpy = vi.fn();
     vi.stubGlobal("open", openSpy);
     renderWithProviders(<AboutTab />);
@@ -227,23 +259,7 @@ describe("AboutTab (ROUND-89 R89-A)", () => {
         "noreferrer",
       );
     });
-  });
-
-  it("A3/R99-A: the EXPLICIT external affordance hands the URL to the Tauri open_external_url command", async () => {
-    // isTauri() probes `"__TAURI__" in window` — setting the global before
-    // render is the whole mock (sidecar.ts line 38).
-    const invoke = vi.fn().mockResolvedValue(undefined);
-    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = { core: { invoke } };
-    renderWithProviders(<AboutTab />);
-
-    fireEvent.click(screen.getByTestId("about-releases-external"));
-
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("open_external_url", {
-        url: "https://github.com/testplay-byte/ACUTE-CODE/releases",
-      });
-    });
-    // The in-app leg never fired — forceExternal is the deliberate device-browser gesture.
+    // And no in-app tab either — the same one-path law in web mode.
     expect(Object.values(useRightSidebarStore.getState().byProject)).toHaveLength(0);
   });
 });
@@ -778,5 +794,197 @@ describe("AboutTab R99-C/R104: the two-stage update hand-shake", () => {
     // And back — the toggle is live in both directions.
     fireEvent.click(screen.getByRole("switch", { name: "Check for updates automatically" }));
     expect(useUpdateCheckerStore.getState().autoCheck).toBe(true);
+  });
+});
+
+// ── ROUND-120 (R120-U): the updater's PAT-rotation resilience. The owner
+// rotated his GitHub PAT and "Check for updates" answered HTTP 401 (GitHub
+// rejects bad credentials even on public repos); the sidecar now retries
+// ANONYMOUSLY and flags the dead token, and this card turns that flag into
+// the quiet re-pairing row: auto-opened on a token-rejected answer, always
+// available behind the footer disclosure, saved through the SIDECAR (the
+// PAT never touches the webview's fetch), and confirmed by a re-run of the
+// check itself.
+describe("AboutTab R120-U: the GitHub token re-pairing row", () => {
+  it("a tokenWarning answer (the anonymous retry CARRIED the check) renders the amber hint + AUTO-OPENS the row — the check still succeeds", async () => {
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: APP_VERSION,
+      releasesUrl: "x",
+      ok: true,
+      latest: APP_VERSION,
+      updateAvailable: false,
+      tokenWarning: "the saved GitHub token was rejected — a new token is needed for private/rate-limited access",
+    });
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+
+    // The check itself ANSWERED (up to date — the anonymous leg carried it).
+    await waitFor(() => {
+      expect(screen.getByTestId("update-state").textContent).toContain("Up to date");
+    });
+    // The amber hint line rides below the state line...
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-warning").textContent).toContain(
+        "The saved GitHub token was rejected — this check ran anonymously",
+      );
+    });
+    // ...and the re-pairing row is ALREADY open (no toggle click needed).
+    expect(screen.getByTestId("update-token-row")).toBeTruthy();
+  });
+
+  it("a token-rejected check (BOTH legs failed) renders the honest error + the auto-opened row", async () => {
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: APP_VERSION,
+      releasesUrl: "x",
+      ok: false,
+      reason: "token-rejected",
+      error:
+        "GitHub rejected the saved token (HTTP 401) and the anonymous check also failed (HTTP 403) — save a new GitHub token to restore private/rate-limited access",
+      tokenWarning: "the saved GitHub token was rejected — a new token is needed for private/rate-limited access",
+    });
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("update-state").textContent).toContain(
+        "GitHub rejected the saved token (HTTP 401)",
+      );
+    });
+    // The row auto-opened beside the honest error.
+    expect(screen.getByTestId("update-token-row")).toBeTruthy();
+  });
+
+  it("Save PUTs the token through the SIDECAR, re-runs the check, and shows the saved note (the fresh answer is the feedback)", async () => {
+    // First answer: both legs failed (the rotated-PAT state). Second
+    // answer: the re-paired token answers clean — no warning field at all.
+    vi.mocked(fetchSystemUpdates)
+      .mockResolvedValueOnce({
+        current: APP_VERSION,
+        releasesUrl: "x",
+        ok: false,
+        reason: "token-rejected",
+        error: "GitHub rejected the saved token (HTTP 401) and the anonymous check also failed (HTTP 403)",
+        tokenWarning: "the saved GitHub token was rejected — a new token is needed for private/rate-limited access",
+      })
+      .mockResolvedValue({
+        current: APP_VERSION,
+        releasesUrl: "x",
+        ok: true,
+        latest: APP_VERSION,
+        updateAvailable: false,
+      });
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-row")).toBeTruthy();
+    });
+
+    // Type the re-paired token + save. The value is TRIMMED on the wire
+    // (the route's own contract) — the leading/trailing spaces below pin
+    // that the webview sends the cleaned form.
+    fireEvent.change(screen.getByTestId("update-token-input"), {
+      target: { value: "  github_pat_repaired_round120  " },
+    });
+    fireEvent.click(screen.getByTestId("update-token-save"));
+
+    await waitFor(() => {
+      expect(vi.mocked(saveUpdateToken)).toHaveBeenCalledWith("github_pat_repaired_round120");
+    });
+    // The re-run: the check fired a SECOND time (the card's own fresh
+    // answer is the success feedback — the route cleared the stale env
+    // snapshot server-side, so the re-run rides the fresh token).
+    await waitFor(() => {
+      expect(vi.mocked(fetchSystemUpdates)).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-saved").textContent).toContain(
+        "GitHub token saved — re-running the check",
+      );
+    });
+    // The fresh answer cleared the warning line (and the input).
+    await waitFor(() => {
+      expect(screen.queryByTestId("update-token-warning")).toBeNull();
+    });
+    expect((screen.getByTestId("update-token-input") as HTMLInputElement).value).toBe("");
+    expect(screen.getByTestId("update-state").textContent).toContain("Up to date");
+  });
+
+  it("a REFUSED save renders the honest thrown message and does NOT re-run the check", async () => {
+    vi.mocked(fetchSystemUpdates).mockResolvedValue({
+      current: APP_VERSION,
+      releasesUrl: "x",
+      ok: false,
+      reason: "token-rejected",
+      error: "GitHub rejected the saved token (HTTP 401) and the anonymous check also failed (HTTP 403)",
+      tokenWarning: "the saved GitHub token was rejected — a new token is needed for private/rate-limited access",
+    });
+    // The sidecar's 401 UNAUTHORIZED refusal — the ApiError's message
+    // verbatim (the PAT never rides it; the route scrubs as the belt).
+    vi.mocked(saveUpdateToken).mockRejectedValue(
+      new Error("GitHub rejected this token (HTTP 401) — check that it is a valid, unexpired token"),
+    );
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-row")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByTestId("update-token-input"), {
+      target: { value: "github_pat_still_dead" },
+    });
+    fireEvent.click(screen.getByTestId("update-token-save"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-error").textContent).toContain(
+        "GitHub rejected this token (HTTP 401)",
+      );
+    });
+    expect(screen.getByTestId("update-token-error").getAttribute("role")).toBe("alert");
+    // No re-run (the save failed — the check state is untouched) and no
+    // saved note.
+    expect(vi.mocked(fetchSystemUpdates)).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("update-token-saved")).toBeNull();
+  });
+
+  it("the footer disclosure opens the row ANY time (no check needed) and renders the health line from GET /system/updates/token", async () => {
+    // A saved, ACCEPTED token — the health line's success spelling.
+    vi.mocked(fetchUpdateTokenStatus).mockResolvedValue({ present: true, valid: true });
+    renderWithProviders(<AboutTab />);
+
+    // Collapsed by default — the power-user affordance stays quiet.
+    expect(screen.queryByTestId("update-token-row")).toBeNull();
+    fireEvent.click(screen.getByTestId("update-token-toggle"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-row")).toBeTruthy();
+    });
+    // The health probe fired once (on open, never on mount) and its line
+    // rendered — the TOKEN'S VALUE never crosses this boundary.
+    await waitFor(() => {
+      expect(vi.mocked(fetchUpdateTokenStatus)).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-health").textContent).toContain(
+        "A GitHub token is saved and GitHub accepts it",
+      );
+    });
+    // And NO update check ran — the disclosure is independent of the check.
+    expect(vi.mocked(fetchSystemUpdates)).not.toHaveBeenCalled();
+  });
+
+  it("the health line's REJECTED spelling (a saved token GitHub refuses) renders the replace-me copy", async () => {
+    vi.mocked(fetchUpdateTokenStatus).mockResolvedValue({ present: true, valid: false });
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByTestId("update-token-toggle"));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-token-health").textContent).toContain(
+        "A GitHub token is saved but GitHub rejected it — replace it below",
+      );
+    });
   });
 });
