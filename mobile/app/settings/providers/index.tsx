@@ -2,15 +2,10 @@
  * Providers — the configured-first inventory (R114-f rework): "Your
  * providers" (the SERVER's `configured` bit — custom row OR any held key,
  * pool-aware) as full rows pushing to the detail page; "Add a provider"
- * COLLAPSED behind ONE CTA (R115-O — the owner: "by default shows all
- * options — instead ONE option to click then the others appear"): tapping
- * it reveals the unconfigured seeded presets as compact add-rows + the
- * CUSTOM PROVIDER row (the house 30ms stagger ≈ the ~200ms reveal) —
- * tapping it again collapses. The custom row opens the create sheet (name
- * + base URL + api format + the first key); server validation surfaces
- * inline exactly like the New Project sheet. Live: the settings epoch
- * reloads the tiers while the screen is open (another device's key save
- * flips a row's tier the moment the server does).
+ * behind ONE CTA (R115-O — the owner: "by default shows all options —
+ * instead ONE option to click then the others appear"). Live: the settings
+ * epoch reloads the tiers while the screen is open (another device's key
+ * save flips a row's tier the moment the server does).
  *
  * R113-e — the events-bus live reload; R114-f — the phone OWNS its
  * inventory (create included), the tiers re-derived off the fresh rows;
@@ -28,15 +23,30 @@
  * inset md, marginVertical xl — ~65px of total break, a step the 12px
  * intra-group rhythm can never fake); and AddProviderAction (the old
  * full-width outlined row doing a CTA's job) is DELETED — the centered
- * self-sized ChromeButton (minWidth PAGE_CTA_MIN_W, accessibilityExpanded)
- * in ALL THREE states (empty / configured-only / mixed), so the zero-state
- * caption's "add one below" finally points at a real affordance. The sheet
- * rides the R118-A law: no field captions, the API format is the shared
- * SegmentedControl, the CTA centered.
+ * self-sized ChromeButton (minWidth PAGE_CTA_MIN_W) in ALL THREE states
+ * (empty / configured-only / mixed). The sheet rides the R118-A law: no
+ * field captions, the API format is the shared SegmentedControl, the CTA
+ * centered.
+ *
+ * ── ROUND-120 (why): ── R120-S, the owner's report §1 C (items 5/6/7/9):
+ * the Add-a-Provider OPTIONS moved OFF the page INTO the bottom-up sheet —
+ * "all of those options should be in a dedicated section. There should be
+ * a dedicated background to all of them so that they look separate from
+ * the whole UI" (the sheet's own clay panel IS that dedicated background;
+ * the old inline reveal — rows floating on the page with no surface of
+ * their own — is deleted). And the five presets NO LONGER navigate
+ * directly to the provider page: tapping OpenAI / NVIDIA / Anthropic /
+ * Google / OpenRouter swaps the SAME sheet to that provider's
+ * configuration entry (the name rides the sheet's title, the base URL
+ * arrives prefilled, the API key input commits the add) — the exact
+ * custom-providers grammar, mirrored for the presets; the add flow happens
+ * IN the sheet, then commits. The CTA's glow (the ChromeButton sheen
+ * family) died in primitives.tsx this round (item 5); "Create provider"
+ * joins the same quiet-solid family (item 9).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { RefreshControl, StyleSheet, View } from "react-native";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Pressable, RefreshControl, StyleSheet, View } from "react-native";
 import { ChevronRight, Plus, Server } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { ScreenScaffold } from "@/components/screen-scaffold";
@@ -48,6 +58,7 @@ import {
   ClayInput,
   Hairline,
   PressableCard,
+  QuietButton,
   SectionHeader,
   SegmentedControl,
   TypeBodyStrong,
@@ -70,8 +81,10 @@ import {
   customProviderBody,
   fetchConfiguredModels,
   fetchProviders,
+  presetAddPlan,
   setProviderKey,
   splitProviders,
+  updateProvider,
   type ProviderApiFormat,
   type ProviderRow,
 } from "@/features/config";
@@ -104,15 +117,15 @@ export default function ProvidersScreen() {
   const [providers, setProviders] = useState<ProviderRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [customSheetOpen, setCustomSheetOpen] = useState(false);
+  // ── ROUND-120 (why): ── the Add-a-Provider options live in the SHEET now
+  // (the owner's §1 C6: "there should be a dedicated background to all of
+  // them so that they look separate from the whole UI") — the old inline
+  // reveal state (addOpen + the staggered page rows) is deleted with it.
+  const [addSheetOpen, setAddSheetOpen] = useState(false);
   // R116-j (verdict #39): the per-provider MODELS count — grouped by
   // providerId off ONE fetchConfiguredModels call. null = not loaded yet
   // (the row's meta line renders the honest "—", never a fabricated 0).
   const [modelCounts, setModelCounts] = useState<Map<string, number> | null>(null);
-  // R115-O: the add-list reveal — collapsed by default (ONE prominent
-  // action instead of the always-on preset wall); toggling re-mounts the
-  // rows so the stagger entrance replays on every reveal.
-  const [addOpen, setAddOpen] = useState(false);
 
   // R113-e: the live settings epoch — a settings frame (another device's
   // key save / toggle, or the hello resync) moves it while this screen is
@@ -186,13 +199,15 @@ export default function ProvidersScreen() {
   // hasKey read would miss sits in "Your providers" where it belongs.
   const tiers = splitProviders(providers ?? []);
 
-  // R118-E (A4): the ONE add affordance, shared by all three states — the
-  // centered self-sized CTA (the old AddProviderAction full-width row is
-  // deleted). accessibilityExpanded speaks the reveal; the icon dies with
-  // the row it lived in.
-  const onAddToggle = useCallback(() => {
+  // ── ROUND-120 (why): ── the ONE add affordance opens the SHEET (items
+  // 6+7: the options render on the sheet's own clay surface — the dedicated
+  // background the owner asked for — and every option, presets included,
+  // configures IN the sheet; nothing navigates to the provider page from
+  // here anymore). The old reveal toggle + accessibilityExpanded die with
+  // the inline rows.
+  const onAddOpen = useCallback(() => {
     void selectionHaptic();
-    setAddOpen((v) => !v);
+    setAddSheetOpen(true);
   }, []);
 
   return (
@@ -225,7 +240,7 @@ export default function ProvidersScreen() {
           {providers.length === 0 ? (
             // ── the ZERO state — the CTA below is a real affordance now
             // (R118-E: the old branch's caption pointed at nothing; the
-            // centered ChromeButton + its reveal live here too).
+            // centered ChromeButton + its sheet live here too).
             <EmptyState
               title="no providers yet"
               caption="add one below — a preset with a key, or your own endpoint."
@@ -261,38 +276,29 @@ export default function ProvidersScreen() {
             </>
           )}
 
-          {/* ── GROUP 2 — "Add a provider" COLLAPSED behind the ONE CTA
-              (R115-O + R116-j + R118-E A4): the presets + the custom row
-              reveal below it on the house stagger (~200ms for the preset
-              wall); tapping the CTA again collapses. The custom row stays
-              reachable even with every preset configured — the owner can
-              always add another endpoint. Tapping a preset pushes to its
-              page — the key pool there is where the key lands (the
-              desktop's R113-d rule, kept). */}
+          {/* ── GROUP 2 — "Add a provider" behind the ONE CTA (R115-O +
+              R116-j + R118-E A4 + R120-S): tapping it opens the bottom-up
+              sheet whose clay panel is the options' DEDICATED background
+              (the owner's item 6) — the presets + the custom row render
+              inside it, and every pick configures in place (item 7: no
+              direct navigation to the provider page). The CTA itself is
+              the quiet-solid ChromeButton (item 5 — the glow is gone). */}
           <ChromeButton
-            onPress={onAddToggle}
+            onPress={onAddOpen}
             accessibilityLabel="Add a provider"
-            accessibilityExpanded={addOpen}
-            testID="providers-add-toggle"
+            testID="providers-add-cta"
             style={styles.addCta}
           >
             Add a provider
           </ChromeButton>
-          {addOpen ? (
-            <>
-              {tiers.addable.map((provider, index) => (
-                <AddableRowCard key={provider.id} provider={provider} index={index} />
-              ))}
-              <CustomProviderRow onPress={() => setCustomSheetOpen(true)} index={tiers.addable.length} />
-            </>
-          ) : null}
         </>
       )}
 
-      <CustomProviderSheet
-        open={customSheetOpen}
-        onClose={() => setCustomSheetOpen(false)}
-        onCreated={() => void load()}
+      <AddProviderSheet
+        open={addSheetOpen}
+        addable={tiers.addable}
+        onClose={() => setAddSheetOpen(false)}
+        onChanged={() => void load()}
       />
     </ScreenScaffold>
   );
@@ -354,70 +360,330 @@ function ProviderRowCard({
   );
 }
 
-// ── the addable preset row — compact, quiet, staggered on reveal ───────────
+// ── ROUND-120 (why): ── the Add-Provider SHEET (items 6+7) ─────────────────
+//
+// The options' dedicated home: the sheet's own clay panel is the background
+// that separates them from the page (the owner's "they look separate from
+// the whole UI"). ONE sheet, three levels:
+//
+//   options — the unconfigured presets + the custom row, each a quiet row
+//             on the sheet's surface (the old page-floating reveal rows
+//             are gone);
+//   preset  — the tapped provider's configuration entry: the name rides
+//             the sheet's TITLE, the base URL arrives prefilled (editable),
+//             the API key input commits the add (updateProvider PATCH when
+//             the URL drifted, then setProviderKey) — the custom-providers
+//             grammar mirrored for the five presets, NO navigation to the
+//             provider page;
+//   custom  — the R115-O custom-create form (name + base URL + api format
+//             + the first key), absorbed from the old CustomProviderSheet.
+//
+// Every level carries the R118-A sheet laws (label + input only, no field
+// captions; the CTA centered + self-sized; the quiet escape centered
+// beneath at natural width).
 
-function AddableRowCard({ provider, index }: { provider: ProviderRow; index: number }) {
-  const { tokens } = useTheme();
-  const router = useRouter();
-  return (
-    <PressableCard
-      enterIndex={Math.min(index, 12)}
-      onPress={() => router.push(`/settings/providers/${encodeURIComponent(provider.id)}`)}
-      accessibilityLabel={`Add provider ${provider.name}`}
-    >
-      <View style={styles.addRowInner}>
-        <View style={[styles.addRowIcon, { backgroundColor: tokens.subtleHover }]}>
-          <Plus size={16} color={tokens.accent2} strokeWidth={2.2} />
-        </View>
-        <View style={styles.addRowText}>
-          <TypeBodyStrong numberOfLines={1}>{provider.name}</TypeBodyStrong>
-          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-            add a key to start using it
-          </TypeMicro>
-        </View>
-        <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
-      </View>
-    </PressableCard>
-  );
-}
-
-// ── the custom-provider row ─────────────────────────────────────────────────
-
-function CustomProviderRow({ onPress, index }: { onPress: () => void; index: number }) {
-  const { tokens } = useTheme();
-  return (
-    <PressableCard
-      enterIndex={Math.min(index, 12)}
-      onPress={onPress}
-      accessibilityLabel="Add a custom provider"
-    >
-      <View style={styles.addRowInner}>
-        <View style={[styles.addRowIcon, { backgroundColor: tokens.subtleHover }]}>
-          <Plus size={16} color={tokens.accent} strokeWidth={2.2} />
-        </View>
-        <View style={styles.addRowText}>
-          <TypeBodyStrong numberOfLines={1}>Custom provider</TypeBodyStrong>
-          <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
-            any OpenAI-compatible endpoint
-          </TypeMicro>
-        </View>
-        <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
-      </View>
-    </PressableCard>
-  );
-}
-
-// ── the custom-create sheet ─────────────────────────────────────────────────
-
-function CustomProviderSheet({
+function AddProviderSheet({
   open,
+  addable,
   onClose,
-  onCreated,
+  onChanged,
 }: {
   open: boolean;
+  /** The unconfigured presets (the server's configured bit owns the tier). */
+  addable: ProviderRow[];
+  /** Dismiss (the scrim tap, the X, Android's back button). */
   onClose: () => void;
-  /** The list reload after a successful create (the row appears in "Your providers"). */
-  onCreated: () => void;
+  /** The inventory may have changed — re-read the list (fired on close only
+   *  when something committed; a pure cancel reads nothing). */
+  onChanged: () => void;
+}) {
+  // The sheet's level state: `preset` non-null = that preset's config entry;
+  // `custom` = the custom-create form; both null/false = the options list.
+  // The states persist through the close animation (the content stays alive
+  // under the departing panel) and reset on the NEXT open.
+  const [preset, setPreset] = useState<ProviderRow | null>(null);
+  const [custom, setCustom] = useState(false);
+  // The dirty flag: something committed inside the sheet (a created row the
+  // key save could not finish, at minimum) — the close path re-reads the
+  // list so the inventory can never go stale behind a cancelled sheet.
+  const dirtyRef = useRef(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setPreset(null);
+    setCustom(false);
+    dirtyRef.current = false;
+  }, [open]);
+
+  const finish = useCallback(() => {
+    dirtyRef.current = true;
+    onClose();
+    onChanged();
+  }, [onClose, onChanged]);
+
+  const close = useCallback(() => {
+    const dirty = dirtyRef.current;
+    onClose();
+    if (dirty) onChanged();
+  }, [onClose, onChanged]);
+
+  const goOptions = useCallback(() => {
+    setPreset(null);
+    setCustom(false);
+  }, []);
+
+  const title =
+    preset !== null ? preset.name : custom ? "Custom provider" : "Add a provider";
+
+  return (
+    <Sheet open={open} onClose={close} title={title} testID="add-provider-sheet">
+      {preset !== null ? (
+        <PresetConfigLevel key={preset.id} provider={preset} onBack={goOptions} onFinish={finish} />
+      ) : custom ? (
+        <CustomProviderLevel
+          onBack={goOptions}
+          onFinish={finish}
+          onDirtied={() => {
+            dirtyRef.current = true;
+          }}
+        />
+      ) : (
+        <View style={styles.optionList}>
+          {/* ── ROUND-120 (why): ── the presets route through the SHEET (the
+              owner's item 7: tapping OpenAI / NVIDIA / Anthropic / Google /
+              OpenRouter must NOT navigate to the provider page) — the row
+              swaps this sheet to that provider's configuration entry. The
+              rows knit by the inset hairline, the key-pool row grammar
+              (components.md "Key-pool rows": inset hairlines between rows —
+              never after the last). */}
+          {addable.map((provider, index) => (
+            <Fragment key={provider.id}>
+              {index > 0 ? <Hairline inset={spacing.lg} /> : null}
+              <SheetOptionRow
+                iconTone="preset"
+                title={provider.name}
+                meta="add a key to start using it"
+                onPress={() => {
+                  void selectionHaptic();
+                  setPreset(provider);
+                }}
+                accessibilityLabel={`Add provider ${provider.name}`}
+              />
+            </Fragment>
+          ))}
+          {addable.length > 0 ? <Hairline inset={spacing.lg} /> : null}
+          <SheetOptionRow
+            iconTone="custom"
+            title="Custom provider"
+            meta="any OpenAI-compatible endpoint"
+            onPress={() => {
+              void selectionHaptic();
+              setCustom(true);
+            }}
+            accessibilityLabel="Add a custom provider"
+          />
+        </View>
+      )}
+    </Sheet>
+  );
+}
+
+// ── one option row on the sheet's own surface ───────────────────────────────
+
+/**
+ * The options level's row — the quiet sheet-row idiom (NOT a card: these
+ * rows sit on the panel's own clay surface, knit by the strong Hairline
+ * dividers): [32px add-tile] [name + ONE meta line] [chevron]. The press is
+ * the house tint (no ripple, no scale — the sheet's own entrance carries
+ * the motion). minHeight 56 keeps the 44px touch discipline.
+ */
+function SheetOptionRow({
+  iconTone,
+  title,
+  meta,
+  onPress,
+  accessibilityLabel,
+}: {
+  /** "preset" — the catalog suggestion's accent2 glyph; "custom" — the ember. */
+  iconTone: "preset" | "custom";
+  title: string;
+  meta: string;
+  onPress: () => void;
+  accessibilityLabel: string;
+}) {
+  const { tokens } = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.optionRow,
+        { backgroundColor: pressed ? tokens.subtle : "transparent" },
+      ]}
+    >
+      <View style={[styles.optionIcon, { backgroundColor: tokens.subtleHover }]}>
+        <Plus size={16} color={iconTone === "custom" ? tokens.accent : tokens.accent2} strokeWidth={2.2} />
+      </View>
+      <View style={styles.optionText}>
+        <TypeBodyStrong numberOfLines={1}>{title}</TypeBodyStrong>
+        <TypeMicro numberOfLines={1} style={{ color: tokens.textTertiary }}>
+          {meta}
+        </TypeMicro>
+      </View>
+      <ChevronRight size={16} color={tokens.textTertiary} strokeWidth={2.2} />
+    </Pressable>
+  );
+}
+
+// ── the preset's configuration entry (the sheet's second level) ─────────────
+
+/**
+ * ── ROUND-120 (why): ── the owner's item 7 — the preset's add flow happens
+ * IN the sheet (the old row navigated straight to the provider page). The
+ * provider's NAME rides the sheet's title; the base URL arrives prefilled
+ * (editable — a mirror endpoint is a legitimate want); the API key input
+ * commits the add: `presetAddPlan` (pure, in features/config.ts) owns the
+ * honesty — the key is REQUIRED (the server's `configured` bit flips on a
+ * held key; a keyless "add" would be a lie) and the base-URL PATCH rides
+ * only when the field drifted from the preset's own URL.
+ */
+function PresetConfigLevel({
+  provider,
+  onBack,
+  onFinish,
+}: {
+  provider: ProviderRow;
+  /** The quiet escape — back to the sheet's options level. */
+  onBack: () => void;
+  /** Close + re-read (the add committed). */
+  onFinish: () => void;
+}) {
+  const { tokens } = useTheme();
+  const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
+  const [apiKey, setApiKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onAdd = useCallback(async () => {
+    if (busy) return;
+    const plan = presetAddPlan(provider, baseUrl, apiKey);
+    if ("error" in plan) {
+      setError(plan.error);
+      void warningHaptic();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      if (plan.baseUrlPatch !== null) {
+        const urlOutcome = await updateProvider(getLinkManager(), provider.id, {
+          baseUrl: plan.baseUrlPatch,
+        });
+        if (!urlOutcome.ok) {
+          mobWarn("config", "preset base url update failed", {
+            id: provider.id,
+            status: urlOutcome.error.status,
+            message: urlOutcome.error.message,
+          });
+          void warningHaptic();
+          setError(urlOutcome.error.message);
+          return;
+        }
+        mobLog("config", "preset base url updated", { id: provider.id });
+      }
+      const keyOutcome = await setProviderKey(getLinkManager(), provider.id, plan.key);
+      if (keyOutcome.ok) {
+        mobLog("config", "preset provider key set", { id: provider.id });
+        void successHaptic();
+        onFinish();
+        return;
+      }
+      mobWarn("config", "preset provider key save failed", {
+        id: provider.id,
+        status: keyOutcome.error.status,
+        message: keyOutcome.error.message,
+      });
+      void warningHaptic();
+      setError(keyOutcome.error.message);
+    } catch {
+      mobWarn("config", "preset provider add threw");
+      void warningHaptic();
+      setError("the host is offline — the key was not saved");
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, provider, baseUrl, apiKey, onFinish]);
+
+  return (
+    <View style={styles.fieldGap}>
+      {/* R118-A: label + input ONLY — the field captions are banned in
+          sheets (the plan's own validation message surfaces inline when
+          there is something to say). */}
+      <ClayInput
+        label="Base URL"
+        mono
+        value={baseUrl}
+        onChangeText={setBaseUrl}
+        autoCapitalize="none"
+        autoCorrect={false}
+        inputMode="url"
+        accessibilityLabel="Provider base URL"
+      />
+      <ClayInput
+        label="API key"
+        mono
+        value={apiKey}
+        onChangeText={setApiKey}
+        autoCapitalize="none"
+        autoCorrect={false}
+        secureTextEntry
+        accessibilityLabel="Provider API key"
+      />
+      {error !== null ? (
+        <TypeCaption style={{ color: tokens.danger }} numberOfLines={4}>
+          {error}
+        </TypeCaption>
+      ) : null}
+      {/* R118-A §2.4: the CTA zone — centered, self-sized, minWidth 200; the
+          quiet escape sits centered beneath at natural width. */}
+      <ChromeButton
+        onPress={() => void onAdd()}
+        disabled={busy}
+        accessibilityLabel={busy ? "Adding the provider" : "Add the provider"}
+        style={styles.sheetCta}
+      >
+        {busy ? "adding…" : "Add provider"}
+      </ChromeButton>
+      <QuietButton onPress={onBack} style={styles.sheetQuiet}>
+        Back
+      </QuietButton>
+    </View>
+  );
+}
+
+// ── the custom-provider create form (the sheet's third level) ───────────────
+
+/**
+ * The R115-O custom-create form, absorbed from the old CustomProviderSheet
+ * (R120-S — one Add-Provider sheet, one grammar): name + base URL + the
+ * api format + the first key. The create/key-save split keeps its honest
+ * created state (the provider EXISTS but the key save failed — re-creating
+ * would 409 on the name; Done hands over to the list) and now also flushes
+ * the sheet's dirty flag so the close path re-reads the inventory.
+ */
+function CustomProviderLevel({
+  onBack,
+  onFinish,
+  onDirtied,
+}: {
+  /** The quiet escape — back to the sheet's options level. */
+  onBack: () => void;
+  /** Close + re-read (the create committed). */
+  onFinish: () => void;
+  /** The provider exists but the sheet stayed open — the close path must
+   *  re-read the list whenever it eventually happens. */
+  onDirtied: () => void;
 }) {
   const { tokens } = useTheme();
   const [name, setName] = useState("");
@@ -430,23 +696,6 @@ function CustomProviderSheet({
   // the key save failed. Re-creating would 409 on the name; the only honest
   // action left is Done (close + reload; the key lands from its page).
   const [created, setCreated] = useState(false);
-
-  // Every open resets the form + the stale error (the previous attempt's
-  // 409 must not haunt the next one).
-  useEffect(() => {
-    if (!open) return;
-    setName("");
-    setBaseUrl("");
-    setApiFormat("chat-completions");
-    setFirstKey("");
-    setError(null);
-    setCreated(false);
-  }, [open]);
-
-  const finish = useCallback(() => {
-    onClose();
-    onCreated();
-  }, [onClose, onCreated]);
 
   const onCreate = useCallback(async () => {
     if (busy || created) return;
@@ -472,14 +721,14 @@ function CustomProviderSheet({
         const key = firstKey.trim();
         if (key === "") {
           void successHaptic();
-          finish();
+          onFinish();
           return;
         }
         const keyOutcome = await setProviderKey(getLinkManager(), outcome.data.id, key);
         if (keyOutcome.ok) {
           mobLog("config", "custom provider key set", { id: outcome.data.id });
           void successHaptic();
-          finish();
+          onFinish();
           return;
         }
         mobWarn("config", "custom provider key save failed", {
@@ -488,6 +737,9 @@ function CustomProviderSheet({
           message: keyOutcome.error.message,
         });
         void warningHaptic();
+        // The row exists server-side — every future close of this sheet
+        // must re-read the list (the dirty flag).
+        onDirtied();
         setCreated(true);
         setError(
           `the provider was created, but its key did not save — ${keyOutcome.error.message}. Add it from the provider's page.`,
@@ -508,76 +760,78 @@ function CustomProviderSheet({
     } finally {
       setBusy(false);
     }
-  }, [busy, created, name, baseUrl, apiFormat, firstKey, finish]);
+  }, [busy, created, name, baseUrl, apiFormat, firstKey, onFinish, onDirtied]);
 
   return (
-    <Sheet open={open} onClose={onClose} title="Custom provider" testID="custom-provider-sheet">
-      <View style={styles.fieldGap}>
-        {/* R118-A: label + input ONLY — the field captions are banned in
-            sheets (the route's own validation message surfaces inline when
-            there is something to say). */}
-        <ClayInput
-          label="Name"
-          value={name}
-          onChangeText={setName}
-          autoCapitalize="none"
-          autoCorrect={false}
-          accessibilityLabel="Provider name"
-        />
-        <ClayInput
-          label="Base URL"
-          mono
-          value={baseUrl}
-          onChangeText={setBaseUrl}
-          autoCapitalize="none"
-          autoCorrect={false}
-          inputMode="url"
-          accessibilityLabel="Provider base URL"
-        />
-        {/* R118-A: the API format is the shared SegmentedControl — three
-            choices on ONE line (the wrapping Chip row is gone); the full
-            names ride the a11y labels. */}
-        <SegmentedControl
-          options={API_FORMATS}
-          selectedId={apiFormat}
-          onSelect={setApiFormat}
-          testID="api-format"
-        />
-        <ClayInput
-          label="First API key (optional)"
-          mono
-          value={firstKey}
-          onChangeText={setFirstKey}
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-          accessibilityLabel="First API key"
-        />
-        {error !== null ? (
-          <TypeCaption style={{ color: tokens.danger }} numberOfLines={4}>
-            {error}
-          </TypeCaption>
-        ) : null}
-        {/* R118-A §2.4: the CTA zone — centered, self-sized, minWidth 200;
-            the created-state label is the one-word "Done" (the 8-word essay
-            died with the full-width idiom). */}
-        {created ? (
-          // The provider exists — creating again would 409 on the name.
-          <ChromeButton onPress={finish} accessibilityLabel="Done — close the sheet" style={styles.sheetCta}>
-            Done
-          </ChromeButton>
-        ) : (
-          <ChromeButton
-            onPress={() => void onCreate()}
-            disabled={busy}
-            accessibilityLabel={busy ? "Creating the provider" : "Create the provider"}
-            style={styles.sheetCta}
-          >
-            {busy ? "creating…" : "Create provider"}
-          </ChromeButton>
-        )}
-      </View>
-    </Sheet>
+    <View style={styles.fieldGap}>
+      {/* R118-A: label + input ONLY — the field captions are banned in
+          sheets (the route's own validation message surfaces inline when
+          there is something to say). */}
+      <ClayInput
+        label="Name"
+        value={name}
+        onChangeText={setName}
+        autoCapitalize="none"
+        autoCorrect={false}
+        accessibilityLabel="Provider name"
+      />
+      <ClayInput
+        label="Base URL"
+        mono
+        value={baseUrl}
+        onChangeText={setBaseUrl}
+        autoCapitalize="none"
+        autoCorrect={false}
+        inputMode="url"
+        accessibilityLabel="Provider base URL"
+      />
+      {/* R118-A: the API format is the shared SegmentedControl — three
+          choices on ONE line (the wrapping Chip row is gone); the full
+          names ride the a11y labels. */}
+      <SegmentedControl
+        options={API_FORMATS}
+        selectedId={apiFormat}
+        onSelect={setApiFormat}
+        testID="api-format"
+      />
+      <ClayInput
+        label="First API key (optional)"
+        mono
+        value={firstKey}
+        onChangeText={setFirstKey}
+        autoCapitalize="none"
+        autoCorrect={false}
+        secureTextEntry
+        accessibilityLabel="First API key"
+      />
+      {error !== null ? (
+        <TypeCaption style={{ color: tokens.danger }} numberOfLines={4}>
+          {error}
+        </TypeCaption>
+      ) : null}
+      {/* R118-A §2.4: the CTA zone — centered, self-sized, minWidth 200;
+          the created-state label is the one-word "Done" (the 8-word essay
+          died with the full-width idiom). The quiet Back escape sits
+          centered beneath at natural width. */}
+      {created ? (
+        // The provider exists — creating again would 409 on the name.
+        <ChromeButton onPress={onFinish} accessibilityLabel="Done — close the sheet" style={styles.sheetCta}>
+          Done
+        </ChromeButton>
+      ) : (
+        <ChromeButton
+          onPress={() => void onCreate()}
+          disabled={busy}
+          accessibilityLabel={busy ? "Creating the provider" : "Create the provider"}
+          style={styles.sheetCta}
+        >
+          {busy ? "creating…" : "Create provider"}
+        </ChromeButton>
+      )}
+      <QuietButton onPress={onBack} style={styles.sheetQuiet}>
+        Back
+      </QuietButton>
+    </View>
   );
 }
 
@@ -619,22 +873,6 @@ const styles = StyleSheet.create({
   /** R118-E A2 — the INVENTORY tier's name override: 15/700 (the bold
    *  face over TypeBodyStrong's semibold — same size, same line box). */
   rowTitleBold: { flexShrink: 1, fontFamily: fontFamily.bold },
-  addRowInner: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    padding: spacing.md,
-    paddingHorizontal: spacing.lg,
-    minHeight: 56,
-  },
-  addRowIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 11,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  addRowText: { flex: 1, gap: 2 },
   tierEmpty: { paddingHorizontal: spacing.xs, paddingVertical: spacing.sm },
   /** R118-E A3 — the tier break: the strong hairline's own breathing room
    *  (marginVertical xl both sides; the scaffold's 12px gap rides on top —
@@ -643,7 +881,31 @@ const styles = StyleSheet.create({
   /** R118-E A4 — the page-level CTA law: centered, self-sized, minWidth
    *  200 (never a full-width row pretending to be a button). */
   addCta: { alignSelf: "center", minWidth: PAGE_CTA_MIN_W },
-  /** R118-A — the sheet CTA law: centered, self-sized, minWidth 200. */
+  /** ── ROUND-120 (why): ── the options list on the sheet's own surface —
+   *  the rows knit inside the panel (the owner's dedicated background),
+   *  never floating on the page. */
+  optionList: { gap: 0 },
+  /** The quiet sheet-row anatomy: [32px tile] [name + one meta line]
+   *  [chevron], minHeight 56 (the 44px touch law), the house press tint. */
+  optionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    padding: spacing.md,
+    paddingHorizontal: spacing.lg,
+    minHeight: 56,
+  },
+  optionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  optionText: { flex: 1, gap: 2 },
+  /** R118-A — the sheet CTA law: centered, self-sized, minWidth 200; the
+   *  quiet escape beneath at natural width. */
   sheetCta: { alignSelf: "center", minWidth: SHEET_CTA_MIN_W },
+  sheetQuiet: { alignSelf: "center" },
   fieldGap: { gap: spacing.md },
 });

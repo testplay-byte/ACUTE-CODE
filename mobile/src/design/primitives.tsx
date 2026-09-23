@@ -9,10 +9,10 @@
  *   PressableCard — the press state: tint + 0.98 scale + shadow collapse,
  *                   one spring, NO ripple (android_ripple stays off forever)
  *   FadeInUp      — the fade-in-up entrance for non-card blocks (R115 §2)
- *   ChromeButton  — the primary CTA: accentDeep fill + accentText label +
- *                   the quiet vertical sheen (one of the three sanctioned
- *                   chrome surfaces, §2); flat = the R115 wizard CTA
- *                   (sheen-less, clay shadow)
+ *   ChromeButton  — the primary CTA (R120-S): the QUIET-SOLID family —
+ *                   accentDeep fill + accentText label, NO sheen, no glow,
+ *                   no gradient wash (the owner's round-120 verdict killed
+ *                   the glint); flat = the R115 wizard CTA (clay shadow)
  *   QuietButton   — the secondary action: outlined, flat, honest
  *   ChromeEdge    — the 1px gradient border wrapper (the floating bar's
  *                   edge + selected markers — the other sanctioned chrome)
@@ -288,12 +288,19 @@ export interface ChromeButtonProps {
   /** R118-A — the destructive confirm rides the danger fill
    *  (dangerDeep + its AA ink); a destructive verb never wears the ember. */
   tone?: "accent" | "danger";
-  /** The quiet vertical sheen (default true — the §2.2 jewelry). */
-  sheen?: boolean;
-  /** R115: the flat wizard CTA — solid accent, NO sheen gradient, the clay
-   *  elevation-2 shadow (the round-115 "no glow/sheen on CTAs" verdict,
-   *  components.md's Primary idiom). Additive + optional: every other
-   *  caller renders exactly as before. */
+  /** R115: the flat wizard CTA — solid accent, the clay elevation-2
+   *  shadow (the round-115 "no glow/sheen on CTAs" verdict, components.md's
+   *  Primary idiom). Additive + optional: every other caller renders
+   *  exactly as before.
+   *
+   *  ── ROUND-120 (why): ── the `sheen` prop is DELETED. The owner's
+   *  round-120 report — "there is some glowing effect around the 'Add a
+   *  Provider' text, which is not good. It makes it look ugly and bad" (and
+   *  the same "weird effect" family on "Create Provider" + the provider
+   *  page's CTAs) — killed the white glint gradient on EVERY ChromeButton:
+   *  the primary is now the quiet-solid family per the design language
+   *  ("no glow, no gradient washes, no Apple-y shine"), and `flat`'s only
+   *  remaining job is the clay elevation-2 shadow. */
   flat?: boolean;
   /** R119-P (round-119 §1 item 10 — the provider hero's "Test connection"
    *  line-broke to "Test"/"connection" at 360dp, where the two flex:1 peers
@@ -317,19 +324,22 @@ export interface ChromeButtonProps {
 
 /**
  * The primary action — accentDeep fill (the ember light / the salmon
- * dark), radius 14, 50px tall, and the ONE quiet glint: a white α→0
- * gradient across the top half at the R117-g1 whisper alpha 0.18 (a
- * "one quiet glint," never a mirror, never a 2012 gloss band). Label =
- * accentText (white on ember 4.98:1 / warm ink on salmon 6.30:1 — AA at
- * last). Pressed = scale 0.98 + tint. `flat` (R115) drops the glint and
- * adds the clay elevation-2 shadow — the wizard CTA idiom.
+ * dark), radius 14, 50px tall, label accentText (white on ember 4.98:1 /
+ * warm ink on salmon 6.30:1 — AA). Pressed = scale 0.98 + tint. `flat`
+ * (R115) adds the clay elevation-2 shadow — the wizard CTA idiom.
+ *
+ * ── ROUND-120 (why): ── the quiet glint gradient is GONE. The owner's
+ * round-120 report read the R117-g1 "whisper" sheen as a GLOW around the
+ * label ("it makes it look ugly and bad") on the Add-a-Provider CTA, the
+ * Create-Provider CTA, and the provider page's buttons — one family, one
+ * fix: the solid clay fill IS the button now (donts #11's law, finally
+ * literal). The sheen's geometry died with it; nothing replaced it.
  */
 export function ChromeButton({
   children,
   onPress,
   disabled = false,
   tone = "accent",
-  sheen = true,
   flat = false,
   labelFit = false,
   style,
@@ -409,28 +419,10 @@ export function ChromeButton({
           <ActivityIndicator color={fg} />
         ) : (
           <>
-            {sheen && !flat && !disabled ? (
-              <View
-                pointerEvents="none"
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  right: 0,
-                  top: 0,
-                  height: "55%",
-                  borderTopLeftRadius: RADIUS_INPUT,
-                  borderTopRightRadius: RADIUS_INPUT,
-                  overflow: "hidden",
-                }}
-              >
-                <LinearGradient
-                  colors={[tokens.sheenTop, tokens.sheenBottom]}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 0, y: 1 }}
-                  style={{ flex: 1 }}
-                />
-              </View>
-            ) : null}
+            {/* ── ROUND-120 (why): ── the sheen overlay that used to live
+                here is deleted — the owner's round-120 report read the
+                white glint as a glow around the label ("ugly and bad").
+                The quiet-solid fill below is the whole button. */}
             <Text
               numberOfLines={labelFit ? 1 : undefined}
               adjustsFontSizeToFit={labelFit}

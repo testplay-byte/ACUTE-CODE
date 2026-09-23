@@ -12,11 +12,14 @@ import { describe, expect, it } from "@jest/globals";
 
 import type { QuietIconButtonProps, SegmentedControlProps } from "@/design/primitives";
 import type { SheetProps } from "@/components/sheet";
+import * as MotionModule from "@/design/motion";
 import {
+  DISCLOSURE_SPRING,
   SHEET_CLOSE_MS,
-  SHEET_CONTENT_FADE_DELAY_MS,
-  SHEET_CONTENT_FADE_MS,
   SHEET_SCRIM_OPEN_MS,
+  SHEET_SHOW_ARM_FALLBACK_MS,
+  SHEET_SPRING,
+  sheetPanelTravelPx,
 } from "@/design/motion";
 import {
   PAGE_CTA_MIN_W,
@@ -119,31 +122,54 @@ describe("the R118-A sheet anatomy — the drift-guards (spec-A §5)", () => {
   });
 });
 
-// ── R119-P — the sheet's TIMED legs (the round-119 motion tuning, pinned) ───
-// The owner's verdict: the Add-Provider sheet's UI was right but "the
-// animations were not that good". The timed legs (scrim open / close
-// departure / content ride) are now NAMED constants in motion.ts — these
-// pins hold them (the spring pair itself lives in disclosure-motion.test.ts,
-// alongside the DISCLOSURE settle it now shares).
+// ── R120-S — the sheet motion retune #2 (the round's authority), pinned ─────
+// The owner's round-120 verdict: the animations "look ugly, they are
+// stuttering, and they do not play in the proper time when needed". The
+// diagnosis found the START RACE (the entrance was armed before the Modal's
+// Android window existed — the sheet surfaced mid-rise), the OVER-TRAVEL
+// (maxHeightFraction x window + 48 ≈ 670dp against a settle tuned for
+// 300-400dp), and the CLOSE LINGER (ease-in quad covered 2.7% of the travel
+// in two frames; the content pre-blanked while the panel sat still). The
+// spelling below is what sheet.tsx now rides — the docs wave codifies it.
 
-describe("the R119-P sheet motion — the timed legs (round-119 §2 Track P)", () => {
-  it("the scrim's open fade is 200ms (was 160 linear) — the dim completes as the panel crosses the fold", () => {
-    expect(SHEET_SCRIM_OPEN_MS).toBe(200);
+describe("the R120-S sheet motion — one coordinated timeline (round-120 §1 C8)", () => {
+  it("the spring VALUE stands: SHEET_SPRING is still the house DISCLOSURE settle {180, 24}", () => {
+    expect(SHEET_SPRING).toEqual({ stiffness: 180, damping: 24 });
+    // R119-P's equality law survives the retune: the panel grammar IS the
+    // disclosure grammar (same spelling, two names — pinned by value).
+    expect(SHEET_SPRING).toEqual(DISCLOSURE_SPRING);
   });
 
-  it("the close departure is 200ms — panel and scrim leave together, ease-in quad", () => {
-    expect(SHEET_CLOSE_MS).toBe(200);
-    // Panel and scrim MATCH — one exit, never a two-speed dissolve.
-    expect(SHEET_CLOSE_MS).toBe(SHEET_SCRIM_OPEN_MS);
+  it("the scrim's open fade is 240ms ease-out — frame one with the panel, completing as the settle lands (~300ms)", () => {
+    expect(SHEET_SCRIM_OPEN_MS).toBe(240);
   });
 
-  it("the content ride: a 120ms fade starting 40ms after the panel begins (the header lands first)", () => {
-    expect(SHEET_CONTENT_FADE_MS).toBe(120);
-    expect(SHEET_CONTENT_FADE_DELAY_MS).toBe(40);
-    // The ride completes inside the scrim's open leg — the content is fully
-    // visible before the entrance settles.
-    expect(SHEET_CONTENT_FADE_DELAY_MS + SHEET_CONTENT_FADE_MS).toBeLessThanOrEqual(
-      SHEET_SCRIM_OPEN_MS,
-    );
+  it("the close departure is 220ms on BOTH legs — one exit, never a two-speed dissolve", () => {
+    expect(SHEET_CLOSE_MS).toBe(220);
+    // The dismissal is the snappier leg: closing never outlasts the open's
+    // dim — the sheet leaves at least as promptly as it arrived.
+    expect(SHEET_CLOSE_MS).toBeLessThan(SHEET_SCRIM_OPEN_MS);
+  });
+
+  it("the onShow guard is 150ms — a platform that never fires onShow can never leave the sheet below the fold", () => {
+    expect(SHEET_SHOW_ARM_FALLBACK_MS).toBe(150);
+  });
+
+  it("the R119 content ride is RETIRED — no SHEET_CONTENT_FADE_* constant exists (the fold reveals the body)", () => {
+    expect(Object.keys(MotionModule)).not.toContain("SHEET_CONTENT_FADE_MS");
+    expect(Object.keys(MotionModule)).not.toContain("SHEET_CONTENT_FADE_DELAY_MS");
+  });
+
+  it("the travel is the panel's MEASURED height — the settle never rides the maxHeightFraction over-travel", () => {
+    // Measured wins the moment layout has reported: a 400dp panel travels
+    // 400dp, never the ~670dp fraction bound.
+    expect(sheetPanelTravelPx(400, 672)).toBe(400);
+    expect(sheetPanelTravelPx(317.6, 672)).toBe(318);
+    // The pre-layout fallback holds (fully below the fold either way) and
+    // rounds honestly.
+    expect(sheetPanelTravelPx(0, 672)).toBe(672);
+    expect(sheetPanelTravelPx(0, 671.4)).toBe(671);
+    // Degenerate measurements never travel sideways.
+    expect(sheetPanelTravelPx(-1, 672)).toBe(672);
   });
 });

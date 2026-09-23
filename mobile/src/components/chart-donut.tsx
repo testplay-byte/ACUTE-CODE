@@ -195,7 +195,10 @@ function DonutArcView({
 export interface DonutChartProps {
   /** The models to ring — order = rank (the caller sorts; hue by that rank). */
   segments: DonutSegment[];
-  /** Ring diameter (px) — default 120, PC parity. */
+  /** Ring diameter (px) — default 120, PC parity. The dashboard passes its
+   *  card's full content width (── ROUND-120 (why): ── the owner's "a lot of
+   *  empty area on the right sides and the left sides" — the fixed 120px ring
+   *  sat centered with dead side bands; the ring now fills the card). */
   size?: number;
   /**
    * The dataset's identity — the sweep re-triggers whenever it changes (once

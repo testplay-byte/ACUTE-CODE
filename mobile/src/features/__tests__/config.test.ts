@@ -35,6 +35,7 @@ import {
   newProjectBody,
   nextFreeKeySlot,
   parseModelNumericField,
+  presetAddPlan,
   putProviderKeySlot,
   searchCatalogEntries,
   setProviderKey,
@@ -275,6 +276,60 @@ describe("customProviderBody", () => {
     expect(customProviderBody("   ", "https://x.test", "responses")).toBeNull();
     expect(customProviderBody("a", "", "chat-completions")).toBeNull();
     expect(customProviderBody("a", "   ", "chat-completions")).toBeNull();
+  });
+});
+
+describe("presetAddPlan — the preset-add sheet's commit plan (R120-S, round-120 §1 C7)", () => {
+  // The owner's verdict: tapping a preset must NOT navigate to the provider
+  // page — the add happens IN the sheet. The plan owns the honesty: the key
+  // is REQUIRED (the configured bit flips on a held key), the base-URL
+  // PATCH rides only on drift, a cleared URL is refused before the route
+  // 400s (the customProviderBody discipline).
+  const preset = { baseUrl: "https://api.openai.com/v1" };
+
+  it("the untouched URL + a key = a key-only plan (no PATCH — the preset's own URL stands)", () => {
+    expect(presetAddPlan(preset, "https://api.openai.com/v1", "  sk-live-abc  ")).toEqual({
+      baseUrlPatch: null,
+      key: "sk-live-abc",
+    });
+  });
+
+  it("a drifted URL rides the PATCH (trimmed); the key rides trimmed", () => {
+    expect(
+      presetAddPlan(preset, " https://mirror.internal/v1 ", "sk-live-abc"),
+    ).toEqual({
+      baseUrlPatch: "https://mirror.internal/v1",
+      key: "sk-live-abc",
+    });
+    // drift back to the preset's own URL after an edit = no PATCH either
+    expect(presetAddPlan(preset, `  ${preset.baseUrl} `, "k")).toEqual({
+      baseUrlPatch: null,
+      key: "k",
+    });
+  });
+
+  it("a blank key is refused — a keyless add would leave the row unconfigured (a lie)", () => {
+    expect(presetAddPlan(preset, "https://api.openai.com/v1", "")).toEqual({
+      error: "paste the provider's API key to add it",
+    });
+    expect(presetAddPlan(preset, "https://api.openai.com/v1", "   ")).toEqual({
+      error: "paste the provider's API key to add it",
+    });
+  });
+
+  it("a cleared URL is refused before the route 400s", () => {
+    expect(presetAddPlan(preset, "", "sk-live-abc")).toEqual({
+      error: "a base URL is required",
+    });
+    expect(presetAddPlan(preset, "   ", "sk-live-abc")).toEqual({
+      error: "a base URL is required",
+    });
+  });
+
+  it("the key check comes FIRST — a blank key with a drifted URL still names the key", () => {
+    expect(presetAddPlan(preset, "https://mirror/v1", "")).toEqual({
+      error: "paste the provider's API key to add it",
+    });
   });
 });
 

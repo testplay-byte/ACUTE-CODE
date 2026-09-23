@@ -552,6 +552,37 @@ export function customProviderBody(
   return { name: trimmedName, baseUrl: trimmedBaseUrl, apiFormat };
 }
 
+/**
+ * ── ROUND-120 (why): ── the preset-add sheet's COMMIT PLAN (the owner's
+ * round-120 report, §1 C7: tapping OpenAI / NVIDIA / Anthropic / Google /
+ * OpenRouter must NOT navigate to the provider page — the add flow happens
+ * IN the bottom-up sheet, the custom-providers grammar mirrored for the
+ * presets). The key is REQUIRED (the server's `configured` bit flips on a
+ * held key — a keyless "add" would leave the row exactly as unconfigured as
+ * it started, a lie); the base-URL PATCH rides only when the field drifted
+ * from the preset's own URL; a cleared URL is refused honestly before the
+ * route 400s (the customProviderBody discipline). Pure (table-tested in
+ * __tests__/config.test.ts).
+ */
+export type PresetAddPlan =
+  | { error: string }
+  | { baseUrlPatch: string | null; key: string };
+
+export function presetAddPlan(
+  provider: Pick<ProviderRow, "baseUrl">,
+  baseUrl: string,
+  key: string,
+): PresetAddPlan {
+  const trimmedKey = key.trim();
+  if (trimmedKey === "") return { error: "paste the provider's API key to add it" };
+  const trimmedBaseUrl = baseUrl.trim();
+  if (trimmedBaseUrl === "") return { error: "a base URL is required" };
+  return {
+    baseUrlPatch: trimmedBaseUrl !== provider.baseUrl ? trimmedBaseUrl : null,
+    key: trimmedKey,
+  };
+}
+
 /** POST /providers — custom provider create. Answers 201 (fresh row) or 200
  * (the ADOPT case: a keyless built-in row at the wanted id, `adopted:true`)
  * — both parse as the ProviderRow the list re-reads. The FIRST KEY does not
