@@ -9,11 +9,20 @@
  *   INLINE: **bold**, *italic* / _italic_, `code`, ~~strike~~,
  *           [text](url)
  *
- * Pure string → Block[] with zero React Native imports (unit-testable);
- * the renderer (components/markdown-text.tsx) is the only consumer.
+ * Pure string → Block[] (unit-testable); the renderer
+ * (components/markdown-text.tsx) is the only consumer.
  * Re-parsing on every stream delta is O(n) on content length — cheap
  * enough for a live turn (a 30 KB message parses in single-digit ms).
+ *
+ * ROUND-120 (R120-CM, §1 item 41 — "no proper headings"): the HEADING
+ * TIER RECIPE lives here too (`headingTier`) — markdown levels 1-4 map
+ * onto the house Type ladder (tokens.ts's TYPE_* constants, imported —
+ * the ladder is the contract, the recipe never inlines a size). The
+ * renderer maps the recipe's weight onto fontFamily.bold/semibold; jest
+ * pins the table right beside the parser it serves.
  */
+
+import { TYPE_BODY, TYPE_HEADING, TYPE_TITLE } from "@/design/tokens";
 
 // ── the inline token tree ───────────────────────────────────────────────────
 
@@ -37,6 +46,45 @@ export type Block =
   | { t: "list"; ordered: boolean; items: ListItem[] }
   | { t: "table"; header: Inline[][]; rows: Inline[][][] }
   | { t: "hr" };
+
+// ── the heading tier recipe (R120-CM, §1 item 41) ────────────────────────────
+
+/** One markdown heading's house tier — the size + weight pair the renderer
+ *  maps onto the type ladder (700 → fontFamily.bold, 600 → fontFamily.semibold).
+ *  Pure data; `headingTier` is the single source. */
+export interface HeadingTier {
+  /** The ladder's size slot (tokens.ts TYPE_*). */
+  size: number;
+  /** The ladder's weight slot (the weight law: 700 card/section titles,
+   *  600 row-title strength one step down). */
+  weight: 600 | 700;
+}
+
+/**
+ * R120-CM — the markdown heading → house Type tier table (the owner's
+ * "no proper headings" verdict on the mobile center; typography.md's
+ * hierarchy): H1 the TITLE tier (20/700 — the document's one headline;
+ * DISPLAY 28 stays wizard-only), H2 the HEADING tier (16/700), H3 the
+ * HEADING tier one weight down (16/600 — the ladder's row-title weight,
+ * a visible step without a rogue size), H4 the BODYSTRONG tier (15/600 —
+ * the run-in heading). The sizes read the ladder's own constants — a
+ * tier drift here is a compile-time import away, never an inline number.
+ * Dense + textScale never touch the heading ladder (the R114-d
+ * calibration-mark law: the chatTextSize pref scales the PARAGRAPH body
+ * only). Pure.
+ */
+export function headingTier(level: 1 | 2 | 3 | 4): HeadingTier {
+  switch (level) {
+    case 1:
+      return { size: TYPE_TITLE, weight: 700 };
+    case 2:
+      return { size: TYPE_HEADING, weight: 700 };
+    case 3:
+      return { size: TYPE_HEADING, weight: 600 };
+    case 4:
+      return { size: TYPE_BODY, weight: 600 };
+  }
+}
 
 // ── the inline parser ───────────────────────────────────────────────────────
 

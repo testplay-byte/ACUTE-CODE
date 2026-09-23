@@ -145,17 +145,14 @@ import {
 } from "@/features/streaming-args";
 import {
   activitySummary,
-  genericOneLineSummary,
   groupDisplayRows,
-  humanizeToolName,
   orderDisplayItems,
-  readTargetSegment,
+  toolRowTitle,
   turnActivityFacts,
   turnBlockA11yLabel,
   turnReplyText,
   turnThinkingText,
   writeLineDiff,
-  writePath,
   type DisplayRow,
   type StandaloneTranscriptItem,
   type ToolItem,
@@ -1084,30 +1081,12 @@ function ToolRow({ item, expandable }: { item: ToolItem; expandable: boolean }) 
   // The head's ONE line — the families' existing grammar, moved from the
   // retired cards: the write family keeps its "Writing {file}… · {n} chars"
   // streaming verb and "Wrote {file}" settle; every other family carries the
-  // CompactToolRow's own one-line law, "verb · target".
+  // CompactToolRow's own one-line law, "verb · target". R120-CM: the string
+  // lives in the PURE `toolRowTitle` (features/turn-block.ts) — the row's
+  // grammar is jest-pinned there, the component stays a renderer.
   const preview = extractWritePreview(item.inputRaw ?? "");
-  const path = writePath(item);
   const streaming = running && isWrite && item.inputRaw !== null;
-  let title: string;
-  if (isWrite) {
-    const verbRunning = item.toolName === "write_file" ? "Writing" : "Editing";
-    const verbDone = item.toolName === "write_file" ? "Wrote" : "Edited";
-    title = running
-      ? path !== null
-        ? streaming
-          ? `${verbRunning} ${path}… · ${preview.chars.toLocaleString()} chars`
-          : `${verbRunning} ${path}…`
-        : `${verbRunning}…`
-      : path !== null
-        ? `${verbDone} ${path}`
-        : humanizeToolName(item.toolName);
-  } else {
-    const summary = isRead ? readTargetSegment(item) : genericOneLineSummary(item);
-    title =
-      summary !== null && summary !== ""
-        ? `${humanizeToolName(item.toolName)} · ${summary}`
-        : humanizeToolName(item.toolName);
-  }
+  const title = toolRowTitle(item);
   const icon = isWrite ? (
     <FileCode2 size={13} color={tokens.accent} strokeWidth={2.2} />
   ) : isTerminal ? (

@@ -180,6 +180,19 @@
  * list, and the fold catches up through the todo-updated frame (a live
  * turn) or the rehydrate (none). The data source is the display item
  * stream's ONE todo card — the same list the transcript's TodoCard shows.
+ *
+ * ROUND-120 (R120-CM — the center's finish, §1 items 40-42 + §2 Track C-M's
+ * processing indicators): the transcript-side work lives in
+ * transcript.tsx/turn-block.ts/sessions.ts (the honest tool rows live AND
+ * folded, the tool-frame association + the mid-turn twin dedupe, the
+ * collapsed rail's tool hints, the markdown ladder). THIS screen's own
+ * piece: the header avatar wears the LIVE EDGE (AvatarLiveEdge below) —
+ * while a turn runs (turnLive — the one truth the breathing line, the
+ * Stop row, and the composer's running mode already read) a subtle 2dp
+ * accent ring breathes on the delivery-edge rhythm over the avatar's
+ * box; at rest nothing renders and the layout never shifts. The sent
+ * message keeps its delivery rungs (transcript.tsx, pinned); the
+ * TurnBlock's own live rail breath is untouched (R119-A anatomy).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -193,6 +206,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   FadeIn,
+  interpolateColor,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -208,13 +222,18 @@ import { Composer, menuLevelRendersRootRows, nextOpenModelProvider, type Compose
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { HeaderDropdown, MAIN_LEVEL_KEY, type HeaderDropdownItem } from "@/components/header-dropdown";
 import { LetterAvatar } from "@/components/letter-avatar";
-import { TranscriptRowView } from "@/components/transcript";
+import {
+  DELIVERY_EDGE_HIGH,
+  DELIVERY_EDGE_LOW,
+  DELIVERY_EDGE_STATIC,
+  TranscriptRowView,
+} from "@/components/transcript";
 import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
 import { QuietIconButton, TypeBodyStrong, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
 import { warningHaptic } from "@/design/haptics";
 import { useTheme } from "@/design/theme";
 import { DISCLOSURE_FADE_MS, SPRING } from "@/design/motion";
-import { spacing, TOUCH_TARGET, fontFamily, TYPE_CAPTION } from "@/design/tokens";
+import { mixHex, spacing, TOUCH_TARGET, fontFamily, TYPE_CAPTION } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { getLinkManager } from "@/link/runtime";
 import type { SseStream } from "@/link/connection";
@@ -1418,11 +1437,19 @@ export default function SessionScreen() {
               testID="session-back"
             />
           </View>
-          {project !== null ? (
-            <LetterAvatar label={project.name} color={project.color} size={36} testID="session-header-avatar" />
-          ) : (
-            <NeutralAvatar label={headerFallbackLetter} />
-          )}
+          {/* R120-CM (§2 Track C-M — the processing indicators): the avatar
+              wears a subtle accent EDGE while a turn is live — the
+              delivery-edge rhythm, absolutely OVER the avatar so the header
+              layout never shifts; at rest NOTHING renders (resting chrome
+              never fidgets — motion.md §5). */}
+          <View style={styles.avatarWrap}>
+            {project !== null ? (
+              <LetterAvatar label={project.name} color={project.color} size={AVATAR_SIZE} testID="session-header-avatar" />
+            ) : (
+              <NeutralAvatar label={headerFallbackLetter} />
+            )}
+            <AvatarLiveEdge live={turnLive} />
+          </View>
           <View style={styles.headerIdentity}>
             <TypeBodyStrong numberOfLines={1} testID="session-header-title">
               {headerTitle}
@@ -1621,6 +1648,76 @@ function ItemSeparator() {
 }
 
 // ── R115-I — the identity bar's pieces ─────────────────────────────────────
+
+/** R120-CM (§2 Track C-M — the processing indicators): the avatar's LIVE
+ *  edge — an absolutely-positioned 2dp accent ring breathing on the
+ *  DELIVERY-EDGE rhythm (mixHex(surfaceHeader, accent, 0.34) ↔ 0.62 at the
+ *  house 550ms legs — the same breath the processing bubble's border and
+ *  the live header line ride), the static 0.55 mix under reduced motion.
+ *  Alive-but-calm: NO glow, NO spinner (donts #11/#14 — an opacity breathe
+ *  is the sanctioned "currently working" idiom, motion.md §4.5's grammar),
+ *  and NOTHING renders at rest. The ring draws OUTSIDE the avatar's own box
+ *  (top/left −3, +6 size) so the header row's layout is byte-identical in
+ *  both states; pointerEvents none — it is chrome, not a control. */
+const AVATAR_EDGE_INSET = 3;
+const AVATAR_EDGE_WIDTH = 2;
+const AVATAR_SIZE = 36;
+const AVATAR_EDGE_RADIUS = Math.round((AVATAR_SIZE + 2 * AVATAR_EDGE_INSET) * 0.38);
+
+function AvatarLiveEdge({ live }: { live: boolean }) {
+  const { tokens } = useTheme();
+  const reduced = useReducedMotion();
+  const pulse = useSharedValue(0);
+
+  useEffect(() => {
+    if (!live) {
+      pulse.value = 0;
+      return;
+    }
+    if (reduced) {
+      pulse.value = 0;
+      return;
+    }
+    pulse.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: LIVE_LINE_LEG_MS }),
+        withTiming(0, { duration: LIVE_LINE_LEG_MS }),
+      ),
+      -1,
+      false,
+    );
+  }, [live, reduced, pulse]);
+
+  const low = mixHex(tokens.surfaceHeader, tokens.accent, DELIVERY_EDGE_LOW);
+  const high = mixHex(tokens.surfaceHeader, tokens.accent, DELIVERY_EDGE_HIGH);
+  const steady = mixHex(tokens.surfaceHeader, tokens.accent, DELIVERY_EDGE_STATIC);
+  const style = useAnimatedStyle(() => ({
+    borderColor: reduced
+      ? steady
+      : interpolateColor(pulse.value, [0, 1], [low, high]),
+  }));
+
+  if (!live) return null;
+  return (
+    <Animated.View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      pointerEvents="none"
+      style={[
+        styles.avatarEdge,
+        {
+          borderWidth: AVATAR_EDGE_WIDTH,
+          borderRadius: AVATAR_EDGE_RADIUS,
+          top: -AVATAR_EDGE_INSET,
+          left: -AVATAR_EDGE_INSET,
+          width: AVATAR_SIZE + 2 * AVATAR_EDGE_INSET,
+          height: AVATAR_SIZE + 2 * AVATAR_EDGE_INSET,
+        },
+        style,
+      ]}
+    />
+  );
+}
 
 /** The honest fallback identity tile — a NEUTRAL avatar (subtle bg + the
  * session title's first letter, "A" when nothing reads) for a session with
@@ -1975,6 +2072,16 @@ const styles = StyleSheet.create({
   headerIdentity: {
     flex: 1,
     gap: 1,
+  },
+  /** R120-CM — the avatar's fixed 36px slot: the LIVE edge draws absolutely
+   *  OUTSIDE it (−3 inset), so the header row's flex layout never shifts
+   *  between the resting and the live state. */
+  avatarWrap: {
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
+  },
+  avatarEdge: {
+    position: "absolute",
   },
   /** R118-D §2.1 — the live line rides INSIDE the chrome column, pinned
    *  absolutely over its bottom edge — the breathing bar REPLACES the

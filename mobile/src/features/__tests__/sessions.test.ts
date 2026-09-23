@@ -1958,3 +1958,327 @@ describe("sessions — the measured thinking span rides the fold (R119-A)", () =
     expect(absent?.kind === "assistant" && absent.thinkingMs).toBeUndefined();
   });
 });
+
+// ── R120-CM: the center's honest rows (§1 items 40/41) ──────────────────────
+
+describe("sessions — the fold renders the write/edit/command rows (R120-CM, item 40)", () => {
+  it("a persisted write turn folds to tool rows that carry everything the rows render: name, path summary, verdict, output", () => {
+    const items = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "make the changes" }),
+      event(2, "message.assistant", { role: "assistant", content: "", thinking: "planning", thinkingMs: 3_000, model: "m" }),
+      event(3, "tool.use", { role: "tool", toolName: "write_file", argsSummary: "path: src/new.ts, content: export const A = 1; …", ok: true, outputSummary: "wrote 96 bytes to 'src/new.ts'" }),
+      event(4, "tool.use", { role: "tool", toolName: "edit_file", argsSummary: "path: src/a.ts, oldString: x, newString: y", ok: true, outputSummary: "Edited 'src/a.ts': 2 replacements, +12 −3 lines" }),
+      event(5, "tool.use", { role: "tool", toolName: "run_command", argsSummary: "command: npm test", ok: true, outputSummary: "ok [exit code: 0]" }),
+      event(6, "message.assistant", { role: "assistant", content: "done", model: "m" }),
+    ]);
+    // Every write/edit/create call survives the fold as a TOOL ROW's data —
+    // the TurnBlock's well renders each one (the item model never drops them).
+    const tools = items.filter((item) => item.kind === "tool");
+    expect(tools.map((t) => (t.kind === "tool" ? t.toolName : ""))).toEqual([
+      "write_file",
+      "edit_file",
+      "run_command",
+    ]);
+    const write = tools[0];
+    expect(write?.kind === "tool" && write.argsSummary).toBe("path: src/new.ts, content: export const A = 1; …");
+    expect(write?.kind === "tool" && write.ok).toBe(true);
+    expect(write?.kind === "tool" && write.outputSummary).toBe("wrote 96 bytes to 'src/new.ts'");
+    const edit = tools[1];
+    expect(edit?.kind === "tool" && edit.outputSummary).toBe("Edited 'src/a.ts': 2 replacements, +12 −3 lines");
+    const command = tools[2];
+    expect(command?.kind === "tool" && command.argsSummary).toBe("command: npm test");
+    // A FAILED write carries its false verdict (the danger row's own data).
+    const [failedWrite] = foldSessionEvents([
+      event(7, "tool.use", { role: "tool", toolName: "write_file", argsSummary: "path: src/locked.ts, content: …", ok: false, outputSummary: "path is outside the project root" }),
+    ]);
+    expect(failedWrite?.kind === "tool" && failedWrite.ok).toBe(false);
+  });
+});
+
+describe("sessions — the live tool-frame association is content-keyed (R120-CM, items 40/41a)", () => {
+  /** Drive one own turn through the frame list (the plain reducer harness). */
+  function turnOf(frames: Array<Record<string, unknown>>): LiveTurn {
+    let turn = beginLiveTurn([], "fix both files", NOW);
+    let t = NOW;
+    for (const frame of frames) {
+      turn = applyLiveFrame(turn, frame, t);
+      t += 10;
+    }
+    return turn;
+  }
+
+  it("parallel same-name calls keep their OWN rows: paths, args, and +A/−B verdicts never cross-wire", () => {
+    // The AI SDK's generation order for two parallel edit_file calls in one
+    // step — input A completes, input B completes, then the executed results
+    // settle (either order; here the natural A-then-B). The pre-R120-CM
+    // reverse() match landed A's frames on B's card: card A never got its
+    // argsSummary (its PATH never rendered) and the two results swapped.
+    const turn = turnOf([
+      { type: "turn.started", text: "fix both files", model: "m", providerId: "p" },
+      { type: "tool-input-start", toolCallId: "call_A", toolName: "edit_file" },
+      { type: "tool-input-delta", toolCallId: "call_A", inputTextDelta: '{"path": "src/a.ts", "oldString": "x"' },
+      { type: "tool-input-start", toolCallId: "call_B", toolName: "edit_file" },
+      { type: "tool-input-delta", toolCallId: "call_B", inputTextDelta: '{"path": "src/b.ts", "oldString": "y"' },
+      { type: "tool-call", toolName: "edit_file", argsSummary: "path: src/a.ts, oldString: x, newString: x2" },
+      { type: "tool-call", toolName: "edit_file", argsSummary: "path: src/b.ts, oldString: y, newString: y2" },
+      { type: "tool-result", toolName: "edit_file", argsSummary: "path: src/a.ts, oldString: x, newString: x2", ok: true, outputSummary: "Edited 'src/a.ts': 1 replacement, +2 −1 lines" },
+      { type: "tool-result", toolName: "edit_file", argsSummary: "path: src/b.ts, oldString: y, newString: y2", ok: true, outputSummary: "Edited 'src/b.ts': 1 replacement, +3 −0 lines" },
+      { type: "done" },
+    ]);
+    const tools = turn.items.filter((item) => item.kind === "tool");
+    expect(tools).toHaveLength(2);
+    const a = tools[0];
+    const b = tools[1];
+    // Card A = the FIRST call: its args, its result — never B's.
+    expect(a?.kind === "tool" && a.argsSummary).toBe("path: src/a.ts, oldString: x, newString: x2");
+    expect(a?.kind === "tool" && a.outputSummary).toBe("Edited 'src/a.ts': 1 replacement, +2 −1 lines");
+    expect(a?.kind === "tool" && a.ok).toBe(true);
+    expect(b?.kind === "tool" && b.argsSummary).toBe("path: src/b.ts, oldString: y, newString: y2");
+    expect(b?.kind === "tool" && b.outputSummary).toBe("Edited 'src/b.ts': 1 replacement, +3 −0 lines");
+    expect(b?.kind === "tool" && b.toolCallId).toBeNull(); // spent at the settle, exactly one call's lifecycle
+  });
+
+  it("out-of-order results still land on their own cards (the frame's argsSummary names the call)", () => {
+    const turn = turnOf([
+      { type: "turn.started", text: "go", model: "m", providerId: "p" },
+      { type: "tool-input-start", toolCallId: "call_A", toolName: "write_file" },
+      { type: "tool-input-delta", toolCallId: "call_A", inputTextDelta: '{"path": "src/one.ts"' },
+      { type: "tool-call", toolName: "write_file", argsSummary: "path: src/one.ts, content: one" },
+      { type: "tool-input-start", toolCallId: "call_B", toolName: "write_file" },
+      { type: "tool-input-delta", toolCallId: "call_B", inputTextDelta: '{"path": "src/two.ts"' },
+      { type: "tool-call", toolName: "write_file", argsSummary: "path: src/two.ts, content: two" },
+      // B finished FIRST (the faster write settles first) — the result still
+      // lands on B's card because its argsSummary names it.
+      { type: "tool-result", toolName: "write_file", argsSummary: "path: src/two.ts, content: two", ok: true, outputSummary: "wrote 3 bytes to 'src/two.ts'" },
+      { type: "tool-result", toolName: "write_file", argsSummary: "path: src/one.ts, content: one", ok: true, outputSummary: "wrote 3 bytes to 'src/one.ts'" },
+    ]);
+    const tools = turn.items.filter((item) => item.kind === "tool");
+    expect(tools[0]?.kind === "tool" && tools[0].outputSummary).toBe("wrote 3 bytes to 'src/one.ts'");
+    expect(tools[1]?.kind === "tool" && tools[1].outputSummary).toBe("wrote 3 bytes to 'src/two.ts'");
+    // The still-running A card kept its streaming raw until its own result.
+    expect(tools[0]?.kind === "tool" && tools[0].inputRaw).toBeNull();
+  });
+
+  it("tool-output tails land on the card whose command the frame carries (parallel run_commands never cross)", () => {
+    const turn = turnOf([
+      { type: "turn.started", text: "go", model: "m", providerId: "p" },
+      { type: "tool-call", toolName: "run_command", argsSummary: "command: npm test" },
+      { type: "tool-call", toolName: "run_command", argsSummary: "command: npm run lint" },
+      // exec.ts rides the RAW command in tool-output's argsSummary.
+      { type: "tool-output", toolName: "run_command", argsSummary: "npm run lint", chunk: "lint: clean" },
+      { type: "tool-output", toolName: "run_command", argsSummary: "npm test", chunk: "tests: 3 passed" },
+    ]);
+    const tools = turn.items.filter((item) => item.kind === "tool");
+    expect(tools[0]?.kind === "tool" && tools[0].outputTail).toBe("tests: 3 passed");
+    expect(tools[1]?.kind === "tool" && tools[1].outputTail).toBe("lint: clean");
+  });
+
+  it("a frame with NO argsSummary falls back to the OLDEST running card of the name (sequential order)", () => {
+    const turn = turnOf([
+      { type: "turn.started", text: "go", model: "m", providerId: "p" },
+      { type: "tool-call", toolName: "read_file", argsSummary: "path: src/a.ts" },
+      { type: "tool-call", toolName: "read_file", argsSummary: "path: src/b.ts" },
+      // An older sidecar's result frame without argsSummary: the FIRST call
+      // completes first — the oldest running card is the honest target.
+      { type: "tool-result", toolName: "read_file", ok: true, outputSummary: "120 lines" },
+    ]);
+    const tools = turn.items.filter((item) => item.kind === "tool");
+    expect(tools[0]?.kind === "tool" && tools[0].ok).toBe(true);
+    expect(tools[0]?.kind === "tool" && tools[0].outputSummary).toBe("120 lines");
+    expect(tools[1]?.kind === "tool" && tools[1].ok).toBeNull();
+  });
+});
+
+describe("sessions — rebaseRemoteTurn's mid-turn twin dedupe (R120-CM, item 41a)", () => {
+  it("a mid-turn rehydrate renders the opener, the settled tools, and the flushed segments EXACTLY ONCE (the persisted twins drop the live copies)", () => {
+    // The remote mirror streams a write turn on the phone while the events
+    // bus's event frames trigger the debounced rehydrate — the persisted log
+    // already carries the opener user row, the first tool.use, and the
+    // flushed assistant segment. The old head-only dedupe left ALL of them
+    // doubled (the split-in-two transcript).
+    let mirror = beginRemoteTurn([]);
+    const frames: Array<Record<string, unknown>> = [
+      { type: "turn.started", text: "add a file", model: "m1", providerId: "p" },
+      { type: "text-delta", delta: "making it" },
+      { type: "tool-input-start", toolCallId: "A", toolName: "write_file" },
+      { type: "tool-input-delta", toolCallId: "A", inputTextDelta: '{"path": "src/new.ts", "content": "x' },
+      { type: "tool-call", toolName: "write_file", argsSummary: "path: src/new.ts, content: x" },
+      { type: "tool-result", toolName: "write_file", argsSummary: "path: src/new.ts, content: x", ok: true, outputSummary: "wrote 1 byte to 'src/new.ts'" },
+      { type: "text-delta", delta: " and done" },
+    ];
+    let t = NOW;
+    for (const frame of frames) {
+      mirror = applyLiveFrame(mirror, frame, t);
+      t += 10;
+    }
+    // The rehydrate: the persisted log now carries the opener + the flushed
+    // first segment + the completed write (the second segment still streams).
+    const freshBase = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "add a file" }),
+      event(2, "message.assistant", { role: "assistant", content: "making it", model: "m1" }),
+      event(3, "tool.use", { role: "tool", toolName: "write_file", argsSummary: "path: src/new.ts, content: x", ok: true, outputSummary: "wrote 1 byte to 'src/new.ts'" }),
+    ]);
+    const rebased = rebaseRemoteTurn(mirror, freshBase, 0);
+    const kinds = rebased.items.map((item) => item.kind);
+    // ONE user row, ONE settled first segment, ONE settled tool row, then the
+    // still-streaming second segment (its persisted twin has NOT landed — a
+    // segment flushes only at the next tool boundary or the turn's end).
+    expect(kinds).toEqual(["user", "assistant", "tool", "assistant"]);
+    const users = rebased.items.filter((item) => item.kind === "user");
+    expect(users).toHaveLength(1);
+    expect(users[0]?.kind === "user" && users[0].key).toBe("e1"); // the persisted card owns the slot
+    const tools = rebased.items.filter((item) => item.kind === "tool");
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.kind === "tool" && tools[0].outputSummary).toBe("wrote 1 byte to 'src/new.ts'");
+    const liveTail = rebased.items[rebased.items.length - 1];
+    expect(liveTail?.kind === "assistant" && liveTail.live).toBe(true);
+    expect(liveTail?.kind === "assistant" && liveTail.content).toBe(" and done");
+  });
+
+  it("a still-RUNNING tool has no persisted twin and keeps streaming through the rebase", () => {
+    let mirror = beginRemoteTurn([]);
+    mirror = applyLiveFrame(mirror, { type: "turn.started", text: "go", model: "m", providerId: "p" }, NOW);
+    mirror = applyLiveFrame(mirror, { type: "tool-input-start", toolCallId: "A", toolName: "edit_file" }, NOW + 1);
+    mirror = applyLiveFrame(mirror, { type: "tool-input-delta", toolCallId: "A", inputTextDelta: '{"path": "src/a.ts"' }, NOW + 2);
+    // The persisted log grew past the opener (an approval, say) — the running
+    // edit row keeps its live streaming raw.
+    const freshBase = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "go" }),
+      event(2, "approval.requested", { approvalId: "ap1", toolName: "edit_file", argsSummary: "path: src/a.ts", category: "confirm" }),
+    ]);
+    const rebased = rebaseRemoteTurn(mirror, freshBase, 0);
+    const tools = rebased.items.filter((item) => item.kind === "tool");
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.kind === "tool" && tools[0].ok).toBeNull();
+    expect(tools[0]?.kind === "tool" && tools[0].inputRaw).toBe('{"path": "src/a.ts"');
+  });
+
+  it("identical repeat segments stay count-honest: two persisted twins consume two live twins, a third live copy survives", () => {
+    let mirror = beginRemoteTurn([]);
+    mirror = applyLiveFrame(mirror, { type: "turn.started", text: "go", model: "m", providerId: "p" }, NOW);
+    mirror = applyLiveFrame(mirror, { type: "text-delta", delta: "OK" }, NOW + 1);
+    mirror = applyLiveFrame(mirror, { type: "tool-input-start", toolCallId: "A", toolName: "read_file" }, NOW + 2);
+    mirror = applyLiveFrame(mirror, { type: "text-delta", delta: "OK" }, NOW + 3);
+    const freshBase = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "go" }),
+      event(2, "message.assistant", { role: "assistant", content: "OK", model: "m" }),
+      event(3, "tool.use", { role: "tool", toolName: "read_file", argsSummary: "path: src/a.ts", ok: true, outputSummary: "5 lines" }),
+      event(4, "message.assistant", { role: "assistant", content: "OK", model: "m" }),
+    ]);
+    const rebased = rebaseRemoteTurn(mirror, freshBase, 0);
+    const assistants = rebased.items.filter((item) => item.kind === "assistant");
+    expect(assistants).toHaveLength(2);
+    // The tail's RUNNING read kept streaming — a still-streaming card has no
+    // content key (no argsSummary yet), so it never pairs with a persisted
+    // twin. Honest residual, documented: a mirror that BLIPPED past a call's
+    // tool-call/tool-result frames keeps the ghost running row until the
+    // turn's terminal rehydrate replaces the whole overlay with the fold.
+    const runningTools = rebased.items.filter((item) => item.kind === "tool" && item.ok === null);
+    expect(runningTools).toHaveLength(1);
+    const settledTools = rebased.items.filter((item) => item.kind === "tool" && item.ok === true);
+    expect(settledTools).toHaveLength(1);
+    expect(settledTools[0]?.kind === "tool" && settledTools[0].key).toBe("e3");
+  });
+
+  it("queued rows pair with nothing — the R119-A law still owns their slot (the live q-row wins)", () => {
+    let mirror = beginRemoteTurn([]);
+    mirror = applyLiveFrame(mirror, { type: "turn.started", text: "go", model: "m", providerId: "p" }, NOW);
+    mirror = applyLiveFrame(mirror, { type: "text-delta", delta: "working" }, NOW + 1);
+    mirror = applyLiveFrame(mirror, { type: "user.queued", seq: 9, content: "the next one", ts: "2026-09-18T11:00:01Z" }, NOW + 2);
+    const freshBase = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "go" }),
+      event(2, "message.queued", { role: "user", content: "the next one" }),
+    ]);
+    const rebased = rebaseRemoteTurn(mirror, freshBase, 0);
+    const waiting = rebased.items.filter((item) => item.kind === "user" && item.queued);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]?.kind === "user" && waiting[0].key).toBe("q9"); // the LIVE row owns the slot
+    const users = rebased.items.filter((item) => item.kind === "user");
+    expect(users).toHaveLength(2); // the persisted opener + the live queued row — no doubling
+  });
+});
+
+// ── R120-CM (item 41a): the live reducer's accumulation ORDER ───────────────
+
+describe("sessions — the live reducer accumulates in FRAME order (R120-CM, item 41a)", () => {
+  /** Drive one own turn through the frame list (the plain reducer harness). */
+  function turnOf(frames: Array<Record<string, unknown>>): LiveTurn {
+    let turn = beginLiveTurn([], "go", NOW);
+    let t = NOW;
+    for (const frame of frames) {
+      turn = applyLiveFrame(turn, frame, t);
+      t += 10;
+    }
+    return turn;
+  }
+
+  it("think → text → tool → think → text lands EXACTLY in emission order — no segment ever leaps an earlier one", () => {
+    // The reasoning-model stream the owner watched "appear in the wrong
+    // order": segment 1 (thinking + text), a tool boundary that FLUSHES it,
+    // then segment 2 (more thinking + the closing text). The items must
+    // read back in exactly this wire order.
+    const turn = turnOf([
+      { type: "turn.started", text: "go", model: "m", providerId: "p" },
+      { type: "thinking-delta", delta: "plan A" },
+      { type: "text-delta", delta: "Working" },
+      { type: "tool-input-start", toolCallId: "c1", toolName: "read_file" },
+      { type: "tool-input-delta", toolCallId: "c1", inputTextDelta: '{"path": "src/a.ts"' },
+      { type: "tool-call", toolName: "read_file", argsSummary: "path: src/a.ts" },
+      { type: "tool-result", toolName: "read_file", argsSummary: "path: src/a.ts", ok: true, outputSummary: "12 lines" },
+      { type: "thinking-delta", delta: "plan B" },
+      { type: "text-delta", delta: " Done" },
+      { type: "done" },
+    ]);
+    // ONE user card, then segment 1, the tool, segment 2 — nothing else.
+    expect(turn.items.map((i) => i.kind)).toEqual(["user", "assistant", "tool", "assistant"]);
+    const seg1 = turn.items[1];
+    expect(seg1?.kind === "assistant" && seg1.thinking).toBe("plan A");
+    expect(seg1?.kind === "assistant" && seg1.content).toBe("Working");
+    expect(seg1?.kind === "assistant" && seg1.live).toBe(false); // flushed by the tool boundary
+    const tool = turn.items[2];
+    expect(tool?.kind === "tool" && tool.argsSummary).toBe("path: src/a.ts");
+    const seg2 = turn.items[3];
+    expect(seg2?.kind === "assistant" && seg2.thinking).toBe("plan B");
+    expect(seg2?.kind === "assistant" && seg2.content).toBe(" Done");
+  });
+
+  it("the fold of the SAME wire emits the same order (live rendering == settled rendering — the seam is honest)", () => {
+    // The persisted log the runtime writes for that same turn: the opener,
+    // segment 1 flushed at the tool boundary, the tool.use row, segment 2
+    // flushed at the turn's end. The fold must read back the SAME sequence
+    // the live reducer produced — the item stream's order contract.
+    const items = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "go" }),
+      event(2, "message.assistant", { role: "assistant", content: "Working", thinking: "plan A", model: "m" }),
+      event(3, "tool.use", { role: "tool", toolName: "read_file", argsSummary: "path: src/a.ts", ok: true, outputSummary: "12 lines" }),
+      event(4, "message.assistant", { role: "assistant", content: " Done", thinking: "plan B", model: "m" }),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["user", "assistant", "tool", "assistant"]);
+    expect(items[1]?.kind === "assistant" && items[1].content).toBe("Working");
+    expect(items[3]?.kind === "assistant" && items[3].content).toBe(" Done");
+  });
+
+  it("text deltas arriving AFTER a tool result open a NEW segment after the tool — never merge backward into the flushed one", () => {
+    const turn = turnOf([
+      { type: "turn.started", text: "go", model: "m", providerId: "p" },
+      { type: "text-delta", delta: "first" },
+      { type: "tool-call", toolName: "run_command", argsSummary: "command: ls" },
+      { type: "tool-result", toolName: "run_command", argsSummary: "command: ls", ok: true, outputSummary: "ok" },
+      { type: "text-delta", delta: "second" },
+    ]);
+    expect(turn.items.map((i) => i.kind)).toEqual(["user", "assistant", "tool", "assistant"]);
+    expect(turn.items[1]?.kind === "assistant" && turn.items[1].content).toBe("first");
+    expect(turn.items[3]?.kind === "assistant" && turn.items[3].content).toBe("second");
+    // the chunk merging stays IN-ORDER (the oldest two fold first — a
+    // memory cap, never a reorder)
+    let merged = beginLiveTurn([], "go", NOW);
+    merged = applyLiveFrame(merged, { type: "turn.started", text: "go", model: "m", providerId: "p" }, NOW);
+    for (let i = 0; i < 250; i += 1) {
+      merged = applyLiveFrame(merged, { type: "text-delta", delta: `w${i} ` }, NOW + i);
+    }
+    const seg = merged.items[1];
+    const text = seg?.kind === "assistant" && seg.chunks !== null ? seg.chunks.join("") : "";
+    expect(text.startsWith("w0 w1 w2")).toBe(true);
+    expect(text.endsWith("w249 ")).toBe(true);
+  });
+});

@@ -33,6 +33,10 @@ import {
   orderDisplayItems,
   readTargetSegment,
   runningToolWord,
+  TOOL_HINT_MAX,
+  toolHint,
+  toolHintList,
+  toolRowTitle,
   turnActivityFacts,
   turnBlockA11yLabel,
   turnReplyText,
@@ -124,6 +128,7 @@ function railFacts(overrides: Partial<TurnActivityFacts> = {}): TurnActivityFact
     live: false,
     runningToolWord: null,
     writing: false,
+    toolHints: [],
     ...overrides,
   };
 }
@@ -542,6 +547,8 @@ describe("turn-block — turnActivityFacts + activitySummary (the rail's string 
       live: false,
       runningToolWord: null,
       writing: false,
+      // R120-CM — the default fixtures carry no command/path to hint
+      toolHints: [],
     });
     expect(activitySummary(detailed)).toBe("Thought for 5s · 2 actions · 1 failed");
     // compact keeps every count (the rows render, just pinned to one line)
@@ -672,5 +679,165 @@ describe("turn-block — turnBlockA11yLabel (the one accessible container label)
     expect(turnBlockA11yLabel({ ...railFacts(), replyText: exactly })).toBe(
       `Assistant reply. Reply: ${exactly}`,
     );
+  });
+});
+
+// ── R120-CM: the well row's title + the collapsed rail's tool hints ─────────
+
+describe("turn-block — toolRowTitle (R120-CM — the well row's ONE-line grammar, per family)", () => {
+  it("the write family: the streaming verb with its char count, the settled Wrote/Edited verdict", () => {
+    // running + streaming raw: the growing file preview
+    expect(
+      toolRowTitle(
+        toolItem("t1", {
+          toolName: "write_file",
+          ok: null,
+          inputRaw: '{"path":"src/new.ts","content":"' + "x".repeat(96),
+        }),
+      ),
+    ).toBe("Writing src/new.ts… · 96 chars");
+    // running + a path but no raw yet (joined mid-call)
+    expect(
+      toolRowTitle(toolItem("t2", { toolName: "edit_file", ok: null, argsSummary: "path: src/a.ts" })),
+    ).toBe("Editing src/a.ts…");
+    // running + no path anywhere: the bare verb
+    expect(toolRowTitle(toolItem("t3", { toolName: "write_file", ok: null, inputRaw: null }))).toBe(
+      "Writing…",
+    );
+    // settled: the Wrote verdict
+    expect(
+      toolRowTitle(toolItem("t4", { toolName: "write_file", argsSummary: "path: src/new.ts" })),
+    ).toBe("Wrote src/new.ts");
+    expect(
+      toolRowTitle(toolItem("t5", { toolName: "edit_file", argsSummary: "path: src/a.ts" })),
+    ).toBe("Edited src/a.ts");
+    // settled with no readable path: the humanized verb, never a guess
+    expect(toolRowTitle(toolItem("t6", { toolName: "edit_file", argsSummary: "" }))).toBe("edit file");
+  });
+
+  it("the read/terminal/generic families: the verb · target one-line law", () => {
+    expect(toolRowTitle(toolItem("t7", { toolName: "read_file", argsSummary: "path: src/a.ts" }))).toBe(
+      "read file · src/a.ts",
+    );
+    expect(
+      toolRowTitle(toolItem("t8", { toolName: "run_command", argsSummary: "command: npm test" })),
+    ).toBe("run command · npm test");
+    expect(
+      toolRowTitle(toolItem("t9", { toolName: "search", argsSummary: "query: radius law" })),
+    ).toBe("search · query: radius law");
+    // an empty summary never rides a dangling separator
+    expect(toolRowTitle(toolItem("t10", { toolName: "bash", argsSummary: "" }))).toBe("bash");
+  });
+});
+
+describe("turn-block — toolHint / toolHintList (R120-CM — the collapsed rail's glance)", () => {
+  it("the hint families: the write PATH, the terminal COMMAND, the read TARGET — everything else null", () => {
+    expect(toolHint(toolItem("h1", { toolName: "edit_file", argsSummary: "path: src/a.ts" }))).toBe(
+      "src/a.ts",
+    );
+    // the write family's live raw carries the path too (the hint works mid-stream)
+    expect(
+      toolHint(toolItem("h2", { toolName: "write_file", ok: null, inputRaw: '{"path":"src/new.ts"' })),
+    ).toBe("src/new.ts");
+    expect(toolHint(toolItem("h3", { toolName: "run_command", argsSummary: "command: npm test" }))).toBe(
+      "npm test",
+    );
+    expect(toolHint(toolItem("h4", { toolName: "read_file", argsSummary: "path: src/a.ts" }))).toBe(
+      "src/a.ts",
+    );
+    expect(toolHint(toolItem("h5", { toolName: "search", argsSummary: "query: x" }))).toBeNull();
+    // a write with no readable path teases nothing (never a guess)
+    expect(toolHint(toolItem("h6", { toolName: "edit_file", argsSummary: "" }))).toBeNull();
+  });
+
+  it("toolHintList dedupes ORDER-PRESERVING (two edits of one file hint once) and keeps call order", () => {
+    const items = [
+      toolItem("d1", { toolName: "edit_file", argsSummary: "path: src/a.ts" }),
+      toolItem("d2", { toolName: "edit_file", argsSummary: "path: src/a.ts" }),
+      toolItem("d3", { toolName: "run_command", argsSummary: "command: npm test" }),
+    ];
+    expect(toolHintList(items)).toEqual(["src/a.ts", "npm test"]);
+  });
+
+  it("the cap: at most TOOL_HINT_MAX (3) hints, then the honest +N more tail", () => {
+    expect(TOOL_HINT_MAX).toBe(3);
+    const mk = (path: string): ToolItem =>
+      toolItem(`c-${path}`, { toolName: "edit_file", argsSummary: `path: ${path}` });
+    expect(toolHintList([mk("a.ts"), mk("b.ts"), mk("c.ts")])).toEqual(["a.ts", "b.ts", "c.ts"]);
+    expect(toolHintList([mk("a.ts"), mk("b.ts"), mk("c.ts"), mk("d.ts")])).toEqual([
+      "a.ts",
+      "b.ts",
+      "c.ts",
+      "+1 more",
+    ]);
+    expect(
+      toolHintList([mk("a.ts"), mk("b.ts"), mk("c.ts"), mk("d.ts"), mk("e.ts"), mk("f.ts")]),
+    ).toEqual(["a.ts", "b.ts", "c.ts", "+3 more"]);
+    // generic calls add nothing — the count already carries them
+    expect(
+      toolHintList([
+        mk("a.ts"),
+        toolItem("c-g", { toolName: "search", argsSummary: "query: x" }),
+      ]),
+    ).toEqual(["a.ts"]);
+  });
+});
+
+describe("turn-block — activitySummary + a11y with the tool hints (R120-CM, item 40: the glance)", () => {
+  it("the settled rail carries the hints BETWEEN the actions count and the failed tail", () => {
+    expect(
+      activitySummary(
+        railFacts({ hasThinking: true, thoughtMs: 8_000, toolCount: 3, toolHints: ["src/a.ts", "npm test"] }),
+      ),
+    ).toBe("Thought for 8s · 3 actions · src/a.ts, npm test");
+    // tools-only + hints
+    expect(activitySummary(railFacts({ toolCount: 2, toolHints: ["src/a.ts"] }))).toBe(
+      "2 actions · src/a.ts",
+    );
+    // hints + failures: the failed tail stays LAST (the glance-level tell)
+    expect(
+      activitySummary(railFacts({ toolCount: 3, failedCount: 1, toolHints: ["src/a.ts"] })),
+    ).toBe("3 actions · src/a.ts · 1 failed");
+    // no hints: the string table is byte-identical to R119-A
+    expect(activitySummary(railFacts({ toolCount: 3 }))).toBe("3 actions");
+  });
+
+  it("the LIVE rail never carries hints — the running verb owns the line", () => {
+    expect(
+      activitySummary(railFacts({ live: true, toolHints: ["src/a.ts"], toolCount: 2 })),
+    ).toBe("Thinking…");
+    expect(
+      activitySummary(
+        railFacts({ live: true, runningToolWord: "Reading src/a.ts…", toolHints: ["src/a.ts"] }),
+      ),
+    ).toBe("Reading src/a.ts…");
+  });
+
+  it("turnActivityFacts derives the hints off the group — and the hidden pref never teases them", () => {
+    const items = [
+      assistantItem("a1", { thinking: "planning" }),
+      toolItem("t1", { toolName: "edit_file", argsSummary: "path: src/a.ts" }),
+      toolItem("t2", { toolName: "run_command", argsSummary: "command: npm test" }),
+    ];
+    const group = singleTurn(items);
+    expect(turnActivityFacts(group, "detailed").toolHints).toEqual(["src/a.ts", "npm test"]);
+    // compact keeps the hints (the rows render, one line each)
+    expect(turnActivityFacts(group, "compact").toolHints).toEqual(["src/a.ts", "npm test"]);
+    // hidden: no rows AND no hints — the summary never teases content the well will not show
+    expect(turnActivityFacts(group, "hidden").toolHints).toEqual([]);
+    expect(turnActivityFacts(group, "hidden").toolCount).toBe(0);
+  });
+
+  it("turnBlockA11yLabel rides the hints as the parenthetical — the screen reader hears what the glance sees", () => {
+    expect(
+      turnBlockA11yLabel({
+        ...railFacts({ hasThinking: true, thoughtMs: 8_000, toolCount: 3, toolHints: ["src/a.ts", "npm test"] }),
+        replyText: "",
+      }),
+    ).toBe("Assistant turn — thought 8 seconds, 3 actions (src/a.ts, npm test)");
+    // no hints: the label keeps the R119-A spelling
+    expect(
+      turnBlockA11yLabel({ ...railFacts({ toolCount: 3 }), replyText: "" }),
+    ).toBe("Assistant turn — 3 actions");
   });
 });

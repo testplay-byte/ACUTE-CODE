@@ -83,6 +83,21 @@
  * POST /sessions/:parent/subagents/:child/retry — ADR-0022's resume) and
  * the honest error fold (turn.error's additive errorClass/attempts fields
  * since R43/R75 — the error card's class chip + attempts line).
+ *
+ * ROUND-120 (R120-CM — the center's honest rows, §1 items 40/41): the live
+ * TOOL-FRAME ASSOCIATION is content-keyed now (the wire's own argsSummary —
+ * chat.ts's summarizeArgs, the same string the tool-call frame, the
+ * tool-result frame, and the persisted tool.use row all carry): a call's
+ * frames land on ITS card, not on the newest same-name card, so parallel
+ * calls of one tool (two edit_file writes in one step — the ordinary
+ * multi-file turn) never cross-wire their paths, args, and +A/−B verdicts
+ * (the owner: "no hint of the tools that ran", "text appearing in the
+ * wrong order"). rebaseRemoteTurn's mid-turn seam is twin-deduped the same
+ * way: the fresh fold's persisted rows drop their LIVE twins from the
+ * streaming tail (the user card, the flushed assistant segments, the
+ * settled tool rows), so a remote mirror watched on the phone renders every
+ * write/edit/create EXACTLY ONCE while it streams — never the split-in-two
+ * double render a mid-turn rehydrate used to produce.
  */
 
 import { apiJson, type ApiOutcome, type ApiSender, type SseSender } from "./api";
@@ -959,6 +974,16 @@ export function appendToolInputRaw(prev: string | null, delta: string): string {
   return next.length > MAX_TOOL_INPUT_RAW ? next.slice(0, MAX_TOOL_INPUT_RAW) : next;
 }
 
+/** R120-CM — the `command:` segment of a run_command argsSummary, read back
+ * out for the tool-output association (exec.ts rides the RAW command in the
+ * frame's argsSummary; the card's summary is chat.ts's full
+ * "command: X, timeout_ms: N" spelling — "command: npm test" → "npm test").
+ * A summary without the segment reads as itself (never a guess). Pure. */
+function toolCommandSegment(argsSummary: string): string {
+  const segment = argsSummary.match(/^command:\s*(.*)$/)?.[1] ?? "";
+  return segment !== "" ? segment : argsSummary;
+}
+
 /** R117-d2 — the last-activity word's length cap (the PC's own 72 — one
  * quiet line, never a wall). */
 const SUBAGENT_ACTIVITY_CAP = 72;
@@ -1238,12 +1263,45 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
       // or a joined-mid-call gap) → the card opens here, as before.
       const toolName = typeof frame.toolName === "string" ? frame.toolName : "tool";
       const argsSummary = typeof frame.argsSummary === "string" ? frame.argsSummary : "";
-      const target = [...items]
-        .reverse()
-        .find(
-          (item) =>
-            item.kind === "tool" && item.toolName === toolName && item.inputRaw !== null,
-        );
+      // R120-CM — the match is OLDEST-FIRST: the model generates ONE call's
+      // arguments at a time, so the oldest still-streaming card of this name
+      // that has not received its argsSummary yet is the call whose input
+      // just completed. The old reverse() match cross-wired parallel
+      // same-name calls (tool-call A landed on card B, B's path never
+      // rendered, the results swapped) — the multi-file edit turn the
+      // owner watched shuffle on the phone.
+      let targetIndex = -1;
+      for (let i = 0; i < items.length; i += 1) {
+        const item = items[i];
+        if (
+          item !== undefined &&
+          item.kind === "tool" &&
+          item.toolName === toolName &&
+          item.inputRaw !== null &&
+          item.argsSummary === ""
+        ) {
+          targetIndex = i;
+          break;
+        }
+      }
+      if (targetIndex === -1) {
+        // Replay tolerance: the oldest still-streaming card of this name
+        // (any args) accepts the frame — a replayed frame re-lands
+        // idempotently on the same card.
+        for (let i = 0; i < items.length; i += 1) {
+          const item = items[i];
+          if (
+            item !== undefined &&
+            item.kind === "tool" &&
+            item.toolName === toolName &&
+            item.inputRaw !== null
+          ) {
+            targetIndex = i;
+            break;
+          }
+        }
+      }
+      const target = targetIndex !== -1 ? items[targetIndex] : undefined;
       if (target !== undefined && target.kind === "tool") {
         const index = items.indexOf(target);
         items[index] = { ...target, argsSummary, live: true };
@@ -1268,14 +1326,48 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
       const toolName = typeof frame.toolName === "string" ? frame.toolName : "tool";
       const ok = frame.ok === true;
       const outputSummary = typeof frame.outputSummary === "string" ? frame.outputSummary : null;
-      // Complete the LAST running call with this name (matches by tool name;
-      // the runtime emits call → result pairs in order).
-      const target = [...items]
-        .reverse()
-        .find(
-          (item) =>
-            item.kind === "tool" && item.toolName === toolName && item.ok === null,
-        );
+      const argsSummary = typeof frame.argsSummary === "string" ? frame.argsSummary : "";
+      // Complete the matching running card. R120-CM — the association
+      // ladder, content-first: (1) the frame's own argsSummary NAMES the
+      // call (chat.ts summarizes the same input object into the tool-call
+      // frame, the tool-result frame, AND the persisted tool.use row — one
+      // string, three surfaces), so an exact match on a running card is the
+      // call itself, whatever order the parallel executions settled in;
+      // (2) else the OLDEST running card of this name (the sequential
+      // completion order the runtime emits call → result pairs in). The old
+      // reverse() match settled parallel same-name calls onto each other's
+      // cards — the +A/−B chips and the output summaries swapped rows.
+      let targetIndex = -1;
+      if (argsSummary !== "") {
+        for (let i = 0; i < items.length; i += 1) {
+          const item = items[i];
+          if (
+            item !== undefined &&
+            item.kind === "tool" &&
+            item.toolName === toolName &&
+            item.ok === null &&
+            item.argsSummary === argsSummary
+          ) {
+            targetIndex = i;
+            break;
+          }
+        }
+      }
+      if (targetIndex === -1) {
+        for (let i = 0; i < items.length; i += 1) {
+          const item = items[i];
+          if (
+            item !== undefined &&
+            item.kind === "tool" &&
+            item.toolName === toolName &&
+            item.ok === null
+          ) {
+            targetIndex = i;
+            break;
+          }
+        }
+      }
+      const target = targetIndex !== -1 ? items[targetIndex] : undefined;
       if (target !== undefined && target.kind === "tool") {
         const index = items.indexOf(target);
         items[index] = {
@@ -1309,9 +1401,40 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
     case "tool-output": {
       const toolName = typeof frame.toolName === "string" ? frame.toolName : "tool";
       const chunk = typeof frame.chunk === "string" ? frame.chunk : "";
-      const target = [...items]
-        .reverse()
-        .find((item) => item.kind === "tool" && item.toolName === toolName && item.live);
+      const argsSummary = typeof frame.argsSummary === "string" ? frame.argsSummary : "";
+      // R120-CM — the same association ladder as tool-result, tuned to this
+      // frame's own vocabulary: exec.ts rides the RAW command in
+      // tool-output's argsSummary, so the match reads the card's `command:`
+      // segment back out of its full summary; an exact hit is the running
+      // command itself (parallel run_commands never cross their tails),
+      // else the OLDEST running card of the name takes the stream.
+      let targetIndex = -1;
+      if (argsSummary !== "") {
+        for (let i = 0; i < items.length; i += 1) {
+          const item = items[i];
+          if (
+            item !== undefined &&
+            item.kind === "tool" &&
+            item.toolName === toolName &&
+            item.live &&
+            item.argsSummary !== "" &&
+            toolCommandSegment(item.argsSummary) === argsSummary
+          ) {
+            targetIndex = i;
+            break;
+          }
+        }
+      }
+      if (targetIndex === -1) {
+        for (let i = 0; i < items.length; i += 1) {
+          const item = items[i];
+          if (item !== undefined && item.kind === "tool" && item.toolName === toolName && item.live) {
+            targetIndex = i;
+            break;
+          }
+        }
+      }
+      const target = targetIndex !== -1 ? items[targetIndex] : undefined;
       if (target !== undefined && target.kind === "tool") {
         const index = items.indexOf(target);
         items[index] = {
@@ -1861,32 +1984,81 @@ export function beginRemoteTurn(baseItems: TranscriptItem[]): LiveTurn {
  * mirrors as a LIVE q-row (the events stream carried the queue route's
  * user.queued frame onto the mirror) is dropped — the live row owns the
  * slot, content-identical, and flips in place on queued.delivered, exactly
- * the head-dedupe discipline below.
+ * the twin-dedupe discipline below.
+ *
+ * ROUND-120 (R120-CM — the mid-turn twin dedupe, §1 items 40/41): the
+ * persisted log grows WHILE the remote turn streams (the runtime appends
+ * tool.use rows at each call's completion and flushes message.assistant
+ * segments at each tool boundary), and every append publishes an event
+ * frame that triggers this rehydrate — so the fresh base's NEW rows are
+ * the persisted twins of the tail's streamed frames. The old head-only
+ * dedupe dropped just the FIRST tail item, and only while the base still
+ * ENDED with the opening user card: once the first tool.use landed, the
+ * rebase rendered the opener user card twice and every settled tool row +
+ * flushed assistant segment twice (base copy + live copy) — the phone's
+ * split-in-two, "text appearing in the wrong order" transcript. The dedupe
+ * is now MULTISET-KEYED over the fresh base's new rows: each persisted
+ * twin consumes exactly one content-matching live twin (the opener user
+ * card by content, a settled tool row by toolName + argsSummary — the same
+ * string the tool-call/tool-result frames carried, a flushed assistant
+ * segment by content), while still-RUNNING tools and still-STREAMING
+ * segments have no persisted twin and keep streaming. QUEUED rows pair
+ * with nothing (the R119-A law above owns their slot — the live q-row
+ * wins, the folded twin drops).
  */
+
+/** The content key a live tail row and its persisted twin share — null when
+ *  the row has no honest twin (a queued user row, a still-streaming tool
+ *  with no argsSummary, a thinking-only segment, every meta/approval/… row):
+ *  those always keep streaming. Pure. */
+function twinKeyOf(item: TranscriptItem): string | null {
+  switch (item.kind) {
+    case "user":
+      return !item.queued && item.content.trim() !== "" ? `u:${item.content}` : null;
+    case "assistant":
+      return item.content.trim() !== "" ? `a:${item.content}` : null;
+    case "tool":
+      return item.argsSummary !== "" ? `t:${item.toolName}:${item.argsSummary}` : null;
+    default:
+      return null;
+  }
+}
+
+/** Drop every live tail row whose persisted twin already landed in the fresh
+ *  base's NEW rows (multiset-keyed — each persisted row consumes at most one
+ *  live twin, so identical repeat segments stay honest). Pure. */
+function dedupeTailTwins(tail: TranscriptItem[], newBaseRows: TranscriptItem[]): TranscriptItem[] {
+  if (tail.length === 0 || newBaseRows.length === 0) return tail;
+  const available = new Map<string, number>();
+  for (const row of newBaseRows) {
+    const key = twinKeyOf(row);
+    if (key === null) continue;
+    available.set(key, (available.get(key) ?? 0) + 1);
+  }
+  if (available.size === 0) return tail;
+  return tail.filter((item) => {
+    const key = twinKeyOf(item);
+    if (key === null) return true;
+    const count = available.get(key) ?? 0;
+    if (count === 0) return true; // no persisted twin landed — keep streaming
+    available.set(key, count - 1);
+    return false; // the persisted twin owns the slot
+  });
+}
+
 export function rebaseRemoteTurn(
   turn: LiveTurn,
   baseItems: TranscriptItem[],
   baseCount: number,
 ): LiveTurn {
   const rawTail = turn.items.slice(baseCount);
-  // R114-d: turn.started's mirrored user card (the frame's own text, pushed
-  // so the bubble rendered BEFORE the persisted fold refetch) duplicates the
-  // message.user row the fresh base now carries — drop the LIVE one (the
-  // persisted card owns the slot; content-identical, key-stable). Anything
-  // else folds exactly as before.
-  let tail = rawTail;
-  if (rawTail.length > 0) {
-    const head = rawTail[0];
-    const last = baseItems.length > 0 ? baseItems[baseItems.length - 1] : undefined;
-    if (
-      head?.kind === "user" &&
-      head.key.startsWith("live-") &&
-      last?.kind === "user" &&
-      last.content === head.content
-    ) {
-      tail = rawTail.slice(1);
-    }
-  }
+  // R114-d + R120-CM: turn.started's mirrored user card (the frame's own
+  // text, pushed so the bubble rendered BEFORE the persisted fold refetch)
+  // duplicates the message.user row the fresh base now carries — the twin
+  // dedupe drops the LIVE one (the persisted card owns the slot;
+  // content-identical, key-stable), together with every other persisted
+  // twin that landed since the last rebase.
+  const tail = dedupeTailTwins(rawTail, baseItems.slice(baseCount));
   // R119-A — pull the STILL-QUEUED folded rows out of the fresh base and
   // re-append them AFTER the live tail. Delivered rows (the log flips
   // message.queued → message.user IN PLACE) ride their settled positions —
