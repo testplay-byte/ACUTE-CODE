@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-119 -->
+<!-- last-reviewed: 2026-09-23 round-120 -->
 
 # Patterns — Components
 
@@ -18,6 +18,15 @@ file pins the idioms round-115 established.
 | **Fitted label** (R119-P) | `ChromeButton labelFit` — `numberOfLines 1` + `adjustsFontSizeToFit`, `minimumFontScale 0.85`, horizontal padding xl→md while on | Two `flex:1` peers at 360dp where a 15px bold label line-breaks (the provider hero's "Test connection" — the owner's report). Opt-in: every other call site wraps as before |
 
 Labels: 1–3 words. No sentence buttons. No glow, no gradient washes, no Apple-y shine.
+
+**Round-120 amendment (R120-S) — the sheen is deleted everywhere:** the
+owner's report — a "glowing effect around the text" on the Add-a-Provider
+CTA, "ugly and bad" — killed the R117-g1 whisper-sheen for good:
+ChromeButton's `sheen` prop NO LONGER EXISTS (the quiet-solid fill —
+`accentDeep` fill + `accentText` label — is the whole button; tsc proves no
+caller passes sheen). `LinearGradient` survives ONLY inside ChromeEdge. Both
+the Add-a-Provider CTA and Create Provider inherit the flat family — the
+round-115 "no sheen" law is now enforced by deletion, not discipline.
 
 **Round-118 addition (R118-E) — the self-sized page CTA:** list/registry pages carry
 their "New X" as a CENTERED `ChromeButton` with `minWidth: PAGE_CTA_MIN_W (200)` —
@@ -56,6 +65,13 @@ not a CTA; the half-width idiom is retired.
   Never one undifferentiated card carrying identity + machine meta + two
   same-weight outlined rows. **R119-P:** the primary opts into `labelFit` so the
   pair's ~144dp share at 360dp never wraps the label (see §Buttons).
+  **R120-M amendment (round-120 §1 items 10-13):** the hero's ONE context line
+  under the name IS THE BASE URL itself (the "Chat Completion API" label is
+  dead — the owner: "replace with the **base URL directly**, no heading"; it
+  rides `TypeMono` `identityBaseUrl`), the on/off `ClaySwitch` sits in the
+  TITLE ROW's RIGHT (never beside the base URL), and "Rename" reads **"Edit"**
+  (the sheet it opens edits the name AND the base URL); the actions pair rides
+  the quiet-solid flat CTAs (labelFit on the primary).
 - **Model rows are NAME-only (R118-E):** the display name (or the cleaned name) +
   the facts line — the raw model id renders on DETAIL surfaces only (the actions
   sheet's mono block, the edit form's read-only field), never in the list row.
@@ -114,7 +130,9 @@ not a CTA; the half-width idiom is retired.
   styles — the Modal's new Android window can composite before Reanimated attaches,
   and an empty first animated style paints the panel open at rest ("opens, then
   replays"). See `motion.md` §2.
-- **Round-116 mechanics (amended R119-P):** the entrance rides the SHEET spring —
+- **Round-116 mechanics (amended R119-P — the timed legs, the content ride,
+  and the start-arm are SUPERSEDED by R120-S's final spelling below; the
+  spring, the clamp, the skirt, and the overscroll law stand):** the entrance rides the SHEET spring —
   **now the house disclosure settle `{180, 24}`** (R119-P supersedes the stiffer
   `{210, 30}` snap-cut; the owner's verdict on the Add-Provider sheet: "the
   animations were not that good") — one soft settle, never a jelly bounce; the
@@ -126,6 +144,54 @@ not a CTA; the half-width idiom is retired.
   below the header fades in **120ms starting 40ms after the panel begins to move**
   (reduced motion snaps it; the first-frame static pose applies — `motion.md` §1).
   The keyboard ride inherits the settle (mechanics untouched — R118-E's law).
+- **THE FINAL SHEET-MOTION SPELLING (R120-S — the round's sheet-motion
+  authority; every sheet inherits):** the owner's verdict — the sheets are
+  "stuttering, and they do not play in the proper time when needed" — was a
+  START RACE and a TRAVEL defect, not a spring defect. The diagnosis: the
+  entrance was armed in the same effect that mounts the Modal, so the spring
+  burned its fastest frames while Android was still creating the dialog window
+  (the sheet surfaced part-way up and finished its settle — "opens, then
+  replays"); and the travel was computed off maxHeightFraction (~0.78 × window
+  + 48 ≈ 670dp on a tall phone) instead of the panel's real height, so a
+  settle tuned for a 300–400dp disclosure ran at ~2× velocity. The final
+  spelling, all values frozen and pinned by `sheet-anatomy.test.ts`:
+  - **Driver:** Reanimated shared values on the UI thread throughout (no RN
+    Animated anywhere in the file — `useNativeDriver` is moot; translateY +
+    opacity are native worklet-driven).
+  - **Entrance:** armed from the Modal's own `onShow` (Android wires the
+    Dialog's OnShowListener — the window exists, so the first VISIBLE frame
+    is the first ANIMATED frame) with the `SHEET_SHOW_ARM_FALLBACK_MS` 150 JS
+    guard so a platform that never fires onShow can never leave the sheet
+    hanging below the fold; static poses before the arm (panel below fold at
+    its travel, scrim 0).
+  - **Panel leg:** `withSpring(1, SHEET_SPRING {180, 24})` — the house
+    disclosure settle (ζ ≈ 0.894, ~0.6s) — traveling its MEASURED height:
+    `sheetPanelTravelPx(measured, fallback)` = `measured > 0 ?
+    round(measured) : round(fallback)`, the fallback
+    `maxHeightFraction × window + 48` only for the pre-layout frames; the
+    measured height is accepted only at progress rest 0|1.
+  - **Scrim open:** `withTiming(1, 240ms, Easing.out(cubic))` — on the SAME
+    frame as the panel (never a separate pipeline), completing as the settle
+    lands (~300ms) so the dim and the rise read as one motion.
+  - **Close:** BOTH legs `withTiming(0, 220ms, Easing.out(cubic))`, departing
+    FRAME ONE (the R119 ease-in covered only 2.7% of the travel in two frames
+    — the sheet lingered visibly before leaving); the panel's exact callback
+    unmounts (runOnJS, reopen-race guarded — the Modal can never zombie past
+    its own exit eating taps); 220 < 240 pinned so closing never outlasts the
+    open's dim.
+  - **Content ride — RETIRED:** `SHEET_CONTENT_FADE_MS`/`DELAY_MS` are
+    DELETED from motion.ts (the absence is pinned); the R119 120ms/40ms fade
+    was a patch on the start race — with the panel rising its own measured
+    height the fold itself reveals the content top-first, and a late fade
+    read as a pop. The panel's opacity is 1 throughout.
+  - **Reduced motion:** the panel snaps (never travels), the scrim fade is
+    the only animated leg; close snaps the panel, the scrim fades 220ms,
+    unmount on its callback.
+  - **Keyboard ride:** the R118-E mechanics byte-untouched, same
+    `SHEET_SPRING`.
+  - **FROZEN:** `SHEET_HEADER_ROW` 48, `SHEET_CHROME` 64, `SKIRT_PX` 28,
+    the clamp + skirt + `overScrollMode="never"`, and the `maxHeightFraction`
+    default (0.78) — none of these may move without a superseding amendment.
 - Sheet contents = Archetype 3 forms: label + control stacks, `spacing.lg` (16)
   horizontal. **Fields are `ClayInput` (label above) with captions banned** — no
   description blocks, no explainer footnotes, nothing between or under fields
@@ -142,6 +208,17 @@ not a CTA; the half-width idiom is retired.
   clear of the keyboard. `KeyboardAvoidingView` stays banned (R115-K).
 - **A sheet asks ONE question.** "Which folder?" — not "name + folder + color".
   Derived data (project name from folder) is derived, never asked.
+- **The add-provider flow routes through the sheet (R120-S, items 6+7):** the
+  owner's rulings — the options "show at the bottom **without a dedicated
+  background**" and tapping a provider option "must **NOT navigate directly**
+  to the provider page." The options render INSIDE the Sheet's own clay panel
+  (the dedicated background — key-pool-row grammar with inset hairlines,
+  visually separated from the page; the old page-floating reveal wall is
+  deleted), and the five PRESETS take the same bottom-up path as custom
+  providers: pick in the sheet → the PresetConfig level (title = provider
+  name, base URL prefilled/editable, key required) → `presetAddPlan` (pure:
+  key check first, PATCH only on URL drift, cleared URL refused) → finish
+  (close + reload). No `router.push` from an add flow.
 - Sheet scroll area owns the full remaining height; content bottom padding ensures the
   page background is never visible through/below the panel.
 - **Action menus with ≤4 actions render as a GRID** (2×2), not a vertical stack —
@@ -286,13 +363,109 @@ not a CTA; the half-width idiom is retired.
   dividers between rows** (never after the last). ONE spelling everywhere: the
   dashboard's session wells and the projects screen's well are the same recipe.
 
+**Round-120 amendments (R120-P — the projects screen's sessions well, the
+owner's items 24-27, round-120 §1 G):**
+
+- **The identity chip:** every session row carries the `ClayIconChip` identity
+  glyph on the left (MessageSquare 17 — the round-117 tinted chip) — a session
+  row reads as a conversation, never a bare text line.
+- **The alternating subtle wash:** ODD rows carry the resting `subtle` wash
+  (4% ink — a step BELOW the `subtleHover` press tier, so pressing a tinted
+  row still reads) — consecutive sessions are distinguishable at a glance
+  (`index % 2 === 1`, the `folderBasename` inline precedent).
+- **The CTA tier break:** the New Session button owns its own tier — the
+  R118-B strong inset `Hairline` ABOVE it + the well-CTA margins (md over /
+  sm under) — visibly separated from the list it creates.
+- **"Type a path instead" is a real option row (item 24):** the sheet's
+  OPTION-ROW family — Keyboard 16 `accentDeep` + TypeBody label + the subtle
+  press fill + hairline border + `RADIUS_INPUT`, a real 46dp bordered target
+  ("Create a folder here"'s own grammar; the Keyboard glyph the connect
+  flow's manual pairing already owns) — never plain dead TypeMicro text.
+
 ## Banners, strips, empty states
 
 - Offline/probing = one quiet strip (dot + one line) at the content top — never a
   modal banner.
 - Empty state = centered icon + one-line title + one-line caption (Archetype-1 DNA).
 - Success/error feedback = the `NoteLine` idiom (one line + dot) or a haptic — toasts
-  only for cross-screen consequences.
+  only for cross-screen consequences. **(R120-M supersedes the toast clause — see
+  §Toast: the sheet-verdict case IS the toast's job now; the NoteLine still owns
+  persistent in-form verdicts.)**
+
+## Toast (R120-M — the transient verdict strip)
+
+The owner's ruling (round-120 §1 item 16): a failed model test and a
+Hide-model action "show their details at the bottom of the sheet — they must
+be a **toast that auto-dismisses in ~2s**." THE TOAST LAW
+(`mobile/src/components/toast.tsx`, every constant pinned):
+
+- **ONE transient verdict** — auto-dismisses in 2s (`TOAST_MS`); the newest
+  toast REPLACES the one before it (never a stack, never a queue — these are
+  one-line verdicts, not a log).
+- **Placement is TOP** (below the status-bar inset): the bottom band belongs
+  to the sheets these verdicts fire over and to the composer elsewhere — a
+  bottom toast would collide with exactly the surfaces that trigger it.
+- **Anatomy = the NoteLine grammar on a floating clay strip:** the semantic
+  `StatusDot` + ONE caption (2 lines max, 140-char clamp —
+  `TOAST_MAX_LINES`/`TOAST_TEXT_CAP`), card fill + `clayRim` hairline +
+  `clayShadow2`, radius 14 — no icon walls, no action buttons (a toast never
+  asks a question — sheets ask).
+- **Motion = the quick crossfade family:** 180ms ease-out fade + an 8dp settle
+  from above (`TOAST_ENTER_MS`); the exit a 120ms fade (`TOAST_EXIT_MS`);
+  reduced motion snaps.
+- **A Modal-hosted surface (a Sheet) renders its OWN `<ToastHost />` as the
+  first child of its content:** RN Modals are separate native windows, so a
+  toast fired while a sheet is open must render INSIDE the sheet's own tree to
+  be visible; both hosts read the SAME provider state, so one `show()` serves
+  whichever surface is showing.
+
+## The model CONFIGURE SCREEN (R120-M)
+
+The owner's items 15-22 (round-120 §1 F). "Edit Model" is a SCREEN
+(`app/settings/providers/[id]/model.tsx` — the settings stack's own route),
+never a sheet — the model editor's field count outgrew the sheet grammar
+(a sheet asks ONE question; this is a form):
+
+- **Save-before-add (item 22):** the model picker only ROUTES to the
+  configure screen; the screen's explicit **Save** is the SINGLE commit —
+  the list never grows before it (the owner: the "Add" button "commits the
+  model to the list before 'Save Configuration'"). Tapping an
+  add-custom-model SEARCH result opens the edit screen for that model too
+  (item 19 — never a dead tap).
+- **The smart fetch (item 20):** opening a model's configure page runs a
+  bounded provider call (the /models or /models/{id} surface per format)
+  that populates size / capabilities / context window / max output /
+  input/output/cache-read prices behind a small loading strip (the
+  smart-fetch strip — never a spinner); in **EDIT mode the apply is
+  ONLY-BLANK** — the owner's saved configuration outranks the catalog, a
+  blank field takes the provider's first served value, and a user typing
+  while the fetch lands is never clobbered (any edit flips the apply to
+  blank-only). A provider that serves nothing is a graceful no-op (a leg
+  that never ran renders NO line, never a guess).
+- **Numbers simplify on blur (item 17 — cosmetic only):** the
+  context-window / max-output fields show **1M / 26K on blur**
+  (`formatCompactCount`) and the full digits **on focus** — the draft keeps
+  the EXACT string; the blurred form is the at-a-glance read, never the
+  saved value.
+- **The capability pills are SVG glyphs, ONE line (item 18):** eight
+  hand-drawn 24×24 stroke glyphs (strokeWidth 1.8, round joins —
+  text/vision/audio/video/pdf/image/tools/reasoning, `CAPABILITY_KINDS`),
+  13px icon + 11px label per pill, the row NEVER wraps
+  (`flexWrap: "nowrap"` + overflow hidden); each capability's hue resolves
+  off the theme's OWN token hues (`capabilityHue` — no hardcoded colors,
+  donts #12).
+- **The reasoning ladder editor (item 21):** the levels ordered
+  lowest→highest with the **+ button on the RIGHT of the highest rung**
+  (add offers the shared vocabulary's remaining rungs through the
+  Add-a-level sheet; delete per rung). The write gate:
+  untouched-empty-unknown never written, touched-empty = an explicit
+  supported:false, the default effort survives only on a standing rung.
+- **The KeyActionsSheet menu grammar (item 14):** tapping an API-key row
+  opens the bottom-up menu — Test / Replace / Copy key id / Remove /
+  Add-key-here, all on existing routes — the inline right-side Test /
+  Replace options are DEAD (donts #54). The model-actions sheet rides the
+  same menu family + the toast law above (test failures and hide
+  confirmations are toasts, never sheet-bottom detail blocks).
 
 ## Chat components (summary — full spec in `chat.md`)
 

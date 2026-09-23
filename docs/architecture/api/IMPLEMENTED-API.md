@@ -2928,3 +2928,35 @@ keys); the route is deliberately NOT on the device-token blocklist
 `ghp_[A-Za-z0-9]{20,}` → `ghp_***` beside the existing `github_pat_…`
 rule — the updater now accepts (and persists) classic tokens, so its
 error lines must scrub both spellings (the R80 one-place lesson).
+
+## ROUND-120 additions, part 2 (R120-C-PC, 2026-09-23) — the live-turn truth surface
+
+The owner's items 37+38 (round-120 §1 I): "the frontend claims completion
+while the backend still works; the stop button disappears mid-processing; a
+refresh makes everything look finished until the next agent frame arrives."
+The working/stop state now derives from the BACKEND's shared turn registry,
+not from SSE frame arrival.
+
+### GET /api/v1/sessions/:id/live (NEW)
+
+A read-only view of the registry — the SAME map
+`registerTurn`/`unregisterTurn`/`abortTurn` maintain for the stop route and
+the queue route's `notifyTurn` — answering, for any session, whether a turn
+is registered RIGHT NOW:
+
+- `404 NOT_FOUND` — unknown session id;
+- `200 {live: boolean}` — `true` when `getTurnController(id)` resolves
+  (a live parent turn OR a registered sub-agent child; both stop routes and
+  the queue route share the registry).
+
+One boolean, no session mutation, no event writes — additive to the route
+set. The PC panel polls it on mount + every 5 s
+(`SESSION_LIVE_POLL_MS`), skipping the poll while its own SSE reader holds
+the session (the reader is the freshest truth), and feeds the store's
+`rehydrateLiveTurn` reconciler — live:true with no local liveTurn
+REHYDRATES the remote mirror (a refresh mid-turn reopens the working state
++ the stop button); a non-deliberate own-stream death with the turn alive
+DETACHES the frozen failure onto the mirror path; live:false with an open
+mirror and no pending retire RETIRES it (the missed terminal frame). The
+agent-core pin: `tests/r120-live-turn.test.ts` (6); the store pin:
+`src/lib/stream-rehydrate.test.ts` (7).

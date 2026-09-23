@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-23 round-120 -->
 # Components — the primitive catalog and composition rules
 
 Serves DESIGN-SYSTEM §5 (anatomy inventory). The inventory there names the
@@ -174,6 +174,72 @@ compressed-vs-full directive):
   12px radius, icon + label) with the hover on the CSS-var leg
   (`hover:border-accent` + `hover:bg-accent-soft`) — real buttons, click
   fills the composer.
+
+### ROUND-120 (R120-C-PC) — the center redo amendments
+
+The owner's items 34-39 (round-120 §1 I — "the center-section redo is now
+the round's core"). Each supersedes the named clause; the rest of §7
+stands:
+
+- **The timeline is a MINIMAP (item 34 — supersedes the R101-D dot
+  rail/spine, RETIRED):** a slim vertical bar strip docked at the
+  transcript viewport's left edge (`MessageTimeline.tsx`) — it does NOT
+  scroll with the content (a navigational minimap: every exchange stays
+  reachable while reading deep history). ONE bar per USER exchange (folded
+  user rows + the live turn's opener — the optimistic echo, the remote
+  mirror's bubble, or a delivered queued message still live-rendering),
+  each an honest `<button>`. Hover-proximity scaling: the bar nearest the
+  pointer grows to 28px (`MAX_HEIGHT`) with a LINEAR falloff to its 8px
+  resting height (`REST_HEIGHT`) over a 56px radius (`FALLOFF_PX` — the
+  dock-magnification grammar; a 200ms CSS height transition on the shared
+  ease, MOTION.md's quick tier; 0s jump under reduced motion). The CURRENT
+  exchange's bar is accent-filled (`bg-accent`) and rests taller (12px,
+  `CURRENT_REST_HEIGHT`; ink while previewed, muted otherwise). Hover or
+  keyboard-focus shows the preview popover: the first 2 lines of the user's
+  message + 2 lines of the agent's response, plain text, `line-clamp-2`
+  owning the "2 lines" law so long single lines wrap honestly. Click
+  scrolls the transcript to that exchange (`scrollIntoView` on the
+  `chat-item-*` anchors the panel stamps on every transcript row).
+- **ONE clock + the consolidated footer (item 36 — supersedes the turn
+  footer's stats-line CONTENT; the one-line mono `tabular-nums` grammar
+  stands):** a turn answers "how long did this run" exactly ONCE — the
+  footer's **"Ran 4m 12s · 23 actions · 18.2k tokens"** block
+  (`ReplyStats`, middle-dot separated, mono tabular-nums, tertiary; the
+  full ↑in/↓out/tok-s breakdown rides the `title` so no data is lost to the
+  consolidation). The work-section headers carry NO duration at all, and a
+  LIVE turn renders ONE clock — the panel gates it with `clockVisible` on
+  the turn's FIRST live work section, so one turn paints one clock, never
+  the owner's "8-9 separate right-side blocks."
+- **The fold's FILE-MUTATION rows (item 35):** the write/edit/create/delete
+  rows (`FILE_MUTATION_TOOLS`) render OUTSIDE the collapse — the mutations
+  the agent made to the project are NEVER hidden behind the expand (the
+  owner: "file edits, created files… are not shown — the center never
+  renders them"). Path + verdict + the streamed diff summary, the same
+  tool-row vocabulary the live section always used — the fold's tool rows
+  and the live section's are one spelling.
+- **The heading ladder never dips under the body (item 39):** the R117-f
+  0.9em spelling rendered a `####` heading SMALLER than its own body text
+  (the root cause of "no proper headings"). The tiers now step down
+  unmistakably — h1 ~1.5em/700, h2 ~1.3em/650, h3 ~1.15em/600, h4–h6 at
+  the **1em body floor**/600 — a heading is always at least as large as
+  its own body, still unmistakably a heading. Code blocks keep the language
+  label + Prism highlight colors + background.
+- **The sync/state law (items 37+38):** the working/stop state derives from
+  the BACKEND's turn registry, never from SSE frame arrival ("no frames
+  lately" → looks done; a refresh mid-turn rendered a finished transcript
+  while the backend kept working). The panel polls **GET
+  /sessions/:id/live** on mount + every 5s (`SESSION_LIVE_POLL_MS`) —
+  skipped while the panel's own SSE reader holds the session (it is the
+  freshest truth) — and the store's `rehydrateLiveTurn` makes the three
+  honest moves: **live:true + no liveTurn** → REHYDRATE the remote mirror
+  from the folded trailing turn (the `startedBySeq` anchor — a refresh
+  mid-turn reopens the working state + the stop button); **a non-deliberate
+  own stream death with the turn alive** → DETACH onto the mirror path (the
+  events bus keeps rendering every frame — never a false "Generation
+  finished" while the backend works); **live:false + an open mirror with no
+  pending retire** → RETIRE it now and let the folded log take over (the
+  missed terminal frame). The refresh-split-in-two (the folded/live seam)
+  is dead by construction.
 
 ## 8. The clay/chrome surface patterns — ROUND-107 (R107-g), reworked ROUND-108 (R108-e)
 

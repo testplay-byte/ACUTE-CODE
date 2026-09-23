@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-119 -->
+<!-- last-reviewed: 2026-09-23 round-120 -->
 
 # Patterns — Chat (the WhatsApp-inspired conversation)
 
@@ -61,6 +61,28 @@ grammar: **an identity header, a clean transcript, and a minimal dock.**
   empty branch means the Mode/Model/Thinking/Context rows can never trail beneath
   the provider list (the owner's exact defect report: they rendered at the BOTTOM
   of the model list).
+- **The avatar's live edge (R120-CM):** while a turn runs, the header avatar
+  wears a 2dp accent ring breathing on the DELIVERY-EDGE rhythm —
+  `mixHex(surfaceHeader, accent, 0.34↔0.62)` on the house 550ms legs
+  (`LIVE_LINE_LEG_MS` + the transcript's exported `DELIVERY_EDGE_*` constants —
+  the delivery-edge rhythm by construction), the static 0.55 mix under reduced
+  motion, drawn OUTSIDE the avatar's own 36px box (inset −3) so the header
+  layout never shifts; **NOTHING at rest** (`motion.md` §5). It is chrome, not a
+  control — `pointerEvents` none + a11y-hidden. No glow, no spinner (donts
+  #11/#14): the breathing ring is the sanctioned alive-but-calm idiom.
+- **The Task list level (R120-P, item 33):** the owner's ask — "The kebab menu
+  gains a **separator + 'Task list' option at the bottom**." The root level
+  carries the strong-rule SEPARATOR row (HeaderDropdown's optional `separator`
+  flag — the R118-B strong inset `Hairline`, 1dp `borderStrong` inset by the
+  gutter) over the live-valued "Task list — {done}/{total}" row; the tasks level
+  is the anchored panel's own level grammar (back-chevron + title row, scroll
+  cap 320) with **CHECKABLE rows** — 15dp square r4 checkbox (success fill +
+  white Check when done, the accent dot while the agent works it, line-through
+  on done), the done/total-or-error footer line, a11y role checkbox,
+  busy-disabled guard — through `POST /sessions/:id/todo` (optimistic flip,
+  rehydrate catch-up, honest failure revert). The rows are CHECKABLE, not
+  read-only, because the R88 owner-write route exists (max 30 items /
+  200-char content / status enum validated server-side).
 
 ## Composer — the minimal dock
 
@@ -69,14 +91,15 @@ grammar: **an identity header, a clean transcript, and a minimal dock.**
 ```
 
 (R119-B: the input sits LEFT of the attach circle in every state — the diagram's
-order is the law.)
+order is the law. R120-P supersedes the geometry: the attach control now DOCKS
+INSIDE the input's own surface — see the docked-control law below.)
 
 - **Exactly three controls.** The control pill row is deleted; the mode/model/
   thinking/context picks live in the kebab's in-place sub-levels (R118-D).
 - Attach opens the existing "Add context" sheet (Attach a file / Choose from project) —
   unchanged behavior, polished rows. The control itself is the **attach circle**
-  (R119-B — see the single-tier law below): the paperclip's own 40dp quiet circle
-  BESIDE the input.
+  (R119-B — see the single-tier law below; R120-P supersedes the BESIDE clause:
+  the paperclip's 40dp quiet circle DOCKS INSIDE the input's surface now).
 - Send: circular accent button. While a turn is live: an **icon-only stop** (R118-D)
   — a 50px circle with a 1dp danger border and the Square glyph, no text label —
   which opens the **centered confirm dialog** before stopping (`components.md`
@@ -88,7 +111,9 @@ order is the law.)
   the last 40 being the band the single-tier law deleted), no controlled height, no
   `flex:1` desync — the field scrolls past the cap. The focus ring is **1.5dp** (a
   hairline whisper is not a ring).
-- **The single-tier law (R119-B — SUPERSEDES the two-tier attach geometry):** the
+- **The single-tier law (R119-B — SUPERSEDES the two-tier attach geometry; its
+  ROW grammar stands, its BESIDE clause superseded by R120-P's docked-control
+  law below):** the
   owner's verdict — "the text would be typed on the left side of the add file
   option, but apparently it was being typed above it," and the dock was "way too
   much taller in its height" at rest. ONE row in EVERY state:
@@ -99,6 +124,47 @@ order is the law.)
   never a reserved band under tall text. The input's padding is CONSTANT (16
   horizontal / 10 vertical) — nothing reserves room. The dock's resting frame
   tightened 8/4 → 4/2. The pill→bar radius swap on tall stays.
+- **The docked-control law (R120-P — SUPERSEDES the single-tier law's BESIDE
+  clause; the owner's items 29+30, round-120 §1 H):** "The Add Context control
+  sits OUTSIDE the 'Message the Agent' area — move it **inside, at the far
+  right** of the input row," and "the text will **never overlap** with the 'Add
+  Context' button." ONE row still — `[inputWrap (flex:1)][send|queue|stop 50]`,
+  `alignItems flex-end` — but the 40dp paperclip control is ABSOLUTELY DOCKED
+  inside the inputWrap at the input's BOTTOM-RIGHT corner: right inset
+  `ATTACH_DOCK_INSET` 4, bottom inset `ATTACH_DOCK_BOTTOM_INSET` 2 (40 + 2×2 =
+  44 centers it in the resting pill; it rides the input's last line when the
+  input grows). **THE WRAP LAW:** the input's `paddingRight` =
+  `ATTACH_DOCK_PADDING_RIGHT` = 4 + 40 + 8 (`ATTACH_DOCK_TEXT_GAP` =
+  `spacing.sm`) = **52**, reserved on EVERY line — RN has no per-line float, so
+  the owner's permissive "text CAN show above it" collapses to the reservation
+  on all lines; the NEVER-OVERLAP guarantee is the hard law and holds by
+  construction. `paddingLeft` stays 16, vertical padding stays 10/10, the cap
+  stays 146, the pill→bar radius swap stays, the dock frame stays 4/2. The
+  control: `RADIUS_ROUND`, Paperclip 19 / strokeWidth 2.2, tertiary→accent on
+  press, `hitSlop` 4, testID `composer-attach`.
+- **The @-mention menu ABOVE the input (R120-P, item 31):** the owner's ask —
+  "Typing **@** opens a results menu ABOVE the input, filtering as the query
+  continues." A plain sibling INSIDE the dock's column, rendered ABOVE the
+  input row (lifted with the dock when the keys rise); it opens the moment an @
+  token is ACTIVE and never vanishes on a bare "@": the busy row while the tree
+  loads ("loading the project tree…" / "the host is offline" / "this session has
+  no project"), "no files match" when empty, ≤8 live-filtered matches
+  (`filterProjectFiles` — substring, case-insensitive) at maxHeight 176,
+  `keyboardShouldPersistTaps` handled. Detection rides BOTH legs: `onChangeText`
+  through `advancedCaret` (Android fires change BEFORE selection — a fresh "@"
+  in an empty field read caret 0 and the menu never opened, the exact bug) and
+  `onSelectionChange`'s authoritative re-detect. A pick strips the token, stages
+  the chip (source "at"), fires `selectionHaptic`.
+- **Attachment chips + the viewer pop-up (R120-P, item 32):** picked images
+  carry `localUri` → a 28dp `RADIUS_PILL` thumbnail chip (project-read files
+  keep the glyph — their bytes live on the host and never crossed to the
+  phone); tapping ANY chip opens the **AttachmentViewer**: image → the
+  transcript's full-screen ImageViewer, text → the centered clay card
+  `min(520, w−40)` with the 60%-height scrollable selectable mono body + the
+  honest "first 128 KB" caption, info → name + size + kind. Frozen motion:
+  160ms scrim / 120ms exit / 0.96 entrance (scale→1, origin center — the
+  centered-dialog grammar, `motion.md` §4.13). The chip's X keeps its own
+  nested Pressable so a remove never opens the viewer.
 - **The two-tier attach geometry (R118-D — RETIRED, deleted from the code by
   R119-B):** resting, the paperclip sat beside the line (paddingRight 52, pinned
   bottom-right); once tall, text took the full width above a reserved **40px attach
@@ -107,7 +173,13 @@ order is the law.)
   it.
 - The dock owns the keyboard (see `session-screen.md` architecture in the wave spec:
   ADJUST_NOTHING + single animated paddingBottom expression; `keyboardDidHide`
-  blurs the input so handles and selection clear — R118-D).
+  blurs the input so handles and selection clear — R118-D). **The bottom inset
+  (R120-P, item 28):** the session screen's dock expression is
+  `paddingBottom = max(insetsBottom, kbHeight) + COMPOSER_EDGE_BEAT` — the
+  beat is `spacing.sm` 8: flat devices get the beat alone, home-indicator
+  devices inset + beat, open keys keep the beat OVER the IME; the composer
+  itself never pads its own bottom (R115-K's one-expression law). The dock
+  never rides the device edge bare.
 
 ## Transcript — the message grammar
 
@@ -160,6 +232,15 @@ assistant/thinking/tool item of one turn renders as ONE clay container (the
   (ChevronDown/Up); breathing 0.85↔1 at 600ms legs only while the turn WORKS —
   once text streams, the shared LiveCaret owns the motion, never two breathing
   things for one state.
+- **The rail's tool hints (R120-CM, item 40):** the settled rail can carry the
+  HINTS tail — `Thought for 8s · 3 actions · src/a.ts, npm test`: the write
+  family's file path, the terminal family's command, the read family's target,
+  one hint per call (`toolHint`), ORDER-PRESERVING deduped (two edits of one
+  file hint once, `toolHintList`), capped at `TOOL_HINT_MAX` 3 with the honest
+  "+N more" tail — everything else answers null (a generic verb adds no
+  information the "N actions" count doesn't already carry). The hints ride BOTH
+  the visible summary and the a11y label, pref-applied with the rest (hidden =
+  no tool content, so no hints either).
 - **The well** is the recessed container the rail expands — `surfaceWell` +
   hairline rim + `RADIUS_INPUT`: the thinking text in the retired ThinkingBlock's
   mono-dim voice (20-line settled cap + "Show all"; live thinking never clamps)
@@ -173,6 +254,18 @@ assistant/thinking/tool item of one turn renders as ONE clay container (the
   family's streaming tail + "Wrote {file}" + `+A/−B` diff chips (the minus is the
   server's U+2212), the terminal family's output tail + exit summary, the read
   family's quiet one-liner, the generic fallback's humanized verb + target.
+- **The association is CONTENT-KEYED (R120-CM — the reorder fix):** the owner's
+  report — text "appearing in the wrong order" — had two roots in the live
+  reducer: parallel same-name tool calls cross-wired (swapped paths/verdicts)
+  and the mid-turn rehydrate double-rendered the split-in-two transcript.
+  tool-call/tool-result now match the running card by the frame's OWN
+  `argsSummary` (the content-first association ladder, oldest-open-card
+  fallback; tool-output matches the raw `command:` segment), and the fold's
+  trailing twin is deduped at the rebase seam (`dedupeTailTwins` — each
+  persisted twin consumes exactly one content-matching live copy while
+  still-running tools/segments keep streaming). The fold keeps every tool.use
+  row with name + path + verdict + output — the settled well IS the live well's
+  content, exactly.
 - **The reply** is the block's body below the rail — the retired AssistantBlock's
   grammar: the meta line above the first content chunk, the MarkdownText, the
   shared LiveCaret while streaming.
@@ -269,6 +362,15 @@ spinner while uploading (no more silent full-block spinner).
   generic machine message demotes to the dim secondary line; blank/whitespace reads
   as absent; the 3-line clamp + expand ride the primary; "Copy details" carries
   both. The error card stays compact — the honesty is in the lines, not the size.
+- **The markdown ladder is a pinned table (R120-CM, item 41):** `headingTier` in
+  `features/markdown.ts` maps H1→Title **20/700**, H2→Heading **16/700**, H3→
+  **16/600**, H4→BodyStrong **15/600** — importing the ladder constants
+  (`TYPE_TITLE` / `TYPE_HEADING` / `TYPE_BODY`) so drift is a COMPILE error,
+  with `accessibilityRole="header"` on every heading Text. A heading never
+  renders smaller than its own body (the old flat 21/18/16/15 inline sizes
+  with L4 at plain-body weight are dead); the strict step-down law is pinned.
+  Code blocks carry the LANGUAGE label (the wire's own spelling, mono-micro
+  tertiary) + the a11y "code block, {lang}" name.
 
 ## Model sheet (grouped)
 

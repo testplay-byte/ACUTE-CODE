@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-23 round-120 -->
 # Motion — the animation grammar
 
 Serves DESIGN-SYSTEM §4 (motion). Owner direction (round-98): "animations
@@ -68,6 +68,7 @@ animations documented for everything."
 | Composer focus (R105-B) | the whole-section highlight is pure CSS: `:focus-within` on the shell swaps the border to accent@50% + a 3px accent-soft halo, fading via the shell's 200ms transition. (R107-g briefly added a chrome glint hairline on top; R108-e removed it — the accent edge + halo is the complete, owner-directed focus story.) |
 | Toast enter/exit | y-slide 200ms, exit fade |
 | Jump-to-latest pill | frosted pill, opacity 150ms on scroll-need |
+| Message-timeline bar growth (R120-C-PC) | the transcript minimap's hover-proximity scaling: CSS height transition, 200ms quick tier on the shared `ease`, linear falloff (28px peak / 8px rest / 56px radius, the dock-magnification grammar); collapsed to a 0s jump under reduced motion — the grown end-state is always visible, never layout-dependent on the tween |
 
 ## 5. When NOT to animate
 

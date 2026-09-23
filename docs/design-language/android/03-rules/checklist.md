@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-119 -->
+<!-- last-reviewed: 2026-09-23 round-120 -->
 
 # Rules — The Pre-Merge Checklist
 
@@ -98,3 +98,32 @@ Run against every mobile diff before review. A "no" to any question = rework.
 - [ ] The model test probes TOOLS — the verdict line reports the tools leg honestly
       ("tools ✓ (called echo)" / accepted-but-text / rejected + the raw reason); a
       hard tools-rejection fails the test (`components.md` §Sheets).
+
+## Round-120 additions
+
+- [ ] ONE consolidated turn footer — "Ran {duration} · {n} actions · {tokens}
+      tokens" (mono tabular-nums, the full breakdown on the title); no
+      per-section duration blocks, ONE live clock per turn (donts #56; PC
+      `COMPONENTS.md` §7 — the mobile twin is the TurnBlock rail).
+- [ ] The fold renders file mutations — write/edit/create rows with path +
+      verdict + diff summary, never hidden behind the collapse (PC
+      `COMPONENTS.md` §7; mobile `chat.md` §Transcript — the settled well
+      keeps every tool.use row).
+- [ ] The composer dock law — the Add Context control DOCKED inside the
+      inputWrap at the input's bottom-right (4/2), paddingRight 52 reserving
+      its column on every line, never an overlap; the @-menu renders ABOVE
+      the input (`chat.md` §Composer; donts #57).
+- [ ] The toast law — one transient verdict, 2s auto-dismiss, newest
+      replaces, TOP placement, the sheet's own ToastHost (`components.md`
+      §Toast; donts #58).
+- [ ] The live-turn truth law — the working/stop state derives from the
+      BACKEND's turn registry (GET /sessions/:id/live, the 5s truth poll +
+      rehydrateLiveTurn's mirror/detach/retire), never from "no frames
+      lately" (PC `COMPONENTS.md` §7).
+- [ ] The timeline minimap grammar (PC — mobile N/A): one bar per user
+      exchange, hover-proximity scaling (28px peak / 8px rest / 56px
+      falloff), current-exchange accent, the 2+2-line popover, click-to-
+      scroll (`COMPONENTS.md` §7).
+- [ ] Buttons carry no sheen/glow anywhere — the quiet-solid family, `sheen`
+      deleted (donts #53); no inline key-row actions (donts #54); the model
+      list grows only on Save (donts #55).

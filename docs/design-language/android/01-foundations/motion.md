@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-119 -->
+<!-- last-reviewed: 2026-09-23 round-120 -->
 
 # Foundations — Motion
 
@@ -37,6 +37,27 @@ over-damped configs; a bounce that reveals the page background is a defect, not
 personality. If it doesn't feel right at these numbers, the design is wrong, not the
 spring.
 
+**Round-120 amendment (R120-S — SUPERSEDES the R119-P timed legs and the
+start-arm; the spring pair stands):** the owner's verdict — "stuttering, and
+they do not play in the proper time when needed" — was a START RACE and a
+TRAVEL defect: the entrance was armed in the same effect that mounts the
+Modal (the spring burned its fastest frames while Android created the dialog
+window — "opens, then replays"), and the travel was computed off
+maxHeightFraction (~0.78 × window + 48 ≈ 670dp on a tall phone) instead of
+the panel's real height (~2× velocity for a settle tuned on 300–400dp). The
+final spelling (the round's sheet-motion authority — the FULL law in
+`components.md` §Sheets): entrance armed from the Modal's own `onShow` +
+the `SHEET_SHOW_ARM_FALLBACK_MS` 150 JS guard, static poses before the arm;
+the panel rides `withSpring(1, SHEET_SPRING {180, 24})` traveling its
+MEASURED height (`sheetPanelTravelPx`); the scrim opens `withTiming` 240ms
+ease-out cubic on the same frame; the CLOSE departs frame one — both legs
+`withTiming` 220ms ease-out cubic — with the panel's exact callback owning
+the unmount (220 < 240 pinned). The R119 content ride (120ms/40ms) is
+RETIRED — `SHEET_CONTENT_FADE_MS`/`DELAY_MS` are DELETED (the absence is
+pinned); the panel's opacity is 1 throughout. Reduced motion: the panel
+snaps, the scrim fade is the only animated leg. The R118-E keyboard ride is
+untouched (same `SHEET_SPRING`).
+
 ## 2. Entrance grammar
 
 - **Fade-in-up**: opacity 0→1, translateY `ENTRANCE_DELTA` (8px)→0,
@@ -62,6 +83,7 @@ spring.
 | Success (granted, linked, created) | icon tile bg springs to `success`, icon crossfades to the check, a single `successHaptic` |
 | Waiting (thinking) | the TurnBlock rail's three dots, 1.2s opacity pulse (600ms legs, 0.85↔1) with a 180ms stagger — calm, never a spinner (R119-A: the dots moved from the retired placeholder card into the rail's live state; the rail breathes only while the turn WORKS — once text streams, the LiveCaret owns the motion) |
 | Live caret | 8×15 accent bar, 0.25↔1 opacity, 550ms each way — the house live rhythm; R118-D: the processing bubble's accent edge breathes 0.34↔0.62 on the same 550ms legs (the delivery-edge rhythm; static 0.55 mix under reduced motion) |
+| Live edge (avatar) (R120-CM) | while a turn runs, the session header's avatar wears a 2dp accent ring breathing the delivery-edge rhythm — `mixHex(surfaceHeader, accent, 0.34↔0.62)` on the same 550ms legs (`LIVE_LINE_LEG_MS` + the exported `DELIVERY_EDGE_*` constants), static 0.55 under reduced motion, drawn outside the avatar's 36px box (inset −3, layout never shifts); NOTHING at rest |
 | Countdown pressure | the "Valid for Ns" chip tints warning under 30s, springs gently each tick — no seizure flashing |
 
 ## 4. The animated moments (round-115 mandates)
@@ -119,6 +141,15 @@ spring.
     reduced motion = the plain 120ms fade. The panel's own entrance (spring
     0.96→1) + exit fade are untouched and frozen: `PANEL_WIDTH 220`,
     `ENTRANCE_SCALE 0.96`, `EXIT_FADE_MS 120`.
+13. **The attachment viewer (round-120, R120-P):** the composer's pop-up viewer
+    for staged attachments — the centered clay card springs in at **0.96→1**
+    (`VIEWER_ENTRANCE_SCALE`, origin center — the centered-dialog grammar)
+    over the **160ms scrim** (`VIEWER_SCRIM_MS`); the exit is a **120ms fade**
+    (`VIEWER_EXIT_FADE_MS`). The card is `min(520, windowWidth − 40)` wide
+    (`viewerCardWidth`) with the 60%-height scrollable body
+    (`VIEWER_BODY_HEIGHT_RATIO`); the text arm carries the honest "first 128
+    KB" caption. Carries the static initial pose (§2) — it is a Modal-hosted
+    surface. All constants frozen + pinned by `attachment-viewer.test.ts`.
 
 ## 5. What never animates
 
@@ -126,8 +157,9 @@ spring.
 - The matte top edge (it's a material, not a light).
 - Sheet chrome (header row) — the panel slides, its contents don't double-slide.
   (R118-A: the grip is deleted — see `round-117-elevation.md` §2.2's supersession.
-  R119-P's ONE sanctioned exception: the content row's 120ms/40ms fade-in under the
-  moving panel — a fade, never a second slide.)
+  R119-P's ONE sanctioned exception — the content row's 120ms/40ms fade-in under
+  the moving panel — is RETIRED by R120-S: the content ride is deleted; the fold
+  itself reveals the content top-first, and the panel's opacity is 1 throughout.)
 - Anything while `prefers-reduced-motion`/accessibility "remove animations" is on:
   entrance/stagger/idle animations drop; state changes snap.
 
@@ -139,6 +171,7 @@ moment — never per frame.
 
 ## 7. Durations (when `withTiming` is unavoidable)
 
-instant 120ms (scrim pre-fade) · quick 180ms (crossfade) · sheet legs **200ms** (scrim
-open ease-out / close ease-in — R119-P) · base 300ms (terminal moments) · deliberate
+instant 120ms (scrim pre-fade) · quick 180ms (crossfade) · sheet legs — scrim open
+**240ms ease-out cubic** / close **220ms ease-out cubic** both legs (R120-S —
+supersedes the R119-P 200/200 pair) · base 300ms (terminal moments) · deliberate
 500ms (donut sweep). Everything else is the spring.

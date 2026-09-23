@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-22 round-119 -->
+<!-- last-reviewed: 2026-09-23 round-120 -->
 
 # Rules — The Don'ts (the slop signature)
 
@@ -125,3 +125,30 @@ called out across three rounds of feedback.
     (full-width text over a reserved band) is deleted; the input sits LEFT of the
     add-file circle in EVERY state, tall included (R119-B — the owner's exact
     words: "the text would be typed on the left side of the add file option").
+    (R120-P supersedes the LEFT-OF spelling — the control DOCKS INSIDE the input's
+    surface now; see chat.md §Composer's docked-control law. The LAW both
+    spellings serve — text never overlaps the control — stands.)
+
+## Round-120 additions (the owner's v0.114.0 walkthrough)
+
+53. **A glow/sheen on a primary CTA** — the R117-g1 whisper-sheen read as a
+    "glowing effect around the text" ("ugly and bad"); the `sheen` prop is
+    deleted outright — the quiet-solid fill is the whole button, and tsc
+    enforces it (R120-S).
+54. **Inline per-row action buttons where a bottom-sheet menu exists** —
+    tapping an API-key row opens the Test / Replace / Copy key id / Remove
+    menu; the inline right-side options are dead (R120-M).
+55. **A model committed to the list before Save** — the picker routes, the
+    configure screen's explicit save is the single commit; the list never
+    grows on "Add" (R120-M — the owner: the model "must only appear after
+    an explicit save").
+56. **A separate duration block per work section** — one turn answers "how
+    long did this run" ONCE: the footer's consolidated "Ran 4m 12s · 23
+    actions · 18.2k tokens" line + ONE live clock (R120-C-PC; the mobile
+    twin is the TurnBlock rail's own one-line summary).
+57. **Text overlapping the docked composer control** — the input's
+    paddingRight (52) reserves the Add Context control's column on EVERY
+    line; overlap is a geometry defect, not a polish item (R120-P).
+58. **A sheet-verdict detail block at the bottom of a sheet** — test failures
+    and hide confirmations are TOASTS (2s auto-dismiss, newest replaces);
+    the sheet body never grows a verdict essay (R120-M).
