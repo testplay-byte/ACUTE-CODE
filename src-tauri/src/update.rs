@@ -216,7 +216,10 @@ pub async fn run_update_installer(
         );
     }
     if (is_appimage || is_linux_deb) && !cfg!(target_os = "linux") {
-        return Err("the Linux update (.AppImage / .deb) only installs on Linux — use the Releases page".to_string());
+        return Err(
+            "the Linux update (.AppImage / .deb) only installs on Linux — use the Releases page"
+                .to_string(),
+        );
     }
 
     let meta = std::fs::metadata(parsed)
@@ -467,7 +470,10 @@ mod appimage {
             .parent()
             .ok_or_else(|| "the AppImage has no parent directory".to_string())?
             .to_path_buf();
-        let staged = dir.join(format!(".ACUTE-CODE-update-{}.AppImage", std::process::id()));
+        let staged = dir.join(format!(
+            ".ACUTE-CODE-update-{}.AppImage",
+            std::process::id()
+        ));
 
         // 1+2. STAGE: copy beside the target (proves writability), size-check
         // the copy, chmod 0755, fsync — all BEFORE anything is killed.
@@ -613,7 +619,10 @@ mod deb {
         //    on — its exit code IS dpkg's (exec replaces the shell), and a
         //    cancelled polkit prompt surfaces as a non-zero exit exactly
         //    like a failed dpkg.
-        let script = format!("exec pkexec dpkg -i {}", sh_single_quoted(&downloaded.to_string_lossy()));
+        let script = format!(
+            "exec pkexec dpkg -i {}",
+            sh_single_quoted(&downloaded.to_string_lossy())
+        );
         let mut child = Command::new("sh")
             .arg("-c")
             .arg(&script)
@@ -637,8 +646,8 @@ mod deb {
         let watcher_app = app.clone();
         let watcher_exe = exe.clone();
         std::thread::spawn(move || {
-            let deadline = std::time::Instant::now()
-                + std::time::Duration::from_secs(DPKG_WAIT_BUDGET_SECS);
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_secs(DPKG_WAIT_BUDGET_SECS);
             let status = loop {
                 match child.try_wait() {
                     Ok(Some(status)) => break Some(status),
@@ -653,13 +662,18 @@ mod deb {
             };
             match status {
                 Some(status) if status.success() => {
-                    crate::sidecar::log_line("update: dpkg -i succeeded — relaunching the new version");
+                    crate::sidecar::log_line(
+                        "update: dpkg -i succeeded — relaunching the new version",
+                    );
                     let _ = watcher_app.emit("update-installed", ());
                     // The relaunch: the exe at its (now updated) path,
                     // detached, null stdio — the shell outlives this exit.
                     let relaunch = Command::new("sh")
                         .arg("-c")
-                        .arg(format!("exec {}", sh_single_quoted(&watcher_exe.to_string_lossy())))
+                        .arg(format!(
+                            "exec {}",
+                            sh_single_quoted(&watcher_exe.to_string_lossy())
+                        ))
                         .stdin(Stdio::null())
                         .stdout(Stdio::null())
                         .stderr(Stdio::null())
@@ -898,6 +912,15 @@ pub(crate) mod overlay {
     // SAFETY: see the struct comment — exclusive single-owner discipline.
     unsafe impl Send for SendHandle {}
 
+    /// Unwrap the handle INSIDE the watcher thread. A FUNCTION CALL argument
+    /// is a whole-value use of `process`, so the closure's capture analysis
+    /// captures the SendHandle itself — pattern destructuring
+    /// (`let SendHandle(h) = process`) is a field-path move under Rust 2021's
+    /// disjoint captures and would capture the raw pointer directly.
+    fn into_handle(SendHandle(handle): SendHandle) -> windows_sys::Win32::Foundation::HANDLE {
+        handle
+    }
+
     /// The installer argument string for the overlay leg: NSIS's `/S`
     /// (silent) with NO `/R` — the relaunch is OURS here (the watcher
     /// relaunches the new exe the moment the install finishes), not the
@@ -953,7 +976,9 @@ pub(crate) mod overlay {
                 return Ok(false);
             }
         }
-        crate::sidecar::log_line("update: the overlay self-rename landed — the install path is free");
+        crate::sidecar::log_line(
+            "update: the overlay self-rename landed — the install path is free",
+        );
 
         // 2. LAUNCH the installer with an OWNED handle. CreateProcessW's
         //    command line must be MUTABLE UTF-16 (the documented contract)
@@ -1017,13 +1042,15 @@ pub(crate) mod overlay {
         let watcher_exe = exe.clone();
         let process = SendHandle(proc_info.hProcess);
         std::thread::spawn(move || {
-            // R123 (the disjoint-capture lesson): destructure the wrapper INSIDE
-            // the closure so the closure captures `process` — the Send newtype —
-            // as a WHOLE. Rust 2021's disjoint field captures would otherwise
-            // capture the raw-pointer FIELD directly and lose the Send impl.
+            // R123 (the disjoint-capture lesson, twice over): a FUNCTION CALL
+            // argument is a whole-value use, so into_handle(process) makes the
+            // closure capture the SendHandle WRAPPER — both `process.0` field
+            // accesses AND pattern destructuring (`let SendHandle(h) = process`)
+            // are field-path moves under Rust 2021's disjoint captures and
+            // would capture the raw pointer directly, losing the Send impl.
             // SAFETY: the handle came from a successful CreateProcessW and is
             // closed exactly once on every path below (the watcher's join).
-            let SendHandle(handle) = process;
+            let handle = into_handle(process);
             let wait = unsafe { WaitForSingleObject(handle, WAIT_BUDGET_MS) };
             match wait {
                 WAIT_OBJECT_0 => {
@@ -1125,7 +1152,9 @@ pub(crate) fn cleanup_renamed_exe() {
     if old.exists() {
         match std::fs::remove_file(&old) {
             Ok(()) => {
-                crate::sidecar::log_line("update: removed a stale .old exe from a previous update flow");
+                crate::sidecar::log_line(
+                    "update: removed a stale .old exe from a previous update flow",
+                );
             }
             Err(_) => {
                 // A live instance may still run from it (two apps open) —
