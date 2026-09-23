@@ -1017,10 +1017,14 @@ pub(crate) mod overlay {
         let watcher_exe = exe.clone();
         let process = SendHandle(proc_info.hProcess);
         std::thread::spawn(move || {
-            // SAFETY: the handle came from a successful CreateProcessW and
-            // is closed exactly once on every path below (the join point of
-            // the watcher's lifetime).
-            let wait = unsafe { WaitForSingleObject(process.0, WAIT_BUDGET_MS) };
+            // R123 (the disjoint-capture lesson): destructure the wrapper INSIDE
+            // the closure so the closure captures `process` — the Send newtype —
+            // as a WHOLE. Rust 2021's disjoint field captures would otherwise
+            // capture the raw-pointer FIELD directly and lose the Send impl.
+            // SAFETY: the handle came from a successful CreateProcessW and is
+            // closed exactly once on every path below (the watcher's join).
+            let SendHandle(handle) = process;
+            let wait = unsafe { WaitForSingleObject(handle, WAIT_BUDGET_MS) };
             match wait {
                 WAIT_OBJECT_0 => {
                     // The install finished — the new exe owns the original
@@ -1039,11 +1043,11 @@ pub(crate) mod overlay {
                                 "the new version is installed, but relaunching it failed: {e} — reopen the app by hand"
                             ),
                         );
-                        unsafe { CloseHandle(process.0) };
+                        unsafe { CloseHandle(handle) };
                         return;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(700));
-                    unsafe { CloseHandle(process.0) };
+                    unsafe { CloseHandle(handle) };
                     watcher_app.exit(0);
                 }
                 WAIT_TIMEOUT => {
@@ -1060,7 +1064,7 @@ pub(crate) mod overlay {
                         "update-install-failed",
                         "the silent install did not finish within ten minutes — the app keeps running the current version; try the update again (or use the Releases page)",
                     );
-                    unsafe { CloseHandle(process.0) };
+                    unsafe { CloseHandle(handle) };
                 }
                 _ => {
                     // WAIT_FAILED (or anything unexpected) — the wait itself
@@ -1073,7 +1077,7 @@ pub(crate) mod overlay {
                         "update-install-failed",
                         "waiting on the installer failed — the app keeps running the current version; try the update again (or use the Releases page)",
                     );
-                    unsafe { CloseHandle(process.0) };
+                    unsafe { CloseHandle(handle) };
                 }
             }
         });
