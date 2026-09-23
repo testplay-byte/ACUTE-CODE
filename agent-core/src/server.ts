@@ -132,6 +132,9 @@ import { registerQuestionRoutes } from "./routes/questions.js";
 import { registerTodoRoutes } from "./routes/todo.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
+// R122: the feedback-ledger domain — the Self-Feedback settings section's
+// file surface (GET/DELETE /feedback/file).
+import { registerFeedbackRoutes } from "./routes/feedback.js";
 // R86: the SSE domain — the streamed turn route (final-phase extraction).
 import { registerSseRoutes } from "./routes/sse.js";
 // R113-a: the EVENT STREAM domain — GET /events/stream, the watcher's live
@@ -1603,7 +1606,14 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       // routes/settings.ts; registration order preserved. R106-S1: the
       // domain also carries GET/PUT /settings/device-link (the Devices tab's
       // allow-links switch, which drives the ctx.mobileLink listener).
+      // R122: the domain also carries GET/PUT /settings/feedback (the
+      // self-feedback ledger's master switch, the debug domain's sibling).
       registerSettingsRoutes(scope, ctx);
+
+      // R122: the FEEDBACK LEDGER domain — GET /feedback/file (raw ledger,
+      // phone-reachable) + DELETE /feedback/file (shell-only Clear).
+      // Registered right after the settings domain that owns its toggle.
+      registerFeedbackRoutes(scope, ctx);
 
       // R106-S1: the mobile-link domain — pair/start, pair/claim, the
       // device list + revoke, link-info (routes/mobile.ts).

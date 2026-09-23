@@ -1105,8 +1105,10 @@ function excerpt(text: string, cap: number): string {
 /** ROUND-83 (R83): which subsystem spent the tokens — every pre-R83 row is
  * a plain "turn"; the compaction summarizer and the debug analyst (the
  * audit's §2.12: real provider spend that appeared NOWHERE) now record
- * their own rows with their origin so the usage screens can label them. */
-export type UsageOrigin = "turn" | "compaction" | "debug";
+ * their own rows with their origin so the usage screens can label them.
+ * ROUND-122 (R122): the self-feedback reporter joins the family — one row
+ * per ledger entry it writes (origin "feedback"). */
+export type UsageOrigin = "turn" | "compaction" | "debug" | "feedback";
 
 /** ROUND-83 (R83): the storage-side dimensions of a usage row beyond the
  * shared UsageRecord — providerCalls (the real SDK-call count behind the

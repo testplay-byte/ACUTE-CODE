@@ -353,6 +353,44 @@ export function setDebugSettings(db: SqliteDatabase, patch: Partial<DebugSetting
   return getDebugSettings(db);
 }
 
+// ── ROUND-122 (the owner's self-feedback directive): the LEDGER master
+//    switch. While ON, after each completed session turn a separate
+//    context-free agent (agents/feedback-writer.ts) reviews the whole main
+//    conversation and appends one structured entry to the shared ledger
+//    file (<dataDir>/feedback.md — storage/feedback-ledger.ts). The ledger
+//    is a diagnostic instrument for the app's developers, read later from
+//    the dedicated settings section; it is NEVER injected into any
+//    conversation. The sibling of the debug switch above, deliberately the
+//    same shape: opt-in (default OFF — feedback costs one extra model call
+//    per completed turn), per-turn read by the stream route's post-turn
+//    phase, one boolean row in the settings table.
+
+export interface FeedbackSettings {
+  enabled: boolean;
+}
+
+export const FEEDBACK_DEFAULTS: FeedbackSettings = {
+  enabled: false,
+};
+
+const FEEDBACK_ENABLED_KEY = "feedback.enabled";
+
+export function getFeedbackSettings(db: SqliteDatabase): FeedbackSettings {
+  return { enabled: readBoolean(db, FEEDBACK_ENABLED_KEY, FEEDBACK_DEFAULTS.enabled) };
+}
+
+export function setFeedbackSettings(db: SqliteDatabase, patch: Partial<FeedbackSettings>): FeedbackSettings {
+  if (patch.enabled !== undefined) {
+    if (typeof patch.enabled !== "boolean") {
+      throw new Error("enabled must be a boolean");
+    }
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(FEEDBACK_ENABLED_KEY, String(patch.enabled));
+  }
+  return getFeedbackSettings(db);
+}
+
 // ── ROUND-78 (R78, owner: "General Settings 重试配置" — a retry-config
 //    section) — the per-class AUTO-RETRY switches ─────────────────────────────
 //
