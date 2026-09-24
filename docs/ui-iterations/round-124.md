@@ -220,6 +220,15 @@ for future agents.
 - **mobile**: tsc CLEAN · jest **46 suites / 1029 passed** (was 44/969: the updater core 31 + the
   orchestration 12, usage-format +8, chart-donut's contract pin, sheet-anatomy +9 drag-law pins, the
   R120-S close test updated honestly citing R124).
+- **CI (the honest red-then-fixed story)**: main 50dea4c went green on CI + Rust Checks + Mobile CI
+  immediately — but the TAG's Mobile APK run caught the round's one sandbox-blind defect at its first
+  compile: `withDangerousMod`'s second argument is the `[platform, action]` TUPLE, not a bare
+  function ("function is not iterable" — run 35993378103). The hotfix (e2e94ea) is the signing
+  plugin's own verified spelling, validated LOCALLY: `expo prebuild -p android --clean` now runs
+  clean in the sandbox and emits the plugin's whole contract (REQUEST_INSTALL_PACKAGES, the
+  `com.acutecode.companion.acuteinstaller` authority matching the Kotlin, the one-cache-path
+  whitelist). The stale draft + the broken tag were deleted, v0.117.0 re-tagged at the fix, and
+  Mobile CI + CI re-ran green on e2e94ea before the re-tag.
 - **Honest limits**: no Android device, no Windows, no real browser webview in this sandbox — the
   Kotlin module follows AcuteNetModule's verified patterns but compiles only in CI (the Mobile APK
   workflow is the gate); the staged capture's 400 ms settle + the sub-second flash are code-read +
