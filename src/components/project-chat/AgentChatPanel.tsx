@@ -113,6 +113,12 @@ import {
   toProjectChatItems,
 } from "../../lib/api";
 import { useConfigStore } from "../../lib/config-store";
+// ROUND-125 (R125-3): the per-session composer drafts (the owner's "switch
+// to another section, remember which message was typed there").
+import { clearSessionDraft, loadSessionDraft, saveSessionDraft } from "../../lib/draft-store";
+// R125-2: the pending-write owner threads the live-tail section's inputs as
+// a typed prop (the type's home is the stream store).
+import type { StreamingToolInput } from "../../lib/stream-store";
 import { useThemeStore } from "../../lib/theme-store";
 import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
@@ -2319,6 +2325,14 @@ export function AgentChatPanel({
     null,
   );
 
+  // ── ROUND-125 (R125-3): the PER-SESSION composer drafts ────────────────
+  // The owner's ask (verbatim): "the message should be remembered for each
+  // one of the sessions separately, like if I write a message and then
+  // switch to another section, then it should remember which message was
+  // typed there." The draft now belongs to the CONVERSATION, not the user's
+  // position: switching sessions flushes the outgoing draft to the store
+  // and restores the incoming one; typing persists on a trailing debounce;
+  // a send (normal or queued) clears the entry. See src/lib/draft-store.ts.
   const [input, setInput] = useState("");
   const [pendingUser, setPendingUser] = useState<string | null>(null);
   const [lastSent, setLastSent] = useState<string | null>(null);
@@ -2339,6 +2353,17 @@ export function AgentChatPanel({
     activeSessionId !== null ? s.bySession[activeSessionId] : undefined,
   );
   const liveTurn = streamSlice?.liveTurn ?? null;
+  // R125-3: the debounced DRAFT writer — fires 400ms after the last
+  // keystroke (a synchronous write per key would churn localStorage on
+  // fast typists; the session-switch effect below flushes synchronously so
+  // a fast switch loses nothing).
+  useEffect(() => {
+    if (activeSessionId === null) return;
+    const timer = window.setTimeout(() => {
+      saveSessionDraft(activeSessionId, input);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [input, activeSessionId]);
   // R119-C: the LIVE-overlay gates as PRIMITIVES (boolean/string), read once
   // here so the items memo below never depends on the liveTurn OBJECT —
   // the store patches liveTurn on every SSE delta, and a per-delta re-fold
@@ -2386,6 +2411,41 @@ export function AgentChatPanel({
   // clear after the refetch and resets on the next send).
   const lastTurnStoppedByUser = streamSlice?.lastTurnStoppedByUser ?? false;
   const lastTurnStoppedTs = streamSlice?.lastTurnStoppedTs ?? null;
+  // ── ROUND-125 (R125-B, owner: "it did not actually show me the processing
+  //    of the feedback ledger. It did not show me the info of when it was
+  //    being written or other stuff like that"): the ledger's live status —
+  //    the slice-level field survives the live turn's teardown, so BOTH the
+  //    mid-turn checkpoint line (rendered at the live block's bottom edge)
+  //    AND the post-turn written/failed toast key off this one read.
+  const feedbackEvent = streamSlice?.feedbackEvent ?? null;
+
+  // ── ROUND-125 (R125-B): the post-turn toast — the turn-end frames ride the
+  //    events bus AFTER the own stream closed (no live turn to render a line
+  //    under), so the completion surfaces as a quiet toast the moment the
+  //    frame lands. Mid-turn frames render the live line instead (below) —
+  //    a toast mid-stream would interrupt the watching reader.
+  const feedbackToastRef = useRef<number>(0);
+  useEffect(() => {
+    if (feedbackEvent === null) return;
+    if (feedbackEvent.ts === feedbackToastRef.current) return;
+    feedbackToastRef.current = feedbackEvent.ts;
+    if (feedbackEvent.phase !== "turn-end") return;
+    if (feedbackEvent.stage === "written") {
+      pushLocalToast(
+        "Self-feedback ledger updated",
+        feedbackEvent.entries !== null
+          ? `${feedbackEvent.entries} entries — Settings → Self-Feedback to read`
+          : "Settings → Self-Feedback to read",
+        "task_complete",
+      );
+    } else if (feedbackEvent.stage === "failed") {
+      pushLocalToast(
+        "Self-feedback ledger write failed",
+        feedbackEvent.detail ?? "the reporter failed — see the sidecar logs",
+        "task_failed",
+      );
+    }
+  }, [feedbackEvent]);
 
   // ── ROUND-119 (R119-C, owner: while a queued message waited, the transcript
   //    showed "the exact same thought process… the exact same reply" as the
@@ -2434,6 +2494,10 @@ export function AgentChatPanel({
   //    here instead of in the render loop, so exactly ONE queued bubble owns
   //    the render while the stream is open. ──
   const liveOpenUserText = remoteMirror ? (liveTurn?.userText ?? null) : streamPendingEcho;
+  // R125-2: the live turn's START CLOCK as a primitive (the positional
+  // fallback's freshness gate below — read once here so the items memo's
+  // dependency list stays primitive-only, the R119-C discipline).
+  const liveTurnStartedAtMs = liveTurn?.startedAtMs ?? null;
   // ROUND-37: the turn fold carries stats turn-level — the old R33
   // interim-reply stat-strip pass is GONE (superseded by the fold).
   const items = useMemo(() => {
@@ -2445,6 +2509,42 @@ export function AgentChatPanel({
     if (liveOverlayActive && liveOpenUserText !== null && liveOpenUserText !== "") {
       for (const it of folded) {
         if (it.kind === "user" && it.content === liveOpenUserText) anchorSeq = it.seq;
+      }
+    }
+    // ── R125-2: THE POSITIONAL FALLBACK. When the content anchor missed —
+    //    a queued message DELIVERED mid-turn (no pendingEcho: the queue
+    //    route's flip is the opener), a rehydrated mirror whose userText
+    //    landed before the fold refetched, an own turn whose echo was
+    //    consumed by the detach path — the folded trailing copy of the LIVE
+    //    stream rendered BESIDE the overlay (every tool row twice). The
+    //    fallback anchors on the LAST folded user row instead, GATED ON
+    //    FRESHNESS: the row's ts must be within 30s of the live turn's own
+    //    start clock. Both clocks are the SAME machine's wall clock (the
+    //    sidecar writes the row's ts, the store stamps startedAtMs at the
+    //    opening frame), so an in-flight opener is milliseconds fresh while
+    //    the PREVIOUS exchange's user row is minutes stale — the stale row
+    //    never anchors, so a refetch that raced the opener's persist (a
+    //    focus-refetch inside the POST window) suppresses nothing instead of
+    //    hiding the previous turn. The trade is honest: the 30s window can
+    //    transiently suppress a JUST-previous exchange in a pathological
+    //    clock-skew case, and the handoff always renders everything once the
+    //    overlay clears. ──
+    if (liveOverlayActive && anchorSeq === null && liveTurnStartedAtMs !== null) {
+      let lastUserSeq: number | null = null;
+      let lastUserTsMs: number | null = null;
+      for (const it of folded) {
+        if (it.kind === "user") {
+          lastUserSeq = it.seq;
+          const parsed = Date.parse(it.ts);
+          lastUserTsMs = Number.isNaN(parsed) ? null : parsed;
+        }
+      }
+      if (
+        lastUserSeq !== null &&
+        lastUserTsMs !== null &&
+        lastUserTsMs + 30_000 >= liveTurnStartedAtMs
+      ) {
+        anchorSeq = lastUserSeq;
       }
     }
     if (anchorSeq === null && liveQueued.length === 0) return folded;
@@ -2462,8 +2562,9 @@ export function AgentChatPanel({
     });
     // Deps are PRIMITIVES + stable references on purpose (see the R119-C
     // gates above the memo): the liveTurn object itself is patched per SSE
-    // delta and must never re-fold the log.
-  }, [sessionDetail.data, liveOverlayActive, liveOpenUserText, liveQueued]);
+    // delta and must never re-fold the log. R125-2 adds liveTurnStartedAtMs
+    // (a primitive that changes once per turn) for the positional fallback.
+  }, [sessionDetail.data, liveOverlayActive, liveOpenUserText, liveQueued, liveTurnStartedAtMs]);
 
   // R37 review #4: turns that JUST finished while the user watched start
   // collapsed (the folded summary + answer); cold-loaded sessions use the
@@ -3006,19 +3107,35 @@ export function AgentChatPanel({
   const prevSessionIdRef = useRef<string | null>(activeSessionId);
   useEffect(() => {
     if (prevSessionIdRef.current === activeSessionId) return;
+    const outgoing = prevSessionIdRef.current;
+    // R125-3: flush the OUTGOING session's draft FIRST — the `input` state
+    // still holds that conversation's text at this beat (the reset below
+    // hasn't re-rendered yet), so the typed message stays with the session
+    // it was written for instead of following the user.
+    if (outgoing !== null) {
+      saveSessionDraft(outgoing, input);
+    }
     // Local composer state reset only — the store's per-session state
     // persists so the user can switch back to a running session and see
     // its live progress.
     setPendingUser(null);
     setLastSent(null);
     setInput("");
+    // R125-3: restore the INCOMING session's draft (its own typed message,
+    // sent-drafts were cleared at send; a never-typed session answers "").
+    if (activeSessionId !== null) {
+      const restored = loadSessionDraft(activeSessionId);
+      if (restored !== "") {
+        setInput(restored);
+      }
+    }
     prevSessionIdRef.current = activeSessionId;
     // R94-D2: a session switch starts the new view PINNED at the bottom
     // (pre-R94 the unconditional effect scrolled on the items swap; the
     // stick-to-bottom gate must not inherit the previous session's
     // detached state into the fresh one).
     pinToBottom();
-  }, [activeSessionId]);
+  }, [activeSessionId, input]);
 
   // ROUND-38/39 (owner: running session shows a pixelated animation in the
   // sidebar). The stream store already marks the session active when
@@ -3187,6 +3304,9 @@ export function AgentChatPanel({
         // composer already dropped its chips + @ token; NO pendingEcho —
         // the chip IS the optimistic render for a queued message).
         setInput("");
+        // R125-3: a QUEUED message is as sent as a normal one — its draft
+        // entry goes (the queue chip owns the render from here).
+        if (liveSid !== undefined) clearSessionDraft(liveSid);
         setSendError(null);
         setPendingEchoAttachments(null);
         return;
@@ -3217,6 +3337,10 @@ export function AgentChatPanel({
       return;
     }
     setInput("");
+    // R125-3: the sent message is not a draft — clear the session's entry
+    // (a reload or a switch back must find an empty composer, not the text
+    // that just left).
+    if (activeSessionId !== null) clearSessionDraft(activeSessionId);
     setLastSent(text);
     setPendingUser(text);
     setSendError(null);
@@ -3680,6 +3804,17 @@ export function AgentChatPanel({
   // auto-collapses on completion and the live/folded handoff is seamless.
   // The LIVE streaming answer text still renders at the BOTTOM with the
   // caret, exactly as before.
+  //
+  // ROUND-125 (R125-2, owner: "it was showing me multiple writing at the
+  // same time… the exact same ones… one much earlier in the conversation,
+  // the other one showing further"): the PENDING streaming writes now render
+  // in EXACTLY ONE place — the section that owns the LIVE TAIL. Before,
+  // every mounted live work section read the store's streamingToolInputs
+  // through its own selector and painted the same "Writing…" row, so a
+  // segmented turn (tools → narration text → a new write) showed the
+  // identical pending row in EACH section plus the synthetic tail — the
+  // duplicate the owner watched. The panel now derives the inputs ONCE and
+  // threads them as a prop to the single owning section below.
   const liveSection = (() => {
     if (liveTurn === null) return null;
     const entries: WorkingEntry[] = [
@@ -3688,21 +3823,27 @@ export function AgentChatPanel({
         ? [{ type: "thinking" as const, text: liveTurn.streamThinking, ts: new Date().toISOString() }]
         : []),
     ];
-    // ROUND-58 (R58-cf): an in-flight tool-arg write (tool-input-start frame
-    // landed, no ToolUseEntry yet) counts as tool work — the section renders
-    // (with its pending write row + live preview) instead of the bare
-    // thoughts-only shape.
-    const hasPendingWriteInput = liveTurn.streamingToolInputs.some((s) =>
+    // R125-2: the pending write inputs derive ONCE (the panel is the single
+    // owner now); the DIFF filter is the old selector's law, kept verbatim.
+    const pendingWriteInputs: StreamingToolInput[] = liveTurn.streamingToolInputs.filter((s) =>
       DIFF_TOOLS.has(s.toolName),
     );
+    const hasPendingWriteInput = pendingWriteInputs.length > 0;
     const liveEntryIdx = liveTurn.streamThinking.trim() !== "" ? entries.length - 1 : undefined;
     const segments = segmentWorkingEntries(entries);
-    // ROUND-58 (R58-cf): the pending-write rows (live file-write previews)
-    // render INSIDE a live WorkingSection — when no tool entry exists yet but
-    // a write's args are streaming, the LAST work segment (or an empty
-    // trailing section when the turn ends on flushed text) hosts them, so
-    // the owner still sees the file being written the moment it starts.
-    const lastWorkSegIdx = segments.map((s) => s.kind === "work").lastIndexOf(true);
+    // R125-2: THE OWNER RULE. The pending writes render at the LIVE TAIL —
+    // after every settled entry. When the LAST segment renders as a live
+    // work section (tool/screenshot entries, or the still-streaming thought
+    // rides in it) that section owns them; otherwise the synthetic tail
+    // section below the last block renders them. Exactly ONE section ever
+    // receives the prop — the duplicate-render fix.
+    const lastSeg = segments.length > 0 ? segments[segments.length - 1] : undefined;
+    const lastSegRendersAsSection =
+      lastSeg !== undefined &&
+      lastSeg.kind === "work" &&
+      (lastSeg.entries.some((e) => e.type === "tool" || e.type === "screenshot") ||
+        (liveEntryIdx !== undefined && liveEntryIdx >= lastSeg.firstIndex && liveEntryIdx <= lastSeg.lastIndex));
+    const tailOwnsPendingWrites = hasPendingWriteInput && !lastSegRendersAsSection;
     // R120-C-PC (item 36): ONE live clock per turn — the prior design let
     // every segmented live work section paint its own right-aligned elapsed
     // clock (the owner's "8-9 separate right-side blocks"); now the FIRST
@@ -3726,7 +3867,6 @@ export function AgentChatPanel({
       const isWork =
         seg.entries.some((e) => e.type === "tool") ||
         seg.entries.some((e) => e.type === "screenshot") ||
-        (hasPendingWriteInput && i === lastWorkSegIdx) ||
         // ROUND-96 (R96-E, owner: "the thinking was still not proper. It was
         // not auto-scrolling to the very bottom"): the segment carrying the
         // STILL-STREAMING thought renders as a LIVE WorkingSection too —
@@ -3759,6 +3899,15 @@ export function AgentChatPanel({
             stopped={liveTurn.stopped}
             liveEntryIndex={segLiveIdx}
             clockVisible={clockVisible}
+            // R125-2: the pending writes ride ONLY the live-tail owner (the
+            // LAST segment when it renders as a section); every earlier
+            // section renders none — one "Writing…" row per turn, at the
+            // live position.
+            pendingWrites={
+              hasPendingWriteInput && i === segments.length - 1 && lastSegRendersAsSection
+                ? pendingWriteInputs
+                : undefined
+            }
             onApprovalDecision={(id, decision, remember) => void onApprovalDecision(id, decision, remember)}
             onQuestionAnswer={(id, answers, sources) => void onQuestionAnswer(id, answers, sources)}
           />
@@ -3772,7 +3921,12 @@ export function AgentChatPanel({
         />
       );
     });
-    if (hasPendingWriteInput && (segments.length === 0 || segments[segments.length - 1].kind === "text")) {
+    // R125-2: the synthetic tail — renders when the live tail is NOT a work
+    // section (no segments, the last segment is a text answer, or a
+    // thinking-only bare block) so the pending writes still land at the
+    // live position. Exactly one owner: this OR the last section above,
+    // never both.
+    if (tailOwnsPendingWrites) {
       rendered.push(
         <WorkingSection
           key="live-seg-write-tail"
@@ -3786,6 +3940,7 @@ export function AgentChatPanel({
           // earlier live work section rendered (segments.length === 0 — a
           // write started before anything else).
           clockVisible={!liveClockTaken}
+          pendingWrites={pendingWriteInputs}
           onApprovalDecision={(id, decision, remember) => void onApprovalDecision(id, decision, remember)}
         />,
       );
@@ -4233,6 +4388,41 @@ export function AgentChatPanel({
                     style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.35), color: styles.textSecondary, background: withAlpha(SEMANTIC_COLORS.warning, 0.05) }}
                   >
                     {liveTurn.note}
+                  </div>
+                ) : null}
+                {/* ── R125-B (owner: "it did not actually show me the processing
+                    of the feedback ledger"): the MID-TURN ledger checkpoint's
+                    live status line — the same bottom-edge position the retry
+                    card + the recovery note ride, so the owner WATCHES the
+                    ledger being written while the troubled turn still runs
+                    (the turn-end phase surfaces as the post-turn toast + the
+                    Settings → Self-Feedback strip instead). Quiet by design:
+                    accent-tinted, one line, the failure excerpt title-attr'd. ── */}
+                {feedbackEvent !== null && feedbackEvent.phase === "mid-turn" ? (
+                  <div
+                    data-testid="live-feedback-line"
+                    className="mb-1 min-w-0 flex items-center gap-1.5 text-[11px] font-mono px-3 py-1.5 rounded-lg border"
+                    title={feedbackEvent.detail ?? undefined}
+                    style={{
+                      borderColor: withAlpha(styles.accent, 0.28),
+                      color: styles.textSecondary,
+                      background: withAlpha(styles.accent, 0.05),
+                    }}
+                  >
+                    {feedbackEvent.stage === "writing" ? (
+                      <span
+                        className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0"
+                        style={{ background: styles.accent }}
+                        aria-hidden
+                      />
+                    ) : null}
+                    <span className="min-w-0 truncate">
+                      {feedbackEvent.stage === "writing"
+                        ? "writing the self-feedback checkpoint…"
+                        : feedbackEvent.stage === "written"
+                          ? `self-feedback checkpoint written${feedbackEvent.entries !== null ? ` · ${feedbackEvent.entries} entries` : ""}`
+                          : "self-feedback checkpoint failed"}
+                    </span>
                   </div>
                 ) : null}
                 {/* ROUND-59 (R59-D): the live turn's rating key lands with the

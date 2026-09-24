@@ -568,6 +568,10 @@ end tell`;
   },
 
   async captureRegion(run, region) {
+    // ROUND-125 (R125-A): `region.ownerPid` is deliberately IGNORED here —
+    // macOS has no PrintWindow equivalent reachable from osascript
+    // (screencapture -R is a screen-region grab, whatever sits on top
+    // leaks in), so the honest raster source is always "screen".
     const result = await run({
       program: "sh",
       args: ["-c", `screencapture -x -R${region.x},${region.y},${region.w},${region.h} /tmp/.acute-capture.png 2>/dev/null && base64 < /tmp/.acute-capture.png && rm -f /tmp/.acute-capture.png`],
@@ -585,6 +589,7 @@ end tell`;
       height: dims.height,
       scale: 2.0,
       origin: { x: region.x, y: region.y },
+      source: "screen", // R125-A: screencapture -R photographs the SCREEN, never a window surface
     } satisfies Raster;
   },
 

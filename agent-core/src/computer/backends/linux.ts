@@ -552,6 +552,10 @@ export const linuxBackend: CuaBackend = {
   },
 
   async captureRegion(run, region) {
+    // ROUND-125 (R125-A): `region.ownerPid` is deliberately IGNORED here —
+    // X11 has no PrintWindow equivalent reachable from the shell (scrot -a
+    // / import -crop are screen-region grabs, whatever sits on top leaks
+    // in), so the honest raster source is always "screen".
     const haveScrot = await hasTool(run, "scrot", ["-v"]);
     if (haveScrot) {
       const result = await run({
@@ -567,6 +571,7 @@ export const linuxBackend: CuaBackend = {
           height: dims?.height ?? region.h,
           scale: 1.0,
           origin: { x: region.x, y: region.y },
+          source: "screen", // R125-A: scrot -a photographs the SCREEN, never a window surface
         } satisfies Raster;
       }
     }
@@ -585,6 +590,7 @@ export const linuxBackend: CuaBackend = {
           height: dims?.height ?? region.h,
           scale: 1.0,
           origin: { x: region.x, y: region.y },
+          source: "screen", // R125-A: import -window root crops the ROOT window's pixels
         } satisfies Raster;
       }
     }

@@ -34,9 +34,20 @@ import {
 // still-open SSE before the turn's terminal frame.
 import { runDebugAnalyst } from "../agents/debug-analyst.js";
 // R122: the post-turn CONTEXT-FREE FEEDBACK REPORTER — the ledger writer
-// (no tools, no SSE frames, no session events; the FILE is the only
-// persistence). See runSelfFeedbackPhase below.
+// (no session events, no ledger content on any frame; the FILE is the only
+// persistence). See runSelfFeedbackPhase below. R125-B adds: STATUS-only
+// meta.feedback frames + the MID-TURN checkpoint — see the R125-B block
+// inside the route.
 import { runFeedbackWriter } from "../agents/feedback-writer.js";
+// ROUND-125 (R125-B): the feedback STATUS plumbing — the registry read the
+// checkpoint guards on, and the pure arm predicate + settle constant (kept
+// in the dependency-free module so tests pin them without importing this
+// whole route graph).
+import {
+  FEEDBACK_CHECKPOINT_SETTLE_MS,
+  readFeedbackStatus,
+  shouldArmFeedbackCheckpoint,
+} from "../agents/feedback-status.js";
 import { streamAiSdkChat } from "../agents/chat.js";
 import { resolveProvider } from "../providers/registry.js";
 import { getAgent, type Agent } from "../storage/agents.js";
@@ -312,7 +323,78 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
       clientGone = true;
       clearInterval(heartbeat);
     });
+    // ── ROUND-125 (R125-B, the owner's v0.117.0 verdict): the MID-TURN
+    // CHECKPOINT arm state. The owner's two asks: "it did not show me the
+    // processing of the feedback ledger … the info of when it was being
+    // written" (→ the meta.feedback STATUS frames + GET /feedback/status)
+    // and "it should be able to write the self-feedback ledger and improve
+    // it midway too if it feels like" (→ this checkpoint). The counters
+    // live HERE, not in the runtime: send() below is the pipe every turn
+    // frame already flows through, so watching it costs three property
+    // reads per frame and zero changes to agents/runtime.ts. They reset at
+    // each loop-top below — ONE checkpoint per TURN, not per stream (a
+    // queue continuation is a fresh turn with a fresh trouble budget).
+    // `turnSeq` counts the loop's turns so a checkpoint armed by turn N can
+    // stand down when turn N+1 begins inside its settle window (that turn's
+    // own turn-end entry covers it); `turnClosed` marks the whole stream
+    // closing; `checkpointTimer` holds the settle timeout so the finally
+    // block can cancel it outright.
+    let turnIssues = {
+      failedTools: 0,
+      approvalDenials: 0,
+      retryAttempts: new Set<number>(),
+      checkpointFired: false,
+    };
+    let turnSeq = 0;
+    let turnClosed = false;
+    let checkpointTimer: NodeJS.Timeout | null = null;
+    // The counting half of the heuristic — a plain closure so send() stays
+    // the single emit path (no second wrapper for the runtime to call).
+    // Arming is lazy: the predicate is only consulted when a frame actually
+    // ticked a counter, because thresholds can only be CROSSED by a fresh
+    // issue, never un-crossed.
+    const trackFeedbackIssues = (event: unknown): void => {
+      const frame = event as { type?: unknown; ok?: unknown; decision?: unknown; attempt?: unknown };
+      if (frame.type === "tool-result" && frame.ok === false) {
+        turnIssues.failedTools += 1;
+      } else if (frame.type === "approval.resolved" && frame.decision === "denied") {
+        turnIssues.approvalDenials += 1;
+      } else if (frame.type === "meta.retry" && typeof frame.attempt === "number") {
+        turnIssues.retryAttempts.add(frame.attempt);
+      } else {
+        return; // not an issue frame — thresholds unchanged, nothing to arm
+      }
+      if (turnIssues.checkpointFired) return; // ONE checkpoint per turn, by design
+      if (
+        !shouldArmFeedbackCheckpoint({
+          failedTools: turnIssues.failedTools,
+          approvalDenials: turnIssues.approvalDenials,
+          retryEvents: turnIssues.retryAttempts.size,
+        })
+      ) {
+        return;
+      }
+      turnIssues.checkpointFired = true;
+      // Fire-and-forget — NEVER awaited: the turn's own stream must not
+      // wait on a side model call (the same law as the turn-end phase).
+      void runMidTurnCheckpoint();
+    };
     const send = (event: unknown) => {
+      // ── R125-B: the mid-turn checkpoint's issue counters. Every frame the
+      // route emits — its own frames AND every frame the runtime forwards
+      // through this callback (tool results, approval resolutions, retry
+      // announcements; even sub-agent children's forwarded tool events ride
+      // the parent stream) — passes through HERE, which makes send() the one
+      // choke point where a cheap "this turn is in trouble" heuristic can
+      // watch the stream WITHOUT touching agents/runtime.ts (that file is
+      // owned elsewhere this round — and the route is the SSE pipe by
+      // construction). Frame grammar: tool-result carries ok:boolean;
+      // approval.resolved carries decision:"approved"|"denied"; meta.retry is
+      // re-emitted per wait TICK with a DISTINCT attempt number per ladder
+      // rung, so the Set dedupes ticks — "2 retry events" means two real
+      // rungs, not one rung's countdown. Uncounted frame types (and this
+      // route's own meta.feedback status frames) never arm anything.
+      trackFeedbackIssues(event);
       // ── R113-a (the backend event fan-out): mirror EVERY outgoing frame
       // to the events bus BEFORE the clientGone check — deliberately first,
       // so the mirror survives the initiator's socket dying (the R42 rule:
@@ -476,15 +558,87 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
     // suggested improvements — the report the owner will hand the
     // developers weeks or months later.
     //
-    // The separation the owner demanded is STRUCTURAL here: ZERO SSE
-    // frames, ZERO session events — the ledger FILE is the only
-    // persistence, so a follow-up user message can never see feedback
-    // content ("after updating the feedback file … it will just stop, and
-    // then if I chat, then the normal conversation will go and the
-    // feedback info will not be included anywhere"). The phase never
+    // The separation the owner demanded is STRUCTURAL here: ZERO session
+    // events, and ZERO ledger CONTENT on any frame — the ledger FILE is
+    // the only persistence, so a follow-up user message can never see
+    // feedback words ("after updating the feedback file … it will just
+    // stop, and then if I chat, then the normal conversation will go and
+    // the feedback info will not be included anywhere"). The phase never
     // throws; every failure logs to stderr and vanishes — feedback must
     // never affect the normal flow, including its own failures.
-    const runSelfFeedbackPhase = async (turnOutcome: string): Promise<void> => {
+    //
+    // ROUND-125 (R125-B) — the owner's v0.117.0 complaint refines the
+    // SILENCE: "it did not actually show me the processing of the feedback
+    // ledger. It did not show me the info of when it was being written."
+    // STATUS is not CONTENT, so the phases now emit meta.feedback STATUS
+    // frames — { type:"meta.feedback", sessionId, stage:"writing"|
+    // "written"|"failed", phase:"turn-end"|"mid-turn", entries?, detail? }
+    // — through send() BEFORE the model call / after the append / on
+    // failure. The frames ride the OWN stream (mid-turn checkpoint: the
+    // stream is still open, so the initiating client AND every events-bus
+    // watcher see them) and, for the turn-end phase, the events BUS ONLY:
+    // the phase runs DETACHED after res.end(), and send() publishes to
+    // the bus BEFORE the clientGone/writableEnded checks — so the phone
+    // mirror and any desktop watcher still see the live writing even
+    // though the initiator's socket is closed (res.writableEnded is true,
+    // the socket write is skipped, the publish already happened). The
+    // frames never carry a single word of the entry — stage, phase,
+    // counts, and at most a scrubbed error excerpt in `detail`.
+    //
+    // R125-B also FACTORS the phase: the turn-end write and the new
+    // mid-turn checkpoint share everything but the phase + outcome string
+    // (gates → resolution → status frames → the writer → usage metering →
+    // the stderr diagnostics), so one launcher below serves both and the
+    // R83 spend metering lives in ONE place instead of three copies.
+
+    // R125-B: the reporter-spend meter (the R83 discipline — a real side
+    // model call must appear in the usage surfaces). Extracted verbatim
+    // from the old runSelfFeedbackPhase's inline block so the turn-end
+    // phase and the mid-turn checkpoint meter IDENTICALLY. Best-effort: a
+    // recording failure never fails either phase.
+    const recordReporterSpend = (
+      providerId: string,
+      model: string,
+      usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number | null },
+    ): void => {
+      try {
+        const pricing = lookupPricing(db, providerId, model);
+        const inputCost =
+          pricing.inputPricePerMtok === null
+            ? 0
+            : (usage.inputTokens / 1_000_000) * pricing.inputPricePerMtok;
+        const outputCost =
+          pricing.outputPricePerMtok === null
+            ? 0
+            : (usage.outputTokens / 1_000_000) * pricing.outputPricePerMtok;
+        recordUsage(
+          db,
+          {
+            agentId: null,
+            sessionId: id,
+            provider: providerId,
+            model,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cachedInputTokens: usage.cachedInputTokens,
+            costUsd: inputCost + outputCost,
+            ts: new Date().toISOString(),
+          },
+          0,
+          { providerCalls: 1, origin: "feedback" },
+        );
+      } catch {
+        // Best-effort accounting — never a feedback-phase failure.
+      }
+    };
+
+    // R125-B: the ONE feedback-write launcher (turn-end + mid-turn). Every
+    // failure path logs to stderr and emits at most a STATUS frame — never
+    // an entry word, never a thrown error.
+    const launchFeedbackWrite = async (
+      phase: "turn-end" | "mid-turn",
+      turnOutcome: string,
+    ): Promise<void> => {
       try {
         // (a) The ledger's home — without a machine-scoped dataDir
         // (hermetic tests, dev servers) there is no file to write.
@@ -503,8 +657,14 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
         // The entry header's project line — resolved once, null-safe.
         const project =
           session.projectId !== null ? getProject(db, session.projectId) : undefined;
-        // (d) The reporter — a fresh no-tools model call over the whole
-        // transcript; failures come back as { ok: false, error }.
+        // (d) R125-B: the VISIBLE writing — the status frame fires BEFORE
+        // the model call so a watcher sees the write START, not just its
+        // outcome (the owner's exact complaint).
+        send({ type: "meta.feedback", sessionId: id, stage: "writing", phase });
+        // (e) The reporter — a fresh no-tools model call over the whole
+        // transcript; failures come back as { ok: false, error }. The
+        // writer itself reports begin/end into the feedback-status
+        // registry (GET /feedback/status reads it live).
         const result = await runFeedbackWriter(
           { db, keyring, chat, dataDir: ctx.dataDir },
           {
@@ -517,60 +677,90 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
             apiKey,
             model,
             turnOutcome,
+            // R125-B: the phase — "turn-end" keeps the R122 entry format
+            // byte-identical; "mid-turn" adds the banner + Phase line.
+            phase,
           },
         );
         if (!result.ok) {
+          // R125-B: the honest failure frame — the excerpt is the writer's
+          // already-scrubbed error line (the API key never rides it).
+          send({ type: "meta.feedback", sessionId: id, stage: "failed", phase, detail: result.error });
           console.error(`[feedback] reporter failed for session ${id}: ${result.error}`);
           return;
         }
-        // (e) R83 discipline: meter the reporter's own spend (origin
-        // "feedback", agentId null — a side model call that must appear
-        // in the usage surfaces like the debug analyst's does). Best-effort.
+        // (f) R83 discipline: meter the reporter's own spend (origin
+        // "feedback", agentId null — a side model call that must appear in
+        // the usage surfaces like the debug analyst's does). Best-effort.
         if (result.usage !== undefined && (result.usage.inputTokens > 0 || result.usage.outputTokens > 0)) {
-          try {
-            const pricing = lookupPricing(db, provider.id, model);
-            const inputCost =
-              pricing.inputPricePerMtok === null
-                ? 0
-                : (result.usage.inputTokens / 1_000_000) * pricing.inputPricePerMtok;
-            const outputCost =
-              pricing.outputPricePerMtok === null
-                ? 0
-                : (result.usage.outputTokens / 1_000_000) * pricing.outputPricePerMtok;
-            recordUsage(
-              db,
-              {
-                agentId: null,
-                sessionId: id,
-                provider: provider.id,
-                model,
-                inputTokens: result.usage.inputTokens,
-                outputTokens: result.usage.outputTokens,
-                cachedInputTokens: result.usage.cachedInputTokens,
-                costUsd: inputCost + outputCost,
-                ts: new Date().toISOString(),
-              },
-              0,
-              { providerCalls: 1, origin: "feedback" },
-            );
-          } catch {
-            // Best-effort accounting — never a feedback-phase failure.
-          }
+          recordReporterSpend(provider.id, model, result.usage);
         }
         const ledger = readFeedbackLedger(ctx.dataDir);
+        // R125-B: the written frame — the LIVE count off the file (never
+        // assumed), so a watcher's strip can say "N entries" the moment
+        // the append lands.
+        send({ type: "meta.feedback", sessionId: id, stage: "written", phase, entries: ledger.entries });
         console.error(
-          `[feedback] ledger entry #${ledger.entries} written (session ${id}, outcome ${turnOutcome}, ${ledger.bytes} bytes)`,
+          `[feedback] ledger entry #${ledger.entries} written (session ${id}, phase ${phase}, outcome ${turnOutcome}, ${ledger.bytes} bytes)`,
         );
       } catch (error) {
-        // The phase's own guard — belt-and-suspenders (runFeedbackWriter
+        // The launcher's own guard — belt-and-suspenders (runFeedbackWriter
         // never throws by contract); a crash here must never surface
-        // anywhere but stderr.
-        console.error(
-          `[feedback] phase crashed for session ${id}: ${
-            error instanceof Error ? error.message : String(error)
-          }`.slice(0, 300),
-        );
+        // anywhere but stderr (+ the honest failed status frame).
+        const detail = `[feedback] phase crashed for session ${id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`.slice(0, 300);
+        send({ type: "meta.feedback", sessionId: id, stage: "failed", phase, detail });
+        console.error(detail);
       }
+    };
+
+    // R122: the post-turn phase — the thin turn-end wrapper over the shared
+    // launcher (see the finally block: DETACHED, never awaited).
+    const runSelfFeedbackPhase = async (turnOutcome: string): Promise<void> => {
+      await launchFeedbackWrite("turn-end", turnOutcome);
+    };
+
+    // ── ROUND-125 (R125-B): the MID-TURN CHECKPOINT — "it should be able
+    // to write the self-feedback ledger and improve it midway too if it
+    // feels like." When a turn hits trouble mid-stream (the arm predicate
+    // in trackFeedbackIssues above), ONE checkpoint model call writes an
+    // entry over the PARTIAL transcript while the turn is still running —
+    // the record of what has gone WRONG so far, not just the post-mortem.
+    // Three guards keep it cheap and non-duplicating:
+    //   · THE SETTLE WINDOW (FEEDBACK_CHECKPOINT_SETTLE_MS): the route
+    //     cannot see the future, so "don't run in the last ~2 s before the
+    //     stream closes" is implemented as "let the checkpoint settle" — a
+    //     turn that finishes (turnClosed) or hands off to a queue
+    //     continuation (turnSeq moved) inside the window stands down,
+    //     because that turn's own turn-end entry covers it and a checkpoint
+    //     seconds before the summary would say the same thing twice at
+    //     double the cost. The finally block cancels the timer outright.
+    //   · THE WRITER-BUSY GUARD: readFeedbackStatus().writing — a previous
+    //     turn's turn-end phase (or an earlier checkpoint) still in flight
+    //     means a real reporter model call is already running; the registry
+    //     is single-slot process-wide, so this simply refuses to overlap
+    //     two reporter calls (the ledger's write chain would serialize the
+    //     appends anyway; this avoids paying for the parallel call).
+    //   · THE PHASE GATES: identical to the turn-end phase's (dataDir,
+    //     enabled, resolution) — evaluated AFTER the settle, inside
+    //     launchFeedbackWrite, so a toggle flip during the window is
+    //     honored.
+    // Never awaited, never throws (the launcher's catch is total); the
+    // [feedback] stderr diagnostics stay the ground truth for skips.
+    const runMidTurnCheckpoint = (): void => {
+      const armedSeq = turnSeq;
+      checkpointTimer = setTimeout(() => {
+        checkpointTimer = null;
+        if (turnClosed || turnSeq !== armedSeq) return; // the turn-end entry covers it
+        if (readFeedbackStatus().writing) {
+          console.error(
+            `[feedback] mid-turn checkpoint skipped for session ${id}: a ledger write is already in flight`,
+          );
+          return;
+        }
+        void launchFeedbackWrite("mid-turn", "in flight (mid-turn checkpoint)");
+      }, FEEDBACK_CHECKPOINT_SETTLE_MS);
     };
 
     try {
@@ -617,6 +807,19 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
       // (while(true) — the loop's exits are the outcome branches below;
       // the queue-continue `continue` is the only loop-around.)
       while (true) {
+        // R125-B: fresh per-TURN issue budget for the mid-turn checkpoint —
+        // every runStreamedAgentTurn call is ONE turn (a queue continuation
+        // is a new turn on the same stream), so the counters and the
+        // one-checkpoint-per-turn latch reset here, and turnSeq advances so
+        // a checkpoint armed by a PREVIOUS turn stands down (that turn's own
+        // turn-end entry covered it).
+        turnSeq += 1;
+        turnIssues = {
+          failedTools: 0,
+          approvalDenials: 0,
+          retryAttempts: new Set<number>(),
+          checkpointFired: false,
+        };
         const outcome = await runStreamedAgentTurn(
           { db, keyring, chat, chatStream: streamAiSdkChat },
           id,
@@ -967,13 +1170,30 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
     } finally {
       unregisterTurn(id, abort);
       clearInterval(heartbeat);
-      // R122: the self-feedback ledger write — AFTER the terminal frame,
-      // the turn registry, and the heartbeat are all closed, DETACHED
-      // from the stream's lifecycle (never awaited: res.end() must not
-      // wait on a model call). runSelfFeedbackPhase never rejects by
-      // construction (its own try/catch is total), so the void is safe
-      // even without a .catch belt.
-      if (feedbackOutcome !== null) void runSelfFeedbackPhase(feedbackOutcome);
+      // ── R125-B: the checkpoint bookkeeping at stream close. turnClosed
+      // first (the settle guard's flag — set synchronously before anything
+      // async can observe it), then the settle timer is CANCELLED outright:
+      // a turn that ends inside the window is covered by its turn-end
+      // entry, so the checkpoint stands down without ever firing (and no
+      // stray callback can touch this closure after the stream is gone).
+      turnClosed = true;
+      if (checkpointTimer !== null) {
+        clearTimeout(checkpointTimer);
+        checkpointTimer = null;
+      }
+      // R125-B (ORDER CHANGE, deliberately): res.end() now runs BEFORE the
+      // phase kickoff. Pre-R125-B the kickoff preceded res.end(), which was
+      // harmless while the phase was silent — but the phase now emits STATUS
+      // frames through send(), and send() writes to the socket only while
+      // !res.writableEnded. Ending the response FIRST keeps the initiator's
+      // SSE body byte-identical to the R122 contract (the terminal frame is
+      // still the LAST frame; zero feedback frames in the body) while the
+      // events bus still carries the turn-end frames — send() publishes to
+      // the bus BEFORE the writableEnded check, so the phone mirror and any
+      // desktop watcher see the live writing even after the initiator's
+      // socket is closed. This also makes the code match its own comment at
+      // last: the phase was always DOCUMENTED as running "after the stream
+      // closes".
       if (!clientGone) {
         try {
           res.end();
@@ -981,6 +1201,13 @@ export function registerSseRoutes(scope: FastifyInstance, ctx: RouteContext): vo
           /* socket already dead */
         }
       }
+      // R122: the self-feedback ledger write — AFTER the terminal frame,
+      // the turn registry, the heartbeat, and the stream's close, DETACHED
+      // from the stream's lifecycle (never awaited: res.end() must not
+      // wait on a model call). runSelfFeedbackPhase never rejects by
+      // construction (the launcher's catch is total), so the void is safe
+      // even without a .catch belt.
+      if (feedbackOutcome !== null) void runSelfFeedbackPhase(feedbackOutcome);
     }
   });
 }

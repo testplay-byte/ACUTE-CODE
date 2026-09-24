@@ -106,7 +106,10 @@ import { getCatalogModel, lookupPricing, resolveModelReasoningSupport } from "..
 import { estimateMessageTokens, type ContextBudget } from "../context.js";
 // ROUND-46 (R46-b): context compaction — summarize the over-budget head
 // instead of silently dropping it.
-import { assembleWithCompaction, type SeqMessage } from "./compaction.js";
+// ROUND-125 (R125-C, D1): providerUsageAnchor — the ZCode-adopted token
+// anchor (see agents/compaction.ts's R125-C header) built here at the two
+// assembleWithCompaction call sites.
+import { assembleWithCompaction, providerUsageAnchor, type SeqMessage } from "./compaction.js";
 
 export type SqliteDatabase = Database.Database;
 
@@ -2379,6 +2382,15 @@ export async function runSingleAgentTurn(
     // ROUND-71 (R71-e2, D5): forceCompaction is armed by the overflow-
     // recovery path below (provider-rejected overflow → force a compaction
     // on this retry regardless of the estimate).
+    // ROUND-125 (R125-C, D1): the provider-usage token anchor — ZCode
+    // methods/compact.ts buildProviderUsageTokenOverride's law: the last
+    // persisted usage-bearing assistant event's PROVIDER-reported
+    // inputTokens + the estimated tail after it replaces the local estimate
+    // in the over-budget gate (the estimate stays the fallback; null when
+    // the session has no usage row yet). The extra event-log read is the
+    // price of the pure, jest-pinnable seam — the same SELECT
+    // assembleHistory and assembleWithCompaction already run this iteration.
+    const anchor = providerUsageAnchor(listSessionEvents(db, session.id), rawMessages);
     const { messages } = await assembleWithCompaction(
       rawMessages,
       budget,
@@ -2390,7 +2402,13 @@ export async function runSingleAgentTurn(
         apiKey,
         model,
       },
-      forceCompaction ? { force: true } : undefined,
+      // R125-C (D1): the anchor threads as tokenOverride; an empty object
+      // is behavior-identical to the old `undefined` (planCompaction gates
+      // on force === true and a finite-positive override).
+      {
+        ...(forceCompaction ? { force: true } : {}),
+        ...(anchor !== null ? { tokenOverride: anchor } : {}),
+      },
     );
     forceCompaction = false;
     if (pendingNudge !== null) {
@@ -3817,6 +3835,12 @@ export async function runStreamedAgentTurn(
     // ROUND-71 (R71-e2, D5): forceCompaction is armed by the overflow-
     // recovery path in the catch below (provider-rejected overflow → force
     // a compaction on this retry regardless of the token estimate).
+    // ROUND-125 (R125-C, D1): the provider-usage token anchor — the SYNC
+    // twin's comment above applies verbatim (ZCode
+    // buildProviderUsageTokenOverride's law; the provider's own number +
+    // the estimated tail after it replaces the estimate in the gate, with
+    // the estimate as the no-usage-row fallback).
+    const anchor = providerUsageAnchor(listSessionEvents(db, session.id), rawMessages);
     const compaction = await assembleWithCompaction(
       rawMessages,
       budget,
@@ -3828,7 +3852,13 @@ export async function runStreamedAgentTurn(
         apiKey,
         model,
       },
-      forceCompaction ? { force: true } : undefined,
+      // R125-C (D1): the anchor threads as tokenOverride; an empty object
+      // is behavior-identical to the old `undefined` (planCompaction gates
+      // on force === true and a finite-positive override).
+      {
+        ...(forceCompaction ? { force: true } : {}),
+        ...(anchor !== null ? { tokenOverride: anchor } : {}),
+      },
     );
     forceCompaction = false;
     const messages = compaction.messages;
@@ -3865,11 +3895,24 @@ export async function runStreamedAgentTurn(
     }
     const usedTokens = estimateMessageTokens(messages);
     if (compaction.compacted && compaction.detail !== undefined) {
+      // ROUND-125 (R125-C, D2): the live frame carries the typed decision's
+      // dual numbers + reason (additive — old frontends ignore the new
+      // keys; ZCode's AutoCompactDecision log context is the twin). The
+      // guards keep absent fields absent (a detail built from a pre-R125
+      // payload shape can never occur — detail is only set on a fresh
+      // compaction — but the optionals stay honest).
       emit({
         type: "meta.compaction",
         tokensSaved: compaction.detail.tokensSaved,
         droppedMessages: compaction.detail.droppedMessages,
         throughSeq: compaction.detail.throughSeq,
+        ...(compaction.detail.tokenCount !== undefined ? { tokenCount: compaction.detail.tokenCount } : {}),
+        ...(compaction.detail.tokenSource !== undefined ? { tokenSource: compaction.detail.tokenSource } : {}),
+        ...(compaction.detail.estimatedTokens !== undefined
+          ? { estimatedTokens: compaction.detail.estimatedTokens }
+          : {}),
+        ...(compaction.detail.threshold !== undefined ? { threshold: compaction.detail.threshold } : {}),
+        ...(compaction.detail.reason !== undefined ? { reason: compaction.detail.reason } : {}),
       });
     }
 

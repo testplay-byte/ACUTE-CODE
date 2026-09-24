@@ -181,6 +181,27 @@
  * BOM note in psCapsule — the .ps1 is written UTF-8 WITH BOM because
  * powershell.exe 5.1 decodes BOM-less scripts as ANSI).
  *
+ * ROUND-125 (R125-A — the owner's v0.117.0 occlusion verdict: "it takes
+ * the screenshot of the whole device rather than the webpage. When I am
+ * in some other application, it takes a screenshot of that application
+ * rather than the browser window itself"): captureRegion is
+ * PRINTWINDOW-FIRST. The screen-region grab (GDI CopyFromScreen) leaks
+ * whatever sits ON TOP of the requested coordinates — an app window
+ * behind another application photographed the OCCLUDER. When the caller
+ * threads ownerPid (the browser-capture route passes process.ppid — the
+ * Tauri app), the capsule instead finds the owner's top-level window
+ * (EnumWindows by pid, containment-first), finds the CHILD webview whose
+ * rect tightest-matches the region (Chrome_WidgetWin_1; symmetric-
+ * difference scoring because the app's OWN full-client-area UI webview
+ * shares the class and MAXES any overlap-only rule), and calls
+ * PrintWindow(child, hdc, PW_RENDERFULLCONTENT=2) — the window's own
+ * rendered surface, valid while OCCLUDED/unfocused — then crops the
+ * region translated into child coords (clamped honestly). ANY window-path
+ * failure runs the legacy CopyFromScreen branch VERBATIM; the raster is
+ * tagged source:"window"|"screen" (the SRC: marker) so the reply can say
+ * WHICH pixels it got. See captureRegion's own comment for the capsule
+ * transport + selection-math details.
+ *
  * ROUND-66-2-d (R66-2-d): the owner's live Windows test hit a Chromium-sized
  * tree (Edge) — every node paid 4+ cross-process COM pattern probes
  * (Invoke/Toggle/ExpandCollapse/Value, twice more at detail:full), the
@@ -227,7 +248,9 @@
  *     payload over stdin base64)
  *   · activation: the AttachThreadInput sequence (doc 04 §3.3) with the
  *     ≤1.5 s postcondition check — honest {active} reporting
- *   · capture: System.Drawing CopyFromScreen → PNG → base64
+ *   · capture: R125-A PrintWindow(PW_RENDERFULLCONTENT) on the owner's
+ *     child webview first (occlusion-proof), System.Drawing
+ *     CopyFromScreen → PNG → base64 as the honest fallback (SRC: tagged)
  *   · clipboard: Get-Clipboard / Set-Clipboard
  *
  * Commands are NEVER model-generated: the tool layer passes validated
@@ -521,6 +544,14 @@ const WHEEL_DELTA = 120;
  * does NOT cap the text; a long type would have crossed the ceiling and
  * died at CreateProcess with a cryptic spawn error. The runtime guard
  * was the R68-C fix; the stdin channel is the R69-a fix.)
+ * ROUND-125 (R125-A) RE-MEASURED (the law above honored): captureRegion
+ * grew to carry the PrintWindow path (the Cap helper + the owner/child
+ * selection) — preamble 8,827 + script 7,654 = 16,482 script chars →
+ * 43,952 base64, PAST the 30,000 switch → the capture capsule now rides
+ * the temp-.ps1 -File transport (buildSnapshot's precedent; no command-
+ * line ceiling, exit codes at least as reliable). The preamble itself is
+ * UNTOUCHED by R125-A — the Cap class lives inside the capture script so
+ * every OTHER capsule's ARGV budget is re-priced by exactly nothing.
  */
 const psCapsule = (script: string, timeoutMs = 20000): CommandCapsule => {
   const full = `${PS_PREAMBLE}\n${script}`;
@@ -1509,30 +1540,249 @@ Write-Output ("GEO:" + $b.X + "," + $b.Y + "," + $b.Width + "," + $b.Height)
   },
 
   async captureRegion(run, region) {
+    // ── ROUND-125 (R125-A): PRINTWINDOW-FIRST — the occlusion-proof path ──
+    // The owner's v0.117.0 device verdict: "it takes the screenshot of the
+    // whole device rather than the webpage. When I am in some other
+    // application, it takes a screenshot of that application rather than the
+    // browser window itself." Root cause: this method's only engine was GDI
+    // CopyFromScreen on the requested SCREEN REGION — a screen-scrape that
+    // photographs whatever else is ON TOP at those coordinates, so an app
+    // window sitting BEHIND another application leaks the OCCLUDER's pixels
+    // (the R124 header documented this as the screen-scrape limit; the owner
+    // has now hit it).
+    //
+    // THE FIX (only when the caller threads `ownerPid` — the browser-capture
+    // route passes process.ppid, i.e. the Tauri app): find the OWNER app's
+    // top-level window, find the CHILD webview whose rect best matches the
+    // region (a browser tab is an OS-level CHILD webview of the main window
+    // — src-tauri/src/browser.rs; on Windows a WebView2 child of class
+    // Chrome_WidgetWin_1), and PrintWindow(child, hdc, 2) —
+    // PW_RENDERFULLCONTENT captures the window's OWN rendered surface
+    // (DirectX/Chromium included) while it is OCCLUDED or unfocused. Then
+    // crop the region translated into child coordinates (clamped to the
+    // bitmap — a region slightly larger than the child crops honestly).
+    //
+    // HONEST FALLBACK (the R124 law kept): ANY failure in the window path —
+    // no ownerPid, the Cap compile failed, no owner window found, no child
+    // matched, PrintWindow returned false, a degenerate crop — runs the
+    // LEGACY CopyFromScreen grab VERBATIM and the raster is tagged
+    // source:'screen' (the JS parse below + the SRC: marker line) so the
+    // caller can say WHICH pixels it got. Never fabricated, never silent.
+    //
+    // WHY a SECOND Add-Type -TypeDefinition in THIS capsule (the one-csc-
+    // compile law is the preamble's): the Cap class is capture-only surface
+    // (EnumWindows/EnumChildWindows/GetWindowThreadProcessId/
+    // IsWindowVisible/GetWindowRect/PrintWindow/GetClassName — the U32
+    // pattern, self-contained). Folding it into the shared U32 would grow
+    // EVERY capsule's ARGV budget (the R69-a docblock's explicit warning);
+    // instead the preamble stays byte-identical and this capsule pays ONE
+    // extra ~1s compile against its 25s budget (captureDisplay's precedent
+    // for captures owning their own loads). A failed compile degrades
+    // honestly to the screen path — the R67-C guard pattern.
+    //
+    // SELECTION MATH (the load-bearing detail): candidates are scored by
+    // SYMMETRIC DIFFERENCE (childArea + regionArea − 2×overlap), NOT by
+    // raw overlap. The app's OWN UI webview is ALSO a Chrome_WidgetWin_1
+    // child whose rect spans the whole client area — its overlap with the
+    // region is maximal (it contains the region), so a largest-overlap rule
+    // would tie-or-beat the staged tab webview and we would capture the
+    // app's React UI instead of the page. The tightest-fit rule is what
+    // makes "the staged tab webview's rect ≈ the region" actually WIN
+    // (diff ≈ 0 for the staged webview vs. area(client)−area(region) for
+    // the app UI webview). Equal diffs prefer the VISIBLE child (a hidden
+    // background tab can park at the same rect; PrintWindow on a hidden
+    // webview renders stale content).
+    const ownerPid =
+      typeof region.ownerPid === "number" && Number.isInteger(region.ownerPid) && region.ownerPid > 0
+        ? region.ownerPid
+        : 0;
     const script = `
 Add-Type -AssemblyName System.Drawing
-$bmp = New-Object System.Drawing.Bitmap(${region.w}, ${region.h})
-$g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.CopyFromScreen(${region.x}, ${region.y}, 0, 0, $bmp.Size)
-$g.Dispose()
-$ms = New-Object System.IO.MemoryStream
-$bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-$bmp.Dispose()
-Write-Output ([Convert]::ToBase64String($ms.ToArray()))
-Write-Output ("GEO:" + ${region.x} + "," + ${region.y})
+# R125-A: the Cap helper (the U32 pattern — guarded compile, honest degrade).
+$script:CAP_OK = $false
+try {
+Add-Type -TypeDefinition 'using System;using System.Text;using System.Collections.Generic;using System.Runtime.InteropServices;
+public class Cap{
+public struct RECT{public int Left;public int Top;public int Right;public int Bottom;}
+public delegate bool EnumProc(IntPtr h,IntPtr lp);
+public delegate bool ChildProc(IntPtr h,IntPtr lp);
+[DllImport("user32.dll")]public static extern bool EnumWindows(EnumProc cb,IntPtr lp);
+[DllImport("user32.dll")]public static extern bool EnumChildWindows(IntPtr p,ChildProc cb,IntPtr lp);
+[DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
+[DllImport("user32.dll")]public static extern bool IsWindowVisible(IntPtr h);
+[DllImport("user32.dll")]public static extern bool GetWindowRect(IntPtr h,out RECT r);
+[DllImport("user32.dll")]public static extern bool PrintWindow(IntPtr h,IntPtr hdc,uint flags);
+[DllImport("user32.dll",CharSet=CharSet.Unicode)]public static extern int GetClassName(IntPtr h,StringBuilder sb,int max);
+private static List<IntPtr> capTops=new List<IntPtr>();
+private static List<IntPtr> capKids=new List<IntPtr>();
+public static void CollectTopWindows(){
+  capTops.Clear();
+  EnumProc cb=delegate(IntPtr h,IntPtr lp){capTops.Add(h);return true;};
+  EnumWindows(cb,IntPtr.Zero);
+}
+public static void CollectChildWindows(IntPtr parent){
+  capKids.Clear();
+  ChildProc cb=delegate(IntPtr h,IntPtr lp){capKids.Add(h);return true;};
+  EnumChildWindows(parent,cb,IntPtr.Zero);
+}
+public static int TopCount(){return capTops.Count;}
+public static int ChildCount(){return capKids.Count;}
+public static long TopAt(int i){return capTops[i].ToInt64();}
+public static long ChildAt(int i){return capKids[i].ToInt64();}
+}'
+  $script:CAP_OK = $true
+} catch {
+  $script:CAP_OK = $false
+}
+$rx = ${region.x}
+$ry = ${region.y}
+$rw = ${region.w}
+$rh = ${region.h}
+$ownerPid = ${ownerPid}
+$src = 'screen'
+$geoX = $rx
+$geoY = $ry
+$b64out = $null
+if ($ownerPid -gt 0 -and $script:CAP_OK) {
+  try {
+    # 1. the OWNER top-level window of that pid: containment first, then
+    # overlap (a containing window beats a merely-overlapping one; among
+    # equals the largest overlap wins — the main window vs. the pop-out).
+    [void][Cap]::CollectTopWindows()
+    $owner = [IntPtr]::Zero
+    $ownerContain = $false
+    $ownerScore = -1
+    for ($i = 0; $i -lt [Cap]::TopCount(); $i++) {
+      $oh = [IntPtr]([Cap]::TopAt($i))
+      if (-not [Cap]::IsWindowVisible($oh)) { continue }
+      $opid = 0
+      [void][Cap]::GetWindowThreadProcessId($oh, [ref]$opid)
+      if ($opid -ne $ownerPid) { continue }
+      $orect = New-Object Cap+RECT
+      if (-not [Cap]::GetWindowRect($oh, [ref]$orect)) { continue }
+      $oox = [Math]::Max(0, [Math]::Min($orect.Right, $rx + $rw) - [Math]::Max($orect.Left, $rx))
+      $ooy = [Math]::Max(0, [Math]::Min($orect.Bottom, $ry + $rh) - [Math]::Max($orect.Top, $ry))
+      if ($oox -le 0 -or $ooy -le 0) { continue }
+      $oov = $oox * $ooy
+      $ocont = ($orect.Left -le $rx -and $orect.Top -le $ry -and $orect.Right -ge ($rx + $rw) -and $orect.Bottom -ge ($ry + $rh))
+      if (($ocont -and -not $ownerContain) -or ($ocont -eq $ownerContain -and $oov -gt $ownerScore)) {
+        $owner = $oh
+        $ownerContain = $ocont
+        $ownerScore = $oov
+      }
+    }
+    if ($owner -ne [IntPtr]::Zero) {
+      # 2. the CHILD webview: Chrome_WidgetWin_1 first (the WebView2
+      # widget), any overlapping child as the fallback; scored by
+      # SYMMETRIC DIFFERENCE (the tightest fit — see the comment above:
+      # the app's own full-client-area UI webview also matches the class).
+      [void][Cap]::CollectChildWindows($owner)
+      $wHwnd = [IntPtr]::Zero; $wDiff = 9223372036854775807; $wL = 0; $wT = 0; $wW = 0; $wHh = 0; $wVis = $false
+      $aHwnd = [IntPtr]::Zero; $aDiff = 9223372036854775807; $aL = 0; $aT = 0; $aW = 0; $aHh = 0; $aVis = $false
+      for ($i = 0; $i -lt [Cap]::ChildCount(); $i++) {
+        $kh = [IntPtr]([Cap]::ChildAt($i))
+        $krect = New-Object Cap+RECT
+        if (-not [Cap]::GetWindowRect($kh, [ref]$krect)) { continue }
+        $kl = [int]$krect.Left; $kt = [int]$krect.Top
+        $kw = [int]$krect.Right - $kl; $khgt = [int]$krect.Bottom - $kt
+        if ($kw -le 0 -or $khgt -le 0) { continue }
+        $kox = [Math]::Max(0, [Math]::Min($krect.Right, $rx + $rw) - [Math]::Max($krect.Left, $rx))
+        $koy = [Math]::Max(0, [Math]::Min($krect.Bottom, $ry + $rh) - [Math]::Max($krect.Top, $ry))
+        if ($kox -le 0 -or $koy -le 0) { continue }
+        $kdiff = ($kw * $khgt) + ($rw * $rh) - (2 * $kox * $koy)
+        $kvis = [Cap]::IsWindowVisible($kh)
+        $ksb = New-Object System.Text.StringBuilder(64)
+        [void][Cap]::GetClassName($kh, $ksb, 64)
+        if ($kdiff -lt $aDiff -or ($kdiff -eq $aDiff -and $kvis -and -not $aVis)) {
+          $aHwnd = $kh; $aDiff = $kdiff; $aL = $kl; $aT = $kt; $aW = $kw; $aHh = $khgt; $aVis = $kvis
+        }
+        if ($ksb.ToString() -eq 'Chrome_WidgetWin_1') {
+          if ($kdiff -lt $wDiff -or ($kdiff -eq $wDiff -and $kvis -and -not $wVis)) {
+            $wHwnd = $kh; $wDiff = $kdiff; $wL = $kl; $wT = $kt; $wW = $kw; $wHh = $khgt; $wVis = $kvis
+          }
+        }
+      }
+      $child = $wHwnd; $childL = $wL; $childT = $wT; $childW = $wW; $childH = $wHh
+      if ($child -eq [IntPtr]::Zero) { $child = $aHwnd; $childL = $aL; $childT = $aT; $childW = $aW; $childH = $aHh }
+      # 3. PrintWindow(PW_RENDERFULLCONTENT) into a child-sized bitmap.
+      if ($child -ne [IntPtr]::Zero -and $childW -gt 0 -and $childH -gt 0) {
+        $bmp = New-Object System.Drawing.Bitmap($childW, $childH)
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        $hdc = $g.GetHdc()
+        $pwok = [Cap]::PrintWindow($child, $hdc, 2)
+        $g.ReleaseHdc($hdc)
+        $g.Dispose()
+        if ($pwok) {
+          # 4. crop the region translated into child coords, CLAMPED to the
+          # bitmap (never negative, never past the edge — a region slightly
+          # larger than the child crops honestly, never pads).
+          $ix0 = [int][Math]::Max(0, $rx - $childL)
+          $iy0 = [int][Math]::Max(0, $ry - $childT)
+          $ix1 = [int][Math]::Min($rx + $rw - $childL, $bmp.Width)
+          $iy1 = [int][Math]::Min($ry + $rh - $childT, $bmp.Height)
+          if ($ix1 - $ix0 -ge 1 -and $iy1 - $iy0 -ge 1) {
+            $crop = New-Object System.Drawing.Rectangle($ix0, $iy0, ($ix1 - $ix0), ($iy1 - $iy0))
+            $part = $bmp.Clone($crop, [System.Drawing.Imaging.PixelFormat]::DontCare)
+            $ms = New-Object System.IO.MemoryStream
+            $part.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+            $part.Dispose()
+            $b64out = [Convert]::ToBase64String($ms.ToArray())
+            $src = 'window'
+            $geoX = $childL + $ix0
+            $geoY = $childT + $iy0
+          }
+        }
+        $bmp.Dispose()
+      }
+    }
+  } catch { }
+}
+if ($null -eq $b64out -or $b64out.Length -lt 64) {
+  # 5. the LEGACY screen-region grab — the honest fallback (SRC:screen).
+  $src = 'screen'
+  $geoX = $rx
+  $geoY = $ry
+  $bmp = New-Object System.Drawing.Bitmap($rw, $rh)
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.CopyFromScreen($rx, $ry, 0, 0, $bmp.Size)
+  $g.Dispose()
+  $ms = New-Object System.IO.MemoryStream
+  $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+  $bmp.Dispose()
+  $b64out = [Convert]::ToBase64String($ms.ToArray())
+}
+Write-Output $b64out
+Write-Output ("GEO:" + $geoX + "," + $geoY)
+Write-Output ("SRC:" + $src)
 `;
-    const result = await run(psCapsule(script, 20000));
+    // R125-A: 25s (captureDisplay's precedent) — the capsule now pays one
+    // extra csc compile (Cap) + the enum walks + PrintWindow before the grab.
+    const result = await run(psCapsule(script, 25000));
     if (result.code !== 0) return { error: `region capture failed: ${result.stderr.trim().slice(0, 200)}` };
     const lines = result.stdout.trim().split("\n");
-    const b64 = lines.filter((l) => !l.startsWith("GEO:")).join("").trim();
+    const geoLine = lines.find((l) => l.startsWith("GEO:"));
+    const srcLine = lines.find((l) => l.startsWith("SRC:"));
+    const b64 = lines.filter((l) => !l.startsWith("GEO:") && !l.startsWith("SRC:")).join("").trim();
     if (b64.length < 64) return { error: "region capture produced no image" };
     const dims = pngDimensions(b64);
+    // R125-A: GEO now carries the raster's TRUE origin (the clamped crop's
+    // top-left for the window path; the region origin for the screen path —
+    // identical to the pre-R125 value there, so legacy callers see no change).
+    const geoNums = geoLine ? geoLine.slice(4).split(",").map(Number) : [];
+    const origin = {
+      x: Number.isFinite(geoNums[0]) ? geoNums[0] : region.x,
+      y: Number.isFinite(geoNums[1]) ? geoNums[1] : region.y,
+    };
     return {
       pngBase64: b64,
       width: dims?.width ?? region.w,
       height: dims?.height ?? region.h,
       scale: 1.0,
-      origin: { x: region.x, y: region.y },
+      origin,
+      // R125-A: only SRC:window is trusted; anything else (SRC:screen, a
+      // missing marker from an older script) reads as the conservative
+      // "screen" — the pixels may contain an occluder.
+      source: srcLine === "SRC:window" ? "window" : "screen",
     } satisfies Raster;
   },
 

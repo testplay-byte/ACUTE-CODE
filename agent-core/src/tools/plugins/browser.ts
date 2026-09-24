@@ -164,7 +164,9 @@ export const BROWSER_CAPTURE_HEIGHT = 720;
 /**
  * R124: the whole round-trip budget for the staged capture — the frontend's
  * stage (bounds + zoom + show) + settle (400ms) + the sidecar's own capture
- * route (its backend capsule carries a 20s timeout) + the restore. The
+ * route (R125-A: its backend capsule carries a 25s timeout — captureDisplay's
+ * precedent, up from 20s because the Windows window path pays one extra csc
+ * compile + the enum walks + PrintWindow before the grab) + the restore. The
  * evalJob precedent runs to 75s for human-paced jobs; a capture is one grab,
  * so half that is generous.
  */
@@ -1534,7 +1536,9 @@ export const browserPlugin: PluginDefinition = {
               // small (the raster is the staged size, never the view size).
               // The reply carries the PNG bytes + the HONEST geometry (the
               // staged logical size, the raster size, whether the target was
-              // clamped to the app window).
+              // clamped to the app window) + R125-A's `source` (window vs
+              // screen — the frontend threads the sidecar route's marker
+              // through, and the note below says WHICH pixels arrived).
               //
               // VERSION SKEW, both directions, honestly handled:
               //  · an OLDER app answers "unknown browser command
@@ -1563,6 +1567,11 @@ export const browserPlugin: PluginDefinition = {
                     logicalWidth?: unknown;
                     logicalHeight?: unknown;
                     clamped?: unknown;
+                    // R125-A: the frontend threads the sidecar route's
+                    // additive `source` through — "window" (PrintWindow on
+                    // the app's own child webview) or "screen" (the region
+                    // grab). Absent on older frontends → no source line.
+                    source?: unknown;
                   } | null;
                   if (
                     reply !== null &&
@@ -1575,9 +1584,26 @@ export const browserPlugin: PluginDefinition = {
                     raster = { pngBase64: reply.pngBase64, width: reply.width, height: reply.height };
                     const logicalW = typeof reply.logicalWidth === "number" ? Math.round(reply.logicalWidth) : BROWSER_CAPTURE_WIDTH;
                     const logicalH = typeof reply.logicalHeight === "number" ? Math.round(reply.logicalHeight) : BROWSER_CAPTURE_HEIGHT;
+                    // ── ROUND-125 (R125-A): the honest SOURCE line ────────
+                    // The owner's occlusion verdict ("it takes the
+                    // screenshot of the whole device… when I am in some
+                    // other application, it takes a screenshot of that
+                    // application") is fixed by the Windows PrintWindow
+                    // path — but a capture that FELL BACK to the screen
+                    // region must SAY so: those pixels may contain the
+                    // occluding window. "window" → the capture worked while
+                    // covered (the model can trust the bytes); "screen" →
+                    // the honest caveat; absent (an older frontend) → no
+                    // line (never guessed).
+                    const rasterSource = reply.source === "window" || reply.source === "screen" ? reply.source : undefined;
                     captureNote =
                       `staged ${logicalW}×${logicalH} logical px, ${raster.width}×${raster.height}px raster` +
-                      (reply.clamped === true ? " (clamped to the app window)" : "");
+                      (reply.clamped === true ? " (clamped to the app window)" : "") +
+                      (rasterSource === "window"
+                        ? " (window capture — works while covered)"
+                        : rasterSource === "screen"
+                          ? " (screen-region fallback — the window could not be captured directly; another window may occlude it)"
+                          : "");
                   }
                   // A reply that is NOT the capture contract (an older app
                   // answered with something else) falls through — raster stays
@@ -1728,7 +1754,9 @@ export const browserPlugin: PluginDefinition = {
               // R124: captureNote describes WHICH capture produced the bytes
               // ("staged WxH logical px, WxH px raster" for the fixed-
               // resolution path, "panel region WxH" for the legacy path) —
-              // never fabricated, always the honest geometry.
+              // never fabricated, always the honest geometry. R125-A adds
+              // the honest SOURCE line ("window capture…" / "screen-region
+              // fallback…" — see the staged-path comment above).
               if (!sessionHasVisionPath(toolDeps.db, toolDeps.mainModel)) {
                 return {
                   ok: true,

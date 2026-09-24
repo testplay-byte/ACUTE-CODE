@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-24 round-124 -->
+<!-- last-reviewed: 2026-09-24 round-125 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` +
@@ -182,7 +182,7 @@ headers):
 | `GET /browser/history?sessionId=` | `{entries:[{url,title,ts}], index, canBack, canForward}` (LRU ≤32 sessions / ≤50 entries, forward-tail truncation on branch). |
 | `POST /browser/navigate` | `{sessionId, url?, title?}` records/updates an entry, or `{sessionId, direction:"back"\|"forward"\|"reload"}` moves the pointer. **ROUND-48 (R48-d): no longer rotates the ticket** (uses non-rotating getOrCreate). |
 | `GET /browser/viewport?sessionId=` / `PUT` | `{width,height,preset,zoom,rotate}` — presets `mobile-sm` 375×667 · `mobile-md` 390×844 · `tablet` 768×1024 · `laptop` 1280×800 (default) · `desktop` 1440×900 · `full-hd` 1920×1080 · `custom`; validation 200..3840 × 200..4320, zoom 0.25..3. This is the SAME state the BrowserPanel renders and the `browser_control` tool reads/writes. **ROUND-48 (R48-d): PUT no longer rotates the ticket** (uses non-rotating getOrCreate). |
-| `POST /browser-capture` | **ROUND-124 (R124)** — the staged screenshot's screen-region grab: `{x, y, w, h}` (physical px) → `{pngBase64, width, height}`, run through the SAME standalone capture backend the `browser_control` tool uses (no computer-use session, no relay, no settings gate — the decoupled door the frontend's staged capture drives mid-command). Bearer-authed like /browser-commands. 400 `VALIDATION` for malformed/degenerate regions (a 50px floor; a 7680×4320 ceiling), 500 `CAPTURE_FAILED` on a backend error or an empty raster. |
+| `POST /browser-capture` | **ROUND-124 (R124)** — the staged screenshot's region grab: `{x, y, w, h}` (physical px) → `{pngBase64, width, height, source}`, run through the SAME standalone capture backend the `browser_control` tool uses (no computer-use session, no relay, no settings gate — the decoupled door the frontend's staged capture drives mid-command). Bearer-authed like /browser-commands. 400 `VALIDATION` for malformed/degenerate regions (a 50px floor; a 7680×4320 ceiling), 500 `CAPTURE_FAILED` on a backend error or an empty raster. **ROUND-125 (R125-A): Windows grabs OCCLUSION-PROOF** — the backend threads the sidecar's parent pid (`ownerPid`), finds the staged tab's `Chrome_WidgetWin_1` child webview (smallest symmetric difference to the region), and `PrintWindow(PW_RENDERFULLCONTENT)` renders ITS surface (works while covered/unfocused); the reply's `source` is `"window"` there, `"screen"` for the legacy CopyFromScreen fallback (macOS/Linux always — their region engines are unchanged), and the tool note names the fallback's occlusion caveat honestly. |
 
 The rewritten page's escape hatch posts `{type:"acute:open"\|"acute:title"\|"acute:location", …}` messages to the panel (no client cookies/Authorization are forwarded upstream — the ROUND-46 jar is the proxy's own state; no Set-Cookie is forwarded downstream either).
 
@@ -3066,6 +3066,21 @@ route-local device-token guard as the whole-ledger Clear). The answer is
 idempotent-honest: `{removed:false, entries}` for an out-of-range index (the
 viewer's list may be one refresh behind a fresh append — never a 404), the
 SURVIVING count on success; 400 VALIDATION for a non-integer/negative index.
+
+### `GET /api/v1/feedback/status` → `{enabled, writing, phase, sessionId, startedAt, lastWriteTs, lastWriteOutcome, entries, bytes, lastError}` (NEW)
+
+**ROUND-125 (R125-B)** — the ledger's LIVE status (the owner: "it did not
+actually show me the processing of the feedback ledger"): the in-memory
+reporter registry (`writing` + the active `phase` — `turn-end` or the
+mid-turn checkpoint — and the session it is writing for) joined with the
+enabled setting and the file's live `entries`/`bytes`. Phone-reachable (the
+viewing trust level — no device-token wall; only the write-class routes are
+shell-only). 503 `SERVICE_UNAVAILABLE` without the machine-scoped dataDir
+(the file route's own hermetic off-state). The PC's Settings → Self-Feedback
+status strip polls this at 3s while the tab is open; the mid-turn
+checkpoint's live line + the post-turn toast ride the `meta.feedback`
+frames on the session stream / events bus instead (status only — no ledger
+content ever rides the wire).
 
 ### The updater asset kinds (changed)
 

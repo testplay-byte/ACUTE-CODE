@@ -467,6 +467,28 @@ export interface StreamSessionState {
    * and the retire path below key off it. A remote mirror never owns an
    * AbortController or a fetch — it is a pure render of ingested frames. */
   remote: boolean;
+  /** ROUND-125 (R125-B, owner: "it did not actually show me the processing
+   * of the feedback ledger"): the LAST self-feedback ledger status frame
+   * (meta.feedback). SLICE-level — NOT on liveTurn — because the turn-end
+   * frames ride the events bus AFTER the own stream closed and the live
+   * turn's teardown would drop them; a slice field keeps the status
+   * visible for the panel's live line (mid-turn) + the post-turn toast.
+   * STATUS ONLY (the separation law: no ledger content on the wire).
+   * Reset by startStream (a fresh turn's ledger story starts empty). */
+  feedbackEvent: LiveFeedbackStatus | null;
+}
+
+/** ROUND-125 (R125-B): the last meta.feedback frame's renderable form. */
+export interface LiveFeedbackStatus {
+  stage: "writing" | "written" | "failed";
+  phase: "turn-end" | "mid-turn";
+  /** The ledger's entry count after a "written" stage (null when the frame
+   * didn't carry it). */
+  entries: number | null;
+  /** The failure excerpt ("failed" stages; title-attr'd in the render). */
+  detail: string | null;
+  /** Client-side receive clock — the toast's change key. */
+  ts: number;
 }
 
 interface StreamStore {
@@ -623,6 +645,7 @@ function emptyState(): StreamSessionState {
     deliveredQueued: [],
     queueKeptNotice: null,
     remote: false,
+    feedbackEvent: null,
   };
 }
 
@@ -1043,6 +1066,10 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
       // (the own reader is the rendering path now; mirrored frames of this
       // same turn arrive and are ignored while streamBusy stays true).
       remote: false,
+      // R125-B: a fresh turn's ledger story starts empty (the previous
+      // turn's writing/written status is history — the settings viewer's
+      // last-write line carries the durable record).
+      feedbackEvent: null,
     });
 
     const controller = new AbortController();
@@ -1891,6 +1918,19 @@ function handleStreamEvent(
         });
       }
     }
+    return;
+  }
+  // ── ROUND-125 (R125-B): the self-feedback ledger's status frames. Deliberately ABOVE the liveTurn guard below: the turn-end frames ride the events bus AFTER the own stream closed (send() publishes to the bus before the writableEnded check, but the initiator's own SSE is already torn down), so the slice's liveTurn is NULL when they land — a liveTurn-scoped field would drop them. The SLICE-level feedbackEvent keeps the status for the panel's quiet live line (mid-turn, under the working section) + the post-turn toast ("Self-feedback ledger updated"). STATUS ONLY — never ledger content (the separation law). ──
+  if (event.type === "meta.feedback") {
+    patchSession(sessionId, {
+      feedbackEvent: {
+        stage: event.stage,
+        phase: event.phase,
+        entries: typeof event.entries === "number" ? event.entries : null,
+        detail: typeof event.detail === "string" ? event.detail : null,
+        ts: Date.now(),
+      },
+    });
     return;
   }
 

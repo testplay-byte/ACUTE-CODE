@@ -770,12 +770,15 @@ describe("collapsed-row icon chips (ROUND-51 R51-d)", () => {
     expect(screen.getByRole("button", { name: /^Edited / })).toBeTruthy();
   });
 
-  it("an in-flight edit row (ok === null) borrows the running-blue in-flight tint", () => {
+  it("an in-flight edit row (ok === null) borrows the RUNNING ACCENT in-flight tint (R125: the theme accent, RUNNING_BLUE retired)", () => {
     renderCollapsedRow({ ...EDIT_TOOL, ok: null, outputSummary: undefined }, true);
 
     const chip = screen.getByTestId("tool-icon-chip");
-    expect(chip.style.background).toBe(withAlpha("#3b82f6", 0.12));
-    expect(chip.style.color).toBe("#3b82f6");
+    // R125 re-pin: the running voice is the THEME ACCENT now (the owner's
+    // "It shows me in the blue colored area" verdict retired the hard-coded
+    // #3b82f6 from this file); the wash + glyph follow styles.accent.
+    expect(chip.style.background).toBe(withAlpha(theme.accent, 0.12));
+    expect(chip.style.color).toBe(theme.accent);
     // Still collapsed + one-line: the chip is the live signal, not an expansion.
     expect(screen.getByRole("button", { name: /^Edited / })).toBeTruthy();
     expect(screen.queryByTestId("live-delegate-row")).toBeNull();
@@ -1013,43 +1016,11 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
     expect(screen.queryByTestId("live-write-pending-row")).toBeNull();
   });
 
-  it("a PENDING write (tool-input frames, no ToolUseEntry yet) renders its own row + preview from the stream store", () => {
-    useStreamStore.setState({
-      bySession: {
-        [SESSION_ID]: {
-          liveTurn: {
-            startedAtMs: Date.now(),
-            working: [],
-            streamText: "",
-            streamThinking: "",
-            stopped: false,
-            stoppedByUser: false,
-            streamingToolInputs: [
-              {
-                toolCallId: "call_w9",
-                toolName: "write_file",
-                raw: '{"path":"src/generated.ts","content":"export const A = 1;\\nexport const B = 2;',
-              },
-            ],
-            debugReport: null,
-            browserCheckpoint: null,
-            retry: null,
-            note: null,
-          },
-          streamBusy: true,
-          sendError: null,
-          liveError: null,
-          pendingEcho: null,
-          lastLiveEndMs: 0,
-          lastTurnStoppedByUser: false,
-          lastTurnStoppedTs: null,
-          queued: [],
-          deliveredQueued: [],
-          queueKeptNotice: null,
-          remote: false,
-        },
-      },
-    });
+  it("a PENDING write (tool-input frames, no ToolUseEntry yet) renders its own row + preview from the pendingWrites PROP (R125-2: the panel threads the store's inputs to the tail-owning section)", () => {
+    // R125-2: the pending rows arrive as a PROP now — the component's old
+    // internal store selector (which made EVERY mounted live section render
+    // the same row — the owner's duplicate) is gone. The store below seeds
+    // NOTHING; the prop is the only source.
     renderWithProviders(
       <WorkingSection
         entries={[]}
@@ -1057,6 +1028,13 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
         projectId="proj_probe"
         live
         defaultOpen
+        pendingWrites={[
+          {
+            toolCallId: "call_w9",
+            toolName: "write_file",
+            raw: '{"path":"src/generated.ts","content":"export const A = 1;\\nexport const B = 2;',
+          },
+        ]}
       />,
     );
 
@@ -1068,7 +1046,10 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
     expect(preview.textContent).toContain("export const A = 1;");
   });
 
-  it("folded sections NEVER read the streaming inputs (a reload shows no pending rows)", () => {
+  it("sections WITHOUT the pendingWrites prop render NO pending rows (folded reloads, non-owning live sections — R125-2's single-owner law)", () => {
+    // R125-2: the store can carry a live turn with streaming inputs (another
+    // section owns them); THIS section — folded, or a live non-owner — never
+    // reads them. The prop is undefined → no rows, even mid-turn elsewhere.
     useStreamStore.setState({
       bySession: {
         [SESSION_ID]: {
@@ -1087,7 +1068,7 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
             retry: null,
             note: null,
           },
-          streamBusy: false,
+          streamBusy: true,
           sendError: null,
           liveError: null,
           pendingEcho: null,
@@ -1098,6 +1079,7 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -1850,50 +1832,21 @@ describe("R120-C-PC item 35: file-mutation rows outside the collapse", () => {
   });
 
   it("a LIVE section the user collapsed keeps the PENDING streaming write visible (a file being written is never hidden by a fold)", async () => {
-    useStreamStore.setState({
-      bySession: {
-        [SESSION_ID]: {
-          liveTurn: {
-            startedAtMs: Date.now(),
-            working: [
-              { type: "tool", tool: { seq: 201, toolName: "write_file", argsSummary: "path: src/gen.ts, content: 80 chars", ok: true, ts: "t1", outputSummary: "wrote 80 chars" } },
-            ],
-            streamText: "",
-            streamThinking: "",
-            stopped: false,
-            stoppedByUser: false,
-            streamingToolInputs: [
-              {
-                toolCallId: "call_r120",
-                toolName: "write_file",
-                raw: '{"path":"src/streaming.ts","content":"export const A = 1;',
-              },
-            ],
-            debugReport: null,
-            browserCheckpoint: null,
-            retry: null,
-            note: null,
-          },
-          streamBusy: true,
-          sendError: null,
-          liveError: null,
-          pendingEcho: null,
-          lastLiveEndMs: 0,
-          lastTurnStoppedByUser: false,
-          lastTurnStoppedTs: null,
-          queued: [],
-          deliveredQueued: [],
-          queueKeptNotice: null,
-          remote: false,
-        },
-      },
-    });
+    // R125-2: the pending input arrives via the prop (the panel chose THIS
+    // section as the tail owner); the store seeding of the old test is gone.
     renderWithProviders(
       <WorkingSection
         entries={[{ type: "tool", tool: { seq: 201, toolName: "write_file", argsSummary: "path: src/gen.ts, content: 80 chars", ok: true, ts: "t1", outputSummary: "wrote 80 chars" } }]}
         sessionId={SESSION_ID}
         projectId="proj_probe"
         live
+        pendingWrites={[
+          {
+            toolCallId: "call_r120",
+            toolName: "write_file",
+            raw: '{"path":"src/streaming.ts","content":"export const A = 1;',
+          },
+        ]}
       />,
     );
     // Live sections auto-expand — collapse it by hand (the owner's own

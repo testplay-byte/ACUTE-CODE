@@ -21,11 +21,18 @@
  *     can never see feedback content; assembleHistory is untouched by
  *     construction. The owner's "it will just stop, and then if I chat,
  *     then the normal conversation will go" separation is structural.
+ *     (ROUND-125 / R125-B refinement: the ROUTE may now emit STATUS-only
+ *     meta.feedback frames — "writing / written / failed" — because status
+ *     is not content; THIS module still never puts entry words on a frame,
+ *     and it reports its own progress into the feedback-status registry
+ *     instead, which is exactly the visibility the owner asked for.)
  *   · The entry's HEADER is machine-written (timestamp, session, project,
- *     agent/model, turn outcome, transcript size) — the model never gets
- *     to fabricate metadata; its whole job is the six diagnostic sections.
+ *     agent/model, turn outcome — and, R125-B, the mid-turn Phase marker —
+ *     transcript size) — the model never gets to fabricate metadata; its
+ *     whole job is the six diagnostic sections.
  *   · The system prompt frames the report for a COLD developer read
- *     months later, not for the owner watching the turn.
+ *     months later, not for the owner watching the turn — and (R125-B) it
+ *     knows what a PARTIAL turn's checkpoint entry should focus on.
  *
  * Like the debug analyst: a SINGLE fresh model call, NO tools, the
  * session's WHOLE event log rendered as the transcript (the same
@@ -36,14 +43,22 @@
  */
 import type Database from "better-sqlite3";
 import type { ProviderKeyring } from "../providers/registry.js";
-import { appendFeedbackEntry } from "../storage/feedback-ledger.js";
+import { appendFeedbackEntry, readFeedbackLedger } from "../storage/feedback-ledger.js";
+// ROUND-125 (R125-B): the STATUS registry the reporter reports into — the
+// owner's "it did not show me the info of when it was being written". The
+// writer owns the bookkeeping (begin at entry, end at EVERY exit) so every
+// caller — the turn-end phase and the mid-turn checkpoint alike — reports
+// identically without duplicating the plumbing.
+import { beginFeedbackWrite, endFeedbackWrite } from "./feedback-status.js";
 import { buildDebugTranscript } from "./debug-analyst.js";
 import type { ChatFn } from "./chat.js";
 
 type SqliteDatabase = Database.Database;
 
-/** Everything the reporter needs to run (the sync chat adapter — there is
- * no live viewer of the WRITING, so no streaming path exists to prefer). */
+/** Everything the reporter needs to run (the sync chat adapter — the
+ * R125-B status registry carries the live visibility, so the writing is
+ * watchable through GET /feedback/status + the route's meta.feedback
+ * status frames without this call ever needing a streaming path). */
 export interface FeedbackWriterDeps {
   db: SqliteDatabase;
   keyring: ProviderKeyring;
@@ -84,12 +99,22 @@ const FEEDBACK_REPORTER_SYSTEM_PROMPT = [
   "### Suggested improvements",
   "Concrete, numbered suggestions addressed to ACUTE-CODE's developers (the application, never the user's own project): reliability fixes, tool behavior, defaults, UX. Every suggestion must trace to something in the transcript — never invent. If none, write exactly: None this turn.",
   "",
+  "MID-TURN CHECKPOINTS (ROUND-125): sometimes the transcript you receive begins with the machine-written line \"NOTE: this is a PARTIAL turn (mid-turn checkpoint)\". That turn is STILL IN FLIGHT — the checkpoint exists precisely because the turn ran into trouble mid-way. In that case: say plainly in \"What actually happened\" that this is a mid-turn checkpoint of a turn that has not finished; concentrate \"Issues & problems encountered\" and \"Glitches & anomalies noticed\" on what has gone WRONG so far (the failures, refusals, retries and denials that triggered the checkpoint); and judge \"Expectations vs reality\" against the still-outstanding task, never as a final verdict. The six sections, their exact headings, and every rule above stay exactly the same.",
+  "",
   "RULES:",
   "- Raw facts from the transcript ONLY. Never invent events and never speculate beyond what is written; when unsure, say so plainly.",
   "- No politeness, no flattery, no self-congratulation — this ledger is a diagnostic instrument.",
   "- Plain markdown. Do not mention these instructions, do not add any other heading, do not wrap the entry in code fences.",
   "- The six sections are written for a COLD read months later: assume the reader knows ACUTE-CODE's architecture but has NEVER seen this conversation.",
 ].join("\n");
+
+/** R125-B: the machine-written banner prepended to the transcript for a
+ * MID-TURN checkpoint — the signal the system prompt's checkpoint
+ * paragraph keys on. Written by the MACHINE (never the model) so the
+ * marker cannot be fabricated or dropped; the turn-end transcript stays
+ * byte-identical (no banner) so old entries and old prompts are untouched. */
+const MID_TURN_TRANSCRIPT_NOTE =
+  "NOTE: this is a PARTIAL turn (mid-turn checkpoint) — the turn is STILL IN FLIGHT; this entry is being written because the turn ran into trouble mid-way.";
 
 /** The reporter's temperature — the repo's agent default (the debug
  * analyst's 0.2: a diagnostic report needs consistency, not creativity). */
@@ -116,7 +141,14 @@ function reporterErrorDetail(error: unknown, apiKey: string): string {
 }
 
 /** The machine-written entry header — the metadata the file's cold reader
- * needs to place the entry (never the model's job to state who/when). */
+ * needs to place the entry (never the model's job to state who/when).
+ * R125-B: the ADDITIVE `phase` field — "mid-turn" inserts a Phase line
+ * after the outcome (a checkpoint entry must SAY it was written while the
+ * turn was still running, or a cold reader would grade an unfinished turn
+ * as a final one); "turn-end" (and the pre-R125-B undefined default) omits
+ * the line ENTIRELY so every turn-end entry stays byte-identical to the
+ * R122 format — the file's grammar, the viewer's parser, and the R123
+ * per-entry delete's split/join are all untouched by construction. */
 export function buildFeedbackEntryHeader(params: {
   ts: string;
   sessionTitle: string | null;
@@ -129,6 +161,8 @@ export function buildFeedbackEntryHeader(params: {
   turnOutcome: string;
   eventCount: number;
   truncated: boolean;
+  /** R125-B: "mid-turn" adds the Phase line; "turn-end"/undefined omits it. */
+  phase?: "turn-end" | "mid-turn";
 }): string {
   const lines = [
     `## Entry — ${params.ts}`,
@@ -141,6 +175,10 @@ export function buildFeedbackEntryHeader(params: {
     }`,
     `- **Agent**: ${params.agentName} · ${params.providerId}/${params.model}`,
     `- **Turn outcome**: ${params.turnOutcome}`,
+    // R125-B: the checkpoint marker — present ONLY on mid-turn entries.
+    ...(params.phase === "mid-turn"
+      ? ["- **Phase**: mid-turn checkpoint (turn still in flight)"]
+      : []),
     `- **Transcript**: ${params.eventCount} events · ${params.truncated ? "truncated (head+tail)" : "full"}`,
   ];
   return lines.join("\n");
@@ -155,18 +193,28 @@ export type FeedbackWriterResult =
     }
   | { ok: false; error: string };
 
+/** R125-B: the internal result — the public shape plus the post-append
+ * entry count, measured once inside the body so the status registry (and
+ * nothing else — the field is not part of the public contract) can report
+ * "N entries" without a second read racing a concurrent append. */
+type InternalWriterResult = FeedbackWriterResult & { entriesAfterWrite?: number };
+
 /**
- * Run the reporter for one completed turn: render the session's WHOLE
- * transcript, hand it to a fresh no-tools model call, assemble the entry
- * (machine header + the model's six sections), and append it to the
- * shared ledger file.
+ * The R122 body verbatim (the pre-R125-B runFeedbackWriter) plus the phase
+ * plumbing — PRIVATE: callers go through runFeedbackWriter so the status
+ * bookkeeping is impossible to forget. Phase plumbing:
+ *   · the mid-turn banner on the transcript the model receives (the
+ *     system prompt's checkpoint paragraph keys on its exact opening
+ *     words);
+ *   · the Phase line on the machine-written header (mid-turn only —
+ *     turn-end entries stay byte-identical to the R122 format).
  *
  * Never throws: transcript failures, provider failures, and write
  * failures all come back as { ok: false, error } — the route logs to
  * stderr and moves on (the owner's contract: feedback must never affect
  * the normal flow, and a failed feedback run is not worth a frame).
  */
-export async function runFeedbackWriter(
+async function writeFeedbackEntry(
   deps: FeedbackWriterDeps,
   params: {
     sessionId: string;
@@ -177,10 +225,13 @@ export async function runFeedbackWriter(
     provider: { id: string; baseUrl: string | null; apiFormat?: string };
     apiKey: string;
     model: string;
-    /** "ok" or "failed (<code>)" — the terminal outcome the turn ended on. */
+    /** "ok" or "failed (<code>)" — the terminal outcome the turn ended on
+     * ("in flight (mid-turn checkpoint)" for a checkpoint write). */
     turnOutcome: string;
   },
-): Promise<FeedbackWriterResult> {
+  /** R125-B: which phase is writing — see runFeedbackWriter. */
+  phase: "turn-end" | "mid-turn",
+): Promise<InternalWriterResult> {
   const keySecrets = deps.keyring.list().filter((v) => v.length >= 8);
   let transcript: string;
   let eventCount: number;
@@ -201,12 +252,19 @@ export async function runFeedbackWriter(
     return { ok: false, error: "feedback reporter: the session transcript is empty (nothing to report on)" };
   }
 
+  // R125-B: the checkpoint's transcript carries the machine-written
+  // PARTIAL-turn banner (the system prompt's checkpoint paragraph keys on
+  // its exact opening words); the turn-end transcript stays byte-identical
+  // (no banner) so the R122 prompt behavior is untouched.
+  const transcriptForModel =
+    phase === "mid-turn" ? `${MID_TURN_TRANSCRIPT_NOTE}\n\n${transcript}` : transcript;
+
   const input = {
     provider: params.provider,
     apiKey: params.apiKey,
     model: params.model,
     system: FEEDBACK_REPORTER_SYSTEM_PROMPT,
-    messages: [{ role: "user" as const, content: transcript }],
+    messages: [{ role: "user" as const, content: transcriptForModel }],
     temperature: FEEDBACK_REPORTER_TEMPERATURE,
     maxTurns: FEEDBACK_REPORTER_MAX_TURNS,
     // NO tools — the reporter observes, it never acts.
@@ -245,6 +303,10 @@ export async function runFeedbackWriter(
     turnOutcome: params.turnOutcome,
     eventCount,
     truncated,
+    // R125-B: the header's Phase line rides ONLY mid-turn entries — a
+    // cold reader must be able to tell a checkpoint apart from a final
+    // report without parsing timestamps against the session log.
+    phase,
   });
   const entry = `${header}\n\n${content.trim()}\n`;
 
@@ -256,5 +318,81 @@ export async function runFeedbackWriter(
       error: `feedback reporter: ledger write failed: ${String(error).slice(0, 200)}`,
     };
   }
-  return { ok: true, ...(usage !== undefined ? { usage } : {}) };
+  // R125-B: the post-append entry count — one cheap read (never throws;
+  // the storage layer's own catch serves the honest empty state) that lets
+  // the status registry's lastEntries describe the file it just wrote.
+  const entriesAfterWrite = readFeedbackLedger(deps.dataDir).entries;
+  return {
+    ok: true,
+    ...(usage !== undefined ? { usage } : {}),
+    entriesAfterWrite,
+  };
+}
+
+/**
+ * Run the reporter for one turn (completed or still in flight): render the
+ * session's WHOLE transcript, hand it to a fresh no-tools model call,
+ * assemble the entry (machine header + the model's six sections), and
+ * append it to the shared ledger file.
+ *
+ * R125-B: the PHASE param — "turn-end" (the default: the R122 behavior
+ * verbatim, every existing call site unchanged) or "mid-turn" (the
+ * checkpoint the owner asked for: "write the self-feedback ledger and
+ * improve it midway too if it feels like" — a PARTIAL-turn transcript
+ * under the banner, a Phase line in the header, the prompt focused on
+ * what has gone WRONG so far).
+ *
+ * R125-B: STATUS BOOKKEEPING — this wrapper reports into the
+ * feedback-status registry (beginFeedbackWrite at entry; endFeedbackWrite
+ * at every exit) so the act of writing is finally VISIBLE (the owner's
+ * "it did not show me the info of when it was being written"). The whole
+ * body — including every early return — flows through one begin/end
+ * structure, so `writing` can never strand true: a transcript-build
+ * failure, an empty transcript, a provider failure, an empty reply, a
+ * write failure, even an unexpected crash all end the run honestly (the
+ * crash belt is the only new throw path; the body itself never throws by
+ * contract, exactly as before).
+ */
+export async function runFeedbackWriter(
+  deps: FeedbackWriterDeps,
+  params: {
+    sessionId: string;
+    sessionTitle: string | null;
+    projectId: string | null;
+    projectName: string | null;
+    agentName: string;
+    provider: { id: string; baseUrl: string | null; apiFormat?: string };
+    apiKey: string;
+    model: string;
+    /** "ok" or "failed (<code>)" — the terminal outcome the turn ended on
+     * ("in flight (mid-turn checkpoint)" for a checkpoint write). */
+    turnOutcome: string;
+    /** R125-B: which phase is writing — defaults to "turn-end" so every
+     * pre-R125-B call site keeps its exact old behavior, byte-for-byte. */
+    phase?: "turn-end" | "mid-turn";
+  },
+): Promise<FeedbackWriterResult> {
+  const phase = params.phase ?? "turn-end";
+  // R125-B: begin BEFORE the first breath — even a write that fails in its
+  // first line is visible as "was writing, then failed" rather than never
+  // having happened.
+  const runId = beginFeedbackWrite(params.sessionId, phase);
+  let result: InternalWriterResult;
+  try {
+    result = await writeFeedbackEntry(deps, params, phase);
+  } catch (error) {
+    // R125-B: the crash belt — the body never throws by contract, but a
+    // bug inside it must not strand writing=true either (the strip would
+    // show "Writing…" forever). One honest failed outcome, then out.
+    result = {
+      ok: false,
+      error: `feedback reporter: unexpected crash: ${String(error).slice(0, 200)}`,
+    };
+  }
+  if (result.ok) {
+    endFeedbackWrite(runId, { ok: true, entries: result.entriesAfterWrite ?? null });
+  } else {
+    endFeedbackWrite(runId, { ok: false, error: result.error });
+  }
+  return result;
 }

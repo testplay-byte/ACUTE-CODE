@@ -244,6 +244,9 @@ import {
   TranscriptRowView,
   type AttachmentImageResolver,
 } from "@/components/transcript";
+// R125-D — the transcript's scroll anchor (the anti-runaway pin; see the
+// module's header for the full coordinate-space rationale).
+import { TRANSCRIPT_SCROLL_ANCHOR } from "@/components/transcript-scroll";
 import { EmptyState, ErrorState, LoadingState } from "@/components/list-state";
 import { QuietIconButton, TypeBodyStrong, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
 import { warningHaptic } from "@/design/haptics";
@@ -1586,6 +1589,35 @@ export default function SessionScreen() {
             data={data}
             inverted
             keyExtractor={(row) => row.key}
+            // ── ROUND-125 (R125-D — why): ── the owner's v0.117.0 device
+            // verdict — "it has auto scroll functionality, which does not
+            // stop." The list above is INVERTED with the data NEWEST-FIRST
+            // ([...displayRows].reverse()), so a live turn's every SSE delta
+            // PREPENDS/grows rows at index 0; with the plain numeric
+            // contentOffset kept, each prepend yanked the viewport toward
+            // the newest content and the reader could not scroll up and
+            // STAY there. maintainVisibleContentPosition is RN's own
+            // chat-grammar answer, in ITS coordinate space: "top" on an
+            // inverted list is the VISUAL BOTTOM (the newest content) —
+            // minIndexForVisible:1 pins the first row the user is actually
+            // reading (index ≥ 1) whenever rows prepend at index 0, so the
+            // reading position HOLDS and the scroll stops following the
+            // stream once the user has scrolled away; the 80pt
+            // autoscrollToTopThreshold keeps the stick-to-newest behavior
+            // ONLY for the at-bottom reader (within 80pt of the newest
+            // edge, new content still scrolls into view). The values are a
+            // pure, jest-pinned contract — TRANSCRIPT_SCROLL_ANCHOR
+            // (src/components/transcript-scroll.ts). The list's other props
+            // are untouched: keyboardShouldPersistTaps stays "handled"
+            // (transcript taps while the keys are up), and the RefreshControl
+            // rides the same inverted edge it always did. Caveat (honest):
+            // iOS applies the anchor inside UIScrollView's own layout pass,
+            // while Android's MaintainVisibleScrollPositionHelper reacts to
+            // UIManager layout events and adjusts the offset right AFTER the
+            // layout lands — on very fast prepend bursts a settle frame is
+            // possible (a one-frame shimmer, not a jump); both platforms
+            // implement both fields in RN 0.86.
+            maintainVisibleContentPosition={TRANSCRIPT_SCROLL_ANCHOR}
             renderItem={({ item: row }) => (
               <TranscriptRowView
                 row={row}

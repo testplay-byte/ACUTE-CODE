@@ -27,6 +27,29 @@
  *     newer messages into a fresh one).
  *   - Summarizer failure degrades to the old hard trim — compaction is a
  *     quality upgrade, never a new failure mode.
+ *
+ * ROUND-125 (R125-C, D1+D2 — the ZCode adoption; owner directive: "You never
+ * refer to the reference projects which I highlighted with you a lot of the
+ * times"): the study's TOP TWO recommendations
+ * (agent-ctx/research/zcode-context-compression.md §D1/§D2), mirrored from
+ * ZCode's compact/policy.ts + runtime/methods/compact.ts:
+ *   - D1 PROVIDER-USAGE TOKEN ANCHORING: the over-budget gate now prefers
+ *     the PROVIDER'S own reported inputTokens (the newest usage-bearing
+ *     assistant event) plus the locally estimated tail AFTER it, over the
+ *     fresh whole-list estimate — ZCode methods/compact.ts
+ *     buildProviderUsageTokenOverride, the same anchor law (see
+ *     providerUsageAnchor below). The local estimate stays the fallback:
+ *     a session with no usage row yet behaves byte-identically to pre-R125.
+ *     Both numbers are reported (ZCode's estimatedTokenCount/tokenCount
+ *     pair) so a bad provider number is visible, not silent.
+ *   - D2 TYPED DECISION: planCompaction returns the decision itself —
+ *     { decision, tokenCount, tokenSource, estimatedTokens, threshold,
+ *     reason } on EVERY path, skip included (ZCode compact/policy.ts
+ *     AutoCompactDecision's twin; the reason vocabulary is ACUTE's own:
+ *     forced | above_threshold | below_threshold | empty_to_summarize). The
+ *     context.compact EVENT payload and the streamed meta.compaction frame
+ *     carry the numbers + reason as ADDITIVE optional fields — pre-R125
+ *     events simply lack them and every reader ignores unknown fields.
  */
 import type Database from "better-sqlite3";
 import { appendSessionEvent, getSession, listSessionEvents, recordUsage, type SessionEvent } from "../storage/sessions.js";
@@ -52,7 +75,77 @@ export interface CompactionPayload {
   throughSeq: number;
   droppedMessages: number;
   tokensSaved: number;
+  /* ROUND-125 (R125-C, D2): the typed decision that produced this event —
+   * additive optional; pre-R125 events simply lack the fields and every
+   * reader (findLatestCompaction guards, applyCompaction/summaryMessage's
+   * Pick<..., "summary" | "droppedMessages">) ignores them. */
+  /** The count the threshold gate used — the D1 anchor when one existed,
+   * the local estimate otherwise. */
+  tokenCount?: number;
+  /** Where tokenCount came from — "provider-anchored" (the provider's own
+   * number won) or "estimated" (the local BPE-approx estimator). */
+  tokenSource?: CompactionTokenSource;
+  /** The local estimate of the whole list — the OTHER half of the dual
+   * number pair (ZCode reports estimatedTokenCount alongside tokenCount so
+   * a provider number that disagrees with reality is visible). */
+  estimatedTokens?: number;
+  /** The available budget the gate compared against (window − output
+   * reserve − margin — the same `available` planCompaction computes). */
+  threshold?: number;
+  /** Why the compaction fired (the D2 vocabulary). */
+  reason?: CompactionDecisionReason;
 }
+
+/** ROUND-125 (R125-C, D2): why planCompaction decided what it decided —
+ * ZCode compact/policy.ts AutoCompactDecision.reason's ACUTE twin (their
+ * disabled|not_enough_messages|circuit_breaker|below_threshold|
+ * above_threshold vocabulary maps onto our paths: ACUTE has no compact
+ * disable switch, no failure circuit breaker yet (D5, queued), and its
+ * "nothing to summarize" shape is the empty head, hence our four).
+ *   · "forced"          — opts.force carried the decision past the gate
+ *                          (the R71-e2 overflow-recovery path; the provider
+ *                          itself rejected the request as too large).
+ *   · "above_threshold"  — the gated count exceeded `available`.
+ *   · "below_threshold"  — the gated count fit (the skip).
+ *   · "empty_to_summarize" — nothing to summarize (the old null-return
+ *                          case: a session too short to compact).
+ */
+export type CompactionDecisionReason = "forced" | "above_threshold" | "below_threshold" | "empty_to_summarize";
+
+/** ROUND-125 (R125-C, D1): which number won the threshold gate. */
+export type CompactionTokenSource = "provider-anchored" | "estimated";
+
+/** ROUND-125 (R125-C, D2): the decision data attached to EVERY planCompaction
+ * result (compact and skip alike) — the observability half of the ZCode
+ * adoption: "why did/didn't it compact" is now a typed field, not a guess
+ * reconstructed from estimate arithmetic. */
+export interface CompactionDecisionFields {
+  decision: "compact" | "skip";
+  /** The number the threshold gate used: the D1 anchor when a valid
+   * tokenOverride was passed, the local estimate otherwise. */
+  tokenCount: number;
+  tokenSource: CompactionTokenSource;
+  /** The local estimate of the whole list — always reported (the dual-number
+   * pair; equals tokenCount whenever tokenSource is "estimated"). */
+  estimatedTokens: number;
+  /** The available budget the gate compared against. */
+  threshold: number;
+  reason: CompactionDecisionReason;
+}
+
+/** ROUND-125 (R125-C, D2): planCompaction's result union — the SKIP side
+ * carries the typed decision (the pre-R125 `null` returns became
+ * { decision: "skip", reason: "below_threshold" | "empty_to_summarize" }
+ * objects; the two test pins that asserted null were updated with
+ * comments). The COMPACT side is the old plan plus the same fields. */
+export type CompactionPlan =
+  | (CompactionDecisionFields & { decision: "skip" })
+  | (CompactionDecisionFields & {
+      decision: "compact";
+      toSummarize: SeqMessage[];
+      keep: SeqMessage[];
+      targetThroughSeq: number;
+    });
 
 /** The compaction event type name (appendSessionEvent accepts any string;
  * readers that don't know the type skip it — the UI event filters only
@@ -116,6 +209,24 @@ export function findLatestCompaction(events: readonly SessionEvent[]): Compactio
       throughSeq,
       droppedMessages: typeof payload.droppedMessages === "number" ? payload.droppedMessages : 0,
       tokensSaved: typeof payload.tokensSaved === "number" ? payload.tokensSaved : 0,
+      // ROUND-125 (R125-C, D2): the typed-decision fields ride the fold
+      // verbatim when present — the same typed guards as the fields above;
+      // a pre-R125 event yields undefined for each (the additive contract:
+      // old events simply lack them).
+      tokenCount: typeof payload.tokenCount === "number" ? payload.tokenCount : undefined,
+      tokenSource:
+        payload.tokenSource === "provider-anchored" || payload.tokenSource === "estimated"
+          ? payload.tokenSource
+          : undefined,
+      estimatedTokens: typeof payload.estimatedTokens === "number" ? payload.estimatedTokens : undefined,
+      threshold: typeof payload.threshold === "number" ? payload.threshold : undefined,
+      reason:
+        payload.reason === "forced" ||
+        payload.reason === "above_threshold" ||
+        payload.reason === "below_threshold" ||
+        payload.reason === "empty_to_summarize"
+          ? payload.reason
+          : undefined,
     };
   }
   return null;
@@ -140,29 +251,119 @@ export function applyCompaction(messages: readonly SeqMessage[], compact: Compac
 }
 
 /**
+ * ROUND-125 (R125-C, D1): the provider-usage token anchor — ZCode
+ * runtime/methods/compact.ts buildProviderUsageTokenOverride's ACUTE twin.
+ *
+ * Walks the event log NEWEST → OLDEST for the LAST persisted
+ * message.assistant event whose payload.usage.inputTokens is a finite
+ * positive number (the runtime persists one per assistant reply — sync path
+ * runtime.ts `usage: { inputTokens, outputTokens }`, streamed path
+ * flushSegment's stats + the stats-carrier event), and returns:
+ *
+ *   anchor = provider inputTokens + estimate(messages AFTER that event)
+ *
+ * The provider's number is GROUND TRUTH for everything it had been sent when
+ * it reported it (our R64 estimator is the ±15% guess); the tail — the
+ * model-facing messages whose throughSeq is GREATER than the event's seq —
+ * is exactly what the provider had NOT yet seen: assembleHistory annotates
+ * every SeqMessage with the seq of the LAST event that contributed to it
+ * (message events carry their own seq; a <tool_results> block carries the
+ * final tool.use seq folded into it), so `throughSeq > anchorSeq` selects
+ * precisely the post-anchor messages. ZCode's twin nuance
+ * (incrementalStartIndex at vs after the anchor message) resolves here to
+ * strictly-after: our persisted inputTokens covers the request INPUT only —
+ * the anchor assistant's own text was its OUTPUT, not input, so the honest
+ * blind spot is that ONE message's tokens (bounded by a single reply,
+ * absorbed by the budget margin; the R71-e2 force path catches any real
+ * overflow reactively). Returns null when no usage-bearing assistant event
+ * exists — the caller falls back to the pure local estimate and behaves
+ * byte-identically to pre-R125.
+ *
+ * PURE (events + messages in, number out) — pinnable without a DB. The
+ * anchor deliberately over-triggers rather than under-triggers in one known
+ * window: after a compaction lands but before the next successful provider
+ * reply re-anchors, the stale provider number still counts messages the new
+ * summary replaced (ZCode zeroes such anchors via
+ * invalidateRuntimeTokenUsage — the research doc's D3, queued, not this
+ * round). The self-healing law: any successful provider call after a
+ * compaction re-anchors exactly.
+ */
+export function providerUsageAnchor(
+  events: readonly SessionEvent[],
+  messages: readonly SeqMessage[],
+): number | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type !== "message.assistant") continue;
+    const payload =
+      ev.payload !== null && typeof ev.payload === "object" ? (ev.payload as Record<string, unknown>) : null;
+    const usage =
+      payload !== null && typeof payload.usage === "object" ? (payload.usage as Record<string, unknown>) : null;
+    const inputTokens = usage?.inputTokens;
+    // Garbage rows (NaN / 0 / negative / non-number) are skipped, not trusted
+    // — the walk continues to the next older usage-bearing event (the
+    // "LAST event whose inputTokens is a finite number > 0" law).
+    if (typeof inputTokens !== "number" || !Number.isFinite(inputTokens) || inputTokens <= 0) continue;
+    const tail = messages.filter((m) => m.throughSeq > ev.seq);
+    const tailTokens = estimateMessageTokens(tail.map(({ role, content }) => ({ role, content })));
+    return inputTokens + tailTokens;
+  }
+  return null;
+}
+
+/**
  * Plan a NEW compaction when the history is over budget. Keeps the newest
  * messages that fit within ~60% of the available budget (so the next
  * compaction is far away, not imminent); the head beyond that is what the
- * summarizer receives. Always keeps at least the final message. Returns null
- * when nothing needs compacting (under budget) or there is nothing to
- * summarize.
+ * summarizer receives. Always keeps at least the final message. Returns the
+ * SKIP decision when nothing needs compacting (under budget) or there is
+ * nothing to summarize.
  *
  * ROUND-71 (R71-e2, D5): `force` skips the "under budget → nothing to do"
  * gate — armed by the runtime's overflow-recovery path when the PROVIDER
  * ITSELF rejected the request as too large (a context_window_exceeded
  * classification is ground truth; the ±15% token estimate is the guess that
- * missed it). The empty-to-summarize check still returns null: a session
- * with a single message has nothing to compact and the recovery must fail
- * honestly instead of pretending otherwise.
+ * missed it). The empty-to-summarize check still skips: a session with a
+ * single message has nothing to compact and the recovery must fail honestly
+ * instead of pretending otherwise.
+ *
+ * ROUND-125 (R125-C, D1): `opts.tokenOverride` — the provider-usage anchor
+ * (see providerUsageAnchor). When it is a finite positive number it REPLACES
+ * the fresh whole-list estimate in the over-budget gate (the provider's own
+ * number is the truth; the estimate stays the fallback and BOTH are
+ * reported on the decision). ZCode compact/policy.ts shouldAutoCompact's
+ * `tokenOverride?.tokenCount ?? estimatedTokenCount`, the same law.
+ *
+ * ROUND-125 (R125-C, D2): the return is the TYPED decision on every path —
+ * { decision: "skip", reason: "below_threshold" | "empty_to_summarize", … }
+ * where pre-R125 returned null, and the compact plan carries the same
+ * fields (ZCode AutoCompactDecision's twin).
  */
 export function planCompaction(
   messages: readonly SeqMessage[],
   budget: ContextBudget,
   force = false,
-): { toSummarize: SeqMessage[]; keep: SeqMessage[]; targetThroughSeq: number } | null {
+  opts?: { tokenOverride?: number },
+): CompactionPlan {
   const available = budget.contextWindow - budget.maxOutputTokens - budget.margin;
   const total = estimateMessageTokens(messages.map(({ role, content }) => ({ role, content })));
-  if (!force && total <= available) return null;
+  // R125-C (D1): a non-finite / non-positive override is garbage, not an
+  // anchor — the estimate wins (the helper's own guard, re-checked here so
+  // planCompaction stays safe against raw caller input).
+  const override = opts?.tokenOverride;
+  const anchored = typeof override === "number" && Number.isFinite(override) && override > 0;
+  const tokenCount = anchored ? (override as number) : total;
+  const tokenSource: CompactionTokenSource = anchored ? "provider-anchored" : "estimated";
+  if (!force && tokenCount <= available) {
+    return {
+      decision: "skip",
+      tokenCount,
+      tokenSource,
+      estimatedTokens: total,
+      threshold: available,
+      reason: "below_threshold",
+    };
+  }
   const target = Math.max(1, Math.floor(available * 0.6));
   let acc = 0;
   let boundary = messages.length; // sentinel: nothing fits
@@ -176,8 +377,25 @@ export function planCompaction(
   // keep just it.
   if (boundary > messages.length - 1) boundary = messages.length - 1;
   const toSummarize = messages.slice(0, boundary);
-  if (toSummarize.length === 0) return null;
+  if (toSummarize.length === 0) {
+    return {
+      decision: "skip",
+      tokenCount,
+      tokenSource,
+      estimatedTokens: total,
+      threshold: available,
+      reason: "empty_to_summarize",
+    };
+  }
   return {
+    decision: "compact",
+    tokenCount,
+    tokenSource,
+    estimatedTokens: total,
+    threshold: available,
+    // R125-C (D2): "forced" wins the vocabulary whenever force carried the
+    // decision past the gate — the numbers are on the decision either way.
+    reason: force ? "forced" : "above_threshold",
     toSummarize,
     keep: messages.slice(boundary),
     targetThroughSeq: toSummarize[toSummarize.length - 1].throughSeq,
@@ -236,19 +454,29 @@ export interface CompactionOutcome {
  * summarize → persist → reuse pipeline below is exactly the same, and the
  * summarizer-failure hard-trim fallback still applies (a recovery attempt
  * is a recovery attempt — the retry will honestly fail if it wasn't enough).
+ *
+ * ROUND-125 (R125-C, D1): `opts.tokenOverride` — the provider-usage anchor
+ * (providerUsageAnchor), built by the runtime at its call sites from the
+ * last persisted usage-bearing assistant event and threaded down here.
+ * It replaces the local estimate in planCompaction's over-budget gate and
+ * rides the persisted event payload as the typed decision fields (D2), so
+ * the log answers “why did it compact, and on whose numbers”.
  */
 export async function assembleWithCompaction(
   seqMessages: readonly SeqMessage[],
   budget: ContextBudget,
   deps: CompactionDeps,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; tokenOverride?: number },
 ): Promise<CompactionOutcome> {
   const events = listSessionEvents(deps.db, deps.sessionId);
   const latest = findLatestCompaction(events);
   const applied: SeqMessage[] = latest ? applyCompaction(seqMessages, latest) : [...seqMessages];
 
-  const plan = planCompaction(applied, budget, opts?.force === true);
-  if (plan === null) {
+  // R125-C (D1): the anchor is threaded (not recomputed here) so the pure
+  // helper stays caller-owned and jest-pinnable; a manual/force caller (the
+  // R83 compact route) simply omits it and keeps the estimate-only gate.
+  const plan = planCompaction(applied, budget, opts?.force === true, { tokenOverride: opts?.tokenOverride });
+  if (plan.decision === "skip") {
     // Within budget (with any prior compaction applied): use as-is. If some
     // prior trim marker is already inside `applied` it stays — nothing to do.
     return { messages: applied.map(({ role, content }) => ({ role, content })), compacted: false };
@@ -330,6 +558,15 @@ export async function assembleWithCompaction(
     throughSeq: plan.targetThroughSeq,
     droppedMessages: plan.toSummarize.length,
     tokensSaved: 0,
+    // R125-C (D2): the typed decision rides the persisted event — additive
+    // fields (ZCode's AutoCompactDecision observability: tokenCount /
+    // tokenSource / estimatedTokens / threshold / reason). Old readers and
+    // the fold paths ignore them; old EVENTS simply lack them.
+    tokenCount: plan.tokenCount,
+    tokenSource: plan.tokenSource,
+    estimatedTokens: plan.estimatedTokens,
+    threshold: plan.threshold,
+    reason: plan.reason,
   };
   const finalMessages: SeqMessage[] = [summaryMessage(compact), ...plan.keep];
   compact.tokensSaved = Math.max(

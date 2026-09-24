@@ -2401,6 +2401,7 @@ describe("Composer: Continue after a user stop (ROUND-58 R58-cf)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -2498,6 +2499,7 @@ describe("Composer: the action anchor + queue-send (ROUND-78 R78-B/R78-D)", () =
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });

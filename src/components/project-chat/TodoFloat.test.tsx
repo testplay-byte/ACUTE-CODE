@@ -66,8 +66,11 @@ function sessionState(over: Partial<StreamSessionState> = {}): StreamSessionStat
     lastTurnStoppedTs: null,
     queued: [],
     deliveredQueued: [],
-          queueKeptNotice: null,
-          remote: false,
+    queueKeptNotice: null,
+    remote: false,
+    // R125-B: the slice's newest field (the feedback ledger status) — null
+    // in every TodoFloat fixture (the float never renders it).
+    feedbackEvent: null,
     ...over,
   };
 }

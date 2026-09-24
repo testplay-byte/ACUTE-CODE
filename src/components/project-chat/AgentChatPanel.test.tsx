@@ -504,6 +504,7 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -565,6 +566,7 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -626,6 +628,7 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -1076,6 +1079,7 @@ describe("AgentChatPanel response ratings (ROUND-59 R59-D)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -1554,6 +1558,7 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -1589,6 +1594,7 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -1671,6 +1677,7 @@ describe("AgentChatPanel R120-C-PC center redo (items 35 + 36)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -1687,6 +1694,177 @@ describe("AgentChatPanel R120-C-PC center redo (items 35 + 36)", () => {
       document.querySelectorAll('[data-testid="work-section-header"] span.font-mono'),
     ).filter((s) => /^\d+:\d\d$/.test(s.textContent ?? ""));
     expect(clocks).toHaveLength(1);
+  });
+
+  it("a SEGMENTED live turn with a pending write renders exactly ONE 'Writing…' row (R125-2: the tail owner — the duplicate the owner watched is dead)", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r125_pending",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "R125 pending-write probe",
+          createdAt: "2026-09-23T10:00:00Z",
+          updatedAt: "2026-09-23T10:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy(), SLOW);
+
+    // The owner's exact scenario (v0.117.0 verdict): tools ran EARLIER in
+    // the conversation, narration text flushed, and a NEW write is being
+    // generated right now — segments [work, text] + a pending write. The
+    // pre-R125 store selector painted the same "Writing…" row in the
+    // earlier work section AND the synthetic tail ("multiple writing at
+    // the same time… the exact same ones… one much earlier in the
+    // conversation, the other one showing further").
+    useStreamStore.setState({
+      bySession: {
+        sess_r125_pending: {
+          liveTurn: {
+            startedAtMs: Date.now() - 5_000,
+            working: [
+              { type: "tool", tool: { seq: 1, toolName: "write_file", argsSummary: "path: a.ts, content: 10 chars", ok: true, ts: "t1", outputSummary: "wrote 10 chars" } },
+              { type: "text", content: "Interim note before the new write.", ts: "t2" },
+            ],
+            streamText: "",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [
+              {
+                toolCallId: "call_r125",
+                toolName: "write_file",
+                raw: '{"path":"src/streaming.ts","content":"export const A = 1;',
+              },
+            ],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: false,
+          feedbackEvent: null,
+        },
+      },
+    });
+
+    // The ONE pending row (the synthetic tail section owns it — the last
+    // segment is the interim TEXT, so the write renders at the live tail,
+    // never duplicated into the earlier work section).
+    await waitFor(
+      () => expect(document.querySelectorAll('[data-testid="live-write-pending-row"]')).toHaveLength(1),
+      SLOW,
+    );
+    const row = document.querySelector('[data-testid="live-write-pending-row"]');
+    expect(row?.textContent).toContain("Writing");
+    expect(row?.textContent).toContain("path: src/streaming.ts");
+    // And exactly ONE live write preview under it.
+    expect(document.querySelectorAll('[data-testid="live-write-preview"]')).toHaveLength(1);
+  });
+
+  it("the mid-turn FEEDBACK CHECKPOINT line renders at the live block's bottom edge (R125-B: the ledger's processing is visible while the turn runs)", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r125_feedback",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "R125 feedback line probe",
+          createdAt: "2026-09-23T10:00:00Z",
+          updatedAt: "2026-09-23T10:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy(), SLOW);
+
+    useStreamStore.setState({
+      bySession: {
+        sess_r125_feedback: {
+          liveTurn: {
+            startedAtMs: Date.now() - 5_000,
+            working: [],
+            streamText: "",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: "watch me",
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: false,
+          // The mid-turn checkpoint's "writing…" stage (R125-B).
+          feedbackEvent: {
+            stage: "writing",
+            phase: "mid-turn",
+            entries: null,
+            detail: null,
+            ts: Date.now(),
+          },
+        },
+      },
+    });
+    await waitFor(
+      () => expect(document.querySelector('[data-testid="live-feedback-line"]')).toBeTruthy(),
+      SLOW,
+    );
+    expect(document.querySelector('[data-testid="live-feedback-line"]')?.textContent).toContain(
+      "writing the self-feedback checkpoint",
+    );
+
+    // The settled stage swaps the line's text in place (the same element).
+    useStreamStore.setState({
+      bySession: {
+        sess_r125_feedback: {
+          ...useStreamStore.getState().bySession.sess_r125_feedback,
+          feedbackEvent: {
+            stage: "written",
+            phase: "mid-turn",
+            entries: 12,
+            detail: null,
+            ts: Date.now(),
+          },
+        },
+      },
+    });
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="live-feedback-line"]')?.textContent).toContain(
+        "self-feedback checkpoint written · 12 entries",
+      ),
+      SLOW,
+    );
   });
 
   it("a FOLDED turn's write renders in the CENTER without expanding anything (item 35 end-to-end: the write row + the answer, no phantom reads)", async () => {
@@ -1814,6 +1992,7 @@ describe("AgentChatPanel remote live turn (ROUND-113 R113-b)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: true,
+          feedbackEvent: null,
         },
       },
     });
@@ -1849,6 +2028,7 @@ describe("AgentChatPanel remote live turn (ROUND-113 R113-b)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -1902,6 +2082,7 @@ describe("AgentChatPanel remote turn.started (ROUND-114 R114-e)", () => {
       deliveredQueued: [],
       queueKeptNotice: null,
       remote: true,
+      feedbackEvent: null,
     };
   }
 
@@ -2126,6 +2307,7 @@ describe("AgentChatPanel message timeline (ROUND-120 R120-C-PC)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -2223,6 +2405,7 @@ describe("AgentChatPanel inline screenshots (ROUND-68 R68-A)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -2432,6 +2615,7 @@ describe("AgentChatPanel ROUND-75 retry ladder surfaces", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -2595,6 +2779,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -2784,6 +2969,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -2914,6 +3100,7 @@ describe("AgentChatPanel queued-message honesty (ROUND-119 R119-C)", () => {
     deliveredQueued: [],
     queueKeptNotice: null,
     remote: false,
+    feedbackEvent: null,
   });
 
   it("R119-C: THE OWNER'S DUPLICATE — a live turn + a folded log carrying the SAME in-flight turn renders it ONCE; the clearStream handoff renders it once again", async () => {
@@ -2996,6 +3183,7 @@ describe("AgentChatPanel queued-message honesty (ROUND-119 R119-C)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -3071,6 +3259,7 @@ describe("AgentChatPanel queued-message honesty (ROUND-119 R119-C)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: true,
+          feedbackEvent: null,
         },
       },
     });
@@ -3101,6 +3290,7 @@ describe("AgentChatPanel queued-message honesty (ROUND-119 R119-C)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -3283,6 +3473,7 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -3333,6 +3524,7 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -3622,6 +3814,7 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });
@@ -3726,6 +3919,7 @@ describe("AgentChatPanel R117-f delivery ticks + breathing placeholder", () => {
     deliveredQueued: [],
     queueKeptNotice: null,
     remote: false,
+    feedbackEvent: null,
     ...extra,
   });
 
@@ -3834,6 +4028,7 @@ describe("AgentChatPanel R117-f delivery ticks + breathing placeholder", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     });

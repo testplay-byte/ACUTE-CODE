@@ -52,13 +52,16 @@
  *         agent `browser_control` tool read/write (validate 200..3840 ×
  *         200..4320, zoom 0.25..3).
  *   POST   /api/v1/browser-capture         {x, y, w, h} → {pngBase64, width,
- *         height} — ROUND-124 (R124): the staged screenshot's screen-region
- *         grab (physical px), run through the SAME standalone capture
- *         backend the browser_control tool uses. 400 VALIDATION for a
+ *         height, source} — ROUND-124 (R124): the staged screenshot's
+ *         screen-region grab (physical px), run through the SAME standalone
+ *         capture backend the browser_control tool uses. 400 VALIDATION for a
  *         malformed/degenerate region, 500 CAPTURE_FAILED on a backend
  *         error. Bearer-authed like /browser-commands (the app itself
  *         calls it mid-command; see the route's comment for the atomicity
- *         rationale).
+ *         rationale). ROUND-125 (R125-A): the reply's `source` field says
+ *         WHICH pixels were captured — "window" (Windows PrintWindow on
+ *         the app's own child webview — occlusion-proof) or "screen"
+ *         (the legacy region grab — another window may occlude it).
  *
  * AUTH — why tickets exist: the sidecar's bearer wall lives in an app-level
  * preHandler hook that reads the Authorization HEADER, but an iframe's src
@@ -2031,17 +2034,43 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
       return jsonError(reply, 400, "VALIDATION", `region ${Math.round(w)}×${Math.round(h)}px exceeds the 7680×4320 ceiling`);
     }
     const capture = getCaptureBackend();
-    const raster = await capture.backend.captureRegion(capture.run, { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) });
+    // ── ROUND-125 (R125-A): the OWNER PID ── the sidecar is a CHILD of the
+    // Tauri app (process.ppid IS the app's pid on the owner's machine), and
+    // the Windows backend's PrintWindow path uses it to resolve the app's
+    // top-level window → the staged CHILD webview, capturing the WINDOW'S
+    // OWN SURFACE instead of scraping the screen region (the owner's
+    // occlusion verdict — another application's pixels were leaking into
+    // the grab). Dev shells (npm run / a terminal) parent us to a NON-APP
+    // pid: the finite-positive-int check filters only garbage here — a
+    // wrong-but-valid pid simply finds no owner window and the backend's
+    // honest screen fallback answers (source:"screen"). Old sidecars↔new
+    // apps are unaffected: the field is additive on both ends.
+    const ownerPid =
+      typeof process.ppid === "number" && Number.isInteger(process.ppid) && process.ppid > 0
+        ? process.ppid
+        : undefined;
+    const raster = await capture.backend.captureRegion(capture.run, {
+      x: Math.round(x),
+      y: Math.round(y),
+      w: Math.round(w),
+      h: Math.round(h),
+      ...(ownerPid !== undefined ? { ownerPid } : {}),
+    });
     if ("error" in raster) {
       return jsonError(reply, 500, "CAPTURE_FAILED", `screen capture failed: ${raster.error}`);
     }
     if (typeof raster.pngBase64 !== "string" || raster.pngBase64.length < 64) {
       return jsonError(reply, 500, "CAPTURE_FAILED", "the capture backend produced no image");
     }
+    // R125-A: `source` rides the reply (additive — old frontends ignore it;
+    // an old SIDECAR never sets it, and absence reads as the conservative
+    // "screen"). The frontend threads it into the screenshot_capture
+    // command reply so the tool's note can say WHICH pixels it got.
     return {
       pngBase64: raster.pngBase64,
       width: raster.width,
       height: raster.height,
+      source: raster.source === "window" ? "window" : "screen",
     };
   });
 

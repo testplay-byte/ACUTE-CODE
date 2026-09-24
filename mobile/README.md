@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-24 round-124 -->
+<!-- last-reviewed: 2026-09-24 round-125 -->
 # ACUTE — the Android companion
 
 The phone-side half of the device link (docs/planning/LINKING-PROTOCOL.md):

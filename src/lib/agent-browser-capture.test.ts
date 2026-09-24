@@ -42,12 +42,14 @@ const nativeState = vi.hoisted(() => {
   };
 });
 
-/** The mocked api's capture replies / failures. */
+/** The mocked api's capture replies / failures. R125-A: `source` mirrors
+ * the sidecar route's additive field (absent = an old sidecar). */
 const apiState = vi.hoisted(() => ({
   reply: { pngBase64: "aW1n".repeat(40), width: 2560, height: 1440 } as {
     pngBase64: string;
     width: number;
     height: number;
+    source?: "window" | "screen";
   },
   failWith: null as Error | null,
   regions: [] as Array<{ x: number; y: number; w: number; h: number }>,
@@ -356,6 +358,59 @@ describe("R124: performStagedBrowserCapture — the choreography", () => {
     expect(result.logicalWidth).toBe(1000);
     expect(result.logicalHeight).toBe(600);
     expect(setBoundsMock).toHaveBeenCalledWith("tab-dims", expect.any(Number), expect.any(Number), 1000, 600);
+  });
+
+  // ── R125-A: the honest SOURCE threading ─────────────────────────────────
+  // The sidecar's capture route now answers `source` ("window" = Windows
+  // PrintWindow on the app's own child webview — occlusion-proof, the
+  // owner's "it takes a screenshot of that application instead" verdict
+  // fixed; "screen" = the legacy region grab — the occluder may have leaked
+  // in). The choreography threads it into the capture result so the
+  // browser_control tool's note can state WHICH pixels arrived; the field is
+  // OPTIONAL-TOLERANT (an older sidecar omits it — absence is absence, never
+  // a guessed "window").
+  it("the raster's source \"window\" threads through to the capture result (the occlusion-proof grab)", async () => {
+    apiState.reply = { pngBase64: "aW1n".repeat(40), width: 2560, height: 1440, source: "window" };
+    const result = await performStagedBrowserCapture("tab-src-win", {});
+    expect(result.source).toBe("window");
+    // The rest of the honest geometry is unchanged by the new field.
+    expect(result.logicalWidth).toBe(1280);
+    expect(result.clamped).toBe(false);
+  });
+
+  it("the raster's source \"screen\" threads through (the fallback is named, never silent)", async () => {
+    apiState.reply = { pngBase64: "aW1n".repeat(40), width: 2560, height: 1440, source: "screen" };
+    const result = await performStagedBrowserCapture("tab-src-scr", {});
+    expect(result.source).toBe("screen");
+  });
+
+  it("an OLD sidecar (no source on the raster) → the result carries NO source key (never guessed)", async () => {
+    // apiState.reply has no source (the beforeEach reset) — the exact-shape
+    // pin: the key is ABSENT, not undefined-valued, so the tool's note logic
+    // and old pins treat it as "don't know".
+    const result = await performStagedBrowserCapture("tab-src-none", {});
+    expect("source" in result).toBe(false);
+    expect(result).toEqual({
+      pngBase64: apiState.reply.pngBase64,
+      width: 2560,
+      height: 1440,
+      logicalWidth: 1280,
+      logicalHeight: 720,
+      clamped: false,
+    });
+  });
+
+  it("a junk source on the wire is DROPPED (only the two known strings survive)", async () => {
+    apiState.reply = {
+      pngBase64: "aW1n".repeat(40),
+      width: 2560,
+      height: 1440,
+      // Simulate a future/buggy sidecar sending an unknown marker — the
+      // threading must not pass it through as if it meant something.
+      source: "hologram" as "window" | "screen",
+    };
+    const result = await performStagedBrowserCapture("tab-src-junk", {});
+    expect("source" in result).toBe(false);
   });
 
   // ── R124: the DEFERRED HIDE — a surface that unmounted mid-capture ─────

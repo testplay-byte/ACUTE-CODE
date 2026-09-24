@@ -54,6 +54,18 @@
  *     off-screen engine capture (CapturePreview/CDP) remains the documented
  *     follow-up if the flash ever bothers the owner.
  *
+ *   · ROUND-125 (R125-A) — the OCCLUSION half of that cost is FIXED on
+ *     Windows: the sidecar's capture route now runs PrintWindow
+ *     (PW_RENDERFULLCONTENT) on the app's own CHILD webview (window-scoped
+ *     pixels, valid while another application covers the app) and its reply
+ *     carries `source` ("window" | "screen") — THIS module threads that field
+ *     into the capture result, the browser_control tool's note states it,
+ *     and a "screen" capture carries the honest caveat (the occluder may
+ *     have leaked in), never a silent pass. The FLASH cost remains (the
+ *     staged page still shows for the grab — the staging choreography is
+ *     unchanged). An older sidecar omits `source` → the field is absent here
+ *     too (optional-tolerant, never guessed).
+ *
  * THE LAWS this module keeps:
  *   · CAPTURE-WHILE-HIDDEN: the webview is ALIVE whenever the browser tab
  *     exists (R87's keep-alive + the tab-close reaper only destroy on tab
@@ -244,6 +256,17 @@ export interface StagedCaptureResult {
   logicalHeight: number;
   /** True when the target resolution was clamped to the app window. */
   clamped: boolean;
+  /**
+   * ROUND-125 (R125-A): WHICH pixels the sidecar's backend captured —
+   * "window" (Windows PrintWindow on the app's own child webview:
+   * occlusion-proof, the grab is the PAGE even when another application
+   * covers the app) or "screen" (the legacy screen-region grab: another
+   * window on top may have leaked in — the owner's v0.117.0 complaint).
+   * OPTIONAL: an older sidecar omits the field and so does this result
+   * (absence = "don't know", never a guessed "window"). The browser_control
+   * tool reads it to state the capture's provenance in its reply.
+   */
+  source?: "window" | "screen";
 }
 
 /**
@@ -426,6 +449,10 @@ export async function performStagedBrowserCapture(
         `screenshot_capture: the capture backend answered a malformed raster (no PNG bytes) for region ${region.w}×${region.h}px`,
       );
     }
+    // R125-A: thread the backend's honest source marker through — ONLY the
+    // two known strings survive (anything else on the wire is dropped: the
+    // conservative absence, never a guessed "window").
+    const rasterSource = raster.source === "window" || raster.source === "screen" ? raster.source : undefined;
     return {
       pngBase64: raster.pngBase64,
       width: raster.width,
@@ -433,6 +460,7 @@ export async function performStagedBrowserCapture(
       logicalWidth: geo.w,
       logicalHeight: geo.h,
       clamped: geo.clamped,
+      ...(rasterSource !== undefined ? { source: rasterSource } : {}),
     };
   } finally {
     // ── RESTORE (always — even when the grab failed) ──────────────────────

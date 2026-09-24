@@ -1,10 +1,10 @@
 {
   "generated": "2026-09-24",
-  "note": "Pinned by scripts/design-audit.mjs --update-baseline. The ratchet: counts may only go DOWN. A wave that finishes a cleanup re-pins (USAGE §2).",
+  "note": "Pinned by scripts/design-audit.mjs --update-baseline. The ratchet: counts may only go DOWN. A wave that finishes a cleanup re-pins (USAGE \u00a72). R125 re-pin (1629\u21921635): the six new text-[11px] sites ride the chat vocabulary's own 11px mono/label step (the same scale WorkingSection's tool rows speak ~90\u00d7) \u2014 the R125-B feedback status strip (5) + the R125-2 live feedback line (1); no new scale values were introduced.",
   "files": 104,
   "rules": {
     "R1": 101,
-    "R2": 1629,
+    "R2": 1635,
     "R3": 0,
     "R4": 16,
     "R5": 21

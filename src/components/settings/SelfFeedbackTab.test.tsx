@@ -19,6 +19,12 @@
  *     PUTs DELETE /feedback/file, converging back to the empty state.
  *  4. THE HONEST ERROR — a failed ledger GET renders the retryable
  *     error card, never an eternal spinner.
+ *  5. ROUND-125 (R125-B) — THE LIVE STATUS STRIP: the writing state
+ *     (spinner + "Writing the ledger entry — mid-turn checkpoint…" + the
+ *     session short form), the last-entry line (time · entries · bytes),
+ *     the quiet failure line (excerpt + the full text in the title), and
+ *     the OFF state (the strip hides entirely — nothing polls). The
+ *     status route is mocked the way the file route is.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -27,8 +33,10 @@ import {
   deleteFeedbackEntry,
   fetchFeedbackLedger,
   fetchFeedbackSettings,
+  fetchFeedbackStatus,
   updateFeedbackSettings,
   type FeedbackLedgerFile,
+  type FeedbackStatus,
 } from "../../lib/api";
 import { resetTestState, renderWithProviders } from "../../test-utils";
 import { parseFeedbackEntries, SelfFeedbackTab } from "./SelfFeedbackTab";
@@ -38,12 +46,29 @@ vi.mock("../../lib/api", () => ({
   fetchFeedbackSettings: vi.fn(),
   updateFeedbackSettings: vi.fn(),
   fetchFeedbackLedger: vi.fn(),
+  fetchFeedbackStatus: vi.fn(),
   clearFeedbackLedger: vi.fn(),
   deleteFeedbackEntry: vi.fn(),
 }));
 
 const settingsState = { enabled: false };
 const puts: Array<Record<string, unknown>> = [];
+
+/** R125-B: the status route's idle reply — the honest never-written state. */
+function idleStatus(): FeedbackStatus {
+  return {
+    enabled: false,
+    writing: false,
+    phase: "turn-end",
+    sessionId: null,
+    startedAt: null,
+    lastWriteTs: null,
+    lastWriteOutcome: null,
+    entries: 0,
+    bytes: 0,
+    lastError: null,
+  };
+}
 
 beforeEach(() => {
   resetTestState();
@@ -52,6 +77,7 @@ beforeEach(() => {
   vi.mocked(fetchFeedbackSettings).mockReset();
   vi.mocked(updateFeedbackSettings).mockReset();
   vi.mocked(fetchFeedbackLedger).mockReset();
+  vi.mocked(fetchFeedbackStatus).mockReset();
   vi.mocked(clearFeedbackLedger).mockReset();
   vi.mocked(fetchFeedbackSettings).mockImplementation(async () => ({ ...settingsState }));
   vi.mocked(updateFeedbackSettings).mockImplementation(async (patch) => {
@@ -66,6 +92,9 @@ beforeEach(() => {
     updatedAt: null,
     entries: 0,
   });
+  // R125-B: the strip's idle default — the toggle is OFF in most tests, so
+  // this value is rarely even fetched (the gate keeps the query disabled).
+  vi.mocked(fetchFeedbackStatus).mockResolvedValue(idleStatus());
   vi.mocked(clearFeedbackLedger).mockResolvedValue({ cleared: true, entries: 0 });
 });
 
@@ -329,5 +358,108 @@ describe("R122: the feedback ledger viewer card", () => {
     expect(screen.getByText(/HTTP 503/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry loading the feedback ledger" })).toBeTruthy();
     expect(screen.queryByTestId("feedback-ledger-content")).toBeNull();
+  });
+});
+
+// ── 5. R125-B: the live status strip ────────────────────────────────────────
+
+describe("R125-B: the live status strip", () => {
+  it("the OFF state: the strip hides entirely and the status route is never polled", async () => {
+    renderWithProviders(<SelfFeedbackTab />);
+    await screen.findByRole("switch", { name: "Toggle self-feedback generation" });
+    // The gate (the toggle's own query key) keeps the status query disabled.
+    expect(screen.queryByTestId("feedback-status-strip")).toBeNull();
+    expect(fetchFeedbackStatus).not.toHaveBeenCalled();
+  });
+
+  it("the WRITING state: the spinner line names the phase and the session's short form (the full id in the title)", async () => {
+    settingsState.enabled = true;
+    vi.mocked(fetchFeedbackStatus).mockResolvedValue({
+      ...idleStatus(),
+      enabled: true,
+      writing: true,
+      phase: "mid-turn",
+      sessionId: "sess_abcdef1234567890",
+      startedAt: "2026-09-23T15:04:05Z",
+    });
+    renderWithProviders(<SelfFeedbackTab />);
+    const writing = await screen.findByTestId("feedback-status-writing");
+    expect(writing.textContent).toContain("Writing the ledger entry — mid-turn checkpoint…");
+    // The short form: the first 14 chars, ellipsized.
+    expect(writing.textContent).toContain("sess_abcdef123…");
+    expect(writing.textContent).not.toContain("sess_abcdef1234567890");
+    // The FULL session id rides the title attribute — truncated display,
+    // never truncated information.
+    expect(writing.getAttribute("title")).toBe("sess_abcdef1234567890");
+  });
+
+  it("the turn-summary writing state reads the other phase", async () => {
+    settingsState.enabled = true;
+    vi.mocked(fetchFeedbackStatus).mockResolvedValue({
+      ...idleStatus(),
+      enabled: true,
+      writing: true,
+      phase: "turn-end",
+      sessionId: "sess_short",
+    });
+    renderWithProviders(<SelfFeedbackTab />);
+    const writing = await screen.findByTestId("feedback-status-writing");
+    expect(writing.textContent).toContain("Writing the ledger entry — turn summary…");
+  });
+
+  it("the LAST-ENTRY line: time · entries · bytes, off the status route's live numbers", async () => {
+    settingsState.enabled = true;
+    vi.mocked(fetchFeedbackStatus).mockResolvedValue({
+      ...idleStatus(),
+      enabled: true,
+      lastWriteTs: "2026-09-23T15:04:05Z",
+      lastWriteOutcome: "written",
+      entries: 3,
+      bytes: 4321,
+    });
+    renderWithProviders(<SelfFeedbackTab />);
+    const last = await screen.findByTestId("feedback-status-last");
+    expect(last.textContent).toContain("Last entry ");
+    expect(last.textContent).toContain("3 entries");
+    expect(last.textContent).toContain("4.2 KB");
+    expect(screen.queryByTestId("feedback-status-error")).toBeNull();
+  });
+
+  it("the FAILURE line: the quiet danger excerpt with the full text in the title", async () => {
+    settingsState.enabled = true;
+    const longError = "feedback reporter: the model returned an empty entry after 3 attempts and a scrubbed provider detail that goes on and on and on past the cap";
+    vi.mocked(fetchFeedbackStatus).mockResolvedValue({
+      ...idleStatus(),
+      enabled: true,
+      lastWriteTs: "2026-09-23T15:04:05Z",
+      lastWriteOutcome: "failed",
+      lastError: longError,
+    });
+    renderWithProviders(<SelfFeedbackTab />);
+    const error = await screen.findByTestId("feedback-status-error");
+    expect(error.getAttribute("role")).toBe("alert");
+    expect(error.textContent).toContain("Last write failed — ");
+    // The excerpt is capped for the one-line discipline: the first 120
+    // chars render, the tail beyond the cap never does.
+    expect(error.textContent).toContain(longError.slice(0, 120));
+    expect(error.textContent).toContain("…");
+    expect(error.textContent).not.toContain(longError.slice(121));
+    // …and the FULL text rides the title attribute.
+    expect(error.getAttribute("title")).toBe(longError);
+  });
+
+  it("flipping the toggle ON lights the strip immediately (the one immediate fetch on enable)", async () => {
+    renderWithProviders(<SelfFeedbackTab />);
+    const toggle = await screen.findByRole("switch", { name: "Toggle self-feedback generation" });
+    expect(screen.queryByTestId("feedback-status-strip")).toBeNull();
+    fireEvent.click(toggle);
+    // The PUT resolves → the settings query is invalidated → the strip's
+    // gate opens → the status query fetches at once (the strip appears with
+    // the idle watching line). (R125-B gate note: the strip's presence is
+    // asserted through the idle line below — findByTestId's element is not
+    // otherwise referenced, so no unused binding.)
+    await screen.findByTestId("feedback-status-strip");
+    expect(fetchFeedbackStatus).toHaveBeenCalled();
+    expect(await screen.findByTestId("feedback-status-idle")).toBeTruthy();
   });
 });

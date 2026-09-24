@@ -26,12 +26,15 @@
  *     honest refusals surface verbatim; BOTH version-skew shapes (an older
  *     app's "unknown browser command" error AND its generic non-contract
  *     reply) fall back to the LEGACY screenshot_meta path verbatim — never
- *     a fabricated raster;
+ *     a fabricated raster; R125-A adds the honest SOURCE line pins (the
+ *     reply's `source` → "(window capture — works while covered)" vs.
+ *     "(screen-region fallback …)" vs. no line when absent);
  *   · the ROUTE (POST /api/v1/browser-capture): the app's staged-grab
  *     engine door — region validation (the 50px floor / the 8K ceiling /
- *     finite numbers), the backend passthrough (rounded physical px), and
- *     the honest 500 CAPTURE_FAILED — bearer-authed like every /browser
- *     route.
+ *     finite numbers), the backend passthrough (rounded physical px +
+ *     R125-A's ownerPid = process.ppid threading and the additive `source`
+ *     in the reply), and the honest 500 CAPTURE_FAILED — bearer-authed like
+ *     every /browser route.
  *
  * Harness idioms mirror r98-browser-screenshot.test.ts (the REAL tool via
  * buildProjectTools, the REAL browser-command bridge resolved on
@@ -67,10 +70,13 @@ import type { ToolSet } from "ai";
 // captureRegion records every region the STANDALONE engine is asked to grab
 // (the legacy path's only source of bytes); the staged path must leave it
 // EMPTY — the app's own POST /browser-capture produced the bytes instead.
+// R125-A: the fake also answers the additive `source` field (null = an OLD
+// backend that never sets it) so the route's reply legs can be pinned.
 const captureState = vi.hoisted(() => ({
-  regions: [] as Array<{ x: number; y: number; w: number; h: number }>,
+  regions: [] as Array<{ x: number; y: number; w: number; h: number; ownerPid?: number }>,
   failWith: null as string | null,
   malformed: false,
+  source: null as "window" | "screen" | null,
 }));
 vi.mock("../src/computer/backends/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/computer/backends/index.js")>();
@@ -80,7 +86,7 @@ vi.mock("../src/computer/backends/index.js", async (importOriginal) => {
       backend: {
         captureRegion: async (
           _run: unknown,
-          region: { x: number; y: number; w: number; h: number },
+          region: { x: number; y: number; w: number; h: number; ownerPid?: number },
         ) => {
           captureState.regions.push(region);
           if (captureState.failWith !== null) return { error: captureState.failWith };
@@ -91,6 +97,7 @@ vi.mock("../src/computer/backends/index.js", async (importOriginal) => {
             height: region.h,
             scale: 1,
             origin: { x: region.x, y: region.y },
+            ...(captureState.source !== null ? { source: captureState.source } : {}),
           };
         },
       },
@@ -166,6 +173,7 @@ beforeEach(() => {
   captureState.regions.length = 0;
   captureState.failWith = null;
   captureState.malformed = false;
+  captureState.source = null;
 });
 
 afterEach(() => {
@@ -380,6 +388,103 @@ describe("R124: browser_control screenshot — the staged capture (the tool side
     expect(result.output).toContain("panel region 300×200");
     expect(captureState.regions).toEqual([{ x: 0, y: 0, w: 300, h: 200 }]);
   });
+
+  // ── R125-A: the honest SOURCE line — the tool states WHICH pixels it got ──
+  // The owner's occlusion verdict ("when I am in some other application, it
+  // takes a screenshot of that application rather than the browser window
+  // itself") is fixed by the sidecar's PrintWindow path — but a capture that
+  // FELL BACK to the screen region must SAY so in the model-facing note
+  // (those pixels may contain the occluder), and a window capture may say it
+  // worked while covered. The frontend threads the sidecar route's additive
+  // `source` through the screenshot_capture reply; these pins hold the note.
+  it("source \"window\" → the note says the capture is window-scoped (works while covered)", async () => {
+    const frames: unknown[] = [];
+    const tools = await buildTools(tempDir, {
+      emit: makeR124Emit(frames, {
+        screenshot_capture: {
+          ok: true,
+          data: {
+            pngBase64: "aW1n".repeat(40),
+            width: 2560,
+            height: 1440,
+            logicalWidth: 1280,
+            logicalHeight: 720,
+            clamped: false,
+            source: "window",
+          },
+        },
+      }),
+    });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/r125-win", sessionId: "tool-tab-r125-win" });
+    const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-r125-win" });
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("staged 1280×720 logical px, 2560×1440px raster (window capture — works while covered)");
+    // The OCCLUDER caveat is NOT there — the bytes are the window's own.
+    expect(result.output).not.toContain("screen-region fallback");
+    expect(captureState.regions).toEqual([]);
+  });
+
+  it("source \"screen\" → the note carries the honest occlusion caveat (the fallback says so)", async () => {
+    const frames: unknown[] = [];
+    const tools = await buildTools(tempDir, {
+      emit: makeR124Emit(frames, {
+        screenshot_capture: {
+          ok: true,
+          data: {
+            pngBase64: "aW1n".repeat(40),
+            width: 2560,
+            height: 1440,
+            logicalWidth: 1280,
+            logicalHeight: 720,
+            clamped: false,
+            source: "screen",
+          },
+        },
+      }),
+    });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/r125-scr", sessionId: "tool-tab-r125-scr" });
+    const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-r125-scr" });
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain(
+      "(screen-region fallback — the window could not be captured directly; another window may occlude it)",
+    );
+    expect(result.output).not.toContain("window capture — works while covered");
+    expect(captureState.regions).toEqual([]);
+  });
+
+  it("no source (an OLDER frontend / an older sidecar) → NO source line ever guessed", async () => {
+    // Optional-tolerant both directions: the R124 pin above (the happy path
+    // without source) already holds the exact note; THIS pin makes the
+    // absence deliberate — neither the window nor the screen line appears.
+    const frames: unknown[] = [];
+    const tools = await buildTools(tempDir, {
+      emit: makeR124Emit(frames, {
+        screenshot_capture: {
+          ok: true,
+          data: {
+            pngBase64: "aW1n".repeat(40),
+            width: 2560,
+            height: 1440,
+            logicalWidth: 1280,
+            logicalHeight: 720,
+            clamped: false,
+          },
+        },
+      }),
+    });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/r125-none", sessionId: "tool-tab-r125-none" });
+    const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-r125-none" });
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("staged 1280×720 logical px, 2560×1440px raster");
+    expect(result.output).not.toContain("window capture — works while covered");
+    expect(result.output).not.toContain("screen-region fallback");
+  });
 });
 
 // ── the ROUTE: POST /api/v1/browser-capture ────────────────────────────────
@@ -387,8 +492,15 @@ describe("R124: browser_control screenshot — the staged capture (the tool side
 describe("R124: POST /browser-capture — the staged grab's engine door", () => {
   const TOKEN = "test-token-r124-capture";
   let app: FastifyInstance;
+  // R125-A: process.ppid is pinned to a DETERMINISTIC value for this
+  // describe (the route threads it as ownerPid — the vitest worker's real
+  // ppid would make the region pins environment-dependent). The getter-spy
+  // form ("get") is required: process.ppid is a getter, not a method.
+  const PPID_PIN = 4242;
+  let ppidSpy: ReturnType<typeof vi.spyOn> | undefined;
 
   beforeEach(() => {
+    ppidSpy = vi.spyOn(process, "ppid", "get").mockReturnValue(PPID_PIN);
     db = openDatabase(join(tempDir, `${randomUUID()}.db`));
     app = buildServer({
       token: TOKEN,
@@ -398,6 +510,7 @@ describe("R124: POST /browser-capture — the staged grab's engine door", () => 
   });
 
   afterEach(async () => {
+    ppidSpy?.mockRestore();
     await app.close();
   });
 
@@ -413,17 +526,25 @@ describe("R124: POST /browser-capture — the staged grab's engine door", () => 
     })) as LightMyRequestResponse;
   }
 
-  it("a valid region → 200 with the backend's PNG + geometry, the region ROUNDED to whole physical px", async () => {
+  it("a valid region → 200 with the backend's PNG + geometry + source, the region ROUNDED and the OWNER PID threaded", async () => {
     const res = await inject({ x: 10.4, y: 20.6, w: 1280, h: 720 });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { pngBase64: string; width: number; height: number };
+    const body = res.json() as { pngBase64: string; width: number; height: number; source: string };
     expect(body.pngBase64).toBe("aW1n".repeat(40));
     expect(body.width).toBe(1280);
     expect(body.height).toBe(720);
     // The engine saw the ROUNDED region (Math.round on every axis — a
     // fractional window origin / scale-factor product must never hand the
     // GDI/scrot backend a sub-pixel rect).
-    expect(captureState.regions).toEqual([{ x: 10, y: 21, w: 1280, h: 720 }]);
+    // R125-A INTENTIONAL PIN UPDATE: the region now ALSO carries ownerPid =
+    // process.ppid (the Tauri app's pid — the Windows backend's
+    // PrintWindow path resolves the app's own window with it; the old
+    // backend mock ignored the field entirely). Pinned via the spy so the
+    // value is deterministic, not environment-dependent.
+    expect(captureState.regions).toEqual([{ x: 10, y: 21, w: 1280, h: 720, ownerPid: PPID_PIN }]);
+    // The additive source field rides the reply (absence on the mock = the
+    // conservative "screen" — the next tests pin both legs).
+    expect(body.source).toBe("screen");
   });
 
   it("a degenerate region (below the 50px floor — REGION_MIN_PX's twin) → 400 VALIDATION, the backend never called", async () => {
@@ -478,5 +599,37 @@ describe("R124: POST /browser-capture — the staged grab's engine door", () => 
     })) as LightMyRequestResponse;
     expect(res.statusCode).toBe(401);
     expect(captureState.regions).toEqual([]);
+  });
+
+  // ── R125-A: the ownerPid + source legs ────────────────────────────────────
+
+  it("a GARBAGE process.ppid (not a finite positive int) → ownerPid is OMITTED, the region stays 4-field (the dev-shell leg)", async () => {
+    // Dev shells (npm run / a terminal) parent the sidecar to a non-app
+    // pid — the route's guard only filters GARBAGE (NaN / 0 / negative);
+    // a wrong-but-valid pid threads through and the backend finds no
+    // owner window (its honest screen fallback). Here we pin the garbage
+    // leg: the recorded region carries NO ownerPid key at all.
+    ppidSpy?.mockReturnValue(Number.NaN);
+    const res = await inject({ x: 0, y: 0, w: 1280, h: 720 });
+    expect(res.statusCode).toBe(200);
+    expect(captureState.regions).toEqual([{ x: 0, y: 0, w: 1280, h: 720 }]);
+  });
+
+  it("the backend reports source \"window\" → the reply carries it verbatim (the occlusion-proof grab)", async () => {
+    captureState.source = "window";
+    const res = await inject({ x: 0, y: 0, w: 1280, h: 720 });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { source: string };
+    expect(body.source).toBe("window");
+  });
+
+  it("an OLD backend (no source on the raster) → the reply says the conservative \"screen\" — never a guessed \"window\"", async () => {
+    // captureState.source stays null (the pre-R125 backend shape); the
+    // route normalizes absence to "screen" so the frontend's note logic
+    // never has to guess.
+    const res = await inject({ x: 0, y: 0, w: 1280, h: 720 });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { source: string };
+    expect(body.source).toBe("screen");
   });
 });

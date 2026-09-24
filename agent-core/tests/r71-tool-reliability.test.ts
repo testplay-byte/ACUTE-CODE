@@ -488,20 +488,30 @@ describe("R71-e2 D4: classifyProviderError — the classifier table", () => {
 describe("R71-e2 D5: compaction force mode (the recovery primitive)", () => {
   const budget = { contextWindow: 200_000, maxOutputTokens: 32_768, margin: 8_000 };
 
-  it("planCompaction: under budget → null without force; with force → a real plan", () => {
+  it("planCompaction: under budget → skip without force; with force → a real plan", () => {
     const messages: SeqMessage[] = [
       { role: "user", content: "the original task", throughSeq: 1 },
       { role: "assistant", content: "did part one", throughSeq: 2 },
       { role: "user", content: "continue", throughSeq: 3 },
     ];
-    expect(planCompaction(messages, budget)).toBeNull();
+    // R125-C (D2, updated pin): the skip path returns the TYPED decision
+    // object — { decision: "skip", reason: "below_threshold" } — where it
+    // returned null before R125-C (planCompaction never returns null now;
+    // see agents/compaction.ts's R125-C header).
+    const underBudget = planCompaction(messages, budget);
+    expect(underBudget.decision).toBe("skip");
+    expect(underBudget.decision === "skip" ? underBudget.reason : "").toBe("below_threshold");
     const forced = planCompaction(messages, budget, true);
-    expect(forced).not.toBeNull();
-    expect(forced!.toSummarize.length).toBe(1);
-    expect(forced!.toSummarize[0].content).toBe("the original task");
-    // Nothing to summarize (a single message) → null even when forced — the
-    // honest "nothing to compact" case.
-    expect(planCompaction([messages[2]], budget, true)).toBeNull();
+    expect(forced.decision).toBe("compact");
+    expect(forced.decision === "compact" ? forced.reason : "").toBe("forced");
+    expect(forced.decision === "compact" ? forced.toSummarize.length : 0).toBe(1);
+    expect(forced.decision === "compact" ? forced.toSummarize[0].content : "").toBe("the original task");
+    // Nothing to summarize (a single message) → the honest skip even when
+    // forced — the "nothing to compact" case (R125-C: reason
+    // "empty_to_summarize" where it returned null before).
+    const nothing = planCompaction([messages[2]], budget, true);
+    expect(nothing.decision).toBe("skip");
+    expect(nothing.decision === "skip" ? nothing.reason : "").toBe("empty_to_summarize");
   });
 
   it("assembleWithCompaction with { force: true } compacts + persists the event even under the estimate", async () => {

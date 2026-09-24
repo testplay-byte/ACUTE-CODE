@@ -15,6 +15,27 @@
  *     messages = [summary, ...keep]; a second assembly REUSES the event
  *     (no re-summarization); round-2 compaction when it overflows again;
  *     summarizer failure/empty-text degrades to the legacy hard trim.
+ *
+ * ROUND-125 (R125-C) — the ZCode D1/D2 adoption
+ * (agent-ctx/research/zcode-context-compression.md §D1/§D2):
+ *   - providerUsageAnchor pins (the pure D1 helper): no usage rows → null;
+ *   the provider number alone when nothing follows it; provider number +
+ *   estimated tail when messages came after; the LAST usage-bearing event
+ *   wins; garbage rows are skipped, not trusted.
+ *   - planCompaction's typed decision (D2): the old null returns became
+ *   { decision: "skip", reason: "below_threshold" | "empty_to_summarize" }
+ *   objects (the two pins that asserted null were updated with comments);
+ *   every result carries { tokenCount, tokenSource, estimatedTokens,
+ *   threshold, reason }.
+ *   - The tokenOverride law (D1): the provider's number can FORCE a
+ *   compaction the estimate says is unnecessary, and — the key honest case
+ *   — VETO one the estimate demands (the estimator over-counted; the
+ *   provider number wins).
+ *   - assembleWithCompaction threads opts.tokenOverride into the gate and
+ *   the persisted event payload carries the typed-decision fields; a
+ *   runStreamedAgentTurn integration test pins the runtime's own anchor
+ *   construction (the last usage-bearing assistant event → the event
+ *   payload + the live meta.compaction frame).
  */
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
@@ -23,7 +44,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
-import { appendSessionEvent, createSession, listSessionEvents } from "../src/storage/sessions";
+import { appendSessionEvent, createSession, listSessionEvents, type SessionEvent } from "../src/storage/sessions";
 // ROUND-117 (R117-b): the episodic bridge's collaborators — the project the
 // session binds to, the memory tier the summary lands in, the master switch.
 import { createProject } from "../src/storage/projects";
@@ -34,12 +55,21 @@ import {
   assembleWithCompaction,
   findLatestCompaction,
   planCompaction,
+  providerUsageAnchor,
   SUMMARIZER_SYSTEM_PROMPT,
   type CompactionPayload,
   type SeqMessage,
 } from "../src/agents/compaction";
-import { assembleHistory } from "../src/agents/runtime";
-import type { ChatFn, ChatTurnInput } from "../src/agents/chat";
+// R125-C (D1): the runtime's own anchor expression + the estimator both
+// live here — the integration test pins providerUsageAnchor against the
+// same estimateMessageTokens the production gate reports.
+import { assembleHistory, runStreamedAgentTurn } from "../src/agents/runtime";
+import type { ChatFn, ChatTurnInput, StreamChatFn, StreamChatEvent } from "../src/agents/chat";
+import { estimateMessageTokens } from "../src/context";
+// R125-C: the runtime integration test's collaborators.
+import { createAgent } from "../src/storage/agents";
+import { upsertModel } from "../src/storage/models";
+import { ProviderKeyring } from "../src/providers/registry";
 
 const dir = mkdtempSync(join(tmpdir(), "acute-compaction-"));
 
@@ -178,6 +208,60 @@ describe("findLatestCompaction + applyCompaction", () => {
     expect(findLatestCompaction(listSessionEvents(db, sid))).toBeNull();
   });
 
+  it("R125-C D2: the typed-decision fields round-trip the fold (new events carry them; pre-R125 events lack them)", () => {
+    const sid = newSession();
+    addMessage(sid, "message.user", "x");
+    appendSessionEvent(db, sid, {
+      type: "context.compact",
+      agentId: null,
+      // A PRE-R125 event (no decision fields) — every new field reads absent.
+      payload: { summary: "old summary", throughSeq: 1, droppedMessages: 1, tokensSaved: 10 },
+    });
+    const old = findLatestCompaction(listSessionEvents(db, sid));
+    expect(old?.tokenCount).toBeUndefined();
+    expect(old?.tokenSource).toBeUndefined();
+    expect(old?.estimatedTokens).toBeUndefined();
+    expect(old?.threshold).toBeUndefined();
+    expect(old?.reason).toBeUndefined();
+
+    appendSessionEvent(db, sid, {
+      type: "context.compact",
+      agentId: null,
+      // An R125-C event — the fields ride verbatim (garbage values are
+      // dropped to absent, the same guard discipline as tokensSaved).
+      payload: {
+        summary: "new summary",
+        throughSeq: 2,
+        droppedMessages: 2,
+        tokensSaved: 20,
+        tokenCount: 123_456,
+        tokenSource: "provider-anchored",
+        estimatedTokens: 100,
+        threshold: 959_232,
+        reason: "above_threshold",
+        junkField: "ignored",
+      },
+    });
+    const found = findLatestCompaction(listSessionEvents(db, sid));
+    expect(found).toMatchObject({
+      summary: "new summary",
+      tokenCount: 123_456,
+      tokenSource: "provider-anchored",
+      estimatedTokens: 100,
+      threshold: 959_232,
+      reason: "above_threshold",
+    });
+    // A garbage tokenSource / reason normalizes to absent, never invents.
+    appendSessionEvent(db, sid, {
+      type: "context.compact",
+      agentId: null,
+      payload: { summary: "junk summary", throughSeq: 3, tokenSource: "telepathy", reason: "because" },
+    });
+    const junk = findLatestCompaction(listSessionEvents(db, sid));
+    expect(junk?.tokenSource).toBeUndefined();
+    expect(junk?.reason).toBeUndefined();
+  });
+
   it("applyCompaction drops covered messages and prepends the summary", () => {
     const messages: SeqMessage[] = [
       { role: "user", content: "old task", throughSeq: 1 },
@@ -195,6 +279,116 @@ describe("findLatestCompaction + applyCompaction", () => {
   });
 });
 
+/* ── ROUND-125 (R125-C, D1): providerUsageAnchor — the pure anchor helper ── */
+
+describe("ROUND-125 (R125-C, D1): providerUsageAnchor", () => {
+  /** Pure event literals — the helper takes (events, messages) and no DB. */
+  const ev = (
+    seq: number,
+    type: "message.user" | "message.assistant",
+    content: string,
+    usage?: { inputTokens: number; outputTokens: number },
+  ): SessionEvent => ({
+    seq,
+    type,
+    agentId: null,
+    payload: { role: type === "message.user" ? "user" : "assistant", content, ...(usage !== undefined ? { usage } : {}) },
+    ts: `2026-01-01T00:00:${String(seq % 60).padStart(2, "0")}Z`,
+  });
+
+  it("no usage-bearing assistant event → null (the pure-estimate fallback)", () => {
+    const events = [ev(1, "message.user", "task"), ev(2, "message.assistant", "reply with NO usage row")];
+    const messages: SeqMessage[] = [
+      { role: "user", content: "task", throughSeq: 1 },
+      { role: "assistant", content: "reply with NO usage row", throughSeq: 2 },
+    ];
+    expect(providerUsageAnchor(events, messages)).toBeNull();
+    expect(providerUsageAnchor([], [])).toBeNull();
+  });
+
+  it("usage event + ZERO later messages → exactly the provider number", () => {
+    const events = [
+      ev(1, "message.user", "task"),
+      ev(2, "message.assistant", "reply", { inputTokens: 4321, outputTokens: 9 }),
+    ];
+    const messages: SeqMessage[] = [
+      { role: "user", content: "task", throughSeq: 1 },
+      { role: "assistant", content: "reply", throughSeq: 2 },
+    ];
+    expect(providerUsageAnchor(events, messages)).toBe(4321);
+  });
+
+  it("usage event + later messages → provider number + the estimated tail (throughSeq > the event's seq)", () => {
+    const events = [
+      ev(1, "message.user", "the original task"),
+      ev(2, "message.assistant", "part one done", { inputTokens: 800, outputTokens: 5 }),
+      ev(3, "message.user", "a follow-up message"),
+    ];
+    // A <tool_results> block anchored at a tool.use seq AFTER the anchor
+    // event counts too — it is exactly what the provider had not seen.
+    const messages: SeqMessage[] = [
+      { role: "user", content: "the original task", throughSeq: 1 },
+      { role: "assistant", content: "part one done", throughSeq: 2 },
+      { role: "user", content: "a follow-up message", throughSeq: 3 },
+      { role: "user", content: "<tool_results>\nread_file(x) → ok\n</tool_results>", throughSeq: 5 },
+    ];
+    const expectedTail = estimateMessageTokens([
+      { role: "user", content: "a follow-up message" },
+      { role: "user", content: "<tool_results>\nread_file(x) → ok\n</tool_results>" },
+    ]);
+    expect(expectedTail).toBeGreaterThan(0);
+    expect(providerUsageAnchor(events, messages)).toBe(800 + expectedTail);
+    // The PRE-anchor message (throughSeq 1 ≤ 2) contributes NOTHING — the
+    // provider already counted it in its own number.
+  });
+
+  it("the LAST usage-bearing event wins (a newer assistant reply re-anchors)", () => {
+    const events = [
+      ev(1, "message.user", "task"),
+      ev(2, "message.assistant", "old reply", { inputTokens: 9999, outputTokens: 1 }),
+      ev(3, "message.user", "continue"),
+      ev(4, "message.assistant", "new reply", { inputTokens: 150, outputTokens: 2 }),
+    ];
+    const messages: SeqMessage[] = [
+      { role: "user", content: "task", throughSeq: 1 },
+      { role: "assistant", content: "old reply", throughSeq: 2 },
+      { role: "user", content: "continue", throughSeq: 3 },
+      { role: "assistant", content: "new reply", throughSeq: 4 },
+    ];
+    // Anchored at seq 4: nothing after it → exactly the NEWEST number, not 9999.
+    expect(providerUsageAnchor(events, messages)).toBe(150);
+  });
+
+  it("garbage usage rows are skipped, not trusted — the walk continues to the older usage-bearing event", () => {
+    const events: SessionEvent[] = [
+      ev(1, "message.user", "task"),
+      ev(2, "message.assistant", "honest reply", { inputTokens: 700, outputTokens: 3 }),
+      // Newer events with garbage usage — none of them may become the anchor.
+      { ...ev(3, "message.assistant", "nan reply", { inputTokens: Number.NaN, outputTokens: 1 }) },
+      { ...ev(4, "message.assistant", "zero reply", { inputTokens: 0, outputTokens: 1 }) },
+      { ...ev(5, "message.assistant", "negative reply", { inputTokens: -50, outputTokens: 1 }) },
+      // An assistant event with NO usage object at all.
+      ev(6, "message.assistant", "usage-less reply"),
+      // A non-numeric inputTokens under a usage object.
+      {
+        ...ev(7, "message.assistant", "string reply"),
+        payload: { role: "assistant", content: "string reply", usage: { inputTokens: "lots" as unknown as number, outputTokens: 1 } },
+      },
+    ];
+    const messages: SeqMessage[] = [
+      { role: "user", content: "task", throughSeq: 1 },
+      { role: "assistant", content: "honest reply", throughSeq: 2 },
+      { role: "assistant", content: "nan reply", throughSeq: 3 },
+    ];
+    // The anchor is the seq-2 event + the seq-3 message tail (the seq-3
+    // message IS post-anchor even though its own usage row was garbage).
+    const expectedTail = estimateMessageTokens([{ role: "assistant", content: "nan reply" }]);
+    expect(providerUsageAnchor(events, messages)).toBe(700 + expectedTail);
+    // And when ONLY garbage exists → null (the estimate fallback).
+    expect(providerUsageAnchor(events.slice(2), [])).toBeNull();
+  });
+});
+
 /* ── planCompaction ───────────────────────────────────────────────────────── */
 
 describe("planCompaction", () => {
@@ -208,25 +402,42 @@ describe("planCompaction", () => {
     return out;
   }
 
-  it("returns null when the history fits", () => {
-    expect(planCompaction(manyPairs(2), ROOMY_BUDGET)).toBeNull();
+  it("returns the SKIP decision when the history fits (R125-C: null pre-R125 → the typed decision)", () => {
+    // R125-C (D2, updated pin): the under-budget path returns the typed skip
+    // object — { decision: "skip", reason: "below_threshold" } — where it
+    // returned null before R125-C (planCompaction never returns null now).
+    const skip = planCompaction(manyPairs(2), ROOMY_BUDGET);
+    expect(skip.decision).toBe("skip");
+    if (skip.decision !== "skip") throw new Error("unreachable");
+    expect(skip.reason).toBe("below_threshold");
+    // The decision's numbers: the local estimate (no anchor passed), the
+    // derived threshold, and the dual-number pair agreeing with itself.
+    expect(skip.tokenSource).toBe("estimated");
+    expect(skip.threshold).toBe(ROOMY_BUDGET.contextWindow - ROOMY_BUDGET.maxOutputTokens - ROOMY_BUDGET.margin);
+    expect(skip.tokenCount).toBe(skip.estimatedTokens);
   });
 
   it("over budget → summarizes the head, keeps the newest ~60% window, keeps at least the final message", () => {
     const messages = manyPairs(10); // 20 messages ≈ 108 tokens each ≈ 2160 tokens > 800
     const plan = planCompaction(messages, TIGHT_BUDGET);
-    expect(plan).not.toBeNull();
-    expect(plan!.toSummarize.length).toBeGreaterThan(0);
-    expect(plan!.keep.length).toBeGreaterThan(0);
-    expect(plan!.keep[plan!.keep.length - 1]).toBe(messages[messages.length - 1]); // final message kept
+    expect(plan.decision).toBe("compact");
+    if (plan.decision !== "compact") throw new Error("unreachable");
+    // R125-C (D2): the compact side carries the typed decision too.
+    expect(plan.reason).toBe("above_threshold");
+    expect(plan.tokenSource).toBe("estimated");
+    expect(plan.threshold).toBe(400);
+    expect(plan.estimatedTokens).toBeGreaterThan(400);
+    expect(plan.toSummarize.length).toBeGreaterThan(0);
+    expect(plan.keep.length).toBeGreaterThan(0);
+    expect(plan.keep[plan.keep.length - 1]).toBe(messages[messages.length - 1]); // final message kept
     // targetThroughSeq is the seq of the LAST summarized message.
-    expect(plan!.targetThroughSeq).toBe(plan!.toSummarize[plan!.toSummarize.length - 1].throughSeq);
+    expect(plan.targetThroughSeq).toBe(plan.toSummarize[plan.toSummarize.length - 1].throughSeq);
     // The keep window fits the ~60% target (240 tokens) — the loop stops
     // BEFORE adding an over-target message.
-    const keepTokens = plan!.keep.reduce((acc, m) => acc + Math.ceil(m.content.length / 4) + 8, 0);
+    const keepTokens = plan.keep.reduce((acc, m) => acc + Math.ceil(m.content.length / 4) + 8, 0);
     expect(keepTokens).toBeLessThanOrEqual(240);
     // Summarize + keep covers everything.
-    expect(plan!.toSummarize.length + plan!.keep.length).toBe(messages.length);
+    expect(plan.toSummarize.length + plan.keep.length).toBe(messages.length);
   });
 
   it("a single gigantic message still keeps it (never keep nothing)", () => {
@@ -235,9 +446,80 @@ describe("planCompaction", () => {
       { role: "assistant", content: "y".repeat(20_000), throughSeq: 2 },
     ];
     const plan = planCompaction(messages, TIGHT_BUDGET);
-    expect(plan).not.toBeNull();
-    expect(plan!.keep.length).toBeGreaterThan(0);
-    expect(plan!.keep[plan!.keep.length - 1].throughSeq).toBe(2);
+    expect(plan.decision).toBe("compact");
+    if (plan.decision !== "compact") throw new Error("unreachable");
+    expect(plan.keep.length).toBeGreaterThan(0);
+    expect(plan.keep[plan.keep.length - 1].throughSeq).toBe(2);
+  });
+
+  // ── R125-C (D1): the tokenOverride law ──────────────────────────────────
+
+  it("R125-C D1: the anchor FORCES a compaction the estimate says is unnecessary (over threshold by the provider's number)", () => {
+    // Estimate ≈ 430 tokens < 959,232 available — but the provider reported
+    // a number far over the line (the estimator UNDER-counted; the provider
+    // is the truth). ZCode compact/policy.ts shouldAutoCompact's
+    // `tokenOverride?.tokenCount ?? estimatedTokenCount`, the same law.
+    const messages = manyPairs(2);
+    const plan = planCompaction(messages, ROOMY_BUDGET, false, { tokenOverride: 1_000_000 });
+    expect(plan.decision).toBe("compact");
+    if (plan.decision !== "compact") throw new Error("unreachable");
+    expect(plan.reason).toBe("above_threshold");
+    expect(plan.tokenSource).toBe("provider-anchored");
+    // The dual numbers: the anchor won the gate, the estimate is reported
+    // alongside (the disagreement is VISIBLE, not silent).
+    expect(plan.tokenCount).toBe(1_000_000);
+    expect(plan.estimatedTokens).toBeLessThan(1_000);
+  });
+
+  it("R125-C D1: the anchor VETOES a compaction the estimate demands — THE key honest case (the estimator over-counted)", () => {
+    // Estimate ≈ 2160 tokens > 400 available — the pre-R125 gate would
+    // compact. But the provider reported 100 input tokens: the estimator
+    // over-counted, and the provider's number wins (a needless compaction
+    // burns a summarizer call and destroys fidelity for nothing).
+    const messages = manyPairs(10);
+    const skip = planCompaction(messages, TIGHT_BUDGET, false, { tokenOverride: 100 });
+    expect(skip.decision).toBe("skip");
+    if (skip.decision !== "skip") throw new Error("unreachable");
+    expect(skip.reason).toBe("below_threshold");
+    expect(skip.tokenSource).toBe("provider-anchored");
+    expect(skip.tokenCount).toBe(100);
+    expect(skip.estimatedTokens).toBeGreaterThan(400); // the over-counted estimate, still reported
+    expect(skip.threshold).toBe(400);
+  });
+
+  it("R125-C D1: garbage overrides (0 / NaN / negative / Infinity) fall back to the estimate", () => {
+    const messages = manyPairs(10); // estimate over TIGHT_BUDGET's 400
+    for (const garbage of [0, Number.NaN, -5, Number.POSITIVE_INFINITY]) {
+      const plan = planCompaction(messages, TIGHT_BUDGET, false, { tokenOverride: garbage });
+      expect(plan.decision).toBe("compact");
+      if (plan.decision !== "compact") throw new Error("unreachable");
+      expect(plan.tokenSource).toBe("estimated");
+      expect(plan.tokenCount).toBe(plan.estimatedTokens);
+    }
+    // And a finite-positive 401 (just over the 400 line) anchors and compacts:
+    expect(planCompaction(manyPairs(10), TIGHT_BUDGET, false, { tokenOverride: 401 }).decision).toBe("compact");
+  });
+
+  it("R125-C D2: the legacy paths carry their typed reasons (forced / empty_to_summarize)", () => {
+    const messages: SeqMessage[] = [
+      { role: "user", content: "the original task", throughSeq: 1 },
+      { role: "assistant", content: "did part one", throughSeq: 2 },
+      { role: "user", content: "continue", throughSeq: 3 },
+    ];
+    // force=true under budget → compact with reason "forced" (the R71-e2
+    // overflow-recovery semantics: the provider's rejection is ground
+    // truth regardless of the estimate).
+    const forced = planCompaction(messages, ROOMY_BUDGET, true);
+    expect(forced.decision).toBe("compact");
+    if (forced.decision !== "compact") throw new Error("unreachable");
+    expect(forced.reason).toBe("forced");
+    expect(forced.tokenSource).toBe("estimated");
+    // A single message + force → the honest empty-head skip (the old null
+    // return — the recovery must fail honestly, not invent a compaction).
+    const empty = planCompaction([messages[2]], ROOMY_BUDGET, true);
+    expect(empty.decision).toBe("skip");
+    if (empty.decision !== "skip") throw new Error("unreachable");
+    expect(empty.reason).toBe("empty_to_summarize");
   });
 });
 
@@ -306,6 +588,59 @@ describe("assembleWithCompaction", () => {
     const payload = compactEvents[0].payload as Record<string, unknown>;
     expect(payload.summary).toContain("feature X");
     expect(typeof payload.throughSeq).toBe("number");
+    // R125-C (D2, added asserts): the persisted event carries the typed
+    // decision — the estimate-driven shape here (no tokenOverride passed):
+    // tokenSource "estimated", tokenCount === estimatedTokens, the derived
+    // threshold, reason "above_threshold".
+    expect(payload.tokenSource).toBe("estimated");
+    expect(payload.reason).toBe("above_threshold");
+    expect(payload.threshold).toBe(400);
+    expect(payload.tokenCount).toBe(payload.estimatedTokens);
+    expect(typeof payload.tokenCount).toBe("number");
+  });
+
+  // ── R125-C (D1): the tokenOverride threading (opts → planCompaction → event) ──
+
+  it("R125-C D1: opts.tokenOverride drives the gate AND rides the persisted event payload (the runtime's threading contract)", async () => {
+    // Estimate ≈ 740 tokens < 959,232 available — the estimate says SKIP;
+    // the anchor (the provider's reported number) says COMPACT. This pins
+    // the exact pass-through the runtime performs at its two call sites.
+    const sid = newSession();
+    seedOverflowingSession(sid);
+    const { chat, calls } = fakeChat();
+    const outcome = await assembleWithCompaction(assembleHistory(db, sid), ROOMY_BUDGET, { ...deps(chat), sessionId: sid }, {
+      tokenOverride: 1_000_000,
+    });
+    expect(outcome.compacted).toBe(true);
+    expect(calls).toHaveLength(1);
+    const payload = listSessionEvents(db, sid).find((e) => e.type === "context.compact")?.payload as Record<
+      string,
+      unknown
+    >;
+    expect(payload.tokenSource).toBe("provider-anchored");
+    expect(payload.tokenCount).toBe(1_000_000);
+    expect(payload.reason).toBe("above_threshold");
+    expect(payload.threshold).toBe(ROOMY_BUDGET.contextWindow - ROOMY_BUDGET.maxOutputTokens - ROOMY_BUDGET.margin);
+    // The dual-number pair: the local estimate is reported ALONGSIDE the
+    // winning provider number (the disagreement is visible).
+    expect(typeof payload.estimatedTokens).toBe("number");
+    expect(payload.estimatedTokens as number).toBeLessThan(1_000);
+  });
+
+  it("R125-C D1: an under-threshold anchor VETOES the compaction the estimate demands — no summarizer call, no event", async () => {
+    // Estimate ≈ 740 tokens > 400 available — the pre-R125 gate compacts;
+    // the provider reported 100 → the honest veto (nothing persisted, the
+    // verbatim list rides on).
+    const sid = newSession();
+    seedOverflowingSession(sid);
+    const { chat, calls } = fakeChat();
+    const outcome = await assembleWithCompaction(assembleHistory(db, sid), TIGHT_BUDGET, { ...deps(chat), sessionId: sid }, {
+      tokenOverride: 100,
+    });
+    expect(outcome.compacted).toBe(false);
+    expect(calls).toHaveLength(0); // the summarizer never fired
+    expect(outcome.messages[0].content).toContain("user message number 0"); // verbatim
+    expect(listSessionEvents(db, sid).some((e) => e.type === "context.compact")).toBe(false);
   });
 
   it("SECOND assembly reuses the compaction event — no re-summarization while it holds", async () => {
@@ -479,5 +814,95 @@ describe("ROUND-117 (R117-b): compaction persists the summary into project memor
     expect(memories.length).toBe(2);
     expect(memories.some((m) => m.content.includes("DIFFERENT: the round-two summary"))).toBe(true);
     expect(memories.every((m) => m.source === "system")).toBe(true);
+  });
+});
+
+/* ── ROUND-125 (R125-C, D1): the runtime integration — the anchor threading ── */
+
+describe("ROUND-125 (R125-C): runStreamedAgentTurn builds + threads the provider-usage anchor", () => {
+  // The full turn-level pin of the runtime's own expression —
+  // providerUsageAnchor(listSessionEvents(db, session.id), rawMessages) —
+  // computed at the streamed call site and threaded through
+  // assembleWithCompaction's opts.tokenOverride into planCompaction's gate.
+  // (The r120-harness pattern: a fake chatStream, a summarizer chat, a
+  // tiny-window models row so the budget is test-small.)
+  const USER1 = "the original task for this session";
+  const ASSISTANT1 = "part one is complete";
+  const FOLLOW_UP = "a follow-up message that came later";
+  const TURN_CONTENT = "please finish the remaining work";
+
+  it("the provider's stale-large number + estimated tail drives the compaction the estimate alone would skip — the event payload AND the live meta.compaction frame carry the typed decision", async () => {
+    // A models row with a small window: available = 10_000 − 100 − 8_000 = 1_900.
+    // The visible content is ~100 tokens (the estimate says SKIP); the
+    // provider reported 5_000 input tokens for its last reply (the honest
+    // under-count case — the anchor says COMPACT).
+    upsertModel(db, "openrouter", { modelId: "test/r125c-1", contextWindow: 10_000, maxOutputTokens: 100 });
+    const agent = createAgent(db, { name: "R125C Agent", providerId: "openrouter", model: "test/r125c-1" });
+    const sid = createSession(db, { agentId: agent.id, mode: "single", projectId: null }).id;
+    addMessage(sid, "message.user", USER1);
+    appendSessionEvent(db, sid, {
+      type: "message.assistant",
+      agentId: agent.id,
+      payload: { role: "assistant", content: ASSISTANT1, usage: { inputTokens: 5_000, outputTokens: 12 } },
+    });
+    addMessage(sid, "message.user", FOLLOW_UP);
+
+    const summarizer: ChatFn = async () => ({
+      text: "SUMMARY: the original task and part one.",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      toolCalls: [],
+    });
+    const chatStream: StreamChatFn = async function* (): AsyncGenerator<StreamChatEvent> {
+      yield { type: "text-delta", delta: "all remaining work is done" };
+      yield { type: "finish", usage: { inputTokens: 30, outputTokens: 4, totalTokens: 34 } };
+    };
+    const emitted: Array<Record<string, unknown>> = [];
+    const outcome = await runStreamedAgentTurn(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: "sk-test-r125c" }), chat: summarizer, chatStream },
+      sid,
+      TURN_CONTENT,
+      (event) => emitted.push(event as Record<string, unknown>),
+    );
+    expect(outcome.ok).toBe(true);
+
+    // The exact numbers the runtime computed, derived from the same pure
+    // estimator the production gate reports with:
+    const expectedTail = estimateMessageTokens([
+      { role: "user", content: FOLLOW_UP },
+      { role: "user", content: TURN_CONTENT },
+    ]);
+    const expectedEstimate = estimateMessageTokens([
+      { role: "user", content: USER1 },
+      { role: "assistant", content: ASSISTANT1 },
+      { role: "user", content: FOLLOW_UP },
+      { role: "user", content: TURN_CONTENT },
+    ]);
+    // The whole visible list is FAR under the 1_900 line — only the anchor
+    // could have tripped the gate (the D1 law under test).
+    expect(expectedEstimate).toBeLessThan(1_900);
+
+    // The persisted event: the typed decision with the provider-anchored
+    // numbers (tokenCount = 5_000 + the estimated post-anchor tail).
+    const payload = listSessionEvents(db, sid)
+      .find((e) => e.type === "context.compact")
+      ?.payload as Record<string, unknown>;
+    expect(payload).toBeDefined();
+    expect(payload.tokenSource).toBe("provider-anchored");
+    expect(payload.reason).toBe("above_threshold");
+    expect(payload.threshold).toBe(1_900);
+    expect(payload.tokenCount).toBe(5_000 + expectedTail);
+    expect(payload.estimatedTokens).toBe(expectedEstimate);
+
+    // The live frame mirrors the same dual numbers + reason (additive keys).
+    const frame = emitted.find((e) => e.type === "meta.compaction");
+    expect(frame).toBeDefined();
+    expect(frame?.tokenSource).toBe("provider-anchored");
+    expect(frame?.reason).toBe("above_threshold");
+    expect(frame?.tokenCount).toBe(5_000 + expectedTail);
+    expect(frame?.threshold).toBe(1_900);
+    expect(frame?.estimatedTokens).toBe(expectedEstimate);
+    // The turn itself completed on the compacted list (the real reply landed).
+    const reply = listSessionEvents(db, sid).find((e) => e.type === "message.assistant" && e.seq > 4);
+    expect((reply?.payload as { content?: string }).content).toContain("all remaining work is done");
   });
 });

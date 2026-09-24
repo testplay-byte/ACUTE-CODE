@@ -3,7 +3,7 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.117.0",
+    "version": "0.118.0",
     "availability": "Private build — not yet distributed",
     "chips": [
       "Windows + Linux desktop",
@@ -364,10 +364,14 @@
     {
       "date": "2026-09-24",
       "label": "R124 — the twenty-eighth round: the Android in-app APK updater (the acute-installer module + the manifest plugin + the anonymous-first policy + the settings screen), the desktop quick-nav's four verdicts (width-dominant magnification, the scroll-owned highlight, the click-dismissed preview, the border-hugging rail + the padding floor), the Add-Model configure-first + the smart live-catalog pre-fill + the batch's visible fetch, the model-test error auto-dismiss, the mobile task-list confirmation + the plain queue prompt + the thinking affordance + the retry card's bottom edge, the mobile dashboard redesign + the sheet's drag-to-dismiss, the staged 1280×720 browser capture, and the ZCode knowledge base) — mobile 46 suites 1029/1029, agent-core 2846, root 267/4709, review-passed — v0.117.0 released"
+    },
+    {
+      "date": "2026-09-24",
+      "label": "R125 — the twenty-ninth round: the live-center truth pass — the duplicate live-write rows killed (the single-owner law: the panel threads the pending writes to EXACTLY ONE tail-owning section), the fold/live interlock's freshness-gated positional fallback, the de-blue pass (the live tool language speaks the theme accent), the occlusion-proof Windows capture (PrintWindow on the staged child webview + the honest source marker), the per-session composer drafts (desktop + mobile), the visible self-feedback ledger (the status route + the settings strip + the mid-turn checkpoint frames + the post-turn toast) + the mid-turn checkpoint writes, the mobile runaway auto-scroll fix (maintainVisibleContentPosition) + the versioned update row, and the first ZCode adoptions (provider-usage token anchoring + typed compaction decisions)) — mobile 48 suites 1049/1049, agent-core 2903, root 274/4805, review-passed — v0.118.0 released"
     }
   ],
   "quality": {
-    "ci": "Local gates at the R124 close: agent-core tsc + 2846 passed; root tsc + eslint 0 on every touched file + 267 files/4709 passed + design-audit clean (R2 re-pinned 1626→1629 via the sanctioned path: the picker's per-row fetch chip text-[10px] matching the row's own id-subtitle voice + the batch summary and smart-fill line text-[11px] matching the surrounding caption voice — the R124 status dot itself snapped to w-1.5/h-1.5 scale utilities) + build green (mermaid chunk ok) + e2e 12/12 + license clean (299 deps); mobile tsc + 46 suites/1029. HONEST LIMITS: no Android device / Windows / real webview in this sandbox — the Kotlin module follows AcuteNetModule's verified patterns but compiles only in CI (the Mobile APK workflow is the gate); the staged capture's settle + flash are mock-pinned only; the sheet's gesture is pure-law-tested only.",
+    "ci": "Local gates at the R125 close: agent-core tsc + 157 files/2903 passed; root tsc + eslint 0 on every touched file + 274 files/4805 passed + design-audit clean (R2 re-pinned 1629→1635 via the sanctioned path: six new text-[11px] sites all riding the chat vocabulary's own 11px mono/label step — the R125-B feedback status strip + the R125-2 live feedback line; the reason is documented in the baseline note) + build green (mermaid chunk ok) + e2e 12/12 + license clean (299 deps); mobile tsc + 48 suites/1049. HONEST LIMITS: no Windows/Android device in this sandbox — the PrintWindow capsule is mock-pinned by construction (the symmetric-difference child selection needs one live run), the mobile scroll anchor + draft round-trip are jest-pinned, the R125-2 duplicate fix is component+panel-pinned.",
     "suites": [
       {
         "name": "frontend",
@@ -377,12 +381,12 @@
       {
         "name": "agent-core",
         "tests": 2846,
-        "detail": "2846 tests at the R124 close (was 2833): the new r124-browser-capture suite (13 — the tool contract, the constants lockstep, the clamp, the refusals, both version-skew legs, the route's validation/error/auth ladder)."
+        "detail": "2903 tests at the R125 close (was 2846): r125-windows-capture 16 (the PrintWindow capsule's shape + the fallback markers), r124-browser-capture 13→19 (ownerPid threading + the source reply), feedback-status 10 + the checkpoint 3, the writer 13→18 + the routes 12→16 (the phase param, the status bookkeeping, GET /feedback/status), context-compaction 17→30 (providerUsageAnchor + the anchor-forces/vetoes pins + the typed decisions)."
       },
       {
         "name": "mobile",
         "tests": 1029,
-        "detail": "46 suites / 1029 tests at the R124 close (was 44/969): the updater core 31 + the orchestration 12 (the anonymous-first policy with faked floors + the SecureStore custody), usage-format +8, the chart-donut contract pin, sheet-anatomy +9 drag-law pins (the R120-S close test updated honestly citing R124)."
+        "detail": "48 suites / 1049 tests at the R125 close (was 46/1029): transcript-scroll 4 (the inverted-list anchor law) + composer-draft 16 (the per-session round-trip, the cap, the blank-clear)."
       }
     ],
     "cargoCheck": "green",
@@ -420,8 +424,8 @@
     ]
   },
   "round": {
-    "current": "R124 LANDED — the Android updater + the quick-nav verdicts + the Add-Model configure-first + the mobile polish wave (the owner's v0.116 report: the phone's OWN in-app APK updater [acute-installer native module + the FileProvider plugin + anonymous-first policy + the settings screen + the 24h auto-check]; the desktop quick-nav's four verdicts [width-dominant magnification 10→28px never a circle, the scroll-owned highlight + click-set, the click-dismissed preview, the border-hugging rail + the content padding floor that kills the small-window overlap]; the Add-Model configure-first [zero upserts until Save] + the smart live-catalog pre-fill [the mobile's R120-M on the desktop, with the honest fetched/no-details line] + the batch's visible per-model fetch [spinners → live-details/none chips → the held summary]; the model-test error's 12s auto-dismiss; the mobile task-list confirm-before-toggle + the plain 'Queue a message…' prompt + the settled thinking's one-line affordance + the retry card's bottom-edge move; the mobile dashboard redesign [range chips in the chart's card, the real axis, the proportionate donut] + the sheet's drag-to-dismiss motion; the browser's staged 1280×720 capture that works while the panel is hidden; the ZCode context-compression knowledge base) — six fronts + docs + review — v0.117.0 rides the proven pipeline",
-    "next": "The owner's v0.117.0 device walkthrough (the Android updater on real hardware [the OS install dialog, the download bar on mobile data, the 24h auto-check's silence], the quick-nav's new feel, the Add-Model flow, the mobile dashboard + sheets on the phone, the staged screenshot capture); then the standing queue (the ZCode adoption queue — provider-usage anchoring first; the menu-timer hover ratchet; the release-flow speed round)."
+    "current": "R125 LANDED — the live-center truth pass on the owner's v0.117.0 device verdicts: (1) THE DUPLICATE LIVE-WRITE ROWS (the owner's 'multiple writing at the same time… the exact same ones… one much earlier in the conversation'): the root cause was WorkingSection's INTERNAL store selector — every mounted live section subscribed to the same streamingToolInputs and painted the same pending row; the fix is the single-owner law (the panel derives once and threads pendingWrites as a prop to EXACTLY ONE tail-owning section). (2) THE FOLD/LIVE INTERLOCK'S positional fallback (freshness-gated on the last folded user row — the queued-delivery double render). (3) THE DE-BLUE PASS (the live write preview + terminal tail + running chips speak the theme accent; RUNNING_BLUE retired from the chat). (4) THE OCCLUSION-PROOF WINDOWS CAPTURE (R125-A subagent: PrintWindow/PW_RENDERFULLCONTENT on the staged Chrome_WidgetWin_1 child — smallest symmetric difference to the region — with the honest source marker + the CopyFromScreen fallback). (5) THE PER-SESSION COMPOSER DRAFTS (desktop draft-store + the mobile composer-draft, both outbox-pattern). (6) THE VISIBLE FEEDBACK LEDGER (R125-B subagent: the status registry + GET /feedback/status + the settings live strip + the meta.feedback frames + the mid-turn checkpoint writes armed on the trouble heuristic). (7) THE MOBILE FIXES (R125-D subagent: the runaway auto-scroll killed via maintainVisibleContentPosition, the versioned update row, the per-session drafts). (8) THE FIRST ZCODE ADOPTIONS (R125-C subagent: provider-usage token anchoring + typed compaction decisions — the study's §D1/§D2). The owner's FULL PC REDESIGN session is scheduled next.",
+    "next": "THE FULL PC REDESIGN SESSION (the owner's explicit next directive — 'the PC application does not look like a professional application which a person could rely on'); then the ZCode adoption queue's next picks (D3 round-aligned selection + invalidateRuntimeTokenUsage, D5 the rapid-refill breaker, D4 post-compact re-injection), the mobile tool-calls device diagnostic (check Settings → Appearance → Tool activity first), and the SubAgentPanel de-blue that rides the redesign."
   },
   "ci": "GREEN — v0.112.0 PUBLISHED (release 393949568, latest, end-state verified: 7/7 assets, APK content-checked [1240 entries, Hermes, arm64-v8a only]); v0.113.0 rides the same proven pipeline (lock-sync proof below: no mobile dep changes, npm ci --dry-run clean)."
 }

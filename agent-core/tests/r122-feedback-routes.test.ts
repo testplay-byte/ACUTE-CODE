@@ -28,6 +28,11 @@ import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { appendFeedbackEntry, readFeedbackLedger } from "../src/storage/feedback-ledger";
 import { getFeedbackSettings, setFeedbackSettings } from "../src/storage/settings";
 import { getEventsBus } from "../src/lib/events-bus";
+// R125-B: the status registry the route reads + the clear-route reset hook
+// pins — driven DIRECTLY (the writer's own begin/end reporting is pinned in
+// r122-feedback-writer.test.ts; this suite pins the ROUTE's join of
+// registry + setting + file).
+import { beginFeedbackWrite, endFeedbackWrite } from "../src/agents/feedback-status";
 
 const TOKEN = "shell-token-r122routes";
 
@@ -326,8 +331,105 @@ describe("R122: the off-state (no machine-scoped dataDir)", () => {
         headers: { authorization: `Bearer ${TOKEN}` },
       });
       expect(del.statusCode).toBe(503);
+      // R125-B: the STATUS route joins the same off-state contract (the
+      // registry alone would answer, but a status line pointing at a ledger
+      // that cannot exist is not honest — 503 like its siblings).
+      const status = await hermeticApp.inject({
+        method: "GET",
+        url: "/api/v1/feedback/status",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(status.statusCode).toBe(503);
+      expect((status.json() as { error: { code: string } }).error.code).toBe("SERVICE_UNAVAILABLE");
     } finally {
       await hermeticApp.close();
     }
+  });
+});
+
+// ── ROUND-125 (R125-B): the LIVE STATUS route ─────────────────────────────
+
+describe("R125-B: the status surface (GET /feedback/status)", () => {
+  it("the idle join: the setting OFF, nothing writing, the file's honest zero — the exact shape the strip renders", async () => {
+    const res = await shellInject("GET", "/api/v1/feedback/status");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      enabled: false,
+      writing: false,
+      phase: "turn-end",
+      sessionId: null,
+      startedAt: null,
+      lastWriteTs: null,
+      lastWriteOutcome: null,
+      entries: 0,
+      bytes: 0,
+      lastError: null,
+    });
+  });
+
+  it("the LIVE join: writing state + the file's real numbers + the setting, all in ONE reply", async () => {
+    setFeedbackSettings(db, { enabled: true });
+    await appendFeedbackEntry(
+      dataDir,
+      "## Entry — 2026-09-23T00:00:00.000Z\n\n### What I was trying to do\nThe thing.",
+    );
+    // The registry mid-flight (what the writer's begin would have set —
+    // driven directly so the route pin does not need a model call).
+    const run = beginFeedbackWrite("sess_status", "mid-turn");
+    const live = await shellInject("GET", "/api/v1/feedback/status");
+    expect(live.statusCode).toBe(200);
+    expect(live.json()).toMatchObject({
+      enabled: true,
+      writing: true,
+      phase: "mid-turn",
+      sessionId: "sess_status",
+      startedAt: expect.any(String),
+      entries: 1,
+      bytes: readFeedbackLedger(dataDir).bytes,
+    });
+    // And after the write completes — the last-write half of the join.
+    // (lastEntries lives in the REGISTRY only — the route's entry count is
+    // the FILE's live number, pinned above; the registry field itself is
+    // pinned in feedback-status.test.ts.)
+    endFeedbackWrite(run, { ok: true, entries: 2 });
+    const done = await shellInject("GET", "/api/v1/feedback/status");
+    expect(done.json()).toMatchObject({
+      enabled: true,
+      writing: false,
+      lastWriteTs: expect.any(String),
+      lastWriteOutcome: "written",
+      lastError: null,
+      entries: 1, // the FILE's live count — one append actually happened
+    });
+  });
+
+  it("the CLEAR route resets the last-write fields (the strip must not point at a deleted file)", async () => {
+    const run = beginFeedbackWrite("sess_clear", "turn-end");
+    endFeedbackWrite(run, { ok: true, entries: 4 });
+    const before = await shellInject("GET", "/api/v1/feedback/status");
+    expect((before.json() as { lastWriteOutcome: string | null }).lastWriteOutcome).toBe("written");
+
+    const wipe = await shellInject("DELETE", "/api/v1/feedback/file");
+    expect(wipe.statusCode).toBe(200);
+    const after = await shellInject("GET", "/api/v1/feedback/status");
+    expect(after.json()).toMatchObject({
+      lastWriteTs: null,
+      lastWriteOutcome: null,
+      lastError: null,
+      entries: 0,
+      bytes: 0,
+    });
+  });
+
+  it("PHONE-REACHABLE: a paired device token may VIEW the status (the R109 view trust level — no device wall on this GET)", async () => {
+    await appendFeedbackEntry(dataDir, "## Entry — x\n\nthe phone can watch me being written");
+    const { deviceToken, port } = await pairDevice();
+    const view = await deviceRequest(port, deviceToken, "GET", "/api/v1/feedback/status");
+    expect(view.status).toBe(200);
+    const body = view.json as Record<string, unknown>;
+    expect(body.enabled).toBe(false); // the honest current setting
+    expect(body.entries).toBe(1);
+    // STATUS only — the entry's words never ride the reply.
+    expect(JSON.stringify(view.json)).not.toContain("the phone can watch me");
   });
 });

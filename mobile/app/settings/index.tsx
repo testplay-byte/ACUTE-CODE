@@ -32,7 +32,10 @@ import { useTheme } from "@/design/theme";
 import { getTheme, spacing } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { mobLog } from "@/lib/log";
-import { getCachedCheck } from "@/update/updater";
+// R125-D — the row's own version prefix: APP_VERSION is the SAME source the
+// update screen and the More hub read (expo-constants' embedded app.json
+// version — never a second dependency, never a hand-maintained string).
+import { APP_VERSION, getCachedCheck } from "@/update/updater";
 
 export default function SettingsScreen() {
   const { tokens, themeId, mode } = useTheme();
@@ -50,6 +53,15 @@ export default function SettingsScreen() {
   // R124 — the phone's own update row's caption: the 24 h auto-check's
   // cached answer ("v0.117.0 available") when one exists, else the plain
   // "check for the latest APK" line. Phone-own: never needs the host.
+  // ── ROUND-125 (R125-D — why): ── the owner's v0.117.0 device verdict —
+  // "on the mobile device, I apparently did not see the update button in
+  // settings anywhere." The row EXISTED (second row, /settings/update) but
+  // its caption was only the check's state, so nothing on the hub read as
+  // THE version/update surface at a glance. The CURRENT build version is
+  // now the PREFIX — the row reads "v0.117.0 · check for the latest APK"
+  // (or "v0.117.0 · v0.118.0 available · tap to update") — the number the
+  // owner is comparing against rides on the row itself; the cached-answer
+  // suffix stays the R124 shape, byte-identical.
   const [updateCaption, setUpdateCaption] = useState("check for the latest APK");
   useEffect(() => {
     void getCachedCheck().then((cached) => {
@@ -90,10 +102,14 @@ export default function SettingsScreen() {
       </PressableCard>
 
       {/* ── app updates: this phone's own build (R124 — the in-app APK
-          updater; phone-own like Appearance, never needs the host) ── */}
+          updater; phone-own like Appearance, never needs the host).
+          R125-D — the caption now LEADS with the current build version
+          ("v0.117.0 · …") so the row reads as the version/update surface
+          at a glance — the owner's "did not see the update button"
+          discoverability verdict; numberOfLines stays 1 (one honest line). ── */}
       <PressableCard
         onPress={() => router.push("/settings/update")}
-        accessibilityLabel="App updates"
+        accessibilityLabel={`App updates — v${APP_VERSION}`}
       >
         <View style={styles.rowInner}>
           <View style={[styles.rowIcon, { backgroundColor: tokens.subtleHover }]}>
@@ -101,7 +117,7 @@ export default function SettingsScreen() {
           </View>
           <View style={styles.rowText}>
             <TypeBodyStrong>App updates</TypeBodyStrong>
-            <TypeCaption numberOfLines={1}>{updateCaption}</TypeCaption>
+            <TypeCaption numberOfLines={1}>{`v${APP_VERSION} · ${updateCaption}`}</TypeCaption>
           </View>
           <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
         </View>

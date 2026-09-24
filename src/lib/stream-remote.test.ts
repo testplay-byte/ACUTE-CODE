@@ -97,6 +97,7 @@ describe("stream store remote mirror (ROUND-113 R113-b)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     }));
@@ -388,6 +389,7 @@ describe("stream store remote mirror · turn.started (ROUND-114 R114-e)", () => 
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
+          feedbackEvent: null,
         },
       },
     }));

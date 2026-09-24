@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-24 round-124 -->
+<!-- last-reviewed: 2026-09-24 round-125 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,71 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [0.118.0] — 2026-09-24 — the live-center truth pass: duplicate writes, occlusion-proof screenshots, per-session drafts, the visible ledger
+
+### The transcript tells the truth while it streams (the desktop)
+- **The duplicate "Writing…" rows are gone.** While the agent worked across a long turn (tools, then
+  narration, then a NEW file write), the same pending-write row used to paint in EVERY work section
+  of the turn — "the exact same ones, one much earlier in the conversation, the other one showing
+  further". The pending write now renders in exactly ONE place: the live tail, where the write is
+  actually happening.
+- **The fold/live handoff no longer double-renders a turn.** When a mid-stream refetch folded the
+  in-flight turn's already-persisted events (a queued message delivered mid-turn, a rehydrated
+  mirror), the folded copy could render beside the live overlay. The interlock now falls back to a
+  freshness-gated positional anchor, so the overlay owns the newest exchange until the handoff.
+- **The live tool language speaks the theme's accent, not a hard-coded blue.** The in-flight write
+  preview, the live terminal tail, and the running tool chips rode a fixed `#3b82f6` slab in every
+  theme ("It shows me in the blue colored area the tool call of writing"). They now follow the
+  active theme's accent — warm in the clay themes, correct everywhere.
+
+### Screenshots capture the PAGE, not whatever covers it (Windows)
+- **The staged browser screenshot is now occlusion-proof.** The old screen-region grab leaked
+  whatever else was on the monitor — "when I am in some other application, it takes a screenshot of
+  that application rather than the browser window itself." The capture now finds the staged tab's
+  own child webview and prints ITS window surface directly (`PrintWindow` with
+  `PW_RENDERFULLCONTENT` — the same path OBS-class capture uses), which works while the app is
+  unfocused, covered, or in the background. The result reports its source honestly: a window capture,
+  or the legacy screen-region fallback (named as such — with the occlusion caveat spelled out) only
+  when the window path genuinely fails.
+- Resolution is still the fixed 1280×720 logical stage regardless of window size; the staged page
+  still flashes briefly during the grab (the honest cost of a real render).
+
+### Your draft stays with its conversation
+- **Typed messages are remembered per session — on the desktop and the phone.** Write half a
+  message, switch to another session, come back: your text is where you left it, per conversation
+  (persisted across reloads and app restarts, bounded and never sent by accident — sending or
+  queueing clears the draft). The mobile composer carries the same per-session discipline through
+  its own store.
+
+### The self-feedback ledger shows its work
+- **You can now SEE the ledger being written.** Settings → Self-Feedback carries a live status
+  strip: a spinner + "writing the ledger entry…" while the reporter runs, the last write's time and
+  entry count, and an honest failure line. While a troubled turn still streams, a quiet
+  checkpoint line rides the live block's bottom edge, and a completed turn-end entry surfaces as a
+  toast — the processing is never invisible again.
+- **The ledger can now write MID-TURN.** When a turn hits real trouble (three failed tool calls, an
+  approval denial alongside a failure, or two retry-ladder rungs), ONE mid-turn checkpoint entry is
+  written while the turn is still in flight — marked `Phase: mid-turn checkpoint` in the file — so a
+  crash or hang still leaves the developers their report. The turn-end summary still lands after.
+  Status only ever rides the wire — ledger content stays in the file, exactly as designed.
+
+### The phone stops fighting your scroll
+- **The transcript's runaway auto-scroll is fixed.** During a live turn the inverted list used to
+  yank the viewport toward the newest content on every frame — you could not scroll up and read.
+  The list now anchors your reading position when new rows arrive and only follows the stream while
+  you are at the very bottom (within 80pt of the newest edge).
+- **Settings' "App updates" row now leads with the installed version** ("v0.117.0 · check for the
+  latest APK") so the row reads as the version/update surface at a glance.
+
+### Under the hood — the first ZCode adoptions
+- **Compaction now trusts the provider's own token counts.** The context-compaction trigger anchors
+  on the last provider-reported input-token figure plus a local estimate of everything after it
+  (ZCode's `buildProviderUsageTokenOverride` law) instead of the raw whole-list estimate — the
+  estimator over-counting no longer compacts a context the provider says fits, and vice versa. Both
+  numbers + the decision reason ride the compaction event for observability.
+- A follow-up from the ZCode study remains queued (round-aligned selection, the rapid-refill
+  breaker, post-compact re-injection — see `agent-ctx/research/zcode-context-compression.md`).
 
 ## [0.117.0] — 2026-09-24 — the Android updater + the quick-nav verdicts + the Add-Model configure-first + the mobile polish wave
 

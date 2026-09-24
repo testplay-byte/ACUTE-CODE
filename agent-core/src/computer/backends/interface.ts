@@ -71,6 +71,20 @@ export interface Raster {
   scale: number;
   /** Global-screen origin of the raster's top-left pixel. */
   origin: { x: number; y: number };
+  /**
+   * ROUND-125 (R125-A): which PIXELS the raster actually contains — the
+   * honest answer to the owner's occlusion complaint ("it takes the
+   * screenshot of the whole device… when I am in some other application, it
+   * takes a screenshot of that application"). "window" = the bytes came from
+   * a window-scoped capture (Windows PrintWindow PW_RENDERFULLCONTENT — the
+   * window's own surface, valid while OCCLUDED/unfocused); "screen" = the
+   * bytes came from a screen-REGION grab (GDI CopyFromScreen / scrot -a /
+   * screencapture -R), which photographs whatever happens to be ON TOP at
+   * those coordinates — an occluding window leaks in. Optional because
+   * pre-R125 backends and paths never set it; absence means "screen" (the
+   * conservative reading — treat the pixels as possibly-occluded).
+   */
+  source?: "window" | "screen";
 }
 
 export interface LaunchSpec {
@@ -298,10 +312,17 @@ export interface CuaBackend {
   // capture
   captureDisplay(run: RunCommand, displayIndex: number): Promise<Raster | { error: string }>;
   /** Region capture (GLOBAL screen points) — the zoom + window-screenshot
-   * path (scrot -a / CopyFromScreen rect / screencapture -R). */
+   * path (scrot -a / CopyFromScreen rect / screencapture -R).
+   * ROUND-125 (R125-A): `ownerPid` (OPTIONAL) is the pid whose TOP-LEVEL
+   * window owns the requested region — when a backend can capture a WINDOW
+   * directly (Windows PrintWindow on the owner's child webview) it prefers
+   * that occlusion-proof path and reports `source:"window"`; without the
+   * pid (or on backends with no window-scoped capture) the screen-region
+   * grab runs and reports `source:"screen"`. Pre-R125 callers that pass only
+   * {x,y,w,h} keep the exact legacy behavior. */
   captureRegion(
     run: RunCommand,
-    region: { x: number; y: number; w: number; h: number },
+    region: { x: number; y: number; w: number; h: number; ownerPid?: number },
   ): Promise<Raster | { error: string }>;
   /** Current pointer position in GLOBAL points (null = unavailable). */
   cursorPosition(run: RunCommand): Promise<{ x: number; y: number } | null>;

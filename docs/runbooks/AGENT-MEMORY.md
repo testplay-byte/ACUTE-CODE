@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-24 round-124 -->
+<!-- last-reviewed: 2026-09-24 round-125 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -1426,3 +1426,41 @@ pointer's own position on every synthetic click that rides one.
 TS's Omit over a discriminated union keeps only the shared keys; the
 distributive `T extends {checkedAt:number} ? Omit<T,...> : T` pattern is the
 one-line fix for "stamp the clock on whichever member I was handed".
+
+### Lesson #125 — one-liners from R125 (the live-center truth pass)
+
+(a) A STORE SELECTOR INSIDE A LIST-RENDERED COMPONENT IS A DUPLICATION
+ENGINE: when N instances of the component each subscribe to the same
+store slice and render what they find, any list that legitimately renders
+N of them paints the SAME thing N times. The fix is ownership, not
+filtering — derive ONCE at the parent and thread the data as a PROP to
+exactly ONE chosen instance (the "live tail owner" law). The symptom
+reads as "the same row at two positions of the conversation" and no
+amount of per-instance logic fixes it, because every instance is
+individually correct.
+(b) CONTENT-KEYED DEDUPES NEED A POSITIONAL FALLBACK WITH A FRESHNESS
+GATE: matching a live turn's opener by its text (pendingEcho) fails
+whenever the echo was consumed or never existed (queued delivery); the
+safe fallback is the LAST positional row, gated on its timestamp being
+within a skew budget of the client's own turn-start clock — both clocks
+are the same machine's wall clock, so "fresh" vs "the previous exchange"
+is separable. An ungated positional anchor would hide the previous turn
+in the POST-vs-persist race window.
+(c) PRINTWINDOW(PW_RENDERFULLCONTENT) IS THE WINDOWS OCCLUSION-PROOF
+CAPTURE: it renders the window's OWN DirectX surface (WebView2/
+Chromium included) even while covered or unfocused, where CopyFromScreen
+scrapes whatever is on top. The disambiguation trap: an app whose whole
+UI is itself a webview has MULTIPLE Chrome_WidgetWin_1 children — pick
+by SMALLEST SYMMETRIC DIFFERENCE to the requested region, never by
+overlap (the full-client webview maxes overlap and wins every tie).
+(d) TURN-END STATUS FRAMES MUST LAND ON A SLICE-LEVEL FIELD: frames
+published after res.end() still reach the events bus, but the live turn
+they describe is already torn down — any liveTurn-scoped store field
+drops them at the `liveTurn === null` guard. Status that must survive
+the teardown rides the SESSION slice, not the turn.
+(e) THE DESIGN AUDIT'S R2 RATCHET COUNTS COMMENTS TOO: a regex over raw
+file text counts `text-[11px]` inside doc-comments as readily as in
+code — six new comment-adjacent pins cost six baseline counts. Re-pin
+with the reason IN the baseline file's note (the ratchet's own USAGE §2
+law), never silently.
+

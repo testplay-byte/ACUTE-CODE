@@ -2939,6 +2939,44 @@ export async function deleteFeedbackEntry(index: number): Promise<{
   );
 }
 
+/** ROUND-125 (R125-B, the owner's v0.117.0 verdict — "it did not show me
+ * the info of when it was being written"): the ledger's LIVE processing
+ * status — what GET /feedback/status serves. Joins the in-process registry
+ * the reporter reports into (writing/phase/session/last write — the part
+ * NO file read can show), the settings row (enabled), and the file's own
+ * honest numbers (entries/bytes, re-measured server-side). STATUS only:
+ * no ledger content ever rides this reply (the separation law). */
+export interface FeedbackStatus {
+  /** The master switch's live value (the same row /settings/feedback reads). */
+  enabled: boolean;
+  /** True while a reporter model call is in flight. */
+  writing: boolean;
+  /** Which phase is (or was last) writing — the post-turn summary or the
+   * R125-B mid-turn checkpoint. */
+  phase: "turn-end" | "mid-turn";
+  /** The session the current/last write reports on (null before any write). */
+  sessionId: string | null;
+  /** ISO timestamp of the current write's start (null before any write). */
+  startedAt: string | null;
+  /** ISO timestamp of the last completed write (success or failure). */
+  lastWriteTs: string | null;
+  /** "written" | "failed" — the last completed write's outcome class. */
+  lastWriteOutcome: string | null;
+  /** The ledger's live entry count. */
+  entries: number;
+  /** The ledger file's live size in bytes. */
+  bytes: number;
+  /** The last failed write's error excerpt (null on success / before any). */
+  lastError: string | null;
+}
+
+/** ROUND-125 (R125-B): the status poll behind the Self-Feedback tab's live
+ * strip — the route answers 503 like the file route when the sidecar has
+ * no machine-scoped dataDir (the honest off-state, surfaced as an error). */
+export async function fetchFeedbackStatus(): Promise<FeedbackStatus> {
+  return request<FeedbackStatus>("/feedback/status");
+}
+
 /** ROUND-78 (R78-C, owner: "General Settings 重试配置" — per-failure-type
  * auto-retry switches): the runtime's retry-ladder gates. When a switch is
  * off, that failure class NEVER enters the ladder — it fails fast
@@ -3718,6 +3756,26 @@ export type StreamTurnEvent =
    * treatment: informational, no store action, the turn's own terminal
    * frame follows. */
   | { type: "meta.continuation_complete"; iterations: number }
+  /** ROUND-125 (R125-B, owner: "it did not actually show me the processing of
+   * the feedback ledger — it did not show me the info of when it was being
+   * written"): the SELF-FEEDBACK ledger's status frames. STATUS ONLY — the
+   * separation law stands (no ledger CONTENT ever rides a frame or a session
+   * event; the file is the only persistence). stage "writing" fires before
+   * the reporter's model call, "written" after a successful append (with the
+   * ledger's new entry count), "failed" on any phase failure (detail = the
+   * error excerpt). phase "mid-turn" = the ONE-per-turn issue checkpoint
+   * (armed on the trouble heuristic — ≥3 failed tools, a denial + a failure,
+   * or ≥2 retry rungs); "turn-end" = the post-turn summary (those frames ride
+   * the events bus after the own stream closes — the slice-level store field
+   * keeps them visible past the live turn's teardown). */
+  | {
+      type: "meta.feedback";
+      sessionId: string;
+      stage: "writing" | "written" | "failed";
+      phase: "turn-end" | "mid-turn";
+      entries?: number;
+      detail?: string;
+    }
   /** ROUND-36 (ADR-0022): a delegated sub-agent changed state — the live
    * SubAgentCards update from these. */
   | {
@@ -4589,6 +4647,16 @@ export async function postBrowserCommandResult(
  * exactly like the /browser-commands result route it complements (the app
  * itself calls it; tickets never apply).
  *
+ * ROUND-125 (R125-A): the reply carries `source` — WHICH pixels the backend
+ * actually captured. "window" = a window-scoped grab (Windows PrintWindow
+ * PW_RENDERFULLCONTENT on the app's own child webview — occlusion-proof, the
+ * owner's "it takes a screenshot of that application instead" verdict fixed);
+ * "screen" = the legacy screen-region grab (another window on top may have
+ * leaked in). OPTIONAL and additive: an older sidecar omits it and callers
+ * treat absence as "screen" (the conservative reading) —
+ * agent-browser-capture.ts threads it into the capture result so the tool's
+ * reply can state it honestly.
+ *
  * Throws ApiError on failure (400 VALIDATION for a malformed region, 500
  * CAPTURE_FAILED when the backend reports an error) — callers surface the
  * message honestly, never a fabricated raster.
@@ -4598,8 +4666,8 @@ export async function captureBrowserRegion(region: {
   y: number;
   w: number;
   h: number;
-}): Promise<{ pngBase64: string; width: number; height: number }> {
-  return request<{ pngBase64: string; width: number; height: number }>("/browser-capture", {
+}): Promise<{ pngBase64: string; width: number; height: number; source?: "window" | "screen" }> {
+  return request<{ pngBase64: string; width: number; height: number; source?: "window" | "screen" }>("/browser-capture", {
     method: "POST",
     json: region,
   });

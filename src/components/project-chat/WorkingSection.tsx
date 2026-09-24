@@ -71,9 +71,14 @@ import { ScreenshotRow } from "./ScreenshotRow";
 import { QuestionCard } from "./QuestionCard";
 import { TodoCard } from "./TodoCard";
 import { extractStringArg } from "./streaming-args";
-// R98-C2: RUNNING_BLUE joins SEMANTIC_COLORS.warning from the documented
-// exception home — one spelling across the chat surfaces.
-import { RUNNING_BLUE, SEMANTIC_COLORS } from "../../lib/semantics";
+// R98-C2 introduced RUNNING_BLUE; R125 (the owner's verdict — "It shows
+// me in the blue colored area the tool call of writing") RETIRES it from
+// this file: the live boxes now speak the THEME ACCENT (styles.accent), so
+// a running write reads in the app's own voice in every theme instead of a
+// hard-coded blue slab. The constant stays exported in lib/semantics.ts for
+// the surfaces not migrated this round (SubAgentPanel — the full PC
+// redesign session owns those).
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 // ROUND-38 (owner: "outright remove that option completely"): the
@@ -1230,10 +1235,12 @@ export function LiveOutputTail({ output }: { output: string }) {
   return (
     <div className="mt-0.5 mb-1 pl-4 min-w-0" data-testid="live-command-output">
       <div className="flex items-center gap-1.5 h-4 px-0.5">
-        <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: RUNNING_BLUE }} aria-hidden />
+        {/* R125: the running accent replaces the retired RUNNING_BLUE — the
+            live tail speaks the theme's own accent voice, not a blue slab. */}
+        <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: styles.accent }} aria-hidden />
         <span
           className="text-[10px] font-mono font-medium uppercase tracking-[0.08em]"
-          style={{ color: RUNNING_BLUE }}
+          style={{ color: styles.accent }}
         >
           live
         </span>
@@ -1242,7 +1249,7 @@ export function LiveOutputTail({ output }: { output: string }) {
         ref={ref}
         className="rounded-lg border px-2.5 py-1.5 max-h-32 overflow-y-auto auto-scroll font-mono text-[10px] leading-[1.5] break-words"
         style={{
-          borderColor: withAlpha(RUNNING_BLUE, 0.35),
+          borderColor: withAlpha(styles.accent, 0.28),
           background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)",
           color: styles.textSecondary,
         }}
@@ -1318,11 +1325,12 @@ export function LiveWritePreview({ raw }: { raw: string }) {
       <div className="flex items-center gap-1.5 h-4 px-0.5">
         {/* Subtle animated shimmer — CSS-only pulse on the small dot
             (ac-pulse: the app's shared live-dot animation, reduced-motion
-            aware — same as LiveOutputTail). */}
-        <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: RUNNING_BLUE }} aria-hidden />
+            aware — same as LiveOutputTail). R125: the theme accent owns the
+            running voice (the retired RUNNING_BLUE's job). */}
+        <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: styles.accent }} aria-hidden />
         <span
           className="text-[10px] font-mono font-medium uppercase tracking-[0.08em] truncate"
-          style={{ color: RUNNING_BLUE }}
+          style={{ color: styles.accent }}
           title={path.found ? path.value : undefined}
         >
           {label}
@@ -1332,7 +1340,7 @@ export function LiveWritePreview({ raw }: { raw: string }) {
         ref={ref}
         className="rounded-lg border px-2.5 py-1.5 max-h-40 overflow-y-auto auto-scroll font-mono text-[11px] leading-[1.5] break-words whitespace-pre-wrap"
         style={{
-          borderColor: withAlpha(RUNNING_BLUE, 0.35),
+          borderColor: withAlpha(styles.accent, 0.28),
           background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)",
           color: styles.textSecondary,
         }}
@@ -1347,10 +1355,20 @@ export function LiveWritePreview({ raw }: { raw: string }) {
  * ROUND-58 (R58-cf): a PENDING write row — the model started generating a
  * write_file/edit_file call's arguments (tool-input-start frame) but the
  * final tool-call frame hasn't landed, so there is no ToolUseEntry yet. The
- * row mirrors a collapsed ToolLine's shape (running-blue icon chip + label +
+ * row mirrors a collapsed ToolLine's shape (running icon chip + label +
  * mono path + "…" in-flight status) with the live write preview beneath —
  * the owner sees the file being written the moment the model starts typing
  * its content. Not interactive: the preview is always shown.
+ *
+ * ROUND-125 (R125-2, owner: "it was showing me multiple writing at the same
+ * time… the exact same ones… one much earlier in the conversation, the
+ * other one showing further"): this row renders from the `pendingWrites`
+ * PROP the chat panel threads to EXACTLY ONE section — the one that owns
+ * the live tail. It used to read the store's streamingToolInputs through a
+ * selector inside EVERY mounted live section, so a segmented turn (tools →
+ * narration text → a new write) painted the same pending row in EACH of its
+ * work sections plus the synthetic tail — the duplicate the owner watched.
+ * The chip speaks the theme accent (R125's retirement of RUNNING_BLUE).
  */
 function LiveWritePendingRow({ toolName, raw }: { toolName: string; raw: string }) {
   const styles = useThemeStyles();
@@ -1363,7 +1381,7 @@ function LiveWritePendingRow({ toolName, raw }: { toolName: string; raw: string 
         className="flex items-center gap-2 h-7 w-full max-w-full px-1 -ml-1"
         style={{ color: styles.textTertiary }}
       >
-        <ToolIconChip Icon={Icon} background={withAlpha(RUNNING_BLUE, 0.12)} color={RUNNING_BLUE} />
+        <ToolIconChip Icon={Icon} background={withAlpha(styles.accent, 0.12)} color={styles.accent} />
         <span className="shrink-0 text-[11px] font-medium" style={{ color: styles.textSecondary }}>
           Writing
         </span>
@@ -1922,16 +1940,18 @@ function ToolLine({
   // ROUND-51 (R51-d): the chip tint per family. Delegations carry the accent
   // wash (the strongest signal — a sub-agent is working on the project);
   // file edits stay calm (subtle + textSecondary, the chip SHAPE is the
-  // differentiator) and borrow the in-flight running blue only while
+  // differentiator) and borrow the RUNNING accent only while
   // ok === null — the same in-progress language as SubAgentPanel's live rows.
+  // R125: the running voice is the THEME ACCENT (the owner's "blue colored
+  // area" verdict retired RUNNING_BLUE from this file).
   // Every other tool keeps the plain glyph, byte-identical to pre-R51.
   const chipTone =
     tool.toolName === "delegate_task"
       ? { background: withAlpha(styles.accent, 0.12), color: styles.accent }
       : DIFF_TOOLS.has(tool.toolName)
         ? {
-            background: tool.ok === null ? withAlpha(RUNNING_BLUE, 0.12) : styles.subtle,
-            color: tool.ok === null ? RUNNING_BLUE : styles.textSecondary,
+            background: tool.ok === null ? withAlpha(styles.accent, 0.12) : styles.subtle,
+            color: tool.ok === null ? styles.accent : styles.textSecondary,
           }
         : null;
 
@@ -2245,6 +2265,7 @@ export function WorkingSection({
   clockVisible = true,
   onApprovalDecision,
   onQuestionAnswer,
+  pendingWrites,
 }: {
   entries: WorkingEntry[];
   sessionId: string | null;
@@ -2279,6 +2300,18 @@ export function WorkingSection({
    * question, sources = option-pick vs custom-typed). Wired on LIVE sections
    * only — a folded card is already settled. */
   onQuestionAnswer?: (questionId: string, answers: string[], sources: Array<"option" | "custom">) => void;
+  /** ROUND-125 (R125-2, owner: "it was showing me multiple writing at the
+   * same time… the exact same ones… one much earlier in the conversation,
+   * the other one showing further"): the PENDING streaming write inputs
+   * (write_file/edit_file calls whose JSON args the model is still
+   * generating). The chat panel passes this to EXACTLY ONE section — the
+   * one that owns the live tail — replacing this component's internal
+   * stream-store selector, which made EVERY mounted live section read the
+   * SAME streamingToolInputs and render the same pending row (a segmented
+   * turn painted it in each of its work sections + the synthetic tail —
+   * the owner's duplicate). Undefined = no pending rows (folded sections,
+   * non-owning live sections). */
+  pendingWrites?: StreamingToolInput[];
 }) {
   const styles = useThemeStyles();
   // ROUND-38: no more activityMode toggle — folded turns collapse by default,
@@ -2303,19 +2336,16 @@ export function WorkingSection({
 
   const liveSeconds = useLiveSeconds(startedAtMs, live && !stopped);
 
-  // ROUND-58 (R58-cf): in-flight tool-ARG streaming — write_file/edit_file
-  // calls whose JSON args the model is still generating (a tool-input-start
-  // frame landed, no ToolUseEntry yet). Live sections only (folded turns
-  // never carry streaming state). The selector returns the store's array
-  // REFERENCE (stable between patches) or undefined — never a fresh array —
-  // so there is no re-render loop; the DIFF filter is a render-time derive.
-  const liveStreamingInputs = useStreamStore((s) =>
-    live && sessionId !== null ? s.bySession[sessionId]?.liveTurn?.streamingToolInputs : undefined,
-  );
-  const pendingWriteInputs: StreamingToolInput[] =
-    liveStreamingInputs === undefined
-      ? EMPTY_STREAMING_INPUTS
-      : liveStreamingInputs.filter((si) => DIFF_TOOLS.has(si.toolName));
+  // ROUND-125 (R125-2): the pending write inputs arrive as a PROP — passed
+  // ONLY to the section that owns the live tail (the panel's choice; see
+  // the prop's doc). The OLD store selector
+  // (useStreamStore((s) => s.bySession[sessionId]?.liveTurn?.streamingToolInputs))
+  // subscribed EVERY mounted live section to the SAME array, so each one
+  // rendered the same LiveWritePendingRow — the owner's "multiple writing
+  // at the same time… the exact same ones… one much earlier in the
+  // conversation, the other one showing further". Folded sections and
+  // non-owning live sections simply carry no pending rows.
+  const pendingWriteInputs: StreamingToolInput[] = pendingWrites ?? EMPTY_STREAMING_INPUTS;
 
   const toolCount = entries.filter((e) => e.type === "tool").length;
   const pendingApproval = entries.some((e) => e.type === "approval" && e.status === "pending");

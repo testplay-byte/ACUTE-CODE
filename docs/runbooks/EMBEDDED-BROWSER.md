@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-24 round-124 -->
+<!-- last-reviewed: 2026-09-24 round-125 -->
 # EMBEDDED BROWSER — the agent's in-app browser panel (owner's guide)
 
 **Status:** normative · **Established:** round-43 (the panel + the tool);
@@ -233,6 +233,20 @@ either (only computer-use frames hold; see [COMPUTER-USE](COMPUTER-USE.md)).
 R67-D addition: the `screenshot` action now also publishes the capture as
 a live chat THUMBNAIL (`screenshot` SSE frame + the ephemeral raster route
 — see [ATTACHMENTS](ATTACHMENTS.md), the ephemeral-rasters section).
+
+R124/R125 addition: the `screenshot` action's capture is STAGED — the
+tab's webview is re-staged at a fixed 1280×720 logical px (resolution is
+never the window's size), and on Windows the grab is now OCCLUSION-PROOF:
+the sidecar finds the staged child webview by its on-screen rect and
+`PrintWindow(PW_RENDERFULLCONTENT)` renders THAT window's own surface —
+so the capture works while the app is unfocused or covered by another
+application (the old screen-region grab scraped whatever was on top —
+the owner's "it takes the screenshot of that application rather than
+the browser window itself"). The tool's result names its source
+honestly (a window capture vs the legacy screen-region fallback, which
+still exists for the paths the window grab genuinely cannot serve).
+A minimized window is refused up front (PrintWindow would render stale
+pixels); the staged page still flashes ~0.5 s during the grab.
 
 ## The engine, honestly (R100-A — evergreen + the de-branded UA)
 

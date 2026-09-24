@@ -25,15 +25,26 @@
  *    Live refresh: every ledger append/clear broadcasts a settings-domain
  *    frame (the R113 invalidation pattern), so an open tab converges
  *    without a manual Refresh; the button stays for the pull path.
+ *  · THE LIVE STATUS STRIP (ROUND-125 / R125-B — the owner's v0.117.0
+ *    verdict: "it did not actually show me the processing of the feedback
+ *    ledger. It did not show me the info of when it was being written or
+ *    other stuff like that"): a one-line live poll of GET /feedback/status
+ *    (3 s while the tab is mounted and the toggle is ON) showing the
+ *    in-flight write (spinner + phase + session), the last completed write
+ *    (time · entries · bytes), and a quiet danger line for the last
+ *    failure. The file route can only show FINISHED entries — the strip is
+ *    the only surface that can show the WRITING. It carries STATUS only,
+ *    never entry content (the separation law).
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, FileText, ListCollapse, NotebookPen, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Copy, FileText, ListCollapse, Loader2, NotebookPen, RefreshCw, Trash2 } from "lucide-react";
 import {
   clearFeedbackLedger,
   deleteFeedbackEntry,
   fetchFeedbackLedger,
   fetchFeedbackSettings,
+  fetchFeedbackStatus,
   updateFeedbackSettings,
 } from "../../lib/api";
 import { useThemeStyles } from "../../lib/use-theme-styles";
@@ -63,6 +74,27 @@ function formatUpdatedAt(iso: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+/** R125-B: ISO → the strip's clock form ("4:05 PM") — the "Last entry"
+ * line's timestamp; the strip is one line, so the timestamp is one field. */
+function formatClock(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+/** R125-B: the session id's short form for the one-line strip (the full id
+ * rides the title attribute — the strip never truncates information, only
+ * display). */
+function shortSessionId(sessionId: string): string {
+  return sessionId.length > 14 ? `${sessionId.slice(0, 14)}…` : sessionId;
+}
+
+/** R125-B: an error excerpt for the strip's quiet danger line — capped for
+ * the one-line discipline; the FULL text rides the title attribute. */
+function errorExcerpt(text: string, cap = 120): string {
+  return text.length > cap ? `${text.slice(0, cap)}…` : text;
 }
 
 export interface ParsedFeedbackSection {
@@ -154,7 +186,117 @@ export function SelfFeedbackTab() {
         </p>
       </div>
       <SelfFeedbackToggleCard />
+      <FeedbackStatusStrip />
       <FeedbackLedgerCard />
+    </div>
+  );
+}
+
+/* ── ROUND-125 (R125-B): the LIVE STATUS STRIP — the writing made visible.
+ * A thin one-line poll (never a full card — it is a status LED, not a
+ * surface): 3 s refetch while the tab is mounted AND the toggle is ON,
+ * one immediate fetch the moment the gate opens (react-query fetches on
+ * enable — flipping the switch ON lights the strip instantly). States:
+ *   · WRITING — spinner + "Writing the ledger entry — {mid-turn checkpoint
+ *     | turn summary}…" + the session's short form (the full id in the
+ *     title). This is the state the owner never got to see before R125-B.
+ *   · AFTER A WRITE — "Last entry {time} · {n} entries · {size}" — the
+ *     FILE's live numbers off the status route (never a client recount,
+ *     never a duplicate of the viewer's meta line: the strip's job is the
+ *     LIVE state the file route cannot show).
+ *   · FAILURE — one quiet danger line with the error excerpt (title = the
+ *     full text).
+ *   · IDLE — a quiet "watching" line so the strip's presence reads as
+ *     intentional, not broken.
+ *   · OFF — the strip hides entirely (nothing polls while the toggle is
+ *     OFF; the gate IS the toggle's own query key, so the strip and the
+ *     switch can never disagree). */
+function FeedbackStatusStrip() {
+  const styles = useThemeStyles();
+  // The gate — the toggle card's OWN query key (react-query dedupes by
+  // key, so this is the same request, not a second one). While OFF the
+  // status query below is disabled entirely: zero polls, hidden strip.
+  const settingsQuery = useQuery({
+    queryKey: ["feedback-settings"],
+    queryFn: fetchFeedbackSettings,
+  });
+  const enabled = settingsQuery.data?.enabled === true;
+  const statusQuery = useQuery({
+    queryKey: ["feedback-status"],
+    queryFn: fetchFeedbackStatus,
+    // R125-B: poll ONLY while the tab is mounted and the toggle is ON —
+    // the strip is the one surface that must catch a write MID-FLIGHT, so
+    // a pull cadence (3 s) beats the invalidation push (the events-bus
+    // settings frame fires on append, but the WRITING state begins before
+    // any file change exists to invalidate).
+    enabled,
+    refetchInterval: 3_000,
+    staleTime: 1_000,
+  });
+  if (!enabled) return null;
+  const status = statusQuery.data;
+  return (
+    <div data-testid="feedback-status-strip" className="flex flex-col gap-0.5 px-1">
+      {status === undefined ? (
+        // The status route is unreachable (sidecar down / no dataDir) — one
+        // quiet tertiary line, never a spinner wall: the ledger card below
+        // already carries the full honest error card for the same failure.
+        statusQuery.isError ? (
+          <p
+            data-testid="feedback-status-unavailable"
+            className="text-[11px]"
+            style={{ color: styles.textTertiary }}
+            title={
+              statusQuery.error instanceof Error ? statusQuery.error.message : String(statusQuery.error)
+            }
+          >
+            live status unavailable
+          </p>
+        ) : null
+      ) : status.writing ? (
+        // The WRITING state — the whole point of R125-B: the owner sees the
+        // ledger being written WHILE it is being written (phase named,
+        // session short-formed; lastError is cleared by the writer's own
+        // begin, so one line is honest here).
+        <div
+          data-testid="feedback-status-writing"
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-1.5 text-[11px]"
+          style={{ color: styles.textSecondary }}
+          title={status.sessionId ?? undefined}
+        >
+          <Loader2 size={11} className="animate-spin" style={{ color: styles.accent }} aria-hidden />
+          <span>
+            Writing the ledger entry — {status.phase === "mid-turn" ? "mid-turn checkpoint" : "turn summary"}…
+            {status.sessionId !== null ? ` · ${shortSessionId(status.sessionId)}` : ""}
+          </span>
+        </div>
+      ) : (
+        <>
+          {status.lastWriteTs !== null ? (
+            <p className="text-[11px]" style={{ color: styles.textSecondary }} data-testid="feedback-status-last">
+              Last entry {formatClock(status.lastWriteTs)} · {status.entries}{" "}
+              {status.entries === 1 ? "entry" : "entries"} · {formatBytes(status.bytes)}
+            </p>
+          ) : (
+            <p className="text-[11px]" style={{ color: styles.textTertiary }} data-testid="feedback-status-idle">
+              Watching — the next completed turn appends an entry here
+            </p>
+          )}
+          {status.lastError !== null && (
+            <p
+              className="text-[11px]"
+              style={{ color: SEMANTIC_COLORS.danger }}
+              role="alert"
+              data-testid="feedback-status-error"
+              title={status.lastError}
+            >
+              Last write failed — {errorExcerpt(status.lastError)}
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }

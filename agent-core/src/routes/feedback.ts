@@ -8,6 +8,22 @@
 //                                    blocklist does NOT include this path):
 //                                    a paired phone viewing the ledger is
 //                                    exactly the R109 "view" trust level.
+//   GET    /api/v1/feedback/status → ROUND-125 (R125-B): the LIVE writing
+//                                    state — the registry the reporter
+//                                    reports into (writing/phase/session/
+//                                    last write) + the setting + the file's
+//                                    own numbers. This is the route the
+//                                    owner's complaint asked for ("it did
+//                                    not show me the processing of the
+//                                    feedback ledger … the info of when it
+//                                    was being written"): the file route
+//                                    can only show FINISHED entries — the
+//                                    strip needs the in-flight write.
+//                                    Phone-reachable exactly like the file
+//                                    GET (viewing is the R109 "view" trust
+//                                    level; STATUS is not CONTENT, so the
+//                                    separation law holds — no entry words
+//                                    ever ride this reply).
 //   DELETE /api/v1/feedback/file   → wipe the ledger (the settings
 //                                    viewer's Clear action). SHELL-ONLY:
 //                                    the route-local rejectDeviceTokens
@@ -23,9 +39,9 @@
 //                                    is idempotent-honest ({removed:false}
 //                                    for a stale index, never a 404).
 //
-// The GET never 404s: a ledger that was never written serves its honest
+// The GETs never 404: a ledger that was never written serves its honest
 // empty state { exists:false, content:"", … } (the mobile-link off-state
-// pattern). Both routes answer 503 when ctx.dataDir is undefined (the R42
+// pattern). All routes answer 503 when ctx.dataDir is undefined (the R42
 // hermetic-tests contract — no machine-scoped directory, no ledger).
 //
 // The toggle itself is NOT here: GET/PUT /settings/feedback lives in
@@ -41,6 +57,12 @@ import {
   deleteFeedbackEntry,
   readFeedbackLedger,
 } from "../storage/feedback-ledger.js";
+// R125-B: the live registry (the reporter's own begin/end reports) + the
+// clear-route reset. getFeedbackSettings is imported the same way sse.ts
+// imports it — the SAME accessor the /settings/feedback routes use, so the
+// status route and the turn-time gate can never disagree about "enabled".
+import { readFeedbackStatus, resetFeedbackWriteStatus } from "../agents/feedback-status.js";
+import { getFeedbackSettings } from "../storage/settings.js";
 
 /** The settings.ts cloud-connector pattern, verbatim in intent: true =
  * rejected (the 403 reply is already sent). The route-local guard is the
@@ -71,6 +93,42 @@ export function registerFeedbackRoutes(scope: FastifyInstance, ctx: RouteContext
     return readFeedbackLedger(ctx.dataDir);
   });
 
+  // ── ROUND-125 (R125-B): the LIVE STATUS surface — GET /feedback/status.
+  // One object joins THREE sources, each owned by its own module: the
+  // in-process registry the reporter reports into (writing/phase/session/
+  // last write — the part NO file read can show), the settings row
+  // (enabled, via the same accessor the turn-time gate uses), and the
+  // ledger file's own honest numbers (entries/bytes — re-measured HERE so
+  // the strip and the viewer can never disagree after a clear or a delete).
+  // Phone-reachable by the same reasoning as the file GET above: status is
+  // the R109 "view" trust level, and the reply carries NO entry content.
+  scope.get("/feedback/status", async (_request, reply) => {
+    if (ctx.dataDir === undefined) {
+      return reply.code(503).send(
+        errorBody("SERVICE_UNAVAILABLE", "the feedback ledger requires the machine-scoped data directory", {
+          hint: "the sidecar passes the SQLite file's directory; dev servers without one have no ledger",
+        }),
+      );
+    }
+    const status = readFeedbackStatus();
+    const ledger = readFeedbackLedger(ctx.dataDir);
+    return {
+      enabled: getFeedbackSettings(ctx.db).enabled,
+      writing: status.writing,
+      phase: status.phase,
+      sessionId: status.sessionId,
+      startedAt: status.startedAt,
+      lastWriteTs: status.lastWriteTs,
+      lastWriteOutcome: status.lastWriteOutcome,
+      // The FILE's live numbers — the registry's lastEntries describes the
+      // moment of the last write; these two describe RIGHT NOW (a Clear or
+      // a per-entry delete between writes must be reflected immediately).
+      entries: ledger.entries,
+      bytes: ledger.bytes,
+      lastError: status.lastError,
+    };
+  });
+
   scope.delete("/feedback/file", async (request, reply) => {
     if (rejectDeviceTokens(request, reply)) return reply;
     if (ctx.dataDir === undefined) {
@@ -84,6 +142,13 @@ export function registerFeedbackRoutes(scope: FastifyInstance, ctx: RouteContext
     // AFTER the wipe, never half-cleared). The wiped entry count rides
     // the reply — the confirmation line is honest, never assumed.
     const wiped = await clearFeedbackLedger(ctx.dataDir);
+    // R125-B: the wipe also resets the status registry's LAST-WRITE fields
+    // — after a Clear there is no "last entry" to point at, and the live
+    // strip's "Last entry … · N entries" line would describe a file that
+    // no longer exists (the registry's LIVE fields stay: a write in flight
+    // while the owner clears is still in flight, and its entry re-creates
+    // the file when it lands — the write chain orders them honestly).
+    resetFeedbackWriteStatus();
     return { cleared: true, entries: wiped.entries };
   });
 

@@ -17,6 +17,15 @@
  *      scrubbed of the API key); the empty-reply refusal; keyring-secret
  *      scrubbing of the transcript the model receives; the usage
  *      passthrough.
+ *   4. ROUND-125 (R125-B) — the PHASE param + the STATUS bookkeeping: the
+ *      mid-turn checkpoint's header Phase line + transcript banner + the
+ *      prompt's checkpoint paragraph; the turn-end format staying
+ *      byte-identical (phase omitted vs undefined); the registry's
+ *      writing flag true DURING the model call and false + lastWriteTs/
+ *      lastEntries after; and the early-return paths never stranding
+ *      writing=true (the owner's "it did not show me the info of when it
+ *      was being written" — the writer itself is now the source of that
+ *      info).
  */
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -25,6 +34,9 @@ import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { appendFeedbackEntry, clearFeedbackLedger, readFeedbackLedger, FEEDBACK_FILE_NAME } from "../src/storage/feedback-ledger";
 import { buildFeedbackEntryHeader, runFeedbackWriter } from "../src/agents/feedback-writer";
+// R125-B: the registry the writer reports into — read live DURING the fake
+// chat's await to pin the in-flight writing state.
+import { readFeedbackStatus, type FeedbackWriterStatus } from "../src/agents/feedback-status";
 import { getEventsBus } from "../src/lib/events-bus";
 import { appendSessionEvent } from "../src/storage/sessions";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
@@ -386,3 +398,202 @@ describe("R122: the feedback reporter (runFeedbackWriter)", () => {
     }
   });
 });
+
+// ── 4. ROUND-125 (R125-B): the phase param + the status bookkeeping ─────────
+
+describe("R125-B: the mid-turn checkpoint phase (runFeedbackWriter phase param)", () => {
+  const MID_TURN_REPORT = "### What I was trying to do\nFix the login bug.\n\n### What actually happened\nThis is a mid-turn checkpoint of a turn that has not finished — the checkpoint fired because calls kept failing.\n\n### Issues & problems encountered\nterminal failed 3 times.\n\n### Glitches & anomalies noticed\nNothing to report.\n\n### Expectations vs reality\nNot met — the task is still outstanding.\n\n### Suggested improvements\nNone this turn.";
+
+  it("the header builder: phase \"mid-turn\" inserts the Phase line; \"turn-end\" and OMITTED are byte-identical (the R122 format)", () => {
+    // The additive contract in one pin: only the mid-turn entry carries the
+    // marker, and the two turn-end spellings are the SAME bytes (an old
+    // entry and a new turn-end entry are indistinguishable — the file's
+    // grammar and the viewer's parser are untouched).
+    const midTurn = buildFeedbackEntryHeader({ ...headerBase, phase: "mid-turn" });
+    expect(midTurn).toContain("- **Phase**: mid-turn checkpoint (turn still in flight)");
+    // The Phase line sits between the outcome and the transcript lines.
+    expect(midTurn.indexOf("- **Turn outcome**")).toBeLessThan(midTurn.indexOf("- **Phase**"));
+    expect(midTurn.indexOf("- **Phase**")).toBeLessThan(midTurn.indexOf("- **Transcript**"));
+
+    const explicitTurnEnd = buildFeedbackEntryHeader({ ...headerBase, phase: "turn-end" });
+    const omittedPhase = buildFeedbackEntryHeader({ ...headerBase });
+    expect(explicitTurnEnd).toBe(omittedPhase);
+    expect(explicitTurnEnd).not.toContain("- **Phase**");
+  });
+
+  it("mid-turn: the transcript the model receives carries the machine-written PARTIAL-turn banner; the system prompt carries the checkpoint paragraph", async () => {
+    const db = openDatabase(join(tempDir, `${randomUUID()}.db`));
+    try {
+      const sessionId = sessionWithTranscript(db, false);
+      const { chat, inputs } = fakeChat(MID_TURN_REPORT);
+      const result = await runFeedbackWriter(
+        { db, keyring: new ProviderKeyring(), chat, dataDir },
+        {
+          sessionId,
+          sessionTitle: null,
+          projectId: null,
+          projectName: null,
+          agentName: "default",
+          provider: { id: "openrouter", baseUrl: "https://example.test/v1" },
+          apiKey: KEY,
+          model: "test/model-1",
+          turnOutcome: "in flight (mid-turn checkpoint)",
+          phase: "mid-turn",
+        },
+      );
+      expect(result.ok).toBe(true);
+      expect(inputs).toHaveLength(1);
+      const input = inputs[0] as { system?: string; messages?: Array<{ content: string }> };
+      // The banner LEADS the transcript — the prompt's checkpoint paragraph
+      // keys on its exact opening words.
+      expect(input.messages?.[0].content.startsWith("NOTE: this is a PARTIAL turn (mid-turn checkpoint)")).toBe(true);
+      expect(input.messages?.[0].content).toContain("please fix the login bug");
+      // The system prompt knows what a checkpoint entry should focus on
+      // (the six-section contract itself stays identical).
+      expect(input.system).toContain("MID-TURN CHECKPOINTS (ROUND-125)");
+      expect(input.system).toContain("### What I was trying to do");
+      // The ledger entry: the Phase line + the checkpoint outcome.
+      const ledger = readFeedbackLedger(dataDir);
+      expect(ledger.entries).toBe(1);
+      expect(ledger.content).toContain("- **Phase**: mid-turn checkpoint (turn still in flight)");
+      expect(ledger.content).toContain("- **Turn outcome**: in flight (mid-turn checkpoint)");
+      expect(ledger.content).toContain("mid-turn checkpoint of a turn that has not finished");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("turn-end (explicit and omitted): NO banner in the transcript — the R122 prompt input is byte-identical", async () => {
+    const db = openDatabase(join(tempDir, `${randomUUID()}.db`));
+    try {
+      const sessionId = sessionWithTranscript(db, false);
+      const { chat: chatA, inputs: inputsA } = fakeChat("### What I was trying to do\nx");
+      await runFeedbackWriter(
+        { db, keyring: new ProviderKeyring(), chat: chatA, dataDir },
+        { ...baseWriterParams(sessionId) },
+      );
+      const { chat: chatB, inputs: inputsB } = fakeChat("### What I was trying to do\nx");
+      await runFeedbackWriter(
+        { db, keyring: new ProviderKeyring(), chat: chatB, dataDir },
+        { ...baseWriterParams(sessionId), phase: "turn-end" },
+      );
+      const transcriptA = (inputsA[0] as { messages?: Array<{ content: string }> }).messages?.[0].content ?? "";
+      const transcriptB = (inputsB[0] as { messages?: Array<{ content: string }> }).messages?.[0].content ?? "";
+      expect(transcriptA.startsWith("NOTE: this is a PARTIAL turn")).toBe(false);
+      expect(transcriptA).toBe(transcriptB);
+      // And the ledger's two entries carry NO Phase line at all.
+      expect(readFeedbackLedger(dataDir).content).not.toContain("- **Phase**");
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("R125-B: the writer's STATUS bookkeeping (the registry reports)", () => {
+  it("writing=true DURING the model call; false + lastWriteTs + lastEntries after a successful write", async () => {
+    const db = openDatabase(join(tempDir, `${randomUUID()}.db`));
+    try {
+      const sessionId = sessionWithTranscript(db, false);
+      // The fake chat READS THE REGISTRY at the moment the writer is
+      // awaiting it — the mid-flight snapshot the owner never got to see.
+      let midFlight: FeedbackWriterStatus | null = null;
+      const chat: ChatFn = async () => {
+        midFlight = readFeedbackStatus();
+        return {
+          text: "### What I was trying to do\nx",
+          usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
+          toolCalls: [],
+          finishReason: "stop",
+          steps: [],
+        };
+      };
+      const result = await runFeedbackWriter(
+        { db, keyring: new ProviderKeyring(), chat, dataDir },
+        { ...baseWriterParams(sessionId), phase: "mid-turn" },
+      );
+      expect(result.ok).toBe(true);
+      // The in-flight state: writing, the phase, the session, a start time.
+      expect(midFlight).not.toBeNull();
+      expect((midFlight as unknown as FeedbackWriterStatus).writing).toBe(true);
+      expect((midFlight as unknown as FeedbackWriterStatus).phase).toBe("mid-turn");
+      expect((midFlight as unknown as FeedbackWriterStatus).sessionId).toBe(sessionId);
+      expect((midFlight as unknown as FeedbackWriterStatus).startedAt).not.toBeNull();
+      // The completed state: idle + the honest outcome/entries/timestamp.
+      const after = readFeedbackStatus();
+      expect(after.writing).toBe(false);
+      expect(after.lastWriteTs).not.toBeNull();
+      expect(after.lastWriteOutcome).toBe("written");
+      expect(after.lastEntries).toBe(1);
+      expect(after.lastError).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("the early-return paths never strand writing=true — a failed write ends with the honest failed outcome", async () => {
+    const db = openDatabase(join(tempDir, `${randomUUID()}.db`));
+    try {
+      // The empty-transcript early return: beginFeedbackWrite ran, the body
+      // returned before any model call — the registry must still END.
+      const sessionId = `sess_${randomUUID()}`; // no events at all
+      const { chat, inputs } = fakeChat("should never be called");
+      const result = await runFeedbackWriter(
+        { db, keyring: new ProviderKeyring(), chat, dataDir },
+        { ...baseWriterParams(sessionId) },
+      );
+      expect(result.ok).toBe(false);
+      expect(inputs).toHaveLength(0);
+      const status = readFeedbackStatus();
+      expect(status.writing).toBe(false);
+      expect(status.lastWriteOutcome).toBe("failed");
+      expect(status.lastError).toContain("empty");
+
+      // The provider-failure early return — same law.
+      const sessionId2 = sessionWithTranscript(db, false);
+      const throwingChat: ChatFn = async () => {
+        throw new Error("provider exploded");
+      };
+      const result2 = await runFeedbackWriter(
+        { db, keyring: new ProviderKeyring(), chat: throwingChat, dataDir },
+        { ...baseWriterParams(sessionId2) },
+      );
+      expect(result2.ok).toBe(false);
+      expect(readFeedbackStatus().writing).toBe(false);
+      expect(readFeedbackStatus().lastWriteOutcome).toBe("failed");
+      expect(readFeedbackStatus().lastError).toContain("provider exploded");
+    } finally {
+      db.close();
+    }
+  });
+});
+
+/** R125-B: the writer params every extension test shares (the R122 shape). */
+function baseWriterParams(sessionId: string): Parameters<typeof runFeedbackWriter>[1] {
+  return {
+    sessionId,
+    sessionTitle: null,
+    projectId: null,
+    projectName: null,
+    agentName: "default",
+    provider: { id: "openrouter", baseUrl: "https://example.test/v1" },
+    apiKey: KEY,
+    model: "test/model-1",
+    turnOutcome: "ok",
+  };
+}
+
+/** R125-B: the header-base fixture shared with describe #2's `base` — kept
+ * separate so the R122 pins above stay untouched. */
+const headerBase = {
+  ts: "2026-09-23T12:00:00.000Z",
+  sessionId: "sess_abc",
+  sessionTitle: null as string | null,
+  projectName: "my-app" as string | null,
+  projectId: "proj_1" as string | null,
+  agentName: "default",
+  providerId: "openrouter",
+  model: "test/model-1",
+  turnOutcome: "ok",
+  eventCount: 42,
+  truncated: false,
+};

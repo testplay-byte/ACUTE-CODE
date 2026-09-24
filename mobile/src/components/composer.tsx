@@ -114,6 +114,23 @@
  * ImageViewer; text → the scrollable mono card; binary → the honest
  * name/size card), and the dock's bottom beat lives in the session
  * screen's dock expression (see [id].tsx — item 28).
+ *
+ * ROUND-125 (R125-D — the PER-SESSION DRAFTS): the owner's v0.117.0 device
+ * verdict — "if I write a message and then switch to another session, it
+ * should remember which message was typed there." The draft used to live
+ * ONLY in this component's useState (leaving the screen lost it; switching
+ * sessions on a live mount carried it along, which is its own small wrong).
+ * It now persists per session id through features/composer-draft.ts (the
+ * outbox's injected-store architecture; one owned AsyncStorage key; a
+ * 20,000-char cap — a draft is not a document). The wiring is purely
+ * additive around the existing draftRef/setDraft flow: hydrate on mount +
+ * session change (guarded against unmount and mid-flight id changes), a
+ * 400ms TRAILING debounce on user typing (onDraftChange + pickAtMention
+ * only — programmatic changes never schedule saves), a FLUSH on leaving a
+ * session (the effect cleanup drops the timer and saves the tail text NOW),
+ * and a CLEAR on send/queue (the consumed draft must not resurrect). The
+ * caret/selection mirrors (draftRef/caretRef) are untouched by the
+ * persistence layer — see the R125-D block at the state declarations.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -199,6 +216,16 @@ import {
   saveModelOverride,
   saveThinkingLevel,
 } from "@/features/composer-prefs";
+// R125-D — the per-session draft persistence (the owner's "if I write a
+// message and then switch to another session, it should remember which
+// message was typed there"). The store module mirrors outbox.ts's injected
+// seam; the debounce + the wiring live HERE, purely additively around the
+// existing draftRef/setDraft flow.
+import {
+  clearComposerDraft,
+  loadComposerDraft,
+  saveComposerDraft,
+} from "@/features/composer-draft";
 
 export type ComposerMode = "compose" | "running" | "offline";
 
@@ -307,6 +334,12 @@ const BINARY_SNIFF_BYTES = 8 * 1024;
 const ATTACHMENT_TEXT_CAP = 131_072;
 /** The picked-binary byte ceiling (POST /attachments/upload's 8MB gate). */
 const MAX_BINARY_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+/** R125-D — the draft-save TRAILING debounce: every keystroke reschedules,
+ * so only the SETTLED text ever hits storage (a pause in typing is the
+ * natural "done for now" signal; the timer is ALWAYS flushed on unmount /
+ * session-switch by the draft effect's cleanup, so the trailing <400ms of
+ * typing can never vanish with the timer). */
+const COMPOSER_DRAFT_SAVE_DEBOUNCE_MS = 400;
 
 export function Composer({
   mode,
@@ -367,6 +400,16 @@ export function Composer({
   // @ picker's tree, and the per-session picks reset with the session too —
   // a file staged for A never rides into B, and a tree fetched for A's
   // project never quick-picks inside B's).
+  // ── ROUND-125 (R125-D — why): ── the DRAFT now resets with the session
+  // too. Pre-R125-D the typed text carried across a session switch on a
+  // live mount (only leaving the screen lost it); the owner's verdict —
+  // "if I write a message and then switch to another session, it should
+  // remember which message was typed there" — makes each session own ITS
+  // text. The old session's draft has ALREADY been flushed to storage by
+  // the R125-D draft effect's cleanup (React runs every re-running
+  // effect's cleanup BEFORE any of the new setups, so that cleanup read
+  // the PRE-clear draftRef); the new session's own draft then loads in
+  // that effect.
   const sessionRef = useRef(sessionId);
   useEffect(() => {
     if (sessionRef.current === sessionId) return;
@@ -376,6 +419,8 @@ export function Composer({
     setTreeFiles(null);
     setThinkingLevel("default");
     setModelOverride(null);
+    setDraft("");
+    draftRef.current = "";
     void loadThinkingLevel(sessionId).then(setThinkingLevel);
     void loadModelOverride(sessionId).then((saved) => {
       setModelOverride(saved);
@@ -394,6 +439,88 @@ export function Composer({
     // workspace's lint program carries no react-hooks plugin, so the unknown
     // rule reference failed the --no-ignore gate).
   }, []);
+
+  // ── ROUND-125 (R125-D — why): ── the per-session DRAFT persistence. The
+  // owner's v0.117.0 device verdict — "if I write a message and then switch
+  // to another session, it should remember which message was typed there."
+  // The draft used to live ONLY in the useState above; now three purely
+  // additive layers wrap the EXISTING draftRef/setDraft flow (the caret /
+  // selection mirrors are never touched — persistence rides alongside):
+  //   · LOAD — on mount (and on every session-id change) the session's own
+  //     draft hydrates: setDraft only for NON-EMPTY text, guarded against
+  //     unmount AND against a session-id change mid-flight (the `cancelled`
+  //     flag's cleanup runs for both), with the caret mirror parked at the
+  //     END of the restored text (the natural resume position for the
+  //     advancedCaret math).
+  //   · SAVE — the trailing 400ms debounce (scheduleDraftSave), scheduled
+  //     ONLY from the two user-driven draft mutations (onDraftChange +
+  //     pickAtMention) so a programmatic change (hydrate, send-clear,
+  //     session-swap) can never schedule a save that fights its own cause.
+  //   · FLUSH — this effect's cleanup: leaving a session (switch OR
+  //     unmount) saves whatever the input held for THAT session NOW,
+  //     dropping the pending timer — the trailing <400ms of typing must
+  //     never vanish with the timer.
+  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Schedule the trailing debounced save (user typing only — see above). */
+  const scheduleDraftSave = useCallback(
+    (text: string): void => {
+      if (draftSaveTimerRef.current !== null) clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = setTimeout(() => {
+        draftSaveTimerRef.current = null;
+        void saveComposerDraft(sessionId, text);
+      }, COMPOSER_DRAFT_SAVE_DEBOUNCE_MS);
+    },
+    [sessionId],
+  );
+
+  /** Save NOW for the given session, dropping any pending debounce (the
+   * flush path — session-exit and unmount). */
+  const flushDraftSave = useCallback((sid: string, text: string): void => {
+    if (draftSaveTimerRef.current !== null) {
+      clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = null;
+    }
+    void saveComposerDraft(sid, text);
+  }, []);
+
+  /** The send path: the message left the composer, the persisted copy dies
+   * with it (and the pending debounce too — a late fire would resurrect
+   * the just-sent text). */
+  const clearPersistedDraft = useCallback((sid: string): void => {
+    if (draftSaveTimerRef.current !== null) {
+      clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = null;
+    }
+    void clearComposerDraft(sid);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadComposerDraft(sessionId).then((text) => {
+      if (cancelled || text === "") return;
+      // The user typed BEFORE the hydrate landed — their fresh text wins
+      // (a stale stored draft must never stomp live keystrokes; the debounce
+      // save persists the fresh text over it). Honest edge: typed-then-
+      // deleted back to empty within the load window still hydrates — the
+      // input is empty, so the session's memory is the truth to show.
+      if (draftRef.current !== "") return;
+      // The caret mirror rides the restored text's END — where typing
+      // resumes; onSelectionChange re-truths it on the first real tap.
+      draftRef.current = text;
+      caretRef.current = text.length;
+      setDraft(text);
+    });
+    return () => {
+      cancelled = true;
+      // Leaving THIS session (switch or unmount): the text the input held
+      // belongs to it — flush the debounce's tail NOW, never with the timer.
+      // (On a switch, this cleanup runs BEFORE any of the new effects'
+      // setups — React's update order — so it still reads the PRE-clear
+      // draftRef, the old session's text, and saves it under the OLD id.)
+      flushDraftSave(sessionId, draftRef.current);
+    };
+  }, [sessionId, flushDraftSave]);
 
   // ── the fetched data (connected-only, best-effort, honest on failure) ────
 
@@ -640,8 +767,11 @@ export function Composer({
       setAtToken(null);
       void selectionHaptic();
       void attachPaths([path], "at");
+      // R125-D — the @ pick is a user-driven draft mutation: the debounced
+      // save rides it exactly like a keystroke.
+      scheduleDraftSave(next);
     },
-    [atToken, draft, attachPaths],
+    [atToken, draft, attachPaths, scheduleDraftSave],
   );
 
   const onDraftChange = useCallback(
@@ -657,8 +787,11 @@ export function Composer({
       setDraft(value);
       setNote(null);
       applyAtToken(value, caret);
+      // R125-D — the trailing debounced draft save (every keystroke
+      // reschedules; only the settled text ever hits storage).
+      scheduleDraftSave(value);
     },
-    [applyAtToken],
+    [applyAtToken, scheduleDraftSave],
   );
 
   // ── send assembly (the desktop's sendStaged pipeline, mirrored) ──────────
@@ -726,12 +859,16 @@ export function Composer({
       draftRef.current = "";
       setAtToken(null);
       setAttachments([]);
+      // R125-D — the send CONSUMES the draft: the persisted per-session
+      // copy dies with it (and the pending debounce too — a late fire would
+      // resurrect the just-sent text on the next visit).
+      clearPersistedDraft(sessionId);
       void successHaptic();
       onSend(content, overridesFor(staged));
     } finally {
       setUploading(false);
     }
-  }, [canSend, uploading, draft, mode, attachments, uploadStaged, onSend, overridesFor]);
+  }, [canSend, uploading, draft, mode, attachments, uploadStaged, onSend, overridesFor, clearPersistedDraft, sessionId]);
 
   const queueNow = useCallback(async (): Promise<void> => {
     if (!canSend || uploading) return;
@@ -743,11 +880,14 @@ export function Composer({
       draftRef.current = "";
       setAtToken(null);
       setAttachments([]);
+      // R125-D — the queue path consumes the draft the same way: the text
+      // rides the outbox now, so the persisted copy must not resurrect it.
+      clearPersistedDraft(sessionId);
       onQueue(content, overridesFor(staged));
     } finally {
       setUploading(false);
     }
-  }, [canSend, uploading, draft, attachments, uploadStaged, onQueue, overridesFor]);
+  }, [canSend, uploading, draft, attachments, uploadStaged, onQueue, overridesFor, clearPersistedDraft, sessionId]);
 
   // ── the send-control setters (persist per session, desktop parity) ───────
 
