@@ -215,6 +215,19 @@ the fold (a count on the debug report).
   MINIMIZED window can render stale content — the frontend's pre-existing minimized refusal guards
   the front door; there is no mid-grab re-check (documented in the backend).
 
+  **THE CI STORY (the honest red-then-fixed, R124's pattern again):** main's first push (74c406c)
+  went green on Mobile CI + Rust Checks immediately, and the TAG's Release + Mobile APK workflows
+  both built — but the `CI` (verify) run caught ONE failing test: the r122 OK-turn feedback-phase
+  pin read the reporter's usage row SYNCHRONOUSLY the instant waitForEntry saw the ledger entry.
+  The detached phase records that row in the same continuation that appended the entry — a race the
+  3-4× slower windows runner can lose (the repo's own documented R73 lesson class; green locally
+  and in the agent-core suite, red once on CI). The fix (bda22fb) keeps the assertion's truth
+  byte-identical and makes only the WAIT honest: `waitForFeedbackUsageRows` /
+  `waitForFeedbackUsageCount` poll like waitForEntry itself, timing out to the honest emptiness so
+  a REAL recording failure still fails. Stress-verified 5× locally; the stale draft + the tag at
+  the red commit were deleted; v0.118.0 was re-tagged at bda22fb AFTER its CI run went green, and
+  the re-tag's Release + Mobile APK workflows both succeeded before the publish.
+
 ## §9 The honest deferred list
 
 - **THE FULL PC REDESIGN SESSION — the owner scheduled it next**: "we will do a session where we
