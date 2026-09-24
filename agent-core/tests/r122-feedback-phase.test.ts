@@ -198,6 +198,31 @@ async function waitForEntry(timeoutMs = 4000): Promise<ReturnType<typeof readFee
   }
 }
 
+/**
+ * R125-B CI-stability (the R73 windows-runner lesson — the runner executes
+ * this suite 3-4× slower under parallel load): the reporter's usage row is
+ * recorded in the SAME detached continuation that appended the ledger
+ * entry, but the entry's file write can surface to the test's poll a beat
+ * before the usage INSERT's continuation lands in the starved worker. The
+ * assertion's TRUTH is unchanged (exactly the expected rows, the right
+ * shape); only the WAIT is honest about the detached phase's asynchronous
+ * completion — poll like waitForEntry, then let the caller assert.
+ */
+async function waitForFeedbackUsageRows(
+  min: number,
+  timeoutMs = 4000,
+): Promise<Array<{ origin: string; provider: string; model: string }>> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const rows = db
+      .prepare("SELECT origin, provider, model FROM usage_events WHERE origin = 'feedback'")
+      .all() as Array<{ origin: string; provider: string; model: string }>;
+    if (rows.length >= min) return rows;
+    if (Date.now() > deadline) return rows; // the honest emptiness — the caller's assertion reports it
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R122: the self-feedback phase on the stream route", () => {
@@ -264,9 +289,10 @@ describe("R122: the self-feedback phase on the stream route", () => {
     expect(eventTypes).not.toContain("debug.report");
 
     // (e) The reporter's spend: ONE usage row with origin 'feedback'.
-    const rows = db
-      .prepare("SELECT origin, provider, model FROM usage_events WHERE origin = 'feedback'")
-      .all() as Array<{ origin: string; provider: string; model: string }>;
+    // R125-B: waitForFeedbackUsageRows — the detached phase records the row
+    // in the same continuation as the append; the poll is the CI-stability
+    // fix (the row's presence + shape stay exactly as pinned).
+    const rows = await waitForFeedbackUsageRows(1);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ origin: "feedback", provider: "openrouter", model: "test/model-1" });
 

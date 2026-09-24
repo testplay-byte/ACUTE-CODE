@@ -209,6 +209,30 @@ async function waitForEntries(count: number, timeoutMs = 4000): Promise<ReturnTy
   }
 }
 
+/**
+ * R125-B CI-stability (the R73 windows-runner lesson; the twin of
+ * r122-feedback-phase.test.ts's helper): the reporter's usage rows land in
+ * the SAME detached continuation as the ledger append, but a starved CI
+ * worker can surface the file write to the poll a beat before the usage
+ * INSERT's continuation — poll for the expected count, then let the
+ * caller's assertion report the honest state.
+ */
+async function waitForFeedbackUsageCount(
+  expected: number,
+  timeoutMs = 4000,
+): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const rows = db
+      .prepare("SELECT COUNT(*) AS n FROM usage_events WHERE origin = 'feedback'")
+      .all() as Array<{ n: number }>;
+    const n = rows[0]?.n ?? 0;
+    if (n >= expected) return n;
+    if (Date.now() > deadline) return n; // the honest shortfall — the assertion reports it
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R125-B: the mid-turn checkpoint on the stream route", () => {
@@ -283,10 +307,9 @@ describe("R125-B: the mid-turn checkpoint on the stream route", () => {
       expect(turnEndFrames[1]).toMatchObject({ entries: 2 });
 
       // (e) R83 discipline: BOTH reporter calls metered (origin feedback).
-      const rows = db
-        .prepare("SELECT COUNT(*) AS n FROM usage_events WHERE origin = 'feedback'")
-        .all() as Array<{ n: number }>;
-      expect(rows[0]?.n).toBe(2);
+      // R125-B: the poll (the CI-stability twin of the r122 file's helper) —
+      // the count + nothing else is pinned, exactly as before.
+      expect(await waitForFeedbackUsageCount(2)).toBe(2);
     } finally {
       unsubscribe();
     }
