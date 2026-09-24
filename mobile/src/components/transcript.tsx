@@ -1067,7 +1067,9 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
           <View
             style={[styles.turnWell, { backgroundColor: tokens.surfaceWell, borderColor: tokens.clayRim }]}
           >
-            {thinkingText !== null && <WellThinking text={thinkingText} live={group.live} />}
+            {thinkingText !== null && (
+              <WellThinking text={thinkingText} live={group.live} thoughtMs={facts.thoughtMs} />
+            )}
             {thinkingText !== null && showToolRows && toolItems.length > 0 && <Hairline strong />}
             {showToolRows &&
               toolItems.map((item) => (
@@ -1118,13 +1120,51 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
 /**
  * The well's thinking text — the retired ThinkingBlock's own body, moved
  * inside (R116-m's settled cap 20 + the "Show all" affordance at the cap;
- * live thinking never clamps — it IS the stream). The block-level rail owns
- * the collapse; this is the TEXT alone.
+ * live thinking never clamps — it IS the stream).
+ *
+ * ROUND-124 (the owner: "The thoughts is still given a dedicated block of
+ * itself. It is not that well cleanly managed"): a SETTLED turn's thinking
+ * no longer renders as its own standing dim block — it collapses behind a
+ * ONE-LINE affordance ("Thought for 8s ▾", the same duration word the rail
+ * summarizes with) that expands to the dim text on tap. LIVE thinking
+ * still streams in place (it is the stream — collapsing the live moment
+ * would hide the very activity the owner asked to see). The well's tool
+ * rows stay first-class visible underneath (the R123 law).
  */
-function WellThinking({ text, live }: { text: string; live: boolean }) {
+function WellThinking({
+  text,
+  live,
+  thoughtMs,
+}: {
+  text: string;
+  live: boolean;
+  thoughtMs: number | null;
+}) {
   const { tokens } = useTheme();
   const [showAll, setShowAll] = useState(false);
+  // R124 — the settled collapse: expanded = false at rest; live never
+  // collapses (the stream is the activity itself).
+  const [expanded, setExpanded] = useState(live);
   const overCap = !live && text.split("\n").length > THINKING_SETTLED_CAP;
+  const seconds = thoughtMs !== null ? Math.max(1, Math.round(thoughtMs / 1000)) : null;
+  const affordance = seconds !== null ? `Thought for ${seconds}s` : "Thought process";
+  if (!live && !expanded) {
+    return (
+      <Pressable
+        accessibilityLabel={`${affordance} — show the agent's thinking`}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: false }}
+        onPress={() => setExpanded(true)}
+        style={styles.thinkingAffordance}
+        testID="thinking-affordance"
+      >
+        <TypeMono style={{ color: tokens.textTertiary, flex: 1 }} numberOfLines={1}>
+          {affordance}
+        </TypeMono>
+        <ChevronDown size={13} color={tokens.textTertiary} strokeWidth={2} />
+      </Pressable>
+    );
+  }
   return (
     <View style={{ gap: spacing.xs }}>
       <TypeMono
@@ -1133,19 +1173,35 @@ function WellThinking({ text, live }: { text: string; live: boolean }) {
       >
         {text}
       </TypeMono>
-      {overCap && (
-        <Pressable
-          accessibilityLabel={showAll ? "Show less of the agent's thinking" : "Show all of the agent's thinking"}
-          accessibilityRole="button"
-          onPress={() => setShowAll((value) => !value)}
-          style={styles.thinkingShowAll}
-          testID="thinking-show-all"
-        >
-          <TypeMicro style={{ color: tokens.accent }} numberOfLines={1}>
-            {showAll ? "Show less" : "Show all"}
-          </TypeMicro>
-        </Pressable>
-      )}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
+        {overCap && (
+          <Pressable
+            accessibilityLabel={showAll ? "Show less of the agent's thinking" : "Show all of the agent's thinking"}
+            accessibilityRole="button"
+            onPress={() => setShowAll((value) => !value)}
+            style={styles.thinkingShowAll}
+            testID="thinking-show-all"
+          >
+            <TypeMicro style={{ color: tokens.accent }} numberOfLines={1}>
+              {showAll ? "Show less" : "Show all"}
+            </TypeMicro>
+          </Pressable>
+        )}
+        {!live && (
+          <Pressable
+            accessibilityLabel="Hide the agent's thinking"
+            accessibilityRole="button"
+            accessibilityState={{ expanded: true }}
+            onPress={() => setExpanded(false)}
+            style={styles.thinkingShowAll}
+            testID="thinking-collapse"
+          >
+            <TypeMicro style={{ color: tokens.textTertiary }} numberOfLines={1}>
+              Hide
+            </TypeMicro>
+          </Pressable>
+        )}
+      </View>
     </View>
   );
 }
@@ -2682,6 +2738,15 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: "center",
     alignSelf: "flex-start",
+  },
+  /** R124 — the settled thinking's ONE-LINE affordance row (the collapsed
+   *  state): the duration word + the chevron, a full-width quiet tap
+   *  target inside the well. */
+  thinkingAffordance: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
   },
   miniLink: {
     minHeight: 44,

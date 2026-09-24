@@ -231,7 +231,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { ArrowLeft, Check, ChevronRight, Ellipsis } from "lucide-react-native";
+import { ArrowLeft, Check, ChevronRight, Ellipsis, X } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { Composer, menuLevelRendersRootRows, nextOpenModelProvider, type ComposerControlsSnapshot, type ComposerMode, type ComposerSheet, type MenuModelRow, type MenuModelSection } from "@/components/composer";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -1994,54 +1994,148 @@ function TaskLevelRows({
 }) {
   const { tokens } = useTheme();
   const done = todos.filter((todo) => todo.status === "completed").length;
+  // ── R124 (the owner: "If I click on any one of the tasks there, it
+  //    automatically marks them as done or marks them as undone, which is
+  //    not a good experience. It should ask for confirmation there"): a tap
+  //    ARMS the row instead of toggling it — the row swaps to the confirm
+  //    affordance ("Mark as done?" + Confirm/Cancel quiet buttons); Confirm
+  //    fires the real toggle, Cancel (or tapping the armed row again, or
+  //    arming a different row) disarms. The POST + optimistic flip + the
+  //    honest error line ride the parent's onToggle unchanged. ──
+  const [armedIndex, setArmedIndex] = useState<number | null>(null);
+  // A list change (the fold caught up / a new todo set landed) disarms —
+  // index N may point at a different row now.
+  useEffect(() => {
+    setArmedIndex(null);
+  }, [todos]);
+  const fireToggle = (i: number): void => {
+    setArmedIndex(null);
+    onToggle(i);
+  };
   return (
     <View>
       {todos.map((todo, i) => {
         const isDone = todo.status === "completed";
         const isActive = todo.status === "in_progress";
+        const armed = armedIndex === i;
         return (
-          <Pressable
-            key={i}
-            accessibilityLabel={`${isDone ? "Done" : isActive ? "In progress" : "Pending"}: ${todo.content}`}
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked: isDone, disabled: busy }}
-            disabled={busy}
-            testID={`session-task-row-${i}`}
-            onPress={() => onToggle(i)}
-            style={({ pressed }) => [
-              styles.menuRow,
-              styles.taskRow,
-              { backgroundColor: pressed ? tokens.subtleHover : "transparent" },
-            ]}
-          >
-            <View
-              style={[
-                styles.taskCheckbox,
-                {
-                  borderColor: isDone ? tokens.success : isActive ? tokens.accent : tokens.borderStrong,
-                  backgroundColor: isDone ? tokens.success : "transparent",
-                },
-              ]}
-            >
-              {isDone ? (
-                <Check size={10} color="#FFFFFF" strokeWidth={3.4} />
-              ) : isActive ? (
-                <View style={[styles.taskActiveDot, { backgroundColor: tokens.accent }]} />
-              ) : null}
-            </View>
-            <Text
-              style={{
-                flex: 1,
-                color: isDone ? tokens.textTertiary : isActive ? tokens.text : tokens.textSecondary,
-                fontSize: TYPE_CAPTION + 0.5,
-                fontFamily: isActive ? fontFamily.semibold : fontFamily.regular,
-                lineHeight: 18,
-                textDecorationLine: isDone ? "line-through" : "none",
-              }}
-            >
-              {todo.content}
-            </Text>
-          </Pressable>
+          <View key={i} style={styles.taskRowWrap}>
+            {!armed ? (
+              <Pressable
+                accessibilityLabel={`${isDone ? "Done" : isActive ? "In progress" : "Pending"}: ${todo.content}`}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: isDone, disabled: busy }}
+                disabled={busy}
+                testID={`session-task-row-${i}`}
+                onPress={() => setArmedIndex(i)}
+                style={({ pressed }) => [
+                  styles.menuRow,
+                  styles.taskRow,
+                  { backgroundColor: pressed ? tokens.subtleHover : "transparent" },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.taskCheckbox,
+                    {
+                      borderColor: isDone ? tokens.success : isActive ? tokens.accent : tokens.borderStrong,
+                      backgroundColor: isDone ? tokens.success : "transparent",
+                    },
+                  ]}
+                >
+                  {isDone ? (
+                    <Check size={10} color="#FFFFFF" strokeWidth={3.4} />
+                  ) : isActive ? (
+                    <View style={[styles.taskActiveDot, { backgroundColor: tokens.accent }]} />
+                  ) : null}
+                </View>
+                <Text
+                  style={{
+                    flex: 1,
+                    color: isDone ? tokens.textTertiary : isActive ? tokens.text : tokens.textSecondary,
+                    fontSize: TYPE_CAPTION + 0.5,
+                    fontFamily: isActive ? fontFamily.semibold : fontFamily.regular,
+                    lineHeight: 18,
+                    textDecorationLine: isDone ? "line-through" : "none",
+                  }}
+                >
+                  {todo.content}
+                </Text>
+              </Pressable>
+            ) : (
+              // ── the ARMED row — the R124 confirmation. The same row's
+              // geometry, carrying the question + the two quiet actions
+              // (Confirm fires the toggle; Cancel disarms). The checkbox
+              // stays on screen so the change being confirmed is visible. ──
+              <View
+                testID={`session-task-row-${i}`}
+                accessibilityLabel={`Confirm: ${isDone ? "mark as not done" : "mark as done"}: ${todo.content}`}
+                style={[styles.menuRow, styles.taskRow, styles.taskRowArmed, { borderColor: tokens.borderStrong }]}
+              >
+                <View
+                  style={[
+                    styles.taskCheckbox,
+                    {
+                      borderColor: isDone ? tokens.success : isActive ? tokens.accent : tokens.borderStrong,
+                      backgroundColor: isDone ? tokens.success : "transparent",
+                    },
+                  ]}
+                >
+                  {isDone ? (
+                    <Check size={10} color="#FFFFFF" strokeWidth={3.4} />
+                  ) : isActive ? (
+                    <View style={[styles.taskActiveDot, { backgroundColor: tokens.accent }]} />
+                  ) : null}
+                </View>
+                <Text
+                  style={{
+                    flex: 1,
+                    color: tokens.text,
+                    fontSize: TYPE_CAPTION + 0.5,
+                    fontFamily: fontFamily.semibold,
+                    lineHeight: 18,
+                  }}
+                  numberOfLines={2}
+                >
+                  {isDone ? "Mark as not done?" : "Mark as done?"}
+                </Text>
+                <Pressable
+                  accessibilityLabel="Confirm the task change"
+                  accessibilityRole="button"
+                  disabled={busy}
+                  testID={`session-task-confirm-${i}`}
+                  onPress={() => fireToggle(i)}
+                  style={({ pressed }) => [
+                    styles.taskConfirmButton,
+                    {
+                      backgroundColor: pressed ? tokens.subtleHover : tokens.subtle,
+                      borderColor: tokens.borderStrong,
+                    },
+                  ]}
+                >
+                  <Check size={13} color={tokens.success} strokeWidth={2.6} />
+                  <TypeCaption numberOfLines={1}>Confirm</TypeCaption>
+                </Pressable>
+                <Pressable
+                  accessibilityLabel="Cancel the task change"
+                  accessibilityRole="button"
+                  disabled={busy}
+                  testID={`session-task-cancel-${i}`}
+                  onPress={() => setArmedIndex(null)}
+                  style={({ pressed }) => [
+                    styles.taskConfirmButton,
+                    {
+                      backgroundColor: pressed ? tokens.subtleHover : "transparent",
+                      borderColor: tokens.borderStrong,
+                    },
+                  ]}
+                >
+                  <X size={13} color={tokens.textTertiary} strokeWidth={2.6} />
+                  <TypeCaption numberOfLines={1}>Cancel</TypeCaption>
+                </Pressable>
+              </View>
+            )}
+          </View>
         );
       })}
       <View style={styles.menuCaptionRow}>
@@ -2154,6 +2248,29 @@ const styles = StyleSheet.create({
    *  todo keeps its checkbox on the FIRST line, the card's spelling). */
   taskRow: {
     alignItems: "flex-start",
+  },
+  /** R124 — the task row's confirm wrapper (the row or its armed form,
+  *  never both). */
+  taskRowWrap: {
+    width: "100%",
+  },
+  /** R124 — the ARMED row (the confirmation state): a bordered clay
+  *  strip carrying the question + the Confirm/Cancel quiet buttons. */
+  taskRowArmed: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    backgroundColor: "transparent",
+  },
+  /** R124 — the quiet Confirm/Cancel pills on the armed row. */
+  taskConfirmButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    minHeight: 32,
   },
   /** The 15dp checkbox square — the transcript TodoCard's own glyph
    *  (r4, 1.5dp border, the success fill + white Check when done, the

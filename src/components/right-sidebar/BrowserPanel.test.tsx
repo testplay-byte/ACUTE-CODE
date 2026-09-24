@@ -61,6 +61,14 @@ const nativeState = vi.hoisted(() => ({
   // start → poll → poll-done). When non-empty it takes precedence.
   evalQueue: [] as Array<{ ok: boolean; value?: unknown; error?: string }>,
   windowMetrics: null as { x: number; y: number; scaleFactor: number } | null,
+  // ROUND-124 (R124): the staged capture's fakes — the tab geometry memory
+  // (mirroring the REAL native-browser module's recording setters) and the
+  // sidecar capture route's scripted reply.
+  boundsMemory: new Map<string, { x: number; y: number; w: number; h: number }>(),
+  zoomMemory: new Map<string, number>(),
+  captureReply: null as { pngBase64: string; width: number; height: number } | null,
+  captureFail: null as string | null,
+  captureRegions: [] as Array<{ x: number; y: number; w: number; h: number } | null>,
 }));
 
 vi.mock("../../lib/native-browser", () => ({
@@ -71,10 +79,25 @@ vi.mock("../../lib/native-browser", () => ({
   // webview "exists" so the watchdog re-asserts instead of recreating).
   nativeTabExists: vi.fn(() => Promise.resolve(true)),
   nativeTabNavigate: vi.fn(() => Promise.resolve()),
-  nativeTabSetBounds: vi.fn(() => Promise.resolve()),
+  // R124: the mock records commanded geometry EXACTLY like the real module
+  // (successful set_bounds/set_zoom write the tab geometry memory the staged
+  // capture's restore reads) — a faithful mock, not a bare resolver.
+  nativeTabSetBounds: vi.fn((tabId: string, x: number, y: number, w: number, h: number) => {
+    nativeState.boundsMemory.set(tabId, { x, y, w, h });
+    return Promise.resolve();
+  }),
   nativeTabSetVisible: vi.fn(() => Promise.resolve()),
   // R60: REAL zoom (Rust browser_tab_set_zoom — asserted by the R60 tests).
-  nativeTabSetZoom: vi.fn(() => Promise.resolve()),
+  nativeTabSetZoom: vi.fn((tabId: string, factor: number) => {
+    nativeState.zoomMemory.set(tabId, factor);
+    return Promise.resolve();
+  }),
+  lastCommandedTabBounds: vi.fn((tabId: string) => nativeState.boundsMemory.get(tabId) ?? null),
+  lastCommandedTabZoom: vi.fn((tabId: string) => nativeState.zoomMemory.get(tabId) ?? null),
+  resetTabGeometryMemoryForTest: vi.fn(() => {
+    nativeState.boundsMemory.clear();
+    nativeState.zoomMemory.clear();
+  }),
   nativeTabGo: vi.fn(() => Promise.resolve()),
   nativeTabUrl: vi.fn(() => Promise.resolve(null)),
   nativeTabClose: vi.fn(() => Promise.resolve()),
@@ -238,6 +261,19 @@ function route(input: RequestInfo | URL, init?: RequestInit): Promise<Response> 
     const status = dead ? 401 : 400;
     return Promise.resolve({ ok: status < 400, status, json: async () => ({}), text: async () => "" } as unknown as Response);
   }
+  // ROUND-124 (R124): the staged screenshot's sidecar capture route — the
+  // panel's screenshot_capture handler POSTs the staged physical region
+  // here mid-command; the scripted reply (or failure) answers it.
+  if (url.pathname === "/api/v1/browser-capture") {
+    nativeState.captureRegions.push(body as { x: number; y: number; w: number; h: number } | null);
+    if (nativeState.captureFail !== null) {
+      return Promise.resolve(ok({ error: { code: "CAPTURE_FAILED", message: nativeState.captureFail } }, 500));
+    }
+    if (nativeState.captureReply === null) {
+      return Promise.resolve(ok({ error: { code: "NOT_FOUND", message: "no scripted capture reply" } }, 404));
+    }
+    return Promise.resolve(ok(nativeState.captureReply));
+  }
   return Promise.resolve(ok({ error: { code: "NOT_FOUND", message: `no mock for ${path}` } }, 404));
 }
 
@@ -274,6 +310,13 @@ beforeEach(() => {
   // ROUND-50: fresh native-bridge state + mock call history per test.
   nativeState.available = false;
   nativeState.navigatedListener = null;
+  // R124: fresh staged-capture fakes (the geometry memory mirrors the real
+  // module's per-tab recording; the capture route's scripted state resets).
+  nativeState.boundsMemory.clear();
+  nativeState.zoomMemory.clear();
+  nativeState.captureReply = null;
+  nativeState.captureFail = null;
+  nativeState.captureRegions.length = 0;
   // R60-D: no popover suppression leaks between tests.
   setPopoverWebviewSuppression(null);
   vi.clearAllMocks();
@@ -1514,6 +1557,293 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
     await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
     expect(hasBrowserCommandHandler("tab-test-1")).toBe(false);
+  });
+
+  // ── ROUND-124 (R124): screenshot_capture — the STAGED high-res grab ──────
+  // The owner's rulings: "the screenshots… should be taken in a higher
+  // resolution, even if the total area being taken up by the browser window
+  // is way too small" + "this should also happen if the user is in some
+  // other application, is in the settings of the program or something else."
+  // The R98-G1 refusals above belong to the LEGACY screenshot_meta path (an
+  // older sidecar's only surface — kept as the fallback); the NEW action
+  // stages the webview at the FIXED capture resolution instead of refusing,
+  // captures through the sidecar's /browser-capture route, and restores.
+  it("R124: a KEEP-ALIVE-HIDDEN tab still captures at the FIXED 1280×720 (capture-while-hidden), then restores the prior geometry + hidden state", async () => {
+    const rectSpy = mockAreaRect();
+    nativeState.windowMetrics = { x: 1920, y: 0, scaleFactor: 2 };
+    nativeState.captureReply = { pngBase64: "aW1n".repeat(40), width: 2560, height: 1440 };
+    // A deterministic window client area (happy-dom defaults are 1024×768).
+    window.innerWidth = 1600;
+    window.innerHeight = 900;
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} hidden />);
+      await waitFor(() => expect(hasBrowserCommandHandler("tab-test-1")).toBe(true));
+      // The hidden panel never ran its own bounds sync (R87's skip), so seed
+      // the tab's LAST COMMANDED geometry the way the tab's ACTIVE period
+      // would have (the realistic story: the user browsed, then backgrounded
+      // the tab) — the capture's restore must put exactly this back.
+      const priorBounds = { x: 80, y: 435, w: 400, h: 250 };
+      nativeState.boundsMemory.set("tab-test-1", priorBounds);
+      nativeState.zoomMemory.set("tab-test-1", 0.3125);
+
+      const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_capture", {
+        width: 1280,
+        height: 720,
+      });
+
+      // The capture SUCCEEDED at the FIXED resolution — not the 400px view,
+      // not a refusal: this is the whole point of R124.
+      expect(reply.ok).toBe(true);
+      const data = reply.data as {
+        pngBase64: string;
+        width: number;
+        height: number;
+        logicalWidth: number;
+        logicalHeight: number;
+        clamped: boolean;
+      };
+      expect(data.logicalWidth).toBe(1280);
+      expect(data.logicalHeight).toBe(720);
+      expect(data.clamped).toBe(false);
+      expect(data.pngBase64).toBe(nativeState.captureReply.pngBase64);
+      // THE STAGE: the webview is re-staged at 1280×720 (anchored at the
+      // panel's rect, 80,120) with zoom 1 — the 1:1 raster — and, being
+      // hidden, SHOWN for the duration of the grab.
+      expect(setBounds()).toHaveBeenCalledWith("tab-test-1", 80, 120, 1280, 720);
+      expect(setZoom()).toHaveBeenCalledWith("tab-test-1", 1);
+      expect(setVisible()).toHaveBeenCalledWith("tab-test-1", true);
+      // THE GRAB: the sidecar's /browser-capture POST carried the staged
+      // PHYSICAL region (window origin 1920,0 + logical 80,120 × scale 2;
+      // 1280×720 × 2 = 2560×1440).
+      expect(nativeState.captureRegions).toEqual([{ x: 2080, y: 240, w: 2560, h: 1440 }]);
+      // THE RESTORE: the prior geometry + zoom + the hidden state are back.
+      expect(setBounds()).toHaveBeenLastCalledWith("tab-test-1", 80, 435, 400, 250);
+      expect(setZoom()).toHaveBeenLastCalledWith("tab-test-1", 0.3125);
+      expect(setVisible()).toHaveBeenLastCalledWith("tab-test-1", false);
+    } finally {
+      rectSpy.mockRestore();
+      nativeState.windowMetrics = null;
+      nativeState.captureReply = null;
+      window.innerWidth = 1024;
+      window.innerHeight = 768;
+    }
+  });
+
+  it("R124: a VISIBLE small panel also captures at the FIXED resolution (the raster never follows the view size)", async () => {
+    const rectSpy = mockAreaRect(); // a 400×900 panel area — the "way too small" case
+    nativeState.windowMetrics = { x: 0, y: 0, scaleFactor: 1 };
+    nativeState.captureReply = { pngBase64: "aW1n".repeat(40), width: 1280, height: 720 };
+    window.innerWidth = 1600;
+    window.innerHeight = 900;
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await waitFor(() =>
+        expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")),
+      );
+
+      const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_capture", {
+        width: 1280,
+        height: 720,
+      });
+      expect(reply.ok).toBe(true);
+      const data = reply.data as { logicalWidth: number; logicalHeight: number; clamped: boolean };
+      // The panel's own view is a fit-scaled ~400px-wide sliver; the capture
+      // is the full fixed resolution — the owner's ruling verbatim.
+      expect(data.logicalWidth).toBe(1280);
+      expect(data.logicalHeight).toBe(720);
+      expect(data.clamped).toBe(false);
+      expect(setBounds()).toHaveBeenCalledWith("tab-test-1", 80, 120, 1280, 720);
+      // A visible webview is never hidden for the grab, and the restore keeps
+      // it visible (the capture-while-VISIBLE case must not blink the page).
+      expect(setVisible()).not.toHaveBeenCalledWith("tab-test-1", false);
+      expect(nativeState.captureRegions).toEqual([{ x: 80, y: 120, w: 1280, h: 720 }]);
+    } finally {
+      rectSpy.mockRestore();
+      nativeState.windowMetrics = null;
+      nativeState.captureReply = null;
+      window.innerWidth = 1024;
+      window.innerHeight = 768;
+    }
+  });
+
+  it("R124: the sidecar capture route's failure surfaces honestly (the panel never fabricates a raster)", async () => {
+    const rectSpy = mockAreaRect();
+    nativeState.windowMetrics = { x: 0, y: 0, scaleFactor: 1 };
+    nativeState.captureFail = "screen capture failed: no scrot, no import";
+    window.innerWidth = 1600;
+    window.innerHeight = 900;
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await waitFor(() =>
+        expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")),
+      );
+
+      const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_capture", {
+        width: 1280,
+        height: 720,
+      });
+      expect(reply.ok).toBe(false);
+      expect(reply.error).toContain("no scrot, no import");
+      // The refusal still RESTORED the webview (never a leaked staging).
+      expect(setVisible()).toHaveBeenLastCalledWith("tab-test-1", true);
+    } finally {
+      rectSpy.mockRestore();
+      nativeState.windowMetrics = null;
+      nativeState.captureFail = null;
+      window.innerWidth = 1024;
+      window.innerHeight = 768;
+    }
+  });
+
+  it("R124: the panel's own 500ms bounds safety net stands down during the capture (no mid-grab shrink)", async () => {
+    // THE RACE THIS PIN GUARDS: the staged capture window (~450ms) overlaps
+    // the panel's bounds safety-net period (500ms) — without the suppression
+    // (syncBounds' isStagedCaptureInFlightFor skip) a safety-net tick would
+    // re-command the panel's SMALL bounds mid-grab and the capture would
+    // photograph the small view: the exact defect R124 exists to fix. The
+    // capture below is held open across the safety-net tick.
+    const rectSpy = mockAreaRect();
+    nativeState.windowMetrics = { x: 0, y: 0, scaleFactor: 1 };
+    nativeState.captureReply = { pngBase64: "aW1n".repeat(40), width: 1280, height: 720 };
+    window.innerWidth = 1600;
+    window.innerHeight = 900;
+    let releaseCapture: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseCapture = resolve;
+    });
+    const realFetch = route;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (raw.includes("/api/v1/browser-capture")) {
+          return gate.then(() => realFetch(input, init));
+        }
+        return realFetch(input, init);
+      }),
+    );
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await waitFor(() =>
+        expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")),
+      );
+      // Let the mount-time sync settle so the count below is stable.
+      await new Promise((r) => setTimeout(r, 60));
+      const boundsBefore = setBounds().mock.calls.length;
+
+      const pending = getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_capture", {
+        width: 1280,
+        height: 720,
+      });
+      // Let a safety-net period (500ms) pass while the capture is in flight…
+      await new Promise((r) => setTimeout(r, 700));
+      // …and no bounds were re-commanded from the panel's side: the ONLY
+      // geometry writer during the window is the capture's own stage (the
+      // staged 1280×720 — excluded below on BOTH dims: a mock call is
+      // [tabId, x, y, w, h], so the width lives at index 3 and the height
+      // at 4; filtering on one axis alone would miscount the stage itself)
+      // — no shrink back to the panel view mid-grab.
+      const duringBounds = setBounds().mock.calls.filter(
+        (c) => !(c[3] === 1280 && c[4] === 720),
+      );
+      expect(duringBounds.length).toBe(boundsBefore);
+      releaseCapture!();
+      const reply = await pending;
+      expect(reply.ok).toBe(true);
+    } finally {
+      rectSpy.mockRestore();
+      nativeState.windowMetrics = null;
+      nativeState.captureReply = null;
+      // The executor assigned releaseCapture synchronously at the Promise's
+      // creation, so the non-null assertion is sound (the sibling suite's
+      // spelling — TS narrows the closure-assigned let to null, so a ?.()
+      // would be a call on never).
+      releaseCapture!();
+      window.innerWidth = 1024;
+      window.innerHeight = 768;
+    }
+  });
+
+  it("R124: a route swap to Settings MID-CAPTURE (the panel unmounts) defers the hide — the grab completes, the webview ends hidden", async () => {
+    // THE OWNER'S RULING #3 RACE: "this should also happen if the user is in
+    // some other application, is in the settings of the program or
+    // something else" — the user swaps routes WHILE the staged grab is still
+    // running. The old unmount cleanup would hide the webview MID-GRAB (the
+    // raster photographing the app DOM behind it — dishonest bytes in the
+    // chat thumbnail) and the capture's restore would then re-show a webview
+    // with NO owner panel (the page floating over Settings). The cleanup now
+    // DEFERS its hide to the capture's restore: the grab completes at the
+    // staged resolution, and the final visibility command is the HIDE.
+    const rectSpy = mockAreaRect();
+    nativeState.windowMetrics = { x: 0, y: 0, scaleFactor: 1 };
+    nativeState.captureReply = { pngBase64: "aW1n".repeat(40), width: 1280, height: 720 };
+    window.innerWidth = 1600;
+    window.innerHeight = 900;
+    let releaseCapture: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseCapture = resolve;
+    });
+    const realFetch = route;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (raw.includes("/api/v1/browser-capture")) {
+          return gate.then(() => realFetch(input, init));
+        }
+        return realFetch(input, init);
+      }),
+    );
+    try {
+      const tab = makeTab({ browserUrl: "https://example.com" });
+      seedRightSidebar(tab);
+      renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+      await waitFor(() =>
+        expect(create()).toHaveBeenCalledWith("tab-test-1", "https://example.com", expect.stringContaining("__acute-agent-cursor")),
+      );
+      // Let the mount-time sync settle so the visibility count is stable.
+      await new Promise((r) => setTimeout(r, 60));
+      const visibleCallsAfterMount = setVisible().mock.calls.length;
+
+      const pending = getBrowserCommandHandlerForTest("tab-test-1")!("screenshot_capture", {
+        width: 1280,
+        height: 720,
+      });
+      await new Promise((r) => setTimeout(r, 60)); // the stage lands first
+
+      // THE ROUTE SWAP: every BrowserPanel unmounts (Settings). The cleanup
+      // must NOT hide mid-grab — the only new visibility command so far is
+      // the capture's own STAGE-side truth (none: the webview was already
+      // visible), so the count is unchanged.
+      cleanup();
+      expect(setVisible().mock.calls.length).toBe(visibleCallsAfterMount);
+      expect(setVisible()).not.toHaveBeenCalledWith("tab-test-1", false);
+
+      // The grab completes at the FIXED resolution — unaffected by the swap.
+      releaseCapture!();
+      const reply = await pending;
+      expect(reply.ok).toBe(true);
+      expect((reply.data as { logicalWidth: number; logicalHeight: number }).logicalWidth).toBe(1280);
+      // And the webview ends HIDDEN (the deferred hide won at the restore —
+      // the background-tab contract for an unmounted panel: no floating page
+      // over the user's next route).
+      expect(setVisible()).toHaveBeenLastCalledWith("tab-test-1", false);
+    } finally {
+      rectSpy.mockRestore();
+      nativeState.windowMetrics = null;
+      nativeState.captureReply = null;
+      releaseCapture!();
+      window.innerWidth = 1024;
+      window.innerHeight = 768;
+    }
   });
 });
 

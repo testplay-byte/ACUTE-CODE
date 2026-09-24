@@ -1,0 +1,7 @@
+{
+  "name": "acute-installer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ACUTE companion APK updater floor: streaming APK download with progress + the Android package-install intent (local Expo module — autolinked from mobile/modules).",
+  "main": "index.ts"
+}

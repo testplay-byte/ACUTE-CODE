@@ -1,12 +1,50 @@
 /**
- * Dashboard v6 (R118-C — the mobile-first vertical instrument) — the owner's
- * "see the dashboard, the stats, the usage" screen. ONE vertical scroll, ZERO
- * horizontal FlatLists (the R116 carousel mandate is superseded — every
- * horizontal scroller on this screen was a defect: mixed-scope cards behind
- * a swipe, a second surface for the models section, a duplicate of the
- * chart's own day buckets).
+ * Dashboard v7 (R124 — the owner's round-124 redesign) — the owner's
+ * "see the dashboard, the stats, the usage" screen. ONE vertical scroll,
+ * ZERO horizontal FlatLists.
  *
- * THE LOAD (features/config.ts, typed 1:1 — the orchestration is untouched):
+ * THE OWNER'S ROUND-124 VERDICT this screen implements: "the complete UI
+ * redesign of the dashboard page … Like at the very top it shows me the
+ * three options: 14 days, 30 days, three months. That is definitely not
+ * the place for it to be. The other things are the daily token charts are
+ * not proper. The model's last month donut chart is not proper. It is
+ * looking ugly and bad. And various other things are most definitely not
+ * looking good and need quite a lot of improvement."
+ *
+ * THE REDESIGN'S MOVES (top → bottom):
+ *   · THE PAGE OPENS WITH THE NUMBERS — the 2×2 stat grid (one ClayCard,
+ *     4-across ≥768dp, 1px inset borderStrong dividers) under a section
+ *     header that SELF-DESCRIBES its window ("Usage · last 14 days") — the
+ *     window selector is no longer the page's opening hero.
+ *   · THE WINDOW SELECTOR LIVES IN THE CHART'S CARD — the compact RangeChips
+ *     (40-tall track, tab-pill indicator, TAB_SPRING glide) ride as the daily
+ *     chart card's FIRST row, so the control reads as the chart's own
+ *     toolbar, next to the data it scopes.
+ *   · THE DAILY CHART — the hand-built react-native-svg stacked bar chart
+ *     (input terracotta / output sage, dashed gridlines, thin capped bars
+ *     centered in their columns) gains the R124 axis: ONE date-tick grammar
+ *     across ALL THREE windows (chartAxisTicks — ≤5 evenly spaced "Sep 1"
+ *     labels, first + last always, the last doubling as the "today" anchor
+ *     in accentDeep) replacing the 14d-only weekday row and the 30d/3mo
+ *     endpoint pair, plus a REAL selected-day column highlight (the old
+ *     1px selection rect was invisible — a quiet tinted column now reads).
+ *   · THE MODELS CARD — the R120-S full-card-width wire hoop is RETIRED: the
+ *     ring rides at a PROPORTIONATE size BESIDE the ranked legend (one row,
+ *     no dead bands, no thin hoop) with a scaled SOLID stroke, and the ring's
+ *     center carries the WINDOW TOTAL ("4.2M / tokens · 5 models") — tapping
+ *     a legend row spotlights its arc and swaps the center to that model's
+ *     own numbers. Legend names are HUMANIZED (cleanModelName — never the
+ *     raw model id), the ranked list caps at 8 with the honest "+N more".
+ *   · THE ENTRANCE RHYTHM — every section staggers in on the house
+ *     FadeInUp (30ms × index, capped beats), the same grammar More/Home
+ *     ride; the bars still GROW from the baseline and the ring still SWEEPS
+ *     (their own §4.6 data entries — the card-level fade and the data-level
+ *     grow are complementary layers, not a double-animation of one value).
+ *   · TOOLS → KEYS → PROJECTS — the whole-history leaderboards (unchanged
+ *     shapes, honest statuses) → the footer clock.
+ *
+ * THE LOAD (features/config.ts, typed 1:1 — the orchestration is untouched —
+ * this is a UI redesign, not a data rework):
  *   window 14d/30d → fetchUsageSummary(14|30) + fetchUsageStats(1) alongside
  *                    (always — the models ring's own calendar window)
  *   window 3mo     → fetchUsageStats(3) — its series is daily, so it carries
@@ -14,32 +52,15 @@
  *   every window   → fetchDetailedUsage(14|30|90) — the whole-history
  *                    drill-down (tools/keys/projects)
  *
- * THE STACK (top → bottom, §2.0): the PERIOD SELECTOR — one self-sized
- * 14d/30d/3mo segmented control (the tab-pill recipe, TAB_SPRING glide) →
- * THE STAT GRID — one ClayCard, 2×2 composed cells (4-across ≥768dp) split
- * by 1px inset borderStrong dividers, all four numbers from the SELECTED
- * window (Tokens in/out · Cost avg/day · Turns · Peak day) → THE DAILY
- * CHART — the hand-built react-native-svg stacked bar chart (input
- * terracotta / output sage, dashed gridlines, thin capped bars centered in
- * their columns, weekday ticks + the "today" anchor in the 14-day window,
- * tap a bar for its day) → MODELS — the R117 donut + the ranked list in ONE
- * card (cap 8 + the honest "+N more models"; R120-S — the ring STRETCHES to
- * the card's full content width, the fixed 120px centered ring's dead side
- * bands are gone) → TOOLS → KEYS — the
- * whole-history leaderboards with 1px row dividers → PROJECTS — the
- * drill-down rows with the inline sessions well (the honest status law:
- * queued shows NO badge) → the footer clock.
- *
- * TABLET (≥768dp, §2.8): the body stack centers at maxWidth 840; the stats
- * go 4-across; the chart + models pair side-by-side; tools + keys pair when
- * keys exist; projects stay full width; the selector stays self-sized
- * leading.
+ * TABLET (≥768dp): the body stack centers at maxWidth 840; the stats go
+ * 4-across; the chart + models pair side-by-side; tools + keys pair when
+ * keys exist; projects stay full width.
  *
  * MOTION: the bars GROW from the baseline on every data load (withTiming
  * 350ms, staggered 12ms, capped at 30 beats) and the donut SWEEPS its arcs
- * in (500ms) — unchanged; the accordions ride the R118-C disclosure split
- * (expand DISCLOSURE_SPRING {180,24}; collapse withTiming 200ms ease-out +
- * 150ms fade — closing never bounces). Reduced motion snaps everywhere.
+ * in (500ms); the accordions ride the R118-C disclosure split (expand
+ * DISCLOSURE_SPRING {180,24}; collapse withTiming 200ms ease-out + 150ms
+ * fade). Reduced motion snaps everywhere.
  *
  * The pure number/date/status helpers live in components/usage-format.ts
  * (jest-pinned, zero RN imports), re-exported through usage-cards.tsx.
@@ -66,8 +87,9 @@ import {
   KeyStatRow,
   localDateString,
   ModelLegendRow,
-  PeriodSegmentedControl,
+  PERIOD_OPTIONS,
   ProjectUsageRow,
+  RangeChips,
   shortDate,
   StatGrid,
   ToolLeaderboardRow,
@@ -75,22 +97,22 @@ import {
   type StatGridCell,
   type UsageDayRow,
 } from "@/components/usage-cards";
+import { chartAxisTicks } from "@/components/usage-format";
 import {
   DonutChart,
   donutShares,
-  shortModelName,
   type DonutSegment,
 } from "@/components/chart-donut";
 import { ErrorState, LoadingState, SkeletonList } from "@/components/list-state";
 import {
   ClayCard,
+  FadeInUp,
   Hairline,
   SectionHeader,
   Skeleton,
   TypeCaption,
   TypeMicro,
-  TypeMono,
-  TypeTitle,
+  TypeStat,
 } from "@/design/primitives";
 import { modelColor } from "@/design/model-colors";
 import { selectionHaptic } from "@/design/haptics";
@@ -102,12 +124,12 @@ import {
   fontFamily,
   mixHex,
   RADIUS_CARD,
-  SEGMENT_TRACK_H,
   spacing,
 } from "@/design/tokens";
 import { getLinkManager } from "@/link/runtime";
 import { useLink } from "@/link/use-link";
 import type { ApiOutcome } from "@/features/api";
+import { cleanModelName } from "@/features/config";
 import {
   fetchDetailedUsage,
   fetchUsageStats,
@@ -143,16 +165,13 @@ const CHART_CAP = 2;
  * instead of a 1.1-second crawl.
  */
 const CHART_STAGGER_CAP = 30;
-
-/** §2.3 — the weekday tick row's label vocabulary ("Mon"-style, calendar-LOCAL). */
-const WEEKDAY_LABELS: ReadonlyArray<string> = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-/** "2026-09-01" → "Mon" — parsed calendar-LOCAL, matching shortDate. */
-function localWeekday(date: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(date);
-  if (m === null) return "";
-  return WEEKDAY_LABELS[new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getDay()] ?? "";
-}
+/**
+ * R124 — the axis's tick budget: ≤5 date labels on every window (14d / 30d /
+ * 3mo alike — the old weekday row rendered 7-label vocabulary every 2nd
+ * column in the 14-day window only, and the longer windows got a bare
+ * endpoint pair). chartAxisTicks owns the ladder; the label is shortDate.
+ */
+const CHART_AXIS_MAX_TICKS = 5;
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
@@ -212,6 +231,9 @@ function GhostBar({
  * baseline on entry; the static props are the FAIL-STATIC hedge (the resting
  * bar) — reanimated's animatedProps override them while the entry runs, and
  * if they ever fail to apply on a device the chart renders complete anyway.
+ * (R124: the selected-day column highlight moved to the chart's own backdrop
+ * pass — the old per-bar isSelected rect was a 1px sliver at the baseline,
+ * arithmetically invisible.)
  */
 function SingleBar({
   x,
@@ -221,7 +243,6 @@ function SingleBar({
   fill,
   capFill,
   emphasis,
-  isSelected,
   tapTarget,
   dataKey,
   index,
@@ -233,7 +254,6 @@ function SingleBar({
   fill: string;
   capFill: string;
   emphasis: number;
-  isSelected: boolean;
   tapTarget: ReactElement;
   dataKey: string;
   index: number;
@@ -269,9 +289,6 @@ function SingleBar({
           animatedProps={capProps}
         />
       ) : null}
-      {isSelected ? (
-        <Rect x={x} y={baselineY} width={barWidth} height={CHART_HEIGHT - baselineY} fill={fill} />
-      ) : null}
       {tapTarget}
     </G>
   );
@@ -281,6 +298,8 @@ function SingleBar({
  * The stacked day — input below (terracotta), output above (sage), both
  * scaled by the SAME peak denominator so the stack is the day; the whole
  * stack grows out of the baseline on entry (the cap rides the rising top).
+ * (R124: the selected-day column highlight moved to the chart's own backdrop
+ * pass — see SingleBar's note.)
  */
 function SplitBar({
   x,
@@ -293,7 +312,6 @@ function SplitBar({
   outHue,
   capFillOut,
   emphasis,
-  isSelected,
   tapTarget,
   dataKey,
   index,
@@ -308,7 +326,6 @@ function SplitBar({
   outHue: string;
   capFillOut: string;
   emphasis: number;
-  isSelected: boolean;
   tapTarget: ReactElement;
   dataKey: string;
   index: number;
@@ -360,9 +377,6 @@ function SplitBar({
           animatedProps={capProps}
         />
       ) : null}
-      {isSelected ? (
-        <Rect x={x} y={baselineY} width={barWidth} height={CHART_HEIGHT - baselineY} fill={inHue} />
-      ) : null}
       {tapTarget}
     </G>
   );
@@ -374,7 +388,6 @@ function UsageChart({
   selected,
   onSelect,
   dataKey,
-  showWeekdayTicks,
 }: {
   days: UsageDayRow[];
   width: number;
@@ -382,8 +395,6 @@ function UsageChart({
   onSelect: (index: number | null) => void;
   /** The dataset's identity — the bars' grow re-triggers whenever it changes. */
   dataKey: string;
-  /** §2.3 — the weekday tick row renders ONLY in the 14-day window. */
-  showWeekdayTicks: boolean;
 }) {
   const { tokens } = useTheme();
   const n = days.length;
@@ -411,6 +422,14 @@ function UsageChart({
   // carries full emphasis.
   const todayIso = localDateString();
   const todayIndex = days.findIndex((day) => day.date === todayIso);
+  // R124 — THE DATE-TICK LADDER: one axis grammar for ALL THREE windows —
+  // chartAxisTicks picks ≤5 evenly spaced day indices (the series is
+  // zero-filled + contiguous, so index-even = date-even), each rendered as
+  // a shortDate label centered on its column, with the LAST tick promoted
+  // to the "today" anchor in accentDeep whenever the series ends on the
+  // device's calendar day. Replaces the 14d-only weekday row ("Mon" every
+  // 2nd column) and the 30d/3mo bare endpoint pair.
+  const tickIndices = new Set(chartAxisTicks(n, CHART_AXIS_MAX_TICKS));
   // 3 quiet dashed gridlines (quarter marks) — the y-axis's honest scale.
   const gridFractions = [0.25, 0.5, 0.75];
   // R117-g2 §2.3 — the gridlines one step stronger than borderSubtle: the
@@ -440,6 +459,25 @@ function UsageChart({
         ) : null}
       </View>
       <Svg width={width} height={CHART_HEIGHT}>
+        {/* R124 — THE SELECTED-DAY BACKDROP: a quiet full-height tinted column
+            UNDER the bars (the old per-bar selection rect was a 1px sliver at
+            the baseline — arithmetically invisible; a tap selected a day and
+            NOTHING read). 7% of the input hue + the bar's own full emphasis
+            + the detail line below make the selection legible at a glance. */}
+        {days.map((day, index) =>
+          selected === index ? (
+            <Rect
+              key={`sel-${day.date}-${index}`}
+              x={index * columnWidth + 0.5}
+              y={0}
+              width={Math.max(1, columnWidth - 1)}
+              height={CHART_HEIGHT}
+              rx={4}
+              fill={inHue}
+              fillOpacity={0.07}
+            />
+          ) : null,
+        )}
         {/* The quiet dashed gridlines — R117-g2 §2.3's one-step-stronger
             warm-ink stroke (was borderSubtle's 6% — invisible at a squint). */}
         {gridFractions.map((fraction) => {
@@ -516,7 +554,6 @@ function UsageChart({
                 fill={fill}
                 capFill={capFill}
                 emphasis={emphasis}
-                isSelected={isSelected}
                 tapTarget={tapTarget}
                 dataKey={dataKey}
                 index={index}
@@ -541,7 +578,6 @@ function UsageChart({
               outHue={outHue}
               capFillOut={capFillOut}
               emphasis={emphasis}
-              isSelected={isSelected}
               tapTarget={tapTarget}
               dataKey={dataKey}
               index={index}
@@ -550,41 +586,34 @@ function UsageChart({
         })}
         <Line x1={0} y1={baselineY} x2={width} y2={baselineY} stroke={tokens.borderSubtle} strokeWidth={1} />
       </Svg>
-      {showWeekdayTicks ? (
-        // §2.3 — the weekday tick row (the 14-day window only): a label on
-        // every 2nd column in the micro tier at 10, with the TODAY bucket
-        // anchored — "today" in accentDeep 10/700 (the last bucket by the
-        // wire's ends-today contract; a single unbreakable word may kiss its
-        // column's edge, which the chart card's padding absorbs).
-        <View style={styles.axisRow}>
-          {days.map((day, index) => {
-            const isToday = index === todayIndex;
-            if (index % 2 !== 0 && !isToday) {
-              return <View key={`${day.date}-${index}`} style={{ width: columnWidth }} />;
-            }
-            return (
-              <View key={`${day.date}-${index}`} style={{ width: columnWidth, alignItems: "center" }}>
-                <Text
-                  style={
-                    isToday
-                      ? [styles.tickToday, { color: tokens.accentDeep }]
-                      : [styles.tickWeekday, { color: tokens.textTertiary }]
-                  }
-                >
-                  {isToday ? "today" : localWeekday(day.date)}
-                </Text>
-              </View>
-            );
-          })}
-        </View>
-      ) : (
-        // The 30d/3mo windows keep the endpoint axis (their columns are too
-        // narrow for a tick every 2nd day to read).
-        <View style={styles.axisRow}>
-          <TypeMicro style={{ color: tokens.textTertiary }}>{n > 0 ? shortDate(days[0].date) : ""}</TypeMicro>
-          <TypeMicro style={{ color: tokens.textTertiary }}>{n > 1 ? shortDate(days[n - 1].date) : ""}</TypeMicro>
-        </View>
-      )}
+      {/* R124 — the date-tick axis (ALL windows, the one grammar): one row of
+          per-day cells aligned to the SVG's columns; only chartAxisTicks's
+          indices carry a shortDate label (centered on its column — an
+          unbreakable "Sep 1" may kiss its neighbors' columns, which the tick
+          spacing absorbs), and the LAST tick promotes to the "today" anchor
+          in accentDeep 10/700 whenever the series ends on the device's own
+          calendar day. */}
+      <View style={styles.axisRow}>
+        {days.map((day, index) => {
+          if (!tickIndices.has(index)) {
+            return <View key={`${day.date}-${index}`} style={{ width: columnWidth }} />;
+          }
+          const isTodayEdge = index === n - 1 && index === todayIndex;
+          return (
+            <View key={`${day.date}-${index}`} style={{ width: columnWidth, alignItems: "center" }}>
+              <Text
+                style={
+                  isTodayEdge
+                    ? [styles.tickToday, { color: tokens.accentDeep }]
+                    : [styles.tickDate, { color: tokens.textTertiary }]
+                }
+              >
+                {isTodayEdge ? "today" : shortDate(day.date)}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -621,9 +650,9 @@ function QuietLine({ children }: { children: string }) {
 function DashboardSkeleton() {
   return (
     <View style={styles.skeletonWrap}>
-      {/* Shaped like the stack: the period selector, the 2×2 stat grid, the
-          chart card, then rows. */}
-      <Skeleton style={styles.selectorSkeleton} />
+      {/* R124 — shaped like the redesigned stack: the stat grid opens the
+          page (the window selector no longer leads), then the chart card
+          (whose own first row is the compact range chips), then rows. */}
       <Skeleton style={styles.statsSkeleton} />
       <Skeleton style={styles.chartSkeleton} />
       <SkeletonList rows={3} rowHeight={64} />
@@ -958,19 +987,26 @@ export default function DashboardScreen() {
   // tablets (the centered instrument column).
   const bodyWidth = Math.min(wide ? 840 : Number.POSITIVE_INFINITY, windowWidth - spacing.lg * 2);
   // The chart's responsive width: the window minus the screen gutters (the
-  // scaffold's own body padding) minus the chart card's own padding —
+  // scaffold's own body padding) minus the chart card's own R124 lg padding —
   // HALVED when the chart pairs beside the models card on tablets.
   const pairWidth = Math.floor((bodyWidth - spacing.lg) / 2);
-  const chartWidth = Math.max(120, Math.floor((wide ? pairWidth : bodyWidth) - spacing.md * 2));
-  // ── ROUND-120 (why): ── the donut's ring STRETCHES to its card's full
-  // content width (the owner: the chart had "a lot of empty area on the
-  // right sides and the left sides" — the fixed 120px ring sat centered in
-  // a ~304dp content box with ~92dp dead bands on each side). The models
-  // card's inner width is the SAME responsive figure the daily chart rides
-  // (both cards pad md inside; on tablets both live in an equal pairCol),
-  // so the one constant stretches BOTH charts to the identical full content
-  // width — the daily chart already filled it, the ring now does too.
-  const donutSize = chartWidth;
+  const chartWidth = Math.max(120, Math.floor((wide ? pairWidth : bodyWidth) - spacing.lg * 2));
+  // ── ROUND-124 (why): ── the R120-S full-card-width ring is RETIRED (the
+  // owner's round-124 verdict: "the model's last month donut chart is not
+  // proper. It is looking ugly and bad" — a ~300dp ring with an 8dp stroke
+  // read as a thin wireframe hoop). The models card now composes the ring
+  // BESIDE the ranked legend: the legend column takes ≥42% of the card's
+  // content width (floor 144dp — the compact rows keep their pct column
+  // honest), and the ring takes the rest — a PROPORTIONATE 140-200dp ring
+  // with a SOLID scaled stroke (~11% of its diameter, clamped 12–18), no
+  // dead side bands (both halves of the row carry content), no wire hoop.
+  const modelsContentWidth = chartWidth;
+  const legendWidth = Math.max(144, Math.round(modelsContentWidth * 0.42));
+  const donutSize = Math.max(120, modelsContentWidth - legendWidth - spacing.md);
+  const donutStroke = Math.max(12, Math.min(18, Math.round(donutSize * 0.11)));
+  // The center hole's label budget: the hole minus a 12px breathing inset
+  // (the center slot's children clamp + ellipsize inside it).
+  const donutCenterMax = Math.max(64, donutSize - donutStroke * 2 - 12);
 
   const refreshControl = (
     <RefreshControl
@@ -992,21 +1028,34 @@ export default function DashboardScreen() {
 
   // ── the sections (composed once, then stacked or paired per §2.8) ──
 
+  // R124 — the window's own spoken label ("last 14 days" …): the stat
+  // grid's section header self-describes its scope (PERIOD_OPTIONS's own
+  // a11y vocabulary — one spelling), so the numbers stay honest even though
+  // the CONTROL lives down in the chart card.
+  const windowLabel =
+    PERIOD_OPTIONS.find((option) => option.key === windowKey)?.accessibilityLabel ?? "this window";
+
   const chartSection = (
     <>
       <SectionHeader>Daily tokens</SectionHeader>
       {days.length === 0 ? (
         <QuietLine>no usage recorded in this window yet</QuietLine>
       ) : (
-        <ClayCard>
+        <ClayCard testID="dashboard-chart">
           <View style={styles.chartPad}>
+            {/* R124 — THE WINDOW SELECTOR'S NEW HOME: the compact RangeChips
+                ride as the chart card's FIRST row (self-sized, leading), so
+                the control reads as the chart's own toolbar — the owner's
+                verdict killed its old life as the page's opening hero. It
+                scopes the stat grid above (whose header names the window) +
+                this chart + the models ring's own calendar window. */}
+            <RangeChips selected={windowKey} onSelect={selectWindow} />
             <UsageChart
               days={days}
               width={chartWidth}
               selected={selectedDay}
               onSelect={setSelectedDay}
               dataKey={chartKey}
-              showWeekdayTicks={windowKey === "14d"}
             />
             <View style={styles.dayDetailWrap}>
               {selectedDay !== null && selectedDay < days.length ? (
@@ -1039,6 +1088,10 @@ export default function DashboardScreen() {
       ) : (
         <ClayCard>
           <View style={styles.donutPad}>
+            {/* R124 — RING BESIDE LEGEND (one row): the proportionate ring
+                (scaled SOLID stroke — see the ROUND-124 geometry note above)
+                on the left, the ranked compact legend filling the rest; both
+                halves carry content, so no dead bands and no wire hoop. */}
             <View style={styles.donutRow}>
               {/* R117-g2 §2.3: the track rides the mono-well class —
                   mixHex(card,"#2A2018",0.06) light (monoBg's exact
@@ -1048,27 +1101,49 @@ export default function DashboardScreen() {
                 segments={donutSegmentsInput}
                 dataKey={donutKey}
                 size={donutSize}
+                strokeWidth={donutStroke}
                 highlighted={highlightedModel}
                 trackColor={tokens.monoBg}
-                accessibilityLabel={`model usage donut — top model ${shortModelName(models[0].model)} at ${Math.round((modelShares[0] ?? 0) * 100)}% of tokens`}
+                accessibilityLabel={`model usage donut — ${models.length} models, ${formatTokens(totalModelTokens)} tokens, top model ${cleanModelName(models[0].model)} at ${Math.round((modelShares[0] ?? 0) * 100)}% of tokens`}
                 center={
-                  <View style={[styles.donutCenterWrap, { maxWidth: Math.round(donutSize / 2) }]}>
-                    <TypeMono numberOfLines={1} style={styles.donutCenterName}>
-                      {shortModelName(models[0].model)}
-                    </TypeMono>
-                    <TypeTitle numberOfLines={1} style={styles.donutCenterPct}>
-                      {`${Math.round((modelShares[0] ?? 0) * 100)}%`}
-                    </TypeTitle>
-                  </View>
+                  highlightedModel !== null && models[highlightedModel] !== undefined ? (
+                    // The spotlight readout: the highlighted model's own
+                    // numbers — pct as the big figure, name · tokens clamped
+                    // under it (a long id ellipsizes honestly, never wraps).
+                    <View style={[styles.donutCenterWrap, { maxWidth: donutCenterMax }]}>
+                      <TypeStat numberOfLines={1} style={styles.donutCenterFigure}>
+                        {`${Math.round((modelShares[highlightedModel] ?? 0) * 100)}%`}
+                      </TypeStat>
+                      <TypeMicro numberOfLines={1} style={[styles.donutCenterName, { color: tokens.textSecondary }]}>
+                        {`${cleanModelName(models[highlightedModel].model)} · ${formatTokens(models[highlightedModel].tokens)}`}
+                      </TypeMicro>
+                    </View>
+                  ) : (
+                    // The resting readout: the WINDOW TOTAL — the honest
+                    // denominator every share divides (the old center showed
+                    // only the top model's slice; the total is the question
+                    // the ring exists to answer).
+                    <View style={[styles.donutCenterWrap, { maxWidth: donutCenterMax }]}>
+                      <TypeStat numberOfLines={1} style={styles.donutCenterFigure}>
+                        {formatTokens(totalModelTokens)}
+                      </TypeStat>
+                      <TypeMicro numberOfLines={1} style={[styles.donutCenterName, { color: tokens.textTertiary }]}>
+                        {`tokens · ${models.length} model${models.length === 1 ? "" : "s"}`}
+                      </TypeMicro>
+                    </View>
+                  )
                 }
               />
-            </View>
-            {/* The ranked list — §2.4's ONE-card fold: 1px borderStrong
-                dividers between rows, cap 8, the honest "+N more". */}
-            <View>
-              {topModels.map((model, index) => (
-                <Fragment key={model.model}>
+              {/* The ranked side legend — the compact rows (hue dot +
+                  HUMANIZED name + pct, tokens · cost · calls caption), cap 8,
+                  the honest "+N more"; tapping spotlights the arc + swaps
+                  the center readout. R124: no inter-row hairlines — the dots
+                  + spacing own the rhythm (visual declutter in the tight
+                  column). */}
+              <View style={styles.legendCol}>
+                {topModels.map((model, index) => (
                   <ModelLegendRow
+                    key={model.model}
                     model={model}
                     share={modelShares[index] ?? 0}
                     rank={index}
@@ -1076,14 +1151,13 @@ export default function DashboardScreen() {
                     dimmed={highlightedModel !== null && highlightedModel !== index}
                     onToggle={() => toggleHighlight(index)}
                   />
-                  {index < topModels.length - 1 ? <Hairline strong /> : null}
-                </Fragment>
-              ))}
-              {hiddenModels > 0 ? (
-                <TypeMicro numberOfLines={1} style={[styles.moreLine, { color: tokens.textTertiary }]}>
-                  +{hiddenModels} more models
-                </TypeMicro>
-              ) : null}
+                ))}
+                {hiddenModels > 0 ? (
+                  <TypeMicro numberOfLines={1} style={[styles.moreLine, { color: tokens.textTertiary }]}>
+                    +{hiddenModels} more models
+                  </TypeMicro>
+                ) : null}
+              </View>
             </View>
           </View>
         </ClayCard>
@@ -1165,10 +1239,6 @@ export default function DashboardScreen() {
         // The body stack (§2.8): the scaffold's 12px intra-group beat carries
         // inside this wrapper; tablets center the whole instrument at 840.
         <View style={wide ? [styles.bodyStack, styles.tabletBody] : styles.bodyStack}>
-          {/* ── the period selector (§2.1) — ONE self-sized control, leading,
-              first element of the scroll body, NOT sticky ── */}
-          <PeriodSegmentedControl selected={windowKey} onSelect={selectWindow} />
-
           {loading && !primaryLoaded ? (
             <DashboardSkeleton />
           ) : !primaryLoaded && error !== null ? (
@@ -1190,21 +1260,34 @@ export default function DashboardScreen() {
                 </TypeCaption>
               ) : null}
 
-              {/* ── the headline stat block (§2.2) — one card, four windowed
-                  numbers, the biggest figure first ── */}
-              <StatGrid cells={statCells} wide={wide} testID="dashboard-stat" />
+              {/* ── R124 — THE PAGE OPENS WITH THE NUMBERS: the windowed stat
+                  block leads (its header self-describes the window; the
+                  window CONTROL lives down in the chart card, beside the data
+                  it scopes — the owner's verdict retired the selector-as-hero)
+                  ── and every section staggers in on the house FadeInUp
+                  (30ms × index — the same grammar More/Home ride; the bars'
+                  own baseline grow + the ring's sweep are their §4.6 DATA
+                  entries, complementary layers, not a double-animation). */}
+              <FadeInUp index={0}>
+                <SectionHeader>{`Usage · ${windowLabel}`}</SectionHeader>
+                <StatGrid cells={statCells} wide={wide} testID="dashboard-stat" />
+              </FadeInUp>
 
               {/* ── the daily chart + the models (§2.3/§2.4) — stacked on
                   phones, side-by-side columns ≥768dp ── */}
               {wide ? (
                 <View style={styles.pairRow}>
-                  <View style={styles.pairCol}>{chartSection}</View>
-                  <View style={styles.pairCol}>{modelsSection}</View>
+                  <View style={styles.pairCol}>
+                    <FadeInUp index={1}>{chartSection}</FadeInUp>
+                  </View>
+                  <View style={styles.pairCol}>
+                    <FadeInUp index={2}>{modelsSection}</FadeInUp>
+                  </View>
                 </View>
               ) : (
                 <>
-                  {chartSection}
-                  {modelsSection}
+                  <FadeInUp index={1}>{chartSection}</FadeInUp>
+                  <FadeInUp index={2}>{modelsSection}</FadeInUp>
                 </>
               )}
 
@@ -1212,38 +1295,44 @@ export default function DashboardScreen() {
                   keys exist; tools stand alone otherwise ── */}
               {wide && keysSection !== null ? (
                 <View style={styles.pairRow}>
-                  <View style={styles.pairCol}>{toolsSection}</View>
-                  <View style={styles.pairCol}>{keysSection}</View>
+                  <View style={styles.pairCol}>
+                    <FadeInUp index={3}>{toolsSection}</FadeInUp>
+                  </View>
+                  <View style={styles.pairCol}>
+                    <FadeInUp index={4}>{keysSection}</FadeInUp>
+                  </View>
                 </View>
               ) : (
                 <>
-                  {toolsSection}
-                  {keysSection}
+                  <FadeInUp index={3}>{toolsSection}</FadeInUp>
+                  {keysSection !== null ? <FadeInUp index={4}>{keysSection}</FadeInUp> : null}
                 </>
               )}
 
               {/* ── the projects drill-down (§2.6) — whole-history rows; tap
                   expands the inline sessions well; full width everywhere ── */}
-              <SectionHeader>Projects · all time</SectionHeader>
-              {detailed === null ? (
-                <QuietLine>
-                  {detailedMissing ? detailedUnavailableLine : "no projects with usage yet"}
-                </QuietLine>
-              ) : detailed.projects.length === 0 ? (
-                <QuietLine>no projects with usage yet</QuietLine>
-              ) : (
-                <View style={styles.projectsList} testID="dashboard-projects">
-                  {detailed.projects.map((project) => (
-                    <ProjectUsageRow
-                      key={project.id}
-                      testID={`dashboard-project-${project.id}`}
-                      project={project}
-                      expanded={expandedProject === project.id}
-                      onToggle={() => toggleProject(project.id)}
-                    />
-                  ))}
-                </View>
-              )}
+              <FadeInUp index={5}>
+                <SectionHeader>Projects · all time</SectionHeader>
+                {detailed === null ? (
+                  <QuietLine>
+                    {detailedMissing ? detailedUnavailableLine : "no projects with usage yet"}
+                  </QuietLine>
+                ) : detailed.projects.length === 0 ? (
+                  <QuietLine>no projects with usage yet</QuietLine>
+                ) : (
+                  <View style={styles.projectsList} testID="dashboard-projects">
+                    {detailed.projects.map((project) => (
+                      <ProjectUsageRow
+                        key={project.id}
+                        testID={`dashboard-project-${project.id}`}
+                        project={project}
+                        expanded={expandedProject === project.id}
+                        onToggle={() => toggleProject(project.id)}
+                      />
+                    ))}
+                  </View>
+                )}
+              </FadeInUp>
 
               {generatedAt !== undefined ? (
                 <TypeMicro style={[styles.footer, { color: tokens.textTertiary }]}>
@@ -1277,34 +1366,36 @@ const styles = StyleSheet.create({
   legendRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
-  chartPad: { padding: spacing.md, gap: spacing.sm },
+  // R124 — the chart card pads lg (the round's consistent-breathing pass) and
+  // its rows knit at md (chips → scale/chart → detail).
+  chartPad: { padding: spacing.lg, gap: spacing.md },
   axisRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: spacing.xs },
-  // §2.3 — the weekday tick row's label tier: the micro recipe at 10px.
-  tickWeekday: { fontSize: 10, fontFamily: fontFamily.semibold, lineHeight: 13, letterSpacing: 0.6 },
-  tickToday: { fontSize: 10, fontFamily: fontFamily.bold, lineHeight: 13, letterSpacing: 0.6 },
+  // R124 — the date-tick tier: the micro recipe at 10px (shortDate labels,
+  // every window; "today" carries the accentDeep 10/700 promotion).
+  tickDate: { fontSize: 10, fontFamily: fontFamily.semibold, lineHeight: 13, letterSpacing: 0.4 },
+  tickToday: { fontSize: 10, fontFamily: fontFamily.bold, lineHeight: 13, letterSpacing: 0.4 },
   dayDetailWrap: { paddingHorizontal: spacing.xs },
   emptyPad: { padding: spacing.lg, alignItems: "center" },
-  rowsPad: { padding: spacing.md },
+  rowsPad: { padding: spacing.lg },
   moreLine: { paddingTop: spacing.sm },
   projectsList: { gap: spacing.md },
-  // The donut + legend card (R115-N — the leaderboard folded in; R118-C:
-  // the dividers own the rows' rhythm).
-  donutPad: { padding: spacing.md, gap: spacing.md },
-  donutRow: { alignItems: "center" },
-  /** ── ROUND-120 (why): ── the center slot's maxWidth is now responsive
-   *  (half the stretched ring — was the fixed 84 the 120px ring needed),
-   *  passed inline off donutSize; the hole itself grew with the ring. */
-  donutCenterWrap: { alignItems: "center" },
+  // R124 — the ring-beside-legend card: the ring + the legend column share ONE
+  // row (gap md), the legend filling the remaining width; the card pads lg.
+  donutPad: { padding: spacing.lg },
+  donutRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
+  legendCol: { flex: 1 },
+  /** R124 — the center slot: the readout stacks the big figure (TypeStat
+   *  mono) over the micro label, clamped inline to the hole's own budget
+   *  (donutCenterMax — the hole minus a 12px breathing inset). */
+  donutCenterWrap: { alignItems: "center", gap: 2 },
+  donutCenterFigure: { textAlign: "center", fontSize: 24 },
   donutCenterName: { textAlign: "center" },
-  donutCenterPct: { textAlign: "center" },
   footer: { textAlign: "center" },
   // R117-g2 (AMENDMENT 5): the loading twin knits at the same 12px beat the
   // body stack carries (the skeleton forecasts the rhythm).
   skeletonWrap: { gap: spacing.md },
-  // The selector skeleton — the 52px track, self-width, r26.
-  selectorSkeleton: { height: SEGMENT_TRACK_H, width: 176, borderRadius: SEGMENT_TRACK_H / 2 },
   // The stat-grid skeleton — the 2×2 composed cells (two ~94px rows + the
   // card's padding).
   statsSkeleton: { height: 200, borderRadius: RADIUS_CARD },
-  chartSkeleton: { height: CHART_HEIGHT + 96, borderRadius: RADIUS_CARD },
+  chartSkeleton: { height: CHART_HEIGHT + 96 + 40, borderRadius: RADIUS_CARD },
 });

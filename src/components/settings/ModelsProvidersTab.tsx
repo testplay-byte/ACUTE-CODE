@@ -13,6 +13,7 @@ import {
   FileText,
   Globe,
   Image as ImageIcon,
+  Loader2,
   Pencil,
   Plus,
   RefreshCw,
@@ -1875,8 +1876,24 @@ export type ModelTestState =
       tools?: ModelTestToolsLeg;
     };
 
+/** R124: how long a FAIL verdict stays on screen before it dismisses
+ * itself (the owner: "it shows me the error message, which is proper, but
+ * that error message does not disappear automatically after some time").
+ * 12s — long enough to read the reason (and open the raw-reason toggle),
+ * short enough that a stale failure never lingers over the list. A fresh
+ * test re-arms it; PASS verdicts stay (they are the quiet confirmation). */
+const MODEL_TEST_FAIL_DISMISS_MS = 12_000;
+
 function useModelTest(model: ProviderModelConfig | null): { state: ModelTestState; run: () => void } {
   const [state, setState] = useState<ModelTestState>({ kind: "idle" });
+  // R124: the auto-dismiss timer — armed when a FAIL lands, cleared by any
+  // state change (a fresh test or an unmount). The effect's cleanup IS the
+  // re-arm mechanism: a new state object re-runs it.
+  useEffect(() => {
+    if (state.kind !== "fail") return;
+    const dismiss = setTimeout(() => setState({ kind: "idle" }), MODEL_TEST_FAIL_DISMISS_MS);
+    return () => clearTimeout(dismiss);
+  }, [state]);
   const run = (): void => {
     if (model === null) return;
     setState({ kind: "testing" });
@@ -2022,12 +2039,16 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
   const { state, run } = useModelTest(model);
   const [showReply, setShowReply] = useState(false);
   const [showFull, setShowFull] = useState(false);
-  // R118-F: pass folds at 10s; fail persists (no timer at all).
+  // R118-F: pass folds at 10s. R124: the fail AUTO-DISMISSES at 12s — the
+  // owner's new verdict ("that error message does not disappear
+  // automatically after some time") supersedes R118-F's "never" — the
+  // dismissal lives in useModelTest itself (the hook resets to idle), so
+  // this view only arms the PASS fold.
   const [showResult, setShowResult] = useState(false);
   useEffect(() => {
     if (state.kind !== "pass" && state.kind !== "fail") return;
     setShowResult(true);
-    if (state.kind === "fail") return; // R118-F: a fail stays until dismissed/retested
+    if (state.kind === "fail") return; // R124: the hook's 12s timer owns the fail
     const hide = setTimeout(() => setShowResult(false), 10_000);
     return () => clearTimeout(hide);
   }, [state]);
@@ -2246,12 +2267,14 @@ function ModelCard({
 
   // The section appears on completion — and R118-F (round-118 §1 item 26,
   // the R87 supersession): a PASS auto-folds after 10s (was 5 — a 2-10s
-  // real completion plus a 5s vanish read as "no status at all"), a FAIL
-  // NEVER auto-collapses (an error the owner must read never snaps away),
-  // and the section renders WHILE TESTING too (the one-line busy row —
+  // real completion plus a 5s vanish read as "no status at all"), and the
+  // section renders WHILE TESTING too (the one-line busy row —
   // "Testing {model}…"). UNLESS the owner interacts with it (Show reply /
   // Show full cancels the timer — the reader keeps the section as long as
-  // they are reading).
+  // they are reading). R124 supersedes the FAIL half of R118-F: a fail now
+  // AUTO-DISMISSES at 12s (useModelTest's own timer — the owner: "that
+  // error message does not disappear automatically after some time"); this
+  // view arms only the PASS fold.
   useEffect(() => {
     if (state.kind !== "pass" && state.kind !== "fail") return;
     setShowResult(true);
@@ -2767,13 +2790,17 @@ function ModelListSection({
   const queryClient = useQueryClient();
   // ROUND-50 (R50-d): the "Add models" picker dialog + the per-model
   // configuration dialog (replaces the inline type-an-id row editor).
-  // ROUND-95 (R95-A): the configure-BEFORE-add handoff is retired — adding a
-  // model (the picker's Add button, batch strip, or the manual by-id form)
-  // UPSERTS the row first, then a single add OPENS the config dialog on the
-  // created row (edit mode) so the owner's "it will add that model and it
-  // will open up the configuring menu for that model" flow holds.
+  // ROUND-124 (the owner: "it is showing me the Configure Model menu, but
+  // the model has already been added"): a SINGLE Add is CONFIGURE-FIRST —
+  // the ADD-mode config dialog opens on the prefill (static catalog + the
+  // live entry's details + the smart blank-fill inside the dialog), and
+  // SAVE creates the row; cancel adds nothing. The batch strip keeps the
+  // direct add with its per-model fetch visibility.
   const [pickerOpen, setPickerOpen] = useState(false);
   const [configuring, setConfiguring] = useState<ProviderModelConfig | null>(null);
+  /** R124: the ADD-mode config dialog's prefill (configure-first — the
+   * single Add hands its prefill here instead of upserting the row). */
+  const [configuringPrefill, setConfiguringPrefill] = useState<ModelAddPrefill | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** ROUND-95 (R95-A): the model row whose delete is awaiting the styled
    * ConfirmDialog (the browser window.confirm is retired app-wide). */
@@ -3217,13 +3244,14 @@ function ModelListSection({
 
       {/* ROUND-50 (R50-d): the catalog-driven picker + the per-model config
           dialog. Both invalidate THIS provider's models query on change.
-          R93-A6: the right-side "Add" (and the batch strip, and the manual
-          by-id form) adds DIRECTLY with the prefill as defaults.
-          ROUND-95 (R95-A, the owner): "when the user clicks on the add button
-          manually, it will add that model and it will open up the
-          configuring menu for that model" — a SINGLE add's created row is
-          handed back here and the EDIT-mode config dialog opens on it
-          (configure-before-add is retired). */}
+          R93-A6: the batch strip (and the manual by-id form) adds DIRECTLY
+          with the prefill as defaults.
+          ROUND-124 (the owner: "it is showing me the Configure Model menu,
+          but the model has already been added"): a SINGLE Add is
+          CONFIGURE-FIRST again — the picker hands the prefill (static
+          catalog + the live entry's details) here, the ADD-mode config
+          dialog opens, and SAVE creates the row (cancel = nothing
+          happened). The R95-A add-then-configure upsert is retired. */}
       {pickerOpen && (
         <AddModelsDialog
           providerId={providerId}
@@ -3234,8 +3262,7 @@ function ModelListSection({
             // R93-A6: upsert each prefill as a configured row with the
             // prefill as its defaults (the exact payload an untouched config
             // draft would POST). allSettled so a partial failure is REPORTED,
-            // not swallowed. R95-A: the CREATED rows ride the resolution so a
-            // single add can open its config dialog immediately.
+            // not swallowed.
             const results = await Promise.allSettled(
               prefills.map((p) =>
                 upsertProviderModelConfig(providerId, {
@@ -3263,11 +3290,11 @@ function ModelListSection({
             }
             return results.map((r) => (r.status === "fulfilled" ? r.value : null));
           }}
-          onConfigureAdded={(row) => {
-            // R95-A: add-then-configure — the picker closes and the created
-            // row's config dialog opens (edit mode; tweaks are PATCHes).
+          onConfigurePrefill={(prefill) => {
+            // R124: configure-first — the picker closes and the ADD-mode
+            // config dialog opens on the prefill; Save POSTs the row.
             setPickerOpen(false);
-            setConfiguring(row);
+            setConfiguringPrefill(prefill);
           }}
           onClose={() => setPickerOpen(false)}
         />
@@ -3277,10 +3304,24 @@ function ModelListSection({
           providerId={providerId}
           model={configuring}
           prefill={null}
+          catalog={catalog}
           onClose={() => setConfiguring(null)}
           onSaved={() => {
             invalidate();
             setConfiguring(null);
+          }}
+        />
+      )}
+      {configuringPrefill && (
+        <ModelConfigDialog
+          providerId={providerId}
+          model={null}
+          prefill={configuringPrefill}
+          catalog={catalog}
+          onClose={() => setConfiguringPrefill(null)}
+          onSaved={() => {
+            invalidate();
+            setConfiguringPrefill(null);
           }}
         />
       )}
@@ -3291,28 +3332,34 @@ function ModelListSection({
 /* ── ROUND-50 (R50-d): the "Add models" catalog picker dialog ─────────────── */
 
 /**
- * R93-A6 → ROUND-95 (R95-A): the picker's TWO-way interaction (the owner
- * retired the third — "there should first of all not be the configure button
- * at all… the configuring should happen like this: when the user clicks on
- * the add button manually, it will add that model and it will open up the
- * configuring menu for that model"):
+ * R93-A6 → ROUND-95 → ROUND-124: the picker's TWO-way interaction (the
+ * owner retired the third — "there should first of all not be the
+ * configure button at all… the configuring should happen like this: when
+ * the user clicks on the add button manually, it will add that model and
+ * it will open up the configuring menu for that model"; R124 refined it
+ * again — the Configure Model menu must open WITHOUT the model already
+ * being added; Save is what adds it):
  *  · LEFT zone (checkbox + name): click = TOGGLE selection; press + DRAG
  *    across rows = paint-selection (every row swept joins the initial
  *    toggle's target state — selecting OR deselecting).
- *  · RIGHT zone: "Add" = DIRECT add with the catalog prefill, and for a
- *    SINGLE add the created row's config dialog OPENS immediately (the
- *    onConfigureAdded handoff). Already-added models are NOT SHOWN at all
- *    (R95-A: "The models which have already been added should not be shown
- *    in the add model popup").
- *  · Batch: "Add N models" in the selection strip adds every selected row
- *    with the same prefill-as-defaults contract, then closes.
+ *  · RIGHT zone (R124): "Add" = CONFIGURE-FIRST — the ADD-mode config
+ *    dialog opens on the prefill (static catalog + the live entry's
+ *    details); Save creates the row, cancel adds nothing. Already-added
+ *    models are NOT SHOWN at all (R95-A: "The models which have already
+ *    been added should not be shown in the add model popup").
+ *  · Batch (R124): "Add N models" enriches every selected prefill with the
+ *    live catalog's details — a fresh catalog read with per-row fetch
+ *    visibility (spinner → "✓ live details" / "— no details served" chips,
+ *    the owner's "show me some animations for them"), then the upserts,
+ *    then a brief "Added N — M with live details" summary, then close.
  */
 function AddModelsDialog({
+  providerId,
   catalog,
   staticCatalog,
   configuredIds,
   onAddDirect,
-  onConfigureAdded,
+  onConfigurePrefill,
   onClose,
 }: {
   /** The provider being picked for (kept in the call-site shape for
@@ -3328,10 +3375,12 @@ function AddModelsDialog({
    * the success path — a failure rejects the whole call). Rejects with a
    * readable message on any failure (no silent partial success). */
   onAddDirect: (prefills: ModelAddPrefill[]) => Promise<(ProviderModelConfig | null)[]>;
-  /** ROUND-95 (R95-A): a successful SINGLE add hands the created row back —
-   * the parent closes the picker and opens the EDIT-mode config dialog on
-   * it (the owner's add-then-configure flow). */
-  onConfigureAdded: (row: ProviderModelConfig) => void;
+  /** ROUND-124 (the owner's verdict: “it is showing me the Configure Model
+   * menu, but the model has already been added” — dead): a SINGLE add no
+   * longer upserts anything — the picker closes and the config dialog
+   * opens in ADD mode carrying the prefill (save = create; cancel =
+   * nothing happened). The R95-A add-then-configure handoff is retired. */
+  onConfigurePrefill: (prefill: ModelAddPrefill) => void;
   onClose: () => void;
 }) {
   const styles = useThemeStyles();
@@ -3388,19 +3437,70 @@ function AddModelsDialog({
   const clearSelection = (): void => setSelected(new Set());
   const selectedCount = selected.size;
 
-  // ── R93-A6: the direct-add/batch mutation ───────────────────────────────
+  // ── R93-A6 + R124: the direct-add/batch mutation, now with the ─────────
+  //    per-model FETCH VISIBILITY the owner asked for (“if it cannot fetch
+  //    the data of some models… show me some animations for them, so that I
+  //    am aware of whether it even tried to fetch the data for it or not”).
+  //    The pipeline: (1) the enrichment pass — ONE fresh catalog read
+  //    (the same GET /providers/:id/models that loaded the picker; the
+  //    backend's 5-minute cache makes a warm read instant) with a spinner
+  //    on every selected row while it runs; (2) the per-row OUTCOME — a
+  //    “live details” chip when the entry carried them, an honest “no
+  //    details served” chip when it did not; (3) the upserts; (4) the
+  //    summary line (“Added N — M with live details, K without”) holds
+  //    briefly so the outcome is READ before the picker closes. ──────────
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchError, setBatchError] = useState<string | null>(null);
+  /** R124: per-row outcome during/after the enrichment pass —
+   * "fetching" while the catalog read runs, "details" | "none" after it. */
+  const [rowFetchState, setRowFetchState] = useState<Map<string, "fetching" | "details" | "none">>(new Map());
+  /** R124: the post-success summary that holds the picker open briefly. */
+  const [batchSummary, setBatchSummary] = useState<string | null>(null);
   const addSelected = async (): Promise<void> => {
-    const prefills: ModelAddPrefill[] = [];
+    const ids: string[] = [];
     for (const id of selected) {
-      if (!configuredIds.has(id)) prefills.push(prefillFor(id));
+      if (!configuredIds.has(id)) ids.push(id);
     }
-    if (prefills.length === 0) return;
+    if (ids.length === 0 || batchBusy) return;
     setBatchBusy(true);
     setBatchError(null);
+    setBatchSummary(null);
+    setRowFetchState(new Map(ids.map((id) => [id, "fetching"] as const)));
     try {
+      // (1) the enrichment read — fresh through the queryClient so a warm
+      // cache still tells the truth about the provider's CURRENT listing.
+      let enriched = catalog.entries;
+      try {
+        enriched = await fetchProviderModelEntries(providerId);
+      } catch {
+        // The enrichment read failing does NOT fail the add — the prefills
+        // fall back to what the picker already had, and every row's outcome
+        // chip reads "none" (the honest “tried, got nothing”).
+      }
+      const enrichedById = new Map(enriched.map((e) => [e.id, e]));
+      // (2) the per-row outcomes + the prefills that carry them.
+      const prefills: ModelAddPrefill[] = [];
+      let withDetails = 0;
+      const outcomes = new Map<string, "details" | "none">();
+      for (const id of ids) {
+        const prefill = prefillFor(id, enrichedById.get(id));
+        prefills.push(prefill);
+        const hasLive = enrichedById.get(id)?.details !== undefined;
+        outcomes.set(id, hasLive ? "details" : "none");
+        if (hasLive) withDetails += 1;
+      }
+      setRowFetchState(outcomes);
+      // (3) the upserts.
       await onAddDirect(prefills);
+      // (4) the summary holds ~1.4s so the outcome is READ, then closes.
+      setBatchSummary(
+        ids.length === 1
+          ? withDetails === 1
+            ? "Added — live details fetched"
+            : "Added — the provider served no details"
+          : `Added ${ids.length} — ${withDetails} with live details, ${ids.length - withDetails} without`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1400));
       onClose(); // batch success closes the picker (the rows are in the list)
     } catch (err) {
       setBatchError(err instanceof Error ? err.message : String(err));
@@ -3409,27 +3509,15 @@ function AddModelsDialog({
     }
   };
 
-  // ── ROUND-95 (R95-A): the SINGLE add — add first, then configure. One
-  // upsert with the catalog prefill; on success the created row hands off
-  // through onConfigureAdded (the parent closes the picker and opens the
-  // row's config dialog — the owner's add-then-configure flow). Serves BOTH
-  // the row's right-zone Add button and the manual add-by-id footer. */
-  const [singleBusy, setSingleBusy] = useState(false);
+  // ── ROUND-124 (the owner: “it is showing me the Configure Model menu, but
+  //    the model has already been added”): the SINGLE add is now CONFIGURE
+  //    FIRST — Add opens the config dialog in ADD mode carrying the prefill
+  //    (static catalog + live details); SAVE creates the row, cancel changes
+  //    nothing. Serves BOTH the row's right-zone Add button and the manual
+  //    add-by-id footer. ──
   const addOne = (id: string): void => {
-    if (batchBusy || singleBusy) return;
-    setSingleBusy(true);
-    setBatchError(null);
-    onAddDirect([prefillFor(id)])
-      .then((rows) => {
-        const row = rows[0];
-        if (row !== null && row !== undefined) onConfigureAdded(row);
-        // A null row on the success path cannot happen (the parent rejects
-        // on failure); if it ever did, the picker simply stays open.
-      })
-      .catch((err: unknown) => {
-        setBatchError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => setSingleBusy(false));
+    if (batchBusy) return;
+    onConfigurePrefill(prefillFor(id));
   };
 
   const staticById = useMemo(
@@ -3467,30 +3555,40 @@ function AddModelsDialog({
   });
   const rows = scopeRows.filter((entry) => !configuredIds.has(entry.id)).slice(0, 300); // sanity cap — the live OpenRouter catalog is huge
 
-  /** ROUND-87 (R87) → R89-C2: the prefill a picked model hands to the config
-   * dialog — a CLEAN human display name FIRST (the live entry's name, then
-   * the served catalog's, then the last path segment humanized — the owner:
-   * "the last part of the model ID was supposed to be shown as the name"),
-   * then the static catalog's pricing/context/vision knowledge. */
-  const prefillFor = (id: string): ModelAddPrefill => {
+  /** ROUND-87 (R87) → R89-C2 → ROUND-124: the prefill a picked model hands
+   * to the config dialog — a CLEAN human display name FIRST (the live
+   * entry's name, then the served catalog's, then the last path segment
+   * humanized — the owner: "the last part of the model ID was supposed to
+   * be shown as the name"), then the static catalog's pricing/context/vision
+   * knowledge, then — NEW this round — the LIVE entry's additive details
+   * filling every gap the static catalog left (the mobile's R120-M smart
+   * fetch, now on the desktop too: the owner: "on my mobile it does
+   * pre-load the context window, max output, input-output prices… and
+   * everything"). Only-blank policy: a static value is never overwritten
+   * by a live one; vision is an OR (either source may assert it). The
+   * `enrichedEntry` param is the BATCH pipeline's fresh entry — defaults
+   * to the picker's own catalog entry. */
+  const prefillFor = (id: string, enrichedEntry?: ProviderModelCatalogEntry): ModelAddPrefill => {
     const meta = staticById.get(id);
-    const entry = catalog.entries.find((e) => e.id === id);
+    const entry = enrichedEntry ?? catalog.entries.find((e) => e.id === id);
+    const live = entry?.details;
+    const num = (a: number | null | undefined, b?: number): number | null =>
+      a !== null && a !== undefined ? a : (b ?? null);
     return {
       modelId: id,
       displayName:
         entry && entry.name !== "" && entry.name !== id
           ? entry.name
           : meta?.displayName ?? cleanModelName(id),
-      ...(meta
-        ? {
-            contextWindow: meta.contextWindow,
-            maxOutputTokens: meta.maxOutputTokens,
-            inputPricePerMtok: meta.inputPricePerMtok,
-            inputPriceCachedPerMtok: meta.inputPriceCachedPerMtok,
-            outputPricePerMtok: meta.outputPricePerMtok,
-            supportsVision: meta.supportsVision,
-          }
-        : {}),
+      contextWindow: num(meta?.contextWindow ?? null, live?.contextWindow),
+      maxOutputTokens: num(meta?.maxOutputTokens ?? null, live?.maxOutputTokens),
+      inputPricePerMtok: num(meta?.inputPricePerMtok ?? null, live?.inputPricePerMtok),
+      inputPriceCachedPerMtok: num(
+        meta?.inputPriceCachedPerMtok ?? null,
+        live?.inputPriceCachedPerMtok,
+      ),
+      outputPricePerMtok: num(meta?.outputPricePerMtok ?? null, live?.outputPricePerMtok),
+      supportsVision: (meta?.supportsVision ?? false) || (live?.supportsVision ?? false),
     };
   };
 
@@ -3700,16 +3798,42 @@ function AddModelsDialog({
                     </span>
                   </span>
                 </button>
-                {/* ── RIGHT zone: the DIRECT add (R93-A6 → R95-A, the owner:
-                    "when the user clicks on the add button manually, it will
-                    add that model and it will open up the configuring menu
-                    for that model") — one upsert with the catalog prefill,
-                    then the created row's config dialog opens (the
-                    onConfigureAdded handoff through the parent). */}
+                {/* ── RIGHT zone: the SINGLE add (R124, configure-first — the
+                    owner: "it is showing me the Configure Model menu, but
+                    the model has already been added" — dead): Add opens the
+                    ADD-mode config dialog carrying the prefill (static
+                    catalog + the live entry's details); SAVE creates the
+                    row, cancel adds nothing. Next to it, the R124 per-row
+                    FETCH OUTCOME chip while/after a batch runs (the owner:
+                    "show me some animations for them, so that I am aware
+                    of whether it even tried to fetch the data"). ── */}
+                {rowFetchState.get(entry.id) !== undefined ? (
+                  <span
+                    data-testid={`picker-row-fetch-${entry.id}`}
+                    className="shrink-0 self-center flex items-center gap-1 font-mono text-[10px] mr-1"
+                    style={{
+                      color:
+                        rowFetchState.get(entry.id) === "details"
+                          ? styles.accent
+                          : styles.textTertiary,
+                    }}
+                  >
+                    {rowFetchState.get(entry.id) === "fetching" ? (
+                      <>
+                        <RefreshCw size={10} className="animate-spin" aria-hidden />
+                        fetching details…
+                      </>
+                    ) : rowFetchState.get(entry.id) === "details" ? (
+                      <>✓ live details</>
+                    ) : (
+                      <>— no details served</>
+                    )}
+                  </span>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => addOne(entry.id)}
-                  disabled={singleBusy || batchBusy}
+                  disabled={batchBusy}
                   aria-label={`Add ${entry.id}`}
                   data-testid="picker-model-direct-add"
                   /* R100-E2: the JS hover pair retired — the accent wash
@@ -3717,9 +3841,9 @@ function AddModelsDialog({
                      faded ≈ the old 0.22 hover). */
                   className="shrink-0 self-center flex items-center gap-1 h-8 px-3 mr-2 rounded-full text-[11px] font-semibold transition-all bg-accent-soft hover:bg-accent-faded active:scale-[0.97] disabled:opacity-50"
                   style={{ color: styles.accent }}
-                  title="Add this model, then open its configuration"
+                  title="Configure this model before adding — Save creates it"
                 >
-                  {singleBusy ? <RefreshCw size={12} className="animate-spin" /> : <Plus size={12} />} Add
+                  <Plus size={12} /> Add
                 </button>
               </div>
             );
@@ -3753,6 +3877,18 @@ function AddModelsDialog({
             <span className="text-[12px] font-medium" style={{ color: styles.text }}>
               {selectedCount} model{selectedCount === 1 ? "" : "s"} selected
             </span>
+            {/* R124: the post-add summary — what the enrichment pass GOT
+                ("Added 3 — 2 with live details, 1 without"), held briefly
+                so the outcome is READ before the picker closes. */}
+            {batchSummary !== null ? (
+              <span
+                data-testid="picker-batch-summary"
+                className="text-[11px] font-medium truncate"
+                style={{ color: styles.textSecondary }}
+              >
+                {batchSummary}
+              </span>
+            ) : null}
             <span className="flex-1" />
             <button
               type="button"
@@ -3800,11 +3936,11 @@ function AddModelsDialog({
           </div>
         ) : null}
 
-        {/* footer: manual add-by-id — R95-A: the SAME add-then-configure
-            contract as the row's Add button (one upsert, then the config
-            dialog opens on the row). An id that is ALREADY configured is
-            handled honestly: the upsert keeps its current semantics (the
-            existing row is updated, then opened for editing), and the hint
+        {/* footer: manual add-by-id — R124: the SAME configure-first
+            contract as the row's Add button (the ADD-mode config dialog
+            opens on the typed id; Save creates the row). An id that is
+            ALREADY configured is handled honestly: the upsert keeps its
+            current semantics (Save UPDATES the existing row), and the hint
             below says so before the click. */}
         <div
           className="shrink-0 border-t px-5 py-3.5 flex flex-col gap-1.5"
@@ -3825,16 +3961,16 @@ function AddModelsDialog({
             />
             <button
               onClick={() => addOne(manualId.trim())}
-              disabled={!manualId.trim() || singleBusy || batchBusy}
+              disabled={!manualId.trim() || batchBusy}
               className="h-10 px-4 rounded-full text-[12px] font-semibold disabled:opacity-50 shrink-0"
               style={{ background: styles.accent, color: styles.accentText }}
             >
-              {singleBusy ? "Adding…" : "Add"}
+              Add
             </button>
           </div>
           {manualId.trim() !== "" && configuredIds.has(manualId.trim()) && (
             <p className="text-[11px]" style={{ color: styles.textTertiary }} data-testid="picker-manual-already-added">
-              Already added — Add opens the existing row for editing.
+              Already added — Save updates the existing row.
             </p>
           )}
         </div>
@@ -4039,6 +4175,7 @@ function ModelConfigDialog({
   providerId,
   model,
   prefill,
+  catalog,
   onClose,
   onSaved,
 }: {
@@ -4047,8 +4184,12 @@ function ModelConfigDialog({
   model: ProviderModelConfig | null;
   /** ROUND-87 (R87) ADD mode: the catalog prefill (clicking a model in the
    * picker opens this dialog INSTEAD of adding directly — the owner: "It
-   * should give the user the option to set them up"). */
+   * should give the user the option to set them up"). R124: this is now
+   * THE single-add flow (configure-first; Save creates the row). */
   prefill: ModelAddPrefill | null;
+  /** R124: the provider's live catalog (entries + fetch state) — the smart
+   * blank-fill's source. Optional for embeds/tests that prefill fully. */
+  catalog?: ProviderCatalogState;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -4058,6 +4199,73 @@ function ModelConfigDialog({
     model !== null ? draftFromModel(model) : draftFromPrefill(prefill ?? { modelId: "" }),
   );
   const [error, setError] = useState<string | null>(null);
+
+  // ── ROUND-124: the SMART BLANK-FILL (the mobile's R120-M configure screen,
+  //    now on the desktop — the owner: "if I do the same thing on my mobile,
+  //    then it does pre-load the context window, max output, input-output
+  //    prices… and everything"). When the dialog opens (add OR edit mode),
+  //    the live catalog's additive details fill every field the row/prefill
+  //    left BLANK — only-blank policy, a filled value is never overwritten
+  //    (the owner's own edits and the static catalog's curated values win).
+  //    The status line is honest in every state: fetching → the provider's
+  //    answer → "no details served" when the entry carried none. A catalog
+  //    fetch FAILURE is silent-but-truthful: the line reads the honest
+  //    "no details served" and never blocks the dialog. ──
+  const [smartFillState, setSmartFillState] = useState<"idle" | "fetching" | "details" | "none">(
+    "idle",
+  );
+  const modelIdForFill = addMode ? (prefill?.modelId ?? "") : (model?.modelId ?? "");
+  useEffect(() => {
+    if (modelIdForFill === "" || catalog === undefined) return;
+    // The catalog is still loading → the fetching state; the effect re-runs
+    // when its entries land.
+    if (catalog.isFetching) {
+      setSmartFillState("fetching");
+      return;
+    }
+    const entry = catalog.entries.find((e) => e.id === modelIdForFill);
+    const live = entry?.details;
+    if (live === undefined) {
+      setSmartFillState("none");
+      return;
+    }
+    // The only-blank fill: every numeric the draft left "" gets the live
+    // value; vision ORs in; the capability chips the draft left NULL get
+    // the live hint (audio/video). One pass, guarded against the user
+    // having typed anything (the draft's non-empty values win).
+    setDraft((d) => {
+      const num = (current: string, v?: number): string =>
+        current === "" && v !== undefined ? String(v) : current;
+      const tri = (current: boolean | null, v?: boolean): boolean | null =>
+        current === null && v !== undefined ? v : current;
+      return {
+        ...d,
+        contextWindow: num(d.contextWindow, live.contextWindow),
+        maxOutputTokens: num(d.maxOutputTokens, live.maxOutputTokens),
+        inputPrice: num(d.inputPrice, live.inputPricePerMtok),
+        cachePrice: num(d.cachePrice, live.inputPriceCachedPerMtok),
+        outputPrice: num(d.outputPrice, live.outputPricePerMtok),
+        supportsVision: d.supportsVision === false && live.supportsVision === true ? true : d.supportsVision,
+        supportsAudio: tri(d.supportsAudio, live.supportsAudio),
+        supportsVideo: tri(d.supportsVideo, live.supportsVideo),
+      };
+    });
+    setSmartFillState("details");
+  }, [modelIdForFill, catalog]);
+
+  // The status line under the dialog's header — the honest record that the
+  // pre-load RAN and what it got (the owner: "so that I am aware of whether
+  // it even tried to fetch the data for it or not").
+  const smartFillLine =
+    catalog === undefined
+      ? null
+      : smartFillState === "fetching"
+        ? "fetching the model's live details…"
+        : smartFillState === "details"
+          ? "live details fetched from the provider — blank fields were filled"
+          : smartFillState === "none"
+            ? "the provider's catalog served no details for this model"
+            : null;
 
   const set = <K extends keyof ModelConfigDraft>(key: K, value: ModelConfigDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
@@ -4177,6 +4385,30 @@ function ModelConfigDialog({
             <X size={14} />
           </button>
         </div>
+
+        {/* R124: the smart blank-fill's honest status line — the record that
+            the pre-load RAN and what it got (fetching / details / none). */}
+        {smartFillLine !== null ? (
+          <div
+            data-testid="model-smart-fill-line"
+            className="flex items-center gap-1.5 text-[11px] leading-tight"
+            style={{ color: styles.textTertiary, marginTop: -6 }}
+          >
+            {smartFillState === "fetching" ? (
+              <Loader2 size={11} className="animate-spin shrink-0" aria-hidden />
+            ) : (
+              <span
+                className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+                style={{
+                  background:
+                    smartFillState === "details" ? styles.accent : styles.textTertiary,
+                }}
+                aria-hidden
+              />
+            )}
+            {smartFillLine}
+          </div>
+        ) : null}
 
         {/* ROUND-82: the two-column body — Identity + Capabilities (left)
             and Sizing + Pricing (right) at ≥560px; single column below

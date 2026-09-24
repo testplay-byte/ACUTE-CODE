@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-23 round-122 -->
+<!-- last-reviewed: 2026-09-24 round-124 -->
 # ACUTE-CODE
 
 Local-first, closed-source multi-agent engineering workbench for Windows
@@ -41,7 +41,7 @@ conversation: the ledger file is the only persistence, and the reporter runs
 detached after the turn closes. Costs one extra model call per completed
 turn (metered in the usage screens with origin `feedback`).
 
-## The Android companion (live sync + full inventory — round-114 state)
+## The Android companion (live sync + full inventory — round-114 state; its own in-app updater since round-124)
 
 A phone pairs to the desktop (Settings → Devices; on the LAN or through the
 cloud relay — `docs/guides/CLOUDFLARE-SETUP.md`) and the two ends stay LIVE
@@ -67,7 +67,12 @@ tails) that mirror the PC's transcript. The dashboard is color-coded
 in full: Models & Providers management (custom provider creation, the key
 pool, saved models with capability editing/testing/hiding/deletion) —
 providers list configured-first on both ends ("Your providers" above the
-add-a-provider catalog). The events wire contract:
+add-a-provider catalog). The companion also updates ITSELF in-app
+(round-124): Settings → App updates checks GitHub anonymously, downloads the
+arm64 APK with a live progress bar, and hands it to Android's own installer
+(an optional GitHub token only accelerates rate-limited checks; a silent
+once-a-day check paints the settings row when a new version lands). The
+events wire contract:
 `docs/architecture/api/IMPLEMENTED-API.md` (the R113 + R114 additions).
 
 ## Linux release (round-100; ARM64 since round-101)

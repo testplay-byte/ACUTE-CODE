@@ -4,21 +4,33 @@
  * the dashboard screen (app/(tabs)/dashboard.tsx) owns the fetch orchestration
  * and passes typed rows down; this module owns the shapes.
  *
- *   PeriodSegmentedControl — the ONE self-sized 14d/30d/3mo selector (§2.1:
- *                          the tab-pill recipe at the chrome-tier label class —
- *                          accentTint fill + 2px accentDeep border, TAB_SPRING)
- *   StatGrid            — the headline stat block (§2.2: ONE ClayCard, 2×2
- *                          composed cells / 4-across ≥768dp, 1px inset
- *                          borderStrong dividers, TypeMicro kicker → TypeStat
- *                          → optional caption)
- *   ActivityGrid        — R118-C TOMBSTONE: zero call sites since the vertical
- *                          rewrite (the chart owns the day buckets); kept for
- *                          export stability.
- *   ToolLeaderboardRow  — rank + tool + count + failures chip + sparkbar
- *   ModelLegendRow      — one ranked model row (the donut card's list half)
- *   KeyStatRow          — one API-key rollup row
- *   ProjectUsageRow     — one project row + the inline sessions accordion in
- *                          the recessed well (§2.6's anatomy + §2.7's motion)
+ * R124 (the owner's round-124 verdict — "the complete UI redesign of the
+ * dashboard page … at the very top it shows me the three options: 14 days,
+ * 30 days, three months. That is definitely not the place for it to be …
+ * the model's last month donut chart is not proper. It is looking ugly and
+ * bad"):
+ *
+ *   · RangeChips        — the COMPACT window selector that now lives INSIDE
+ *                         the daily chart's card (its first row — the control
+ *                         reads as belonging to the chart it scopes, never
+ *                         as the page's hero). 40-tall surfaceWell track,
+ *                         self-sized segments, the tab-pill indicator recipe
+ *                         at the compact tier gliding on TAB_SPRING.
+ *   · PeriodSegmentedControl — R124 TOMBSTONE: zero call sites since the
+ *                         selector moved into the chart card; kept for
+ *                         export stability (the ActivityGrid precedent).
+ *   · ModelLegendRow    — redesigned for the R124 models card: the ring sits
+ *                         BESIDE the ranked legend (one row, no dead bands,
+ *                         no full-width wire hoop), so the row is the
+ *                         COMPACT side-legend shape — hue dot + the
+ *                         HUMANIZED name (cleanModelName — never the raw id)
+ *                         + the share pct, with the tokens · cost · calls
+ *                         caption under it. Full facts stay in the a11y label.
+ *   · StatGrid          — the card's padding moves md → lg (the round's
+ *                         consistent-breathing pass).
+ *
+ * Everything else (ToolLeaderboardRow / KeyStatRow / ProjectUsageRow / the
+ * accordion) is untouched R118-C surface.
  *
  * THE COLOR CONTRACT (round-116 §1.6): every MODEL surface here resolves its
  * color through modelColor(model.name, isDark) — the PC's 12-hue name-hash
@@ -32,9 +44,9 @@
  *
  * The pure number/date/status formatters (formatTokens/formatUsd/formatCount/
  * shortDate/formatClock/timeAgoFromIso/sessionStatusBadge/
- * sessionLastActivityIso/PERIOD_OPTIONS/localDateString) moved to
- * usage-format.ts (pure, zero RN imports, jest-pinned) — RE-EXPORTED below so
- * every existing `@/components/usage-cards` import path keeps working.
+ * sessionLastActivityIso/PERIOD_OPTIONS/localDateString/chartAxisTicks)
+ * moved to usage-format.ts (pure, zero RN imports, jest-pinned) — RE-EXPORTED
+ * below so every existing `@/components/usage-cards` import path keeps working.
  */
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -79,7 +91,7 @@ import {
   spacing,
   TYPE_CAPTION,
 } from "@/design/tokens";
-import type { DetailedUsageProject, DetailedUsageSession, UsageStatsModel } from "@/features/config";
+import { cleanModelName, type DetailedUsageProject, type DetailedUsageSession, type UsageStatsModel } from "@/features/config";
 import {
   formatCount,
   formatTokens,
@@ -95,6 +107,7 @@ import {
 // ── the pure helpers (one spelling, shared with the dashboard screen) ───────
 
 export {
+  chartAxisTicks,
   formatClock,
   formatCount,
   formatTokens,
@@ -128,19 +141,147 @@ export interface UsageDayRow {
   costUsd: number | null;
 }
 
-// ── the period selector (§2.1) ──────────────────────────────────────────────
+// ── the window selector (R124 — the compact in-chart control) ───────────────
 
 /**
+ * R124 — THE RANGE CHIPS: the compact 14d/30d/3mo window selector that lives
+ * INSIDE the daily chart's card (its first row, self-sized and leading), so
+ * the control reads as the chart's own toolbar — the owner's verdict killed
+ * its old life as the page's opening hero ("at the very top it shows me the
+ * three options … that is definitely not the place for it to be").
+ *
+ * Geometry — the shared segmented grammar at the COMPACT tier: a 40-tall
+ * surfaceWell track (radius 20, hairline clayRim — the R117 chip resting
+ * surface) wrapping SELF-SIZED segments (no flex:1 — "14d" never stretches),
+ * with the tab-pill indicator recipe scaled down: accentTint fill + a 1.5px
+ * accentDeep border (r17), gliding on TAB_SPRING. Labels pin the chrome tier
+ * — 12.5/700 accentDeep selected, 12.5/600 textSecondary unselected. The
+ * 32px visual segments carry hitSlop ±6 vertical → the 44px touch law holds
+ * without a 52px chrome band riding inside the card. testIDs stay
+ * `dashboard-window-14d/30d/3mo` (the walkthrough contract).
+ */
+const RANGE_TRACK_H = 40;
+const RANGE_TRACK_INSET = 3;
+/** The compact tier's effective-touch hitSlop — 32px visual + 12 = 44. */
+const RANGE_HIT_SLOP = 6;
+
+export function RangeChips({
+  selected,
+  onSelect,
+}: {
+  selected: PeriodKey;
+  onSelect: (key: PeriodKey) => void;
+}) {
+  const { tokens } = useTheme();
+  const reduced = useReducedMotion();
+  /** Each segment's measured x/width inside the track (the indicator's pose). */
+  const [segmentLayout, setSegmentLayout] = useState<Partial<Record<PeriodKey, { x: number; width: number }>>>({});
+  const indicatorX = useSharedValue(-1);
+  const indicatorWidth = useSharedValue(0);
+  /** False until the first pose lands — the mount pose snaps, never springs. */
+  const primed = useRef(false);
+
+  const activeLayout = segmentLayout[selected];
+
+  useEffect(() => {
+    if (activeLayout === undefined) return;
+    if (!primed.current) {
+      // The mount pose: appear exactly on the selected segment, no slide-in.
+      primed.current = true;
+      indicatorX.value = activeLayout.x;
+      indicatorWidth.value = activeLayout.width;
+      return;
+    }
+    if (reduced) {
+      indicatorX.value = activeLayout.x;
+      indicatorWidth.value = activeLayout.width;
+      return;
+    }
+    indicatorX.value = withSpring(activeLayout.x, TAB_SPRING);
+    // The labels are all ≤4 chars — the width deltas are sub-pixel; snap it.
+    indicatorWidth.value = activeLayout.width;
+  }, [activeLayout, reduced, indicatorX, indicatorWidth]);
+
+  const indicatorStyle = useAnimatedStyle(() => ({
+    width: indicatorWidth.value,
+    transform: [{ translateX: indicatorX.value }],
+  }));
+
+  return (
+    <View
+      style={[
+        styles.rangeTrack,
+        {
+          alignSelf: "flex-start",
+          backgroundColor: tokens.surfaceWell,
+          borderColor: tokens.clayRim,
+        },
+      ]}
+    >
+      {activeLayout !== undefined ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.rangeIndicator,
+            { backgroundColor: tokens.accentTint, borderColor: tokens.accentDeep },
+            indicatorStyle,
+          ]}
+        />
+      ) : null}
+      {PERIOD_OPTIONS.map((option) => {
+        const isSelected = option.key === selected;
+        return (
+          <Pressable
+            key={option.key}
+            testID={`dashboard-window-${option.key}`}
+            accessibilityRole="button"
+            accessibilityLabel={option.accessibilityLabel}
+            accessibilityState={{ selected: isSelected }}
+            hitSlop={{ top: RANGE_HIT_SLOP, bottom: RANGE_HIT_SLOP }}
+            onPress={() => onSelect(option.key)}
+            onLayout={(event: LayoutChangeEvent) => {
+              const { x, width } = event.nativeEvent.layout;
+              setSegmentLayout((current) => {
+                const known = current[option.key];
+                if (known !== undefined && known.x === x && known.width === width) return current;
+                return { ...current, [option.key]: { x, width } };
+              });
+            }}
+            style={styles.rangeSegment}
+          >
+            <Text
+              numberOfLines={1}
+              style={{
+                color: isSelected ? tokens.accentDeep : tokens.textSecondary,
+                fontSize: TYPE_CAPTION,
+                fontFamily: isSelected ? fontFamily.bold : fontFamily.semibold,
+                lineHeight: 16,
+              }}
+            >
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+// ── the period selector (R124 TOMBSTONE) ────────────────────────────────────
+
+/**
+ * R124 TOMBSTONE — zero call sites since the window selector moved INTO the
+ * daily chart's card as the compact RangeChips (the owner's round-124
+ * verdict: the control is not the page's hero — "that is definitely not the
+ * place for it to be"); kept for export stability (the ActivityGrid
+ * precedent). The R118-C spelling it froze:
+ *
  * THE PERIOD SELECTOR — ONE self-sized 3-segment control (leading, never a
  * wrapping row of three buttons). Geometry = the shared SegmentedControl
- * grammar (track 52 / r26 / inset 4) but the INDICATOR is the tab-pill
- * recipe, not the primitive's accentDeep fill: accentTint fill + a 2px
- * accentDeep border (r22), gliding on TAB_SPRING. The labels are pinned at
- * the chrome tier — 12.5/700 accentDeep selected, 12.5/600 textSecondary
- * unselected — which is why this is a LOCAL control (the shared
- * SegmentedControl primitive's labels are the text tier, accentText 15/700
- * on a filled pill). Segments self-size to their label (no flex:1), the
- * track wraps them, and the testIDs stay `dashboard-window-14d/30d/3mo`.
+ * grammar (track 52 / r26 / inset 4) with the tab-pill indicator (accentTint
+ * fill + a 2px accentDeep border, r22) gliding on TAB_SPRING; labels at the
+ * chrome tier (12.5/700 accentDeep selected, 12.5/600 textSecondary
+ * unselected); testIDs `dashboard-window-14d/30d/3mo`.
  */
 export function PeriodSegmentedControl({
   selected,
@@ -264,6 +405,8 @@ export interface StatGridCell {
  * TypeMicro kicker (uppercase 0.8 tertiary) → TypeStat value (28
  * mono-medium, ink) → optional one-line TypeMicro caption; minHeight 88.
  * No icon chips, no carousels — one window, one card, four numbers.
+ * R124: the card's padding moves md → lg (the round's consistent-breathing
+ * pass — every redesigned dashboard card now pads lg).
  */
 export function StatGrid({
   cells,
@@ -499,18 +642,24 @@ export function ToolLeaderboardRow({
   );
 }
 
-// ── the model legend row (the donut card's list half, §2.4) ─────────────────
+// ── the model legend row (the R124 models card's side-legend half) ───────────
 
 /**
- * One legend row — the R115-N fold of the old ModelRow: the NAME-HASH hue
- * carries the row (dot 12 + the donut's own segment — the PC's color
- * contract, R116-g), the head line reads model · share · tokens (mono,
- * right-aligned tabular columns), and the cost·calls caption keeps the
- * leaderboard's truth. Tapping spotlights that model's segment on the ring
- * (the PC's MUTUAL highlight: this row + its arc at 1, everything else
- * dimmed to DONUT_DIM_OPACITY); tapping it again clears. R118-C: rows carry
- * 1px borderStrong dividers between them (the caller's Hairline strong) and
- * the ranked list caps at 8 with the honest "+N more models" line.
+ * R124 — ONE LEGEND ROW, the compact side-legend shape: the models card now
+ * composes the ring BESIDE the ranked legend (one row — the R120-S
+ * full-card-width wire hoop is gone), so the row carries the hue dot + the
+ * HUMANIZED name (cleanModelName — "z-ai/glm-5.2:free" reads "Glm 5.2",
+ * NEVER the raw id; the provider-screen's displayName ?? cleanModelName
+ * pattern applied where the wire row has no displayName to prefer) + the
+ * share pct right-aligned in mono, with the tokens · cost · calls caption
+ * under it. The full facts (name, share, tokens, cost, calls) stay in the
+ * a11y label; the visible caption clamps to one line and ellipsizes — the
+ * tight column never wraps into clutter.
+ *
+ * The MUTUAL HIGHLIGHT survives the redesign: tapping spotlights that
+ * model's arc on the ring (this row + its segment at 1, everything else
+ * dimmed to DONUT_DIM_OPACITY) and the ring's center swaps to the model's
+ * own numbers (the dashboard's center slot); tapping it again clears.
  */
 export function ModelLegendRow({
   model,
@@ -530,13 +679,14 @@ export function ModelLegendRow({
   const { tokens } = useTheme();
   const hue = modelColor(model.model, tokens.isDark);
   const pct = Math.round(share * 100);
+  const name = cleanModelName(model.model);
   return (
     <Pressable
       testID={`dashboard-legend-${rank}`}
       onPress={onToggle}
       accessibilityRole="button"
       accessibilityState={{ selected: highlighted }}
-      accessibilityLabel={`${model.model}: ${pct}% of tokens, ${formatTokens(model.tokens)} tokens, ${formatUsd(model.costUsd)}, ${formatCount(model.calls)} calls`}
+      accessibilityLabel={`${name}: ${pct}% of tokens, ${formatTokens(model.tokens)} tokens, ${formatUsd(model.costUsd)}, ${formatCount(model.calls)} calls`}
       style={({ pressed }) => [
         styles.modelLegendRow,
         {
@@ -548,15 +698,12 @@ export function ModelLegendRow({
       <View style={styles.modelHead}>
         <View style={[styles.modelDot, { backgroundColor: hue }]} accessibilityElementsHidden />
         <TypeMono numberOfLines={1} style={styles.modelName}>
-          {model.model}
+          {name}
         </TypeMono>
         <TypeMono numberOfLines={1} style={styles.legendPct}>{`${pct}%`}</TypeMono>
-        <TypeMono numberOfLines={1} style={styles.legendTokens}>
-          {formatTokens(model.tokens)}
-        </TypeMono>
       </View>
       <TypeMicro numberOfLines={1} style={[styles.legendCaption, { color: tokens.textTertiary }]}>
-        {`${formatUsd(model.costUsd)} · ${formatCount(model.calls)} calls`}
+        {`${formatTokens(model.tokens)} · ${formatUsd(model.costUsd)} · ${formatCount(model.calls)} calls`}
       </TypeMicro>
     </Pressable>
   );
@@ -857,6 +1004,32 @@ export function ProjectUsageRow({
 // ── styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  // The compact range chips (R124): the 40-tall track (r20 / inset 3) with
+  // self-sized segments; the ±6 vertical hitSlop rides the Pressables so the
+  // 44px touch law holds without a 52px chrome band inside the chart card.
+  rangeTrack: {
+    height: RANGE_TRACK_H,
+    borderRadius: RANGE_TRACK_H / 2,
+    padding: RANGE_TRACK_INSET,
+    flexDirection: "row",
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  rangeSegment: {
+    minHeight: RANGE_TRACK_H - RANGE_TRACK_INSET * 2,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.md,
+  },
+  // The compact tab-pill indicator: accentTint fill + the 1.5px accentDeep
+  // border, radius 17 = the track's inner height halved.
+  rangeIndicator: {
+    position: "absolute",
+    top: RANGE_TRACK_INSET,
+    bottom: RANGE_TRACK_INSET,
+    left: 0,
+    borderRadius: (RANGE_TRACK_H - RANGE_TRACK_INSET * 2) / 2,
+    borderWidth: 1.5,
+  },
   // The period selector (§2.1): the shared track geometry (52/r26/inset 4)
   // with self-sized segments carrying the 44px touch law.
   periodTrack: {
@@ -882,9 +1055,9 @@ const styles = StyleSheet.create({
     borderRadius: (SEGMENT_TRACK_H - SEGMENT_INSET * 2) / 2,
     borderWidth: 2,
   },
-  // The stat grid (§2.2): the card's md padding insets the dividers off the
-  // rim; cells pad md so the numbers breathe off the lines.
-  statGridPad: { padding: spacing.md },
+  // The stat grid (§2.2): the card's lg padding insets the dividers off the
+  // rim; cells pad md so the numbers breathe off the lines (R124: md → lg).
+  statGridPad: { padding: spacing.lg },
   statGrid: { flexDirection: "row", flexWrap: "wrap" },
   statCell: { padding: spacing.md, minHeight: 88, gap: 3 },
   statKicker: { textTransform: "uppercase", letterSpacing: 0.8 },
@@ -900,7 +1073,9 @@ const styles = StyleSheet.create({
   toolCount: { flexShrink: 0, minWidth: 44, textAlign: "right" },
   toolTrack: { height: 4, borderRadius: 2, overflow: "hidden" },
   toolFill: { height: 4, borderRadius: 2 },
-  // The model legend row (§2.4 — minHeight 44, the dot at 12).
+  // The model legend row (R124 — the compact side-legend shape): minHeight 44
+  // (the touch law holds at the compact tier), the dot at 12, the pct's mono
+  // column right-aligned at minWidth 38.
   modelLegendRow: {
     minHeight: 44,
     borderRadius: RADIUS_INPUT,
@@ -911,8 +1086,7 @@ const styles = StyleSheet.create({
   },
   modelHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
   modelName: { flex: 1 },
-  legendPct: { flexShrink: 0, minWidth: 44, textAlign: "right" },
-  legendTokens: { flexShrink: 0, minWidth: 56, textAlign: "right" },
+  legendPct: { flexShrink: 0, minWidth: 38, textAlign: "right" },
   // The caption aligns under the model NAME: dot width (12) + head gap (sm).
   legendCaption: { paddingLeft: 12 + spacing.sm },
   // The key stat row.

@@ -6,7 +6,8 @@
  * deterministic), and the two session laws: sessionStatusBadge (the honest
  * status tag — queued shows NOTHING) and sessionLastActivityIso
  * (endedAt ?? startedAt). PERIOD_OPTIONS pins the selector's keys/labels
- * (≤4 chars — the segmented control's tier).
+ * (≤4 chars — the segmented control's tier). R124 adds chartAxisTicks —
+ * the redesigned daily chart's date-tick index ladder.
  *
  * The module under test is PURE (zero React Native imports — the mobile
  * suite's pure-logic convention, jest.config.js), so no mocks are needed;
@@ -17,6 +18,7 @@
 import { describe, expect, it } from "@jest/globals";
 
 import {
+  chartAxisTicks,
   formatClock,
   formatCount,
   formatTokens,
@@ -175,5 +177,62 @@ describe("PERIOD_OPTIONS — the selector's vocabulary (§2.1)", () => {
     for (const option of PERIOD_OPTIONS) {
       expect(option.accessibilityLabel.length).toBeGreaterThan(4);
     }
+  });
+});
+
+// ── R124 — the daily chart's date-tick ladder (the redesigned chart's axis) ──
+// The owner's round-124 verdict retired the weekday-tick row ("Mon"-style
+// labels every 2nd column, 14-day window only) in favor of ONE date-tick
+// grammar across all three windows: ≤5 evenly spaced labels, first + last
+// always present (the last doubles as the "today" edge), zero repeats.
+
+describe("chartAxisTicks — the date-tick index ladder (R124)", () => {
+  it.each([
+    { dayCount: 14, expected: [0, 3, 7, 10, 13] },
+    { dayCount: 30, expected: [0, 7, 15, 22, 29] },
+    { dayCount: 90, expected: [0, 22, 45, 67, 89] },
+  ])("$dayCount days → $expected", ({ dayCount, expected }) => {
+    expect(chartAxisTicks(dayCount, 5)).toEqual(expected);
+  });
+
+  it("a short window labels every day (no dedupe needed)", () => {
+    expect(chartAxisTicks(4, 5)).toEqual([0, 1, 2, 3]);
+    expect(chartAxisTicks(5, 5)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("the first and last indices are ALWAYS included — the today edge survives", () => {
+    for (const dayCount of [6, 13, 14, 30, 45, 90]) {
+      const ticks = chartAxisTicks(dayCount, 5);
+      expect(ticks[0]).toBe(0);
+      expect(ticks[ticks.length - 1]).toBe(dayCount - 1);
+      expect(ticks.length).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it("never repeats an index and stays strictly ascending", () => {
+    for (const dayCount of [2, 3, 7, 14, 29, 30, 90, 365]) {
+      const ticks = chartAxisTicks(dayCount, 5);
+      for (let i = 1; i < ticks.length; i++) {
+        expect(ticks[i]).toBeGreaterThan(ticks[i - 1]);
+      }
+      for (const tick of ticks) {
+        expect(tick).toBeGreaterThanOrEqual(0);
+        expect(tick).toBeLessThan(dayCount);
+      }
+    }
+  });
+
+  it("degenerate inputs answer honestly (empty, no ticks, negative, non-finite)", () => {
+    expect(chartAxisTicks(0, 5)).toEqual([]);
+    expect(chartAxisTicks(-3, 5)).toEqual([]);
+    expect(chartAxisTicks(Number.NaN, 5)).toEqual([]);
+    expect(chartAxisTicks(Number.POSITIVE_INFINITY, 5)).toEqual([]);
+    // A maxTicks under 2 floors to 2 — one label is not a scale.
+    expect(chartAxisTicks(30, 1)).toEqual([0, 29]);
+    expect(chartAxisTicks(30, 0)).toEqual([0, 29]);
+  });
+
+  it("non-integer counts floor before laddering (a 13.9-day series is 13 days)", () => {
+    expect(chartAxisTicks(13.9, 5)).toEqual(chartAxisTicks(13, 5));
   });
 });

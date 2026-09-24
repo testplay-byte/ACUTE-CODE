@@ -1,9 +1,14 @@
+<!-- last-reviewed: 2026-09-24 round-124 -->
 # ACUTE — the Android companion
 
 The phone-side half of the device link (docs/planning/LINKING-PROTOCOL.md):
 remote view + input for the desktop agent. Expo (SDK 57) + expo-router,
 React 19, TypeScript; the custom `modules/acute-net` native module carries
-the pinned-TLS fetch + SSE stream in OkHttp.
+the pinned-TLS fetch + SSE stream in OkHttp, and `modules/acute-installer`
+(ROUND-124) carries the in-app APK update floor — the streaming download
+with progress events + the Android package-install intent through a
+FileProvider (see its README; the phone updates itself from Settings →
+App updates, anonymously first against the public GitHub releases).
 
 - Package: `com.acutecode.companion` · minSdk 29 (Android 10+)
 - Built ONLY by GitHub Actions (`.github/workflows/mobile.yml`) — the owner's

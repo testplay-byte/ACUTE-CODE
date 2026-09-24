@@ -24,6 +24,16 @@
  * transient module state — nothing persists.
  */
 import { postBrowserCommandResult } from "./api";
+// ROUND-124 (R124): the panel-INDEPENDENT staged capture — the module-level
+// fallback for tabs with NO mounted panel (the owner in Settings: the route
+// swap unmounts every BrowserPanel while the webview stays alive).
+import {
+  isNativeBrowserAvailable,
+} from "./native-browser";
+import {
+  parseCapturePayloadDims,
+  performStagedBrowserCapture,
+} from "./agent-browser-capture";
 
 /** The SSE frame shape (api.ts StreamTurnEvent "browser-command" variant). */
 export interface BrowserCommandFrame {
@@ -85,11 +95,46 @@ function warn(reason: string): void {
  * Dispatch one SSE browser-command frame: run the tab's handler and POST the
  * reply. Never throws (a failed POST leaves the tool to its timeout — the
  * command is already lost, the UI can't do better).
+ *
+ * ROUND-124 (R124): `screenshot_capture` is PANEL-INDEPENDENT — when no
+ * handler is registered for the tab (the user is in Settings — the route
+ * swap unmounts every BrowserPanel — or on another sidebar tab type), the
+ * module-level staged capture answers directly through the native bridge:
+ * the webview is still ALIVE (R87 keep-alive + the tab-close reaper only
+ * destroy on tab close), so the stage → grab → restore choreography needs
+ * nothing from the unmounted panel. This is the owner's ruling #3: "this
+ * should also happen if the user is in some other application, is in the
+ * settings of the program or something else, but the screenshot should
+ * still be successfully taken as needed." Every OTHER action keeps the
+ * honest no-panel refusal (eval needs the panel's webview-id scoping at best
+ * and has no off-panel choreography — the pre-R124 behavior).
  */
 export function dispatchBrowserCommand(frame: BrowserCommandFrame): void {
   const { commandId, tabId, action } = frame;
   const handler = handlers.get(tabId);
   if (handler === undefined) {
+    if (action === "screenshot_capture" && isNativeBrowserAvailable()) {
+      const payload =
+        frame.payload !== null && typeof frame.payload === "object" ? frame.payload : {};
+      void (async () => {
+        let reply: BrowserCommandReply;
+        try {
+          // No mounted panel → the background-tab contract holds (the unmount
+          // cleanup hides the webview), so expectVisible stays false: the
+          // stage SHOWS the webview for the grab and the restore re-hides it.
+          const result = await performStagedBrowserCapture(tabId, parseCapturePayloadDims(payload));
+          reply = { ok: true, data: result };
+        } catch (err) {
+          reply = { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        try {
+          await postBrowserCommandResult(commandId, reply);
+        } catch (err) {
+          warn(`result post failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })();
+      return;
+    }
     void postBrowserCommandResult(commandId, {
       ok: false,
       error: `no embedded browser panel is mounted for tab '${tabId}' (the tab is closed, inactive, or running outside the desktop app)`,

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-24 round-124 -->
 # AGENT MEMORY — lessons learned, rules going forward
 
 **Owner directive (2026-08-23):** "learn from the mistakes you made, document
@@ -1396,3 +1396,33 @@ only its grounding summary; the resume prompt ("write the document NOW,
 no more research") recovered it in one turn. Give planning agents an
 explicit output-budget reminder: the document IS the deliverable, and
 research must stop at ~70%.
+
+### Lesson #124 — one-liners from R124 (the Android updater + the quick-nav verdicts)
+
+(a) THE EXPO NATIVE-MODULE DISCIPLINE SCALES: a new Kotlin module
+(acute-installer) copies acute-net's exact shape (expo-module.config.json +
+one Module class + `compileOnly` OkHttp + the main-thread event hop) and it
+typechecks + jest-passes on the first local pass — the ONLY gate a sandbox
+without Android tooling can run. Write the module against the verified
+neighbor, and let the Mobile APK workflow be the compile gate.
+(b) A CONFIG PLUGIN'S AUTHORITY MUST MATCH THE RUNTIME'S: the FileProvider
+authority the plugin writes into the manifest and the authority
+`context.packageName + ".acuteinstaller"` the Kotlin builds at runtime must
+be the SAME string — resolve it from app.json's android.package (the
+authoritative source), never from the merged manifest's package attribute
+(AGP may not even emit one).
+(c) THE R95-A → R124 ADD-MODEL ROUND-TRIP IS THE OWNER'S TASTE CURVE, NOT
+A CONTRADICTION: R95's ruling was "add THEN open the config"; R124's is "the
+config menu must not imply the add already happened". The durable principle
+under both: the UI must never claim a side effect the user has not
+confirmed. When a later verdict "reverses" an earlier one, look for the
+invariant both were reaching for and implement THAT.
+(d) fireEvent.click DEFAULTS ITS COORDS TO (0,0) — a pointer-position-aware
+handler (the click-dismiss arm's >6px wake math) will silently misbehave in
+tests that don't pass {clientX, clientY} explicitly: the "small jiggle"
+becomes a 42px teleport and the assertion pins the WRONG wake. Pass the
+pointer's own position on every synthetic click that rides one.
+(e) Omit<AppUpdateCheck, "checkedAt"> ON A UNION COLLAPSES THE MEMBERS —
+TS's Omit over a discriminated union keeps only the shared keys; the
+distributive `T extends {checkedAt:number} ? Omit<T,...> : T` pattern is the
+one-line fix for "stamp the clock on whichever member I was handed".

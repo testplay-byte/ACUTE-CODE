@@ -79,6 +79,15 @@ vi.mock("../../lib/native-browser", () => ({
   nativeTabsCloseAll: vi.fn(() => Promise.resolve()),
   openExternalUrl: vi.fn(() => Promise.resolve()),
   onBrowserNavigated: vi.fn(() => () => {}),
+  // R124: the staged capture (agent-browser-capture.ts — imported by this
+  // sidebar for the mid-capture defer) also draws on the native bridge; the
+  // exports below complete the mock's contract (no capture runs in THIS
+  // suite, so resolving fakes are enough).
+  nativeTabExists: vi.fn(() => Promise.resolve(false)),
+  nativeWindowMetrics: vi.fn(() => Promise.resolve(null)),
+  lastCommandedTabBounds: vi.fn(() => null),
+  lastCommandedTabZoom: vi.fn(() => null),
+  resetTabGeometryMemoryForTest: vi.fn(() => {}),
 }));
 
 afterEach(cleanup);

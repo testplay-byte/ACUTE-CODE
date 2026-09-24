@@ -18,6 +18,7 @@
  *   sessionStatusBadge — the honest status law (§2.6: queued shows NOTHING)
  *   sessionLastActivityIso — endedAt ?? startedAt
  *   PERIOD_OPTIONS — the 14d/30d/3mo selector's vocabulary
+ *   chartAxisTicks — R124: the daily chart's date-tick index ladder (pure)
  */
 
 // ── the period selector's vocabulary (§2.1) ─────────────────────────────────
@@ -137,6 +138,31 @@ function relativeTimeWord(then: number, now: number): string {
 export function timeAgoFromIso(iso: string, now: number = Date.now()): string {
   const t = Date.parse(iso);
   return Number.isNaN(t) ? iso : relativeTimeWord(t, now);
+}
+
+// ── the daily chart's time axis (R124 — the redesigned chart's tick ladder) ──
+
+/**
+ * R124 — the daily chart's axis-tick ladder: which day indices carry a date
+ * label. The wire's series is zero-filled and contiguous (config.ts's own
+ * contract note on UsageSummary.days), so even INDEX spacing is even DATE
+ * spacing — no calendar math needed for evenness. The FIRST and LAST indices
+ * are always included (the last is the "today" edge whenever the series ends
+ * on the device's calendar day), the count never exceeds `maxTicks`, and no
+ * index ever repeats. Pure (the component maps each index to shortDate).
+ */
+export function chartAxisTicks(dayCount: number, maxTicks: number): number[] {
+  if (!Number.isFinite(dayCount) || dayCount <= 0) return [];
+  const n = Math.floor(dayCount);
+  const cap = Math.max(2, Math.floor(maxTicks));
+  if (n <= cap) return Array.from({ length: n }, (_, index) => index);
+  const step = (n - 1) / (cap - 1);
+  const ticks: number[] = [];
+  for (let i = 0; i < cap; i++) {
+    const index = Math.min(n - 1, Math.round(i * step));
+    if (ticks.length === 0 || ticks[ticks.length - 1] !== index) ticks.push(index);
+  }
+  return ticks;
 }
 
 // ── the session status law (§2.6 — the honest tag) ──────────────────────────

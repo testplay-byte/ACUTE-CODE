@@ -22,6 +22,33 @@ vi.mock("./api", () => ({
   ),
 }));
 
+// ── ROUND-124 (R124): the module-level screenshot_capture fallback's fakes ─
+// The bridge now answers screenshot_capture for tabs with NO mounted panel
+// (the owner in Settings — the route swap unmounts every BrowserPanel) by
+// delegating to the staged capture choreography. That choreography has its
+// own deep suite (agent-browser-capture.test.ts); HERE we pin the DISPATCH
+// contract: when it runs, with which options, and what happens to its reply.
+const captureState = vi.hoisted(() => ({
+  nativeAvailable: false,
+  staged: null as { tabId: string; options: Record<string, unknown> } | null,
+  reply: { pngBase64: "aW1n".repeat(40), width: 2560, height: 1440, logicalWidth: 1280, logicalHeight: 720, clamped: false },
+  failWith: null as Error | null,
+}));
+vi.mock("./native-browser", () => ({
+  isNativeBrowserAvailable: () => captureState.nativeAvailable,
+}));
+vi.mock("./agent-browser-capture", () => ({
+  performStagedBrowserCapture: vi.fn(async (tabId: string, options: Record<string, unknown>) => {
+    captureState.staged = { tabId, options };
+    if (captureState.failWith !== null) throw captureState.failWith;
+    return captureState.reply;
+  }),
+  parseCapturePayloadDims: (payload: Record<string, unknown>) =>
+    typeof payload.width === "number" && typeof payload.height === "number"
+      ? { width: payload.width, height: payload.height }
+      : {},
+}));
+
 import {
   clearBrowserCommandHandlersForTest,
   dispatchBrowserCommand,
@@ -32,6 +59,10 @@ import {
 beforeEach(() => {
   posted.length = 0;
   clearBrowserCommandHandlersForTest();
+  captureState.nativeAvailable = false;
+  captureState.staged = null;
+  captureState.reply = { pngBase64: "aW1n".repeat(40), width: 2560, height: 1440, logicalWidth: 1280, logicalHeight: 720, clamped: false };
+  captureState.failWith = null;
 });
 
 afterEach(() => {
@@ -95,5 +126,66 @@ describe("agent-browser-bridge (R62 D8 dispatch registry)", () => {
     dispatchBrowserCommand(noPayload);
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(seen).toEqual({});
+  });
+});
+
+// ── ROUND-124 (R124): the module-level screenshot_capture fallback ─────────
+// The owner: "this should also happen if the user is in some other application,
+// is in the settings of the program or something else, but the screenshot should
+// still be successfully taken as needed." A route swap to Settings unmounts
+// every BrowserPanel → no handler → the OLD bridge answered "no embedded
+// browser panel is mounted" and the tool refused. Now screenshot_capture is
+// PANEL-INDEPENDENT: the staged capture answers through the native bridge
+// directly (the webview is still alive — R87 keep-alive).
+describe("agent-browser-bridge (R124: the panel-independent screenshot_capture fallback)", () => {
+  it("no handler + native available + screenshot_capture → the staged capture answers with the raster (the Settings case)", async () => {
+    captureState.nativeAvailable = true;
+    dispatchBrowserCommand(frame("cmd-r124-a", "tab-settings", "screenshot_capture", { width: 1280, height: 720 }));
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    // The choreography ran for the RIGHT tab with the tool's threaded dims
+    // and NO panel options (expectVisible stays false — the background-tab
+    // contract: an unmounted panel's webview is hidden).
+    expect(captureState.staged).toEqual({ tabId: "tab-settings", options: { width: 1280, height: 720 } });
+    expect(posted[0]).toEqual({
+      commandId: "cmd-r124-a",
+      result: { ok: true, data: captureState.reply },
+    });
+  });
+
+  it("the staged capture's honest refusal is posted verbatim (never swallowed)", async () => {
+    captureState.nativeAvailable = true;
+    captureState.failWith = new Error("screenshot_capture: the app window is minimized — restore it and retry");
+    dispatchBrowserCommand(frame("cmd-r124-b", "tab-min", "screenshot_capture", { width: 1280, height: 720 }));
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0].result.ok).toBe(false);
+    expect(posted[0].result.error).toContain("the app window is minimized");
+  });
+
+  it("web dev mode (native unavailable) keeps the honest no-panel refusal — no webview exists to stage", async () => {
+    captureState.nativeAvailable = false;
+    dispatchBrowserCommand(frame("cmd-r124-c", "tab-web", "screenshot_capture", { width: 1280, height: 720 }));
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(captureState.staged).toBeNull();
+    expect(posted[0].result.ok).toBe(false);
+    expect(posted[0].result.error).toContain("no embedded browser panel is mounted");
+    expect(posted[0].result.error).toContain("running outside the desktop app");
+  });
+
+  it("other actions without a handler keep the pre-R124 refusal (only screenshot_capture is panel-independent)", async () => {
+    captureState.nativeAvailable = true;
+    dispatchBrowserCommand(frame("cmd-r124-d", "tab-none", "eval", { script: "return 1" }));
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(captureState.staged).toBeNull();
+    expect(posted[0].result.ok).toBe(false);
+    expect(posted[0].result.error).toContain("no embedded browser panel is mounted");
+  });
+
+  it("a MOUNTED panel's handler still owns screenshot_capture (the fallback never shadows it)", async () => {
+    captureState.nativeAvailable = true;
+    registerBrowserCommandHandler("tab-mounted", () => ({ ok: true, data: { from: "panel" } }));
+    dispatchBrowserCommand(frame("cmd-r124-e", "tab-mounted", "screenshot_capture", { width: 1280, height: 720 }));
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(captureState.staged).toBeNull();
+    expect(posted[0].result.data).toEqual({ from: "panel" });
   });
 });

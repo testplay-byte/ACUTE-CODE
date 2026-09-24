@@ -140,6 +140,36 @@ const RELATIVE_LOCAL_FILE_RE = /^[^?#]*\.(?:html?|xhtml|svg|md|txt|json|css|js|m
  */
 const REGION_MIN_PX = 50;
 
+// ── ROUND-124 (R124): the FIXED CAPTURE RESOLUTION law ────────────────────
+//
+// The owner's verdict on the built-in browser's screenshots: "if the browser
+// window is way too small, then the resolution of the screenshot is way too
+// less… the screenshots… should be taken in a higher resolution, even if the
+// total area being taken up by the browser window is way too small. Meaning
+// the screenshot… should not be based on the actual device's resolution, but
+// it should be based on some other factors." THE OTHER FACTORS: a FIXED
+// LOGICAL capture resolution — 1280×720 (the HD band; the viewport preset
+// family's own laptop step on the width axis) — commanded at the tab's
+// webview for the duration of the grab, whatever the visible panel size is.
+// The frontend twin of these constants lives in
+// src/lib/agent-browser-capture.ts (BROWSER_CAPTURE_WIDTH/HEIGHT) as the
+// FALLBACK default; THIS side is the source of truth and threads the numbers
+// through the screenshot_capture command payload (the sidecar cannot import
+// frontend code — the normalizeLocalFileUrl lockstep precedent; the frontend
+// suite pins the same values).
+export const BROWSER_CAPTURE_WIDTH = 1280;
+/** R124: the fixed logical capture height (see BROWSER_CAPTURE_WIDTH). */
+export const BROWSER_CAPTURE_HEIGHT = 720;
+
+/**
+ * R124: the whole round-trip budget for the staged capture — the frontend's
+ * stage (bounds + zoom + show) + settle (400ms) + the sidecar's own capture
+ * route (its backend capsule carries a 20s timeout) + the restore. The
+ * evalJob precedent runs to 75s for human-paced jobs; a capture is one grab,
+ * so half that is generous.
+ */
+const BROWSER_CAPTURE_COMMAND_TIMEOUT_MS = 30_000;
+
 /**
  * R95-C: normalize a file:// URL or a bare LOCAL PATH (Windows drive, POSIX
  * absolute, UNC) into the canonical file:// URL the native chain accepts.
@@ -458,14 +488,14 @@ export const browserPlugin: PluginDefinition = {
         description:
           "Control the user's EMBEDDED BROWSER PANEL — a real in-app browser the user watches live. The panel lives INSIDE the app: browser_control never opens the user's real browsers or touches their desktop, and computer-use tools never drive the panel. Input is visible and human-paced (an agent cursor travels to each target; typing lands word-by-word) — pace actions in order like a person, never in parallel. Omit sessionId to drive this chat session's own tab (auto-opened).\n\n" +
           "How to work: (1) search first — navigate to a search engine and type the query, never guess URLs; (2) read_dom first on every new page — its structured outline (selectors, positions, pageState) beats screenshots for knowing the page; (3) navigation settles: after navigate/back/forward/reload, wait (or use sequence, which settles automatically) before interacting; (4) forms: typing alone never submits — type with submit:true, press_key Enter, or click the submit button; (5) bot walls: a '⚠ A verification wall' warning means stop retrying and call wait_for_verification while the owner solves it.\n\n" +
-          "The panel's page may differ from a fresh fetch (logins, JS): read for text, eval for the live DOM, screenshot for what the user sees. Full parameters live in the schema; deep craft lives in read_skill \"browser-use\".",
+          "The panel's page may differ from a fresh fetch (logins, JS): read for text, eval for the live DOM, screenshot for the page's pixels at a fixed 1280×720 capture resolution (it works even while the browser tab is hidden or the user is elsewhere in the app). Full parameters live in the schema; deep craft lives in read_skill \"browser-use\".",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
             action: {
               type: "string",
               description:
-                "navigate (open an absolute http(s) URL or a local HTML file — a file:// URL or an absolute local path; docs/source hosts like github.com navigate freely, other hosts ask the owner for permission first) | back | forward | reload (walk that tab's history) | set_viewport (resize the display the user sees — responsive-layout testing) | read (fresh server-side text of the current page; local file:// pages read from disk; works in every mode) | read_dom (structured JSON outline of the LIVE page — title, headings, every visible interactive element with a short CSS selector + text/label/value + x/y/w/h, form field names, and pageState: the URL hash/query + the aria-selected/aria-current tab, so after clicking a section or tab you can re-read and confirm it stuck; include 'all' adds the first 80 text paragraphs) | source (the live page's raw material: html/css/scripts) | click (the cursor visibly travels, hovers, then a full real pointer sequence fires at the element; the result reports where focus moved — a cheap effect check; native desktop mode only) | type (human word-by-word typing with real per-character events — React/Vue inputs register it, a ~1s beat after the focusing click; newlines become real Shift+Enter newlines, never an implicit submit; capped at 600 chars per call — split longer texts; native desktop mode only) | press_key (Enter inside a form triggers native form submission) | mouse (pointer ops at exact page coordinates from read_dom — the cursor visibly travels every path; native desktop mode only) | eval (run JavaScript inside the live page and get the value back — the page's own state, logins and JS included; native desktop mode only) | wait (probe the live page until its conditions hold — always call it after navigate before clicking/typing) | sequence (atomic multi-step chain in ONE call — steps settle automatically between) | screenshot (captures exactly what the panel shows, panel region only — needs the tab open and visible in the app's right sidebar; the vision description needs a vision model, the capture alone does not; prefer read/read_dom unless pixels are the question; native desktop mode only) | get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab) | wait_for_verification (bot-wall pause: a countdown card opens in the owner's chat while they solve it, then the page is re-checked honestly)",
+                "navigate (open an absolute http(s) URL or a local HTML file — a file:// URL or an absolute local path; docs/source hosts like github.com navigate freely, other hosts ask the owner for permission first) | back | forward | reload (walk that tab's history) | set_viewport (resize the display the user sees — responsive-layout testing) | read (fresh server-side text of the current page; local file:// pages read from disk; works in every mode) | read_dom (structured JSON outline of the LIVE page — title, headings, every visible interactive element with a short CSS selector + text/label/value + x/y/w/h, form field names, and pageState: the URL hash/query + the aria-selected/aria-current tab, so after clicking a section or tab you can re-read and confirm it stuck; include 'all' adds the first 80 text paragraphs) | source (the live page's raw material: html/css/scripts) | click (the cursor visibly travels, hovers, then a full real pointer sequence fires at the element; the result reports where focus moved — a cheap effect check; native desktop mode only) | type (human word-by-word typing with real per-character events — React/Vue inputs register it, a ~1s beat after the focusing click; newlines become real Shift+Enter newlines, never an implicit submit; capped at 600 chars per call — split longer texts; native desktop mode only) | press_key (Enter inside a form triggers native form submission) | mouse (pointer ops at exact page coordinates from read_dom — the cursor visibly travels every path; native desktop mode only) | eval (run JavaScript inside the live page and get the value back — the page's own state, logins and JS included; native desktop mode only) | wait (probe the live page until its conditions hold — always call it after navigate before clicking/typing) | sequence (atomic multi-step chain in ONE call — steps settle automatically between) | screenshot (captures the page at a FIXED 1280×720 capture resolution — independent of the visible browser panel's size, and works even while the tab is hidden or the user is elsewhere in the app; the vision description needs a vision model, the capture alone does not; prefer read/read_dom unless pixels are the question; native desktop mode only) | get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab) | wait_for_verification (bot-wall pause: a countdown card opens in the owner's chat while they solve it, then the page is re-checked honestly)",
               enum: [
                 "navigate",
                 "back",
@@ -1488,6 +1518,90 @@ export const browserPlugin: PluginDefinition = {
               //      ERROR naming the cause, and THIS side enforces a floor —
               //      a sub-50px region never reaches the backend.
               //
+              // ── ROUND-124 (R124): the STAGED capture — tried FIRST ────────
+              // The owner's verdict: "if I have the application closed, then it
+              // cannot take screenshots of the inbuilt browser"… "if the
+              // browser window is way too small, then the resolution of the
+              // screenshot is way too less"… "this should also happen if the
+              // user is in some other application, is in the settings of the
+              // program or something else." The app now stages the tab's
+              // webview at the FIXED capture resolution (1280×720 logical px,
+              // zoom 1 — BROWSER_CAPTURE_WIDTH/HEIGHT above) INSIDE the
+              // screenshot_capture command: bounds → settle → the sidecar's
+              // own capture route → restore, all atomic in one handler, so it
+              // works while the panel is hidden (keep-alive), unmounted
+              // (Settings — the module-level bridge fallback answers), or just
+              // small (the raster is the staged size, never the view size).
+              // The reply carries the PNG bytes + the HONEST geometry (the
+              // staged logical size, the raster size, whether the target was
+              // clamped to the app window).
+              //
+              // VERSION SKEW, both directions, honestly handled:
+              //  · an OLDER app answers "unknown browser command
+              //    'screenshot_capture'" → the LEGACY screenshot_meta path
+              //    below runs VERBATIM (its R98-G1 pins still guard it);
+              //  · an older app's generic reply that is not the capture
+              //    contract → same legacy fallback (never a fabricated
+              //    raster);
+              //  · THIS app's honest refusals (webview gone, minimized window,
+              //    capture failure) arrive as command ERRORS → surfaced
+              //    VERBATIM below (the model can act on the named cause).
+              let raster: { pngBase64: string; width: number; height: number } | null = null;
+              let captureNote = "";
+              if (typeof toolDeps.emit === "function") {
+                try {
+                  const reply = (await sendBrowserCommand(
+                    toolDeps.emit,
+                    sessionId,
+                    "screenshot_capture",
+                    { width: BROWSER_CAPTURE_WIDTH, height: BROWSER_CAPTURE_HEIGHT },
+                    BROWSER_CAPTURE_COMMAND_TIMEOUT_MS,
+                  )) as {
+                    pngBase64?: unknown;
+                    width?: unknown;
+                    height?: unknown;
+                    logicalWidth?: unknown;
+                    logicalHeight?: unknown;
+                    clamped?: unknown;
+                  } | null;
+                  if (
+                    reply !== null &&
+                    typeof reply === "object" &&
+                    typeof reply.pngBase64 === "string" &&
+                    reply.pngBase64.length >= 64 &&
+                    typeof reply.width === "number" &&
+                    typeof reply.height === "number"
+                  ) {
+                    raster = { pngBase64: reply.pngBase64, width: reply.width, height: reply.height };
+                    const logicalW = typeof reply.logicalWidth === "number" ? Math.round(reply.logicalWidth) : BROWSER_CAPTURE_WIDTH;
+                    const logicalH = typeof reply.logicalHeight === "number" ? Math.round(reply.logicalHeight) : BROWSER_CAPTURE_HEIGHT;
+                    captureNote =
+                      `staged ${logicalW}×${logicalH} logical px, ${raster.width}×${raster.height}px raster` +
+                      (reply.clamped === true ? " (clamped to the app window)" : "");
+                  }
+                  // A reply that is NOT the capture contract (an older app
+                  // answered with something else) falls through — raster stays
+                  // null and the legacy path below takes over. Never fabricate.
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : String(error);
+                  if (!/unknown browser command/i.test(message)) {
+                    // The NEW app refused honestly — surface the cause
+                    // verbatim (same shape as the legacy refusals below).
+                    return {
+                      ok: false,
+                      output:
+                        `browser_control: screenshot — ${message} ` +
+                        "The panel-only capture NEVER falls back to a full-screen shot. " +
+                        "Use action 'read' for the page text or 'read_dom' for the structured content (they work everywhere).",
+                    };
+                  }
+                  // "unknown browser command 'screenshot_capture'" → the app
+                  // predates R124 → the legacy path below, verbatim.
+                }
+              }
+              if (raster === null) {
+              // ── the LEGACY path (R62 D8 → R98-G1) — an older app's only ──
+              // surface, and the honest fallback when no staged reply came.
               // Ask the live UI for the panel's on-screen region (physical px).
               // R87 (the owner: screenshots must be the PANEL ONLY — never the
               // whole display): no answer / web mode → an HONEST ERROR steering
@@ -1566,12 +1680,15 @@ export const browserPlugin: PluginDefinition = {
               // singleton the computer-use dispatcher uses, so capture
               // behavior is identical when both features are on.
               const capture = getCaptureBackend();
-              const raster = await capture.backend.captureRegion(capture.run, region);
-              if ("error" in raster) {
+              const legacyRaster = await capture.backend.captureRegion(capture.run, region);
+              if ("error" in legacyRaster) {
                 return {
                   ok: false,
-                  output: `browser_control: screenshot — screen capture failed: ${raster.error}`,
+                  output: `browser_control: screenshot — screen capture failed: ${legacyRaster.error}`,
                 };
+              }
+              raster = legacyRaster;
+              captureNote = `panel region ${region.w}×${region.h}`;
               }
               // ── ROUND-67 (R67-D): the chat THUMBNAIL frame ────────────────
               // The owner: "if the agent takes screenshots… the images should
@@ -1608,10 +1725,14 @@ export const browserPlugin: PluginDefinition = {
               // seer. NO vision path → the honest refusal rides the SUCCESS
               // output (R94-E's canonical message): the capture is real, the
               // describe is not — steer to the text actions that work.
+              // R124: captureNote describes WHICH capture produced the bytes
+              // ("staged WxH logical px, WxH px raster" for the fixed-
+              // resolution path, "panel region WxH" for the legacy path) —
+              // never fabricated, always the honest geometry.
               if (!sessionHasVisionPath(toolDeps.db, toolDeps.mainModel)) {
                 return {
                   ok: true,
-                  output: `Browser panel screenshot captured (panel region ${region.w}×${region.h}, ${raster.width}×${raster.height}px, page ${state.currentUrl}) — shown to the owner in the chat thumbnail, but NOT described: ${NO_VISION_SCREENSHOT_MESSAGE} Use read / read_dom for the page text; call screenshot only when the owner needs to SEE the panel.`,
+                  output: `Browser panel screenshot captured (${captureNote}, ${raster.width}×${raster.height}px, page ${state.currentUrl}) — shown to the owner in the chat thumbnail, but NOT described: ${NO_VISION_SCREENSHOT_MESSAGE} Use read / read_dom for the page text; call screenshot only when the owner needs to SEE the panel.`,
                 };
               }
               const instruction =
@@ -1622,12 +1743,12 @@ export const browserPlugin: PluginDefinition = {
               if (vision.ok) {
                 return {
                   ok: true,
-                  output: `Browser panel screenshot (panel region ${region.w}×${region.h}, ${raster.width}×${raster.height}px, page ${state.currentUrl}) — vision (${vision.model}) says:\n${vision.text}`,
+                  output: `Browser panel screenshot (${captureNote}, ${raster.width}×${raster.height}px, page ${state.currentUrl}) — vision (${vision.model}) says:\n${vision.text}`,
                 };
               }
               return {
                 ok: true,
-                output: `Browser panel screenshot captured (panel region ${region.w}×${region.h}, ${raster.width}×${raster.height}px, page ${state.currentUrl}), but the vision description is unavailable: ${vision.error}`,
+                output: `Browser panel screenshot captured (${captureNote}, ${raster.width}×${raster.height}px, page ${state.currentUrl}), but the vision description is unavailable: ${vision.error}`,
               };
             }
 

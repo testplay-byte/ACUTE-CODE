@@ -104,16 +104,62 @@
  *       ride (120ms fade, 40ms late) is DELETED — it was a patch on the
  *       start race and read as a late pop now that the rise is whole.
  *
- * Frozen this round (verified untouched): the R118-A first-frame static
- * poses, SHEET_CHROME/SHEET_HEADER_ROW, SKIRT_PX, the clamp + skirt +
+ * R124 (the owner's round-124 verdict — "the bottom up menus are most
+ * definitely not proper. They have bad animations. Like I need you to
+ * properly and thoroughly work on these systems and improve them with
+ * proper planning and with proper care.") — the round's sheet-motion
+ * authority, SUPERSEDING the R120-S close law in two places and adding
+ * the one interaction the sheet never owned:
+ *
+ *   (1) DRAG-TO-DISMISS. Every platform bottom sheet owns the swipe-away;
+ *       this one offered only the scrim tap, the X, and Android's back
+ *       button — and its one visual grab affordance had been DELETED by
+ *       R118-A precisely because it was a lie ("a non-draggable sheet wears
+ *       no drag handle"). R124 makes the sheet GENUINELY draggable: the
+ *       header row (marked by a real grab pill) is the drag surface — a
+ *       native RNGH Pan gesture (react-native-gesture-handler is already a
+ *       dependency — the scanner rides it) feeds a Reanimated dragY shared
+ *       value, the panel follows the finger 1:1, the upward leg is a rubber
+ *       band (sheetRubberBandPx — the panel is bottom-anchored and must
+ *       never detach from the screen's edge), and the release obeys the
+ *       pure sheetDismissOnRelease law (velocity ≥ 900px/s downward OR ≥40%
+ *       of the measured travel ⇒ dismiss; anything less springs home on
+ *       the SHEET spring). The dismissal FOLDS the live drag into the
+ *       progress value — interp(1 − d/travel) + 0 === interp(1) + d on the
+ *       linear interpolation, so the handoff to the close timeline is
+ *       frame-identical — and then rides the ordinary onClose flow (the
+ *       caller's own state drives the exit; the API contract is untouched).
+ *       The Modal's content gains its own GestureHandlerRootView (RNGH's
+ *       documented Modal rule: an Android Modal is a separate native
+ *       window; the app root's gesture root does not reach it).
+ *   (2) THE EXIT MIRRORS THE ENTER. The R120-S close rode an ease-out-cubic
+ *       TIMING while the rise rode the SHEET spring — two different
+ *       physical materials for the same panel. The exit now falls the same
+ *       way it rises: withSpring(0, SHEET_SPRING), with the spring's own
+ *       completion callback owning the unmount (the never-zombie law
+ *       survives verbatim). The spring departs FAST (ζ 0.894 covers half
+ *       its travel in ~150ms) — the R119 linger defect does not return.
+ *       The SCRIM keeps its timed 220ms ease-out fade (SHEET_CLOSE_MS — a
+ *       pure fade is timing territory, motion.md §1).
+ *   (3) THE DIM BREATHES WITH THE SHEET. The scrim's opacity is now the
+ *       entrance fade MULTIPLIED by the panel's visible extent (how far
+ *       the panel still covers the screen): the dim grows with the rise,
+ *       thins with the finger during a drag, and fades with the exit — one
+ *       coupled system instead of two independent legs. A panel below the
+ *       fold never dims the page (the R118-A first-frame guard's spirit,
+ *       extended to every frame).
+ *
+ * Frozen (verified untouched): the R118-A first-frame static poses,
+ * SHEET_CHROME/SHEET_HEADER_ROW, SKIRT_PX, the clamp + skirt +
  * overScrollMode, maxHeightFraction, and the R118-E keyboard-ride mechanics
  * (the ride inherits the same SHEET_SPRING). Reduced motion: the panel
  * never travels — it snaps to its rest pose and the SCRIM fades (the only
  * leg that is a pure fade); the close snaps both and unmounts on the
- * scrim's callback.
+ * scrim's callback; a released drag snaps home (direct manipulation stays,
+ * its SETTLE animation goes).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Keyboard,
   Modal,
@@ -125,6 +171,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import Animated, {
   Easing,
   Extrapolation,
@@ -145,7 +192,9 @@ import {
   SHEET_SCRIM_OPEN_MS,
   SHEET_SHOW_ARM_FALLBACK_MS,
   SHEET_SPRING,
+  sheetDismissOnRelease,
   sheetPanelTravelPx,
+  sheetRubberBandPx,
 } from "@/design/motion";
 
 export interface SheetProps {
@@ -190,14 +239,22 @@ export function Sheet({
     Math.max(240, Math.round(windowHeight * maxHeightFraction) - SHEET_CHROME) +
     skirtDepth;
   // R115 — two independent values: the panel spring and the scrim's timed
-  // fade. Mount/unmount discipline: the panel springs IN on open, times OUT
-  // on close, and the Modal unmounts only after the exit settles — one clean
-  // animation, never a hard cut, never a flash of unanimated content.
+  // fade. Mount/unmount discipline: the panel springs IN on open, springs
+  // OUT on close (R124 — the exit mirrors the rise), and the Modal unmounts
+  // only after the exit settles — one clean animation, never a hard cut,
+  // never a flash of unanimated content.
   // R120-S — the values are armed from the Modal's own onShow (see the
   // R120-S header note (1)): the spring never burns frames against a window
   // that does not exist yet.
+  // R124 — dragY is the live drag offset (0 at rest; the finger's pull while
+  // the header drag is active). translateY = interp(progress) − rise + dragY.
   const panelProgress = useSharedValue(0);
   const scrimProgress = useSharedValue(0);
+  const dragY = useSharedValue(0);
+  /** The drag's continuity base: dragY at activation minus the activation-time
+   *  translation, so the panel never snaps by the ~6px the gesture needed to
+   *  activate. */
+  const dragBase = useSharedValue(0);
   const [rendered, setRendered] = useState(open);
   const reducedMotion = useReducedMotion();
 
@@ -233,16 +290,49 @@ export function Sheet({
   // SHEET_SCRIM_OPEN_MS ease-out cubic (completing as the settle lands) while
   // the panel rises its own measured height on the SHEET spring. Reduced
   // motion snaps the panel to rest — the scrim's fade is the only leg left.
+  // R124 — a fresh open begins from REST: any stale drag offset from an
+  // interrupted dismissal dies here (the gesture's dismissal fold already
+  // zeroes it — this is the belt to that suspenders).
   const armEntrance = useCallback(() => {
     if (armedRef.current || !openRef.current) return;
     armedRef.current = true;
     clearArmTimer();
+    dragY.value = 0;
     scrimProgress.value = withTiming(1, {
       duration: SHEET_SCRIM_OPEN_MS,
       easing: Easing.out(Easing.cubic),
     });
     panelProgress.value = reducedMotion ? 1 : withSpring(1, SHEET_SPRING);
-  }, [reducedMotion, clearArmTimer, scrimProgress, panelProgress]);
+  }, [reducedMotion, clearArmTimer, scrimProgress, panelProgress, dragY]);
+
+  // R120-S — the panel's MEASURED height (the travel tuning): accepted only
+  // while the progress sits at a rest end (0 or 1) so a mid-flight layout
+  // (the keyboard remainder growing the scroller's padding) can never
+  // re-base the travel under a moving panel — while a content swap that
+  // grows the panel AT REST still updates it, so the close always hides the
+  // whole panel.
+  const [panelHeight, setPanelHeight] = useState(0);
+  const acceptMeasuredHeight = useCallback(
+    (height: number) => {
+      const atRest = panelProgress.value === 0 || panelProgress.value === 1;
+      if (atRest) setPanelHeight(height);
+    },
+    [panelProgress],
+  );
+
+  // R120-S — the panel's slide travel: its OWN measured height once layout
+  // has reported (the settle is tuned for a 300-400dp disclosure — the old
+  // maxHeightFraction × window + 48 bound ran the same settle at ~2x
+  // velocity, the "zip" the owner read as ugly). The fraction bound holds
+  // only the pre-layout frames, while the panel is fully below the fold
+  // either way — the swap to the measured travel is invisible.
+  // (R124: declared above the open/close effect — the close's live-drag fold
+  // reads it, and the fold's math must see the SAME travel the panel style
+  // interpolates over.)
+  const panelTravel = sheetPanelTravelPx(
+    panelHeight,
+    Math.round(windowHeight * maxHeightFraction) + 48,
+  );
 
   useEffect(() => {
     openRef.current = open;
@@ -262,13 +352,29 @@ export function Sheet({
       armTimerRef.current = setTimeout(() => armEntrance(), SHEET_SHOW_ARM_FALLBACK_MS);
       return;
     }
-    // R120-S — THE CLOSE: one coordinated departure on frame one (the R119
-    // ease-in linger died — it covered 2.7% of the travel in two frames, the
-    // sheet sat there before leaving). Both legs ride SHEET_CLOSE_MS
-    // ease-out cubic; the panel's exact callback owns the unmount so the
-    // transparent Modal can never outlive its own exit and eat taps.
+    // R124 — THE CLOSE: the exit MIRRORS the enter (superseding R120-S's
+    // ease-out-cubic panel leg — a timing curve on the way down against a
+    // spring on the way up read as two different materials for the same
+    // panel). The panel falls on the SHEET spring with the spring's own
+    // completion callback owning the unmount (the never-zombie law survives
+    // verbatim — the Modal cannot outlive its own exit and eat taps); the
+    // spring departs FAST (ζ 0.894 covers half its travel in ~150ms — the
+    // R119 linger does not return). The SCRIM keeps its timed 220ms
+    // ease-out fade (a pure fade is timing territory, motion.md §1).
     clearArmTimer();
     if (!renderedRef.current) return;
+    // A LIVE drag folds into the progress value first — the SAME
+    // frame-identical handoff the gesture's dismissal branch rides (a close
+    // landing mid-drag: Android's back button while the finger is down, or
+    // the rebuilt disabled gesture cancelling an active one) — so the exit
+    // spring departs from the panel's exact current pose, never a snap.
+    if (dragY.value !== 0) {
+      panelProgress.value = Math.min(
+        1,
+        Math.max(0, panelProgress.value - dragY.value / Math.max(panelTravel, 1)),
+      );
+      dragY.value = 0;
+    }
     if (reducedMotion) {
       // motion.md §5 — reduced motion: the panel never travels. Both legs
       // snap; the scrim's fade carries the exit and its callback unmounts.
@@ -286,14 +392,10 @@ export function Sheet({
       duration: SHEET_CLOSE_MS,
       easing: Easing.out(Easing.cubic),
     });
-    panelProgress.value = withTiming(
-      0,
-      { duration: SHEET_CLOSE_MS, easing: Easing.out(Easing.cubic) },
-      (finished) => {
-        if (finished) runOnJS(hideRendered)();
-      },
-    );
-  }, [open, reducedMotion, armEntrance, clearArmTimer, hideRendered, panelProgress, scrimProgress]);
+    panelProgress.value = withSpring(0, SHEET_SPRING, (finished) => {
+      if (finished) runOnJS(hideRendered)();
+    });
+  }, [open, reducedMotion, armEntrance, clearArmTimer, hideRendered, panelProgress, scrimProgress, dragY, panelTravel]);
 
   // The fallback timer must never outlive the component.
   useEffect(() => clearArmTimer, [clearArmTimer]);
@@ -306,21 +408,6 @@ export function Sheet({
   const rise = useSharedValue(0);
   const [panelRestTopY, setPanelRestTopY] = useState(windowHeight);
   const [kbRemainder, setKbRemainder] = useState(0);
-
-  // R120-S — the panel's MEASURED height (the travel tuning): accepted only
-  // while the progress sits at a rest end (0 or 1) so a mid-flight layout
-  // (the keyboard remainder growing the scroller's padding) can never
-  // re-base the travel under a moving panel — while a content swap that
-  // grows the panel AT REST still updates it, so the close always hides the
-  // whole panel.
-  const [panelHeight, setPanelHeight] = useState(0);
-  const acceptMeasuredHeight = useCallback(
-    (height: number) => {
-      const atRest = panelProgress.value === 0 || panelProgress.value === 1;
-      if (atRest) setPanelHeight(height);
-    },
-    [panelProgress],
-  );
 
   useEffect(() => {
     if (!rendered) return;
@@ -347,23 +434,110 @@ export function Sheet({
     }
   }, [rendered, rise]);
 
-  // R120-S — the panel's slide travel: its OWN measured height once layout
-  // has reported (the settle is tuned for a 300-400dp disclosure — the old
-  // maxHeightFraction × window + 48 bound ran the same settle at ~2x
-  // velocity, the "zip" the owner read as ugly). The fraction bound holds
-  // only the pre-layout frames, while the panel is fully below the fold
-  // either way — the swap to the measured travel is invisible.
-  const panelTravel = sheetPanelTravelPx(
-    panelHeight,
-    Math.round(windowHeight * maxHeightFraction) + 48,
-  );
+  // ── R124 — THE DRAG-TO-DISMISS (the header row is the drag surface) ────────
 
-  const scrim = useAnimatedStyle(() => ({ opacity: scrimProgress.value }));
+  // The stable close proxy: a worklet captures its closure BY VALUE, so it
+  // cannot read a React ref's live `.current` — the gesture captures THIS
+  // stable callback instead, and it reads the ref on the JS thread at call
+  // time (the API contract is untouched: the caller's own `open` state still
+  // drives the exit; the drag only ever asks for the same onClose the scrim
+  // tap and the X circle ask for).
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+  const requestClose = useCallback(() => {
+    onCloseRef.current();
+  }, []);
+
+  // The travel the RELEASE law reads: a shared-value mirror of the
+  // React-side panelTravel (the worklet cannot read state), refreshed the
+  // moment the measured height lands.
+  const travelSv = useSharedValue(panelTravel);
+  useEffect(() => {
+    travelSv.value = panelTravel;
+  }, [panelTravel, travelSv]);
+
+  const panGesture = useMemo(() => {
+    return (
+      Gesture.Pan()
+        // Vertical intent claims the band: 12px of vertical travel either
+        // direction activates (down dismisses, up rubber-bands); a decisive
+        // horizontal move (±24px) FAILS the pan so the header's taps and the
+        // X circle's press never fight the drag.
+        .activeOffsetY([-12, 12])
+        .failOffsetX([-24, 24])
+        // Only while open — a falling (exiting) panel cannot be re-caught.
+        .enabled(open)
+        .onStart((event) => {
+          // The continuity base: dragY at activation minus the activation-time
+          // translation — the ~12px the gesture needed to activate never
+          // snaps the panel (the first onUpdate resumes the exact pose).
+          dragBase.value = dragY.value - event.translationY;
+        })
+        .onUpdate((event) => {
+          // Downward follows the finger 1:1; upward is the rubber band
+          // (sheetRubberBandPx — the panel is bottom-anchored, it must never
+          // detach from the screen's edge; a pure worklet-callable helper).
+          const raw = event.translationY + dragBase.value;
+          dragY.value = raw >= 0 ? raw : -sheetRubberBandPx(-raw);
+        })
+        .onEnd((event) => {
+          const travel = travelSv.value;
+          if (sheetDismissOnRelease(dragY.value, event.velocityY, travel)) {
+            // THE FOLD — frame-identical handoff into the exit: the panel's
+            // translateY is travel × (1 − progress) + dragY on the linear
+            // interpolation, so folding dragY into progress (p′ = p − d/travel)
+            // keeps the pose EXACTLY where the finger left it; the exit
+            // spring then departs from that pose with zero jump.
+            panelProgress.value = Math.min(
+              1,
+              Math.max(0, panelProgress.value - dragY.value / Math.max(travel, 1)),
+            );
+            dragY.value = 0;
+            runOnJS(requestClose)();
+          } else if (reducedMotion) {
+            // Direct manipulation stays; the settle animation goes.
+            dragY.value = 0;
+          } else {
+            // Springs home on the SHEET spring, carrying the release
+            // velocity — the panel returns the way it came.
+            dragY.value = withSpring(0, { ...SHEET_SPRING, velocity: event.velocityY });
+          }
+        })
+        .onFinalize((_event, success) => {
+          // A CANCELLED gesture (another handler claimed it, or `open`
+          // flipped false mid-drag and the rebuilt disabled gesture
+          // cancelled this one) must never strand the panel at a dragged
+          // offset — spring home. The success path already ran onEnd.
+          if (!success && dragY.value !== 0) {
+            dragY.value = reducedMotion ? 0 : withSpring(0, SHEET_SPRING);
+          }
+        })
+    );
+  }, [open, requestClose, travelSv, panelProgress, dragY, dragBase, reducedMotion]);
+
+  const scrim = useAnimatedStyle(() => {
+    // R124 — THE DIM BREATHES WITH THE SHEET: the entrance fade × the
+    // panel's visible extent (how far the panel still covers the screen).
+    // The dim grows with the rise, thins with the finger during a drag, and
+    // collapses with the exit — one coupled system instead of two
+    // independent legs; a panel below the fold never dims the page (the
+    // R118-A first-frame guard's spirit, extended to every frame).
+    const y =
+      interpolate(panelProgress.value, [0, 1], [panelTravel, 0], Extrapolation.CLAMP) -
+      rise.value +
+      dragY.value;
+    const extent = 1 - Math.min(1, Math.max(0, y) / Math.max(panelTravel, 1));
+    return { opacity: scrimProgress.value * extent };
+  });
   // R116-b — the clamp: the progress is interpolated on [0,1] with
   // Extrapolation.CLAMP, so even if a spring ever overshoots 1 the translateY
   // can never go positive past the resting position. R118-E — the keyboard
   // rise subtracts INSIDE the same worklet so the entrance and the IME ride
-  // compose without drift.
+  // compose without drift. R124 — dragY adds last: the live drag (and its
+  // rubber band, already clamped ≥ −SHEET_DRAG_RUBBER_PX) composes with the
+  // entrance and the keyboard ride as pure geometry.
   const panel = useAnimatedStyle(() => ({
     transform: [
       {
@@ -373,7 +547,9 @@ export function Sheet({
             [0, 1],
             [panelTravel, 0],
             Extrapolation.CLAMP,
-          ) - rise.value,
+          ) -
+          rise.value +
+          dragY.value,
       },
     ],
   }));
@@ -399,6 +575,11 @@ export function Sheet({
       onShow={onModalShown}
       testID={testID}
     >
+      {/* R124 — RNGH's documented Modal rule: an Android <Modal> is a
+          separate native window; the app root's GestureHandlerRootView does
+          not reach into it, so the sheet's own tree hosts its own gesture
+          root (the drag lives entirely inside this window). */}
+      <GestureHandlerRootView style={StyleSheet.absoluteFill}>
       <View style={StyleSheet.absoluteFill}>
         <Animated.View
           style={[
@@ -455,26 +636,43 @@ export function Sheet({
               },
             ]}
           >
-            {/* R118-A — the header row: TypeTitle left + the quiet circle
-                close (the back-button grammar the owner ruled). The grip is
-                DELETED — a non-draggable sheet wears no drag handle. */}
-            <View style={styles.headerRow}>
-              <Text
-                numberOfLines={1}
-                ellipsizeMode="tail"
-                style={[styles.headerTitle, { color: tokens.text }]}
-              >
-                {title}
-              </Text>
-              <QuietIconButton
-                icon={X}
-                iconSize={18}
-                size={36}
-                hitSlop={8}
-                onPress={onClose}
-                accessibilityLabel="Close"
-              />
-            </View>
+            {/* R124 — THE DRAG SURFACE: the grab band + the header row.
+                The header row keeps its R118-A anatomy (TypeTitle left + the
+                quiet circle close — the back-button grammar the owner ruled);
+                the GRAB PILL returns because the sheet is GENUINELY draggable
+                now — R118-A deleted the grip BECAUSE it was a lie ("a
+                non-draggable sheet wears no drag handle"), and R124 made it
+                the truth. The pill rides the panel's own paddingTop band
+                (marginTop −sm pulls the band up into it; the pill's 2+4+2 ===
+                sm — SHEET_CHROME's arithmetic is untouched). Vertical intent
+                (±12px) claims the drag; taps stay taps, the X circle's press
+                never fights the pan. */}
+            <GestureDetector gesture={panGesture}>
+              <View style={styles.headerWrap}>
+                <View
+                  accessibilityElementsHidden
+                  pointerEvents="none"
+                  style={[styles.grabPill, { backgroundColor: tokens.borderStrong }]}
+                />
+                <View style={styles.headerRow}>
+                  <Text
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                    style={[styles.headerTitle, { color: tokens.text }]}
+                  >
+                    {title}
+                  </Text>
+                  <QuietIconButton
+                    icon={X}
+                    iconSize={18}
+                    size={36}
+                    hitSlop={8}
+                    onPress={onClose}
+                    accessibilityLabel="Close"
+                  />
+                </View>
+              </View>
+            </GestureDetector>
             {/* R120-S — the R119 content ride is DELETED (a 120ms fade
                 starting 40ms late — a patch on the start race that read as a
                 pop): the panel is fully opaque and the fold itself reveals
@@ -507,6 +705,7 @@ export function Sheet({
           </Animated.View>
         </View>
       </View>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
@@ -536,6 +735,24 @@ const styles = StyleSheet.create({
     borderTopRightRadius: RADIUS_TILE,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
+  },
+  /** R124 — THE DRAG SURFACE: the grab band + the header row in ONE
+   *  GestureDetector subtree. marginTop −sm pulls the band up into the
+   *  panel's own paddingTop (the band re-spends the same 8px: pill 2+4+2),
+   *  so the panel's total chrome — and SHEET_CHROME's arithmetic — is
+   *  byte-identical to R118-A. */
+  headerWrap: { marginTop: -spacing.sm },
+  /** R124 — THE GRAB PILL: 36×4 rounded, centered in the band, in the quiet
+   *  borderStrong gray (18% ink) — the visible affordance that the header is
+   *  the drag surface; decorative (pointerEvents none, hidden from a11y —
+   *  the X circle stays the explicit close affordance for screen readers). */
+  grabPill: {
+    alignSelf: "center",
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    marginTop: 2,
+    marginBottom: 2,
   },
   /** R118-A — the header row: 48 tall, the title left-aligned with the
    *  fields below (the panel's own lg gutter is the row's gutter), the

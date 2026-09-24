@@ -157,12 +157,16 @@ describe("shortModelName — the center headline's cut", () => {
 });
 
 describe("DonutChart — the component surface (compile-time pins)", () => {
-  it("keeps the R115-N prop contract (a removed prop breaks this file's compile)", () => {
+  it("keeps the R115-N prop contract + the R124 stroke scale (a removed prop breaks this file's compile)", () => {
     // The array literal is typed keyof DonutChartProps — deleting any prop
     // from the interface fails `npx tsc --noEmit` on THIS line.
+    // R124: `strokeWidth` joins the contract (ADDITIVE — the proportionate
+    // rings pass a scaled stroke; the 120px-era default 8 stands for every
+    // other caller).
     const contract: Array<keyof DonutChartProps> = [
       "segments",
       "size",
+      "strokeWidth",
       "dataKey",
       "highlighted",
       "trackColor",
@@ -170,6 +174,6 @@ describe("DonutChart — the component surface (compile-time pins)", () => {
       "accessibilityLabel",
       "testID",
     ];
-    expect(contract).toHaveLength(8);
+    expect(contract).toHaveLength(9);
   });
 });

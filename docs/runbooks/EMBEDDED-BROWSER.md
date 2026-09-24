@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-24 round-124 -->
 # EMBEDDED BROWSER — the agent's in-app browser panel (owner's guide)
 
 **Status:** normative · **Established:** round-43 (the panel + the tool);

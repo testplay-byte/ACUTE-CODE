@@ -4,9 +4,19 @@
  * strokeDasharray + per-segment-rotation ring math applied to N segments
  * instead of one fill). The phone's dashboard renders it inside the "Top
  * models" card: the ring carries the token shares, the legend rows beside it
- * are the leaderboard folded in, and the center hole carries the top model +
- * its share (the caller's `center` slot — theme primitives live there, this
- * module stays theme-free and takes hues/colors as data).
+ * are the leaderboard folded in, and the center hole carries the total
+ * (the caller's `center` slot — theme primitives live there, this module
+ * stays theme-free and takes hues/colors as data).
+ *
+ * R124 (the owner's round-124 verdict — "the model's last month donut chart
+ * is not proper. It is looking ugly and bad"): the R120-S full-card-width
+ * stretch is RETIRED — a ~300dp ring wearing an 8dp stroke read as a thin
+ * wireframe hoop with an echoing hole. The dashboard now composes the ring
+ * at a PROPORTIONATE size BESIDE the ranked legend (one row, no dead bands,
+ * no wire ring) and passes the new `strokeWidth` prop so the ring carries a
+ * solid, scaled stroke (~11% of its diameter, clamped 12–18) instead of the
+ * 120px-era fixed 8. The prop is ADDITIVE with the old default, so every
+ * other DonutChart caller (none today) renders byte-identically.
  *
  * MOTION (motion.md §4.6): the ring SWEEPS in once per data load — every arc
  * animates its visible length 0 → its share with withTiming 500ms
@@ -57,7 +67,9 @@ import Animated, {
 import type { SharedValue } from "react-native-reanimated";
 import { DONUT_SWEEP_MS, SPRING } from "@/design/motion";
 
-/** The ring's stroke width — PC parity (ModelDonut's 6px track). */
+/** The ring's stroke width — PC parity (ModelDonut's 6px track) at the
+ *  R115-N 120px ring's scale; the R124 proportionate rings pass their own
+ *  scaled stroke through the `strokeWidth` prop (this stays the default). */
 export const DONUT_STROKE = 8;
 
 /** The resting opacity of NON-highlighted arcs (the mutual-highlight dim). */
@@ -144,6 +156,7 @@ function DonutArcView({
   circumference,
   radius,
   size,
+  strokeWidth,
   active,
   progress,
 }: {
@@ -151,6 +164,7 @@ function DonutArcView({
   circumference: number;
   radius: number;
   size: number;
+  strokeWidth: number;
   active: boolean;
   progress: SharedValue<number>;
 }) {
@@ -182,7 +196,7 @@ function DonutArcView({
       r={radius}
       fill="none"
       stroke={arc.hue}
-      strokeWidth={DONUT_STROKE}
+      strokeWidth={strokeWidth}
       strokeDasharray={`${arc.dash} ${circumference}`}
       strokeDashoffset={0}
       transform={`rotate(${arc.rotation.toFixed(3)} ${size / 2} ${size / 2})`}
@@ -195,11 +209,16 @@ function DonutArcView({
 export interface DonutChartProps {
   /** The models to ring — order = rank (the caller sorts; hue by that rank). */
   segments: DonutSegment[];
-  /** Ring diameter (px) — default 120, PC parity. The dashboard passes its
-   *  card's full content width (── ROUND-120 (why): ── the owner's "a lot of
-   *  empty area on the right sides and the left sides" — the fixed 120px ring
-   *  sat centered with dead side bands; the ring now fills the card). */
+  /** Ring diameter (px) — default 120, PC parity. The R120-S full-card-width
+   *  stretch is RETIRED by R124: the dashboard now passes a PROPORTIONATE
+   *  size and composes the ranked legend beside the ring (one row — no dead
+   *  side bands, no wire-thin hoop). */
   size?: number;
+  /** The ring's stroke width (px) — default 8 (DONUT_STROKE, the 120px-era
+   *  PC-parity default). R124: proportionate rings pass a scaled stroke
+   *  (~11% of the diameter, clamped 12–18) so a 140–170dp ring reads as a
+   *  SOLID chart, not a wireframe. */
+  strokeWidth?: number;
   /**
    * The dataset's identity — the sweep re-triggers whenever it changes (once
    * per data load; window switches and reloads change it, identical refreshes
@@ -219,6 +238,7 @@ export interface DonutChartProps {
 export function DonutChart({
   segments,
   size = 120,
+  strokeWidth = DONUT_STROKE,
   dataKey,
   highlighted = null,
   trackColor,
@@ -228,7 +248,7 @@ export function DonutChart({
 }: DonutChartProps) {
   const reduced = useReducedMotion();
   const progress = useSharedValue(0);
-  const radius = (size - DONUT_STROKE) / 2;
+  const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const arcs = useMemo(
     () => donutSegments(segments, circumference),
@@ -265,7 +285,7 @@ export function DonutChart({
           r={radius}
           fill="none"
           stroke={trackColor}
-          strokeWidth={DONUT_STROKE}
+          strokeWidth={strokeWidth}
         />
         {arcs.map((arc, index) =>
           arc.share > 0 ? (
@@ -275,6 +295,7 @@ export function DonutChart({
               circumference={circumference}
               radius={radius}
               size={size}
+              strokeWidth={strokeWidth}
               active={highlighted === null || highlighted === index}
               progress={progress}
             />

@@ -1,24 +1,25 @@
 // @vitest-environment happy-dom
 /**
- * ROUND-120 (R120-C-PC, item 34) + ROUND-123 (R123-W-nav) tests — the
- * MESSAGE TIMELINE: the left-rail quick navigation over the transcript.
+ * ROUND-120 (R120-C-PC, item 34) + ROUND-123 (R123-W-nav) + ROUND-124 tests —
+ * the MESSAGE TIMELINE: the left-rail quick navigation over the transcript.
  *
  * R120 pinned the contract (one bar per exchange, hover-proximity growth,
  * the pointer-owned preview, click-to-scroll). R123 redesigned the GEOMETRY
- * per the owner's round-123 verdict ("a ROW kind of view … there should
- * always be some padding on the left side … I can hover near it on the
- * right side or left side, but there should be a limit"):
- *  · ROWS — every exchange is a horizontal chip (a short WIDE row, not a
- *    tall thin bar), and the rows stack vertically in the rail;
- *  · the LEFT GUTTER — the rail roots at left-3 (the always-present
- *    padding) and the rows right-anchor their chips (justify-end + a fixed
- *    pr-2 slack), so growth extends LEFTWARD into the gutter and the edge
- *    facing the transcript text never moves;
- *  · the CORRIDOR — the interactive column (w-8 = 32px) is WIDER than the
- *    visual rows (10px rest / 22px magnified): hovering BESIDE a row
- *    registers, and pointerleave on the corridor is the limit;
- *  · proximity magnification now scales BOTH legs (height AND width) on
- *    the same linear falloff.
+ * into rows + the corridor. R124 answers the owner's four verdicts:
+ *  · WIDTH-DOMINANT growth — the magnified chip is 28×9 (a clearly WIDER
+ *    pill), never R123's 22×24 near-square that rounded-full read as a
+ *    circle ("the pill should get more wider");
+ *  · the SCROLL-OWNED highlight — activeIndexFromScroll picks the exchange
+ *    owning the viewport's upper-middle (or the last while pinned at the
+ *    bottom); a click sets it immediately ("the bottom pill would always
+ *    be the highlighted one" — dead);
+ *  · the CLICK-DISMISSED preview — the popover hides on the spot and stays
+ *    hidden until the pointer genuinely moves (>6px) ("the message does
+ *    not automatically disappear" — dead);
+ *  · the BORDER-HUGGING rail — left-1 + LEFT-ANCHORED chips (pl-1.5: the
+ *    pill's left edge 10px from the border), growth extends RIGHTWARD into
+ *    the w-9 corridor ("the pills should be fully aligned to the left
+ *    side… just leaving a small padding").
  *
  * The proximity math drives through mocked rects — happy-dom has no layout,
  * so getBoundingClientRect is programmed (see programGeometry). The
@@ -28,6 +29,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import {
   MessageTimeline,
+  activeIndexFromScroll,
   proximityFactor,
   proximityHeight,
   proximityWidth,
@@ -43,12 +45,12 @@ const EXCHANGES: TimelineExchange[] = [
 /** happy-dom has NO layout — every rect is 0×0 at (0,0). The rail's pointer
  * math reads the strip's + each row's rect, so the tests program a
  * deterministic geometry KEYED BY ELEMENT (call-order-independent — the
- * preview's nearest-row pass reads the same rects): the strip is 32×400
- * (the R123 corridor: w-8) at the origin; row i rests at top = 20 + i * 12
+ * preview's nearest-row pass reads the same rects): the strip is 36×400
+ * (the R124 corridor: w-9) at the origin; row i rests at top = 20 + i * 12
  * with the programmed height. programGeometry runs AFTER render (the rows
  * must exist). */
 function programGeometry(heights: number[]): void {
-  const stripRect = { top: 0, left: 0, right: 32, bottom: 400, width: 32, height: 400, x: 0, y: 0, toJSON: () => ({}) };
+  const stripRect = { top: 0, left: 0, right: 36, bottom: 400, width: 36, height: 400, x: 0, y: 0, toJSON: () => ({}) };
   const rectMap = new WeakMap<HTMLElement, DOMRect>();
   const strip = document.querySelector('[data-testid="message-timeline"]') as HTMLElement | null;
   if (strip !== null) rectMap.set(strip, stripRect as DOMRect);
@@ -57,9 +59,9 @@ function programGeometry(heights: number[]): void {
     rectMap.set(row, {
       top,
       left: 0,
-      right: 32,
+      right: 36,
       bottom: top + heights[i % Math.max(heights.length, 1)],
-      width: 32,
+      width: 36,
       height: heights[i % Math.max(heights.length, 1)],
       x: 0,
       y: top,
@@ -78,16 +80,6 @@ function renderTimeline(exchanges: TimelineExchange[] = EXCHANGES): HTMLElement 
   return utils.container;
 }
 
-function rows(): HTMLElement[] {
-  return Array.from(document.querySelectorAll('[data-testid="message-timeline-bar"]')) as HTMLElement[];
-}
-
-/** The corridor — the interactive column (the root's one interactive
- * child; the pointermove/pointerleave surface). */
-function corridor(): HTMLElement {
-  return document.querySelector('[data-testid="message-timeline"] > div') as HTMLElement;
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -97,7 +89,19 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("MessageTimeline structure (R120 item 34 + the R123-W-nav row redesign)", () => {
+function rows(): HTMLElement[] {
+  return Array.from(document.querySelectorAll('[data-testid="message-timeline-bar"]')) as HTMLElement[];
+}
+
+function corridor(): HTMLElement {
+  return document.querySelector('[data-testid="message-timeline"] > div') as HTMLElement;
+}
+
+/** happy-dom requestAnimationFrame is real but async — the scroll listener's
+ * rAF throttle needs one flush. */
+const flushRaf = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 16));
+
+describe("MessageTimeline structure (R120 + R123 + the R124 verdicts)", () => {
   it("ONE ROW PER USER EXCHANGE — horizontal chips stacked in a vertical rail, every row an honest, labeled button", () => {
     renderTimeline();
     programGeometry([6, 6, 8]);
@@ -115,37 +119,37 @@ describe("MessageTimeline structure (R120 item 34 + the R123-W-nav row redesign)
     }
     expect(list[0].getAttribute("aria-label")).toContain("first question");
 
-    // THE ROW GRAMMAR (R123): a horizontal chip — a short WIDE row (10px
-    // wide × 6px tall at rest), not R120's tall thin bar. The rows stack
-    // vertically (the corridor is a flex-col) and right-anchor their
-    // chips (justify-end + the fixed pr-2 slack): growth extends
-    // LEFTWARD into the gutter, never rightward toward the text.
+    // THE ROW GRAMMAR (R124 verdict 4): a horizontal pill that LEFT-ANCHORS
+    // (justify-start + the fixed pl-1.5 slack — the pill's left edge sits
+    // 10px from the viewport's border, "fully aligned to the left side…
+    // just leaving a small padding"), so growth extends RIGHTWARD into the
+    // corridor, never leftward past the border.
     const corridorEl = corridor();
     expect(corridorEl.className).toContain("flex-col");
-    expect(list[0].className).toContain("justify-end");
-    expect(list[0].className).toContain("pr-2");
+    expect(list[0].className).toContain("justify-start");
+    expect(list[0].className).toContain("pl-1.5");
     expect(list[0].style.height).toBe("6px");
     const chip = list[0].querySelector("span") as HTMLElement;
     expect(chip.style.width).toBe("10px");
   });
 
-  it("the LEFT GUTTER + the CORRIDOR — the rail keeps always-present padding and a hit band wider than the visual rows", () => {
+  it("the BORDER-HUGGING rail + the CORRIDOR — a small left padding, and a hit band wider than the visual rows", () => {
     renderTimeline();
     programGeometry([6, 6, 8]);
 
     const strip = document.querySelector('[data-testid="message-timeline"]') as HTMLElement;
-    // left-3: the always-present left gutter (12px in from the transcript
-    // viewport's edge — the owner's "there should always be some padding
-    // on the left side"). w-8: the corridor's bound (32px).
-    expect(strip.className).toContain("left-3");
-    expect(strip.className).toContain("w-8");
+    // left-1 (4px — "just leaving a small padding") + w-9: the corridor's
+    // bound (36px). The reading column's own pl floor clears it at every
+    // window size, so the pills never ride the text.
+    expect(strip.className).toContain("left-1");
+    expect(strip.className).toContain("w-9");
 
     // The corridor is WIDER than the visual rows — at rest AND at full
     // magnification: the rest chip is 10px wide (pinned from the DOM
     // below) and the pure width helper pins the magnified chip at
-    // MAX_WIDTH 22px; both sit inside the 32px band, so the grown row
+    // MAX_WIDTH 28px; both sit inside the 36px band, so the grown row
     // never leaves it.
-    expect(proximityWidth(10, 0)).toBe(22);
+    expect(proximityWidth(10, 0)).toBe(28);
     const chip = rows()[0].querySelector("span") as HTMLElement;
     expect(chip.style.width).toBe("10px");
 
@@ -155,21 +159,22 @@ describe("MessageTimeline structure (R120 item 34 + the R123-W-nav row redesign)
     expect(corridor().className).toContain("pointer-events-auto");
   });
 
-  it("the CURRENT exchange's row is highlighted — accent fill + data-current + a touch bigger at rest", () => {
+  it("the ACTIVE row is the LAST exchange by default (no scroller — the pinned-bottom honest default), accent-filled + a touch bigger at rest", () => {
     renderTimeline();
     programGeometry([6, 6, 8]);
 
     const list = rows();
     expect(list[0].getAttribute("data-current")).toBe("false");
     expect(list[2].getAttribute("data-current")).toBe("true");
+    expect(list[2].getAttribute("aria-current")).toBe("true");
     const restingFill = list[0].querySelector("span") as HTMLElement;
-    const currentFill = list[2].querySelector("span") as HTMLElement;
+    const activeFill = list[2].querySelector("span") as HTMLElement;
     expect(restingFill.className).toContain("bg-muted");
-    expect(currentFill.className).toContain("bg-accent");
-    // The current row rests a touch taller AND wider than the others.
+    expect(activeFill.className).toContain("bg-accent");
+    // The active row rests a touch taller AND wider than the others.
     expect(list[2].style.height).toBe("8px");
     expect(list[0].style.height).toBe("6px");
-    expect((list[2].querySelector("span") as HTMLElement).style.width).toBe("12px");
+    expect((list[2].querySelector("span") as HTMLElement).style.width).toBe("14px");
     expect((list[0].querySelector("span") as HTMLElement).style.width).toBe("10px");
   });
 
@@ -179,7 +184,7 @@ describe("MessageTimeline structure (R120 item 34 + the R123-W-nav row redesign)
   });
 });
 
-describe("MessageTimeline proximity scaling (the dock magnification, both legs)", () => {
+describe("MessageTimeline proximity scaling (the R124 width-dominant magnification)", () => {
   it("the pure falloff: 1 at the pointer, linear decay to 0 at the radius — height AND width", () => {
     expect(proximityFactor(0)).toBe(1);
     expect(proximityFactor(28)).toBeCloseTo(0.5, 5);
@@ -188,19 +193,20 @@ describe("MessageTimeline proximity scaling (the dock magnification, both legs)"
     // A tighter radius decays faster.
     expect(proximityFactor(10, 20)).toBeCloseTo(0.5, 5);
 
-    // The height leg: rest 6 → max 24 across the same falloff.
-    expect(proximityHeight(6, 0)).toBe(24);
+    // The height leg: rest 6 → max 9 across the same falloff — a MODEST
+    // thickness gain (R124 verdict 1: the pill must read as a WIDER pill,
+    // never a circle; the near-square 22×24 is dead).
+    expect(proximityHeight(6, 0)).toBe(9);
     expect(proximityHeight(6, 56)).toBe(6);
-    // The width leg: rest 10 → max 22 (a modest growth — a grown chip,
-    // never a block).
-    expect(proximityWidth(10, 0)).toBe(22);
-    expect(proximityWidth(10, 28)).toBeCloseTo(10 + 12 * 0.5, 5);
+    // The width leg — THE DOMINANT ONE: rest 10 → max 28 (nearly triple).
+    expect(proximityWidth(10, 0)).toBe(28);
+    expect(proximityWidth(10, 28)).toBeCloseTo(10 + 18 * 0.5, 5);
     expect(proximityWidth(10, 56)).toBe(10);
-    expect(proximityWidth(12, 10, 20)).toBeCloseTo(12 + 10 * 0.5, 5);
+    expect(proximityWidth(14, 10, 20)).toBeCloseTo(14 + 14 * 0.5, 5);
   });
 
-  it("the nearest row grows to the max (height AND width); falloff with distance; the pointer leaving restores rest", () => {
-    // Resting heights: 6, 6, 8 (the last is current); widths 10, 10, 12.
+  it("the nearest row grows WIDER (and only a touch taller); falloff with distance; the pointer leaving restores rest", () => {
+    // Resting heights: 6, 6, 8 (the last is active); widths 10, 10, 14.
     // Row centers with the programmed tops 20 + i*12: 23, 35, 48.
     renderTimeline();
     programGeometry([6, 6, 8]);
@@ -210,17 +216,17 @@ describe("MessageTimeline proximity scaling (the dock magnification, both legs)"
     fireEvent.pointerMove(corridorEl, { clientY: 35, clientX: 20 });
 
     const list = rows();
-    // Row 1 (nearest) grows to the full max on BOTH legs.
-    expect(list[1].style.height).toBe("24px");
-    expect((list[1].querySelector("span") as HTMLElement).style.width).toBe("22px");
-    // Row 0 (distance 12): 6 + 18 * (1 - 12/56) ≈ 20.14px tall, and
-    // 10 + 12 * (44/56) ≈ 19.43px wide.
-    expect(Number.parseFloat(list[0].style.height)).toBeCloseTo(6 + 18 * (44 / 56), 3);
-    expect(Number.parseFloat((list[0].querySelector("span") as HTMLElement).style.width)).toBeCloseTo(10 + 12 * (44 / 56), 3);
-    // Row 2 (distance 13, resting 8/12): 8 + 16 * (43/56) ≈ 20.29px tall,
-    // 12 + 10 * (43/56) ≈ 19.68px wide.
-    expect(Number.parseFloat(list[2].style.height)).toBeCloseTo(8 + 16 * (43 / 56), 3);
-    expect(Number.parseFloat((list[2].querySelector("span") as HTMLElement).style.width)).toBeCloseTo(12 + 10 * (43 / 56), 3);
+    // Row 1 (nearest) grows to the full max on BOTH legs — 9px tall × 28px
+    // wide: a clearly WIDER pill, never a circle.
+    expect(list[1].style.height).toBe("9px");
+    expect((list[1].querySelector("span") as HTMLElement).style.width).toBe("28px");
+    // Row 0 (distance 12): 6 + 3 * (44/56) tall, 10 + 18 * (44/56) wide.
+    expect(Number.parseFloat(list[0].style.height)).toBeCloseTo(6 + 3 * (44 / 56), 3);
+    expect(Number.parseFloat((list[0].querySelector("span") as HTMLElement).style.width)).toBeCloseTo(10 + 18 * (44 / 56), 3);
+    // Row 2 (distance 13, resting 8/14): 8 + 1 * (43/56) tall,
+    // 14 + 14 * (43/56) wide.
+    expect(Number.parseFloat(list[2].style.height)).toBeCloseTo(8 + 1 * (43 / 56), 3);
+    expect(Number.parseFloat((list[2].querySelector("span") as HTMLElement).style.width)).toBeCloseTo(14 + 14 * (43 / 56), 3);
 
     // The pointer leaves the corridor — every row returns to rest (the
     // owner's limit: the effect stops at the corridor's edges).
@@ -230,7 +236,7 @@ describe("MessageTimeline proximity scaling (the dock magnification, both legs)"
     expect(list[2].style.height).toBe("8px");
     expect((list[0].querySelector("span") as HTMLElement).style.width).toBe("10px");
     expect((list[1].querySelector("span") as HTMLElement).style.width).toBe("10px");
-    expect((list[2].querySelector("span") as HTMLElement).style.width).toBe("12px");
+    expect((list[2].querySelector("span") as HTMLElement).style.width).toBe("14px");
   });
 
   it("hovering NEAR a row — beside it on either side of the corridor — still registers (no dead aim needed)", () => {
@@ -238,17 +244,18 @@ describe("MessageTimeline proximity scaling (the dock magnification, both legs)"
     programGeometry([6, 6, 8]);
     const corridorEl = corridor();
 
-    // The corridor (32px wide) is wider than the visual chips: beside a
-    // rest chip there is gutter slack to its LEFT and pr-2 slack to its
-    // RIGHT. A pointer riding that slack — off the chip, still inside the
-    // corridor — registers the same magnification (the handler lives on
-    // the corridor, and the row buttons tile its full width, so the click
-    // lands too). happy-dom has no layout: the corridor IS the element the
-    // event lands on, and the magnified chip (22px) stays inside the band.
-    fireEvent.pointerMove(corridorEl, { clientY: 35, clientX: 40 });
+    // The corridor (36px wide) is wider than the visual chips: beside a
+    // rest chip there is the border gutter to its LEFT and the corridor's
+    // tail to its RIGHT. A pointer riding that slack — off the chip, still
+    // inside the corridor — registers the same magnification (the handler
+    // lives on the corridor, and the row buttons tile its full width, so
+    // the click lands too). happy-dom has no layout: the corridor IS the
+    // element the event lands on, and the magnified chip (28px) stays
+    // inside the band.
+    fireEvent.pointerMove(corridorEl, { clientY: 35, clientX: 34 });
     const list = rows();
-    expect(list[1].style.height).toBe("24px");
-    expect((list[1].querySelector("span") as HTMLElement).style.width).toBe("22px");
+    expect(list[1].style.height).toBe("9px");
+    expect((list[1].querySelector("span") as HTMLElement).style.width).toBe("28px");
     // The preview follows the nearest row from the slack too.
     expect(document.querySelector('[data-testid="message-timeline-preview"]')).not.toBeNull();
 
@@ -306,6 +313,36 @@ describe("MessageTimeline preview popover (2 lines user + 2 lines agent)", () =>
     fireEvent.blur(rows()[0]);
     expect(document.querySelector('[data-testid="message-timeline-preview"]')).toBeNull();
   });
+
+  it("R124 verdict 3 — CLICKING a row DISMISSES the preview on the spot; it stays dismissed until the pointer genuinely moves (>6px)", () => {
+    renderTimeline();
+    programGeometry([6, 6, 8]);
+    const corridorEl = corridor();
+
+    // The preview is open (pointer at row 1's center).
+    fireEvent.pointerMove(corridorEl, { clientY: 35, clientX: 20 });
+    expect(document.querySelector('[data-testid="message-timeline-preview"]')).not.toBeNull();
+
+    // CLICK row 1 — the popover disappears immediately (the jump's target
+    // text is not shadowed by the just-used preview).
+    // The click rides the pointer's own position (a real click's coords ARE
+    // the hover coords — happy-dom's fireEvent defaults them to 0, so the
+    // test passes them explicitly).
+    fireEvent.click(rows()[1], { clientX: 20, clientY: 35 });
+    expect(document.querySelector('[data-testid="message-timeline-preview"]')).toBeNull();
+
+    // A small pointer jiggle (<6px) keeps the dismissal armed.
+    fireEvent.pointerMove(corridorEl, { clientY: 36, clientX: 22 });
+    expect(document.querySelector('[data-testid="message-timeline-preview"]')).toBeNull();
+    // …while the magnification keeps tracking the corridor the whole time
+    // (row 1 is now the ACTIVE row — resting 8 — and the pointer sits 1px
+    // from its center: 8 + 1 * (1 - 1/56) ≈ 8.98px tall).
+    expect(Number.parseFloat(rows()[1].style.height)).toBeCloseTo(8 + 1 * (55 / 56), 3);
+
+    // A GENUINE move (>6px from the click point) wakes the preview again.
+    fireEvent.pointerMove(corridorEl, { clientY: 35, clientX: 40 });
+    expect(document.querySelector('[data-testid="message-timeline-preview"]')).not.toBeNull();
+  });
 });
 
 describe("MessageTimeline click-to-scroll", () => {
@@ -330,5 +367,112 @@ describe("MessageTimeline click-to-scroll", () => {
     // A row whose anchor is NOT in the DOM is a quiet no-op (never a crash).
     fireEvent.click(rows()[2]);
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
+  it("R124 verdict 2 — clicking a row makes THAT row the active one immediately (not the forever-bottom)", () => {
+    programGeometry([6, 6, 8]);
+    render(
+      <div>
+        <div id="chat-item-1">a</div>
+        <div id="chat-item-5">b</div>
+        <div style={{ position: "relative", height: 400, width: 600 }}>
+          <MessageTimeline exchanges={EXCHANGES} />
+        </div>
+      </div>,
+    );
+
+    // Before any click: the last exchange owns the highlight (the default).
+    expect(rows()[2].getAttribute("data-current")).toBe("true");
+    expect(rows()[0].getAttribute("data-current")).toBe("false");
+
+    // Clicking the TOP row — the highlight follows THE CLICKED row, not the
+    // bottom ("when I tried clicking on the very top pill, still the bottom
+    // pill was highlighted" — dead).
+    fireEvent.click(rows()[0]);
+    expect(rows()[0].getAttribute("data-current")).toBe("true");
+    expect(rows()[2].getAttribute("data-current")).toBe("false");
+    const fill = rows()[0].querySelector("span") as HTMLElement;
+    expect(fill.className).toContain("bg-accent");
+  });
+});
+
+describe("R124 verdict 2 — the SCROLL-OWNED active row", () => {
+  it("activeIndexFromScroll (pure): pinned at the bottom → the LAST exchange; otherwise the last anchor above the upper-middle line; nothing above → the first", () => {
+    // Pinned at the bottom: scrollTop + height ≥ scrollHeight - 72.
+    expect(activeIndexFromScroll([100, 300, 500], 0, 400, 1600, 2000)).toBe(2);
+    expect(activeIndexFromScroll([100, 300, 500], 0, 400, 1528, 2000)).toBe(2);
+    // Mid-scroll: the line sits at top + 400*0.45 = 180; anchors 50 and 100
+    // sit above it, anchor 500 below → the LAST above the line owns (1).
+    expect(activeIndexFromScroll([50, 100, 500], 0, 400, 800, 2000)).toBe(1);
+    // Reading the first exchange (anchor 0 above the line, anchor 1 below).
+    expect(activeIndexFromScroll([100, 300, 500], 0, 400, 200, 2000)).toBe(0);
+    // Nothing above the line yet → the first exchange.
+    expect(activeIndexFromScroll([400, 800, 1200], 0, 400, 0, 2000)).toBe(0);
+    // A null anchor (an anchor not yet in the DOM) is skipped, not fatal —
+    // anchor 1 (top 100, above the line) still owns the highlight.
+    expect(activeIndexFromScroll([null, 100, 500], 0, 400, 800, 2000)).toBe(1);
+    // ALL anchors null → the first exchange is the honest default.
+    expect(activeIndexFromScroll([null, null, null], 0, 400, 800, 2000)).toBe(0);
+    // Empty list → -1 (no highlight to own).
+    expect(activeIndexFromScroll([], 0, 400, 0, 2000)).toBe(-1);
+  });
+
+  it("the scroll listener moves the highlight as the reader scrolls (rAF-throttled), and the bottom pin restores the LAST row", async () => {
+    // The scroller + the anchors + the rail, all under one program of
+    // rects: the scroller is 400 tall at the origin; anchor tops 100/300/500.
+    const scrollerRef = { current: null as HTMLDivElement | null };
+    const anchorTops = new WeakMap<HTMLElement, number>();
+    const { container } = render(
+      <div>
+        <div id="chat-item-1">a</div>
+        <div id="chat-item-5">b</div>
+        <div id="chat-item-echo">c</div>
+        <div ref={(el: HTMLDivElement | null) => { scrollerRef.current = el; }} style={{ position: "relative", height: 400, width: 600 }}>
+          <MessageTimeline exchanges={EXCHANGES} scrollContainer={scrollerRef} />
+        </div>
+      </div>,
+    );
+    const scroller = scrollerRef.current as HTMLDivElement;
+    expect(scroller).not.toBeNull();
+    Object.defineProperty(scroller, "scrollTop", { configurable: true, get: () => 800 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => 2000 });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      if (this === scroller) {
+        return { top: 0, left: 0, right: 600, bottom: 400, width: 600, height: 400, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+      }
+      const anchorTop = anchorTops.get(this);
+      if (anchorTop !== undefined) {
+        return { top: anchorTop, left: 0, right: 100, bottom: anchorTop + 20, width: 100, height: 20, x: 0, y: anchorTop, toJSON: () => ({}) } as DOMRect;
+      }
+      return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    });
+    for (const [id, top] of [
+      ["chat-item-1", 100],
+      ["chat-item-5", 300],
+      ["chat-item-echo", 500],
+    ] as Array<[string, number]>) {
+      anchorTops.set(container.querySelector(`#${id}`) as HTMLElement, top);
+    }
+
+    // Mid-scroll (scrollTop 800): the upper-middle line sits at 180 —
+    // anchor 0 (top 100) is above it, anchor 1 (300) below → owner 0.
+    fireEvent.scroll(scroller);
+    await flushRaf();
+    await vi.waitFor(() => {
+      expect(rows()[0].getAttribute("data-current")).toBe("true");
+      expect(rows()[2].getAttribute("data-current")).toBe("false");
+    });
+
+    // Scrolled deep (scrollTop 1528 — within 72px of the bottom pin):
+    // the LAST exchange owns the highlight.
+    Object.defineProperty(scroller, "scrollTop", { configurable: true, get: () => 1528 });
+    fireEvent.scroll(scroller);
+    await flushRaf();
+    await vi.waitFor(() => {
+      expect(rows()[2].getAttribute("data-current")).toBe("true");
+      expect(rows()[0].getAttribute("data-current")).toBe("false");
+    });
   });
 });

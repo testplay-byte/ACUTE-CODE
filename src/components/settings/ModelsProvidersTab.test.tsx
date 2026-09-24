@@ -1106,7 +1106,7 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
     expect(within(pickable).getByText("openai/gpt-4o")).toBeTruthy();
   });
 
-  it("R95-A: clicking Add UPSERTS the model and then OPENS ITS CONFIG DIALOG (add-then-configure, on the created row)", async () => {
+  it("R124: clicking Add OPENS the ADD-mode config dialog FIRST (configure-first) — nothing is added until Save, and the prefill pre-loads the details", async () => {
     // R60-B: All-models scope (the fixture mixes free + paid + unknown).
     useSettingsStore.setState({ modelsFreeOnly: false });
     liveCatalog = [
@@ -1115,30 +1115,42 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
     ];
     await openPicker();
 
-    // Click the paid row's Add — ONE upsert with the catalog prefill fires
-    // (the owner: "it will add that model and it will open up the
-    // configuring menu for that model"), then the EDIT-mode config dialog
-    // opens on the created row.
+    // Click the paid row's Add — the ADD-mode config dialog opens on the
+    // prefill (the owner's R124 verdict: "it is showing me the Configure
+    // Model menu, but the model has already been added" — dead; Save is
+    // what adds it) and the picker closes behind it.
     fireEvent.click(await screen.findByLabelText("Add openai/gpt-4o"));
-    const dialog = await screen.findByRole("dialog", { name: "Configure model" });
+    const dialog = await screen.findByRole("dialog", { name: "Add model" });
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Add models" })).toBeNull(),
     );
 
-    // The prefill rode the UPSERT: the display name + the read-only id
-    // (edit mode) + the served catalog's pricing + sizing.
+    // The PRE-LOADED details the owner asked for ("it does pre-load the
+    // context window, max output, input-output prices… on my mobile" —
+    // now the desktop too): the display name + the read-only id + the
+    // served catalog's pricing + sizing, all BEFORE any upsert.
     expect((within(dialog).getByLabelText("Display name") as HTMLInputElement).value).toBe("GPT-4o");
-    expect(within(dialog).getByLabelText("Model id (read-only)").textContent).toBe("openai/gpt-4o");
+    expect((within(dialog).getByLabelText("Model id") as HTMLInputElement).value).toBe("openai/gpt-4o");
     expect((within(dialog).getByLabelText("Input price ($ per 1M tokens)") as HTMLInputElement).value).toBe("2.5");
     expect((within(dialog).getByLabelText("Context window (tokens)") as HTMLInputElement).value).toBe("128000");
 
-    // Exactly ONE upsert with the catalog prefill (the exact payload the
-    // R93-A6 direct add sends — the created row's config dialog opens for
-    // any tweaks afterwards as PATCHes).
+    // NOTHING was added yet — zero upserts until Save (the R124 law).
+    await new Promise((r) => setTimeout(r, 50));
+    expect(
+      calls.filter((c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models")),
+    ).toHaveLength(0);
+
+    // Save creates the row — exactly ONE upsert with the prefill payload.
+    fireEvent.click(within(dialog).getByTestId("model-config-save"));
+    await waitFor(() => {
+      const posts = calls.filter(
+        (c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"),
+      );
+      expect(posts).toHaveLength(1);
+    });
     const posts = calls.filter(
       (c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"),
     );
-    expect(posts).toHaveLength(1);
     expect(posts[0]!.body).toMatchObject({
       modelId: "openai/gpt-4o",
       displayName: "GPT-4o",
@@ -1178,7 +1190,7 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
     expect(screen.queryByLabelText("Select GPT-4o (openai/gpt-4o)")).toBeNull();
   });
 
-  it("manual add-by-id fallback: unreachable live catalog → the by-id form still adds the model (and opens its config)", async () => {
+  it("manual add-by-id fallback: unreachable live catalog → the by-id form still opens the ADD-mode dialog (and Save adds the model)", async () => {
     liveCatalog = null; // the provider's /models fetch fails
     await openPicker();
 
@@ -1189,12 +1201,17 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
     fireEvent.change(screen.getByLabelText("Model id"), {
       target: { value: "my/custom-model" },
     });
-    // R95-A: the by-id path rides the SAME add-then-configure contract —
-    // one direct upsert, then the created row's config dialog opens.
+    // R124: the by-id path rides the SAME configure-first contract — the
+    // ADD-mode dialog opens on the typed id; Save is what upserts.
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    const dialog = await screen.findByRole("dialog", { name: "Configure model" });
-    expect(within(dialog).getByLabelText("Model id (read-only)").textContent).toBe("my/custom-model");
+    const dialog = await screen.findByRole("dialog", { name: "Add model" });
+    expect((within(dialog).getByLabelText("Model id") as HTMLInputElement).value).toBe("my/custom-model");
+    // Nothing added yet (configure-first).
+    expect(
+      calls.filter((c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models")),
+    ).toHaveLength(0);
 
+    fireEvent.click(within(dialog).getByTestId("model-config-save"));
     await waitFor(() => {
       const post = calls.find(
         (c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"),
@@ -1213,7 +1230,7 @@ describe("Add models — catalog picker (ROUND-50 R50-d)", () => {
       target: { value: "z-ai/glm-5.2:free" },
     });
     expect(await screen.findByTestId("picker-manual-already-added")).toBeTruthy();
-    expect(screen.getByText(/Already added — Add opens the existing row for editing/)).toBeTruthy();
+    expect(screen.getByText(/Already added — Save updates the existing row/)).toBeTruthy();
     // No upsert fired yet — the hint is pre-click honesty, not a block.
     expect(calls.every((c) => c.method !== "POST" || !c.url.endsWith("/providers/openrouter/models"))).toBe(true);
   });
@@ -2296,11 +2313,11 @@ describe("Settings mutations refresh the SESSION page's model caches (R62-2b)", 
     fireEvent.change(screen.getByLabelText("Model id"), {
       target: { value: "custom/manual-model" },
     });
-    // R95-A: the by-id path adds DIRECTLY (one upsert; the created row's
-    // config dialog opens on top, which this test just closes).
+    // R124: the by-id path opens the ADD-mode dialog first; SAVING is what
+    // upserts (and invalidates the cache families).
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    const dialog = await screen.findByRole("dialog", { name: "Configure model" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add model" });
+    fireEvent.click(within(dialog).getByTestId("model-config-save"));
 
     await waitFor(() =>
       expect(
@@ -2509,13 +2526,16 @@ describe("Models UI — the R89 overhaul", () => {
     // …the full id rides below as the subtitle.
     expect(within(row).getByText("meta-llama/llama-3.3-70b-instruct:free")).toBeTruthy();
 
-    // Adding it fires the upsert with the humanized display name, and the
-    // created row's config dialog opens with the same display name.
+    // R124: Add opens the ADD-mode dialog with the humanized display name
+    // pre-filled (nothing is upserted until Save).
     fireEvent.click(within(dialog).getByLabelText("Add meta-llama/llama-3.3-70b-instruct:free"));
-    const config = await screen.findByRole("dialog", { name: "Configure model" });
+    const config = await screen.findByRole("dialog", { name: "Add model" });
     expect((within(config).getByLabelText("Display name") as HTMLInputElement).value).toBe(
       "Llama 3.3 70b Instruct",
     );
+    expect(
+      calls.filter((c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models")),
+    ).toHaveLength(0);
   });
 
   it("the model card renders the capability ICON chips + the details strip cells", async () => {
@@ -2832,7 +2852,7 @@ describe("Add models — the R93-A6 three-way interaction", () => {
     useSettingsStore.setState({ modelsFreeOnly: false });
   });
 
-  it("R93-A6 → R95-A: the right-side Add button adds DIRECTLY (one POST) and OPENS the created row's config dialog", async () => {
+  it("R124: the right-side Add button is CONFIGURE-FIRST — the ADD-mode dialog opens with the prefill, NO POST fires until Save", async () => {
     liveCatalog = [
       { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2" },
       { id: "openai/gpt-4o", name: "GPT-4o" },
@@ -2843,8 +2863,21 @@ describe("Add models — the R93-A6 three-way interaction", () => {
     fireEvent.click(await screen.findByRole("button", { name: /add models/i }));
     const dialog = await screen.findByRole("dialog", { name: "Add models" });
 
-    // The direct-add pill: ONE upsert with the prefill as defaults…
+    // The Add pill: the ADD-mode config dialog OPENS on the prefill (the
+    // owner's R124 verdict — nothing is added while the menu is showing)…
     fireEvent.click(within(dialog).getByLabelText("Add openai/gpt-4o"));
+    const config = await screen.findByRole("dialog", { name: "Add model" });
+    expect((within(config).getByLabelText("Display name") as HTMLInputElement).value).toBe("GPT-4o");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Add models" })).toBeNull(),
+    );
+    // …and ZERO upserts fired (Save is what adds it).
+    await new Promise((r) => setTimeout(r, 50));
+    expect(
+      calls.filter((c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models")),
+    ).toHaveLength(0);
+    // Saving creates the row with the prefill payload.
+    fireEvent.click(within(config).getByTestId("model-config-save"));
     await waitFor(() => {
       const posts = calls.filter(
         (c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"),
@@ -2855,13 +2888,6 @@ describe("Add models — the R93-A6 three-way interaction", () => {
       (c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"),
     );
     expect(post?.body).toMatchObject({ modelId: "openai/gpt-4o", displayName: "GPT-4o" });
-    // R95-A: …and the created row's EDIT-mode config dialog OPENS (the
-    // owner's add-then-configure flow), with the picker closed behind it.
-    const config = await screen.findByRole("dialog", { name: "Configure model" });
-    expect((within(config).getByLabelText("Display name") as HTMLInputElement).value).toBe("GPT-4o");
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Add models" })).toBeNull(),
-    );
   });
 
   it("R93-A6: selecting rows + the batch strip adds ALL selected (and closes the picker)", async () => {
@@ -2886,19 +2912,26 @@ describe("Add models — the R93-A6 three-way interaction", () => {
     expect(strip.textContent).toContain("2 models selected");
     fireEvent.click(within(strip).getByTestId("picker-batch-add"));
 
+    // R124: the enrichment pass runs FIRST (per-row "fetching" spinners),
+    // then the upserts…
     await waitFor(() => {
       const posts = calls.filter(
         (c) => c.method === "POST" && c.url.endsWith("/providers/openrouter/models"),
       );
       expect(posts).toHaveLength(2);
     });
-    // The batch add closes the picker on success.
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Add models" })).toBeNull(),
+    // …then the per-row OUTCOME chips + the summary line land (the owner:
+    // "show me some animations… aware of whether it even tried"), and the
+    // picker closes after the brief summary hold.
+    await waitFor(
+      () => {
+        expect(screen.queryByRole("dialog", { name: "Add models" })).toBeNull();
+      },
+      { timeout: 4000 },
     );
   });
 
-  it("R93-A6: a failed direct add surfaces the honest error strip (never silent)", async () => {
+  it("R124: a failed SAVE surfaces the honest inline error in the dialog (never silent, nothing half-added)", async () => {
     liveCatalog = [{ id: "openai/gpt-4o", name: "GPT-4o" }];
     configured = [];
     // The backend rejects the upsert (429).
@@ -2908,13 +2941,16 @@ describe("Add models — the R93-A6 three-way interaction", () => {
     fireEvent.click(await screen.findByRole("button", { name: /add models/i }));
     const dialog = await screen.findByRole("dialog", { name: "Add models" });
 
+    // Configure-first: the ADD-mode dialog opens (nothing added yet)…
     fireEvent.click(within(dialog).getByLabelText("Add openai/gpt-4o"));
-    const error = await within(dialog).findByTestId("picker-batch-error");
-    expect(error.textContent).toContain("429 rate limited");
-    // The picker STAYS OPEN for a retry (and no config dialog opened — the
-    // handoff only rides the success path).
-    expect(screen.getByRole("dialog", { name: "Add models" })).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: "Configure model" })).toBeNull();
+    const config = await screen.findByRole("dialog", { name: "Add model" });
+    // …Saving hits the 429 — the honest inline error lands IN THE DIALOG
+    // (its own error surface now that the picker is closed), the dialog
+    // STAYS OPEN for a retry, and the picker never reopened.
+    fireEvent.click(within(config).getByTestId("model-config-save"));
+    await waitFor(() => expect(within(config).getByText(/429 rate limited/)).toBeTruthy());
+    expect(screen.getByRole("dialog", { name: "Add model" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Add models" })).toBeNull();
   });
 });
 

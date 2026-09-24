@@ -1,0 +1,29 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.acuteinstaller'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.acuteinstaller"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  // Same discipline as acute-net: OkHttp is provided transitively by
+  // React Native's `api` dependency (RN 0.86 pins okhttp 4.9.x on the
+  // classpath); `compileOnly` keeps this module from forcing a different
+  // version onto the app's dependency graph.
+  compileOnly "com.squareup.okhttp3:okhttp:4.9.2"
+  // androidx.core (FileProvider) ships with every Expo app via
+  // expo-modules-core/RN — compileOnly for the same reason.
+  compileOnly "androidx.core:core:1.13.1"
+}

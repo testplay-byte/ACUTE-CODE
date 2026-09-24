@@ -15,7 +15,7 @@
  */
 
 import { useRouter } from "expo-router";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import {
   Bot,
@@ -23,6 +23,7 @@ import {
   ChevronRight,
   FileText,
   Palette,
+  RefreshCw,
   SlidersHorizontal,
 } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
@@ -31,6 +32,7 @@ import { useTheme } from "@/design/theme";
 import { getTheme, spacing } from "@/design/tokens";
 import { useLink } from "@/link/use-link";
 import { mobLog } from "@/lib/log";
+import { getCachedCheck } from "@/update/updater";
 
 export default function SettingsScreen() {
   const { tokens, themeId, mode } = useTheme();
@@ -44,6 +46,18 @@ export default function SettingsScreen() {
   const unpaired = status === "unpaired";
   const themeName = getTheme(themeId).name;
   const modeWord = mode === "system" ? "follows system" : mode;
+
+  // R124 — the phone's own update row's caption: the 24 h auto-check's
+  // cached answer ("v0.117.0 available") when one exists, else the plain
+  // "check for the latest APK" line. Phone-own: never needs the host.
+  const [updateCaption, setUpdateCaption] = useState("check for the latest APK");
+  useEffect(() => {
+    void getCachedCheck().then((cached) => {
+      if (cached?.kind === "available") {
+        setUpdateCaption(`v${cached.version} available · tap to update`);
+      }
+    });
+  }, []);
 
   // The config rows need a linked host. Appearance never does (the theme is
   // this phone's own).
@@ -70,6 +84,24 @@ export default function SettingsScreen() {
             <TypeCaption numberOfLines={1}>
               {themeName} · {modeWord}
             </TypeCaption>
+          </View>
+          <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
+        </View>
+      </PressableCard>
+
+      {/* ── app updates: this phone's own build (R124 — the in-app APK
+          updater; phone-own like Appearance, never needs the host) ── */}
+      <PressableCard
+        onPress={() => router.push("/settings/update")}
+        accessibilityLabel="App updates"
+      >
+        <View style={styles.rowInner}>
+          <View style={[styles.rowIcon, { backgroundColor: tokens.subtleHover }]}>
+            <RefreshCw size={22} color={tokens.accent} strokeWidth={2.2} />
+          </View>
+          <View style={styles.rowText}>
+            <TypeBodyStrong>App updates</TypeBodyStrong>
+            <TypeCaption numberOfLines={1}>{updateCaption}</TypeCaption>
           </View>
           <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
         </View>

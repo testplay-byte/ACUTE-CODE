@@ -2,17 +2,18 @@
   "expo": {
     "name": "ACUTE",
     "slug": "acute-companion",
-    "version": "0.116.0",
+    "version": "0.117.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "acute",
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.acutecode.companion",
-      "versionCode": 11600,
+      "versionCode": 11700,
       "permissions": [
         "INTERNET",
-        "CAMERA"
+        "CAMERA",
+        "REQUEST_INSTALL_PACKAGES"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#FFFBF0",
@@ -51,7 +52,8 @@
         }
       ],
       "expo-secure-store",
-      "./plugins/with-android-release-signing"
+      "./plugins/with-android-release-signing",
+      "./plugins/with-android-apk-installer"
     ],
     "experiments": {
       "typedRoutes": true,

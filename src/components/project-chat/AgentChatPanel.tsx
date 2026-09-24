@@ -169,7 +169,15 @@ import {
  * to step the tiers). Never use this alone for content — CONTENT_COL_CLASS
  * is the column. */
 const CONTENT_H_PAD_CLASS =
-  "px-6 md:px-12 xl:px-16 @max-[560px]:px-4 @max-[420px]:px-2.5";
+  // R124 (the quick-nav verdict 4): the LEFT leg carries a floor that
+  // clears the timeline rail at EVERY window size — the rail hugs the
+  // viewport's left border (left-1, chips anchored at 10px, magnified to
+  // 28px wide), so the reading column's minimum left padding (pl-11 =
+  // 44px at the narrowest, pl-12 = 48px at base) always leaves daylight
+  // between the widest pill and the text ("the conversation pills start
+  // showing on top of the text… not ideal" — dead). The RIGHT leg keeps
+  // the graduated tiers (nothing rides it).
+  "pl-12 pr-6 md:pl-14 md:pr-12 xl:px-16 @max-[560px]:pl-11 @max-[560px]:pr-4 @max-[420px]:pl-11 @max-[420px]:pr-2.5";
 
 /** ROUND-43 layout contract: the readable width of the chat's content column
  * (messages AND composer share it, centered). The PANEL itself always fills
@@ -4078,24 +4086,14 @@ export function AgentChatPanel({
                     as `screenshot` WorkingEntry rows, rendered by WorkingSection
                     at their capture moment (the owner: "When the screenshots
                     were taken they should be shown at that specific time."). */}
-                {/* ROUND-75 (R75): the transient-API retry wait — the ladder
-                    card sits ABOVE everything (the owner should always see
-                    WHY the stream is quiet and that it is handling itself). */}
-                {liveTurn.retry !== null ? (
-                  <div className="mb-2 min-w-0">
-                    <RetryStatusCard retry={liveTurn.retry} />
-                  </div>
-                ) : null}
-                {/* ROUND-75 (R75): the R71 overflow-recovery line, finally
-                    visible (previously an untyped fall-through frame). */}
-                {liveTurn.note !== null ? (
-                  <div
-                    className="mb-2 min-w-0 text-[12px] font-mono px-3 py-1.5 rounded-lg border"
-                    style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.35), color: styles.textSecondary, background: withAlpha(SEMANTIC_COLORS.warning, 0.05) }}
-                  >
-                    {liveTurn.note}
-                  </div>
-                ) : null}
+                {/* ROUND-75 (R75) → ROUND-124 (the owner: "the retrying
+                    attempts… are apparently shown at the very top of the
+                    conversation rather than showing at the very bottom"): the
+                    transient-API retry ladder + the overflow-recovery note
+                    moved to the live block's BOTTOM EDGE — right where the
+                    pinned reader sits (R75's top placement buried the card
+                    thousands of pixels above during long agentic turns;
+                    the R124 verdict supersedes it). */}
                 {/* R99-B: the LIVE turn's header — the same identity row the
                     folded turn renders (the live→folded handoff is seamless:
                     header → header). R114-e: the model is the turn.started
@@ -4215,6 +4213,26 @@ export function AgentChatPanel({
                         </span>
                       ) : null;
                     })()}
+                  </div>
+                ) : null}
+                {/* ── R124 (the owner: "the retrying attempts… at the very
+                    top… rather than… the very bottom"): the retry ladder
+                    card + the overflow-recovery note now ride the live
+                    block's BOTTOM EDGE — under the streaming text / the
+                    thinking placeholder, right where the pinned reader
+                    watches. A retry wait is exactly when the stream goes
+                    quiet; the "why" belongs where the eyes are. ── */}
+                {liveTurn.retry !== null ? (
+                  <div className="mt-2 mb-1 min-w-0">
+                    <RetryStatusCard retry={liveTurn.retry} />
+                  </div>
+                ) : null}
+                {liveTurn.note !== null ? (
+                  <div
+                    className="mb-1 min-w-0 text-[12px] font-mono px-3 py-1.5 rounded-lg border"
+                    style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.35), color: styles.textSecondary, background: withAlpha(SEMANTIC_COLORS.warning, 0.05) }}
+                  >
+                    {liveTurn.note}
                   </div>
                 ) : null}
                 {/* ROUND-59 (R59-D): the live turn's rating key lands with the
@@ -4343,11 +4361,15 @@ export function AgentChatPanel({
             bar strip that REPLACES the old left rail. Docked at the transcript
             viewport's left edge (NOT inside the scroller — it is a fixed
             navigational minimap: every exchange stays reachable while reading
-            deep history), one bar per user exchange, hover-proximity growth,
-            the current exchange highlighted, hover/focus previews, and
-            click-to-scroll through the chat-item-* anchors the rows stamp.
-            Never rendered on an empty transcript (hasTimelineContent). ── */}
-        {hasTimelineContent ? <MessageTimeline exchanges={timelineExchanges} /> : null}
+            deep history), one bar per user exchange, hover-proximity growth
+            (R124: width-dominant — the pill gets WIDER, never a circle), the
+            SCROLL-OWNED current-exchange highlight + click-set (R124),
+            click-dismissed previews (R124), and click-to-scroll through the
+            chat-item-* anchors the rows stamp. Never rendered on an empty
+            transcript (hasTimelineContent). ── */}
+        {hasTimelineContent ? (
+          <MessageTimeline exchanges={timelineExchanges} scrollContainer={scrollRef} />
+        ) : null}
 
         {/* ── R94-D2 (owner: "It should only auto-scroll if I have moved to
             the very bottom"): the JUMP-TO-LATEST pill — floats near the

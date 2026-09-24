@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-23 round-123 -->
+<!-- last-reviewed: 2026-09-24 round-124 -->
 # IMPLEMENTED API — the shipped surface
 
 **Truth = this file.** Verified against `agent-core/src/server.ts` +
@@ -182,6 +182,7 @@ headers):
 | `GET /browser/history?sessionId=` | `{entries:[{url,title,ts}], index, canBack, canForward}` (LRU ≤32 sessions / ≤50 entries, forward-tail truncation on branch). |
 | `POST /browser/navigate` | `{sessionId, url?, title?}` records/updates an entry, or `{sessionId, direction:"back"\|"forward"\|"reload"}` moves the pointer. **ROUND-48 (R48-d): no longer rotates the ticket** (uses non-rotating getOrCreate). |
 | `GET /browser/viewport?sessionId=` / `PUT` | `{width,height,preset,zoom,rotate}` — presets `mobile-sm` 375×667 · `mobile-md` 390×844 · `tablet` 768×1024 · `laptop` 1280×800 (default) · `desktop` 1440×900 · `full-hd` 1920×1080 · `custom`; validation 200..3840 × 200..4320, zoom 0.25..3. This is the SAME state the BrowserPanel renders and the `browser_control` tool reads/writes. **ROUND-48 (R48-d): PUT no longer rotates the ticket** (uses non-rotating getOrCreate). |
+| `POST /browser-capture` | **ROUND-124 (R124)** — the staged screenshot's screen-region grab: `{x, y, w, h}` (physical px) → `{pngBase64, width, height}`, run through the SAME standalone capture backend the `browser_control` tool uses (no computer-use session, no relay, no settings gate — the decoupled door the frontend's staged capture drives mid-command). Bearer-authed like /browser-commands. 400 `VALIDATION` for malformed/degenerate regions (a 50px floor; a 7680×4320 ceiling), 500 `CAPTURE_FAILED` on a backend error or an empty raster. |
 
 The rewritten page's escape hatch posts `{type:"acute:open"\|"acute:title"\|"acute:location", …}` messages to the panel (no client cookies/Authorization are forwarded upstream — the ROUND-46 jar is the proxy's own state; no Set-Cookie is forwarded downstream either).
 

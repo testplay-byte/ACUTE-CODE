@@ -51,6 +51,14 @@
  *         This is the display-size state BOTH the panel and the future
  *         agent `browser_control` tool read/write (validate 200..3840 ×
  *         200..4320, zoom 0.25..3).
+ *   POST   /api/v1/browser-capture         {x, y, w, h} → {pngBase64, width,
+ *         height} — ROUND-124 (R124): the staged screenshot's screen-region
+ *         grab (physical px), run through the SAME standalone capture
+ *         backend the browser_control tool uses. 400 VALIDATION for a
+ *         malformed/degenerate region, 500 CAPTURE_FAILED on a backend
+ *         error. Bearer-authed like /browser-commands (the app itself
+ *         calls it mid-command; see the route's comment for the atomicity
+ *         rationale).
  *
  * AUTH — why tickets exist: the sidecar's bearer wall lives in an app-level
  * preHandler hook that reads the Authorization HEADER, but an iframe's src
@@ -131,6 +139,10 @@ import { extname } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 // R62 (D8): the live browser command bridge (eval / screenshot-meta results).
 import { resolveBrowserCommand } from "./browser-command.js";
+// ROUND-124 (R124): the staged browser screenshot's capture engine — the
+// decoupled backend door (no computer-use session, no relay, no settings
+// gate; the same singleton the browser_control tool's own path uses).
+import { getCaptureBackend } from "./computer/backends/index.js";
 import { CookieJar, CookieJarStore } from "./storage/browser-cookies.js";
 import type { SqliteDatabase } from "./storage/db.js";
 
@@ -1973,6 +1985,64 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
       return jsonError(reply, 404, "NOT_FOUND", `unknown or expired browser command '${commandId}'`);
     }
     return reply.code(204).send();
+  });
+
+  // ── ROUND-124 (R124): POST /browser-capture — the staged screenshot's ────
+  // screen-region grab. The app's screenshot_capture choreography (the
+  // BrowserPanel handler, or the module-level bridge fallback when no panel
+  // is mounted — the owner in Settings) re-stages the tab's webview at the
+  // FIXED capture resolution, then calls THIS with the staged region in
+  // PHYSICAL screen px; we run the SAME standalone capture engine the
+  // browser_control tool's own screenshot action uses (getCaptureBackend —
+  // GDI CopyFromScreen on Windows, scrot -a on Linux, screencapture -R on
+  // macOS; no computer-use session, no relay, no settings gate) and answer
+  // the PNG bytes. The whole stage → grab → restore dance stays ATOMIC
+  // inside the frontend's command handler because the webview must be
+  // re-staged for exactly the duration of THIS grab — a two-command protocol
+  // (stage / capture / unstage from the tool side) could leak the staging if
+  // any leg died mid-flight.
+  //
+  // TRUST: called by the app itself, bearer-authed exactly like the
+  // /browser-commands result route beside it (the token holder is the app —
+  // the same trust level every other capture-capable surface already has).
+  // Validation: x/y finite, w/h finite and within the REGION floor (50px,
+  // the tool's REGION_MIN_PX twin — a degenerate region is refused, never
+  // captured) and a sane ceiling (the 8K band — a stray number must never
+  // allocate a gigabyte bitmap in the backend capsule).
+  browser.post("/browser-capture", async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = parseJsonObject(request.body);
+    if (body === null) return jsonError(reply, 400, "VALIDATION", "body must be a JSON object");
+    const x = body.x;
+    const y = body.y;
+    const w = body.w;
+    const h = body.h;
+    if (
+      typeof x !== "number" || !Number.isFinite(x) ||
+      typeof y !== "number" || !Number.isFinite(y) ||
+      typeof w !== "number" || !Number.isFinite(w) ||
+      typeof h !== "number" || !Number.isFinite(h)
+    ) {
+      return jsonError(reply, 400, "VALIDATION", "body.x/y/w/h must be finite numbers (the physical screen region to capture)");
+    }
+    if (w < 50 || h < 50) {
+      return jsonError(reply, 400, "VALIDATION", `region ${Math.round(w)}×${Math.round(h)}px is below the 50px floor — a degenerate region is never captured`);
+    }
+    if (w > 7680 || h > 4320) {
+      return jsonError(reply, 400, "VALIDATION", `region ${Math.round(w)}×${Math.round(h)}px exceeds the 7680×4320 ceiling`);
+    }
+    const capture = getCaptureBackend();
+    const raster = await capture.backend.captureRegion(capture.run, { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) });
+    if ("error" in raster) {
+      return jsonError(reply, 500, "CAPTURE_FAILED", `screen capture failed: ${raster.error}`);
+    }
+    if (typeof raster.pngBase64 !== "string" || raster.pngBase64.length < 64) {
+      return jsonError(reply, 500, "CAPTURE_FAILED", "the capture backend produced no image");
+    }
+    return {
+      pngBase64: raster.pngBase64,
+      width: raster.width,
+      height: raster.height,
+    };
   });
 
   // ── GET/PUT /browser/viewport — display-size state (panel + agent tool) ──

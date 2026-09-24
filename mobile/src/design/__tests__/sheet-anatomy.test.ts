@@ -16,10 +16,15 @@ import * as MotionModule from "@/design/motion";
 import {
   DISCLOSURE_SPRING,
   SHEET_CLOSE_MS,
+  SHEET_DRAG_DISMISS_FRACTION,
+  SHEET_DRAG_DISMISS_VELOCITY,
+  SHEET_DRAG_RUBBER_PX,
   SHEET_SCRIM_OPEN_MS,
   SHEET_SHOW_ARM_FALLBACK_MS,
   SHEET_SPRING,
+  sheetDismissOnRelease,
   sheetPanelTravelPx,
+  sheetRubberBandPx,
 } from "@/design/motion";
 import {
   PAGE_CTA_MIN_W,
@@ -144,11 +149,16 @@ describe("the R120-S sheet motion — one coordinated timeline (round-120 §1 C8
     expect(SHEET_SCRIM_OPEN_MS).toBe(240);
   });
 
-  it("the close departure is 220ms on BOTH legs — one exit, never a two-speed dissolve", () => {
+  it("R124 SUPERSEDES the both-legs close law: SHEET_CLOSE_MS (220ms) now scopes the SCRIM's exit fade only — the panel's exit mirrors its rise on the SHEET spring (the R120-S ease-out-cubic panel leg is retired)", () => {
     expect(SHEET_CLOSE_MS).toBe(220);
-    // The dismissal is the snappier leg: closing never outlasts the open's
-    // dim — the sheet leaves at least as promptly as it arrived.
+    // The dismissal is still the snappier leg: closing never outlasts the
+    // open's dim — the sheet leaves at least as promptly as it arrived.
     expect(SHEET_CLOSE_MS).toBeLessThan(SHEET_SCRIM_OPEN_MS);
+    // The panel's exit rides the SAME spring the rise rides (one physical
+    // material both ways — the R124 verdict: "the exit mirrors the enter").
+    // The unmount owns itself via the spring's completion callback, so the
+    // never-zombie law survives the supersession.
+    expect(SHEET_SPRING).toEqual({ stiffness: 180, damping: 24 });
   });
 
   it("the onShow guard is 150ms — a platform that never fires onShow can never leave the sheet below the fold", () => {
@@ -171,5 +181,88 @@ describe("the R120-S sheet motion — one coordinated timeline (round-120 §1 C8
     expect(sheetPanelTravelPx(0, 671.4)).toBe(671);
     // Degenerate measurements never travel sideways.
     expect(sheetPanelTravelPx(-1, 672)).toBe(672);
+  });
+});
+
+// ── R124 — the sheet drag law (round-124 §2 — the drag-to-dismiss), pinned ───
+// The owner's round-124 verdict: "the bottom up menus are most definitely not
+// proper. They have bad animations." The drag law makes the sheet GENUINELY
+// draggable: the header row (a real grab pill) feeds a dragY shared value —
+// downward follows the finger 1:1, upward is the rubber band, and the release
+// obeys the two-leg dismissal law. Both helpers are pure (zero reanimated
+// imports) so they pin here like every other motion recipe.
+
+describe("the R124 sheet drag law — sheetRubberBandPx (the upward ceiling)", () => {
+  it("rest is rest: 0 and non-positive and non-finite pulls answer 0", () => {
+    expect(sheetRubberBandPx(0)).toBe(0);
+    expect(sheetRubberBandPx(-40)).toBe(0);
+    expect(sheetRubberBandPx(Number.NaN)).toBe(0);
+    expect(sheetRubberBandPx(Number.NEGATIVE_INFINITY)).toBe(0);
+  });
+
+  it("the classic asymptote: half the ceiling at one-ceiling pull, never past the ceiling", () => {
+    // pull = R → R × (1 − 1/2) = R/2 exactly.
+    expect(sheetRubberBandPx(SHEET_DRAG_RUBBER_PX)).toBeCloseTo(SHEET_DRAG_RUBBER_PX / 2);
+    // 4× the ceiling of pull → R × (1 − 1/5) = 0.8R.
+    expect(sheetRubberBandPx(SHEET_DRAG_RUBBER_PX * 4)).toBeCloseTo(SHEET_DRAG_RUBBER_PX * 0.8);
+  });
+
+  it("monotone and bounded for every pull up to 8× the ceiling", () => {
+    let previous = 0;
+    for (let pull = 0; pull <= SHEET_DRAG_RUBBER_PX * 8; pull += 4) {
+      const moved = sheetRubberBandPx(pull);
+      expect(moved).toBeGreaterThanOrEqual(previous);
+      expect(moved).toBeLessThanOrEqual(SHEET_DRAG_RUBBER_PX);
+      expect(moved).toBeGreaterThanOrEqual(0);
+      previous = moved;
+    }
+    // The asymptote stays honest: an enormous pull still never crosses the
+    // ceiling (the panel is bottom-anchored — it cannot detach from the fold).
+    expect(sheetRubberBandPx(10_000)).toBeLessThanOrEqual(SHEET_DRAG_RUBBER_PX);
+  });
+});
+
+describe("the R124 sheet drag law — sheetDismissOnRelease (the two-leg dismissal)", () => {
+  it("the thresholds stand: ≥ 900px/s downward flings, ≥ 40% of the travel", () => {
+    expect(SHEET_DRAG_DISMISS_VELOCITY).toBe(900);
+    expect(SHEET_DRAG_DISMISS_FRACTION).toBe(0.4);
+    expect(SHEET_DRAG_RUBBER_PX).toBe(24);
+  });
+
+  it("a fling at ≥ 900px/s downward dismisses from ANY offset — the finger said away", () => {
+    expect(sheetDismissOnRelease(0, 900, 400)).toBe(true);
+    expect(sheetDismissOnRelease(0, 2_500, 400)).toBe(true);
+    // Even from the rubber-banded-up pose (negative offset), a hard downward
+    // fling still dismisses.
+    expect(sheetDismissOnRelease(-20, 1_400, 400)).toBe(true);
+    expect(sheetDismissOnRelease(0, 899.9, 400)).toBe(false);
+    // An UPWARD fling never dismisses on the velocity leg alone.
+    expect(sheetDismissOnRelease(0, -2_500, 400)).toBe(false);
+  });
+
+  it("a pull past 40% of the travel dismisses whatever the velocity", () => {
+    expect(sheetDismissOnRelease(160, 0, 400)).toBe(true);
+    expect(sheetDismissOnRelease(159.9, 0, 400)).toBe(false);
+    // Most of the way gone + still moving up: the position leg owns it —
+    // springing a nearly-dismissed sheet BACK reads as a refusal.
+    expect(sheetDismissOnRelease(300, -2_000, 400)).toBe(true);
+  });
+
+  it("a shallow slow release springs home (the ordinary case — a peek, not a dismissal)", () => {
+    expect(sheetDismissOnRelease(80, 300, 400)).toBe(false);
+    expect(sheetDismissOnRelease(0, 0, 400)).toBe(false);
+  });
+
+  it("degenerate travel (≤ 0) dismisses on any positive offset — there is nothing to spring back to", () => {
+    expect(sheetDismissOnRelease(1, 0, 0)).toBe(true);
+    expect(sheetDismissOnRelease(0, 0, 0)).toBe(false);
+    expect(sheetDismissOnRelease(5, 0, -10)).toBe(true);
+    expect(sheetDismissOnRelease(0, 0, -10)).toBe(false);
+  });
+
+  it("non-finite inputs never dismiss (the guarded branch, not a NaN comparison)", () => {
+    expect(sheetDismissOnRelease(Number.NaN, 1_000, 400)).toBe(false);
+    expect(sheetDismissOnRelease(200, Number.NaN, 400)).toBe(false);
+    expect(sheetDismissOnRelease(Number.POSITIVE_INFINITY, 0, 400)).toBe(false);
   });
 });

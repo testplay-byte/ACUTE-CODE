@@ -4210,24 +4210,67 @@ export async function fetchProviderModels(providerId: string): Promise<string[]>
   return body.models.map((m) => m.id);
 }
 
+/** ROUND-120 (R120-M) → ROUND-124 (the desktop catch-up): the per-model
+ * catalog details the backend serves ADDITIVELY on every ModelSummary
+ * (agent-core's ProviderModelDetails — registry.ts extractModelDetails).
+ * Every field OPTIONAL: absent = the provider's /models entry carried
+ * nothing for it (a plain OpenAI {id, object, owned_by} listing), and a
+ * consumer renders its honest "not served" state instead of fabricating a
+ * value. The mobile configure screen has consumed these since R120-M; the
+ * desktop Add-Model flow now pre-fills from them too (the owner's verdict:
+ * "it does pre-load [the details] on my mobile" — now both surfaces do). */
+export interface ProviderModelCatalogDetails {
+  /** `context_length` — the model's advertised context window (tokens). */
+  contextWindow?: number;
+  /** `top_provider.max_completion_tokens` — the output ceiling. */
+  maxOutputTokens?: number;
+  /** `pricing.prompt` scaled per-token → USD per 1M input tokens. */
+  inputPricePerMtok?: number;
+  /** `pricing.input_cache_read` scaled per-token → USD per 1M cached reads. */
+  inputPriceCachedPerMtok?: number;
+  /** `pricing.completion` scaled per-token → USD per 1M output tokens. */
+  outputPricePerMtok?: number;
+  /** `tools` in `supported_parameters` (definitive when the list is present). */
+  supportsTools?: boolean;
+  /** `image` in `architecture.input_modalities` (same presence rule). */
+  supportsVision?: boolean;
+  /** `audio` in `architecture.input_modalities`. */
+  supportsAudio?: boolean;
+  /** `video` in `architecture.input_modalities`. */
+  supportsVideo?: boolean;
+}
+
 /** ROUND-50 (R50-d): the LIVE provider catalog WITH display names — the
  * Settings "Add models" picker needs searchable entries (id + name), which
  * the ids-only fetchProviderModels above cannot serve. Mirrors agent-core's
- * ModelSummary {id, name} from GET /providers/:id/models. */
+ * ModelSummary {id, name} from GET /providers/:id/models.
+ * ROUND-124: entries now carry the backend's ADDITIVE details leg (the
+ * smart pre-fill's source) — the fields above ride through untouched. */
 export interface ProviderModelCatalogEntry {
   /** Model id sent to the API. */
   id: string;
   /** Upstream display name (falls back to the id when absent). */
   name: string;
+  /** R124: the live catalog's per-model details — absent when the
+   * provider's listing carried none (never fabricated client-side). */
+  details?: ProviderModelCatalogDetails;
 }
 
 export async function fetchProviderModelEntries(
   providerId: string,
 ): Promise<ProviderModelCatalogEntry[]> {
-  const body = await request<{ models: Array<{ id: string; name?: string }> }>(
-    `/providers/${encodeURIComponent(providerId)}/models`,
-  );
-  return body.models.map((m) => ({ id: m.id, name: m.name ?? m.id }));
+  const body = await request<{
+    models: Array<{
+      id: string;
+      name?: string;
+      details?: ProviderModelCatalogDetails;
+    }>;
+  }>(`/providers/${encodeURIComponent(providerId)}/models`);
+  return body.models.map((m) => ({
+    id: m.id,
+    name: m.name ?? m.id,
+    ...(m.details !== undefined ? { details: m.details } : {}),
+  }));
 }
 
 // ── Round-28 WS-G2/WS-H: codebase index + unified search ────────────────────
@@ -4526,6 +4569,39 @@ export async function postBrowserCommandResult(
   await request(`/browser-commands/${encodeURIComponent(commandId)}/result`, {
     method: "POST",
     json: result,
+  });
+}
+
+/**
+ * ROUND-124 (R124): POST /browser-capture — the staged screenshot's grab.
+ * The agent-browser-capture choreography (src/lib/agent-browser-capture.ts)
+ * temporarily re-stages the tab's native webview at the FIXED capture
+ * resolution and then calls THIS with the staged region in PHYSICAL screen px
+ * (logical rect × window scale factor + window origin); the sidecar runs the
+ * same platform capture backend the computer-use path uses (GDI
+ * CopyFromScreen / scrot -a / screencapture -R) and answers the PNG bytes.
+ *
+ * Why the capture round-trips through the sidecar at all: the screen-capture
+ * engines live in agent-core (the frontend has no capture primitive — the
+ * Tauri shell exposes no webview raster API), and the whole stage → grab →
+ * restore dance must be ATOMIC inside one browser-command handler, so the
+ * frontend drives it and borrows the engine through this route. Bearer-authed
+ * exactly like the /browser-commands result route it complements (the app
+ * itself calls it; tickets never apply).
+ *
+ * Throws ApiError on failure (400 VALIDATION for a malformed region, 500
+ * CAPTURE_FAILED when the backend reports an error) — callers surface the
+ * message honestly, never a fabricated raster.
+ */
+export async function captureBrowserRegion(region: {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}): Promise<{ pngBase64: string; width: number; height: number }> {
+  return request<{ pngBase64: string; width: number; height: number }>("/browser-capture", {
+    method: "POST",
+    json: region,
   });
 }
 

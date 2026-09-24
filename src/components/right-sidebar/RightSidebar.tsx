@@ -46,6 +46,13 @@ import { fetchSubAgents, type SubAgentStatus } from "../../lib/api";
 // BEHIND it otherwise (the owner: "the options get hidden behind the actual
 // browser window itself").
 import { nativeTabSetVisible, isNativeBrowserAvailable } from "../../lib/native-browser";
+// ROUND-124 (R124): the staged screenshot capture's in-flight latch — this
+// degraded popover fallback hides the webview, and a hide landing MID-GRAB
+// would corrupt the capture's raster (see the defer's comment below).
+import {
+  deferTabHideUntilCaptureRestores,
+  isStagedCaptureInFlightFor,
+} from "../../lib/agent-browser-capture";
 // R90-C2: the menu overlay bridge — the sidebar's popovers can render in an
 // OWNED transparent OS window that rides ABOVE the live browser webview
 // (the "browser paused while the menu is open" retirement).
@@ -527,7 +534,16 @@ export function RightSidebar({
       // The module flag is what the BrowserPanel's nativeCreate consults —
       // a webview created while this popover is open must not show itself.
       setPopoverWebviewSuppression(activeBrowserTabId);
-      void nativeTabSetVisible(activeBrowserTabId, false).catch(warn);
+      // R124: while a staged screenshot capture owns this tab's visibility,
+      // DEFER the hide to the capture's restore instead of hiding NOW — a
+      // mid-grab hide would photograph whatever sits behind the staged
+      // webview (dishonest bytes). The popover's own close path (the guarded
+      // restore above) re-shows afterwards, so the end state is unchanged.
+      if (isStagedCaptureInFlightFor(activeBrowserTabId)) {
+        deferTabHideUntilCaptureRestores(activeBrowserTabId);
+      } else {
+        void nativeTabSetVisible(activeBrowserTabId, false).catch(warn);
+      }
     }
   }, [quickMenuOpen, subAgentPickerFor, open, activeTab, popoverPos, menuOverlayActive, menuOverlayFailed, buildMenuPayload]);
 

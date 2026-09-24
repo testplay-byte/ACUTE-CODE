@@ -131,9 +131,40 @@ export function nativeTabNavigate(tabId: string, url: string): Promise<void> {
 /**
  * Position/size the tab's webview (logical px == CSS px — see browser.rs for
  * why getBoundingClientRect maps 1:1 onto child-webview coordinates).
+ *
+ * ROUND-124 (R124): every SUCCESSFUL command is also recorded in the module's
+ * TAB GEOMETRY MEMORY (`tabBoundsMemory` below) — the last bounds the FRONTEND
+ * commanded for this tab. The staged screenshot capture
+ * (agent-browser-capture.ts) temporarily re-sizes the webview to the fixed
+ * capture resolution and needs the PRE-STAGE geometry to restore; the Rust
+ * side's own TAB_LAST_BOUNDS re-assert would restore the STAGED bounds (our
+ * staging overwrites them), so the frontend keeps its own memory. There is no
+ * `browser_tab_get_bounds` command (adding one is a Rust change this round
+ * deliberately avoids) — the panel re-commands bounds on a 500ms safety net,
+ * so the memory is at worst half a second stale, and a restore from it is
+ * healed by the next panel sync anyway.
  */
 export function nativeTabSetBounds(tabId: string, x: number, y: number, w: number, h: number): Promise<void> {
-  return runCommand("browser_tab_set_bounds", { tabId, x, y, w, h });
+  return runCommand("browser_tab_set_bounds", { tabId, x, y, w, h }).then(() => {
+    tabBoundsMemory.set(tabId, { x, y, w, h });
+  });
+}
+
+/**
+ * ROUND-124 (R124): the tab geometry memory — last COMMANDED bounds per tab.
+ * Written only by successful `nativeTabSetBounds` calls (see above); read by
+ * the staged capture's restore path. Never a lie: a tab whose bounds were
+ * never commanded through this module answers null.
+ */
+const tabBoundsMemory = new Map<string, { x: number; y: number; w: number; h: number }>();
+
+/**
+ * ROUND-124 (R124): the last bounds THIS module commanded for the tab
+ * (logical px), or null when none were ever commanded. Module state only —
+ * nothing persists.
+ */
+export function lastCommandedTabBounds(tabId: string): { x: number; y: number; w: number; h: number } | null {
+  return tabBoundsMemory.get(tabId) ?? null;
 }
 
 /**
@@ -345,9 +376,43 @@ export async function nativeWindowMetrics(): Promise<{ x: number; y: number; sca
  * `Webview::set_zoom`) — media queries and rem layout re-evaluate like a
  * browser's Ctrl+±, which is what the panel's display-size testing needs.
  * Factor is clamped 0.1–5.0 on the Rust side.
+ *
+ * ROUND-124 (R124): successful commands are recorded in the tab ZOOM memory
+ * (`tabZoomMemory` below) — the staged screenshot capture sets zoom to 1 for
+ * the 1:1 raster and needs the pre-stage factor to restore (a preset-mode
+ * panel composes fit-scale × user-zoom, so a leaked 1.0 would silently
+ * un-scale the user's view until the next syncBounds re-asserts).
  */
 export function nativeTabSetZoom(tabId: string, factor: number): Promise<void> {
-  return runCommand("browser_tab_set_zoom", { tabId, factor });
+  return runCommand("browser_tab_set_zoom", { tabId, factor }).then(() => {
+    tabZoomMemory.set(tabId, factor);
+  });
+}
+
+/**
+ * ROUND-124 (R124): the tab zoom memory — last COMMANDED factor per tab.
+ * Written only by successful `nativeTabSetZoom` calls; read by the staged
+ * capture's restore path. Null when none were ever commanded (the Rust
+ * default 1× applies).
+ */
+const tabZoomMemory = new Map<string, number>();
+
+/**
+ * ROUND-124 (R124): the last zoom factor THIS module commanded for the tab,
+ * or null when none was ever commanded. Module state only — nothing persists.
+ */
+export function lastCommandedTabZoom(tabId: string): number | null {
+  return tabZoomMemory.get(tabId) ?? null;
+}
+
+/**
+ * ROUND-124 (R124): test/inspection hook — forget every recorded bounds and
+ * zoom (the staged-capture suites start from a clean memory so a leaked
+ * recording from a prior test can never answer as "pre-stage geometry").
+ */
+export function resetTabGeometryMemoryForTest(): void {
+  tabBoundsMemory.clear();
+  tabZoomMemory.clear();
 }
 
 /**

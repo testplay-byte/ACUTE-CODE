@@ -21,6 +21,7 @@
  *   /session/:id         → the pushed transcript + live stream + composer
  *   /settings/*          → the pushed management hub (index, pushed from
  *                          the More tab) + its pages (host, appearance,
+ *                          update [R124 — the phone's own APK updater],
  *                          providers, agents, prompts, preferences)
  *
  * R108 BOOT DISCIPLINE (the splash-forever lesson, kept): every startup
@@ -45,6 +46,9 @@ import { BootErrorBoundary } from "@/components/error-boundary";
 import { ToastProvider } from "@/components/toast";
 import { startActivity } from "@/features/activity";
 import { startEvents } from "@/features/events";
+// R124 — the phone's own 24 h update check (silent on failure: a startup
+// check must never nag; the cached answer paints the settings row).
+import { maybeAutoCheck } from "@/update/updater";
 import {
   bootIdentity,
   bootLog,
@@ -78,6 +82,12 @@ function RootNavigator() {
     // as the activity controller: the stream lives while connected +
     // foregrounded (the R42 discipline).
     startEvents();
+    // R124: the once-per-24 h update check — fire-and-forget, silent on
+    // failure; its answer lands in AsyncStorage for the settings hub's
+    // row caption. Deferred a tick so it never competes with the splash.
+    const updateCheck = setTimeout(() => {
+      void maybeAutoCheck().catch(() => null);
+    }, 2000);
     // Prefs land inside ThemeProvider's first effect — one tick later is
     // always enough; the hold is cosmetic-only, never a gate.
     const t = setTimeout(() => {
@@ -92,6 +102,7 @@ function RootNavigator() {
     return () => {
       clearTimeout(t);
       clearTimeout(fallback);
+      clearTimeout(updateCheck);
     };
   }, []);
 

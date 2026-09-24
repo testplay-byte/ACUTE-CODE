@@ -1029,7 +1029,7 @@ export function Composer({
             accessibilityLabel="Message the agent"
             accessibilityHint={
               running
-                ? "A turn is running — queue behind it or stop it"
+                ? "A turn is running — queue or stop"
                 : mode === "offline"
                   ? "The host is offline — the message will be sent when it returns"
                   : "Send this message to the agent on the desktop"
@@ -1053,7 +1053,7 @@ export function Composer({
               // re-renders nothing per keystroke past the swap).
               setInputTall(event.nativeEvent.contentSize.height > INPUT_TALL_THRESHOLD);
             }}
-            placeholder={running ? "Queue a message behind the running turn…" : "Message the agent…"}
+            placeholder={running ? "Queue a message…" : "Message the agent…"}
             placeholderTextColor={tokens.textTertiary}
             style={[
               styles.input,
@@ -1116,7 +1116,7 @@ export function Composer({
                 control; the stop circle stands alone while empty). */}
             {canSend ? (
               <Pressable
-                accessibilityLabel="Queue this message behind the running turn"
+                accessibilityLabel="Queue this message"
                 accessibilityRole="button"
                 testID="composer-queue"
                 onPress={() => void queueNow()}

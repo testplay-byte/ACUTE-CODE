@@ -119,10 +119,22 @@ export const SHEET_SPRING: WithSpringConfig = {
  *     wires the Dialog's own OnShowListener), with this JS timeout as the
  *     guard so a platform that never fires onShow can never leave the sheet
  *     hanging below the fold.
+ *
+ * ROUND-124 (the owner's round-124 verdict: "the bottom up menus are most
+ * definitely not proper. They have bad animations. Like I need you to
+ * properly and thoroughly work on these systems and improve them with
+ * proper planning and with proper care."): SHEET_CLOSE_MS narrows to the
+ * SCRIM's exit fade only — the PANEL's exit now MIRRORS its rise on the
+ * SHEET spring (the R120-S ease-out-cubic departure was a different physical
+ * material on the way down than the spring on the way up; the sheet now
+ * falls the same way it rises, and the spring's own completion callback owns
+ * the unmount — the never-zombie law survives). The drag law joins the
+ * module below (sheet-anatomy.test.ts pins both).
  */
 /** The scrim's open fade (ms) — ease-out cubic in sheet.tsx, frame one. */
 export const SHEET_SCRIM_OPEN_MS = 240;
-/** The close departure (ms) — panel + scrim together, ease-out cubic. */
+/** R124 — the scrim's CLOSE fade only (ms), ease-out cubic; the panel's exit
+ *  rides the SHEET spring instead, mirroring its rise. */
 export const SHEET_CLOSE_MS = 220;
 /** The onShow guard (ms) — arm the entrance even if the platform's onShow
  *  never lands (the sheet can never hang below the fold). */
@@ -139,6 +151,60 @@ export const SHEET_SHOW_ARM_FALLBACK_MS = 150;
  */
 export function sheetPanelTravelPx(measuredPanelHeight: number, fallbackTravel: number): number {
   return measuredPanelHeight > 0 ? Math.round(measuredPanelHeight) : Math.round(fallbackTravel);
+}
+
+// ── the R124 sheet drag law (round-124 §2 — the drag-to-dismiss) ─────────────
+
+/**
+ * R124 — the upward RUBBER-BAND's ceiling (px): pulling the sheet UP past
+ * its rest pose meets smoothly-increasing resistance and never moves the
+ * panel more than this far (the panel is bottom-anchored — translating it
+ * upward would detach it from the screen's bottom edge, so the rubber band
+ * is the honest physics, not a visual flourish). Pure + table-tested.
+ */
+export const SHEET_DRAG_RUBBER_PX = 24;
+
+/**
+ * R124 — the DISMISSAL thresholds for a released drag: the sheet dismisses
+ * when the release velocity alone carries it (≥ this many px/s downward) OR
+ * the finger has already pulled it ≥ this fraction of its own travel; a
+ * slower, shallower release springs back home on the SHEET spring. Pure +
+ * table-tested.
+ */
+export const SHEET_DRAG_DISMISS_FRACTION = 0.4;
+/** The velocity leg of the dismissal law (px/s, downward = positive Y). */
+export const SHEET_DRAG_DISMISS_VELOCITY = 900;
+
+/**
+ * R124 — the rubber-band curve: a pull of `pullPx` beyond the rest pose
+ * moves the panel `SHEET_DRAG_RUBBER_PX × (1 − 1/(1 + pull/R))` pixels —
+ * the classic asymptote (24px of pull moves it 12, 96px moves it ~19, it
+ * never exceeds 24). A non-positive pull answers 0 (rest is rest). Pure.
+ */
+export function sheetRubberBandPx(pullPx: number): number {
+  if (!Number.isFinite(pullPx) || pullPx <= 0) return 0;
+  const r = SHEET_DRAG_RUBBER_PX;
+  return r * (1 - 1 / (1 + pullPx / r));
+}
+
+/**
+ * R124 — does a RELEASED drag dismiss the sheet? The two-leg law: a fling
+ * at ≥ SHEET_DRAG_DISMISS_VELOCITY downward dismisses from ANY offset (the
+ * finger said "away"), and a drag that already pulled ≥
+ * SHEET_DRAG_DISMISS_FRACTION of the panel's own travel dismisses whatever
+ * the velocity (the sheet is most of the way gone — springing it back reads
+ * as a refusal). A degenerate travel (≤ 0) dismisses on any positive offset
+ * (there is nothing to spring back to). Pure + table-tested.
+ */
+export function sheetDismissOnRelease(
+  offsetPx: number,
+  velocityYPx: number,
+  travelPx: number,
+): boolean {
+  if (!Number.isFinite(offsetPx) || !Number.isFinite(velocityYPx)) return false;
+  if (velocityYPx >= SHEET_DRAG_DISMISS_VELOCITY) return true;
+  if (travelPx <= 0) return offsetPx > 0;
+  return offsetPx >= travelPx * SHEET_DRAG_DISMISS_FRACTION;
 }
 
 /**

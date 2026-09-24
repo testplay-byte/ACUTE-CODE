@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-23 round-123 -->
+<!-- last-reviewed: 2026-09-24 round-124 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,68 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [0.117.0] — 2026-09-24 — the Android updater + the quick-nav verdicts + the Add-Model configure-first + the mobile polish wave
+
+### The Android companion updates itself (in-app)
+- **Check, download, and install new APK versions without leaving the app.** Settings carries a new
+  "App updates" row (this phone's own build — it never needs the desktop link): check GitHub for the
+  latest release, download the arm64 APK with a live progress bar and a cancel affordance, and hand
+  it to Android's own installer — whose confirmation dialog is the last word, nothing installs
+  silently. An honest gate walks you to the system's "Install unknown apps" page the one time
+  Android requires it. Checks run anonymously (the repository is public); an optional GitHub token
+  (SecureStore) only accelerates rate-limited checks. Once a day, a silent background check paints
+  the settings row with "vX available · tap to update".
+- The companion's version now follows the repo's single-sourced version (0.117.0 · build 11700).
+
+### The desktop quick navigation (the message timeline)
+- **Hovering a pill now makes it clearly WIDER** — not the near-square "circle" the old magnification
+  produced. Width triples (10→28px); height grows just 6→9px.
+- **The highlighted pill is the one you're actually reading.** The highlight follows your scroll
+  position (the exchange owning the upper-middle of the view, or the newest while you sit at the
+  bottom), and clicking a pill highlights THAT pill immediately instead of forever highlighting the
+  bottom one.
+- **Clicking a pill dismisses its preview on the spot** — the popover no longer lingers over the
+  text you just jumped to (it returns once you genuinely move the pointer).
+- **The pills hug the conversation's left border** (10px in, exactly), and the reading column's left
+  padding now guarantees daylight between the widest magnified pill and the text at EVERY window
+  size — the small-window overlap is gone.
+
+### Adding models (the desktop catches up to the phone)
+- **Add opens the Configure Model form FIRST — the model is no longer added behind your back.**
+  Nothing is saved until you press the form's Add button; cancelling adds nothing.
+- **The form pre-loads the model's real details** — context window, max output, input/output/cache
+  prices, vision capability — from the provider's live catalog (the phone has done this since its
+  provider overhaul; the desktop now matches), with an honest line saying what was fetched and what
+  the provider didn't serve.
+- **Batch add shows its work**: every selected row carries a spinner while the catalog read runs,
+  then a per-row verdict ("✓ live details" / "— no details served"), and a summary line
+  ("Added 3 — 2 with live details, 1 without") before the picker closes.
+- **A failed model test now dismisses itself after 12 seconds** — error bands no longer linger over
+  the list forever (a fresh test re-arms them).
+
+### The mobile conversation
+- **Tapping a task asks for confirmation** — the row turns into "Mark as done? · Confirm / Cancel"
+  instead of silently flipping the agent's task list.
+- **The running-turn composer prompt is just "Queue a message…"** — nothing more.
+- **A settled turn's thinking collapses to a single quiet line** ("Thought for 8s ▾") that expands
+  on tap — no more standing dim block in every turn; live thinking still streams in place, and tool
+  rows stay visible.
+- **The mobile dashboard is redesigned**: the 14/30/90-day selector moved into the chart's own card
+  (no longer the page's hero), the daily token chart gained a real axis + honest empty days + the
+  peak label, and the models donut is a proper proportionate ring beside a ranked, humanized legend.
+- **The bottom sheets learned real motion**: drag-to-dismiss (fling or travel), a spring-driven
+  enter mirrored by its exit, and a backdrop that breathes with the sheet — with reduced-motion
+  snaps throughout.
+
+### The agent browser's screenshots
+- **Screenshots are captured at a fixed high resolution (1280×720)** — no longer tied to the size of
+  the browser panel: a small panel no longer yields a tiny, low-detail raster.
+- **The browser can screenshot while you're elsewhere in the app** — the capture stages the page at
+  full resolution even when the Browser panel isn't the visible tab (an honest refusal only when the
+  webview truly doesn't exist). A target wider than the window is clamped and flagged, never faked.
+- On the desktop conversation, **the retry ladder card now sits at the bottom edge of the live
+  turn** — right where you're reading — instead of far above the stream.
 
 ## [0.116.0] — 2026-09-24 — the updater overhaul + the reference-grammar mobile transcript (no token required; the visible install)
 

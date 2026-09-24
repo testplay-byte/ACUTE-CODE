@@ -44,6 +44,15 @@ import {
   onBrowserNavigated,
   openExternalUrl,
 } from "../../lib/native-browser";
+// ROUND-124 (R124): the STAGED browser screenshot capture — the fixed
+// high-resolution grab that works while this panel is hidden/unmeasurable
+// (the owner's rulings: capture regardless of the visible view's size, and
+// capture while the user is elsewhere in the app).
+import {
+  deferTabHideUntilCaptureRestores,
+  isStagedCaptureInFlightFor,
+  performStagedBrowserCapture,
+} from "../../lib/agent-browser-capture";
 // ROUND-58 (R58-b): Tauri detection for the "Open externally" handoff —
 // ONE source of truth, same as native-browser.ts itself.
 import { isTauri } from "../../lib/sidecar";
@@ -764,6 +773,13 @@ export function BrowserPanel({
     // R87: a hidden (keep-alive) panel has a 0×0 rect — never write those
     // bounds to the live webview; the ResizeObserver re-fires on reveal.
     if (hiddenRef.current) return;
+    // R124: a staged capture in flight for THIS tab owns the webview's
+    // geometry (bounds + zoom) for its duration — the 500ms safety net /
+    // ResizeObserver re-assert here would shrink the webview back to the
+    // panel view MID-GRAB and the capture would photograph the small view
+    // (exactly the defect the fixed-resolution capture exists to fix). The
+    // capture's own finally restores the panel geometry.
+    if (isStagedCaptureInFlightFor(tabId)) return;
     const el = placeholderRef.current;
     if (el === null) return;
     const rect = el.getBoundingClientRect();
@@ -798,6 +814,16 @@ export function BrowserPanel({
       syncBounds();
     });
   }, [syncBounds]);
+
+  // ROUND-124 (R124): the bounds-sync callback mirrored into a REF so the
+  // bridge command handler (registered once per (nativeMode, tabId) — its
+  // identity must not churn on viewport changes) can trigger the immediate
+  // post-capture re-assert after a staged screenshot restore, instead of
+  // waiting for the 500ms safety net to heal the geometry.
+  const scheduleBoundsSyncRef = useRef(scheduleBoundsSync);
+  useEffect(() => {
+    scheduleBoundsSyncRef.current = scheduleBoundsSync;
+  });
 
   const zoomRef = useRef(zoom);
   // R87: the keep-alive hidden flag as a REF (syncBounds + the 500ms safety
@@ -908,6 +934,16 @@ export function BrowserPanel({
       // ANY unmount = the panel went away (active tab switched, sidebar
       // collapsed, tab closed): HIDE the webview but keep it alive — the
       // browsing session persists, exactly like a background tab.
+      // R124: EXCEPT while a staged capture owns visibility — landing this
+      // hide mid-grab would photograph whatever sits behind the staged
+      // webview (dishonest bytes in the chat thumbnail), and the capture's
+      // restore would then re-show the pre-stage truth with NO owner panel
+      // left (the page floating over the user's next route). The defer is
+      // consumed by the capture's restore: the webview still ends hidden.
+      if (isStagedCaptureInFlightFor(tabId)) {
+        deferTabHideUntilCaptureRestores(tabId);
+        return;
+      }
       void nativeTabSetVisible(tabId, false).catch(() => {});
     };
     // Deps note: deliberately NOT keyed on currentUrl — every navigation
@@ -939,6 +975,11 @@ export function BrowserPanel({
   const webviewHidden = overlayCoversPanel || popoverTabId === tabId || hidden || (state?.homeView ?? false);
   useEffect(() => {
     if (!nativeMode || !nativeReadyRef.current) return;
+    // R124: a staged capture owns the webview's VISIBILITY for its duration
+    // too — a mid-capture tab switch (this effect firing on the change)
+    // would hide the staged webview and the grab would photograph whatever
+    // sits behind it. The capture's restore re-commands the live truth.
+    if (isStagedCaptureInFlightFor(tabId)) return;
     void nativeTabSetVisible(tabId, !webviewHidden).catch(nativeWarn);
   }, [nativeMode, tabId, webviewHidden]);
 
@@ -1141,6 +1182,68 @@ export function BrowserPanel({
           };
         }
       }
+      // ── ROUND-124 (R124): screenshot_capture — the STAGED high-res grab ─
+      // The owner's ruling: “the screenshots… should be taken in a higher
+      // resolution, even if the total area being taken up by the browser
+      // window is way too small… not based on the actual device's
+      // resolution” + “this should also happen if the user is in some other
+      // application, is in the settings of the program or something else”.
+      // The legacy screenshot_meta below answered THIS panel's on-screen rect
+      // (raster = view size) and REFUSED when the tab was hidden — both
+      // defects fixed by re-staging the webview at the FIXED capture
+      // resolution (the choreography + its laws live in
+      // agent-browser-capture.ts). The PANEL contributes three things the
+      // module cannot know: the live visibility truth (what the restore
+      // re-commands), the placeholder rect (the anchor — the brief flash
+      // happens where the browser BELONGS), and the immediate post-restore
+      // re-assert (zoom spam-guard reset + a bounds sync, so the user's view
+      // snaps back at once instead of on the next 500ms safety-net tick).
+      // NOTE the gates below are NOT refusals anymore: a keep-alive-hidden
+      // tab, the Home view, even a covering overlay still CAPTURE (the stage
+      // briefly shows the webview above whatever the user is looking at) —
+      // that is the whole point of ruling #1. Only the module's own guards
+      // (missing webview, minimized window, degenerate client area) refuse.
+      if (action === "screenshot_capture") {
+        try {
+          const result = await performStagedBrowserCapture(tabId, {
+            ...(typeof payload.width === "number" && Number.isFinite(payload.width)
+              ? { width: payload.width }
+              : {}),
+            ...(typeof payload.height === "number" && Number.isFinite(payload.height)
+              ? { height: payload.height }
+              : {}),
+            // The live visibility truth, read at capture time exactly like
+            // screenshot_meta reads its gates (getState + refs — the handler
+            // registers once; the truth changes constantly).
+            expectVisible: (() => {
+              if (hiddenRef.current) return false;
+              if (useBrowserTabStore.getState().tabs[tabId]?.homeView) return false;
+              if (useWebviewGuardStore.getState().popoverTabId === tabId) return false;
+              const rect = placeholderRef.current?.getBoundingClientRect() ?? null;
+              if (rect === null) return false;
+              // R92-A discipline: a FRESH overlay sweep before deciding, so a
+              // stale covering rect can never flip the restore truth.
+              refreshOverlayRectsNow();
+              return !overlayCoversRect(rect);
+            })(),
+            anchorRect: () => placeholderRef.current?.getBoundingClientRect() ?? null,
+            onRestored: () => {
+              // Force the composed zoom (fit-scale × user zoom) to re-command
+              // on the next sync — the staging set it to 1 for the 1:1 raster.
+              lastZoomRef.current = null;
+              if (!hiddenRef.current) {
+                scheduleBoundsSyncRef.current?.();
+              }
+            },
+          });
+          return { ok: true, data: result };
+        } catch (err) {
+          // The module's own honest refusals (missing webview / minimized
+          // window / degenerate client area / capture failure) surface
+          // verbatim — the tool relays them to the model.
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      }
       if (action === "screenshot_meta") {
         const el = placeholderRef.current;
         if (el === null) return { ok: false, error: "screenshot_meta: the panel area is not measurable right now" };
@@ -1273,6 +1376,11 @@ export function BrowserPanel({
       // R97-J (M1): the home view legitimately hides the webview — the
       // watchdog must not fight the HOME button by re-asserting the show.
       if (useBrowserTabStore.getState().tabs[tabId]?.homeView) return;
+      // R124: a staged capture in flight owns the webview's geometry +
+      // visibility (the show+bounds re-assert below would shrink the staged
+      // webview back to the panel view mid-grab — the fixed-resolution
+      // capture's own restore re-commands the truth when it finishes).
+      if (isStagedCaptureInFlightFor(tabId)) return;
       // R92-A: fresh guard evaluation BEFORE the geometric skip — see the
       // watchdog's header comment above. Sync by design; cheap (one DOM
       // sweep) at the 2s cadence.
