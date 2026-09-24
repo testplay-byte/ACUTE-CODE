@@ -114,20 +114,27 @@ const withManifest = (config) => {
 
 /** withDangerousMod: write res/xml/acute_installer_paths.xml. */
 const withPathsResource = (config) => {
-  return withDangerousMod(config, async (config) => {
-    const resDir = path.join(
-      config._internal?.projectRoot ?? ".",
-      "android",
-      "app",
-      "src",
-      "main",
-      "res",
-      "xml"
-    );
-    fs.mkdirSync(resDir, { recursive: true });
-    fs.writeFileSync(path.join(resDir, `${PATHS_RES_NAME}.xml`), PATHS_XML);
-    return config;
-  });
+  // R124 hotfix: withDangerousMod's second argument is the [platform, action]
+  // TUPLE — a bare function throws "function is not iterable" at prebuild
+  // (the first CI compile caught it; the signing plugin's own spelling is
+  // the verified pattern).
+  return withDangerousMod(config, [
+    "android",
+    async (config) => {
+      const resDir = path.join(
+        config._internal?.projectRoot ?? ".",
+        "android",
+        "app",
+        "src",
+        "main",
+        "res",
+        "xml"
+      );
+      fs.mkdirSync(resDir, { recursive: true });
+      fs.writeFileSync(path.join(resDir, `${PATHS_RES_NAME}.xml`), PATHS_XML);
+      return config;
+    },
+  ]);
 };
 
 module.exports = (config) => withPathsResource(withManifest(config));
