@@ -163,10 +163,60 @@ jest **1,082 tests** (baseline 1,066) · eslint CLEAN · design-audit CLEAN
 deps) · docs:check 275/0/0 (final run; the egress transients documented
 above) · version:check 7/7 at 0.121.0.
 
-## 6. Release end-state
+## 6. The CI-red lesson + the release end-state
 
-v0.121.0 — the round committed in two review-gated batches, all five
-workflows watched green on the commit (the Rust Checks gate covers the
-sandbox-uncompilable supervisor + unminimize code), the tag at the green
-commit, the release published with the CHANGELOG section, 7/7 assets.
-The rollback door: `backup/pre-r128-improvements` (pushed at b4eb932).
+The FIRST CI run on the round commit (c81dbdc) went RED on the windows
+runner — the sandbox is Linux, so the win32 code paths and the
+windows-shaped test probes had never executed. Root-caused to five
+platform-blind spots, all fixed at the source (commit f91364a):
+
+1. **A REAL BUG in W7b's FIX 4** — `planWindowsEvalTempFile`'s
+   `lastIndexOf`-quote script-end swallowed `node -e "one" && node -e
+   "two"` chains whole into the temp file (a syntax error → exit 1 →
+   r96's batching pin red). The script-end is now the first UNESCAPED
+   wrapping quote (backslash-aware), any trailing content refuses the
+   rewrite (chains run verbatim — the conservative pre-R128 behavior),
+   and the double-quoted body is unescaped per CommandLineToArgvW before
+   landing in the file (the escaped-quote payloads the rewrite exists for
+   were syntax errors in the temp file). Pinned per-platform (linux+win32
+   stubs) with the chained pair + the escaped-quote round-trip.
+2. The FIX 1 message probes were shape-blind — a literal `/absolute/...`
+   against a Windows `C:\` temp root is cross-shape (the no-example
+   variant), inverting the pins on win32. Same-shape outside-root probes
+   (the root's parent) + pure-string cross-shape cases now —
+   deterministic on every runner (r128-w7b + r121).
+3. The search-tool stub was a `#!/bin/sh` no-op on Windows (cmd found the
+   REAL findstr.exe) — a PATH-fronted `findstr.cmd` stub for win32; the
+   POSIX planner/lifecycle cases now STUB linux (they inverted on the
+   real win32).
+4. r127-usage-hourly's `generatedAt` deep-equal flaked across a
+   millisecond boundary on the 3-4x slower runner — stripped before the
+   deep compare, pinned to same-UTC-day separately (a pre-existing latent
+   flake, not an R128 change).
+5. **The supervisor test's windows SyntaxError** — the suspect chain ends
+   at the SHEBANG: `scripts/release/update-supervisor.mjs` was the only
+   shebang-carrying file any test imports (the e2e `.mjs` pair that
+   passes on windows imports only node builtins; every other shebang
+   script is invoked, never imported). Removed (the supervisor is always
+   spawned as `node <script>`) + both supervisor files ASCII-fied as the
+   belt. The un-reproducible-in-sandbox remainder is honestly owned: the
+   fix eliminates every identified Windows-specific variable.
+
+The meta-lesson (recorded for the playbook's next revision): **the
+sandbox's platform IS a gate blind spot** — win32-marked code and
+platform-dependent pins need per-platform stubs in the tests themselves
+(the R104 `stubPlatform` precedent existed; three tests just didn't use
+it), and the full-suite-on-Windows is the only gate that catches the
+class (the targeted suites all passed on Linux).
+
+**Release end-state:** the fix commit f91364a watched GREEN — CI (the
+full verify chain) success; Rust Checks + Mobile CI green on c81dbdc
+(path-filtered workflows; the fix touched neither tree, so the code is
+byte-identical); the tag `v0.121.0` at f91364a → the Release + Mobile APK
+workflows both SUCCESS; the draft published (draft:false, make_latest:
+true) with the CHANGELOG [0.121.0] section body-patched to the section
+(the workflow's whole-file body is the script's default; the R127 ritual
+patches it), 7/7 assets (x64-setup, both AppImages, both debs, the arm64
+APK, the launcher kit), zero drafts remaining — `/releases/latest`
+answers v0.121.0. The rollback door: `backup/pre-r128-improvements`
+(pushed at b4eb932).
