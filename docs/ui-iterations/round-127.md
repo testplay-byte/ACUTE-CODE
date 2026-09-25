@@ -77,8 +77,12 @@ review-gated with the orchestrator reading the diffs + re-running the gates.
   exception #5; R2 1519→1526, R4 12→15, R3 0/0, R5 13/21 — the
   constitution-mandated display-tier spellings, documented re-pins per the
   R125 precedent) · `pnpm build` SUCCESS (mermaid chunk ok) · e2e 12/12 ·
-  license CLEAN (299) · docs:check 274/0/0 · mobile jest **48 suites /
-  1,066 tests** (baseline 48/1,049) · mobile tsc CLEAN.
+  license CLEAN (299) · docs:check 274/0/0 at the code commit (the final
+docs commit's local re-run carries the known transient: 3 servo.org URLs in
+  the R100 research doc unreachable from THIS sandbox's egress — CI's own
+  docs:check was GREEN on the same commit from GitHub's network; the URLs
+  live in a pre-existing doc untouched by this round) · mobile jest **48
+  suites / 1,066 tests** (baseline 48/1,049) · mobile tsc CLEAN.
 - **Live verification (agent-browser, 1600×1000, a real sidecar on a seeded
   temp DB — 33 hourly usage buckets + a provider-anchored session):** the
   usage page's section order (stat row → insights rail BESIDE the chart →
