@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-25 round-127 -->
+<!-- last-reviewed: 2026-09-25 round-128 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,56 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [0.121.0] — 2026-09-25 — the reliability & trust pass: the guaranteed restart, the side tooltips, the honest sidebar, the living ledger row, the mobile trap closed
+
+### Updates can no longer strand you (the external supervisor)
+- **An external update supervisor now owns the restart.** It is a separate process spawned before the installer runs — it survives the app closing, waits for the install, guards against double-launching, relaunches the app (up to 3 attempts), shows an OS notification ("ACUTE-CODE — Updated to vX — restarting"), and logs every step to `update-supervisor.log` beside sidecar.log. The silent leg where the app used to exit and hope the installer's own hook would restart it is retired — the supervisor owns that flow outright.
+- **The relaunched app confirms the update** with a desktop notification once the update-restart marker is validated (in addition to the "Setting up vX…" splash).
+- The update-checker's GitHub rate-limit warning is one quiet line with the token hint instead of a stack of noise.
+
+### The charts place their details beside the point of interest
+- **Hover tooltips render to the SIDE of the hovered bar** — right of a bar in the left half of the plot, left of a bar in the right half — instead of centered on top of it (measured: an 8px gap, zero overlap).
+- **Day views that fit now FILL their card** — the bars stretch to the measured container width (capped at a comfortable 42px), so a 14-day view no longer parks a narrow strip of bars with dead margins on both sides.
+- **Overflowing charts land at the newest end, pre-paint** — the 90-day and 24-month views mount scrolled to the latest data with no oldest-end flash, re-land on every window/months swap, and the entrance animation is capped at 0.4s on every chart (the model mix used to sweep old→new for 4.4 seconds).
+
+### The sidebar finally behaves like a sidebar
+- **Clicking a project expands/collapses its sessions — nothing else.** The view never switches; the dedicated chevron button is gone (the whole row is the toggle, keyboard included). Sessions still navigate when you click one.
+- **Project names render fully** — the hover actions (new session, delete) overlay on hover instead of permanently reserving layout width, and the rows sit a notch taller.
+- **Deletes ask first.** Deleting a session or a project opens a confirmation that enumerates exactly what dies ("Delete \"X\" and its N sessions? Their messages and tool history will be permanently removed.") — and the backend now cascades the project's sessions cleanly instead of orphaning them.
+- **The General conversation.** A persistent "General" entry at the top of the projects list — your no-folder conversations live in the app's own internal workspace (seeded at startup, delete-protected, no folder picker ever). One click on "Start a general conversation" and you're chatting.
+
+### The conversation shows its work, cleanly
+- **File rows carry ONE file icon.** The row is now status → verb → the colored per-extension icon → the filename → the chevron. The generic tool icon and the duplicate icon inside the path pill are gone (five visual marks collapsed to a clean line).
+- **Batch commands render one by one, in order** — a chained command shows its numbered command list ("1. node -v / 2. npm -v") above the combined output.
+- **The self-feedback ledger shows its thinking.** While the end-of-turn ledger is being written, a live processing line (the same quiet pulsing-dot grammar as the mid-turn line) renders at the transcript's bottom edge — resolving to "written · N entries" or the honest failure line, never silent-then-toast.
+- **Parallel tool calls keep their order and their results.** Tool frames now carry their call ids end-to-end (live rows match by id — an out-of-order result can no longer attach to the wrong row; the refolded transcript sorts by call order).
+
+### The agent's tools got honest (ten fixes from the self-feedback ledger)
+- `read_file` and friends **accept absolute paths that live inside the project** (rebased automatically; refusals now name the project root and show the relative shape).
+- `run_command` **distinguishes "no matches" from failure** (findstr/grep exit 1 with no output → the honest note, not FAILED) and **never advertises `nul` as a log file** (the last real redirect wins).
+- The command blocklist **names the exact rule it matched** — and local probes (`curl` against 127.0.0.1/localhost) are no longer hard-blocked.
+- Complex inline `node -e` scripts on Windows are **written to a temp file** behind the scenes (cmd.exe can no longer mangle the quoting); the tool description warns against `2>nul` stderr suppression.
+- `edit_file` failures **report the line number** of the closest match (or the file's line count) — no more blind "oldString not found".
+- `search_code` hints when your query contained regex metacharacters that were treated literally; `search_symbols` falls back to substring matching and says which mode it used.
+- `memory_recall` collapses near-duplicate session summaries (the six-near-identical-notes failure).
+- **`browser_control click` works again** — the bridge bug that killed every click/press_key on every page (an IIFE-vs-return script-shape mismatch) is fixed and pinned with Rust-wrap-faithful mocks.
+- **Screenshots behave**: `describe:false` returns the image without the vision analysis (the vision text is now marked advisory), and a minimized window is restored-and-retried before refusing.
+- `browser_control get_state` reads the LIVE page's URL/title; `read_dom` no longer reports off-screen elements as interactive.
+
+### The context shrinks smarter (the ZCode adoption: D3 + D5)
+- **Compaction never splits an assistant's exchange** — the preserved tail is round-aligned (an assistant message + its tool results + the trailing user messages stay together, verbatim).
+- **The context meter's stale-anchor bias is dead** — token anchors from before a compaction no longer over-trigger the next one (the honest "estimated" fallback covers the gap right after a boundary).
+- **A rapid-refill circuit breaker** stops compaction thrashing: three compactions in a row with fewer than three tool turns between them blocks auto-compaction with a loud, teaching warning (manual compaction and overflow recovery are unaffected).
+
+### The mobile tool cards: the trap closed at the source
+- **The desktop Appearance picker no longer offers "Hidden" tool activity** — the value that only the phone obeyed (text-only transcripts, forever, synced server-side on every reconnect). If it's already set, both the desktop and the phone show an explicit legacy row with a one-tap "Show tool activity" that fixes it everywhere.
+- **The fix sticks** — a failed or offline appearance sync is retried on the next reconnect BEFORE the server's stale value can re-apply (bounded, with a visible error if it gives up).
+- Settled transcripts on the phone **never leave a tool card spinning forever** (a lost result frame settles as "interrupted"), and write rows find their path in any argument order.
+
+### Models & Providers: try the next key
+- **A failed model test offers "Try key N"** right in the failure card — walking your key pool in order until one passes or the pool is exhausted. The failure card no longer auto-dismisses while another key remains, and the probe names which key it's testing.
+
 
 ## [0.120.0] — 2026-09-25 — the improvement pass: the walkthrough fixes, the honest context meter, the smarter agent, the visible mobile
 
