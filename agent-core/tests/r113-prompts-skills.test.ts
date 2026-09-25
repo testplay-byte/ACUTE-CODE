@@ -255,7 +255,7 @@ describe("R113-f P3: the dedup retirements", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R113-f P4: the 24,000 budget holds without a bump", () => {
-  it("the DEFAULT full-tools composition stays ≤ 24,300 and ≥ 23,000 chars", () => {
+  it("the DEFAULT full-tools composition stays ≤ 24,900 and ≥ 23,000 chars", () => {
     // r71 D6's bound, re-pinned by R117-c (the prompt-engineering pass):
     // the calibrated spellings + the <project_memory>/<todo_list>/
     // <background_tasks> fences grew the composition ~+216 net over the
@@ -263,10 +263,14 @@ describe("R113-f P4: the 24,000 budget holds without a bump", () => {
     // the rework. Re-pinned again by R117-d (the robust-orchestration
     // round): the SUB-AGENTS section gained ONE line (the delegation
     // machine-readable block's scope-decisions teaching) — measured
-    // 24,206. The floor keeps the retirements honest — the additions
-    // survived as content.
+    // 24,206. Re-pinned again by R127-W6 (the agent-smarter round): the
+    // EXPLORE arithmetic + dependent-set wait rule, the BATCH DISCIPLINE
+    // bullet's same additions, and the read_file descriptions line's
+    // ~128KB whole-file clause — measured 24,804 (mirrors r71 D6's
+    // 25,000 recalibration). The floor keeps the retirements honest —
+    // the additions survived as content.
     const composed = buildProjectSystemPrompt(ctxFor());
-    expect(composed.length).toBeLessThanOrEqual(24_300);
+    expect(composed.length).toBeLessThanOrEqual(24_900); // R127-W6: the agent-smarter additions measured 24,804
     expect(composed.length).toBeGreaterThanOrEqual(23_000);
   });
 });

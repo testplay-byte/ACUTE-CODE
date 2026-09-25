@@ -71,9 +71,33 @@ Workspace ── chat card ⇄ right sidebar (files/browser/terminal/…)
   32px section breaks (the mobile rhythm law).
 - Charts: hand-rolled SVG, `accentDeep` primary series, `CHART_HUES`
   stable per-entity hues, bars grow on entry (350ms/12ms stagger), the
-  anti-jitter kit (COMPONENTS §6) is binding.
+  anti-jitter kit (COMPONENTS §6) is binding — **and the ROUND-127
+  chart-interaction laws (COMPONENTS §6: full-column hit-testing, tooltip
+  edge clamping, sparse/hour labeling, scroll-to-latest) are binding on
+  every chart, every screen.**
 - Empty/loading: skeletons in `bg-well`; empty states are the mobile
   minimal-center shape (one icon tile + one line + one action).
+- **THE USAGE PAGE ORDER — ROUND-127 (the owner's walkthrough, binding):**
+  (1) the range toolbar; (2) the overview stat row; (3) the activity grid —
+  Token Activity at 2-cols + an INSIGHTS RAIL at 1-col (the rail carries
+  KEY DETAILS: the window's headline facts — top model + share, peak day,
+  cache hit rate, busiest tool — as quiet stat rows, NEVER the tools
+  leaderboard); (4) the tools leaderboard as its own full-width hairline
+  section BELOW the grid; (5) the Data & Statistics panel (heatmap, model
+  mix, model usage donut with the model list BELOW it — the share donut's
+  legend IS the individual-usage list, one card); (6) key cards; (7) the
+  projects drill-down; (8) THE DANGER ZONE LAST — the page's final
+  section, never interleaved mid-page (COMPONENTS §6's danger-zone law
+  applies at PAGE scope, not panel scope).
+- **THE DASHBOARD BOLDNESS LAW — ROUND-127**: the dashboard leads with
+  BOLD display-tier structure — a big display heading row (28–34px/800,
+  the workspace's greeting tier returning as a CONTENT heading, not a
+  chrome header), the stat row's numbers at display weight, and the
+  recent-activity section reads as a TIMELINE (a vertical spine with
+  day-glyph nodes and card rows hanging off it — the "bubbles + timeline"
+  ask) instead of a flat card list. Minimal surfaces, maximum typographic
+  hierarchy; NO new hues, NO new materials — the boldness is scale +
+  spacing + rhythm.
 
 ### Workspace (chat)
 - The chat card (`rounded-2xl` + rim + `.ac-clay`) + the 4px seam + the

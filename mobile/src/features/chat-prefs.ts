@@ -23,6 +23,19 @@
  *                  compact → always-collapsed single-line tool rows;
  *                  hidden  → consecutive tool items fold into ONE quiet
  *                  meta line per turn ("· 6 tool calls").
+ *
+ * R127-W8 — the HIDDEN rung's status: RETIRED from the picker, HONORED in
+ * the resolution. The R127-Ra research verdict: "hidden" is the ONLY
+ * render path in the tree that produces the owner's exact symptom
+ * ("conversation text but NO tool activity, at all" — zero tool rows in
+ * ANY turn, live or settled), and it syncs server-side so it survives every
+ * reconnect. The rung is removed from the phone's Appearance picker (the
+ * compact rung already reduces noise without hiding everything), but a
+ * persisted/server-synced "hidden" still applies VERBATIM — a deliberate
+ * pick is a user preference, not a bug to silently override. Instead the
+ * surfaces make the state observable: the picker shows an explicit legacy
+ * row + a one-tap way back to "detailed", and the transcript renders a
+ * quiet once-per-mount hint (`acquireToolsHiddenHint` in transcript.tsx).
  */
 
 import type { ChatDensity, ChatTextSize, TimestampsMode, ToolActivity } from "@/design/theme";
@@ -84,6 +97,22 @@ export function toolActivityVisibility(activity: ToolActivity): ToolActivityVisi
     default:
       return { expandable: true, collapsedRows: false, hidden: false };
   }
+}
+
+/**
+ * R127-W8 — is this the RETIRED rung? One vocabulary shared by the two
+ * surfaces that now special-case it: the Appearance picker's legacy state
+ * row ("Hidden — tools never render in the transcript") and the
+ * transcript's once-per-mount hint. The law this helper documents: "hidden"
+ * still RESOLVES (toolActivityVisibility keeps its full-hide shape above —
+ * a synced value is never silently overridden), it just can no longer be
+ * SELECTED, and every surface that renders it says so out loud. The LOCAL
+ * default stays "detailed" (design/theme.tsx's CHAT_PREF_DEFAULTS), and a
+ * missing server key resolves to "detailed" too — the ONLY way to be
+ * hidden is an explicit stored/synced pick.
+ */
+export function toolActivityIsHidden(activity: ToolActivity): boolean {
+  return activity === "hidden";
 }
 
 /**

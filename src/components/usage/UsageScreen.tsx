@@ -12,6 +12,11 @@ import { ModelCards } from "./ModelCards";
 import { ProjectsDrilldown } from "./ProjectsDrilldown";
 import { ToolsLeaderboard } from "./ToolsLeaderboard";
 import { UsageActivityChart } from "./UsageActivityChart";
+// R127-W1 (SCREENS §3 "THE USAGE PAGE ORDER"): the activity grid's INSIGHTS
+// RAIL (the key-details companion of the token-activity card) + the
+// page-scope danger-zone card (extracted from DataStatsPanel — LAST).
+import { InsightsRail } from "./InsightsRail";
+import { ClearUsageDataCard } from "./ClearUsageDataCard";
 // R98-I2: the Data & Statistics panel joins the overview — the same shared
 // panel the settings ?tab=data surface hosts.
 import { DataStatsPanel } from "./DataStatsPanel";
@@ -38,6 +43,18 @@ import { CLAY_CARD, formatCompactTokens } from "./usage-helpers";
  * range grammar, the ONE-clay-card stat row (no icon chips), clay chart
  * cards + tooltips, `bg-well` skeletons, and the mobile minimal-center empty
  * state (one icon tile + one line + one action, PC-densified).
+ *
+ * ROUND-127 (R127-W1 — SCREENS §3 "THE USAGE PAGE ORDER", binding): (1) the
+ * range toolbar; (2) the overview stat row; (3) the activity grid — Token
+ * Activity at 2-cols + the INSIGHTS RAIL at 1-col (the window's key details:
+ * top model + share, peak day, busiest tool, active projects — NEVER the
+ * tools leaderboard, the owner's placement complaint); (4) the tools
+ * leaderboard as its own full-width section BELOW the grid; (5) the Data &
+ * Statistics panel (heatmap → model mix → donut → agent health) with the
+ * per-model list (ModelCards) DIRECTLY below it; (6) key cards; (7) the
+ * projects drill-down; (8) THE DANGER ZONE LAST (the standalone
+ * ClearUsageDataCard — the page's final section, never interleaved
+ * mid-page).
  */
 
 const RANGE_OPTIONS = [7, 14, 30, 90] as const;
@@ -46,7 +63,16 @@ export function UsageScreen() {
   const navigate = useNavigate();
   const styles = useThemeStyles();
   const [days, setDays] = useState(30);
-  const usage = useDetailedUsage(days);
+  // R127-W2 (the owner's hourly ask — "if I select it to seven days… then it
+  // only shows seven bars… instead of seven days, it would show me a much
+  // better kind of view, like hourly based"): the 7-day window rides the
+  // HOURLY series (granularity=hour on GET /usage/detailed — 168
+  // "YYYY-MM-DDThh" buckets at 6px bars ≈ 1.34Kpx of scrolling chart, the
+  // fat-bars-with-empty-sides defect dead); every other window keeps the
+  // daily series (and the historical single-arg fetch shape — every
+  // existing exact-args pin stays true).
+  const granularity = days === 7 ? "hour" : "day";
+  const usage = useDetailedUsage(days, granularity);
   // ROUND-64 (R64-e): the "API keys" section's join data — providers +
   // masked key pools (live sidecar only, same dashboard semantics).
   const keyPools = useUsageKeyPools();
@@ -226,7 +252,11 @@ export function UsageScreen() {
               />
             </div>
 
-            {/* Activity chart + tool leaderboard */}
+            {/* Activity grid — R127-W1 (SCREENS §3 order step 3): Token
+                Activity at 2-cols + the INSIGHTS RAIL at 1-col. The tools
+                leaderboard that used to squat this rail is now its own
+                full-width section below the grid (the owner's "should not be
+                shown just right of the token activity" directive). */}
             <div className="mb-4 md:mb-6 grid grid-cols-1 lg:grid-cols-3 gap-3 md:gap-4">
               <div className="lg:col-span-2 min-w-0">
                 {/* UsageActivityChart STAYS (the R52-b input/output view) —
@@ -237,26 +267,47 @@ export function UsageScreen() {
                 <UsageActivityChart
                   days={usage.data?.days ?? []}
                   dayCount={days}
+                  granularity={granularity}
                   isPending={false}
                   isError={false}
                   delay={0.2}
                   styles={styles}
                 />
               </div>
+              <InsightsRail
+                models={usage.data?.models ?? []}
+                days={usage.data?.days ?? []}
+                tools={usage.data?.tools ?? []}
+                projectCount={usage.data?.projects.length ?? 0}
+                styles={styles}
+              />
+            </div>
+
+            {/* Tools leaderboard — R127-W1 (SCREENS §3 order step 4): its own
+                FULL-WIDTH hairline section BELOW the activity grid (same clay
+                card + data contract; the rows stretch to the page width). */}
+            <div className="mb-4 md:mb-6">
               <ToolsLeaderboard tools={usage.data?.tools ?? []} styles={styles} />
             </div>
 
             {/* R98-I2 (owner: "Data & statistics … shown in BOTH the
                 settings tab AND the usage screen"): the shared panel slots
                 below the activity/leaderboard grid — the 12-month heatmap,
-                the model-mix stack chart + donut, agent health, and the
-                clear-all-data card. The panel owns its own query + months
-                picker, so it works identically here and in settings. */}
+                the model-mix stack chart + donut, and agent health (R127-W1:
+                the danger zone moved out — it closes the page now, not the
+                panel). The panel owns its own query + months picker, so it
+                works identically here and in settings. */}
             <div className="mb-4 md:mb-6">
               <DataStatsPanel />
             </div>
 
-            {/* Model mix */}
+            {/* Model mix — R127-W1 (SCREENS §3 order step 5): the individual
+                per-model usage sits DIRECTLY below the Data & Statistics
+                panel (the donut's card group) — the owner's "supposed to be
+                shown below the Model Usage" directive. The list reads
+                usage.data.models (whole-history); the donut inside the panel
+                reads the months window — ModelCards' sub-caption states the
+                scope difference. */}
             <ModelCards models={usage.data?.models ?? []} styles={styles} />
 
             {/* ROUND-64 (R64-e): per-API-key stats — one card per key. */}
@@ -277,6 +328,13 @@ export function UsageScreen() {
               }}
               styles={styles}
             />
+
+            {/* THE DANGER ZONE, LAST — R127-W1 (SCREENS §3 order step 8 +
+                COMPONENTS §6 at PAGE scope): the standalone clear-all-data
+                card closes the page (the owner's "supposed to be shown at the
+                very bottom" directive — it used to sit inside DataStatsPanel,
+                mid-page between agent health and this list). */}
+            <ClearUsageDataCard />
           </>
         )}
       </div>

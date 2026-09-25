@@ -1,19 +1,16 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
   HeartPulse,
   ShieldCheck,
   Wrench,
 } from "lucide-react";
-import { clearUsageData, type UsageStatsHealthIssue } from "../../lib/api";
+import { type UsageStatsHealthIssue } from "../../lib/api";
 import { useUsageStats } from "../../hooks/use-usage";
 import { formatTokenCount } from "../../lib/format";
 import { ease } from "../../lib/motion";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-import { utcDateLabel, withAlpha } from "../dashboard/helpers";
-import { ConfirmDialog } from "../settings/ConfirmDialog";
+import { utcDateLabel } from "../dashboard/helpers";
 import { Kicker } from "../ui/Kicker";
 import { ModelDonut } from "./ModelDonut";
 import { ModelStackChart } from "./ModelStackChart";
@@ -29,7 +26,15 @@ import { cn } from "../../lib/utils";
  * tokens, peak day, total cost and turns; the token-activity heatmap; the
  * per-day model-mix stacked chart + the model donut (color-coded BY MODEL
  * NAME — same name across providers is one model, same color everywhere);
- * agent health; and the clear-all-data danger zone.
+ * and agent health.
+ *
+ * ROUND-127 (R127-W1 amendment, SCREENS §3 "THE USAGE PAGE ORDER"): the
+ * clear-all-data DANGER ZONE no longer lives here — it moved BYTE-WHOLESALE
+ * into the standalone ClearUsageDataCard so it can close the PAGE (and the
+ * settings tab) as its final section (the danger-zone law applies at PAGE
+ * scope, not panel scope — the owner's "very bottom" directive). The panel
+ * now ends at agent health; both mount sites render ClearUsageDataCard
+ * after it.
  *
  * ROUND-99 (R99-E, owner: "the data and statistics… not that well handled…
  * some things seem out of place"): the section ORDER is the GitHub-settings
@@ -95,24 +100,8 @@ function QuickFade({
 
 export function DataStatsPanel() {
   const styles = useThemeStyles();
-  const queryClient = useQueryClient();
   const [months, setMonths] = useState<(typeof MONTHS_OPTIONS)[number]>(12);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [clearedCount, setClearedCount] = useState<number | null>(null);
   const stats = useUsageStats(months);
-
-  const clear = useMutation({
-    mutationFn: () => clearUsageData(),
-    onSuccess: (result) => {
-      setClearedCount(result.deleted);
-      // Refetch EVERY usage surface that reads the now-empty ledger (the
-      // stats panel itself + the usage screen's detailed rollups + the
-      // dashboard summary) — the prefix matches all months/day windows.
-      void queryClient.invalidateQueries({ queryKey: ["usage-stats"] });
-      void queryClient.invalidateQueries({ queryKey: ["usage-detailed"] });
-      void queryClient.invalidateQueries({ queryKey: ["usage-summary"] });
-    },
-  });
 
   const { text, textSecondary } = styles;
 
@@ -163,9 +152,11 @@ export function DataStatsPanel() {
       >
         {/* R99-E anti-jitter: the skeleton mirrors the READY geometry
             section-for-section (header → the ONE-card stat row → heatmap →
-            stack → donut → agent health → danger zone — same heights, same
-            order) so the loading→ready swap never shifts the layout.
-            R126-3b: the blocks pulse in the WELL (bg-well). */}
+            stack → donut → agent health — same heights, same order) so the
+            loading→ready swap never shifts the layout. R126-3b: the blocks
+            pulse in the WELL (bg-well). R127-W1: the trailing h-[96px]
+            danger-zone block DIED with the zone's extraction into
+            ClearUsageDataCard (the panel no longer renders it). */}
         <WellSkeleton className="h-[56px] rounded-xl" />
         <div className={cn(CLAY_CARD, "grid grid-cols-2 md:grid-cols-4")}>
           {[0, 1, 2, 3].map((i) => (
@@ -181,7 +172,13 @@ export function DataStatsPanel() {
         </div>
         <WellSkeleton className="h-[184px] md:h-[192px]" />
         <WellSkeleton className="h-[264px] md:h-[272px]" />
-        <WellSkeleton className="h-[184px] md:h-[192px]" />
+        {/* R127-W2 (the donut GAUGE law — COMPONENTS §6): the donut block's
+            mirror grew to the gauge ring's reserved height (160px ring +
+            14px stroke + the display-tier center stat — the ready card's
+            min-h-[224px]/md:232px). The ONE sanctioned W2 edit in this
+            file; the heatmap's own h-[184px]/md:192px mirror above is
+            W1's and stays. */}
+        <WellSkeleton className="h-[224px] md:h-[232px]" />
         <div>
           <div className="mb-2.5">
             <WellSkeleton className="h-[13px] w-[120px] rounded-sm" />
@@ -192,7 +189,6 @@ export function DataStatsPanel() {
             ))}
           </div>
         </div>
-        <WellSkeleton className="h-[96px]" />
       </div>
     );
   }
@@ -239,7 +235,6 @@ export function DataStatsPanel() {
           selected={months}
           onChange={(value) => {
             setMonths(value as (typeof MONTHS_OPTIONS)[number]);
-            setClearedCount(null);
           }}
           groupLabel="Statistics months window"
           optionAriaLabel={(option) => `Last ${option} months`}
@@ -306,7 +301,9 @@ export function DataStatsPanel() {
           (1-col below md). Severity rides the icon + the number color ONLY —
           never a tinted card (the R99-E verdict); both sub-blocks ALWAYS
           render their honest empty one-liner so the layout is stable
-          window-over-window (no content jumping). */}
+          window-over-window (no content jumping). R127-W1: this is now the
+          panel's LAST section — the danger zone that followed moved into the
+          standalone ClearUsageDataCard (page-scope law). */}
       <section data-testid="agent-health-section" aria-label="Agent health">
         <div className="mb-2.5">
           <Kicker icon={ShieldCheck}>Agent health</Kicker>
@@ -336,79 +333,6 @@ export function DataStatsPanel() {
           />
         </div>
       </section>
-
-      {/* 7 — THE DANGER ZONE, always LAST (the GitHub settings pattern): a
-          quiet red-OUTLINED box — no filled background, no shadow — with the
-          description-left / red-action-button-right row. The exact
-          enumeration of what stays untouched lives in the ConfirmDialog.
-          R126-3b: this grammar is the DOCUMENTED EXCEPTION (COMPONENTS §6) —
-          it rides unchanged, byte-identical, in both modes. */}
-      <section
-        data-testid="clear-usage-card"
-        aria-label="Danger zone"
-        className="min-h-[96px] rounded-2xl border-[1.5px] p-4"
-        style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4) }}
-      >
-        <div className="mb-2.5 flex items-center gap-2">
-          <span
-            className="text-[11px] font-medium uppercase leading-none tracking-[0.08em]"
-            style={{ color: SEMANTIC_COLORS.danger }}
-          >
-            Danger zone
-          </span>
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="max-w-[520px] text-[11px] leading-relaxed" style={{ color: textSecondary }}>
-            Clear usage data — deletes every usage event in the ledger. Turns, sessions, and project
-            data are untouched.
-          </p>
-          <button
-            type="button"
-            disabled={clear.isPending}
-            data-testid="clear-usage-button"
-            onClick={() => setConfirmOpen(true)}
-            className="h-8 shrink-0 cursor-pointer rounded-lg border px-3.5 text-[12px] font-semibold transition-opacity hover:opacity-85 disabled:cursor-wait disabled:opacity-60"
-            style={{
-              borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
-              color: SEMANTIC_COLORS.danger,
-              background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-            }}
-          >
-            {clear.isPending ? "Clearing…" : "Clear data…"}
-          </button>
-        </div>
-        {clear.isError ? (
-          <div className="mt-2 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
-            Could not clear the usage ledger — {clear.error instanceof Error ? clear.error.message : String(clear.error)}.
-            Nothing was deleted.
-          </div>
-        ) : null}
-        {clearedCount !== null && !clear.isError ? (
-          <div
-            className="mt-2 text-[11px] font-semibold tabular-nums"
-            style={{ color: styles.successDeep }}
-            role="status"
-            data-testid="clear-usage-success"
-          >
-            Cleared {clearedCount.toLocaleString()} usage event{clearedCount === 1 ? "" : "s"}
-          </div>
-        ) : null}
-      </section>
-
-      {confirmOpen ? (
-        <ConfirmDialog
-          title="Clear all usage data?"
-          message="This deletes every usage event — token counts, costs, and model history. Sessions, conversations, agents, providers, and settings are NOT touched."
-          confirmLabel="Clear data"
-          danger
-          onConfirm={() => {
-            setConfirmOpen(false);
-            setClearedCount(null);
-            clear.mutate();
-          }}
-          onClose={() => setConfirmOpen(false)}
-        />
-      ) : null}
     </div>
   );
 }

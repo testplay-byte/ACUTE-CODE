@@ -61,7 +61,31 @@ export function registerUsageRoutes(scope: FastifyInstance, ctx: RouteContext): 
       }
       days = parsed;
     }
-    return getDetailedUsage(db, { days });
+    // ROUND-127 (the hourly view): `granularity=hour` re-buckets the
+    // activity series by UTC hour (the 7-day view's dense rendering — the
+    // owner: "instead of seven days, it would show me a much better kind of
+    // view, like hourly based"). Bounded to days ≤ 14 (≤ 336 zero-filled
+    // buckets) so the response stays lean; absent/`day` keeps the
+    // byte-identical historical shape (mobile + dashboard + tests green).
+    let granularity: "day" | "hour" = "day";
+    if (query.granularity !== undefined) {
+      if (query.granularity !== "day" && query.granularity !== "hour") {
+        return reply.code(400).send(
+          errorBody("VALIDATION", "granularity must be 'day' or 'hour'", {
+            field: "query.granularity",
+          }),
+        );
+      }
+      if (query.granularity === "hour" && days > 14) {
+        return reply.code(400).send(
+          errorBody("VALIDATION", "granularity=hour requires days ≤ 14 (hourly windows cap at 336 buckets)", {
+            field: "query.granularity",
+          }),
+        );
+      }
+      granularity = query.granularity;
+    }
+    return getDetailedUsage(db, { days, granularity });
   });
 
   // ---- ROUND-98 (R98-I2, owner: "Data & statistics"): the windowed stats

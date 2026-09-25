@@ -114,6 +114,8 @@ stream, the wizard's ambient set, the 9s chrome pass).
 | Toast enter/exit | **ROUND-126**: rising dock rides `--ac-clay-shadow-sheet` + a y-slide settle on SHEET_SPRING; exit 200ms fade |
 | Jump-to-latest pill | frosted pill, opacity 150ms on scroll-need |
 | Message-timeline bar growth (R120-C-PC) | hover-proximity scaling: CSS height transition 200ms quick tier, linear falloff (28px peak / 8px rest / 56px radius); 0s jump under reduced motion |
+| **Tool section auto-lifecycle (R127)** | a tool/thinking row EXPANDS on DISCLOSURE_SPRING the moment it goes live; on completing (live→settled) it holds ~2.5s (the owner reads the outcome), then COLLAPSES via the timed close (200ms ease-out height + 150ms fade) — never instant, never a spring on the way down. A user's manual toggle always wins (and silences the automation for that row's lifetime). Failed rows never auto-collapse — a failure stays open with its error excerpt. |
+| **Scrollbar fade (R127)** | the thumb tints in with the scroll (CSS, 120ms), holds while scrolling, fades out ~700ms after the last scroll event (CSS transition on background-color); no layout animation ever (the gutter never appears/disappears — overlay law, TOKENS §6) |
 
 ## 5. What NEVER animates (mobile §5, adopted)
 

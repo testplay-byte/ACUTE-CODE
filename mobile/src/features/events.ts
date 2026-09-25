@@ -12,7 +12,10 @@
  *                       foregrounded (the R42 discipline — the verbatim
  *                       activity.ts lifecycle), drops the handle on transport
  *                       blips without flipping the link (R110 #1e: the
- *                       manager's hysteresis owns the global status)
+ *                       manager's hysteresis owns the global status), and
+ *                       SELF-HEALS the drop (R127-W8: the desktop
+ *                       EventStreamStarter's reconnect ladder — see
+ *                       scheduleStreamRetry below)
  *
  * Wire contract (R113-a, commit 84f846f — mirrored from
  * agent-core/src/lib/events-bus.ts, nothing invented):
@@ -325,6 +328,26 @@ export interface EventsEnv {
  */
 const SESSION_REFRESH_DEBOUNCE_MS = 1_000;
 
+/**
+ * R127-W8 — the reconnect ladder's bounds: the DESKTOP's EventStreamStarter
+ * semantics, ported verbatim in shape (no jitter — the desktop has none):
+ * after a stream error/close/open-failure the controller retries openStream
+ * after 1s, then 2s, 4s, … capped at 15s; a successful HELLO frame resets
+ * the ladder to 1s (the stream is proven live — a future drop starts fresh).
+ * The gap this closes (the R127-Ra root cause #2): before this loop, one
+ * stream error over the relay/LAN left the phone deaf to ALL live frames —
+ * no turn mirror, no session/status frames, no appearance pushes — until an
+ * unrelated poke (a manager state change, a foreground flip, any successful
+ * api() call) happened to re-open it. Over the Cloudflare/DO relay, stream
+ * errors are ROUTINE (hibernation, mobile-network transitions); the desktop
+ * twin has self-healed since R113-b. The ladder only arms while the stream
+ * WOULD be held (connected + foregrounded — the R42 discipline): an
+ * intentional drop (backgrounding, link down) cancels the pending retry and
+ * resets the ladder, and the next intentional open starts fresh at 1s.
+ */
+const STREAM_RETRY_MIN_MS = 1_000;
+const STREAM_RETRY_MAX_MS = 15_000;
+
 export class EventsController {
   private store: EventsStore;
   private env: EventsEnv | null = null;
@@ -333,6 +356,10 @@ export class EventsController {
   private status: ConnectionStatus = "unpaired";
   private foreground = true;
   private sessionTimer: ReturnType<typeof setTimeout> | undefined;
+  /** R127-W8 — the pending reconnect (one max; cleared on intentional drop). */
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  /** R127-W8 — the ladder's current delay (1s → … → 15s; hello resets). */
+  private retryBackoffMs = STREAM_RETRY_MIN_MS;
 
   constructor(store: EventsStore) {
     this.store = store;
@@ -365,8 +392,17 @@ export class EventsController {
     }
     if (shouldHold && this.stream === null) {
       this.openStream();
-    } else if (!shouldHold && this.stream !== null) {
-      this.closeStream("link state changed");
+    } else if (!shouldHold) {
+      // R127-W8 — the R42 gate: the stream is (or would be) intentionally
+      // down. Any pending retry dies HERE (backgrounding / the link dropping
+      // must never leave a zombie timer re-opening a stream the discipline
+      // just closed), and the ladder resets — the next intentional open
+      // (foreground flip, manager reconnect) starts fresh at 1s.
+      this.clearStreamRetry();
+      this.retryBackoffMs = STREAM_RETRY_MIN_MS;
+      if (this.stream !== null) {
+        this.closeStream("link state changed");
+      }
     }
   }
 
@@ -375,6 +411,10 @@ export class EventsController {
     try {
       const stream = this.env.manager.sse("/api/v1/events/stream");
       mobLog("events", "stream opened");
+      // A fresh open supersedes any pending retry (the manager-poke path can
+      // re-open directly while a retry is still armed — the timer would fire
+      // into an already-open stream; the hello that follows resets ladder).
+      this.clearStreamRetry();
       this.store.setStreamLive(true);
       stream.addEventListener("data", (ev) => {
         const frame = parseEventsFrame(ev.data);
@@ -385,19 +425,32 @@ export class EventsController {
         // R110 #1e (the activity controller's exact discipline): the handle
         // is dead but the LINK verdict is NOT ours to flip — the manager's
         // hysteresis-verified probe owns the global status. Drop the handle
-        // so the manager's next verified state change re-opens cleanly.
+        // and let the R127-W8 ladder re-open it.
         mobWarn("events", "stream error", { kind: err.kind, message: err.message });
+        // Stale-guard: a handle the controller already replaced (the manager
+        // poke re-opened while this one was dying) must not clobber the NEW
+        // stream's state — only the CURRENT handle's death counts.
+        if (this.stream !== stream) return;
         this.stream = null;
         this.store.setStreamLive(false);
+        this.scheduleStreamRetry();
       });
       stream.addEventListener("close", () => {
         mobLog("events", "stream closed by host");
-        this.store.setStreamLive(false);
+        if (this.stream !== stream) return; // the stale-guard, as above
         this.stream = null;
+        this.store.setStreamLive(false);
+        // The host ended the stream cleanly (sidecar restart, relay/DO
+        // hibernation) — the desktop reconnects on exactly this shape; so do
+        // we: the hello-on-reconnect resync covers the gap.
+        this.scheduleStreamRetry();
       });
       this.stream = stream;
     } catch (err) {
       mobWarn("events", "stream open failed", err instanceof Error ? err.message : err);
+      // The desktop's catch leg: an open failure rides the SAME ladder (the
+      // retry only arms while the R42 gate holds — see the guard below).
+      this.scheduleStreamRetry();
     }
   }
 
@@ -414,6 +467,48 @@ export class EventsController {
   }
 
   /**
+   * R127-W8 — the reconnect ladder (the desktop EventStreamStarter's exact
+   * semantics, translated from its async start() loop to this controller's
+   * event-handle world): after a stream error/close/open-failure, retry
+   * openStream after the current backoff (1s → 2s → 4s → … capped 15s — no
+   * jitter; the desktop has none). Gated by the R42 discipline at ARM time
+   * (the retry only exists while the stream WOULD be held) and re-derived
+   * at FIRE time (the timer routes through sync(), so a link/background
+   * change during the wait is honored, not raced). One pending retry max —
+   * a fresh successful open clears it, hello resets the ladder.
+   */
+  private scheduleStreamRetry(): void {
+    if (!this.env) return;
+    if (this.retryTimer !== undefined) return; // one pending retry max
+    const status = this.env.manager.getStatus();
+    if (status !== "connected" || !this.foreground) {
+      // Intentional silence (the R42 discipline) — nothing to heal; the next
+      // manager/foreground poke opens fresh through sync().
+      return;
+    }
+    const delay = this.retryBackoffMs;
+    mobLog("events", `stream dropped — retrying in ${delay}ms`);
+    this.retryTimer = setTimeout(
+      () => {
+        this.retryTimer = undefined;
+        // sync() re-derives the whole verdict (status may have flipped since
+        // the timer armed) and opens only when the R42 gate still holds.
+        this.sync();
+      },
+      delay,
+    );
+    this.retryBackoffMs = Math.min(this.retryBackoffMs * 2, STREAM_RETRY_MAX_MS);
+  }
+
+  /** R127-W8 — drop a pending reconnect (intentional close / fresh open). */
+  private clearStreamRetry(): void {
+    if (this.retryTimer !== undefined) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = undefined;
+    }
+  }
+
+  /**
    * The dispatch — one parsed frame → the store's epochs + the raw frame
    * listeners. Public on purpose: it is the seam the tests drive (and any
    * future in-process publisher), with zero transport in sight.
@@ -424,6 +519,12 @@ export class EventsController {
         // The resync sweep — hello means "you may have missed everything
         // while disconnected": all three worlds move at once.
         mobLog("events", "hello — resync");
+        // R127-W8 — the ladder reset (the desktop's hello leg): the stream is
+        // PROVEN live end-to-end, so a future drop starts from the initial
+        // 1s delay. A stale pending retry (armed before a poke re-opened the
+        // stream) dies here too — this hello owns the present.
+        this.retryBackoffMs = STREAM_RETRY_MIN_MS;
+        this.clearStreamRetry();
         this.store.resync();
         break;
       }
@@ -464,13 +565,16 @@ export class EventsController {
     }, SESSION_REFRESH_DEBOUNCE_MS);
   }
 
-  /** Test seam: drop a pending debounced refresh (between test cases the
-   * timer would otherwise fire into a detached store). */
+  /** Test seam: drop a pending debounced refresh AND any pending stream
+   * retry (between test cases the timers would otherwise fire into a
+   * detached store/controller). */
   resetForTest(): void {
     if (this.sessionTimer !== undefined) {
       clearTimeout(this.sessionTimer);
       this.sessionTimer = undefined;
     }
+    this.clearStreamRetry();
+    this.retryBackoffMs = STREAM_RETRY_MIN_MS;
   }
 }
 

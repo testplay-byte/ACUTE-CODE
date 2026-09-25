@@ -301,7 +301,18 @@ describe("UsageScreen (ROUND-52 R52-b)", () => {
     );
     fireEvent.click(activityRange.getByRole("button", { name: "Last 7 days" }));
     expect((await screen.findAllByText("Tokens")).length).toBeGreaterThan(0);
-    expect(vi.mocked(fetchDetailedUsage)).toHaveBeenCalledWith(7);
+    // R127-W2 RE-PIN (the granularity derivation — the owner's "seven days…
+    // a much better kind of view, like hourly based" ask): the 7-day window
+    // now rides the HOURLY series, so the call shape gains the granularity
+    // arg. The 30-day pin above (line: toHaveBeenCalledWith(30)) STAYS TRUE
+    // — day mode keeps the historical single-arg fetchDetailedUsage(days)
+    // shape (and so do 14/90).
+    expect(vi.mocked(fetchDetailedUsage)).toHaveBeenCalledWith(7, "hour");
+    // R127-W2 (the chart contract re-pin): the hourly window reads in the
+    // chart's own header — the Kicker carries the "· hourly" suffix the
+    // UsageActivityChart renders in hour mode (the dedicated component
+    // suite owns the full hour-mode pins).
+    expect(await screen.findByText("Token Activity · 7 days · hourly")).toBeTruthy();
   });
 
   it("shows the empty state when the ledger has no sessions", async () => {
@@ -329,6 +340,90 @@ describe("UsageScreen (ROUND-52 R52-b)", () => {
     fireEvent.click(retry);
     expect(await screen.findByText("Tokens")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+/* ── ROUND-127 (R127-W1 — SCREENS §3 "THE USAGE PAGE ORDER", binding): the
+ * pins for the wave's layout contracts — the INSIGHTS RAIL in the activity
+ * grid's 1-col rail (NEVER the tools leaderboard, the owner's placement
+ * complaint), the tools leaderboard as its own FULL-WIDTH section below the
+ * grid, the per-model list directly below the Data & Statistics panel, and
+ * THE DANGER ZONE LAST (page scope — the owner's "very bottom" directive).
+ * The fetchDetailedUsage exact-args pin on (30) above is untouched — W2
+ * (R127) later re-pinned the 7-day call to (7, "hour") for the hourly
+ * series; day mode keeps the single-arg shape. */
+
+/** a precedes b in document order. */
+function precedes(a: Element, b: Element): boolean {
+  return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+}
+
+describe("UsageScreen ROUND-127 (R127-W1 — the page order)", () => {
+  it("the activity grid: the insights rail rides the 1-col rail — the leaderboard is NOT the rail anymore", async () => {
+    vi.mocked(fetchDetailedUsage).mockResolvedValue(seededDetailedUsage());
+    renderUsageScreen();
+
+    const rail = await screen.findByTestId("usage-insights-rail");
+    const leaderboard = screen.getByTestId("tools-leaderboard");
+
+    // The rail sits in the 3-col activity grid (Token Activity 2-cols +
+    // the rail 1-col)…
+    const grid = rail.closest(".grid");
+    expect(grid).toBeTruthy();
+    expect(grid?.className).toContain("lg:grid-cols-3");
+    // …and the leaderboard is OUT of that grid — it follows it as its own
+    // full-width section (the owner's "should not be shown just right of
+    // the token activity" directive).
+    expect(grid?.contains(leaderboard)).toBe(false);
+    expect(precedes(rail, leaderboard)).toBe(true);
+
+    // The rail's key details (the quiet rows — InsightsRail.test.tsx owns
+    // the full pins): top model + share, peak day, busiest tool, projects.
+    expect(within(rail).getByText("Top model")).toBeTruthy();
+    expect(within(rail).getByText("glm-5.2 · 100%")).toBeTruthy();
+    expect(within(rail).getByText("Peak day")).toBeTruthy();
+    expect(within(rail).getByText("Jun 2 · 330")).toBeTruthy();
+    expect(within(rail).getByText("Busiest tool")).toBeTruthy();
+    expect(within(rail).getByText("read_file · 3")).toBeTruthy();
+    expect(within(rail).getByText("Active projects")).toBeTruthy();
+  });
+
+  it("the page order: activity grid → leaderboard → Data & Statistics → Models → API keys → projects → DANGER ZONE LAST", async () => {
+    vi.mocked(fetchDetailedUsage).mockResolvedValue(seededDetailedUsage());
+    renderUsageScreen();
+
+    const rail = await screen.findByTestId("usage-insights-rail");
+    const leaderboard = screen.getByTestId("tools-leaderboard");
+    const stats = screen.getByTestId("data-stats-panel");
+    const models = screen.getByRole("region", { name: "Models" });
+    const keys = screen.getByRole("region", { name: "API keys" });
+    const projects = screen.getByRole("region", { name: "Projects and sessions" });
+    const danger = screen.getByTestId("clear-usage-card");
+
+    expect(precedes(rail, leaderboard)).toBe(true);
+    expect(precedes(leaderboard, stats)).toBe(true);
+    // The per-model list sits DIRECTLY below the Data & Statistics panel
+    // (the owner's "supposed to be shown below the Model Usage" directive).
+    expect(precedes(stats, models)).toBe(true);
+    expect(precedes(models, keys)).toBe(true);
+    expect(precedes(keys, projects)).toBe(true);
+    expect(precedes(projects, danger)).toBe(true);
+
+    // THE DANGER ZONE LAST (page scope): the card is the page content's
+    // final element — nothing follows it at rest (the ConfirmDialog only
+    // renders when armed).
+    expect(danger.parentElement?.lastElementChild).toBe(danger);
+  });
+
+  it("the models section carries the honest all-time sub-caption (the months-window nuance)", async () => {
+    vi.mocked(fetchDetailedUsage).mockResolvedValue(seededDetailedUsage());
+    renderUsageScreen();
+
+    const models = await screen.findByRole("region", { name: "Models" });
+    expect(
+      within(models).getByText(/Individual usage, all-time/i),
+    ).toBeTruthy();
+    expect(within(models).getByText(/Model Usage donut above shows the selected months window/i)).toBeTruthy();
   });
 });
 

@@ -127,7 +127,10 @@ everything else is secondary/ghost.
   transform = end-state.
 
 ## 6. The data-display grammar (round-98 I2 adds; round-99 E adds the
-anti-jitter + danger-zone rules)
+anti-jitter + danger-zone rules; **ROUND-127 adds the chart-interaction
+laws** — the owner's walkthrough: hovers that only fire above the bar,
+tooltips that overflow the card edge, a too-thin donut, empty 7-day
+views, charts that open at the oldest end)
 
 - **Stat cards**: big number (22px **600** tabular — ROUND-100 R100-C: the
   value tier is 600, never font-black; TOKENS §2's weight law) + label + one
@@ -143,7 +146,42 @@ anti-jitter + danger-zone rules)
   0.85 → 1); empty days transparent; month labels `meta` type.
 - **Donut/ring**: 6px track, center hole carries the headline stat; segment
   hover = MUTUAL highlight with the legend row (the round-97 context-bar
-  contract, generalized).
+  contract, generalized). **ROUND-127 (the gauge law): the DONUT-FOR-SHARE
+  charts (ModelDonut-class) draw a REAL gauge — ring ≥ 160px, stroke ≥ 14px
+  (a ~9% ring ratio), the center stat at display tier; the 6px hairline
+  track survives ONLY for micro-meters (the composer's ContextDonut) where
+  the ring sits beside a 46px control.** A share donut the owner squints at
+  is a defect.
+- **Chart hover hit-testing — ROUND-127 (the full-column law)**: every bar
+  chart's hover resolves through ONE transparent hit column per bar that
+  spans the FULL plot height (`data-bar-idx` on the column), and the PAINTED
+  segments above it are `pointer-events: none` — so hovering the bar's BODY,
+  its cap, or the empty air beside it all resolve the same bar. The R121-d
+  single-pointer-read law (one `onPointerMove` on the chart card, hit via
+  `closest("[data-bar-idx]")`) is unchanged; the DEFECT it fixes is painted
+  rects without the idx eating the pointer over the bar body (the owner's
+  "hover only works at the top area" complaint).
+- **Chart tooltip placement — ROUND-127 (the edge law)**: a tooltip centers
+  on its bar only while it fits; near the FIRST/LAST bars it clamps inside
+  the chart card's content box (align the tooltip's near edge to the plot's
+  edge + a small inset). NEVER a `translateX(-50%)` that overflows the card
+  at the right end (the owner's "details show where there is no place to
+  view them"). The clamp math rides the shared helper in
+  `usage-helpers.ts` (`clampTooltipX`), one spelling for every chart.
+- **Dense-series labeling — ROUND-127 (the sparse-tick + hour laws)**: when
+  a series renders more bars than the label band fits (~14 at 20px bars),
+  x-labels thin to SPARSE TICKS (the ModelStackChart 4-tick pattern —
+  first, ⅓, ⅔, last); HOUR buckets (the 7-day hourly view, granularity=
+  hour from `/usage/detailed`) label `HH:00` ticks + a `Mon DD · HH:00`
+  tooltip header through a DEDICATED hour-label branch — hour dates NEVER
+  reach the `\`${date}T00:00:00Z\`` day-label helpers (they template-append
+  and yield Invalid Date; dashboard/helpers.ts is day-only by contract).
+- **Scroll-to-latest — ROUND-127 (the newest-end law)**: any chart whose
+  natural width overflows its card (`overflow-x-auto`) MOUNTS at the
+  NEWEST end (scrollLeft = scrollWidth on mount + on every range/data
+  swap). A 90-day token-activity that opens at the oldest week with the
+  live edge off-screen is a defect (the owner's "should automatically
+  scroll to the latest one").
 - **Anti-jitter kit** (research §3.2): every numeric element renders
   `tabular-nums` (digits hold width while values grow); chart wrappers
   reserve their final height (`min-h` matching the fixed SVG geometry) so

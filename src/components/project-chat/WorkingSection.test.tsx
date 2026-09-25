@@ -13,12 +13,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import {
   BareWorkingEntries,
   FILE_MUTATION_TOOLS,
+  TOOL_COLLAPSE_HOLD_MS,
   WorkingSection,
   assignDelegateChildren,
   toolStatusDetail,
@@ -779,7 +780,9 @@ describe("collapsed-row icon chips (ROUND-51 R51-d)", () => {
     // #3b82f6 from this file); the wash + glyph follow styles.accent.
     expect(chip.style.background).toBe(withAlpha(theme.accent, 0.12));
     expect(chip.style.color).toBe(theme.accent);
-    // Still collapsed + one-line: the chip is the live signal, not an expansion.
+    // R127-W5: the in-flight row AUTO-EXPANDS now (MOTION §4) — the chip is
+    // still the row head's live signal; the body beneath it is the
+    // auto-expanded DiffDetail loading state, not a delegate view.
     expect(screen.getByRole("button", { name: /^Edited / })).toBeTruthy();
     expect(screen.queryByTestId("live-delegate-row")).toBeNull();
   });
@@ -833,7 +836,11 @@ describe("live command output tail (ROUND-52 R52-c)", () => {
     liveOutput: "PASS src/a.test.ts\nPASS src/b.test.ts\n",
   };
 
-  it("an in-flight run_command with accumulated output renders the live tail under the pill", () => {
+  // R127-W5 re-pin: the in-flight row now AUTO-EXPANDS (MOTION §4), so the
+  // tail renders INSIDE the expanded body (TerminalDetail's live view) — the
+  // same LiveOutputTail component that used to ride under the collapsed
+  // pill; its content/structure assertions are unchanged.
+  it("an in-flight run_command with accumulated output renders the live tail (R127-W5: in the auto-expanded body)", () => {
     renderWithProviders(
       <WorkingSection
         entries={[{ type: "tool", tool: LIVE_CMD }]}
@@ -902,7 +909,7 @@ describe("live command output tail (ROUND-52 R52-c)", () => {
     expect(screen.queryByTestId("live-command-output")).toBeNull();
   });
 
-  it("the tail keeps only the LAST ~10 lines of the accumulated output", () => {
+  it("the tail keeps only the LAST ~10 lines of the accumulated output (R127-W5: rides the auto-expanded body)", () => {
     const lines = Array.from({ length: 15 }, (_, i) => `line ${i + 1}`).join("\n");
     const longTail: ToolUseEntry & { liveOutput?: string } = { ...LIVE_CMD, liveOutput: lines };
     renderWithProviders(
@@ -935,7 +942,7 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
     liveInput: '{"path":"src/app.ts","content":"<!DOCTYPE html>\\n<html>"}',
   };
 
-  it("an in-flight write_file with liveInput renders the preview UNDER the pill (collapsed row)", () => {
+  it("an in-flight write_file with liveInput AUTO-EXPANDS — the preview IS the body (R127-W5's auto-lifecycle; never DiffDetail while live)", () => {
     renderWithProviders(
       <WorkingSection
         entries={[{ type: "tool", tool: LIVE_WRITE }]}
@@ -946,6 +953,12 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
       />,
     );
 
+    // R127-W5 re-pin (MOTION §4): the row expanded itself the moment it went
+    // live — the owner watches the file being written; the preview mounts as
+    // the expanded BODY (the pre-R127 "under the pill, collapsed row" spot
+    // is the manual-collapse fallback, pinned below).
+    const row = screen.getByRole("button", { name: /^Wrote / });
+    expect(row.getAttribute("aria-expanded")).toBe("true");
     const preview = screen.getByTestId("live-write-preview");
     // The label: filename (not the full path) + the decoded char count.
     expect(preview.textContent).toContain("writing app.ts");
@@ -957,7 +970,7 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
     expect(vi.mocked(fetchSessionCheckpoints)).not.toHaveBeenCalled();
   });
 
-  it("expanding the in-flight row keeps the preview as the body (the snapshot doesn't exist yet)", () => {
+  it("R127-W5: the in-flight row's manual toggle — collapsing puts the preview back UNDER the pill; re-expanding returns it to the body", async () => {
     renderWithProviders(
       <WorkingSection
         entries={[{ type: "tool", tool: LIVE_WRITE }]}
@@ -967,10 +980,24 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
         defaultOpen
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /^Wrote / }));
+    // Auto-expanded at mount: exactly ONE preview (the body).
+    expect(screen.getAllByTestId("live-write-preview")).toHaveLength(1);
 
-    // Still the preview — never DiffDetail's "loading diff…" placeholder.
-    expect(screen.getByTestId("live-write-preview")).toBeTruthy();
+    // The owner's own tap wins over the automation (MOTION §4) — collapsed:
+    // the preview rides UNDER the pill (the body's AnimatePresence exit
+    // settles first — during the 200ms timed close both paint while the old
+    // body folds away, so wait for the settle, never assert mid-flight).
+    fireEvent.click(screen.getByRole("button", { name: /^Wrote / }));
+    const row = screen.getByRole("button", { name: /^Wrote / });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    await waitFor(() => expect(screen.getAllByTestId("live-write-preview")).toHaveLength(1));
+    expect(screen.getByTestId("live-write-preview").textContent).toContain("writing app.ts");
+
+    // Re-expanded: the preview is the body again — never DiffDetail's
+    // "loading diff…" placeholder (the snapshot doesn't exist yet).
+    fireEvent.click(screen.getByRole("button", { name: /^Wrote / }));
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getAllByTestId("live-write-preview")).toHaveLength(1);
     expect(screen.queryByText(/loading diff/)).toBeNull();
     expect(screen.queryByText(/no snapshot recorded/)).toBeNull();
     expect(vi.mocked(fetchSessionCheckpoints)).not.toHaveBeenCalled();
@@ -2166,6 +2193,48 @@ describe("R117-f humanized tool args (the collapsed row's glance)", () => {
     expect(screen.getByText("of 42 total")).toBeTruthy();
   });
 
+  it("R127-W5: every file-family row renders the target path's EXTENSION-IDENTITY icon BEFORE the path pill (dir tools take the Folder glyph)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[
+          { type: "tool", tool: { seq: 85, toolName: "read_file", argsSummary: "path: src/app.ts", ok: true, ts: "t", outputSummary: "of 42 total" } },
+          { type: "tool", tool: { seq: 86, toolName: "list_dir", argsSummary: "path: src/components", ok: true, ts: "t2", outputSummary: "2 entries" } },
+          { type: "tool", tool: { seq: 87, toolName: "run_command", argsSummary: "cmd: ls", ok: true, ts: "t3", outputSummary: "[exit code: 0]" } },
+        ]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    // The .ts row: the violet TS glyph rides BEFORE the path pill (the
+    // owner's "proper colored icons based on their extensions" ask —
+    // TOKENS §1 exception #5's fixed identity, not a theme color).
+    const readRow = screen.getByRole("button", { name: /^Read path: src\/app\.ts — completed$/ });
+    const fileIcon = readRow.querySelector('[data-testid="file-type-icon"]') as HTMLElement;
+    expect(fileIcon).not.toBeNull();
+    expect(fileIcon.getAttribute("data-file-ext")).toBe("ts");
+    const pill = screen.getByRole("button", { name: "Open src/app.ts in sidebar" });
+    expect(readRow.contains(pill)).toBe(true);
+    expect(
+      fileIcon.compareDocumentPosition(pill) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the file-type icon rides BEFORE the path pill",
+    ).toBeTruthy();
+    // The tinted stroke resolves the fixed pair's dark leg (nova dark is the
+    // pinned theme): TS violet.
+    const svg = fileIcon.querySelector("svg") as SVGElement;
+    expect((svg as unknown as HTMLElement).style.color).toBe("#a78bfa");
+
+    // A DIRECTORY target (list_dir) takes the Folder meta, not a file family.
+    const dirRow = screen.getByRole("button", { name: /^Listed path: src\/components — completed$/ });
+    const dirIcon = dirRow.querySelector('[data-testid="file-type-icon"]') as HTMLElement;
+    expect(dirIcon.getAttribute("data-file-ext")).toBe("dir");
+
+    // run_command (no path target) renders NO file icon — the family glyph
+    // alone stays.
+    const cmdRow = screen.getByRole("button", { name: /^Ran cmd: ls — completed$/ });
+    expect(cmdRow.querySelector('[data-testid="file-type-icon"]')).toBeNull();
+  });
+
   it("run_command shows the command headline; delegate shows role · task_id; the raw string stays the fallback", () => {
     renderWithProviders(
       <WorkingSection
@@ -2329,5 +2398,224 @@ describe("R117-f the settled thought's Show-all (past the max-h-64 clamp)", () =
       />,
     );
     expect(screen.queryByTestId("thought-show-all")).toBeNull();
+  });
+});
+
+// ── ROUND-127 (R127-W5, MOTION.md §4): the tool-section AUTO-LIFECYCLE ──────
+// Owner (verbatim): "the things would not automatically expand and collapse
+// by themselves. Like if a command is run, then it should auto-expand that
+// section and then auto-collapse it afterwards, after some time. Not
+// immediately after finishing it. It should take some time and then smoothly
+// close it."
+//
+// The law: a tool/thinking row EXPANDS the moment it goes live; on
+// completing it HOLDS TOOL_COLLAPSE_HOLD_MS (~2.5s), then COLLAPSES via the
+// timed close (200ms ease-out height + 150ms fade — never instant); a
+// manual toggle always wins (and silences the automation for the row's
+// lifetime); FAILED rows never auto-collapse.
+//
+// FAKE TIMERS: the hold is pinned on the row's EXPANDED STATE (the toggle's
+// aria-expanded flips synchronously with the timer), not on body-content
+// presence — happy-dom cannot observe framer's AnimatePresence exit, which
+// keeps the body mounted through its 200ms timed close regardless.
+describe("R127-W5: the tool-section auto-lifecycle (MOTION §4)", () => {
+  /** The thought row's toggle (aria-expanded mirrors the row's open state). */
+  const thoughtToggle = () =>
+    screen.getByRole("button", { name: /^(Collapse|Expand) thought$/ }) as HTMLElement;
+
+  /** A live section whose single thought is in flight (liveEntryIndex=0) —
+   * completing re-renders with the marker moved OFF the row (the store
+   * flushed it into working), the SECTION staying live: the real mid-turn
+   * shape (a thought completes while the turn keeps running). */
+  function liveThoughtSection(liveEntryIndex: number | undefined): ReactElement {
+    return (
+      <WorkingSection
+        entries={[{ type: "thinking", text: "plan the work", ts: "t", thinkingMs: 400 }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+        liveEntryIndex={liveEntryIndex}
+      />
+    );
+  }
+
+  /** A live section with one run_command row (running → settled re-render
+   * flips ok on the SAME seq — the store's mid-turn tool-result patch). */
+  function liveRunSection(tool: ToolUseEntry): ReactElement {
+    return (
+      <WorkingSection
+        entries={[{ type: "tool", tool }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+      />
+    );
+  }
+
+  const RUNNING_CMD: ToolUseEntry & { liveOutput?: string } = {
+    seq: -13,
+    toolName: "run_command",
+    argsSummary: "pnpm test",
+    ok: null,
+    ts: "t",
+    liveOutput: "PASS src/a.test.ts\n",
+  };
+
+  /** Rerender-safe providers (the R95-D suite's pattern): RTL's `rerender`
+   * preserves the WRAPPER, so the section re-renders with its QueryClient —
+   * renderWithProviders' wrapper is initial-render-only and a plain
+   * rerender drops the client (useDelegateChildren's useQuery dies). */
+  function renderSection(ui: ReactElement) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return render(ui, {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>{children}</MemoryRouter>
+        </QueryClientProvider>
+      ),
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a LIVE thought renders EXPANDED; completing HOLDS the hold window, then timed-collapses (never instantly)", () => {
+    const utils = renderSection(liveThoughtSection(0));
+    expect(thoughtToggle().getAttribute("aria-expanded")).toBe("true");
+
+    // Completing: the live marker moves off the row, the section keeps
+    // running — the row holds OPEN (the pre-R127 instant collapse is dead).
+    act(() => {
+      utils.rerender(liveThoughtSection(undefined));
+    });
+    expect(thoughtToggle().getAttribute("aria-expanded")).toBe("true");
+
+    // Still held a tick before the window elapses…
+    act(() => {
+      vi.advanceTimersByTime(TOOL_COLLAPSE_HOLD_MS - 1);
+    });
+    expect(thoughtToggle().getAttribute("aria-expanded")).toBe("true");
+    // …and closed exactly at it.
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(thoughtToggle().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("a manual tap during the hold CANCELS the auto-collapse (the toggle wins for the row's lifetime)", () => {
+    const utils = renderSection(liveThoughtSection(0));
+    act(() => {
+      utils.rerender(liveThoughtSection(undefined));
+    });
+    expect(thoughtToggle().getAttribute("aria-expanded")).toBe("true"); // the hold
+
+    // The owner taps during the hold — the row collapses NOW (their choice)…
+    fireEvent.click(thoughtToggle());
+    expect(thoughtToggle().getAttribute("aria-expanded")).toBe("false");
+    // …taps again to re-read it, and the automation NEVER re-fires: the row
+    // stays open past the whole hold window + more.
+    fireEvent.click(thoughtToggle());
+    expect(thoughtToggle().getAttribute("aria-expanded")).toBe("true");
+    act(() => {
+      vi.advanceTimersByTime(TOOL_COLLAPSE_HOLD_MS * 2);
+    });
+    expect(thoughtToggle().getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("a LIVE run_command renders its live tail EXPANDED (the owner watches the command run)", () => {
+    renderSection(liveRunSection(RUNNING_CMD));
+    const row = screen.getByRole("button", { name: /^Ran pnpm test — running$/ });
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    // The live view rides in the expanded body (TerminalDetail's live tail).
+    const tail = screen.getByTestId("live-command-output");
+    expect(tail.textContent).toContain("PASS src/a.test.ts");
+  });
+
+  it("a tool row completing (ok null→true) holds the window, then timed-collapses; a settled row mounted non-live never auto-expands", () => {
+    const utils = renderSection(liveRunSection(RUNNING_CMD));
+    const row = screen.getByRole("button", { name: /^Ran pnpm test — running$/ });
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+
+    // The tool-result lands (same seq, ok + outputSummary attached — the
+    // store's settled shape; the live tail is stripped).
+    const settled: ToolUseEntry = {
+      ...RUNNING_CMD,
+      ok: true,
+      outputSummary: "3 passed\n[exit code: 0]",
+    };
+    act(() => {
+      utils.rerender(liveRunSection(settled));
+    });
+    expect(row.getAttribute("aria-expanded")).toBe("true"); // the hold
+    act(() => {
+      vi.advanceTimersByTime(TOOL_COLLAPSE_HOLD_MS - 1);
+    });
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+
+    // The no-regression leg: a FOLDED turn's completed row mounts COLLAPSED
+    // (no ok-transition was ever observed — old rows never pop open).
+    cleanup();
+    renderSection(
+      <WorkingSection
+        entries={[{ type: "tool", tool: { ...settled } }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    const foldedRow = screen.getByRole("button", { name: /^Ran pnpm test — completed$/ });
+    expect(foldedRow.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("a FAILED tool row NEVER auto-collapses (MOTION §4 — a failure stays open with its error excerpt)", () => {
+    const utils = renderSection(liveRunSection(RUNNING_CMD));
+    const row = screen.getByRole("button", { name: /^Ran pnpm test — running$/ });
+    act(() => {
+      utils.rerender(
+        liveRunSection({
+          ...RUNNING_CMD,
+          ok: false,
+          outputSummary: "error TS2304: Cannot find name 'foo'\n[exit code: 1]",
+        }),
+      );
+    });
+    // The failure holds open through the hold window and far past it.
+    act(() => {
+      vi.advanceTimersByTime(TOOL_COLLAPSE_HOLD_MS * 3);
+    });
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    // The full error dump rides in the open body (the excerpt is the
+    // collapsed view's glance).
+    expect(screen.getByText("error TS2304: Cannot find name 'foo'")).toBeTruthy();
+  });
+
+  it("delegate_task rows are CARVED OUT of the auto-lifecycle (their body is the R64-c claim-matched view with its own logic)", () => {
+    renderSection(
+      <WorkingSection
+        entries={[{ type: "tool", tool: { seq: -14, toolName: "delegate_task", argsSummary: "task: Fix it, role: coder", ok: null, ts: "t" } }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        live
+      />,
+    );
+    const row = screen.getByRole("button", { name: /^Delegated task: Fix it, role: coder — running$/ });
+    // Pending delegate rows stay COLLAPSED until the owner expands them —
+    // the R64-c manual-expand contract (and its single-live-child open
+    // affordance) owns that row, not the generic automation.
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    act(() => {
+      vi.advanceTimersByTime(TOOL_COLLAPSE_HOLD_MS);
+    });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
   });
 });

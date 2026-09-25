@@ -3942,6 +3942,92 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
     // renders (it appears only when the user scrolls UP inside it).
     expect(screen.queryByTestId("thinking-jump-latest")).toBeNull();
   });
+
+  // ── R127-W5: the two MISSED follow deps (the owner: "there was no
+  // auto-scroll functionality on the PC side") — content grows INSIDE a live
+  // working section while NONE of the old deps (items.length, busy, the
+  // working count, the answer-tail length, the queue lengths) fire: the
+  // live THINKING text streams with the answer tail empty, and the model
+  // types a tool call's JSON args with nothing else moving. The thinking
+  // length + the streaming-args byte count joined the deps. ──
+
+  /** R127-W5: arm the live turn with a STREAMING TOOL-ARG accumulation (the
+   * pending write row's source — everything else stays empty/frozen). */
+  function armLiveStreamingArgsTurn(raw: string): void {
+    useStreamStore.setState({
+      bySession: {
+        [SESSION_ID]: {
+          liveTurn: {
+            startedAtMs: Date.now() - 3000,
+            working: [],
+            streamText: "",
+            streamThinking: "",
+            stopped: false,
+            stoppedByUser: false,
+            streamingToolInputs: [
+              { toolCallId: "call_w5", toolName: "write_file", raw },
+            ],
+            debugReport: null,
+            browserCheckpoint: null,
+            retry: null,
+            note: null,
+          },
+          streamBusy: true,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: false,
+          feedbackEvent: null,
+        },
+      },
+    });
+  }
+
+  it("R127-W5: a GROWING LIVE THINKING text keeps the pinned view following (the missed dep — the owner's 'no auto-scroll on the PC side')", async () => {
+    const scroller = await renderScrollPanel();
+    const scrollTo = vi.fn();
+    scroller.scrollTo = scrollTo;
+    armLiveThinkingOnlyTurn("the live thinking tail grows here", "");
+    await screen.findByText(/live thinking tail grows here/, {}, SLOW);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled(), SLOW);
+
+    // The thought KEEPS STREAMING while the answer tail stays EMPTY — the
+    // old deps never fired on this tick (busy already true, no entry
+    // settled, no text), so the pinned transcript sat exactly here. The
+    // thinking length now joins the deps → the follow fires + the pill
+    // stays hidden (still pinned).
+    scrollTo.mockClear();
+    armLiveThinkingOnlyTurn("the live thinking tail grows here — and it keeps going", "");
+    await screen.findByText(/and it keeps going/, {}, SLOW);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled(), SLOW);
+    expect(pill()).toBeNull();
+  });
+
+  it("R127-W5: growing STREAMING TOOL ARGS keep the pinned view following (the write preview's growth — the second missed dep)", async () => {
+    const scroller = await renderScrollPanel();
+    const scrollTo = vi.fn();
+    scroller.scrollTo = scrollTo;
+    armLiveStreamingArgsTurn('{"path":"src/generated.ts","content":"export const A = 1;');
+    await screen.findByText(/Writing/, {}, SLOW);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled(), SLOW);
+
+    // The model keeps typing the call's JSON args — the pending write row's
+    // body grows with no text/thinking/entry change anywhere else. The
+    // streaming-args byte count joined the deps → the follow fires.
+    scrollTo.mockClear();
+    armLiveStreamingArgsTurn(
+      '{"path":"src/generated.ts","content":"export const A = 1;\nexport const B = 2;',
+    );
+    await screen.findByText(/export const B = 2;/, {}, SLOW);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled(), SLOW);
+    expect(pill()).toBeNull();
+  });
 });
 
 // ── ROUND-117 (R117-f): the PC transcript quality wave's panel legs ─────────

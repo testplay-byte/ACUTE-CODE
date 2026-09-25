@@ -49,23 +49,23 @@ import { recordSnapshot } from "../../storage/snapshots.js";
 // ROUND-96 (R96-C): the atomic batch shape + the uniform result type.
 import type { EditOp } from "../fs-ops.js";
 import type { PluginDefinition, ToolBuildContext, ToolDefinition, ToolResult } from "../registry.js";
-// ROUND-98 (R98-F2): the whole-file budget — the redundant-read reminder's
-// expensive-file threshold (re-reads of files OVER this budget cost real
-// context; ≤48KB re-reads are cheap and stay unreminded).
-import { READ_WHOLE_BUDGET_BYTES } from "../fs-ops.js";
 
-/** ROUND-98 (R98-F2): the redundant-read reminder — ONE bounded note when
- * the model re-reads a file it already read/wrote THIS session, ONLY for
- * files over the 48KB whole-file budget (the re-read is expensive there;
- * ≤48KB re-reads are cheap and reminding on them would be noise). Once per
- * file per session (file-ledger's shouldRemindRedundantRead check-and-mark,
- * the R72-d session-once pattern). The text is deliberately one sentence —
- * the task-hints discipline: a reminder is a hint, not a second prompt. */
+/** ROUND-98 (R98-F2) → ROUND-127 (R127-W6): the redundant-read reminder —
+ * ONE bounded note when the model re-reads a file it already read/wrote
+ * THIS session. R98 fired it ONLY for files over the 48KB whole-file
+ * budget; the owner's live complaint ("the context of our agent is most
+ * definitely not handled well… It should not be needing to reread the
+ * files again and again") retired the size threshold — the reminder now
+ * fires on ANY re-read (a small file re-read is just as much a wasted
+ * round-trip as a large one). Still once per file per session
+ * (file-ledger's shouldRemindRedundantRead check-and-mark, the R72-d
+ * session-once pattern), and the text is still ONE sentence — the
+ * task-hints discipline: a reminder is a hint, not a second prompt. */
 function redundantReadReminder(relPath: string): string {
   return renderReminder({
     kind: "note",
     label: `[you already read ${relPath} this session]`,
-    text: `you already read ${relPath} this session — prefer direct edits with anchors from your last read/write.`,
+    text: `you already read ${relPath} this session — it is already in your context from that earlier read/write: anchor edits against what you already have, and re-read only after an edit_file failure tells you the content moved or you have concrete evidence the file changed on disk.`,
   });
 }
 
@@ -128,16 +128,20 @@ export const filesystemPlugin: PluginDefinition = {
         // Read parity) + offset/limit pagination for large files. The content
         // after each line-number prefix is byte-exact — the model strips the
         // prefix when building edit_file anchors.
-        // ROUND-96 (R96-C): the description now teaches WHOLE-FILE-FIRST —
-        // the owner's bug class was a modest HTML file read in needless
-        // parts ("it could have read the whole HTML file in a single go but
-        // it split the HTML file into multiple parts"). The old copy taught
+        // ROUND-96 (R96-C): the description teaches WHOLE-FILE-FIRST — the
+        // owner's bug class was a modest HTML file read in needless parts
+        // ("it could have read the whole HTML file in a single go but it
+        // split the HTML file into multiple parts"). The old copy taught
         // paging ("page through with offset… instead of re-reading the whole
-        // file") — exactly backwards. Files under ~48KB return WHOLE in one
-        // call; only genuinely large files page, and the truncation marker
-        // then carries the exact continuation.
+        // file") — exactly backwards.
+        // ROUND-127 (R127-W6): the budget is 48KB → ~128KB (the owner's live
+        // complaint: a 554-line / ~10K-token file was read in THREE parts),
+        // and the language is STRONGER: the default single call returns the
+        // whole file for anything under ~128KB — do NOT page with offset/limit
+        // unless a previous call's truncation marker told you to continue; a
+        // few-hundred-line file ALWAYS reads whole in one call.
         description:
-          "Reads a text file with line numbers (cat -n style: right-aligned line number + two spaces + content). Path is relative to the project root. Files under ~48KB return the WHOLE file in one call — prefer that; do NOT page small files or read them in parts. Only genuinely large files page: the result then ends with a truncation marker carrying the file's total line count and the EXACT next call ('use offset=N to continue') — page from there, don't guess. Read BEFORE editing so you know the exact current text, and cite locations as path:line. For targeted re-reads of a known region use offset (1-based start line) and limit (number of lines). The line-number prefix is NOT part of the file — when building edit_file anchors, copy ONLY the content after the prefix. read_file may append a [conventions from <dir>/AGENTS.md] reminder when a deeper directory carries its own AGENTS.md/CLAUDE.md — it is a reminder, not file content.",
+          "Reads a text file with line numbers (cat -n style: right-aligned line number + two spaces + content). Path is relative to the project root. The default single call (no offset/limit) returns the WHOLE file in one call for anything under ~128KB (~32K tokens) — a few-hundred-line source file ALWAYS reads whole in one call, so do NOT page with offset/limit and do NOT pre-split the read unless a previous call's truncation marker told you to continue. Only genuinely large files page: the result then ends with a truncation marker carrying the file's total line count and the EXACT next call ('use offset=N to continue') — page from there, don't guess. Read BEFORE editing so you know the exact current text, and cite locations as path:line. For targeted re-reads of a known region use offset (1-based start line) and limit (number of lines). The line-number prefix is NOT part of the file — when building edit_file anchors, copy ONLY the content after the prefix. read_file may append a [conventions from <dir>/AGENTS.md] reminder when a deeper directory carries its own AGENTS.md/CLAUDE.md — it is a reminder, not file content.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
@@ -170,16 +174,13 @@ export const filesystemPlugin: PluginDefinition = {
                   mtimeMs: stats.mtimeMs,
                   size: stats.size,
                 });
-                // The bounded redundant-read reminder: ONLY a re-read of a
-                // file the session already saw AND only when the file is
-                // OVER the ~48KB whole-file budget — the expensive re-reads.
-                // (≤48KB re-reads are cheap; reminding on them would be
-                // noise. Once per file per session, via the check-and-mark.)
-                if (
-                  alreadySaw &&
-                  stats.size > READ_WHOLE_BUDGET_BYTES &&
-                  shouldRemindRedundantRead(sessionId, resolved.abs)
-                ) {
+                // The bounded redundant-read reminder: ANY re-read of a
+                // file the session already saw — R127-W6 retired R98's
+                // over-the-48KB-budget size gate (the owner: "It should
+                // not be needing to reread the files again and again" —
+                // the wasted round-trip is the problem, not the byte
+                // count). Once per file per session, via the check-and-mark.
+                if (alreadySaw && shouldRemindRedundantRead(sessionId, resolved.abs)) {
                   ledgerSuffix = redundantReadReminder(relPath);
                 }
               }
@@ -260,7 +261,7 @@ export const filesystemPlugin: PluginDefinition = {
         // confirmation with no diff body (the UI renders diffs from the
         // recorded snapshots).
         description:
-          "Edit an existing file by exact string replacement. Read the file first (needed before the FIRST edit of a file this session; after a successful edit or write of the SAME file your anchors are current — edit again directly without re-reading) and copy oldString EXACTLY from the current content — one whitespace character of difference misses. Include enough surrounding lines to make oldString match EXACTLY ONCE, or set replaceAll: true to replace every occurrence (the result reports the count). Exactly ONE fallback rung exists: when the exact anchor is absent, whitespace-normalized matching is tried once (runs of whitespace compared as a single space) and the result says so — anything else fails honestly; on failure re-read the file and re-anchor on CURRENT content. For several changes to one file pass edits: [{oldString, newString}, …] (max 32, optionally with replaceAll per item): every anchor is validated IN ORDER against the evolving content and applied in ONE atomic write — any failure names the failing index and leaves the file UNTOUCHED. Prefer edit_file over write_file for changing existing files.",
+          "Edit an existing file by exact string replacement. Read the file first (needed before the FIRST edit of a file this session; after a successful edit or write of the SAME file your anchors are current — edit again directly without re-reading) and copy oldString EXACTLY from the current content — one whitespace character of difference misses. Include enough surrounding lines to make oldString match EXACTLY ONCE, or set replaceAll: true to replace every occurrence (the result reports the count). Exactly ONE fallback rung exists: when the exact anchor is absent, whitespace-normalized matching is tried once (runs of whitespace compared as a single space) and the result says so — anything else fails honestly; a not-found failure names the recovery (re-read JUST the region — read_file with offset/limit around where you expected it, or the whole file, which returns whole in one call under ~128KB — then re-anchor on CURRENT content) and echoes the first line of the anchor you tried to match. For several changes to one file pass edits: [{oldString, newString}, …] (max 32, optionally with replaceAll per item): every anchor is validated IN ORDER against the evolving content and applied in ONE atomic write — any failure names the failing index and leaves the file UNTOUCHED. Prefer edit_file over write_file for changing existing files.",
         inputSchema: jsonSchema({
           type: "object",
           properties: {

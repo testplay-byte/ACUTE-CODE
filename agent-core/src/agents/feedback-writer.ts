@@ -30,6 +30,20 @@
  *     agent/model, turn outcome — and, R125-B, the mid-turn Phase marker —
  *     transcript size) — the model never gets to fabricate metadata; its
  *     whole job is the six diagnostic sections.
+ *   · ROUND-127 (R127-W7): the TRANSCRIPT the model receives now opens
+ *     with a MACHINE-WRITTEN context-telemetry preamble — the context
+ *     window + its provenance, the output reserve, the available budget,
+ *     the provider-anchored context usage at the last provider call, and
+ *     the session's lifetime token totals (the owner's: "make the
+ *     feedback ledger prompts much better, like they would include the
+ *     proper details which are necessary, like what was the context of
+ *     it, what were the total expected tokens around that time, what was
+ *     roughly available there"). The numbers come from the SAME seams the
+ *     live context meter reads (resolveTurnBudget, providerUsageAnchor,
+ *     the usage_events SUMs) so the ledger and the meter can never tell
+ *     two different stories; the block rides the TRANSCRIPT ONLY — the
+ *     ledger file's format (header + six sections) is untouched by
+ *     construction.
  *   · The system prompt frames the report for a COLD developer read
  *     months later, not for the owner watching the turn — and (R125-B) it
  *     knows what a PARTIAL turn's checkpoint entry should focus on.
@@ -52,6 +66,19 @@ import { appendFeedbackEntry, readFeedbackLedger } from "../storage/feedback-led
 import { beginFeedbackWrite, endFeedbackWrite } from "./feedback-status.js";
 import { buildDebugTranscript } from "./debug-analyst.js";
 import type { ChatFn } from "./chat.js";
+// ROUND-127 (R127-W7): the telemetry block's number sources — the SAME
+// seams the live context meter reads (routes/sessions.ts's context
+// handler): resolveTurnBudget for the window/reserve/available (with
+// provenance), and the R125-C anchor machinery (providerUsageAnchor over
+// the session events, applied to the compaction-applied history) for the
+// provider-anchored used. No cycle risk: neither module imports the writer.
+import { assembleHistory, resolveTurnBudget } from "./runtime.js";
+import {
+  applyCompaction,
+  findLatestCompaction,
+  providerUsageAnchor,
+} from "./compaction.js";
+import { listSessionEvents } from "../storage/sessions.js";
 
 type SqliteDatabase = Database.Database;
 
@@ -101,6 +128,13 @@ const FEEDBACK_REPORTER_SYSTEM_PROMPT = [
   "",
   "MID-TURN CHECKPOINTS (ROUND-125): sometimes the transcript you receive begins with the machine-written line \"NOTE: this is a PARTIAL turn (mid-turn checkpoint)\". That turn is STILL IN FLIGHT — the checkpoint exists precisely because the turn ran into trouble mid-way. In that case: say plainly in \"What actually happened\" that this is a mid-turn checkpoint of a turn that has not finished; concentrate \"Issues & problems encountered\" and \"Glitches & anomalies noticed\" on what has gone WRONG so far (the failures, refusals, retries and denials that triggered the checkpoint); and judge \"Expectations vs reality\" against the still-outstanding task, never as a final verdict. The six sections, their exact headings, and every rule above stay exactly the same.",
   "",
+  // R127-W7: the telemetry-teaching paragraph — the model is told to USE
+  // the machine-measured numbers, never restate them wholesale, never
+  // invent one the block does not carry. Deliberately NOT a seventh
+  // heading: it is guidance, not a section (the six-heading contract above
+  // stays byte-exact).
+  "CONTEXT TELEMETRY (ROUND-127): the transcript you receive carries a machine-written CONTEXT TELEMETRY block (immediately after the PARTIAL-turn banner on a mid-turn checkpoint). Those numbers are measured, not estimated by you — the context window and its provenance, the output reserve, the available budget, the provider-anchored context usage at the last provider call, and the session's lifetime token totals. Weave them into your report where they explain the outcome (a turn that hit the context ceiling, a compaction that fired mid-turn, a usage anomaly, a cache that never hit); cite them plainly (e.g. 'context was at 61% of the 200k window'). Never restate the whole block — use the numbers that matter to the story, and never invent a number the block does not carry.",
+  "",
   "RULES:",
   "- Raw facts from the transcript ONLY. Never invent events and never speculate beyond what is written; when unsure, say so plainly.",
   "- No politeness, no flattery, no self-congratulation — this ledger is a diagnostic instrument.",
@@ -115,6 +149,108 @@ const FEEDBACK_REPORTER_SYSTEM_PROMPT = [
  * byte-identical (no banner) so old entries and old prompts are untouched. */
 const MID_TURN_TRANSCRIPT_NOTE =
   "NOTE: this is a PARTIAL turn (mid-turn checkpoint) — the turn is STILL IN FLIGHT; this entry is being written because the turn ran into trouble mid-way.";
+
+/** R127-W7: the telemetry block's fixed opening line — the machine-written
+ * marker the system prompt's CONTEXT TELEMETRY paragraph keys on. Like the
+ * mid-turn banner: written by the MACHINE (never the model) so the numbers
+ * cannot be fabricated or dropped. */
+const CONTEXT_TELEMETRY_HEADER = "CONTEXT TELEMETRY (machine-measured, this turn):";
+
+/** R127-W7: the window's provenance in the METER'S OWN vocabulary (the
+ * context donut's label spellings — one vocabulary across surfaces, so a
+ * cold reader of the ledger and a live reader of the meter see the same
+ * words for the same source). */
+function contextWindowSourceLabel(
+  source: "override" | "catalog" | "default",
+): string {
+  switch (source) {
+    case "override":
+      return "your override";
+    case "catalog":
+      return "catalog default";
+    default:
+      return "assumed 200k — unknown model";
+  }
+}
+
+/**
+ * R127-W7: build the machine-written context-telemetry preamble the
+ * reporter's transcript opens with — the owner's "what was the context of
+ * it, what were the total expected tokens around that time, what was
+ * roughly available there" answered with MEASURED numbers, never the
+ * model's guesses.
+ *
+ * The three number sources (each the SAME seam the live context meter
+ * reads, so the two surfaces can never disagree):
+ *   · resolveTurnBudget(db, provider.id, model) — the window WITH its
+ *     provenance, the output reserve, and available = window − reserve −
+ *     margin (routes/sessions.ts's context handler resolves exactly this);
+ *   · providerUsageAnchor(events, meterMessages) — the R125-C law: the
+ *     provider's OWN reported inputTokens + the estimated tail of messages
+ *     the provider has not yet seen, computed over the compaction-applied
+ *     history exactly the way the meter computes it;
+ *   · the usage_events SUMs — the context handler's totalsRow pattern
+ *     (input/output/cached totals, COUNT(*) turns, the raw cached SUM kept
+ *     NULL so a never-reported cache tier renders "not reported", never a
+ *     fabricated 0%).
+ *
+ * Honesty law: where a number cannot resolve, the block SAYS SO (the
+ * "no provider report yet" line when the anchor is null; "no usage rows
+ * yet" when COUNT(*) is 0 — a turn that died before any completed provider
+ * call) — a measured zero is a zero, but an ABSENCE is never dressed up as
+ * one. A session with usage rows renders the full line verbatim.
+ */
+function buildContextTelemetryBlock(
+  db: SqliteDatabase,
+  params: { sessionId: string; provider: { id: string }; model: string },
+): string {
+  const budget = resolveTurnBudget(db, params.provider.id, params.model);
+
+  const events = listSessionEvents(db, params.sessionId);
+  const latestCompact = findLatestCompaction(events);
+  const seqMessages = assembleHistory(db, params.sessionId);
+  const meterMessages =
+    latestCompact !== null ? applyCompaction(seqMessages, latestCompact) : seqMessages;
+  const anchor = providerUsageAnchor(events, meterMessages);
+
+  const totalsRow = db
+    .prepare(
+      `SELECT
+           COALESCE(SUM(input_tokens), 0) AS inputTokens,
+           COALESCE(SUM(output_tokens), 0) AS outputTokens,
+           SUM(cached_input_tokens) AS cachedInputTokensRaw,
+           COALESCE(SUM(cached_input_tokens), 0) AS cachedInputTokens,
+           COUNT(*) AS requests
+         FROM usage_events WHERE session_id = ?`,
+    )
+    .get(params.sessionId) as {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokensRaw: number | null;
+    cachedInputTokens: number;
+    requests: number;
+  };
+  const hitRate =
+    totalsRow.cachedInputTokensRaw !== null && totalsRow.inputTokens > 0
+      ? `${Math.round((totalsRow.cachedInputTokensRaw / totalsRow.inputTokens) * 100)}%`
+      : "not reported";
+
+  const usedLine =
+    anchor !== null
+      ? `· context used at last provider call: ${anchor} (provider-anchored)`
+      : "· context used at last provider call: no provider report yet (turn died before first reply)";
+  const totalsLine =
+    totalsRow.requests > 0
+      ? `· session totals at write time: ${totalsRow.inputTokens} in / ${totalsRow.outputTokens} out / ${totalsRow.cachedInputTokens} cached (hit rate ${hitRate}) over ${totalsRow.requests} turns`
+      : "· session totals at write time: no usage rows yet (no completed provider call)";
+
+  return [
+    CONTEXT_TELEMETRY_HEADER,
+    `· context window: ${budget.contextWindow} tokens (${contextWindowSourceLabel(budget.contextWindowSource)}) · output reserve: ${budget.maxOutputTokens} · available: ${budget.available}`,
+    usedLine,
+    totalsLine,
+  ].join("\n");
+}
 
 /** The reporter's temperature — the repo's agent default (the debug
  * analyst's 0.2: a diagnostic report needs consistency, not creativity). */
@@ -208,6 +344,11 @@ type InternalWriterResult = FeedbackWriterResult & { entriesAfterWrite?: number 
  *     words);
  *   · the Phase line on the machine-written header (mid-turn only —
  *     turn-end entries stay byte-identical to the R122 format).
+ * R127-W7 plumbing: the transcript the model receives opens with the
+ * machine-written CONTEXT TELEMETRY block (banner first on mid-turn, then
+ * telemetry, then the transcript body — the ORDER LAW at the composition
+ * site below); the ledger FILE gains nothing (the telemetry rides the
+ * transcript only).
  *
  * Never throws: transcript failures, provider failures, and write
  * failures all come back as { ok: false, error } — the route logs to
@@ -252,12 +393,34 @@ async function writeFeedbackEntry(
     return { ok: false, error: "feedback reporter: the session transcript is empty (nothing to report on)" };
   }
 
-  // R125-B: the checkpoint's transcript carries the machine-written
-  // PARTIAL-turn banner (the system prompt's checkpoint paragraph keys on
-  // its exact opening words); the turn-end transcript stays byte-identical
-  // (no banner) so the R122 prompt behavior is untouched.
+  // R127-W7: the machine-measured telemetry preamble. Built AFTER the
+  // transcript (it reads the same session's events/history/usage the
+  // transcript came from) and composed SECOND — after the mid-turn banner,
+  // before the transcript body. A telemetry failure must never kill the
+  // entry (the writer's never-throws contract — feedback must never affect
+  // the normal flow): the block degrades to the honest unavailable line,
+  // never a fabricated number.
+  let telemetryBlock: string;
+  try {
+    telemetryBlock = buildContextTelemetryBlock(deps.db, params);
+  } catch {
+    telemetryBlock = [
+      CONTEXT_TELEMETRY_HEADER,
+      "· telemetry unavailable — the context numbers were not measured; do not guess them. The transcript below is unaffected.",
+    ].join("\n");
+  }
+
+  // R127-W7: THE ORDER LAW — banner (mid-turn only) FIRST, telemetry
+  // SECOND, transcript body LAST. The banner leads because the system
+  // prompt's MID-TURN CHECKPOINTS paragraph keys on the transcript
+  // BEGINNING with the NOTE line (read the paragraph: "sometimes the
+  // transcript you receive begins with the machine-written line …");
+  // the telemetry block follows as the machine-written preamble the
+  // prompt's CONTEXT TELEMETRY paragraph teaches the model to use. The
+  // turn-end transcript opens directly with the telemetry block.
   const transcriptForModel =
-    phase === "mid-turn" ? `${MID_TURN_TRANSCRIPT_NOTE}\n\n${transcript}` : transcript;
+    (phase === "mid-turn" ? `${MID_TURN_TRANSCRIPT_NOTE}\n\n` : "") +
+    `${telemetryBlock}\n\n${transcript}`;
 
   const input = {
     provider: params.provider,

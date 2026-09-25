@@ -63,8 +63,12 @@ function tool(set: ToolSet, name: string): ExecutableTool {
 /* ── A: read_file WHOLE-FILE-FIRST ──────────────────────────────────────── */
 
 describe("R96-C A: read_file whole-file-first", () => {
-  it("READ_WHOLE_BUDGET_BYTES is the named ~48KB export", () => {
-    expect(READ_WHOLE_BUDGET_BYTES).toBe(48 * 1024);
+  it("READ_WHOLE_BUDGET_BYTES is the named ~128KB export", () => {
+    // R127-W6 re-pin: 48KB → 128KB — the owner's live complaint (a 554-line
+    // / ~10K-token file read in three parts; "it could have read the whole
+    // file in a single go"). The R96-C law is unchanged; the budget now
+    // covers the realistic source-file class.
+    expect(READ_WHOLE_BUDGET_BYTES).toBe(128 * 1024);
   });
 
   it("a file under the budget returns the WHOLE file in one call — no marker, no paging language", () => {
@@ -93,9 +97,11 @@ describe("R96-C A: read_file whole-file-first", () => {
   });
 
   it("a file just OVER the budget returns PAGE 1 + the honest marker with the total line count and the EXACT next call", () => {
-    // 49KB of content — 1KB over the 48KB budget.
+    // R127-W6 re-pin: the fixture grew from 49KB (1KB over the 48KB budget)
+    // to 129KB (1KB over the 128KB budget) — the boundary law is unchanged,
+    // only the constant moved.
     const line = "x".repeat(98); // 99 bytes with the newline
-    const count = Math.ceil(49 * 1024 / 99); // ~507 lines
+    const count = Math.ceil(129 * 1024 / 99); // ~1334 lines
     const content = Array.from({ length: count }, (_, i) => `L${i + 1}-${line}`).join("\n") + "\n";
     writeFileSync(join(tempDir, "over.html"), content, "utf8");
     const totalLines = content.split("\n").length - 1;
@@ -132,7 +138,12 @@ describe("R96-C A: read_file whole-file-first", () => {
     const tools = await buildProjectTools(tempDir);
     const desc = tool(tools, "read_file").description;
     expect(desc).toContain("WHOLE file in one call");
-    expect(desc).toContain("do NOT page small files");
+    // R127-W6 re-pin: "do NOT page small files" became the STRONGER
+    // whole-file-first language — under ~128KB the default call returns the
+    // whole file; paging needs the marker's permission.
+    expect(desc).toContain("under ~128KB (~32K tokens)");
+    expect(desc).toContain("do NOT page with offset/limit");
+    expect(desc).toContain("a few-hundred-line source file ALWAYS reads whole in one call");
     expect(desc).toContain("Only genuinely large files page");
     // The discipline that must survive the rewrite:
     expect(desc).toContain("path:line");
@@ -153,11 +164,20 @@ describe("R96-C B: edit_file single shape (fs-ops)", () => {
     expect(readFileSync(join(tempDir, "s1.ts"), "utf8")).toBe("const a = 1;\nconst b = 20;\n");
   });
 
-  it("not-found keeps the byte-exact historic diagnostic (the streak machinery keys on it)", () => {
+  it("not-found keeps the historic PREFIX and carries the R127 recovery recipe + anchor echo (the streak machinery keys on the prefix)", () => {
     writeFileSync(join(tempDir, "s2.txt"), "alpha\n", "utf8");
     const result = editFile(tempDir, "s2.txt", "nope", "x");
     expect(result.ok).toBe(false);
-    expect(result.output).toBe("edit failed: oldString not found in 's2.txt'");
+    // R127-W6 re-pin: the bare one-liner grew the recovery recipe (the
+    // owner's "it would run into issues that it failed") — the historic
+    // PREFIX survives byte-exact, the recipe + the truncated anchor echo
+    // follow it.
+    expect(result.output.startsWith("edit failed: oldString not found in 's2.txt'")).toBe(true);
+    expect(result.output).toContain("the file may have changed since your last read");
+    expect(result.output).toContain("re-read JUST the region");
+    expect(result.output).toContain("files under 128KB return whole in one call");
+    expect(result.output).toContain("re-anchor on CURRENT content");
+    expect(result.output).toContain('you tried to match: "nope"');
   });
 
   it("ambiguity fails with the longer-anchor diagnostic + the replaceAll hint", () => {

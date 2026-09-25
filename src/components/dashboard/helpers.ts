@@ -5,7 +5,10 @@
  * in src/lib/motion.ts (shared app-wide). R113-d: useGreeting (the
  * time-of-day greeting hook) is deleted — the dashboard's page header died
  * with the owner's "unnecessary, unneeded, and not required" directive and
- * the greeting was NOT relocated anywhere.
+ * the TIME-OF-DAY GREETING never returned. R127 (SCREENS §3, the DASHBOARD
+ * BOLDNESS LAW) later sanctioned a CONTENT heading ("Workspace", a static
+ * scope label — no greeting copy) on the DashboardScreen; no helper here
+ * came back with it.
  */
 
 /** Compose an rgba() wash over a hex color; non-hex inputs pass through. */
@@ -22,6 +25,33 @@ export function withAlpha(color: string, alpha: number): string {
 
 /** Demo `bdr()` — inline-style border shorthand. */
 export const bdr = (width: string, color: string): string => `${width} solid ${color}`;
+
+/* ── ROUND-127 (the chart-interaction laws — COMPONENTS §6): the canonical
+ * tooltip edge-clamp is the usage wave's shared helper (read-only import —
+ * ONE implementation app-wide); re-exported here so the dashboard's charts
+ * spell the import from their local helper seam. */
+export { clampTooltipX, TOOLTIP_EDGE_INSET_PX } from "../usage/usage-helpers";
+
+/* ── ROUND-127 (SCREENS §3 — the DASHBOARD BOLDNESS LAW): the
+ * recent-activity TIMELINE's day-grouping helpers. Pure UTC — the same
+ * timezone discipline as shortUtcDay/utcDateLabel above (the API stamps
+ * every session updatedAt in UTC ISO-8601). */
+
+/** "2026-08-22T09:31:00Z" → "2026-08-22" — the UTC day key a session hangs
+ *  on the timeline (the grouping key behind each day divider). */
+export function utcDayKeyOf(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+/** The timeline's day-divider label: "TODAY" / "YESTERDAY" / the short UTC
+ *  date ("Aug 22" via utcDateLabel). Pure — `nowMs` injectable for pins. */
+export function timelineDayLabel(dayKey: string, nowMs: number = Date.now()): string {
+  const todayKey = new Date(nowMs).toISOString().slice(0, 10);
+  if (dayKey === todayKey) return "TODAY";
+  const yesterdayKey = new Date(nowMs - 86_400_000).toISOString().slice(0, 10);
+  if (dayKey === yesterdayKey) return "YESTERDAY";
+  return utcDateLabel(dayKey);
+}
 
 /** "Mon"-style UTC weekday for a YYYY-MM-DD bucket from the usage API. */
 export function shortUtcDay(date: string): string {

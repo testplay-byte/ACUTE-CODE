@@ -300,7 +300,13 @@ export function buildUsageCardSections(
     bigUsed: fmtTokens(data.usedTokens),
     bigLimit: fmtTokens(window_),
     // The ONE % line — percentage first; the R83 tilde says PROJECTED.
-    pctLine: `~${Math.round(pct)}% projected`,
+    // ROUND-127 (R127-W4): under the provider anchor the number is the
+    // provider's OWN count + the tail estimate — no tilde, the line SAYS
+    // its basis ("provider-anchored") instead of "projected".
+    pctLine:
+      data.usedTokensBasis === "provider-anchored"
+        ? `${Math.round(pct)}% · provider-anchored`
+        : `~${Math.round(pct)}% projected`,
     meta,
     ...(available !== null
       ? {
@@ -1103,12 +1109,20 @@ export function ContextDonut({
   // projection; the provider's own number (when one exists) rides along.
   // The old text presented the estimate as fact (the owner: "highly
   // misleading").
+  // ROUND-127 (R127-W4): under the provider anchor the headline number is
+  // the provider's OWN count + the tail estimate — the summary SAYS so
+  // ("provider-anchored", no "~" projection marker) instead of
+  // "projected"/"estimated".
+  const anchored = data !== null && data.usedTokensBasis === "provider-anchored";
+  const pctLabel = anchored
+    ? `${pct !== null ? Math.round(pct) : 0}% of context window · provider-anchored`
+    : `~${pct !== null ? Math.round(pct) : 0}% of context window projected`;
   const summaryText =
     data !== null
-      ? `~${pct !== null ? Math.round(pct) : 0}% of context window projected` +
+      ? pctLabel +
         (data.actual !== null && data.actual !== undefined
           ? ` · ${fmtTokens(data.actual.inputTokens)} measured at last request (of ${fmtTokens(window_)} window)`
-          : ` (${fmtTokens(used)} of ${fmtTokens(window_)} tokens, estimated)`)
+          : ` (${fmtTokens(used)} of ${fmtTokens(window_)} tokens, ${anchored ? "provider-anchored" : "estimated"})`)
       : report.isError
         ? "Context window usage unavailable"
         : "Context window usage";

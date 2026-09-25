@@ -22,7 +22,7 @@
  * the markdown/image deep chain) — the VALUES under test are pure exports.
  */
 
-import { describe, expect, it, jest } from "@jest/globals";
+import { afterEach, describe, expect, it, jest } from "@jest/globals";
 
 jest.mock("react-native-reanimated", () => ({
   __esModule: true,
@@ -47,7 +47,16 @@ jest.mock("@/link/runtime", () => ({ getLinkManager: () => ({}) }));
 jest.mock("@/components/markdown-text", () => ({ MarkdownText: () => null }));
 jest.mock("@/components/image-viewer", () => ({ ImageViewer: () => null }));
 
-import { userBubbleBodyPlan, wellDefaultOpen } from "@/components/transcript";
+import {
+  TOOLS_HIDDEN_HINT_COPY,
+  acquireToolsHiddenHint,
+  dismissToolsHiddenHint,
+  mountToolsHiddenHintBlock,
+  releaseToolsHiddenHintBlock,
+  resetToolsHiddenHintForTest,
+  userBubbleBodyPlan,
+  wellDefaultOpen,
+} from "@/components/transcript";
 import type { AttachmentView } from "@/features/sessions";
 
 function attachment(name: string, path?: string): AttachmentView {
@@ -114,5 +123,75 @@ describe("R123-W-m — wellDefaultOpen (the well's default-OPEN law)", () => {
 
   it("a turn with NO tool rows keeps the R119 collapsed default — the thinking-only well and the hidden pref's clean document", () => {
     expect(wellDefaultOpen(false, 0)).toBe(false);
+  });
+});
+
+// ── R127-W8 — the tools-hidden hint (once per session screen mount) ────────
+// The TurnBlock renders the line; THESE exports are the state machine it
+// drives, so the pins drive them directly (the transcript suite's own
+// precedent — pure exports, no component rendering).
+describe("R127-W8 — the tools-hidden hint's once-per-mount law", () => {
+  const ownerA = {};
+  const ownerB = {};
+  const ownerC = {};
+
+  afterEach(() => {
+    resetToolsHiddenHintForTest();
+  });
+
+  it("the first qualifying block claims the hint; a second block never gets it (ONCE)", () => {
+    expect(acquireToolsHiddenHint(ownerA, true, 2)).toBe(true);
+    expect(acquireToolsHiddenHint(ownerB, true, 3)).toBe(false);
+    expect(acquireToolsHiddenHint(ownerC, true, 1)).toBe(false);
+  });
+
+  it("the OWNER keeps the hint across its own re-renders while it still qualifies", () => {
+    expect(acquireToolsHiddenHint(ownerA, true, 2)).toBe(true);
+    expect(acquireToolsHiddenHint(ownerA, true, 2)).toBe(true); // re-render
+    expect(acquireToolsHiddenHint(ownerA, true, 5)).toBe(true); // tool rows grew
+  });
+
+  it("the claim dies with the fix — once hidden flips false (setToolActivity('detailed')), the line is gone", () => {
+    expect(acquireToolsHiddenHint(ownerA, true, 2)).toBe(true);
+    expect(acquireToolsHiddenHint(ownerA, false, 2)).toBe(false); // the tap landed
+  });
+
+  it("a turn with NOTHING to hide never claims — the hint needs hidden + tool items", () => {
+    expect(acquireToolsHiddenHint(ownerA, false, 3)).toBe(false); // pref not hidden
+    expect(acquireToolsHiddenHint(ownerB, true, 0)).toBe(false); // no tool items
+    // And it did not steal the claim from a later qualifying block:
+    expect(acquireToolsHiddenHint(ownerC, true, 1)).toBe(true);
+  });
+
+  it("the agreed one-liner is the spec's exact copy (the pinned string)", () => {
+    expect(TOOLS_HIDDEN_HINT_COPY).toBe("Tool activity is hidden — tap to show");
+  });
+
+  it("dismissal silences the hint for the WHOLE generation — both the owner and later blocks", () => {
+    expect(acquireToolsHiddenHint(ownerA, true, 2)).toBe(true);
+    dismissToolsHiddenHint(); // the ✕ (or the fix-tap — same leg)
+    expect(acquireToolsHiddenHint(ownerA, true, 2)).toBe(false);
+    expect(acquireToolsHiddenHint(ownerB, true, 4)).toBe(false);
+  });
+
+  it("a fresh session screen mount (all blocks unmounted) re-opens the generation", () => {
+    mountToolsHiddenHintBlock(); // block A mounts
+    mountToolsHiddenHintBlock(); // block B mounts
+    expect(acquireToolsHiddenHint(ownerA, true, 2)).toBe(true);
+
+    releaseToolsHiddenHintBlock(); // A unmounts — B still holds the screen
+    expect(acquireToolsHiddenHint(ownerB, true, 2)).toBe(false); // still once
+
+    releaseToolsHiddenHintBlock(); // the LAST block unmounts — screen gone
+    expect(acquireToolsHiddenHint(ownerB, true, 2)).toBe(true); // fresh mount claims
+  });
+
+  it("a mid-generation dismissal does NOT outlive the screen — the next mount says it again", () => {
+    mountToolsHiddenHintBlock();
+    expect(acquireToolsHiddenHint(ownerA, true, 2)).toBe(true);
+    dismissToolsHiddenHint();
+    expect(acquireToolsHiddenHint(ownerA, true, 2)).toBe(false);
+    releaseToolsHiddenHintBlock(); // the screen unmounts
+    expect(acquireToolsHiddenHint(ownerB, true, 2)).toBe(true); // fresh generation
   });
 });

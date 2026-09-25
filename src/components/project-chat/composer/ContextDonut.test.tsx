@@ -674,3 +674,56 @@ describe("ROUND-96 (R96-G) → R99-D — buildUsageCardSections (the pure payloa
     expect(cache.lines[0]!.barColor).toBe("teal");
   });
 });
+
+// ── ROUND-127 (R127-W4): the provider-anchored labels ────────────────────────
+describe("ROUND-127 (R127-W4) — the provider-anchored basis labels the meter honestly", () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+  });
+
+  it("the ONE % line: \"provider-anchored\" replaces the ~ tilde + \"projected\" — the estimate spelling is UNTOUCHED", () => {
+    // The anchored report: the headline is the provider's OWN count + the
+    // tail estimate — no tilde, the line SAYS its basis.
+    const anchored = buildUsageCardSections(
+      baseReport({ usedTokensBasis: "provider-anchored" }),
+      { isError: false, sessionId: "s1" },
+    );
+    expect(anchored!.overview!.pctLine).toBe("20% · provider-anchored");
+    // The estimate spelling stays byte-identical (the fallback law's label).
+    const estimated = buildUsageCardSections(baseReport(), { isError: false, sessionId: "s1" });
+    expect(estimated!.overview!.pctLine).toBe("~20% projected");
+  });
+
+  it("the button title + the popover: the anchored summary says \"provider-anchored\" (never \"projected\"/\"estimated\")", async () => {
+    renderDonut(baseReport({ usedTokensBasis: "provider-anchored" }));
+    // The title is the honest two-number summary — the anchored % (no ~)
+    // + the provider's measured number.
+    const button = await waitFor(() => screen.getByTitle(/provider-anchored/));
+    expect(button.getAttribute("title")).toBe(
+      "20% of context window · provider-anchored · 45k measured at last request (of 200k window)",
+    );
+    expect(button.getAttribute("title")).not.toContain("projected");
+
+    fireEvent.click(button);
+    await waitFor(() => {
+      expect(document.querySelector("[data-context-popover]")).not.toBeNull();
+    });
+    // The popover's ONE % line carries the anchored spelling; the estimate
+    // spelling ("~20% projected") is GONE under the anchor.
+    expect(document.body.textContent).toContain("20% · provider-anchored");
+    expect(document.body.textContent).not.toContain("projected");
+    // The measured pair still rides the hero (the provider's own count).
+    expect(document.querySelector("[data-context-measured]")?.textContent).toContain("45k");
+    expect(document.querySelector("[data-context-measured]")?.textContent).toContain("measured at last request");
+  });
+
+  it("before the first reply under the anchor: the tail fallback says \"provider-anchored\", never \"estimated\"", async () => {
+    // actual null + basis anchored (e.g. the provider reported, then the
+    // stats carrier aged out — or a report built from the anchor alone):
+    // the summary's parenthetical names the anchored basis.
+    renderDonut(baseReport({ usedTokensBasis: "provider-anchored", actual: null }));
+    const button = await waitFor(() => screen.getByTitle(/provider-anchored/));
+    expect(button.getAttribute("title")).toBe("20% of context window · provider-anchored (40k of 200k tokens, provider-anchored)");
+    expect(button.getAttribute("title")).not.toContain("estimated");
+  });
+});

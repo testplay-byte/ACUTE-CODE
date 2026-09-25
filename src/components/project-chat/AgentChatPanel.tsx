@@ -3279,6 +3279,20 @@ export function AgentChatPanel({
   // turn to end).
   const liveWorkingCount = liveTurn?.working.length ?? 0;
   const liveTailText = liveTurn?.streamText ?? "";
+  // ── ROUND-127 (R127-W5, owner: "there was no auto-scroll functionality
+  //    on the PC side"): the LIVE THINKING TEXT and the STREAMING TOOL ARGS
+  //    join the follow deps. Content grows INSIDE a live working section
+  //    while NONE of the old deps fire (the working count only bumps when a
+  //    step SETTLES, and the answer tail is empty while the thought streams
+  //    or the model types a call's JSON) — so a pinned transcript sat still
+  //    exactly when the owner watched it. Both are cheap LENGTHS (stable
+  //    while nothing grows), so the panel's per-delta re-render never
+  //    re-fires the effect blindly; the store's thinking accumulation and
+  //    streamingToolInputs[].raw (see stream-store's thinking-delta /
+  //    tool-input-delta arms) are the sources. ──
+  const liveThinkingLength = liveTurn?.streamThinking.length ?? 0;
+  const liveStreamingArgsBytes =
+    liveTurn?.streamingToolInputs.reduce((total, input) => total + input.raw.length, 0) ?? 0;
   // R78: the queue lengths join the auto-scroll deps — a new chip / a
   // delivered bubble is new content at the bottom, exactly like a working
   // entry (the owner should see the chip land without scrolling).
@@ -3303,6 +3317,8 @@ export function AgentChatPanel({
     pendingUser,
     liveWorkingCount,
     liveTailText.length,
+    liveThinkingLength,
+    liveStreamingArgsBytes,
     liveQueued.length,
     deliveredQueued.length,
   ]);

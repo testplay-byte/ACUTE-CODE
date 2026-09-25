@@ -5,10 +5,19 @@ import { CLAY_CARD } from "./usage-helpers";
 import { cn } from "../../lib/utils";
 
 /**
- * ROUND-52 (R52-b): tool leaderboard — the /usage screen's companion card to
- * the activity chart (the owner-approved DASHBOARD usage page's "Every tool
- * call, ranked" section). Top 8 tools; horizontal bars relative to the
+ * ROUND-52 (R52-b): tool leaderboard — the /usage screen's "Every tool
+ * call, ranked" section. Top 8 tools; horizontal bars relative to the
  * most-used tool; failures render in the danger tier when > 0.
+ *
+ * ROUND-127 (R127-W1 — SCREENS §3 "THE USAGE PAGE ORDER", step 4): the
+ * leaderboard is its OWN FULL-WIDTH section BELOW the activity grid — the
+ * owner's placement complaint (verbatim intent): "the tool leaderboard
+ * should not be shown just right of the token activity. On the right side
+ * of the token activity, some other key details should be shown" (the
+ * 1-col rail now carries the InsightsRail). The card, its data contract
+ * (tools prop, top-8 slice, count-desc server order), testids and aria
+ * labels are unchanged — the rows simply stretch to the full card width
+ * now (wider rows, the R126 flat hairline row grammar intact).
  *
  * ROUND-126 (R126-3b, the Clay Companion redesign): the rows go FLAT — no
  * per-row cards; separation is the 1px inset hairline between rows (the
@@ -29,7 +38,10 @@ export function ToolsLeaderboard({
   const max = Math.max(1, ...top.map((t) => t.count));
 
   return (
-    <div className={cn(CLAY_CARD, "flex flex-col p-4 md:p-5")}>
+    <div
+      data-testid="tools-leaderboard"
+      className={cn(CLAY_CARD, "flex w-full flex-col p-4 md:p-5")}
+    >
       <div className="mb-3 flex shrink-0 items-center justify-between">
         <Kicker>Tool Leaderboard</Kicker>
         <span className="text-[11px] font-medium leading-none tabular-nums" style={{ color: textSecondary }}>

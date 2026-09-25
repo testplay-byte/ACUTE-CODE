@@ -51,18 +51,34 @@ function renderDashboard() {
 }
 
 describe("DashboardScreen (fixture backend)", () => {
-  it("renders the stat cards as the page's first content — the R113-d hero is GONE", async () => {
+  it("renders the bold lead heading + the stat cards — the R113-d greeting hero stays GONE", async () => {
     renderDashboard();
 
     // R113-d (owner: the page headers are "unnecessary, unneeded, and not
     // required"): the Kicker + 24px greeting + description block is deleted —
-    // nothing of it renders, and the stat row is the top of the page.
+    // nothing of it renders, and NO greeting copy ever returns.
     expect(screen.queryByText(/Workspace Overview/i)).toBeNull();
     expect(screen.queryByText(/what.s happening/i)).toBeNull();
     expect(screen.queryByText(/good (morning|afternoon|evening|night)/i)).toBeNull();
 
-    // The four stat cards (owner round-8: Projects replaces Agents here —
-    // agents management lives in Settings now).
+    // R127 (SCREENS §3 — THE DASHBOARD BOLDNESS LAW): the greeting tier
+    // returns as a CONTENT heading, not chrome — "Workspace" at the 32px/800
+    // display tier (font-extrabold, the law's 28–34px band) in the theme's
+    // text ink, with ONE honest 12px secondary scope line under it. It is
+    // the page's first content (always rendered — the scope line held the
+    // honest "—" while the sources loaded).
+    const lead = await screen.findByRole("heading", { level: 1, name: "Workspace" });
+    expect(lead.className).toContain("text-[32px]");
+    expect(lead.className).toContain("font-extrabold");
+    expect(lead.style.color).not.toBe("");
+    await waitFor(() =>
+      expect(lead.parentElement?.textContent).toMatch(
+        /\d+ projects? · \d+ sessions? · last 14 days/,
+      ),
+    );
+
+    // The four stat cells (owner round-8: Projects replaces Agents here —
+    // agents management lives in Settings now), now UNDER the lead heading.
     // R97-I part 2 re-pin: the stat row is a SKELETON until every source
     // settles (never false zeros) — await a label instead of reading it at
     // first paint.
@@ -173,14 +189,17 @@ describe("DashboardScreen (fixture backend)", () => {
     expect(cells.filter((c) => c.className.includes("border-r")).length).toBe(3);
     expect(cells[3].className.includes("border-r")).toBe(false);
     // The Tokens cell is the highlight: kicker + value in accentDeep ink
-    // (TOKENS §1d — accent-as-text, INK-ONLY), the value on the 22px/600
-    // tabular tier. The pin: the highlight value's ink differs from a plain
-    // cell's (accentDeep vs text) while the card itself never fills.
+    // (TOKENS §1d — accent-as-text, INK-ONLY), the value on the R127 display
+    // tier — 26px/700 tabular (SCREENS §3: "the stat row's numbers at display
+    // weight"; re-pinned from the R126 22px/600 this wave). The pin: the
+    // highlight value's ink differs from a plain cell's (accentDeep vs text)
+    // while the card itself never fills.
     const tokensCell = cells.find((c) => c.textContent?.includes("Tokens")) as HTMLElement;
     const projectsCell = cells.find((c) => c.textContent?.includes("Projects")) as HTMLElement;
     const value = tokensCell.querySelector('[class*="tabular-nums"]') as HTMLElement;
     const plainValue = projectsCell.querySelector('[class*="tabular-nums"]') as HTMLElement;
-    expect(value.className).toContain("text-[22px]");
+    expect(value.className).toContain("text-[26px]");
+    expect(value.className).toContain("font-bold");
     expect(value.style.color).not.toBe("");
     expect(value.style.color).not.toBe(plainValue.style.color);
   });
@@ -197,6 +216,37 @@ describe("DashboardScreen (fixture backend)", () => {
     const completed = screen.getByText("completed");
     expect(completed.className).toContain("bg-badge-success");
     expect(completed.className).toContain("text-badge-success-fg");
+  });
+
+  it("R127: recent activity reads as a TIMELINE — the spine, day dividers, and node glyphs", async () => {
+    renderDashboard();
+
+    expect(await screen.findByText("Phase 2 report draft")).toBeTruthy();
+
+    // SCREENS §3 (THE DASHBOARD BOLDNESS LAW): the sessions list inside the
+    // section card hangs off ONE vertical spine. The fixture's two newest
+    // sessions fall on two distinct UTC days (2026-08-22 + 2026-08-21), so
+    // the timeline renders two day-divider groups (the label text is
+    // now-relative — TODAY/YESTERDAY/short date — so the pin counts groups,
+    // never the literal label), each row carrying its node glyph on the
+    // spine (accentDeep for TODAY's rows, clay-rim otherwise).
+    expect(document.querySelectorAll("[data-timeline-spine]")).toHaveLength(1);
+    const dividers = document.querySelectorAll("[data-timeline-day]");
+    expect(dividers).toHaveLength(2);
+    const nodes = document.querySelectorAll("[data-timeline-node]");
+    expect(nodes).toHaveLength(2);
+    // Every node is a round glyph sitting at the spine's x (left-0 on the
+    // pl-6 row wrapper).
+    for (const node of Array.from(nodes)) {
+      expect(node.className).toContain("rounded-full");
+      expect((node as HTMLElement).style.backgroundColor).not.toBe("");
+    }
+    // The row contract survives the restructure: the open-session aria is
+    // the R126 spelling verbatim.
+    expect(
+      screen.getByRole("button", { name: "Open session Phase 2 report draft" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open session Audit Agents screen visuals" })).toBeTruthy();
   });
 
   it("a failed projects fetch joins the loadError banner — Retry re-drives it", async () => {

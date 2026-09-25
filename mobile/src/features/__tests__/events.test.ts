@@ -411,6 +411,7 @@ describe("EventsController — the stream rides the manager's hysteresis", () =>
     closed = false;
     private readonly dataListeners = new Set<(ev: SseEvent) => void>();
     private readonly errorListeners = new Set<(err: SseError) => void>();
+    private readonly closeListeners = new Set<() => void>();
     private static nextId = 1;
 
     constructor(openedWith: HttpRequestOptions) {
@@ -424,6 +425,7 @@ describe("EventsController — the stream rides the manager's hysteresis", () =>
     addEventListener(type: string, listener: unknown): SseStream {
       if (type === "data") this.dataListeners.add(listener as (ev: SseEvent) => void);
       if (type === "error") this.errorListeners.add(listener as (err: SseError) => void);
+      if (type === "close") this.closeListeners.add(listener as () => void);
       return this;
     }
 
@@ -438,18 +440,33 @@ describe("EventsController — the stream rides the manager's hysteresis", () =>
     emitError(err: SseError): void {
       for (const listener of this.errorListeners) listener(err);
     }
+
+    /** R127-W8 — the host's clean stream end (sidecar restart / relay-DO
+     * hibernation): fires the close listeners exactly as the real transport
+     * would. */
+    emitClose(): void {
+      for (const listener of this.closeListeners) listener();
+    }
   }
 
   function makeEnv() {
     const requests: HttpRequestOptions[] = [];
     const streams: FakeSseStream[] = [];
     let handler: (o: HttpRequestOptions) => HttpResponse = () => ({ status: 404, headers: {}, bodyText: "" });
+    // R127-W8 — the open-failure leg: when set, the NEXT openSse throws (the
+    // controller's catch path rides the same reconnect ladder).
+    let openSseError: { kind: string; message: string } | null = null;
     const net: NetTransport = {
       async request(options) {
         requests.push(options);
         return handler(options);
       },
       openSse(options) {
+        if (openSseError !== null) {
+          const err = openSseError;
+          openSseError = null;
+          throw err;
+        }
         const stream = new FakeSseStream(options);
         streams.push(stream);
         return stream;
@@ -507,6 +524,9 @@ describe("EventsController — the stream rides the manager's hysteresis", () =>
         handler = () => {
           throw { kind, message };
         };
+      },
+      failNextOpenSse(kind: string, message: string) {
+        openSseError = { kind, message };
       },
       fireForeground() {
         foreground?.();
@@ -620,5 +640,146 @@ describe("EventsController — the stream rides the manager's hysteresis", () =>
 
     expect(seen).toEqual([{ type: "hello" }]);
     expect(env.events.getState().sessionsEpoch).toBe(1); // the hello resync ran
+  });
+
+  // ── R127-W8 — the reconnect ladder (the desktop EventStreamStarter's
+  // port; the R127-Ra root cause #2: one stream error used to leave the
+  // phone deaf to ALL live frames until an unrelated poke). The error kind
+  // here is deliberately "protocol" — the manager's sse() leg only routes
+  // tls/network kinds into its probe, so NOTHING pokes the controller: the
+  // ladder is the ONLY re-open path under test. ──────────────────────────
+
+  it("R127-W8: a stream error with no manager verdict retries after 1s, then 2s (the desktop ladder)", async () => {
+    const env = makeEnv();
+    env.setHandler(() => health());
+    await env.manager.start();
+    await settle();
+    env.controller.start({ manager: env.manager });
+    await settle();
+    expect(env.streams).toHaveLength(1);
+
+    // First drop → the retry arms at the ladder's floor (1s).
+    env.streams[0]?.emitError({ kind: "unknown", message: "frame parse died" });
+    expect(env.events.getState().streamLive).toBe(false);
+    await jest.advanceTimersByTimeAsync(999);
+    expect(env.streams).toHaveLength(1); // still waiting
+    await jest.advanceTimersByTimeAsync(1);
+    expect(env.streams).toHaveLength(2); // the 1s retry re-opened
+    expect(env.events.getState().streamLive).toBe(true);
+
+    // Second drop → the ladder DOUBLED (2s).
+    env.streams[1]?.emitError({ kind: "unknown", message: "died again" });
+    await jest.advanceTimersByTimeAsync(1_999);
+    expect(env.streams).toHaveLength(2);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(env.streams).toHaveLength(3);
+  });
+
+  it("R127-W8: the host's clean CLOSE (relay/DO hibernation, sidecar restart) rides the same ladder", async () => {
+    const env = makeEnv();
+    env.setHandler(() => health());
+    await env.manager.start();
+    await settle();
+    env.controller.start({ manager: env.manager });
+    await settle();
+    expect(env.streams).toHaveLength(1);
+
+    env.streams[0]?.emitClose(); // no error, no manager probe — pure close
+    expect(env.events.getState().streamLive).toBe(false);
+    await jest.advanceTimersByTimeAsync(999);
+    expect(env.streams).toHaveLength(1);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(env.streams).toHaveLength(2);
+    // The hello-on-reconnect resync fires when the host answers.
+    env.streams[1]?.emitData(JSON.stringify({ type: "hello" }));
+    expect(env.events.getState().sessionsEpoch).toBe(1);
+  });
+
+  it("R127-W8: a successful open + HELLO resets the ladder to 1s (the desktop's hello leg)", async () => {
+    const env = makeEnv();
+    env.setHandler(() => health());
+    await env.manager.start();
+    await settle();
+    env.controller.start({ manager: env.manager });
+    await settle();
+
+    env.streams[0]?.emitError({ kind: "unknown", message: "drop" });
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(env.streams).toHaveLength(2);
+    env.streams[1]?.emitData(JSON.stringify({ type: "hello" })); // proven live
+
+    // Without the reset this drop would retry at 2s; with it, 1s.
+    env.streams[1]?.emitError({ kind: "unknown", message: "drop again" });
+    await jest.advanceTimersByTimeAsync(999);
+    expect(env.streams).toHaveLength(2);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(env.streams).toHaveLength(3);
+  });
+
+  it("R127-W8: backgrounding CANCELS the pending retry; foregrounding re-opens FRESH (no backoff wait)", async () => {
+    const env = makeEnv();
+    env.setHandler(() => health());
+    await env.manager.start();
+    await settle();
+    env.controller.start({ manager: env.manager });
+    await settle();
+    expect(env.streams).toHaveLength(1);
+
+    env.streams[0]?.emitError({ kind: "unknown", message: "drop" }); // retry armed at 1s
+    env.controller.setForeground(false); // the R42 gate — intentional silence
+    await jest.advanceTimersByTimeAsync(15_000);
+    expect(env.streams).toHaveLength(1); // the retry was CANCELLED, not fired
+
+    env.controller.setForeground(true);
+    expect(env.streams).toHaveLength(2); // re-opened immediately — fresh, 0ms
+    expect(env.events.getState().streamLive).toBe(true);
+  });
+
+  it("R127-W8: the link going offline STOPS the loop — no retry ever re-opens a stream the R42 gate closed", async () => {
+    const env = makeEnv();
+    env.setHandler(() => health());
+    await env.manager.start();
+    await settle();
+    env.controller.start({ manager: env.manager });
+    await settle();
+    expect(env.streams).toHaveLength(1);
+
+    // A network-kind error → the manager probes; the host is dead, so the
+    // hysteresis verdict lands offline (the existing REAL-outage path).
+    env.failWith("network", "dead");
+    env.streams[0]?.emitError({ kind: "network", message: "stream died" });
+    await settle();
+    await jest.advanceTimersByTimeAsync(5_000);
+    await settle();
+    expect(env.manager.getStatus()).toBe("offline");
+
+    // The offline flip cleared the pending retry (sync's R42 leg) — a long
+    // wait must NOT silently grow new streams.
+    const countAfterOffline = env.streams.length;
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(env.streams).toHaveLength(countAfterOffline);
+    expect(env.events.getState().streamLive).toBe(false);
+  });
+
+  it("R127-W8: an OPEN failure (sse throws) rides the same ladder — the desktop's catch leg", async () => {
+    const env = makeEnv();
+    env.setHandler(() => health());
+    await env.manager.start();
+    await settle();
+    env.controller.start({ manager: env.manager });
+    await settle();
+    expect(env.streams).toHaveLength(1);
+
+    env.failNextOpenSse("network", "open blew up");
+    env.streams[0]?.emitError({ kind: "unknown", message: "drop" });
+    await jest.advanceTimersByTimeAsync(1_000);
+    // The retry's openStream THREW (caught + honest) — the next retry arms at
+    // the doubled 2s; the ladder, not a crash, owns the recovery.
+    expect(env.streams).toHaveLength(1);
+    await jest.advanceTimersByTimeAsync(1_999);
+    expect(env.streams).toHaveLength(1);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(env.streams).toHaveLength(2);
+    expect(env.events.getState().streamLive).toBe(true);
   });
 });

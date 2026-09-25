@@ -77,7 +77,14 @@ import { estimateMessageTokens, estimateTokens } from "../context.js";
 // ROUND-83 (R83): the meter applies the newest compaction to the messages
 // estimate (the model receives the summary + tail — the raw log is NOT what
 // rides the next request; the audit's §2.4).
-import { applyCompaction, assembleWithCompaction, findLatestCompaction } from "../agents/compaction.js";
+// ROUND-127 (R127-W4): providerUsageAnchor — the meter's headline number
+// anchors on the provider's OWN reported input tokens (the honesty law).
+import {
+  applyCompaction,
+  assembleWithCompaction,
+  findLatestCompaction,
+  providerUsageAnchor,
+} from "../agents/compaction.js";
 import { buildSystemPromptSections, readCustomRules } from "../agents/prompts.js";
 // ROUND-83 (R83): the meter's skills resolution — the same shared resolver
 // prepareTurn uses, so the SKILLS section the estimate counts is the one the
@@ -628,9 +635,13 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
   // `model` is optional (defaults to the session agent's model — the
   // composer's per-send model picker passes its selection).
   //
-  // All breakdown numbers are ESTIMATES (approximations documented
+  // The breakdown numbers are ESTIMATES (approximations documented
   // inline below): the goal is an honest donut, not exact provider
-  // accounting. usedTokens = the sum of all breakdown slices.
+  // accounting. usedTokens = the sum of all breakdown slices — EXCEPT
+  // under the ROUND-127 anchor (see the R127-W4 block in the handler):
+  // once the provider has reported its own input token count, that
+  // number + the post-anchor tail IS the headline, labeled
+  // usedTokensBasis "provider-anchored".
   //
   // ROUND-51 (R51-c): the response ALSO carries `usage` — the Main agent
   // / Sub-agents / Combined split of the session-totals (the donut
@@ -806,7 +817,39 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
       latestCompact !== null ? applyCompaction(seqMessages, latestCompact) : seqMessages;
     const messages = estimateMessageTokens(meterMessages);
     const mcpTools = 0;
-    const usedTokens = systemPrompt + systemTools + memory + messages + meta + mcpTools;
+
+    // ── ROUND-127 (R127-W4): THE HONESTY LAW — the provider-usage anchor
+    // wins the meter's headline number. The owner's complaint: "in my
+    // provider, it was showing me 50,000 or 60,000 tokens, or even 70,000
+    // tokens occasionally, but our context window management was only
+    // showing a fixed value there… fixed at 26K of 1 million" — the donut
+    // showed the PURE local estimate while the provider's own reported
+    // input was 2-3× higher. The estimate LIES LOW: the provider counts
+    // what it ACTUALLY received — the real serialization of every tool
+    // schema (not our ±15% BPE approximation of it), per-message wire
+    // overhead, provider-side framing — everything the local sum
+    // under-counts. The R125-C law (compaction.ts providerUsageAnchor —
+    // the same anchor the RUNTIME already gates compaction on at its two
+    // assembleWithCompaction call sites) is therefore applied HERE too:
+    // when a provider-reported inputTokens exists, the headline
+    // `usedTokens` = that number + the estimated tail of model-facing
+    // messages the provider has NOT yet seen (the anchor's own
+    // arithmetic). The BREAKDOWN slices stay as-is — per-slice estimates,
+    // still rendered in the popover (under the anchor they no longer sum
+    // to the headline; that divergence is the honest, visible gap between
+    // the estimate and the provider's count). FAILURE MODE, documented:
+    // the anchor is null before the first provider reply — the local
+    // estimate stands, labeled usedTokensBasis "estimated" (never a
+    // fabricated number, never a fake 0). The `actual` block below stays
+    // byte-identical either way (the popover keeps the provider's
+    // last-request ground truth).
+    const anchor = providerUsageAnchor(meterEvents, meterMessages);
+    let usedTokensBasis: "estimated" | "provider-anchored" = "estimated";
+    let usedTokens = systemPrompt + systemTools + memory + messages + meta + mcpTools;
+    if (anchor !== null) {
+      usedTokens = anchor;
+      usedTokensBasis = "provider-anchored";
+    }
 
     // ROUND-83 (R83) §3.1: the `actual` block — the provider's OWN
     // number for the last request (the newest message.assistant
@@ -939,7 +982,11 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
       usedTokens,
       // ROUND-83: every estimate field is LABELED — the wire says which
       // number is a projection and which is the provider's own.
-      usedTokensBasis: "estimated",
+      // ROUND-127 (R127-W4): "provider-anchored" — the headline is the
+      // provider's OWN reported input + the post-anchor tail estimate
+      // (the meter's honesty law; "estimated" only when the anchor is
+      // null — before the first provider reply).
+      usedTokensBasis,
       breakdown: {
         systemPrompt,
         systemTools,

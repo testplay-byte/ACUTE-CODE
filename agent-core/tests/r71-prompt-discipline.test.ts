@@ -425,7 +425,15 @@ describe("D6: the size budget (the hard bound + the section window)", () => {
     // unbounded growth (the budget discipline itself is R71's point) and
     // the floor below keeps the additions honest content, not a gutting.
     const composed = buildProjectSystemPrompt(ctxFor());
-    expect(composed.length).toBeLessThanOrEqual(24_500); // R117-c: the volatile fences added ~100 chars; recalibrated
+    // R127-W6: 24,500 → 25,000 — the owner-directed agent-smarter additions
+    // (the EXPLORE N-files arithmetic + the dependent-set wait rule, the
+    // BATCH DISCIPLINE bullet's same two additions, the read_file
+    // descriptions line's ~128KB whole-file clause) grew the composition
+    // ~+598 over the R117-d measured 24,206 — measured 24,804. The same
+    // precedent as R96-D/R99-G/R117-c: the bound moves to hold the owner's
+    // explicit asks rather than degrading them under an arbitrary number;
+    // the floor below still keeps the additions honest content.
+    expect(composed.length).toBeLessThanOrEqual(25_000);
     expect(composed.length).toBeGreaterThan(15_000); // the R71 delta is real content, not a gutting
   });
 

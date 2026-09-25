@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { clearUsageData, fetchUsageStats, type UsageStats, type UsageStatsDayBucket } from "../../lib/api";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { fetchUsageStats, type UsageStats, type UsageStatsDayBucket } from "../../lib/api";
 import { DataStatsPanel } from "./DataStatsPanel";
 import { useConfigStore } from "../../lib/config-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
@@ -11,24 +11,26 @@ import { renderWithProviders, resetTestState } from "../../test-utils";
  * the clear usage data completely looks out of place… turn errors and tool
  * failures… completely out of order"): the pins for the reordered panel —
  * the GitHub-settings read (stats → heatmap → model charts → ONE unified
- * agent-health section → the DANGER ZONE always LAST), the quiet health
- * sub-blocks (severity via icon + number color, never a tinted card), the
- * red-outlined no-fill danger zone (description-left / button-right), the
- * anti-jitter kit (skeleton mirrors the ready geometry; tabular-nums on
- * every number), and the untouched clear-flow contract (ConfirmDialog
- * enumeration + success note + invalidations).
+ * agent-health section LAST), the quiet health sub-blocks (severity via
+ * icon + number color, never a tinted card), the anti-jitter kit (skeleton
+ * mirrors the ready geometry; tabular-nums on every number).
  *
- * The panel is a VIEW over GET /usage/stats + DELETE /usage/data — the api
- * module is mocked exactly as the sidecar shapes it. Both mount sites
- * (settings ?tab=data + the /usage screen) render THIS panel, so these
- * pins hold for both.
+ * ROUND-127 (R127-W1): the DANGER-ZONE pins (the quiet red-outlined grammar
+ * + the clear-flow contract) MOVED to ClearUsageDataCard.test.tsx — the
+ * zone was extracted from the panel into the standalone page-scope card
+ * (SCREENS §3 "THE USAGE PAGE ORDER", step 8). The pins here now assert
+ * the panel ENDS at agent health and never renders the zone itself.
+ *
+ * The panel is a VIEW over GET /usage/stats — the api module is mocked
+ * exactly as the sidecar shapes it. Both mount sites (settings ?tab=data +
+ * the /usage screen) render THIS panel (the danger zone rides the
+ * ClearUsageDataCard after it), so these pins hold for both.
  */
 vi.mock("../../lib/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../lib/api")>();
   return {
     ...original,
     fetchUsageStats: vi.fn(),
-    clearUsageData: vi.fn(),
   };
 });
 
@@ -40,7 +42,6 @@ beforeEach(() => {
   // usage log) — flip the store so the mocked fetch actually executes.
   useConfigStore.setState({ demoData: false });
   vi.mocked(fetchUsageStats).mockReset().mockResolvedValue(seedStats());
-  vi.mocked(clearUsageData).mockReset().mockResolvedValue({ deleted: 0 });
 });
 
 /** A two-week series (one model most days, two on every third day). */
@@ -112,8 +113,8 @@ function precedes(a: Element, b: Element): boolean {
   return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 }
 
-describe("DataStatsPanel (R99-E — the section order + the danger zone)", () => {
-  it("renders the GitHub-settings order: stat cards → heatmap → stack chart → donut → agent health → danger zone LAST", async () => {
+describe("DataStatsPanel (R99-E — the section order; R127-W1 — the zone extracted)", () => {
+  it("renders the GitHub-settings order: stat cards → heatmap → stack chart → donut → agent health LAST — and no longer renders the danger zone", async () => {
     renderPanel();
     const statValue = await screen.findByText("630K"); // the Tokens StatCard value
     const heatmap = screen.getByTestId("usage-heatmap");
@@ -122,7 +123,6 @@ describe("DataStatsPanel (R99-E — the section order + the danger zone)", () =>
     const health = screen.getByTestId("agent-health-section");
     const turnErrors = screen.getByTestId("stats-turn-errors");
     const toolFailures = screen.getByTestId("stats-tool-failures");
-    const dangerZone = screen.getByTestId("clear-usage-card");
 
     expect(precedes(statValue, heatmap)).toBe(true);
     expect(precedes(heatmap, stack)).toBe(true);
@@ -130,12 +130,15 @@ describe("DataStatsPanel (R99-E — the section order + the danger zone)", () =>
     expect(precedes(donut, health)).toBe(true);
     expect(precedes(health, turnErrors)).toBe(true);
     expect(precedes(turnErrors, toolFailures)).toBe(true);
-    expect(precedes(toolFailures, dangerZone)).toBe(true);
 
-    // The danger zone is the LAST section of the panel (the ConfirmDialog
-    // renders only when armed — nothing may follow the zone at rest).
+    // R127-W1 (SCREENS §3 — DANGER ZONE LAST at PAGE scope): the danger
+    // zone moved byte-wholesale into the standalone ClearUsageDataCard —
+    // agent health is now the panel's final section, and the zone's pins
+    // live in ClearUsageDataCard.test.tsx.
     const panel = screen.getByTestId("data-stats-panel");
-    expect(panel.lastElementChild).toBe(dangerZone);
+    expect(panel.lastElementChild).toBe(health);
+    expect(screen.queryByTestId("clear-usage-card")).toBeNull();
+    expect(screen.queryByTestId("clear-usage-button")).toBeNull();
   });
 
   it("the unified Agent health section: one micro-header, both sub-blocks, their counts + issue rows + window aria-labels", async () => {
@@ -198,58 +201,10 @@ describe("DataStatsPanel (R99-E — the section order + the danger zone)", () =>
     expect(within(toolFailures).getByText("0")).toBeTruthy();
   });
 
-  it("the danger zone is the QUIET GitHub pattern: red outline, NO filled background, NO shadow, description-left / button-right", async () => {
-    renderPanel();
-    const zone = await screen.findByTestId("clear-usage-card");
-
-    // Red-OUTLINED (withAlpha(danger, 0.4))…
-    expect(zone.style.borderColor).toBe("rgba(239, 68, 68, 0.4)");
-    // …but QUIET: no tinted fill, no shadow (the mid-flow danger card was
-    // the owner's "completely looks out of place" verdict).
-    expect(zone.style.backgroundColor).toBe("");
-    expect(zone.style.boxShadow).toBe("");
-
-    // The danger-tinted micro-header (the label-caps grammar).
-    expect(screen.getByText("Danger zone")).toBeTruthy();
-
-    // ONE row: the description LEFT, the red action button RIGHT (the
-    // button follows the description inside the row container).
-    const button = screen.getByTestId("clear-usage-button");
-    expect(button.textContent).toBe("Clear data…");
-    const row = button.parentElement as HTMLElement;
-    const description = row.querySelector("p");
-    expect(description).not.toBeNull();
-    expect(description?.textContent).toContain("deletes every usage event in the ledger");
-    expect(precedes(description as Element, button)).toBe(true);
-  });
-
-  it("the clear flow keeps its contract: Clear data… → the enumeration dialog → confirm → clearUsageData + the success note + the stats refetch", async () => {
-    vi.mocked(clearUsageData).mockResolvedValue({ deleted: 27 });
-    renderPanel();
-    await screen.findByTestId("clear-usage-card");
-
-    fireEvent.click(screen.getByTestId("clear-usage-button"));
-
-    // The ConfirmDialog — the exact enumeration (what dies vs. what stays).
-    expect(await screen.findByTestId("confirm-dialog")).toBeTruthy();
-    expect(
-      screen.getByText(/Sessions, conversations, agents, providers, and settings are NOT touched/),
-    ).toBeTruthy();
-
-    // The stats fetch count BEFORE the clear (the initial mount).
-    const fetchesBefore = vi.mocked(fetchUsageStats).mock.calls.length;
-
-    fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
-    await waitFor(() => expect(vi.mocked(clearUsageData)).toHaveBeenCalledTimes(1));
-
-    // The success note (verb matches the button 1:1) + the invalidation
-    // re-drives the panel's own query.
-    expect(await screen.findByTestId("clear-usage-success")).toBeTruthy();
-    expect(screen.getByTestId("clear-usage-success").textContent).toBe("Cleared 27 usage events");
-    await waitFor(() => {
-      expect(vi.mocked(fetchUsageStats).mock.calls.length).toBeGreaterThan(fetchesBefore);
-    });
-  });
+  /* R127-W1: the two danger-zone tests that lived here (the QUIET GitHub
+   * grammar pin + the clear-flow contract pin) MOVED verbatim to
+   * ClearUsageDataCard.test.tsx — the zone's new home. Nothing was deleted:
+   * the assertions re-live there against the extracted card. */
 
   it("the months picker drives the windowed query (12 default → 6) without a skeleton flash (keepPreviousData)", async () => {
     renderPanel();
@@ -291,16 +246,20 @@ describe("DataStatsPanel (R99-E — the section order + the danger zone)", () =>
 
     // The reserved heights — one block per ready section, in order (the
     // bracket-bearing arbitrary classes are matched on className, not via
-    // the selector engine).
+    // the selector engine). R127-W1: the trailing h-[96px] danger-zone block
+    // DIED with the zone's extraction into ClearUsageDataCard — the
+    // skeleton no longer reserves it.
     const pulses = Array.from(panel.querySelectorAll(".animate-pulse"));
     expect(pulses.filter((el) => el.className.includes("h-[92px]")).length).toBe(4); // the stat cards
     expect(pulses.some((el) => el.className.includes("h-[264px]"))).toBe(true); // the stack chart
-    expect(pulses.some((el) => el.className.includes("h-[96px]"))).toBe(true); // the danger zone
+    expect(pulses.some((el) => el.className.includes("h-[96px]"))).toBe(false); // the zone block is GONE (R127-W1)
     expect(container.querySelector('[data-testid="usage-heatmap"]')).toBeNull(); // no real charts yet
 
     resolveStats(seedStats());
     expect(await screen.findByTestId("usage-heatmap")).toBeTruthy();
-    expect(screen.getByTestId("clear-usage-card")).toBeTruthy();
+    // R127-W1: the panel stays zone-less after load too (the card is
+    // ClearUsageDataCard's contract now).
+    expect(screen.queryByTestId("clear-usage-card")).toBeNull();
   });
 
   it("a failed GET renders the honest retryable error card — Retry re-drives the query", async () => {
@@ -323,6 +282,8 @@ describe("DataStatsPanel (R99-E — the section order + the danger zone)", () =>
 
     expect(await screen.findByText(/No usage statistics available/i)).toBeTruthy();
     expect(vi.mocked(fetchUsageStats)).not.toHaveBeenCalled();
+    // R127-W1: still true (and now true at every gate) — the panel never
+    // renders the zone; the standalone card owns it.
     expect(screen.queryByTestId("clear-usage-card")).toBeNull();
   });
 });
@@ -387,7 +348,8 @@ describe("DataStatsPanel ROUND-126 (R126-3b — the clay materials)", () => {
     expect(pulses.every((el) => el.className.includes("bg-well"))).toBe(true);
     expect(pulses.filter((el) => el.className.includes("h-[92px]")).length).toBe(4);
     expect(pulses.some((el) => el.className.includes("h-[264px]"))).toBe(true);
-    expect(pulses.some((el) => el.className.includes("h-[96px]"))).toBe(true);
+    // R127-W1: the danger-zone skeleton block died with the extraction.
+    expect(pulses.some((el) => el.className.includes("h-[96px]"))).toBe(false);
     expect(container.querySelector('[data-testid="usage-heatmap"]')).toBeNull();
   });
 

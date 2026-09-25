@@ -20,11 +20,16 @@ import { useConfigStore } from "../lib/config-store";
  * the previous window on screen while a range switch refetches (no skeleton
  * flash between 7d/14d/30d/90d).
  */
-export function useDetailedUsage(days = 30) {
+export function useDetailedUsage(days = 30, granularity: "day" | "hour" = "day") {
   const source = useConfigStore((s) => (s.demoData ? "demo" : "live"));
   return useQuery({
-    queryKey: ["usage-detailed", source, days],
-    queryFn: () => fetchDetailedUsage(days),
+    // R127: the granularity rides the key — a day↔hour switch must never
+    // serve the other's buckets from cache. The DAY call keeps its
+    // historical single-arg shape (fetchDetailedUsage(days)) so every
+    // existing exact-args pin stays true.
+    queryKey: ["usage-detailed", source, days, granularity],
+    queryFn: () =>
+      granularity === "hour" ? fetchDetailedUsage(days, "hour") : fetchDetailedUsage(days),
     enabled: source === "live",
     staleTime: 60_000,
     placeholderData: keepPreviousData,

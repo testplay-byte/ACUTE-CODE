@@ -24,7 +24,7 @@ import { cn } from "../../lib/utils";
  * highlight is unchanged.
  *
  * R99-E (anti-jitter kit): the card reserves its final height
- * (min-h-[184px]/md:192px — header + the fixed 120px ring); legend rows
+ * (min-h-[224px]/md:232px — header + the fixed 160px ring); legend rows
  * truncate and every number renders tabular-nums.
  *
  * R126-3b (the Clay Companion redesign): the card rides the CLAY material
@@ -33,10 +33,18 @@ import { cn } from "../../lib/utils";
  * by the data fingerprint so a window switch redraws the sweep honestly.
  * The STABLE per-model palette (usage-helpers modelColor) is the sanctioned
  * data-viz exception — untouched (same name = same color, everywhere).
+ *
+ * ROUND-127 (R127-W2 — COMPONENTS §6's DONUT GAUGE LAW, binding): a share
+ * donut the owner squints at is a defect — SIZE 120→160, STROKE 6→14 (a
+ * ~9% ring ratio), and the center stat at DISPLAY tier (the share %
+ * 22px/600 → 30px/700 tabular; the top model's short name stays 10px).
+ * The 6px hairline track survives ONLY for micro-meters (the composer's
+ * ContextDonut). The mutual hover-highlight (pointer-owned,
+ * data-donut-idx) and the 500ms sweep are untouched.
  */
 
-const SIZE = 120;
-const STROKE = 6;
+const SIZE = 160;
+const STROKE = 14;
 const R = (SIZE - STROKE) / 2;
 const CIRCUMFERENCE = 2 * Math.PI * R;
 
@@ -87,7 +95,7 @@ export function ModelDonut({
       data-testid="model-donut"
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
-      className={cn(CLAY_CARD, "flex min-h-[184px] flex-col p-4 md:min-h-[192px] md:p-5")}
+      className={cn(CLAY_CARD, "flex min-h-[224px] flex-col p-4 md:min-h-[232px] md:p-5")}
     >
       <div className="mb-4 flex shrink-0 items-center">
         <Kicker icon={ChartPie}>Model Usage · Share of Tokens</Kicker>
@@ -113,7 +121,8 @@ export function ModelDonut({
               focusable="false"
               className="shrink-0"
             >
-              {/* The §6 6px track — the recessed well leg */}
+              {/* The §6 gauge ring — the recessed well track (R127-W2:
+                  the 14px stroke at SIZE 160 — a ~9% ring ratio). */}
               <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none" stroke="var(--ac-surface-well)" strokeWidth={STROKE} />
               {segments.map(
                 (seg, i) =>
@@ -143,13 +152,15 @@ export function ModelDonut({
               )}
             </svg>
             {/* The center hole carries the headline stat — the top model's
-                short name + its share of the window's tokens. */}
+                short name + its share of the window's tokens. R127-W2 (the
+                gauge law): the share % renders at DISPLAY tier (30px/700
+                tabular) — the squint test the 22px/600 value failed. */}
             <div className="pointer-events-none absolute inset-0 grid place-items-center text-center">
               <div>
                 <div className="font-mono text-[10px] font-semibold" style={{ color: textSecondary }}>
                   {shortModelName(top.model)}
                 </div>
-                <div className="text-[22px] font-semibold leading-none tabular-nums" style={{ color: text }}>
+                <div className="text-[30px] font-bold leading-none tabular-nums" style={{ color: text }}>
                   {topSharePct}%
                 </div>
               </div>

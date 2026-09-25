@@ -91,10 +91,10 @@ describe("R71-e2 D1: read_file truncation markers teach the exact next call", ()
   const mk = (i: number): string => `L${i}-` + "z".repeat(96);
 
   it("the >256KB marker carries the byte count, boundary lines, TOTAL line count, and offset=<first omitted line>", () => {
-    // ROUND-96 (R96-C): the DEFAULT read is whole-file-first (~48KB budget,
-    // page 1 + marker beyond); the R70-a/R71-e2 head+tail marker machinery
-    // now belongs to EXPLICIT offset/limit windows — pinned here through
-    // one. 3000 lines × 103 bytes ≈ 309KB — over the 256KB cap.
+    // ROUND-96 (R96-C): the DEFAULT read is whole-file-first (~128KB budget
+    // since R127-W6, page 1 + marker beyond); the R70-a/R71-e2 head+tail
+    // marker machinery now belongs to EXPLICIT offset/limit windows — pinned
+    // here through one. 3000 lines × 103 bytes ≈ 309KB — over the 256KB cap.
     const content = Array.from({ length: 3000 }, (_, i) => mk(i + 1)).join("\n") + "\n";
     writeFileSync(join(tempDir, "r71-big.txt"), content, "utf8");
     const result = readFileWindow(tempDir, "r71-big.txt", { offset: 1, limit: 3000 });
@@ -238,15 +238,22 @@ describe("R71-e2 D2: edit-failure escalation — through the real toolset", () =
 
   it("consecutive anchor failures escalate (2nd → 3rd → 5th) and append AFTER the honest base error", async () => {
     const edit = tool(tools, "edit_file");
-    // 1st failure: base error only, no escalation suffix.
+    // 1st failure: the R127-W6 base error (historic PREFIX + recovery
+    // recipe + anchor echo), no escalation suffix.
     const first = await edit.execute({ path: "edit-target.txt", oldString: "nope", newString: "x" });
     expect(first.ok).toBe(false);
-    expect(first.output).toBe("edit failed: oldString not found in 'edit-target.txt'");
+    expect(first.output.startsWith("edit failed: oldString not found in 'edit-target.txt'")).toBe(true);
+    expect(first.output).toContain("re-read JUST the region");
+    expect(first.output).toContain('you tried to match: "nope"');
+    expect(first.output).not.toContain("consecutive edit failure");
     // 2nd failure: tier-2 suffix appended to the SAME base error.
     const second = await edit.execute({ path: "edit-target.txt", oldString: "nope", newString: "x" });
     expect(second.ok).toBe(false);
     expect(second.output).toBe(
-      "edit failed: oldString not found in 'edit-target.txt' (2nd consecutive edit failure — re-read the file with read_file and copy the anchor EXACTLY from the current content.)",
+      "edit failed: oldString not found in 'edit-target.txt' — the file may have changed since your last read; " +
+        "re-read JUST the region (read_file with offset/limit around where you expected it, or the whole file — " +
+        "files under 128KB return whole in one call) and re-anchor on CURRENT content; " +
+        "you tried to match: \"nope\" (2nd consecutive edit failure — re-read the file with read_file and copy the anchor EXACTLY from the current content.)",
     );
     // 3rd: change-approach tier.
     const third = await edit.execute({ path: "edit-target.txt", oldString: "still nope", newString: "x" });
@@ -273,7 +280,11 @@ describe("R71-e2 D2: edit-failure escalation — through the real toolset", () =
     expect(editStreakCount(session())).toBe(0);
     // …so the NEXT failure is a first failure again — base error only.
     const after = await edit.execute({ path: "edit-target.txt", oldString: "nope", newString: "x" });
-    expect(after.output).toBe("edit failed: oldString not found in 'edit-target.txt'");
+    expect(after.output.startsWith("edit failed: oldString not found in 'edit-target.txt'")).toBe(true);
+    expect(after.output).not.toContain("consecutive edit failure");
+    // R127-W6: the recovery recipe is now part of the FIRST-failure shape
+    // itself (the owner's poor-recovery complaint) — re-pinned above in the
+    // escalation test; here only the reset law matters.
   });
 
   it("a missing FILE (not an anchor failure) never escalates", async () => {

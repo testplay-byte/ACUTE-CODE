@@ -13,6 +13,7 @@ import {
   messageClock,
   textSizeScale,
   timestampsVisible,
+  toolActivityIsHidden,
   toolActivityVisibility,
 } from "../chat-prefs";
 import type { TranscriptItem } from "../sessions";
@@ -65,6 +66,32 @@ describe("chat-prefs — toolActivity visibility", () => {
       collapsedRows: false,
       hidden: true,
     });
+  });
+
+  // ── R127-W8 — the HIDDEN rung's retirement, pinned both directions ──────
+
+  it("R127-W8: a synced \"hidden\" STILL RESOLVES to the full-hide shape — the pref is never silently overridden", () => {
+    // The de-risk law's resolution half: whatever the picker stops offering,
+    // the value a user (or an old sync) actually stored keeps rendering
+    // exactly as before — only its SELECTION is retired, never its meaning.
+    expect(toolActivityVisibility("hidden").hidden).toBe(true);
+    expect(toolActivityVisibility("hidden").expandable).toBe(false);
+    expect(toolActivityVisibility("hidden").collapsedRows).toBe(false);
+  });
+
+  it("R127-W8: toolActivityIsHidden names the retired rung — and ONLY that rung", () => {
+    expect(toolActivityIsHidden("hidden")).toBe(true);
+    expect(toolActivityIsHidden("detailed")).toBe(false);
+    expect(toolActivityIsHidden("compact")).toBe(false);
+  });
+
+  it("R127-W8: the local default vocabulary cannot produce hidden by drift — only an explicit pick", () => {
+    // The LOCAL default is "detailed" (design/theme.tsx's
+    // CHAT_PREF_DEFAULTS, verified here from the module's own consumer
+    // contract): both selectable rungs resolve non-hidden, so the owner's
+    // state can only be reached by the stored/synced value itself.
+    expect(toolActivityIsHidden("detailed")).toBe(false);
+    expect(toolActivityIsHidden("compact")).toBe(false);
   });
 });
 

@@ -17,11 +17,15 @@ import { scaleIn } from "../../lib/motion";
  *   shadow). Hover = the rim→border-strong swap, nothing more (MOTION §4:
  *   the clay card is already elevated; hover confirms, never performs).
  * · Cell anatomy: Kicker-tier label (11px/500 uppercase tracked tertiary) →
- *   the value at 22px/600 `tabular-nums` (TOKENS §2's `value` tier) → ONE
- *   11px tertiary supporting line (the copy-length law: one line or absent).
- *   NO icon chips — the mobile stat-grid law; the icon tiles retired with
- *   the redesign (the `icon` prop survives on StatCard only so the usage
- *   screens' call sites compile until their wave lands).
+ *   the value at 26px/700 `tabular-nums` (R127, SCREENS §3 — the DASHBOARD
+ *   BOLDNESS LAW: "the stat row's numbers at display weight"; TOKENS §2's
+ *   weight law names the StatCard value as the ONE 700/900 chrome seat) →
+ *   ONE 11px tertiary supporting line (the copy-length law: one line or
+ *   absent). The usage screens' own UsageStatRow keeps the 22px/600 `value`
+ *   tier — their wave, their call. NO icon chips — the mobile stat-grid law;
+ *   the icon tiles retired with the redesign (the `icon` prop survives on
+ *   StatCard only so the usage screens' call sites compile until their wave
+ *   lands).
  * · Highlight (the Tokens cell): kicker + value render in `accentDeep` —
  *   the accent-as-ink tier (TOKENS §1d). NEVER a solid accent fill: the
  *   VLM's R126 review flagged that fill as an anomaly against the clay
@@ -42,7 +46,7 @@ export interface StatRowCell {
   key: string;
   /** The Kicker-tier label ("Projects", "Tokens", …). */
   label: string;
-  /** The headline figure — 22px/600 tabular (the PC `value` tier). */
+  /** The headline figure — 26px/700 tabular (R127 display weight). */
   value: string;
   /** The optional ONE-line supporting line (11px tertiary — the honesty scope). */
   caption?: string;
@@ -65,7 +69,7 @@ function StatCellBody({ cell, styles }: { cell: StatRowCell; styles: ThemeStyles
         {cell.label}
       </div>
       <div
-        className="mt-1 text-[22px] font-semibold leading-none tabular-nums"
+        className="mt-1 text-[26px] font-bold leading-none tabular-nums"
         style={{ color: cell.highlight ? accentDeep : text }}
       >
         {cell.value}
@@ -86,8 +90,9 @@ function StatCellBody({ cell, styles }: { cell: StatRowCell; styles: ThemeStyles
  * horizontal padding (the mobile stat-grid law; 2×2 below `md` gains the
  * horizontal divider the same way). Every cell is pinned `h-[92px]`
  * (R99-E's skeleton contract — see the file header for why the pin sits on
- * the cells). The Tokens cell's `highlight` is ink-only (see the file
- * header).
+ * the cells; 26px value + 11px label + 11px caption ≈ 60px of type in the
+ * 92px cell — the R127 display weight still fits with room). The Tokens
+ * cell's `highlight` is ink-only (see the file header).
  */
 export function StatRow({
   cells,

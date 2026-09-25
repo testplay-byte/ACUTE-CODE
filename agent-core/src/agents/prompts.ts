@@ -535,7 +535,11 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // per-tool craft stays in the tool schemas + skills.
   tools("What the core tools DO (the list above + each tool's schema stay authoritative for which exist):");
   const has = (name: string): boolean => ctx.toolNames.includes(name);
-  if (has("read_file")) tools("- read_file: reads a file (the session ledger tracks freshness).");
+  if (has("read_file"))
+    // ROUND-127 (R127-W6): the whole-file clause — the owner's 554-line/
+    // ~10K-token file was read in THREE parts; the budget raise (fs-ops)
+    // only helps if the prompt teaches the model to EXPECT whole files.
+    tools("- read_file: reads a file (the session ledger tracks freshness) — returns whole files under ~128KB in one call; a typical source file is ONE call, do not pre-split reads.");
   if (has("write_file")) tools("- write_file: creates or wholly rewrites one file.");
   if (has("edit_file")) tools("- edit_file: surgical oldString→newString replacement.");
   if (has("search_files")) tools("- search_files: finds files by name.");
@@ -701,7 +705,14 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // live in the TOOL USE descriptions block now); ACT loses the
   // prefer-editing clause (FILE EDITING rule 4 owns it) and the re-read
   // parenthetical (the risk list lives in smart verification).
-  ident("2. EXPLORE — understand before acting: one message with the independent discovery calls batched in parallel — the most specific tool for each. Do not re-explore between steps or re-read files already in context.");
+  // ROUND-127 (R127-W6): the owner's live complaint — "it was not running
+  // multiple steps and commands in a single time… like one command at a
+  // time, one file write at a time" — earned the batching its explicit
+  // ARITHMETIC (N files = N read_file calls in ONE message, never N
+  // messages of one call each) and the CONDITIONS rule (dependent calls
+  // WAIT: batch the independent prefix, then the dependent set once the
+  // dependency lands).
+  ident("2. EXPLORE — understand before acting: one message with the independent discovery calls batched in parallel — the most specific tool for each; a file-reading task over N files is N read_file calls in ONE message, never N messages of one call each. When later calls DEPEND on earlier results (a path you learn from a list_dir, an anchor you learn from a read), WAIT — batch the independent prefix, then batch the dependent set once the dependency lands. Do not re-explore between steps or re-read files already in context.");
   ident("3. ACT — the fewest steps that genuinely complete the work; every call must earn its place. A successful write_file/edit_file response is itself confirmation the save landed — re-read only when something indicates a problem.");
   // The adversarial-review affordance only makes sense when delegation exists.
   // ROUND-96 (R96-D): the VERIFY phase gains ON-DISK verification — re-read
@@ -771,7 +782,13 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   // response" and "DEPENDENT CALLS WAIT" were the same rule stated twice
   // (and stated a THIRD time in the TOOL USE batching rule, which now
   // carries the one-line form + a pointer here).
-  ident("- **Batch independent calls:** whenever tool calls do not depend on each other's results, issue them all in one response — three files to read means three read_file calls in one message; a call that needs a previous result waits for it.");
+  // ROUND-127 (R127-W6): the same two additions the EXPLORE phase gained —
+  // the owner's agent still ran one command at a time despite the existing
+  // teaching, so the bullet now carries the explicit ARITHMETIC (N files =
+  // N read_file calls in ONE message) and the prefix/dependent-set shape of
+  // the wait rule (batch the independent prefix, then the dependent set
+  // once the dependency lands).
+  ident("- **Batch independent calls:** whenever tool calls do not depend on each other's results, issue them all in one response — a file-reading task over N files is N read_file calls in ONE message, never N messages of one call each; a call that needs a previous result waits for it — batch the independent prefix, then batch the dependent set once the dependency lands (a path you learn from a list_dir, an anchor you learn from a read).");
   ident("- **Chain shell commands:** related shell work is one run_command (`a && b`) — a chain stops at the first failure, so order the links deliberately.");
   ident("- **One-call-one-wait is the anti-pattern:** batched discovery then one reasoning pass over all results is the fast shape.");
   ident("");

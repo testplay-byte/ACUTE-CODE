@@ -42,7 +42,7 @@ deriveThemeStyles()           ThemeStyles (~35 derived keys:
 
 1. NEVER hard-code a hex/rgb in a component. If the pipeline can't express
    it, extend the pipeline (themes.ts) — do not bypass it.
-2. Documented exceptions live in exactly four places:
+2. Documented exceptions live in exactly FIVE places:
    `src/lib/semantics.ts` (`SEMANTIC_COLORS`: success `#22c55e`, danger
    `#ef4444`, warning `#f59e0b`), the syntax palette
    (`src/components/project-chat/highlight.ts`), the usage-segment
@@ -51,7 +51,13 @@ deriveThemeStyles()           ThemeStyles (~35 derived keys:
    12 fixed light/dark hue pairs + the deterministic `modelColor(name,
    isDark)` hash, so the same model name paints the same color on every
    surface; hue identity is the data encoding, so it cannot flow from the
-   theme pipeline). Anything else hard-coded is a bug (round-98 C2 hunts
+   theme pipeline), and — **ROUND-127, exception #5** — the FILE-TYPE
+   palette (`src/components/project-chat/file-type.ts`): the fixed
+   per-extension identity colors for the chat's file chips (HTML/CSS/JS/
+   TS/JSON/MD/images/audio/video/archive…), the same data-encoding class
+   as the model palette (a `.html` file reads in its own hue in every
+   theme, on every surface — extension identity is the encoding, not a
+   surface mood). Anything else hard-coded is a bug (round-98 C2 hunts
    them; R100-C's audit rule R1 counts them).
 3. Alpha tints ALWAYS via `withAlpha(color, 0.08–0.13)` from
    `src/components/dashboard/helpers.ts` — never string-suffix hex hacks
@@ -254,7 +260,23 @@ exception** (WIZARD-DNA §4). Kill every other arbitrary radius
   §7) and is progressively retired from working screens (Dashboard /
   Usage heroes first).
 
-## 6. Interaction states — ROUND-100 (R100-C, research §C1.5)
+## 6. Interaction states — ROUND-100 (R100-C, research §C1.5) — **ROUND-127
+adds the overlay-scrollbar law (the owner's walkthrough: "completely hide
+those scroll bars… they should only appear when the user tries to scroll")**
+
+- **Scrollbars — ROUND-127 (the overlay law):** EVERY scroller in the app
+  (both axes) is HIDDEN AT REST — the thumb paints `transparent` with NO
+  gutter reflow — and TINTS IN only while its scroller is actively
+  scrolling (the `.is-scrolling` tag, applied by the global scroll-fade
+  listener on the scrolling element itself, held ~700ms after the last
+  scroll event, fading via the CSS transition). The resting app shows ZERO
+  scrollbar chrome. Supersedes the always-visible thin rules of R87-A1
+  (whose adaptive gutter survives only inside the fade-in state) and the
+  per-component `useScrollFade` opt-in pattern (the mechanism goes GLOBAL;
+  the old hook + `.auto-scroll` class remain as no-op compat or retire
+  with their screens). Keyboard focus within a scroller keeps the thumb
+  visible (an accessibility carve-out the OS-level overlay bars also
+  honor).
 
 - **Hover (ROUND-100 R100-C):** every interactive row = the `hover:bg-hover`
   bg wash (the CSS-var leg), **80–120ms, no translate/scale**. Hover is a

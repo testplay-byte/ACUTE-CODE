@@ -211,10 +211,10 @@ describe("R70-a D2: readFileWindow — line numbers + pagination", () => {
 
   it("an oversized EXPLICIT window (> 256KB content) keeps head ~32KB + tail ~32KB with an honest marker that points at offset/limit", () => {
     // ROUND-96 (R96-C): the DEFAULT read (no offset/limit) is now
-    // WHOLE-FILE-FIRST — a ~48KB budget, page 1 + marker beyond (pinned by
-    // r96-tools-precision.test.ts). The R70-a head+tail machinery survives
-    // for EXPLICIT windows (targeted re-reads / huge-file paging), which is
-    // what this test now exercises.
+    // WHOLE-FILE-FIRST — a ~128KB budget since R127-W6 (was ~48KB), page 1
+    // + marker beyond (pinned by r96-tools-precision.test.ts). The R70-a
+    // head+tail machinery survives for EXPLICIT windows (targeted re-reads /
+    // huge-file paging), which is what this test now exercises.
     // 3000 lines × 103 bytes ≈ 309KB — over the 256KB cap.
     const mk = (i: number): string => `L${i}-` + "z".repeat(96);
     const content = Array.from({ length: 3000 }, (_, i) => mk(i + 1)).join("\n") + "\n";

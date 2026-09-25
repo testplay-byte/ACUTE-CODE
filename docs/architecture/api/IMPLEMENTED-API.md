@@ -689,22 +689,30 @@ abort after `childStallTimeoutMs`).
 supervisor heartbeat cadence and the stall threshold (Settings →
 Sub-agents exposes them in seconds/minutes).
 
-### `GET /api/v1/usage/detailed?days=1..90`
+### `GET /api/v1/usage/detailed?days=1..90[&granularity=day|hour]`
 
 `{days:[{date,inputTokens,outputTokens,requests,costUsd}](zero-filled),
-totals:{projects,sessions,subagentSessions,toolCalls,requests,tokens,
-costUsd}, tools:[{name,count,failures}], models:[{model,requests,
-inputTokens,outputTokens,cachedInputTokens,totalTokens,costUsd}],
-projects:[{id,name,color,lastActivity,sessions:[…],subagentCount,
-toolCalls, models:[…], totals:{…}}]}` — a faithful port of
-export-usage.mjs's aggregation with a PRIVATE shape (raw ids/titles — the
-public export is the redacted one). `days` scopes ONLY the activity
-series; totals/tools/models/projects are whole-history. Session rows
-carry `{id, title, status, model, isSubagent, parentId, subRole,
-subagentCount, startedAt, endMs, durationMs, requests, tokens, toolCalls,
-costUsd, tools:[{name,count,failures}]}`; children stay nested under
-their parent's project; orphans land in a synthetic unassigned group.
-Default 30; `400 VALIDATION` outside 1–90.
+granularity:"day"|"hour", totals:{projects,sessions,subagentSessions,
+toolCalls,requests,tokens,costUsd}, tools:[{name,count,failures}],
+models:[{model,requests,inputTokens,outputTokens,cachedInputTokens,
+totalTokens,costUsd}], projects:[{id,name,color,lastActivity,
+sessions:[…],subagentCount,toolCalls, models:[…], totals:{…}}]}` — a
+faithful port of export-usage.mjs's aggregation with a PRIVATE shape (raw
+ids/titles — the public export is the redacted one). `days` scopes ONLY
+the activity series; totals/tools/models/projects are whole-history.
+Session rows carry `{id, title, status, model, isSubagent, parentId,
+subRole, subagentCount, startedAt, endMs, durationMs, requests, tokens,
+toolCalls, costUsd, tools:[{name,count,failures}]}`; children stay nested
+under their parent's project; orphans land in a synthetic unassigned
+group. Default 30; `400 VALIDATION` outside 1–90. ROUND-127:
+`granularity=hour` re-buckets the activity series by UTC hour (keys
+`YYYY-MM-DDThh`, a sargable `ts` range + `substr(ts,1,13)` grouping —
+zero migration, the stored ISO-8601 ts is ms-precise; zero-filled to the
+CURRENT hour, no future buckets) and the response echoes
+`granularity`; hour is capped at days ≤ 14 (≤ 336 buckets, `400
+VALIDATION` beyond; garbage values 400). Absent param / `day` is
+byte-identical to the historical response plus the `"day"` echo — mobile
+and dashboard consumers are untouched.
 
 ## ROUND-53 additions (implemented)
 

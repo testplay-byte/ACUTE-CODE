@@ -21,6 +21,16 @@
  * afterthought); the rows knit with the strong Hairline dividers; the
  * "synced across devices — applied live" footer is DELETED (the sync is
  * the system's own behavior, not a caption's job).
+ *
+ * R127-W8 — the Tool activity picker RETIRES its "Hidden" rung: the
+ * R127-Ra research verdict named it the ONLY render path that produces the
+ * owner's exact symptom ("conversation text but NO tool activity, at all"),
+ * and it syncs server-side so it survives every reconnect. Detailed and
+ * Compact stay selectable (compact already reduces noise without hiding
+ * everything). A PERSISTED "hidden" is never silently overridden — the
+ * picker renders its explicit state row ("Hidden — tools never render in
+ * the transcript") with a one-tap "Show tool activity" action back to
+ * detailed; the rung itself can no longer be SELECTED going forward.
  */
 
 import { Pressable, StyleSheet, View } from "react-native";
@@ -33,6 +43,7 @@ import {
   SectionHeader,
   SegmentedControl,
   TypeBodyStrong,
+  TypeCaption,
 } from "@/design/primitives";
 import {
   useTheme,
@@ -42,6 +53,7 @@ import {
   type TimestampsMode,
   type ToolActivity,
 } from "@/design/theme";
+import { toolActivityIsHidden } from "@/features/chat-prefs";
 import { RADIUS_INPUT, RADIUS_PILL, spacing, THEMES, type ThemeColors } from "@/design/tokens";
 import { selectionHaptic } from "@/design/haptics";
 import { mobLog } from "@/lib/log";
@@ -68,10 +80,15 @@ const TIMESTAMPS: ReadonlyArray<{ id: TimestampsMode; label: string }> = [
   { id: "hidden", label: "Hidden" },
 ];
 
+/**
+ * R127-W8 — the selectable rungs. "hidden" is RETIRED (the R127-Ra verdict:
+ * the one phone-side pick that renders conversation text with ZERO tool
+ * rows ever, synced server-side so it won every reconnect); a persisted
+ * hidden value renders the explicit legacy row below instead of a chip.
+ */
 const TOOL_ACTIVITY: ReadonlyArray<{ id: ToolActivity; label: string }> = [
   { id: "detailed", label: "Detailed" },
   { id: "compact", label: "Compact" },
-  { id: "hidden", label: "Hidden" },
 ];
 
 /** The six themes chunked into two-card rows (the 2-column grid; THEMES is
@@ -93,6 +110,7 @@ export default function AppearanceSettingsScreen() {
     setTimestampsMode,
     toolActivity,
     setToolActivity,
+    tokens,
   } = useTheme();
 
   return (
@@ -199,6 +217,33 @@ export default function AppearanceSettingsScreen() {
                 {option.label}
               </Chip>
             ))}
+            {/* R127-W8 — the RETIRED rung's honest state row: a persisted
+                "hidden" (the owner's current state) is not overridden — it
+                is SHOWN, named, and one tap away from detailed. Rendered
+                only while the stored value is hidden; gone the moment the
+                rung is left. */}
+            {toolActivityIsHidden(toolActivity) && (
+              <View style={styles.legacyHiddenRow} testID="chat-tool-activity-legacy-hidden">
+                <TypeCaption
+                  numberOfLines={2}
+                  style={[styles.legacyHiddenText, { color: tokens.textTertiary }]}
+                >
+                  Hidden — tools never render in the transcript
+                </TypeCaption>
+                <Chip
+                  testID="chat-tool-activity-show"
+                  onPress={() => {
+                    void selectionHaptic();
+                    setToolActivity("detailed");
+                    mobLog("settings", "tool activity un-hidden (legacy rung recovery)", {
+                      toolActivity: "detailed",
+                    });
+                  }}
+                >
+                  Show tool activity
+                </Chip>
+              </View>
+            )}
           </ChatPrefRow>
         </View>
       </ClayCard>
@@ -325,6 +370,22 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     justifyContent: "center",
     gap: spacing.sm,
+  },
+  // ── R127-W8 — the retired Hidden rung's state row (the R118-B row's own
+  // grammar: the caption heads, the action chip sits below; centered like
+  // the chips row, quiet like a meta line — the state is information, not
+  // an alarm) ──
+  legacyHiddenRow: {
+    alignSelf: "stretch",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+    paddingTop: spacing.xs,
+  },
+  // The color rides tokens at render (textTertiary — the quiet meta voice);
+  // only the layout lives here.
+  legacyHiddenText: {
+    textAlign: "center",
   },
 });
 

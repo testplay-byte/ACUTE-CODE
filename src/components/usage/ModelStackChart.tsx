@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Layers } from "lucide-react";
 import type { ThemeStyles } from "../../lib/themes";
@@ -6,7 +6,16 @@ import type { UsageStatsDayBucket, UsageStatsModel } from "../../lib/api";
 import { ease } from "../../lib/motion";
 import { Kicker } from "../ui/Kicker";
 import { utcDateLabel, withAlpha } from "../dashboard/helpers";
-import { formatCompactTokens, modelColor, CHART_BAR_GROW_MS, CHART_BAR_STAGGER_MS, CLAY_CARD, CLAY_TOOLTIP } from "./usage-helpers";
+import {
+  formatCompactTokens,
+  modelColor,
+  CHART_BAR_GROW_MS,
+  CHART_BAR_STAGGER_MS,
+  CLAY_CARD,
+  CLAY_TOOLTIP,
+  clampTooltipX,
+  sparseTickIndices,
+} from "./usage-helpers";
 import { RangeSelector } from "./RangeSelector";
 import { cn } from "../../lib/utils";
 
@@ -39,6 +48,27 @@ import { cn } from "../../lib/utils";
  * stacked bars grow from the BASELINE on entry (MOTION §2's chart-entry
  * law — 350ms, 12ms per-bar stagger, once per data load: new days mount
  * fresh and grow in, existing keys hold their settled pose).
+ *
+ * ROUND-127 (R127-W2 — COMPONENTS §6's chart-interaction laws, binding):
+ * · THE FULL-COLUMN HIT-TESTING LAW: the transparent `data-bar-idx` column
+ *   (full plot height) is the ONE hit surface per bar; the PAINTED stacked
+ *   motion.rect segments render `pointer-events: none` (display-only) so the
+ *   pointer over a colored segment's BODY resolves through the column
+ *   underneath (the owner's "hover only works at the top area of the bar"
+ *   complaint, named on this chart).
+ * · THE TOOLTIP EDGE LAW: the tooltip centers on its bar only while it
+ *   fits; near the first/last bars `clampTooltipX` (the shared helper — ONE
+ *   spelling) clamps it inside the chart's content box (the owner's
+ *   "hover the very right side entry… the details show where there is no
+ *   place to view them" complaint, named on this chart). The -50%
+ *   centering rides framer's own `x` slot (a raw style.transform would be
+ *   clobbered by the animated y/scale — the pre-R126 lesson, kept).
+ * · The x-axis ticks read the shared `sparseTickIndices` (ONE spelling of
+ *   the 4-tick idiom this chart invented — the ⅓ tick now rounds instead
+ *   of flooring, a ±1-bucket shift at some window sizes).
+ * · THE NEWEST-END LAW: the overflow-x scroller MOUNTS at the newest end
+ *   and re-lands there on every range swap (the owner's "same goes for the
+ *   other areas" report — the 90/365-day windows open on the latest week).
  */
 
 const RANGE_OPTIONS = [7, 30, 90, 365] as const;
@@ -46,6 +76,9 @@ const CHART_HEIGHT = 150;
 const LABEL_AREA = 22;
 const Y_AXIS = 36;
 const BAR_RADIUS = 3;
+/** R127-W2 (the edge law): the tooltip's rendered width — the `w-52` class
+ * (208px) on the tooltip card below. */
+const TOOLTIP_W = 208;
 
 function dayTotal(day: UsageStatsDayBucket): number {
   let sum = 0;
@@ -93,6 +126,33 @@ export function ModelStackChart({
   const chartWidth = visible.length * (barWidth + barGap) - barGap;
   const hovered = hoveredIdx !== null ? visible[hoveredIdx] : undefined;
 
+  // R127-W2 (the edge law): the hovered bar's tooltip position — center on
+  // the bar only while the tooltip fits inside the chart's content box (the
+  // Y_AXIS offset included — the clamp's coordinate space is the svg's);
+  // near the first/last bars the shared clampTooltipX clamps it.
+  const tooltipX =
+    hoveredIdx !== null && hovered !== undefined
+      ? clampTooltipX(
+          Y_AXIS + hoveredIdx * (barWidth + barGap) + barWidth / 2,
+          Y_AXIS + chartWidth,
+          TOOLTIP_W,
+        )
+      : null;
+
+  // R127-W2 (the newest-end law): the overflow-x scroller MOUNTS at the
+  // newest end and re-lands there on every range/window swap
+  // (`scrollLeft = scrollWidth` clamps to 0 when the content fits — the
+  // 7/30-day centered fits are untouched). data-scrolled-to-latest is the
+  // effect's observable contract (happy-dom's scroll geometry is 0/0, so
+  // the pin reads the hook).
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el === null) return;
+    el.scrollLeft = el.scrollWidth;
+    el.dataset.scrolledToLatest = "true";
+  }, [range, visible.length]);
+
   return (
     <div
       data-testid="model-stack-chart"
@@ -122,7 +182,7 @@ export function ModelStackChart({
           </p>
         </div>
       ) : (
-        <div className="custom-scrollbar overflow-x-auto">
+        <div ref={scrollRef} className="custom-scrollbar overflow-x-auto">
           <div
             className="relative mx-auto w-fit"
             onPointerMove={(e) => {
@@ -209,6 +269,13 @@ export function ModelStackChart({
                               fill={seg.color}
                               opacity={hoveredIdx === null || isHovered ? 1 : 0.35}
                               data-stack-model={seg.name}
+                              // R127-W2 (the full-column law): the painted
+                              // segment is DISPLAY-ONLY — pointer-events:none
+                              // lets the pointer resolve through the
+                              // transparent data-bar-idx column underneath
+                              // (hovering a colored segment's BODY works, not
+                              // just the air above the stack).
+                              style={{ pointerEvents: "none" }}
                               // R126-3b (MOTION §2): grow from the baseline —
                               // 350ms, 12ms stagger, once per data load.
                               initial={{ y: CHART_HEIGHT, height: 0 }}
@@ -226,9 +293,12 @@ export function ModelStackChart({
                 })}
               </g>
 
+              {/* R127-W2: the sparse 4-tick idiom reads the shared
+                  sparseTickIndices (ONE spelling — the ⅓ tick now ROUNDS
+                  instead of flooring; a ±1-bucket shift at some window
+                  sizes, the same first/⅓/⅔/last spread). */}
               {visible.length > 1 &&
-                [0, Math.floor((visible.length - 1) / 3), Math.floor((2 * (visible.length - 1)) / 3), visible.length - 1].map(
-                  (tick, i) => {
+                sparseTickIndices(visible.length, 4).map((tick, i) => {
                     const day = visible[tick];
                     if (day === undefined) return null;
                     const cx = Y_AXIS + tick * (barWidth + barGap) + barWidth / 2;
@@ -246,12 +316,11 @@ export function ModelStackChart({
                         {utcDateLabel(day.date)}
                       </text>
                     );
-                  },
-                )}
+                  })}
             </svg>
 
             <AnimatePresence>
-              {hovered ? (
+              {hovered && tooltipX !== null ? (
                 <motion.div
                   key="tooltip"
                   initial={{ opacity: 0, y: 4, scale: 0.96 }}
@@ -259,9 +328,16 @@ export function ModelStackChart({
                   exit={{ opacity: 0, y: 4, scale: 0.96 }}
                   transition={{ duration: 0.15 }}
                   className="pointer-events-none absolute top-0 z-50"
+                  // R127-W2 (the edge law): when the clamp engages, `left` IS
+                  // the tooltip's left edge (no shift). When it doesn't,
+                  // `left` is the bar's center — x:"-50%" is framer's own
+                  // transform slot, so the centering composes WITH the
+                  // animated y/scale (a raw style.transform would be
+                  // clobbered by framer's transform writes — the pre-R126
+                  // lesson, kept).
                   style={{
-                    left: Y_AXIS + (hoveredIdx ?? 0) * (barWidth + barGap) + barWidth / 2,
-                    transform: "translateX(-50%)",
+                    left: tooltipX.left,
+                    ...(tooltipX.clamped ? {} : { x: "-50%" }),
                   }}
                 >
                   {/* R126-3b: the tooltip surface is the clay popover. */}

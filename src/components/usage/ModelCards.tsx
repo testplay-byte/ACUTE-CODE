@@ -124,6 +124,16 @@ export function ModelCards({
           {models.length} {models.length === 1 ? "model" : "models"}
         </span>
       </div>
+      {/* R127-W1 (SCREENS §3 order step 5 — the months-window nuance): this
+          list renders usage.data.models (WHOLE HISTORY) and sits directly
+          below the Data & Statistics panel, whose Model Usage donut reads
+          stats.data.models (the selected MONTHS window). The sub-caption
+          keeps the two lists' scopes readable side by side — the honest
+          hedge the owner's "individual usage below Model Usage" directive
+          needs. */}
+      <p className="mb-3 text-[11px]" style={{ color: textSecondary }}>
+        Individual usage, all-time — the Model Usage donut above shows the selected months window.
+      </p>
       {sorted.length === 0 ? (
         <p className="py-4 text-[12px]" style={{ color: textSecondary }}>
           No model calls recorded yet.

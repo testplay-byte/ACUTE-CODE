@@ -907,8 +907,88 @@ export function wellDefaultOpen(live: boolean, toolRowCount: number): boolean {
   return live || toolRowCount > 0;
 }
 
+// ── R127-W8 — the tools-hidden hint (once per session screen mount) ──────
+//
+// The R127-Ra research verdict: toolActivity "hidden" is the ONLY render
+// path that produces the owner's exact symptom ("conversation text but NO
+// tool activity, at all"), and the pick syncs server-side so it survives
+// every reconnect. The rung is retired from the picker (appearance.tsx) but
+// a persisted value still applies — so the TRANSCRIPT makes the invisible
+// state observable: while hidden is active and a turn carries tool items,
+// ONE quiet dismissible one-liner renders ("Tool activity is hidden — tap
+// to show"; the tap sets detailed — the fix is one press away, the pref is
+// never overridden behind the user's back).
+//
+// ONCE PER SESSION SCREEN MOUNT: the session screen renders TurnBlocks
+// through its inverted FlatList; the hint's "generation" runs from the
+// first block mount to the LAST block unmount (all blocks gone = the screen
+// is gone — the next mount starts a fresh generation). Within a generation
+// exactly ONE block owns the hint (the first qualifying render claims it);
+// a dismissal (the ✕ or the fix-tap) silences it for the whole generation.
+// Honest caveat: a viewport that momentarily shows ZERO turn blocks (a
+// window of only standalone cards) also closes a generation — the hint may
+// re-appear once when a turn block scrolls back in. That is the cheap cost
+// of detecting "screen mount" from inside the row renderer (the screen
+// itself is outside this module's ownership).
+
+/** The hint's agreed copy (the spec's exact one-liner — pinned by the tests). */
+export const TOOLS_HIDDEN_HINT_COPY = "Tool activity is hidden — tap to show";
+
+let toolsHiddenHintOwner: object | null = null;
+let toolsHiddenHintMountedBlocks = 0;
+let toolsHiddenHintDismissed = false;
+
+/** Test seam: a fresh generation (the tests mount/unmount blocks directly). */
+export function resetToolsHiddenHintForTest(): void {
+  toolsHiddenHintOwner = null;
+  toolsHiddenHintMountedBlocks = 0;
+  toolsHiddenHintDismissed = false;
+}
+
+/** The mount leg — EVERY TurnBlock holds its generation open (qualifying or
+ * not): the generation ends only when the last block unmounts. */
+export function mountToolsHiddenHintBlock(): void {
+  toolsHiddenHintMountedBlocks += 1;
+}
+
+/** The unmount leg — the last block out closes the generation (a fresh
+ * session screen mount starts with the hint available again). */
+export function releaseToolsHiddenHintBlock(): void {
+  toolsHiddenHintMountedBlocks = Math.max(0, toolsHiddenHintMountedBlocks - 1);
+  if (toolsHiddenHintMountedBlocks === 0) {
+    toolsHiddenHintOwner = null;
+    toolsHiddenHintDismissed = false;
+  }
+}
+
+/** The dismissal leg — the ✕ or the fix-tap silences the hint for the rest
+ * of the generation (the OWNING block also flips its local state so the
+ * line disappears immediately, without waiting for a re-render). */
+export function dismissToolsHiddenHint(): void {
+  toolsHiddenHintDismissed = true;
+  toolsHiddenHintOwner = null;
+}
+
+/**
+ * The claim (called from the block's render): does THIS block render the
+ * hint? The first qualifying block of a generation claims it (hidden active
+ * + the turn actually carries tool items — a turn with nothing to hide
+ * never claims); the owner KEEPS it across its own re-renders while it still
+ * qualifies (the claim dies with the fix: once hidden flips false the line
+ * is gone). Pure-ish module state — display-only, no data integrity rides
+ * it; the pins drive these exact functions.
+ */
+export function acquireToolsHiddenHint(owner: object, hidden: boolean, toolItemCount: number): boolean {
+  if (toolsHiddenHintDismissed) return false;
+  if (toolsHiddenHintOwner === owner) return hidden && toolItemCount > 0;
+  if (toolsHiddenHintOwner === null && hidden && toolItemCount > 0) {
+    toolsHiddenHintOwner = owner;
+  }
+  return toolsHiddenHintOwner === owner;
+}
+
 export function TurnBlock({ group }: { group: TurnGroup }) {
-  const { tokens } = useTheme();
+  const { tokens, setToolActivity } = useTheme();
   const prefs = useChatPrefs();
   const reduced = useReducedMotion();
   const visibility = toolActivityVisibility(prefs.toolActivity);
@@ -932,6 +1012,18 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
   // R123-W-m — the tool-row count the well actually renders (pref-applied:
   // 0 under `hidden` — the clean document keeps the collapsed default).
   const toolRowCount = showToolRows ? toolItems.length : 0;
+
+  // ── R127-W8 — the tools-hidden hint's claim (see the block above): this
+  // block joins the mount generation, and the first qualifying render
+  // claims the one-liner. Local hintGone mirrors the module-level dismissal
+  // so the line vanishes on the tap itself, not on the next re-render. ──
+  const [hintOwner] = useState(() => ({}) as object);
+  const [hintGone, setHintGone] = useState(false);
+  useEffect(() => {
+    mountToolsHiddenHintBlock();
+    return () => releaseToolsHiddenHintBlock();
+  }, []);
+  const showToolsHiddenHint = !hintGone && acquireToolsHiddenHint(hintOwner, visibility.hidden, toolItems.length);
 
   // ── the body (the retired AssistantBlock's grammar, over the segments) ──
   const textSegments = assistantItems.filter((seg) => {
@@ -1062,6 +1154,23 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
       testID="transcript-turn-block"
     >
       {rail}
+      {/* R127-W8 — the retired Hidden rung's observable state: ONE quiet
+          dismissible line per session screen mount (see the hint block
+          above). The whole line is the fix — tap → detailed. */}
+      {showToolsHiddenHint && (
+        <ToolsHiddenHint
+          onShow={() => {
+            dismissToolsHiddenHint();
+            setHintGone(true);
+            void selectionHaptic();
+            setToolActivity("detailed");
+          }}
+          onDismiss={() => {
+            dismissToolsHiddenHint();
+            setHintGone(true);
+          }}
+        />
+      )}
       {wellHasContent && (
         <Reveal open={open}>
           <View
@@ -1113,6 +1222,47 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
           </View>
         ) : null;
       })}
+    </View>
+  );
+}
+
+// ── R127-W8 — the tools-hidden hint row (the quiet one-liner) ────────────
+
+/**
+ * The retired Hidden rung's observable state, in the R123 well's own quiet
+ * grammar: ONE line under the rail — the message (TypeCaption, tertiary
+ * ink — the meta voice, never an alarm) as the whole fix target (tap →
+ * setToolActivity("detailed")), plus a small ✕ to dismiss WITHOUT changing
+ * the pref (a deliberate hidden pick is a user preference; the hint only
+ * says it out loud once). minHeight 32 = the rail's own touch height.
+ */
+function ToolsHiddenHint({ onShow, onDismiss }: { onShow: () => void; onDismiss: () => void }) {
+  const { tokens } = useTheme();
+  return (
+    <View style={styles.toolsHiddenHint}>
+      <Pressable
+        accessibilityLabel={`${TOOLS_HIDDEN_HINT_COPY} tool activity`}
+        accessibilityRole="button"
+        onPress={onShow}
+        style={({ pressed }) => [
+          styles.toolsHiddenHintPress,
+          pressed ? { backgroundColor: tokens.subtleHover } : null,
+        ]}
+        testID="transcript-tools-hidden-hint"
+      >
+        <TypeCaption numberOfLines={1} style={{ color: tokens.textTertiary }}>
+          {TOOLS_HIDDEN_HINT_COPY}
+        </TypeCaption>
+      </Pressable>
+      <Pressable
+        accessibilityLabel="Dismiss the hidden tool activity hint"
+        accessibilityRole="button"
+        hitSlop={8}
+        onPress={onDismiss}
+        testID="transcript-tools-hidden-dismiss"
+      >
+        <CircleX size={14} color={tokens.textTertiary} strokeWidth={2} />
+      </Pressable>
     </View>
   );
 }
@@ -2648,6 +2798,22 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     padding: spacing.sm,
     gap: spacing.xs,
+  },
+  /** R127-W8 — the tools-hidden hint row: one quiet line under the rail (the
+   *  rail's own 32 touch height; the press target takes the flex, the ✕ rides
+   *  the end with hitSlop). */
+  toolsHiddenHint: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    minHeight: 32,
+  },
+  toolsHiddenHintPress: {
+    flex: 1,
+    alignItems: "center",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: RADIUS_PILL,
   },
   /** One tool row inside the well (a failed call's quiet danger wash rides
    *  inline; the rows are flush lines, never nested cards). */

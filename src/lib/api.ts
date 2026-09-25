@@ -393,8 +393,13 @@ export interface SessionContextReport {
   available?: number;
   usedTokens: number;
   /** ROUND-83 (R83): "estimated" — the wire says which number is a
-   * projection and which (actual) is the provider's own. */
-  usedTokensBasis?: "estimated";
+   * projection and which (actual) is the provider's own.
+   * ROUND-127 (R127-W4): "provider-anchored" — the headline is the
+   * provider's OWN reported input tokens + the post-anchor tail estimate
+   * (the context meter's honesty law: the local estimate was lying 2-3×
+   * low against the provider's own count). "estimated" only when no
+   * provider usage exists yet (before the first reply). */
+  usedTokensBasis?: "estimated" | "provider-anchored";
   breakdown: {
     systemPrompt: number;
     systemTools: number;
@@ -897,6 +902,9 @@ export interface DetailedUsageTotals {
 export interface DetailedUsage {
   /** Windowed, zero-filled, ascending — feeds the activity chart. */
   days: UsageDayBucket[];
+  /** ROUND-127: the series granularity echo — "day" (keys "YYYY-MM-DD")
+   *  or "hour" (keys "YYYY-MM-DDThh"; the 7-day hourly view). */
+  granularity?: "day" | "hour";
   /** Whole-history rollups (mirrors the public usage.json export). */
   totals: DetailedUsageTotals;
   tools: DetailedUsageToolCall[];
@@ -910,10 +918,18 @@ export interface DetailedUsage {
 
 /**
  * Whole-history usage analytics for the /usage screen (activity series over
- * the trailing `days` UTC days, 1–90, default 30).
+ * the trailing `days` UTC days, 1–90, default 30). ROUND-127:
+ * `granularity: "hour"` re-buckets that series by UTC hour (server-capped
+ * at days ≤ 14) — omitted/"day" leaves the URL byte-identical to the
+ * historical call so every existing consumer (mobile, dashboard, tests)
+ * stays untouched.
  */
-export function fetchDetailedUsage(days = 30): Promise<DetailedUsage> {
-  return request<DetailedUsage>(`/usage/detailed?days=${days}`);
+export function fetchDetailedUsage(
+  days = 30,
+  granularity?: "day" | "hour",
+): Promise<DetailedUsage> {
+  const suffix = granularity === "hour" ? "&granularity=hour" : "";
+  return request<DetailedUsage>(`/usage/detailed?days=${days}${suffix}`);
 }
 
 // ---------------------------------------------------------------------------

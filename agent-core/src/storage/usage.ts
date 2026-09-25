@@ -50,6 +50,28 @@ function utcDayKey(daysBack: number): string {
   return new Date(todayUtcMidnight - daysBack * MS_PER_DAY).toISOString().slice(0, 10);
 }
 
+/* ── ROUND-127 (the hourly view — the owner: "if I select it to seven days
+ * … instead of seven days, it would show me a much better kind of view, like
+ * hourly based"): the hour-bucket series. The stored `ts` is ISO-8601 UTC
+ * TEXT with millisecond precision (0001_init + 0031 canonical), so
+ * `substr(ts, 1, 13)` buckets by hour with NO migration, and the WHERE
+ * range is SARGABLE on idx_usage_events_ts (strictly better than the
+ * day path's `date(ts)` function-on-column predicate). Hour keys are
+ * "YYYY-MM-DDThh" — the frontend's hour-label branches key on that exact
+ * 13-char shape (usage-helpers isHourBucket; the day-label helpers are
+ * day-only BY CONTRACT and must never see one). */
+
+const MS_PER_HOUR = 3_600_000;
+
+/** The hour key of a UTC instant — "YYYY-MM-DDThh". */
+function utcHourKey(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 13);
+}
+
+/** The series granularity: "day" (the historical buckets) or "hour" (the
+ *  R127 7-day view). Default/absent = "day" → byte-identical responses. */
+export type UsageGranularity = "day" | "hour";
+
 /** Sums of REAL columns pick up binary-float noise; money fields get trimmed. */
 function roundUsd(value: number): number {
   return Math.round(value * 1e6) / 1e6;
@@ -59,8 +81,20 @@ function roundUsd(value: number): number {
  * Per-day usage for the last `options.days` UTC calendar days ending today,
  * ordered ascending and zero-filled. Days are cut on UTC boundaries because
  * that is exactly what SQLite's date(ts) buckets the stored ISO-8601 ts by.
+ *
+ * ROUND-127: `granularity: "hour"` re-buckets the SAME window by UTC hour
+ * (`substr(ts, 1, 13)`, a sargable `ts >= ? AND ts <= ?` range on the
+ * ts index) — the zero-fill runs from the window's first midnight to the
+ * CURRENT hour inclusive (no future buckets). The day path stays
+ * byte-identical when granularity is absent or "day".
  */
-export function getUsageSummary(db: SqliteDatabase, options: { days: number }): UsageSummary {
+export function getUsageSummary(
+  db: SqliteDatabase,
+  options: { days: number; granularity?: UsageGranularity },
+): UsageSummary {
+  if (options.granularity === "hour") {
+    return getUsageSummaryHourly(db, options.days);
+  }
   const firstDay = utcDayKey(options.days - 1);
   const rows = db
     .prepare(
@@ -100,6 +134,64 @@ export function getUsageSummary(db: SqliteDatabase, options: { days: number }): 
   );
 
   return { days, totals, generatedAt: new Date().toISOString() };
+}
+
+/**
+ * ROUND-127: the HOURLY series — the same window, bucketed by UTC hour.
+ * The WHERE range is SARGABLE (a plain `ts >= ? AND ts <= ?` on the ISO
+ * text column rides idx_usage_events_ts — no function-on-column), the
+ * GROUP BY is `substr(ts, 1, 13)` ("YYYY-MM-DDThh"), and the zero-fill
+ * walks from the window's first midnight to the CURRENT hour inclusive —
+ * no future buckets, exactly `days * 24 - (24 - currentHour - 1)` rows.
+ * Totals fold the same way as the day path (the whole window's sums).
+ */
+function getUsageSummaryHourly(db: SqliteDatabase, days: number): UsageSummary {
+  const now = new Date();
+  const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const windowStartMs = todayUtcMidnight - (days - 1) * MS_PER_DAY;
+  const currentHourStartMs =
+    todayUtcMidnight + now.getUTCHours() * MS_PER_HOUR;
+  // The range end covers the current hour's events (ISO ms precision).
+  const rangeEnd = new Date(currentHourStartMs + MS_PER_HOUR - 1).toISOString();
+  const rangeStart = new Date(windowStartMs).toISOString();
+  const rows = db
+    .prepare(
+      `SELECT substr(ts, 1, 13) AS date,
+              SUM(input_tokens) AS input_tokens,
+              SUM(output_tokens) AS output_tokens,
+              COUNT(*) AS requests,
+              SUM(cost_usd) AS cost_usd
+       FROM usage_events
+       WHERE ts >= ? AND ts <= ?
+       GROUP BY substr(ts, 1, 13)`,
+    )
+    .all(rangeStart, rangeEnd) as UsageAggregateRow[];
+
+  const byHour = new Map(rows.map((row) => [row.date, row]));
+  const buckets: UsageDayBucket[] = [];
+  for (let ms = windowStartMs; ms <= currentHourStartMs; ms += MS_PER_HOUR) {
+    const date = utcHourKey(ms);
+    const row = byHour.get(date);
+    buckets.push({
+      date,
+      inputTokens: row?.input_tokens ?? 0,
+      outputTokens: row?.output_tokens ?? 0,
+      requests: row?.requests ?? 0,
+      costUsd: roundUsd(row?.cost_usd ?? 0),
+    });
+  }
+
+  const totals = buckets.reduce<UsageTotals>(
+    (sum, bucket) => ({
+      inputTokens: sum.inputTokens + bucket.inputTokens,
+      outputTokens: sum.outputTokens + bucket.outputTokens,
+      requests: sum.requests + bucket.requests,
+      costUsd: roundUsd(sum.costUsd + bucket.costUsd),
+    }),
+    { inputTokens: 0, outputTokens: 0, requests: 0, costUsd: 0 },
+  );
+
+  return { days: buckets, totals, generatedAt: new Date().toISOString() };
 }
 
 /* ── ROUND-52 (R52-b): detailed usage analytics (the in-app /usage screen) ──
@@ -248,6 +340,9 @@ export interface DetailedUsageTotals {
 export interface DetailedUsage {
   /** Windowed, zero-filled, ascending (getUsageSummary's series). */
   days: UsageDayBucket[];
+  /** ROUND-127: the series granularity ECHO — "day" (the default, keys
+   *  "YYYY-MM-DD") or "hour" (keys "YYYY-MM-DDThh"). */
+  granularity: UsageGranularity;
   /** Whole-history rollups (mirrors the export script's totals). */
   totals: DetailedUsageTotals;
   tools: DetailedUsageToolCall[];
@@ -459,10 +554,16 @@ interface SessionView extends DetailedUsageSession {
  * per-model leaderboards plus a projects → sessions drill-down with sub-agent
  * children nested by parentId (same aggregation the public usage.json export
  * runs, minus the redaction — see the section header). `options.days` only
- * scopes the zero-filled `days` activity series (getUsageSummary).
+ * scopes the zero-filled `days` activity series (getUsageSummary);
+ * `options.granularity` (ROUND-127) re-buckets that series by hour and is
+ * ECHOED on the response so clients label without sniffing string shapes.
  */
-export function getDetailedUsage(db: SqliteDatabase, options: { days: number }): DetailedUsage {
-  const dayBuckets = getUsageSummary(db, { days: options.days }).days;
+export function getDetailedUsage(
+  db: SqliteDatabase,
+  options: { days: number; granularity?: UsageGranularity },
+): DetailedUsage {
+  const granularity: UsageGranularity = options.granularity ?? "day";
+  const dayBuckets = getUsageSummary(db, { days: options.days, granularity }).days;
 
   const projectRows = db
     .prepare("SELECT id, name, color, created_at FROM projects ORDER BY created_at, id")
@@ -709,6 +810,9 @@ export function getDetailedUsage(db: SqliteDatabase, options: { days: number }):
 
   return {
     days: dayBuckets,
+    // ROUND-127: the granularity ECHO — clients label the series without
+    // sniffing string shapes (hour keys are "YYYY-MM-DDThh").
+    granularity,
     totals,
     tools: sortedToolCalls(globalTools),
     models: sortedModels(globalModels, unpriced),

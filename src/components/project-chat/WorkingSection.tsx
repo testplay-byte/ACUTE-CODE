@@ -84,6 +84,17 @@ import { SEMANTIC_COLORS } from "../../lib/semantics";
 // 200ms TIMING never a spring; the header chevron rotates on the house
 // SPRING). Never hand-roll a spring in a component.
 import { DISCLOSURE_SPRING, SPRING } from "../../lib/motion";
+// R127-W5: the timed-close constants (MOTION.md §2's DISCLOSURE_COLLAPSE_MS
+// / DISCLOSURE_FADE_MS) — usage-helpers owns the one spelling of the timed
+// disclosure legs; the new tool-row body animation below rides them so the
+// file never re-rolls the numbers.
+import { DISCLOSURE_COLLAPSE_MS, DISCLOSURE_FADE_MS } from "../usage/usage-helpers";
+// R127-W5 (TOKENS.md §1 hex-exception #5): the FILE-TYPE palette — every
+// file-family row renders its target path's extension-identity glyph
+// (the owner's "proper icons and proper colored icons based on their
+// extensions" ask) before the path pill / at the path's render points.
+// FileTypeIcon's `dir` prop swaps in the Folder meta (list_dir/create_dir).
+import { FileTypeIcon } from "./file-type";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 // ROUND-38 (owner: "outright remove that option completely"): the
@@ -237,6 +248,14 @@ const EMPTY_STREAMING_INPUTS: StreamingToolInput[] = [];
  * exactly what hid them. Reads/searches/commands stay behind the expand;
  * the mutations the agent made to the project NEVER hide. */
 export const FILE_MUTATION_TOOLS = new Set(["write_file", "edit_file", "create_dir", "delete_file"]);
+
+/** ROUND-127 (R127-W5, MOTION.md §4 — the tool-section auto-lifecycle): the
+ * HOLD between a row's completion and its timed close. The owner (verbatim):
+ * "it should auto-expand that section and then auto-collapse it afterwards,
+ * after some time. Not immediately after finishing it. It should take some
+ * time and then smoothly close it." ~2.5s — long enough to read a command's
+ * outcome, short enough that a run of tools folds itself away. */
+export const TOOL_COLLAPSE_HOLD_MS = 2500;
 
 /** ROUND-52 (R52-c): the amber warning tone for the stalled-watch line
  * (same value SubAgentPanel uses — a semantic, theme-stable warning color). */
@@ -590,6 +609,14 @@ const THOUGHT_CLAMP_LINES = 15;
  * has been completed then it will collapse by itself."
  * → live rows auto-expand; completing (live→false) auto-collapses; a manual
  * tap always wins over the automation.
+ * ROUND-127 (R127-W5, MOTION.md §4 — the tool-section auto-lifecycle): the
+ * completing collapse now HOLDS ~TOOL_COLLAPSE_HOLD_MS before the timed
+ * close (the owner: "auto-collapse it afterwards, after some time. Not
+ * immediately after finishing it. It should take some time and then
+ * smoothly close it") — the pre-R127 instant setOpen(false) is dead. The
+ * body's expand/collapse animation already speaks the disclosure grammar
+ * (DISCLOSURE_SPRING up, the 200ms/150ms timed close down), so the LAW
+ * needed only the hold.
  */
 /** R97-F: split the thinking text on CLOSED ``` fences — the prose parts
  * render as the quiet mono notes; each CLOSED fence renders as a CodeBlock
@@ -683,13 +710,44 @@ export function ThoughtRow({
     jumpToBottom: jumpThoughtToBottom,
   } = useStickToBottom([trimmed], { enabled: live });
 
+  // ── ROUND-127 (R127-W5): the pending timed close. Armed when the row
+  //    completes (live→false while it was expanded); fired after the hold;
+  //    cleared if the row re-goes-live (a retry), by a manual tap, or on
+  //    unmount (the cleanup below). The callback re-checks userTouched so a
+  //    manual tap during the hold ALWAYS wins. ──
+  const collapseTimer = useRef<number | null>(null);
+
   useEffect(() => {
     if (!userTouched.current) {
-      if (live) setOpen(true); // in-flight → expanded
-      else if (prevLive.current) setOpen(false); // just completed → collapse
+      if (live) {
+        // In-flight → expanded (also cancels a pending close — the row
+        // re-went-live, e.g. a retried thought re-arms the automation).
+        if (collapseTimer.current !== null) {
+          window.clearTimeout(collapseTimer.current);
+          collapseTimer.current = null;
+        }
+        setOpen(true);
+      } else if (prevLive.current) {
+        // Just completed → HOLD (MOTION §4: the owner reads the outcome),
+        // then the timed close — never the pre-R127 instant collapse.
+        if (collapseTimer.current === null) {
+          collapseTimer.current = window.setTimeout(() => {
+            collapseTimer.current = null;
+            if (!userTouched.current) setOpen(false);
+          }, TOOL_COLLAPSE_HOLD_MS);
+        }
+      }
     }
     prevLive.current = live;
   }, [live]);
+
+  // A pending close never outlives the row.
+  useEffect(
+    () => () => {
+      if (collapseTimer.current !== null) window.clearTimeout(collapseTimer.current);
+    },
+    [],
+  );
 
   if (trimmed === "") return null;
   const preview = trimmed.length > 72 ? `${trimmed.slice(0, 72)}…` : trimmed;
@@ -1061,8 +1119,14 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
     <div className="min-w-0" data-testid="diff-block">
       <div className="flex items-center gap-2 mb-1">
         {path ? (
-          <span className="min-w-0 flex-1 truncate font-mono text-[10px]" style={{ color: styles.textTertiary }} title={path}>
-            {path}
+          <span className="min-w-0 flex-1 flex items-center gap-1">
+            {/* R127-W5 (TOKENS §1 exception #5): the diff card's path line
+                leads with the extension-identity glyph — the same icon the
+                collapsed row carries before its path pill. */}
+            <FileTypeIcon filename={path} size={10} />
+            <span className="min-w-0 truncate font-mono text-[10px]" style={{ color: styles.textTertiary }} title={path}>
+              {path}
+            </span>
           </span>
         ) : (
           <span className="flex-1" />
@@ -1411,8 +1475,17 @@ function LiveWritePendingRow({ toolName, raw }: { toolName: string; raw: string 
         <span className="shrink-0 font-mono text-[12px] font-medium" style={{ color: styles.textSecondary }}>
           Writing
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[12px]" style={{ color: styles.textTertiary }} title={path.found ? path.value : undefined}>
-          {argsSummary}
+        <span
+          className="min-w-0 flex-1 flex items-center gap-1"
+          title={path.found ? path.value : undefined}
+        >
+          {/* R127-W5 (TOKENS §1 exception #5): the pending write's target
+              path carries its extension glyph too (the row family icon
+              above says "tool"; this one says what KIND of file). */}
+          {path.found ? <FileTypeIcon filename={path.value} size={11} /> : null}
+          <span className="min-w-0 truncate font-mono text-[12px]" style={{ color: styles.textTertiary }}>
+            {argsSummary}
+          </span>
         </span>
         <span className="shrink-0 w-4 text-center font-mono text-[12px]" style={{ color: styles.textTertiary }}>
           …
@@ -1891,6 +1964,15 @@ function ToolLine({
   const [open, setOpen] = useState(false);
   const userTouched = useRef(false);
   const prevOk = useRef<boolean | null>(tool.ok);
+  // ── ROUND-127 (R127-W5): the pending timed close (the same contract as
+  //    ThoughtRow's — see its block above for the full law). ──
+  const collapseTimer = useRef<number | null>(null);
+  const clearCollapseTimer = (): void => {
+    if (collapseTimer.current !== null) {
+      window.clearTimeout(collapseTimer.current);
+      collapseTimer.current = null;
+    }
+  };
 
   // ROUND-48 (R48-e2, owner: "There was no option in the main chat to click
   // the Delegated card and see that agent on the right sidebar"): while this
@@ -1905,14 +1987,48 @@ function ToolLine({
     : [];
   const singleLiveChild = liveChildren.length === 1 ? liveChildren[0] : null;
 
-  // ROUND-33 live behavior preserved: an in-flight write auto-expands the
-  // moment it completes (the owner's "live file creation" moment).
+  // ── ROUND-127 (R127-W5, owner: "if a command is run, then it should
+  //    auto-expand that section and then auto-collapse it afterwards, after
+  //    some time. Not immediately after finishing it. It should take some
+  //    time and then smoothly close it"): the tool row's AUTO-LIFECYCLE
+  //    (MOTION.md §4) — EXPAND the moment the row goes live (ok === null in a
+  //    live section: the owner watches the command's live terminal tail /
+  //    the write preview, which the expanded body carries); on completing
+  //    (ok null→settled) HOLD ~TOOL_COLLAPSE_HOLD_MS so the outcome is
+  //    readable, then COLLAPSE via the timed close. SUPERSEDES ROUND-33's
+  //    in-flight-write auto-expand-at-completion COHERENTLY (expand EARLIER,
+  //    collapse LATER — the write still stands open at completion, now from
+  //    the moment it started). FAILED rows (ok === false) NEVER auto-collapse
+  //    (MOTION §4 — a failure stays open with its error excerpt); a manual
+  //    toggle always wins (userTouched silences the automation for the row's
+  //    lifetime). delegate_task rows are deliberately CARVED OUT — their body
+  //    is the R64-c claim-matched child view / SubAgentCard with its own
+  //    logic (single-live-child open affordance, manual expand). ──
   useEffect(() => {
-    if (!userTouched.current && live && prevOk.current === null && tool.ok !== null && DIFF_TOOLS.has(tool.toolName)) {
+    if (userTouched.current) {
+      prevOk.current = tool.ok;
+      return;
+    }
+    if (tool.toolName !== "delegate_task" && tool.ok === null && live) {
+      // In-flight → EXPANDED (also cancels a pending close — the row
+      // re-went-live, e.g. a retried call re-arms the automation).
+      clearCollapseTimer();
       setOpen(true);
+    } else if (prevOk.current === null && tool.ok === true) {
+      // Just completed CLEANLY → the hold, then the timed close. (A FAILED
+      // completion arms nothing — MOTION §4's failures-never-auto-collapse.)
+      if (collapseTimer.current === null) {
+        collapseTimer.current = window.setTimeout(() => {
+          collapseTimer.current = null;
+          if (!userTouched.current) setOpen(false);
+        }, TOOL_COLLAPSE_HOLD_MS);
+      }
     }
     prevOk.current = tool.ok;
   }, [tool.ok, tool.toolName, live]);
+
+  // A pending close never outlives the row.
+  useEffect(() => () => clearCollapseTimer(), []);
 
   const Icon = TOOL_ICONS[tool.toolName] ?? Terminal;
   const label = TOOL_LABELS[tool.toolName] ?? tool.toolName;
@@ -1992,6 +2108,9 @@ function ToolLine({
 
   const toggle = () => {
     userTouched.current = true;
+    // R127-W5: a manual tap cancels any pending auto-collapse (MOTION §4 —
+    // the toggle wins for the row's lifetime).
+    clearCollapseTimer();
     setOpen((v) => !v);
   };
 
@@ -2129,7 +2248,17 @@ function ToolLine({
             the pill's click), the command's headline / the delegate's
             role · task_id as plain mono, else the RAW summary. */}
         {target !== null && target.kind === "path" ? (
-          <span className="min-w-0 flex-1 flex justify-start" onClick={(e) => e.stopPropagation()}>
+          <span className="min-w-0 flex-1 flex items-center justify-start gap-1" onClick={(e) => e.stopPropagation()}>
+            {/* R127-W5 (TOKENS §1 exception #5): the target path's
+                EXTENSION-IDENTITY glyph rides BEFORE the path pill — the
+                owner's "proper colored icons based on their extensions"
+                ask. Directory-family tools (list_dir/create_dir) take the
+                Folder meta instead of a file family. */}
+            <FileTypeIcon
+              filename={target.value}
+              size={11}
+              dir={tool.toolName === "list_dir" || tool.toolName === "create_dir"}
+            />
             <PathPill path={target.value} projectId={projectId} />
           </span>
         ) : (
@@ -2182,26 +2311,49 @@ function ToolLine({
           preview the same way (never both with the expanded body). */}
       {showLiveTail && !open ? <LiveOutputTail output={liveOutput} /> : null}
       {showLiveWrite && !open ? <LiveWritePreview raw={liveInput} /> : null}
-      {open && (
-        <div className="mt-0.5 mb-1 pl-4 min-w-0">
-          {tool.toolName === "delegate_task" ? (
-            <DelegateDetail tool={tool} sessionId={sessionId} live={live} projectId={projectId} claimedChildId={claimedChildId} />
-          ) : DIFF_TOOLS.has(tool.toolName) ? (
-            // ROUND-58 (R58-cf): while the write is still in flight the
-            // preview IS the body (the diff snapshot doesn't exist yet); the
-            // tool-result swaps in the real DiffDetail.
-            showLiveWrite ? (
-              <LiveWritePreview raw={liveInput} />
-            ) : (
-              <DiffDetail tool={tool} sessionId={sessionId} />
-            )
-          ) : tool.toolName === "run_command" ? (
-            <TerminalDetail tool={tool} />
-          ) : (
-            <OutputDetail tool={tool} />
-          )}
-        </div>
-      )}
+      {/* R127-W5 (MOTION.md §4 — the disclosure grammar): the tool row's
+          body joins ThoughtRow/the section's animated disclosure — expand
+          rides DISCLOSURE_SPRING (one soft settle), collapse is a TIMING
+          never a spring: 200ms ease-out height + 150ms fade (closing never
+          bounces — the mobile R118-C law). The pre-R127 bare conditional
+          render cut the body in/out with no motion. */}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="tool-body"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1, transition: DISCLOSURE_SPRING }}
+            exit={{
+              height: 0,
+              opacity: 0,
+              transition: {
+                height: { duration: DISCLOSURE_COLLAPSE_MS, ease: "easeOut" },
+                opacity: { duration: DISCLOSURE_FADE_MS, ease: "easeOut" },
+              },
+            }}
+            className="overflow-hidden"
+          >
+            <div className="mt-0.5 mb-1 pl-4 min-w-0">
+              {tool.toolName === "delegate_task" ? (
+                <DelegateDetail tool={tool} sessionId={sessionId} live={live} projectId={projectId} claimedChildId={claimedChildId} />
+              ) : DIFF_TOOLS.has(tool.toolName) ? (
+                // ROUND-58 (R58-cf): while the write is still in flight the
+                // preview IS the body (the diff snapshot doesn't exist yet);
+                // the tool-result swaps in the real DiffDetail.
+                showLiveWrite ? (
+                  <LiveWritePreview raw={liveInput} />
+                ) : (
+                  <DiffDetail tool={tool} sessionId={sessionId} />
+                )
+              ) : tool.toolName === "run_command" ? (
+                <TerminalDetail tool={tool} />
+              ) : (
+                <OutputDetail tool={tool} />
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -16,7 +16,9 @@
 //      again directly, no re-read, no warning); the stale-warning prepend on
 //      success; the stale evidence on anchor FAILURE; the byte-exact old
 //      error when the ledger has no entry; the bounded redundant-read
-//      reminder (only >48KB re-reads, once per file per session).
+//      reminder (R127-W6: ANY re-read, once per file per session — the
+//      R98 >48KB size gate retired by the owner's "It should not be needing
+//      to reread the files again and again").
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -286,17 +288,25 @@ describe("R98-F2 B: the ledger wiring (read_file / edit_file / write_file)", () 
     writeFileSync(join(tempDir, "miss.txt"), "totally different bytes now\n", "utf8");
     const result = await edit.execute({ path: "miss.txt", oldString: "target line", newString: "x" });
     expect(result.ok).toBe(false);
+    // R127-W6: the base error now carries the recovery recipe + anchor
+    // echo; the ledger's stale evidence still appends AFTER it.
     expect(result.output).toContain("edit failed: oldString not found in 'miss.txt'");
+    expect(result.output).toContain('you tried to match: "target line"');
     expect(result.output).toMatch(/— the file changed on disk since you last read it \(\d+ ms ago\): re-read it with read_file and re-anchor on the CURRENT content/);
   });
 
-  it("an anchor failure WITHOUT a ledger entry keeps the byte-exact historic error (no fabricated staleness)", async () => {
+  it("an anchor failure WITHOUT a ledger entry keeps the historic PREFIX + the R127 recovery recipe (no fabricated staleness)", async () => {
     const tools = await buildProjectTools(tempDir, undefined, sessionDeps);
     writeFileSync(join(tempDir, "cold.txt"), "one\n", "utf8");
     // No read_file first — the ledger has no entry, so no evidence is added.
     const result = await tool(tools, "edit_file").execute({ path: "cold.txt", oldString: "nope", newString: "x" });
     expect(result.ok).toBe(false);
-    expect(result.output).toBe("edit failed: oldString not found in 'cold.txt'");
+    // R127-W6 re-pin: the bare one-liner grew the recipe + echo; the
+    // no-fabricated-staleness law survives — no "changed on disk" clause.
+    expect(result.output.startsWith("edit failed: oldString not found in 'cold.txt'")).toBe(true);
+    expect(result.output).toContain("the file may have changed since your last read");
+    expect(result.output).toContain('you tried to match: "nope"');
+    expect(result.output).not.toContain("changed on disk");
   });
 });
 
@@ -316,7 +326,9 @@ describe("R98-F2 B: the bounded redundant-read reminder", () => {
     resetFileLedgerForTest();
   });
 
-  /** A file OVER the ~48KB whole-file budget (the expensive re-read class). */
+  /** A file in the ~60KB class (whole under the 128KB R127-W6 budget; the
+   * reminder is size-agnostic since R127-W6 — the re-read itself is the
+   * wasted round-trip). */
   function bigFile(rel: string): void {
     const line = "y".repeat(99); // 100 bytes with the newline
     const content = Array.from({ length: 600 }, (_, i) => `B${i}-${line}`).join("\n") + "\n"; // ~60KB
@@ -331,16 +343,21 @@ describe("R98-F2 B: the bounded redundant-read reminder", () => {
     expect(first.output).not.toContain("you already read");
   });
 
-  it("a RE-READ of a >48KB file carries the ONE-LINE reminder — once per file per session", async () => {
+  it("a RE-READ carries the ONE-LINE reminder — once per file per session", async () => {
     const tools = await buildProjectTools(tempDir, undefined, sessionDeps);
     bigFile("big.txt");
     const read = tool(tools, "read_file");
     await read.execute({ path: "big.txt" });
     const second = await read.execute({ path: "big.txt" });
     expect(second.ok).toBe(true);
-    // The R73-d fenced note, riding the read's tail.
+    // The R73-d fenced note, riding the read's tail. R127-W6: the reminder
+    // is no longer gated on >48KB (any re-read) and the text teaches the
+    // context-honesty guidance (already in context — anchor against it;
+    // re-read only on edit failure / disk-change evidence).
     expect(second.output).toContain("--- [you already read big.txt this session]");
-    expect(second.output).toContain("you already read big.txt this session — prefer direct edits with anchors from your last read/write.");
+    expect(second.output).toContain(
+      "you already read big.txt this session — it is already in your context from that earlier read/write: anchor edits against what you already have, and re-read only after an edit_file failure tells you the content moved or you have concrete evidence the file changed on disk.",
+    );
     expect(second.output).toContain("(end note — the surrounding content is unaffected)");
     // THIRD read: the reminder already fired for this file — clean output.
     const third = await read.execute({ path: "big.txt" });
@@ -348,7 +365,7 @@ describe("R98-F2 B: the bounded redundant-read reminder", () => {
     expect(third.output).not.toContain("you already read");
   });
 
-  it("a re-read of a SMALL file (≤48KB) stays unreminded — the threshold is the documented expense line", async () => {
+  it("a re-read of a SMALL file carries the reminder too — R127-W6 retired the size gate (the wasted round-trip is the problem)", async () => {
     const tools = await buildProjectTools(tempDir, undefined, sessionDeps);
     writeFileSync(join(tempDir, "small.txt"), "tiny\n", "utf8");
     expect(statSync(join(tempDir, "small.txt")).size).toBeLessThanOrEqual(READ_WHOLE_BUDGET_BYTES);
@@ -356,7 +373,12 @@ describe("R98-F2 B: the bounded redundant-read reminder", () => {
     await read.execute({ path: "small.txt" });
     const second = await read.execute({ path: "small.txt" });
     expect(second.ok).toBe(true);
-    expect(second.output).not.toContain("you already read");
+    // R127-W6 re-pin (was: stays unreminded — the ≤48KB threshold): the
+    // owner's "It should not be needing to reread the files again and
+    // again" retired the threshold; once per file per session still holds.
+    expect(second.output).toContain("--- [you already read small.txt this session]");
+    const third = await read.execute({ path: "small.txt" });
+    expect(third.output).not.toContain("you already read");
   });
 
   it("a re-read after the model EDITED the file is also covered (the authored view counts as seen)", async () => {

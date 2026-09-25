@@ -10,16 +10,29 @@ import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSy
 import { isAbsolute, join, posix, sep } from "node:path";
 import type { ToolResult } from "./registry.js";
 
-/** Maximum bytes a single read returns (keeps context windows sane). */
+/** Maximum bytes a single read returns (keeps context windows sane).
+ * ROUND-127 (R127-W6): deliberately KEPT at 256KB — this is the cap for
+ * EXPLICIT offset/limit windows (targeted re-reads / huge-file paging),
+ * NOT the whole-file budget. Raising READ_WHOLE_BUDGET_BYTES to 128KB
+ * (below) keeps the two constants consistent in the one direction that
+ * matters: a paging call never returns LESS per call than the default
+ * whole-file read would (128KB ≤ 256KB), and the R70-a head+tail machinery
+ * + its pins (r70-tool-feedback, r71-tool-reliability D1) stay intact at
+ * the same ceiling — no reason to touch it. */
 const MAX_READ_BYTES = 256 * 1024;
 /** ROUND-96 (R96-C): the WHOLE-FILE-FIRST budget — the default read_file
  * (no offset/limit) returns the entire file when its content fits this,
  * with no marker and no paging language. The owner's bug class: a modest
- * HTML file was read in needless PARTS. 48KB ≈ 12k tokens — safe for the
- * free 32–64k-context models (research note (a): the 256KB MAX_READ_BYTES
- * ceiling can blow such a window; it stays as the cap for EXPLICIT
- * offset/limit windows, i.e. targeted re-reads). */
-export const READ_WHOLE_BUDGET_BYTES = 48 * 1024;
+ * HTML file was read in needless PARTS.
+ * ROUND-127 (R127-W6): 48KB → 128KB — the owner's live complaint (a
+ * 554-line / ~10K-token source file was read in THREE parts; "it could
+ * have read the whole file in a single go"). 48KB ≈ 12k tokens was tuned
+ * for free 32–64k-context models; the project's real sessions run far
+ * larger windows, and 128KB ≈ 32k tokens puts the whole-file-first law
+ * over the realistic source-file class (a few-hundred-line file ALWAYS
+ * reads whole in one call now). The 256KB MAX_READ_BYTES ceiling stays
+ * as the cap for EXPLICIT offset/limit windows, i.e. targeted re-reads. */
+export const READ_WHOLE_BUDGET_BYTES = 128 * 1024;
 /** ROUND-70 (R70-a): when a read_file window exceeds MAX_READ_BYTES, keep
  * BOTH ends — first ~32KB + last ~32KB with an honest omitted-middle marker
  * (same head+tail policy as run_command: a file's interesting parts are the
@@ -201,7 +214,8 @@ function readSingleLineSlice(startLine: number, line: string, totalLines: number
  *   - output is LINE-NUMBERED (cat -n style) so the model can cite path:line
  *     and page large files instead of re-reading them whole;
  *   - ROUND-96 (R96-C) WHOLE-FILE-FIRST: the DEFAULT read (no offset/limit)
- *     returns the ENTIRE file when it fits READ_WHOLE_BUDGET_BYTES (~48KB) —
+ *     returns the ENTIRE file when it fits READ_WHOLE_BUDGET_BYTES (~128KB
+ *     since R127-W6) —
  *     no marker, no paging language ("do not split modest files into parts",
  *     the owner's HTML-file bug class). Over the budget it returns PAGE 1 (the
  *     first lines that fit) + the honest marker with the file's TOTAL line
@@ -264,10 +278,11 @@ export function readFileWindow(root: string, relative: string, options?: ReadFil
 
     // ROUND-96 (R96-C): the DEFAULT read (no offset AND no limit) is
     // WHOLE-FILE-FIRST — the owner's bug class was a modest HTML file read
-    // in needless parts. Under READ_WHOLE_BUDGET_BYTES the ENTIRE file
-    // returns in ONE call (no marker, no paging language); over it, PAGE 1
-    // (the first lines that fit the budget) + the honest marker with the
-    // total line count and the EXACT next call. Explicit offset/limit
+    // in needless parts. Under READ_WHOLE_BUDGET_BYTES (128KB since
+    // R127-W6 — the owner's 554-line file read in three parts) the ENTIRE
+    // file returns in ONE call (no marker, no paging language); over it,
+    // PAGE 1 (the first lines that fit the budget) + the honest marker with
+    // the total line count and the EXACT next call. Explicit offset/limit
     // windows (targeted re-reads / huge-file paging) keep the R70-a
     // machinery below.
     if (offset === undefined && limit === undefined) {
@@ -465,7 +480,7 @@ function editOrdinal(n: number): string {
 }
 
 /** Structured anchor-failure reasons — the callers compose the final
- * model-facing text (the R71 suites pin the single-edit formats byte-exactly,
+ * model-facing text (the R71 suites pin the single-edit formats' PREFIXES,
  * and the batch form needs its own index-prefixed composition). */
 type EditOpError =
   | { kind: "empty-anchor" }
@@ -545,16 +560,40 @@ function applyEditOp(
   };
 }
 
+/** ROUND-127 (R127-W6): the not-found RECOVERY RECIPE — the owner's
+ * complaint ("while editing the files, it should properly edit the files in
+ * smarter ways… it would run into issues that it failed"): a bare
+ * "oldString not found" gave the model nothing to recover WITH, so it
+ * burned turns guessing (the R71 streak exists precisely because the 1st
+ * failure carried no advice). The recipe names the likeliest cause (the
+ * file moved since the last read), the CONCRETE next call (re-read JUST the
+ * region — or the whole file, which returns whole in one call under the
+ * 128KB whole-file budget), and echoes the FIRST LINE of the missed anchor
+ * (truncated to ~80 chars, with an honest "…" when clipped) so the miss is
+ * diagnosable from the error alone. Shared by the single-edit and batch
+ * forms so the recovery language never drifts between them. */
+function notFoundRecipe(relative: string, oldString: string): string {
+  const firstLine = oldString.split("\n")[0] ?? "";
+  const echo = firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine;
+  return (
+    `oldString not found in '${relative}' — the file may have changed since your last read; ` +
+    `re-read JUST the region (read_file with offset/limit around where you expected it, or the whole file — ` +
+    `files under 128KB return whole in one call) and re-anchor on CURRENT content; ` +
+    `you tried to match: "${echo}"`
+  );
+}
+
 /** The single-edit diagnostic for a structured anchor error (the R71 pins:
  * "edit failed: oldString not found in 'x'" / "edit failed: oldString matches
- * N times in 'x' — provide a longer unique anchor" — kept byte-exact for the
- * not-found case, extended with the replaceAll hint for the ambiguous one). */
-function singleEditError(error: EditOpError, relative: string): string {
+ * N times in 'x' — provide a longer unique anchor" — the ambiguous forms
+ * stay byte-exact; R127-W6 extends the not-found form with the recovery
+ * recipe + the truncated anchor echo, keeping the historic PREFIX). */
+function singleEditError(error: EditOpError, relative: string, oldString: string): string {
   switch (error.kind) {
     case "empty-anchor":
       return `edit failed: oldString is empty — copy the exact text to replace (read_file the region first)`;
     case "not-found":
-      return `edit failed: oldString not found in '${relative}'`;
+      return `edit failed: ${notFoundRecipe(relative, oldString)}`;
     case "ambiguous":
       return error.normalized
         ? `edit failed: oldString matches ${error.occurrences} times after whitespace normalization in '${relative}' — provide a longer unique anchor`
@@ -616,9 +655,10 @@ export function editFile(
   }
   const applied = applyEditOp(content, { oldString, newString, replaceAll: options?.replaceAll });
   if (!applied.ok) {
-    // The exact historic diagnostics (pinned by the R71 suites — the streak
-    // machinery keys on the "edit failed:" prefix).
-    return { ok: false, output: singleEditError(applied.error, relative) };
+    // The exact historic PREFIX (pinned by the R71 suites — the streak
+    // machinery keys on the "edit failed:" prefix); R127-W6 extends the
+    // not-found body with the recovery recipe + the anchor echo.
+    return { ok: false, output: singleEditError(applied.error, relative, oldString) };
   }
   writeFileSync(resolved.abs, applied.content, "utf8");
   const linesAdded = lineCount(newString);
@@ -678,11 +718,14 @@ export function editFileMulti(root: string, relative: string, edits: EditOp[]): 
     const applied = applyEditOp(working, op);
     if (!applied.ok) {
       const others = edits.length - 1;
+      // R127-W6: the not-found reason carries the SAME recovery recipe +
+      // anchor echo as the single-edit form (notFoundRecipe) so a failed
+      // batch op is as diagnosable as a failed single edit.
       const reason =
         applied.error.kind === "empty-anchor"
           ? "oldString is empty — copy the exact text to replace"
           : applied.error.kind === "not-found"
-            ? `oldString not found in '${relative}'`
+            ? notFoundRecipe(relative, op.oldString)
             : applied.error.normalized
               ? `oldString matches ${applied.error.occurrences} times after whitespace normalization in '${relative}' — provide a longer unique anchor`
               : `oldString matches ${applied.error.occurrences} times in '${relative}' — provide a longer unique anchor (or set replaceAll: true)`;
@@ -691,7 +734,7 @@ export function editFileMulti(root: string, relative: string, edits: EditOp[]): 
         output:
           `edit failed: edits[${k}] (${editOrdinal(k + 1)} of ${edits.length}) ${reason} — ` +
           `NO changes were applied (the file is untouched); the other ${others} edit${others === 1 ? "" : "s"} were not applied either. ` +
-          `Re-read the file, fix that one anchor, and re-send the whole batch.`,
+          `Fix that one anchor and re-send the whole batch.`,
       };
     }
     working = applied.content;

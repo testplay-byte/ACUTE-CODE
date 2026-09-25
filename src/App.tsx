@@ -16,6 +16,10 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { SetupWizard } from "./components/onboarding/SetupWizard";
 import { shouldRunSetup } from "./components/onboarding/providers-api";
 import { isTauri } from "./lib/sidecar";
+// R127 (the overlay-scrollbar law — TOKENS §6): the GLOBAL scroll-fade
+// listener, mounted once. Every scrollbar in the app paints transparent at
+// rest and tints in only while its scroller is actively scrolling.
+import { useGlobalScrollFade } from "./lib/use-global-scroll-fade";
 
 /**
  * First-run gate (plan-ui-fidelity.md Wave 1): with no `acute.setupDone`
@@ -70,6 +74,10 @@ function FirstRunCheck() {
  * deleted the orphaned ChatView/NewSessionDialog source files too.
  */
 export function App() {
+  // R127: the overlay-scrollbar law — mounted ONCE at the app root; see
+  // src/lib/use-global-scroll-fade.ts for the mechanism + the compat note
+  // on the per-component useScrollFade opt-ins it supersedes.
+  useGlobalScrollFade();
   // R59-A (owner: "make that top navigation bar rounded and give it padding
   // on all four sides"): in Tauri mode the window paints a soft inset FRAME —
   // 8px of breathing room on every side + an 8px gap — and the TitleBar and

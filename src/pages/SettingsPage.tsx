@@ -35,6 +35,10 @@ import {
   type SettingsSectionId,
 } from "../components/settings/settings-sections";
 import { DataStatsPanel } from "../components/usage/DataStatsPanel";
+// R127-W1: the danger zone moved OUT of DataStatsPanel into its own card
+// (SCREENS §3 — DANGER ZONE LAST at page scope); the data tab renders it
+// as its final section.
+import { ClearUsageDataCard } from "../components/usage/ClearUsageDataCard";
 // R98-J: the LIVE in-memory push of the switch to the notification bridge
 // (the bridge caches the flag so a flip applies to the very next record).
 import { setDesktopNotificationsEnabled } from "../lib/desktop-notifications";
@@ -186,7 +190,15 @@ export function SettingsPage() {
           {tab === "vision" && <ImageAnalysisTab />}
           {tab === "browser" && <BrowserTab />}
           {tab === "devices" && <DevicesTab />}
-          {tab === "data" && <DataStatsPanel />}
+          {/* R127-W1 (SCREENS §3 — THE DANGER ZONE LAST): the clear-data
+              danger zone moved out of DataStatsPanel into ClearUsageDataCard;
+              the tab keeps it as its final section. */}
+          {tab === "data" && (
+            <>
+              <DataStatsPanel />
+              <ClearUsageDataCard />
+            </>
+          )}
           {tab === "advanced" && <AdvancedTab />}
           {tab === "feedback" && <SelfFeedbackTab />}
           {tab === "about" && <AboutTab />}

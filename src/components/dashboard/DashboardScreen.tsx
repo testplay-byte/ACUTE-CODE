@@ -13,24 +13,32 @@ import { StatRow, type StatRowCell } from "./StatCard";
 import { TokenBarChart } from "./TokenBarChart";
 
 /**
- * Dashboard screen — R126-3a, the Instrument archetype (SCREENS §3): stat
- * row → chart + quick actions → recent activity, ONE scroll, on the
- * container ladder (1280→1640px). AppShell's main is transparent; the clay
- * cards float.
+ * Dashboard screen — R126-3a, the Instrument archetype (SCREENS §3): the
+ * bold lead heading → stat row → chart + quick actions → recent activity,
+ * ONE scroll, on the container ladder (1280→1640px). AppShell's main is
+ * transparent; the clay cards float.
  *
  * · R113-d (owner: the page headers are "unnecessary, unneeded, and not
- *   required"): NO page header — the stat row is the top of the page
- *   (binding; the greeting died with it and was never relocated).
+ *   required"): NO page-header CHROME. R127 (SCREENS §3 — THE DASHBOARD
+ *   BOLDNESS LAW) later sanctioned the greeting tier's RETURN as a CONTENT
+ *   heading: "Workspace" at the 32px/800 display tier with ONE honest
+ *   12px secondary scope line ("N projects · M sessions · last 14 days",
+ *   values already fetched; "—" while loading). No greeting copy, no
+ *   header chrome — a content heading, typographic hierarchy only.
  * · R126: the stat row is ONE clay card with four inset-divided cells
  *   (StatRow — the mobile stat-grid law); QuickActions + RecentActivity
  *   ride `ui/SectionCard` on the clay material; the error banner is the
  *   danger badge-tone container (TOKENS §11) with the outlined-danger
  *   Retry; skeletons ride the WELL fill (TOKENS §10 law 4).
- * · Motion (MOTION §2/§6): the stat row enters first (the hero), the
- *   sections stagger after on the 30ms beat — fade-in-up 8px on the house
- *   spring, imported from src/lib/motion.ts. NO hover lift/bloom anywhere
- *   (the clay card is already elevated; hover = the rim→border-strong swap
- *   at most). Reduced motion snaps the entrance (rule 5).
+ * · R127: the stat row's values render at display weight (26px/700 —
+ *   StatCard.tsx) and RecentActivity reads as a TIMELINE (the "bubbles +
+ *   timelines" ask) — no new hues, no new materials.
+ * · Motion (MOTION §2/§6): the lead heading enters first (index 0), the
+ *   stat row follows at index 1, the sections stagger after on the 30ms
+ *   beat — fade-in-up 8px on the house spring, imported from
+ *   src/lib/motion.ts. NO hover lift/bloom anywhere (the clay card is
+ *   already elevated; hover = the rim→border-strong swap at most).
+ *   Reduced motion snaps the entrance (rule 5).
  */
 export function DashboardScreen() {
   const navigate = useNavigate();
@@ -65,18 +73,21 @@ export function DashboardScreen() {
   const loadError =
     sessionsQuery.isError || agentsQuery.isError || projectsQuery.isError || usage.isError;
 
-  // R126 (MOTION §2/§6): the section entrance — fade-in-up ENTRANCE_DELTA(8)
-  // on the house SPRING, staggered STAGGER_STEP_MS(30) after the stat row
-  // (the hero, index 0). Reduced motion snaps ({ duration: 0 } — rule 5).
+  // R126 (MOTION §2/§6) + R127 (the lead heading takes index 0): the
+  // section entrance — fade-in-up ENTRANCE_DELTA(8) on the house SPRING,
+  // staggered STAGGER_STEP_MS(30) after the heading (index 0; the stat row
+  // is index 1, the hero CARD). Reduced motion snaps ({ duration: 0 } —
+  // rule 5).
   const sectionEntrance = (index: number) => ({
     initial: { opacity: 0, y: ENTRANCE_DELTA },
     animate: { opacity: 1, y: 0 },
     transition: reduced ? { duration: 0 } : { ...SPRING, delay: index * STAGGER_STEP_MS },
   });
 
-  // R126: the four cells of the ONE-card stat row — kicker → 22px/600
-  // tabular value → ONE 11px supporting line (the honesty scope). The
-  // Tokens cell is the highlight (accentDeep ink — never a solid fill).
+  // R126 → R127: the four cells of the ONE-card stat row — kicker →
+  // 26px/700 tabular value (display weight, SCREENS §3) → ONE 11px
+  // supporting line (the honesty scope). The Tokens cell is the highlight
+  // (accentDeep ink — never a solid fill).
   const statCells: StatRowCell[] = [
     { key: "projects", label: "Projects", value: String(projectCount), caption: "all-time" },
     { key: "sessions", label: "Sessions", value: String(sessions.length), caption: "all-time" },
@@ -100,6 +111,29 @@ export function DashboardScreen() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px] px-5 md:px-8 2xl:px-14 py-4 md:py-6 pb-16">
+        {/* THE LEAD HEADING (R127, SCREENS §3 — THE DASHBOARD BOLDNESS LAW):
+            the greeting tier returned as a CONTENT heading — 32px/800
+            display (font-extrabold — the law's 28–34px/800 band), Manrope's
+            own weight axis (no new font imports), the theme's text ink, ONE
+            honest 12px secondary scope line under it. It is
+            chrome-independent CONTENT: always rendered — while the sources
+            load the scope line holds the honest "—", never a false count
+            (the R97-I rule riding the same data). */}
+        <motion.div {...sectionEntrance(0)} className="mb-4 md:mb-5">
+          <h1
+            data-testid="dashboard-lead-heading"
+            className="text-[32px] font-extrabold leading-[1.15]"
+            style={{ color: styles.text }}
+          >
+            Workspace
+          </h1>
+          <p className="mt-1.5 text-xs text-muted tabular-nums">
+            {statsLoading
+              ? "—"
+              : `${projectCount} ${projectCount === 1 ? "project" : "projects"} · ${sessions.length} ${sessions.length === 1 ? "session" : "sessions"} · last 14 days`}
+          </p>
+        </motion.div>
+
         {/* The stat row — ONE clay card, four cells (R126, SCREENS §3).
             R97-I part 2: while any source is still loading the row holds its
             shape as ONE h-[92px] card-shaped skeleton block (the anti-jitter
@@ -115,15 +149,15 @@ export function DashboardScreen() {
             <SkeletonBlock className="h-[92px] w-full rounded-2xl" />
           </div>
         ) : (
-          <motion.div {...sectionEntrance(0)} className="mb-4 md:mb-6">
+          <motion.div {...sectionEntrance(1)} className="mb-4 md:mb-6">
             <StatRow cells={statCells} styles={styles} testId="dashboard-stat-row" />
           </motion.div>
         )}
 
         {/* Chart + Quick Actions — the clay section cards (rounded-2xl,
-            rim + .ac-clay); both enter on the section stagger's first beat. */}
+            rim + .ac-clay); both enter on the section stagger's next beat. */}
         <div className="mb-4 md:mb-6 grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
-          <motion.div {...sectionEntrance(1)} className="min-w-0">
+          <motion.div {...sectionEntrance(2)} className="min-w-0">
             <TokenBarChart
               days={usage.data?.days ?? []}
               isPending={usage.isPending && usage.isFetching}
@@ -132,7 +166,7 @@ export function DashboardScreen() {
               styles={styles}
             />
           </motion.div>
-          <motion.div {...sectionEntrance(1)} className="min-w-0">
+          <motion.div {...sectionEntrance(2)} className="min-w-0">
             <QuickActions onNavigate={(to) => void navigate(to)} />
           </motion.div>
         </div>
@@ -171,15 +205,17 @@ export function DashboardScreen() {
           </div>
         ) : null}
 
-        {/* Recent activity — the clay SectionCard; while the sessions list
-            is in flight one card-shaped well block holds the section's
-            footprint (the loading mirror, announced by aria-label). */}
+        {/* Recent activity — the clay SectionCard carrying the R127 TIMELINE
+            (SCREENS §3: the vertical spine with day-divider nodes and card
+            rows hanging off it); while the sessions list is in flight one
+            card-shaped well block holds the section's footprint (the loading
+            mirror, announced by aria-label). */}
         {sessionsQuery.isPending ? (
           <div aria-label="Loading recent activity">
             <SkeletonBlock className="h-52 w-full rounded-2xl" />
           </div>
         ) : (
-          <motion.div {...sectionEntrance(2)}>
+          <motion.div {...sectionEntrance(3)}>
             <RecentActivity
               sessions={sessions}
               agentById={agentById}

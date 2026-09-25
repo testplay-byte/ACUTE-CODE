@@ -456,7 +456,23 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // search_skills lines now compose), and the ask_user INTAKE variant.
     // The old fixtures/prompt-golden-r61.txt stays as HISTORY — pinned
     // below as present-on-disk, never byte-compared again.
-    const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r117.txt"), "utf8").replace(/\r\n/g, "\n");
+    //
+    // Re-pinned in R127-W6 (the agent-smarter round) as a NEW fixture —
+    // fixtures/prompt-golden-r127.txt — per the SAME R117-c fork precedent
+    // (the r117 file becomes history below). The verified diff (git diff of
+    // the fixture, read before regenerating — never blind) is EXACTLY three
+    // hunks, +3/−3 lines: (1) the AGENTIC LOOP's EXPLORE phase gains the
+    // N-files arithmetic ("a file-reading task over N files is N read_file
+    // calls in ONE message, never N messages of one call each") + the
+    // dependent-set conditions rule ("When later calls DEPEND on earlier
+    // results (a path you learn from a list_dir, an anchor you learn from a
+    // read), WAIT — batch the independent prefix, then batch the dependent
+    // set once the dependency lands"); (2) BATCH DISCIPLINE's first bullet
+    // swaps its "three files" example for the same N-files arithmetic and
+    // extends the wait clause with the prefix/dependent-set shape; (3) the
+    // TOOL USE descriptions block's read_file line gains the ~128KB
+    // whole-file clause. NOTHING else moved.
+    const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r127.txt"), "utf8").replace(/\r\n/g, "\n");
     const composed = buildProjectSystemPrompt(FULL_CTX).replace(/\r\n/g, "\n");
     expect(composed).toBe(golden);
   });
@@ -469,22 +485,23 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // then the BYTE-IDENTITY pin above holds the new composition. Without
     // the env var this is a no-op (normal runs never touch the fixture).
     if (process.env.UPDATE_GOLDEN !== "1") return;
-    writeFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r117.txt"), buildProjectSystemPrompt(FULL_CTX));
+    writeFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r127.txt"), buildProjectSystemPrompt(FULL_CTX));
   });
 
-  it("R117-c: the R61-era golden stays in fixtures/ as HISTORY — superseded by prompt-golden-r117.txt, never byte-compared again", () => {
-    // The re-pin precedent (R67/R68/R70/R71/R81/R94/R96/R98/R99/R113)
-    // regenerated ONE fixture in place; R117-c deliberately forks the name
-    // so the history survives (the audit's archaeology: the fixture is the
-    // record of what the prompt WAS at each era). The old file is pinned
-    // present-on-disk so it cannot be silently deleted; only the r117
-    // fixture is a live byte-identity anchor.
-    expect(existsSync(join(import.meta.dirname, "fixtures", "prompt-golden-r61.txt"))).toBe(true);
-    const history = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r61.txt"), "utf8").replace(/\r\n/g, "\n");
-    // It is the R61-era composition: it still carries the round-tags the
-    // R117-c strip removed — the marker that proves it is history, not live.
-    expect(history).toContain("(round-33)");
-    expect(history).toContain("(R67)");
+  it("R127-W6: the R117-era golden stays in fixtures/ as HISTORY — superseded by prompt-golden-r127.txt, never byte-compared again", () => {
+    // The R117-c fork precedent, one era later: the r117 fixture is the
+    // record of what the prompt WAS before the R127-W6 agent-smarter
+    // additions; the r127 fixture is the live byte-identity anchor. The
+    // old file is pinned present-on-disk so it cannot be silently deleted.
+    expect(existsSync(join(import.meta.dirname, "fixtures", "prompt-golden-r117.txt"))).toBe(true);
+    const history = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r117.txt"), "utf8").replace(/\r\n/g, "\n");
+    // It is the pre-R127 composition: its BATCH DISCIPLINE bullet still
+    // carries the "three files" example the R127 arithmetic replaced, and
+    // its EXPLORE phase has no N-files clause — the markers that prove it
+    // is history, not live.
+    expect(history).toContain("three files to read means three read_file calls in one message");
+    expect(history).not.toContain("never N messages of one call each");
+    expect(history).not.toContain("returns whole files under ~128KB in one call");
   });
 });
 

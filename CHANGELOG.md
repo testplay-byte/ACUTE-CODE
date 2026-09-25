@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-25 round-126 -->
+<!-- last-reviewed: 2026-09-25 round-127 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,48 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [0.120.0] — 2026-09-25 — the improvement pass: the walkthrough fixes, the honest context meter, the smarter agent, the visible mobile
+
+### The usage screen reads right (the placement + density pass)
+- **The tool leaderboard moved out of the token-activity row** — the rail beside the activity chart now carries an INSIGHTS card (top model + share, peak day, busiest tool, active projects), and the leaderboard is its own full-width section below (where it always belonged).
+- **7-day views are HOURLY now** — a 7-day range re-buckets the activity series by UTC hour (dense bars, `HH:00` ticks with day-boundary labels), so the chart fills its card instead of drawing 7 lonely bars with dead space on both sides. The backend serves it as `GET /usage/detailed?granularity=hour` (no migration — the ledger's timestamps were millisecond-precise all along).
+- **Overflowing charts open at the NEWEST end** — 90-day and 365-day views mount scrolled to the latest data instead of the oldest week.
+- **Chart hovers work on the bar BODY, not just the air above it** — the painted bars no longer eat the pointer; the full-height hit column owns it (every chart: token activity, model mix, the dashboard's chart).
+- **Tooltips never overflow the card edge** — near the first/last bars the tooltip clamps inside the chart's content box (the shared `clampTooltipX` law, one spelling for every chart).
+- **The Model Usage donut is a real gauge** — a 160px ring at 14px stroke (was a 120px ring at a squint-inducing 6px) with the share number at display weight.
+- **The per-model usage list sits directly below the donut**, with its honest "all-time" scope note — and **the Danger Zone is the page's LAST section** (it used to sit mid-page inside the stats panel; the settings' Data & Statistics tab keeps it last too).
+- **The model mix's hover** got the same two interaction laws (body hit + edge-clamped tooltip).
+
+### The dashboard leads bold
+- A big bold **"Workspace"** content heading (32px/800) with an honest scope line ("N projects · M sessions · last 14 days") — the greeting tier returning as content, not chrome.
+- **The stat numbers went display-weight** (26px/700 tabular).
+- **Recent activity is a timeline now** — a vertical spine with day-glyph nodes (today's rows carry the accent node), TODAY/YESTERDAY/day dividers, and the rows hanging off the spine.
+
+### The conversation behaves
+- **Auto-scroll follows the live turn again** — the transcript's follow-effect now tracks the live THINKING text and the STREAMING tool arguments (the old deps only watched settled steps, so a pinned transcript sat still while the model thought and typed).
+- **Tool sections live a lifecycle**: they auto-EXPAND while running (watch the command's live tail), hold ~2.5s after completing so the outcome is readable, then collapse with the timed smooth close. Failures never auto-collapse; your manual taps always win.
+- **Files in chat carry colored per-extension icons** — HTML orange, CSS blue, JS yellow, TS violet, Markdown teal, images/audio/video/archives each in their identity hue (the classic editor conventions, muted for clay; a documented palette exception like the model colors).
+
+### The context meter tells the truth
+- **The context donut's headline is now the PROVIDER'S OWN number** — when the provider reported 50-70K input tokens, the meter shows that (provider-anchored, labeled as such), not the ~26K local estimate that used to sit there. The estimate remains the labeled fallback before the first reply; the per-slice breakdown still renders in the popover.
+
+### The agent got smarter
+- **Whole-file reads by default** — the read budget went 48KB → 128KB (~32K tokens), so a few-hundred-line file ALWAYS reads whole in one call; the tool description now forbids pre-splitting reads.
+- **Redundant re-reads get called out** — re-reading a file you already have in context draws a one-line reminder (once per file) telling you to anchor edits on what you already have.
+- **edit_file failures carry a recovery recipe** — the not-found error names the likeliest cause, the concrete next call (re-read the region or the whole file), and echoes the first line of the anchor you tried to match.
+- **The prompts teach batching with arithmetic** — "a file-reading task over N files is N read_file calls in ONE message, never N messages of one call each" + the conditions rule (batch the independent prefix, wait for the dependency, then batch the dependent set).
+- **The feedback ledger's reporter now receives machine-measured CONTEXT TELEMETRY** — the window + provenance, the output reserve, the available budget, the provider-anchored usage, the session totals + cache rate — and the prompt teaches it to weave the numbers into the report (an absence is never dressed up as a zero).
+
+### The mobile app hears the PC again
+- **The phone's live stream self-heals now** — a dropped events connection retries on the desktop's backoff ladder (1s → 2s → … 15s, reset on hello), so one relay hiccup no longer leaves the phone deaf to every live frame until an unrelated poke.
+- **Tool activity can no longer vanish silently** — the "hidden" rung is retired from the Appearance picker (detailed/compact remain); if it was already set, the picker shows the state with a one-tap "Show tool activity" recovery, and the transcript carries a quiet "hidden — tap to show" line while it's active.
+- The mobile transcript's auto-scroll law was verified end-to-end (the inverted-list anchor) — the perceived absence was the deaf stream, now healed.
+
+### Platform
+- **Scrollbars are hidden at rest everywhere** — the whole app paints zero scrollbar chrome until you actually scroll (the thumb tints in while scrolling, fades ~700ms after; the gutter geometry never reflows; keyboard focus keeps it visible).
+- **Design-language amendments**: COMPONENTS §6's four chart-interaction laws (full-column hit-testing, tooltip edge clamping, sparse/hour labeling, scroll-to-latest) + the donut gauge law; SCREENS §3's usage page order + dashboard boldness law; TOKENS §6's overlay-scrollbar law + the file-type palette exception (#5); MOTION §4's tool auto-lifecycle + scrollbar fade.
+- Full gates: root tsc + 288 files / 4,961 tests + eslint + design-audit + build + e2e 12/12 + license clean + docs 274/0/0; mobile 48 suites / 1,066.
 
 ## [0.119.0] — 2026-09-25 — the Clay Companion redesign: the whole desktop speaks the Android app's design language
 

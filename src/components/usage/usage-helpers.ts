@@ -131,3 +131,94 @@ export function shortModelName(name: string): string {
   const beforeVariant = tail.split(":")[0];
   return beforeVariant.trim() !== "" ? beforeVariant : name;
 }
+
+/* ── ROUND-127 (the chart-interaction laws — COMPONENTS §6): the shared
+ * tooltip EDGE-CLAMP + the hour-label helpers. One spelling for every chart
+ * (the owner's complaints: tooltips that overflow the card at the right
+ * end; the 7-day view's fat bars + empty sides). Pure math — pinnable
+ * without a DOM. */
+
+/** The tooltip's clamp inset from the chart's content-box edges (px). */
+export const TOOLTIP_EDGE_INSET_PX = 8;
+
+/**
+ * R127 (the edge law): clamp a tooltip's left edge so the tooltip stays
+ * INSIDE the chart's content box. `barCenterX` is the hovered bar's center
+ * in the same coordinate space as `containerWidth`; `tooltipWidth` the
+ * rendered tooltip's width (the w-44/w-52 classes = 176/208px). The return
+ * is the tooltip's LEFT position (add a transform of NONE — the caller
+ * stops using translateX(-50%) and positions by the returned left directly,
+ * or keeps -50% only when the clamp didn't engage: the returned
+ * `clamped: false` flag tells the caller the center fit).
+ *
+ *   const { left, clamped } = clampTooltipX(centerX, containerW, tipW);
+ *   style = clamped ? { left } : { left, transform: "translateX(-50%)" }
+ */
+export function clampTooltipX(
+  barCenterX: number,
+  containerWidth: number,
+  tooltipWidth: number,
+): { left: number; clamped: boolean } {
+  const half = tooltipWidth / 2;
+  const minLeft = TOOLTIP_EDGE_INSET_PX;
+  const maxLeft = Math.max(minLeft, containerWidth - tooltipWidth - TOOLTIP_EDGE_INSET_PX);
+  if (barCenterX - half < minLeft) {
+    return { left: minLeft, clamped: true };
+  }
+  if (barCenterX + half > containerWidth - TOOLTIP_EDGE_INSET_PX) {
+    return { left: maxLeft, clamped: true };
+  }
+  return { left: barCenterX, clamped: false };
+}
+
+/* ── ROUND-127 (the hour laws — COMPONENTS §6's dense-series rule): the
+ * 7-day HOURLY view's label helpers. Hour bucket dates arrive as
+ * "YYYY-MM-DDThh" (the granularity=hour series from /usage/detailed) and
+ * MUST NEVER reach the `${date}T00:00:00Z` day-label helpers (they
+ * template-append and yield Invalid Date — the R127-Rb research's trap
+ * list). These are the dedicated branches. */
+
+/** Is this series bucket an HOUR bucket ("YYYY-MM-DDThh", 13 chars)? */
+export function isHourBucket(date: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}$/.test(date);
+}
+
+/** "2025-06-15T14" → "Jun 15 · 14:00" — the hourly tooltip header. */
+export function hourBucketLabel(date: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})$/.exec(date);
+  if (m === null) return date;
+  const [, y, mo, d, h] = m;
+  const dt = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d)));
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[dt.getUTCMonth()]} ${dt.getUTCDate()} · ${h}:00`;
+}
+
+/** "2025-06-15T14" → "14:00" — the hourly x-axis tick. */
+export function hourTickLabel(date: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})$/.exec(date);
+  return m !== null ? `${m[4]}:00` : date;
+}
+
+/** The DAY a bucket belongs to ("2025-06-15T14" → "2025-06-15") — for
+ * day-boundary tick dividers in the hourly view. */
+export function hourBucketDay(date: string): string {
+  return date.slice(0, 10);
+}
+
+/**
+ * R127 (the sparse-tick law): pick ≤maxTicks evenly spaced indices over a
+ * series of `count` buckets (the ModelStackChart 4-tick pattern,
+ * generalized — first, ~⅓, ~⅔, last at maxTicks=4). Pure; deterministic.
+ * Degenerate guards: count 0 → []; maxTicks ≤ 1 → the first bucket only
+ * (the 0/0 spread would otherwise yield NaN).
+ */
+export function sparseTickIndices(count: number, maxTicks: number): number[] {
+  if (count <= 0) return [];
+  if (maxTicks <= 1) return [0];
+  if (count <= maxTicks) return Array.from({ length: count }, (_, i) => i);
+  const out: number[] = [];
+  for (let i = 0; i < maxTicks; i++) {
+    out.push(Math.round((i / (maxTicks - 1)) * (count - 1)));
+  }
+  return [...new Set(out)];
+}

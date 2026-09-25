@@ -13,6 +13,11 @@ export { ProjectsDrilldown } from "./ProjectsDrilldown";
 // ROUND-98 (R98-I2): the Data & Statistics surface — the shared panel
 // (settings tab + usage screen) + its three charts.
 export { DataStatsPanel } from "./DataStatsPanel";
+// R127-W1 (SCREENS §3 "THE USAGE PAGE ORDER"): the activity grid's INSIGHTS
+// RAIL (the window's key details — never the tools leaderboard) + the
+// page-scope danger-zone card (extracted from DataStatsPanel — LAST).
+export { InsightsRail } from "./InsightsRail";
+export { ClearUsageDataCard } from "./ClearUsageDataCard";
 export { UsageHeatmap } from "./UsageHeatmap";
 export { ModelStackChart } from "./ModelStackChart";
 export { ModelDonut } from "./ModelDonut";

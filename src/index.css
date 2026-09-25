@@ -503,9 +503,25 @@
      zero-width sliver. At the 10px gutter the values are byte-identical to
      the old fixed recipe (3px inset → 4px pill), so wide screens see no
      change. Firefox keeps scrollbar-width: thin + scrollbar-color above
-     (already proportional by design). */
+     ROUND-127 (the overlay-scrollbar law — TOKENS §6, the owner: "completely
+     hide those scroll bars… they should only appear when the user tries to
+     scroll"): the thumb is TRANSPARENT AT REST app-wide and tints in ONLY
+     while its scroller is actively scrolling (the `.is-scrolling` tag the
+     global scroll-fade listener applies, held ~700ms after the last scroll
+     event — src/lib/use-global-scroll-fade.ts, mounted once in App). The
+     STABLE GUTTER survives (R60-B's no-reflow law: scrollbar-width stays
+     thin + the gutter geometry never appears/disappears — only the INK
+     fades). Keyboard carve-out: a scroller with focus inside keeps the
+     thumb visible. The per-component useScrollFade/.auto-scroll opt-in is
+     superseded by this GLOBAL mechanism (kept as compat — same ink values). */
   * {
     scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  *:focus-within {
+    /* The accessibility carve-out (TOKENS §6): keyboard focus inside a
+       scroller keeps its thumb visible (elements without scrollbars ignore
+       scrollbar-color — harmless breadth). */
     scrollbar-color: color-mix(in srgb, var(--text) 18%, transparent) transparent;
   }
   *::-webkit-scrollbar {
@@ -519,15 +535,33 @@
     background: transparent;
   }
   *::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--text) 18%, transparent);
+    /* R127: transparent at rest — the resting app shows ZERO scrollbar
+       chrome; the tint arrives with .is-scrolling (below) / legacy focus. */
+    background: transparent;
     /* R87-A1: proportional inset — 30% of the adaptive gutter per side
        (3px at the 10px gutter, 1.5px at 5px), so the pill stays a pill. */
     border: calc(clamp(5px, 0.7vw, 10px) * 0.3) solid transparent;
     border-radius: 9999px;
     background-clip: padding-box;
+    transition: background-color 0.4s ease;
   }
   *::-webkit-scrollbar-thumb:hover {
     background: color-mix(in srgb, var(--text) 34%, transparent);
+    background-clip: padding-box;
+  }
+  /* R127: the ACTIVE-SCROLL state — the global listener tags the scrolling
+     element itself; Chromium 121+ / Firefox honor the standard property
+     (and then ignore the webkit pseudo rules), older WebKit falls to the
+     thumb rule. Same 18% tint both legs. */
+  .is-scrolling {
+    scrollbar-color: color-mix(in srgb, var(--text) 18%, transparent) transparent;
+  }
+  .is-scrolling::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text) 18%, transparent);
+    background-clip: padding-box;
+  }
+  *:focus-within::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text) 18%, transparent);
     background-clip: padding-box;
   }
 }
