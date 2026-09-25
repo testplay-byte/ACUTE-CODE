@@ -1,7 +1,7 @@
 // The supervisor unit tests (R128-W1). Vitest's default include sweeps the
-// whole tree (vite.config.ts — mobile/** is the only project exclude), so
+// whole tree (vite.config.ts -- mobile/** is the only project exclude), so
 // this file rides the root `pnpm test` run even though it lives in tests/.
-// The environment is the config default (node) — the supervisor is a plain
+// The environment is the config default (node) -- the supervisor is a plain
 // Node process, and importing it must NEVER start its CLI loop (the
 // import.meta guard is pinned by the fact that this suite completes).
 import { describe, expect, it } from "vitest";
@@ -28,7 +28,7 @@ import {
 
 const SCRIPT_PATH = fileURLToPath(new URL("../../scripts/release/update-supervisor.mjs", import.meta.url));
 
-// ── parseSupervisorArgs ─────────────────────────────────────────────────────
+// == parseSupervisorArgs =====================================================
 
 describe("parseSupervisorArgs", () => {
   it("parses the full argv contract exactly as update.rs spells it", () => {
@@ -72,7 +72,7 @@ describe("parseSupervisorArgs", () => {
     expect(parseSupervisorArgs(["--app-exe", "/a", "--installer", "none"])).toEqual({ error: "--version is required" });
   });
 
-  it("run mode refuses the null installer — the supervisor would own an install it cannot run", () => {
+  it("run mode refuses the null installer -- the supervisor would own an install it cannot run", () => {
     const parsed = parseSupervisorArgs(["--app-exe", "/a", "--installer", "none", "--version", "1", "--mode", "run"]);
     expect(parsed).toEqual({
       error: "--mode run requires a real --installer path (the supervisor owns the install)",
@@ -96,7 +96,7 @@ describe("parseSupervisorArgs", () => {
   });
 });
 
-// ── liveness, the plan, and the guard ───────────────────────────────────────
+// == liveness, the plan, and the guard =======================================
 
 describe("isProcessAlive (the default strategy)", () => {
   it("answers alive for a live pid and dead for a reaped child", async () => {
@@ -166,7 +166,7 @@ describe("buildGuardCommand / parseGuardOutput", () => {
       command: "pgrep",
       args: ["-f", "/opt/ACUTE-CODE.AppImage"],
     });
-    // The supervisor's own command line carries --app-exe — pgrep -f would
+    // The supervisor's own command line carries --app-exe -- pgrep -f would
     // self-match; the parser must filter the self pid out.
     expect(parseGuardOutput("linux", "/opt/ACUTE-CODE.AppImage", "4242\n", 0, 4242)).toBe(false);
     expect(parseGuardOutput("linux", "/opt/ACUTE-CODE.AppImage", "4242\n1234\n", 0, 4242)).toBe(true);
@@ -175,10 +175,10 @@ describe("buildGuardCommand / parseGuardOutput", () => {
   });
 });
 
-// ── the run-mode installer + the notification ───────────────────────────────
+// == the run-mode installer + the notification ===============================
 
 describe("buildInstallerCommand", () => {
-  it("windows: the setup.exe with NSIS /S — and NO /R (the relaunch is the supervisor's own)", () => {
+  it("windows: the setup.exe with NSIS /S -- and NO /R (the relaunch is the supervisor's own)", () => {
     expect(buildInstallerCommand("win32", "C:\\Temp\\ACUTE-CODE_0.121.0_x64-setup.exe")).toEqual({
       command: "C:\\Temp\\ACUTE-CODE_0.121.0_x64-setup.exe",
       args: ["/S"],
@@ -216,40 +216,40 @@ describe("buildNotificationCommand", () => {
     expect(script).toContain("ToastText02");
     expect(script).toContain("CreateToastNotifier('ACUTE-CODE')");
     expect(script).toContain("CreateTextNode('ACUTE-CODE')");
-    expect(script).toContain("CreateTextNode('Updated to v0.121.0 — restarting')");
-    expect(note.text).toEqual({ title: "ACUTE-CODE", body: "Updated to v0.121.0 — restarting" });
+    expect(script).toContain("CreateTextNode('Updated to v0.121.0 -- restarting')");
+    expect(note.text).toEqual({ title: "ACUTE-CODE", body: "Updated to v0.121.0 -- restarting" });
   });
 
   it("linux: notify-send with the app name + the same body", () => {
     const note = buildNotificationCommand("linux", "0.121.0");
     expect(note).toEqual({
       command: "notify-send",
-      args: ["ACUTE-CODE", "Updated to v0.121.0 — restarting"],
-      text: { title: "ACUTE-CODE", body: "Updated to v0.121.0 — restarting" },
+      args: ["ACUTE-CODE", "Updated to v0.121.0 -- restarting"],
+      text: { title: "ACUTE-CODE", body: "Updated to v0.121.0 -- restarting" },
     });
   });
 
   it("single quotes inside a version cannot break the PowerShell string", () => {
     const note = buildNotificationCommand("win32", "0.1'2");
-    expect(note.args[2]).toContain("'Updated to v0.1''2 — restarting'");
+    expect(note.args[2]).toContain("'Updated to v0.1''2 -- restarting'");
   });
 });
 
-// ── watch mode's readiness test ─────────────────────────────────────────────
+// == watch mode's readiness test =============================================
 
 describe("exeIsReady", () => {
-  it("the exe exists ⇒ ready; absent ⇒ not; the renamed .old path is never the new app", () => {
+  it("the exe exists => ready; absent => not; the renamed .old path is never the new app", () => {
     expect(exeIsReady("C:\\Apps\\ACUTE-CODE.exe", { size: 1 })).toBe(true);
     expect(exeIsReady("C:\\Apps\\ACUTE-CODE.exe", null)).toBe(false);
     expect(exeIsReady("C:\\Apps\\ACUTE-CODE.exe.old", { size: 1 })).toBe(false);
   });
 });
 
-// ── the loop itself (every external edge injected) ──────────────────────────
+// == the loop itself (every external edge injected) ==========================
 
 /** A fake deps bundle + a state recorder. guardAnswer() is consulted per
  * probe; the default says "not running" until the app spawn is recorded,
- * then "running" — exactly the real verify-window shape. */
+ * then "running" -- exactly the real verify-window shape. */
 function fakeDeps(overrides = {}) {
   const state = {
     t: 0,
@@ -329,7 +329,7 @@ function supervisorArgs(overrides = {}) {
 }
 
 describe("runSupervisor (mode behavior, all edges injected)", () => {
-  it("watch mode: app exits → exe in place → guard clear → DETACHED relaunch → verify → the completion toast", async () => {
+  it("watch mode: app exits -> exe in place -> guard clear -> DETACHED relaunch -> verify -> the completion toast", async () => {
     const { state, deps } = fakeDeps();
     const code = await runSupervisor(supervisorArgs({ mode: "watch" }), deps);
     expect(code).toBe(0);
@@ -343,13 +343,13 @@ describe("runSupervisor (mode behavior, all edges injected)", () => {
     ]);
     // The notification: notify-send (linux), waited on.
     expect(state.waited).toEqual([
-      { cmd: "notify-send", args: ["ACUTE-CODE", "Updated to v0.121.0 — restarting"], opts: { stdio: "ignore" }, timeout: 15000 },
+      { cmd: "notify-send", args: ["ACUTE-CODE", "Updated to v0.121.0 -- restarting"], opts: { stdio: "ignore" }, timeout: 15000 },
     ]);
     // The hard-lifetime timer was armed at max-wait + 120s.
     expect(state.timers.map((t) => t.ms)).toEqual([720_000]);
     // The story is on the log, one line per step.
     const story = state.logLines.join("\n");
-    expect(story).toContain("started — mode=watch");
+    expect(story).toContain("started -- mode=watch");
     expect(story).toContain("the app process has exited");
     expect(story).toContain("the app executable is in place");
     expect(story).toContain("relaunch attempt 1/3");
@@ -363,10 +363,10 @@ describe("runSupervisor (mode behavior, all edges injected)", () => {
     expect(code).toBe(0);
     expect(state.appSpawns).toEqual([]);
     expect(state.waited).toEqual([]);
-    expect(state.logLines.join("\n")).toContain("already running — supervisor exits");
+    expect(state.logLines.join("\n")).toContain("already running -- supervisor exits");
   });
 
-  it("run mode: app exits → the installer /S is OWNED (spawned + waited) → relaunch → toast", async () => {
+  it("run mode: app exits -> the installer /S is OWNED (spawned + waited) -> relaunch -> toast", async () => {
     const { state, deps } = fakeDeps({ platform: "win32" });
     const code = await runSupervisor(
       supervisorArgs({
@@ -387,7 +387,7 @@ describe("runSupervisor (mode behavior, all edges injected)", () => {
       {
         cmd: "C:\\Apps\\ACUTE-CODE\\ACUTE-CODE.exe",
         args: [],
-        // cwd = the exe's own directory (node:path's dirname — the
+        // cwd = the exe's own directory (node:path's dirname -- the
         // platform-flavored module the supervisor itself uses).
         opts: { detached: true, stdio: "ignore", cwd: dirname("C:\\Apps\\ACUTE-CODE\\ACUTE-CODE.exe") },
       },
@@ -426,7 +426,7 @@ describe("runSupervisor (mode behavior, all edges injected)", () => {
     const story = state.logLines.join("\n");
     expect(story).toContain("the installer exited with code 1");
     expect(story).toContain("no completion toast (honest)");
-    // Only the installer was waited on — no notify-send.
+    // Only the installer was waited on -- no notify-send.
     expect(state.waited.filter((w) => w.cmd === "notify-send")).toEqual([]);
     // The app still came back (the restart guarantee outranks the install).
     expect(state.appSpawns.length).toBe(1);
@@ -449,10 +449,10 @@ describe("runSupervisor (mode behavior, all edges injected)", () => {
   });
 });
 
-// ── the CLI guard (importing never starts the loop; bad argv exits 2) ───────
+// == the CLI guard (importing never starts the loop; bad argv exits 2) =======
 
 describe("the CLI entry", () => {
-  it("invalid argv exits 2 with the usage line (a REAL child process — the import.meta guard fires)", async () => {
+  it("invalid argv exits 2 with the usage line (a REAL child process -- the import.meta guard fires)", async () => {
     const { stdout, stderr } = await new Promise((resolve, reject) => {
       execFile(process.execPath, [SCRIPT_PATH, "--app-exe", "/a"], { timeout: 15_000 }, (err, out, errOut) => {
         if (err && err.code !== 2) reject(err);

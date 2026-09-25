@@ -127,7 +127,17 @@ describe("R127 getUsageSummary — granularity=hour", () => {
     seedUsage({ ts: isoAtMsIntoDay(0, 10 * 3_600_000) });
     const absent = getUsageSummary(db, { days: 3 });
     const day = getUsageSummary(db, { days: 3, granularity: "day" });
-    expect(day).toEqual(absent);
+    // R128 CI fix: generatedAt is a per-call timestamp — on the 3-4x slower
+    // Windows runner the two calls straddled a millisecond boundary and the
+    // "byte-identical" deep-equal flaked (run 36197681737). The identical-DAY-
+    // PATH contract is everything EXCEPT that timestamp; strip it before the
+    // deep compare and pin it separately (same UTC day, fresh).
+    const { generatedAt: _absentAt, ...absentRest } = absent;
+    const { generatedAt: _dayAt, ...dayRest } = day;
+    expect(dayRest).toEqual(absentRest);
+    expect(new Date(day.generatedAt).toISOString().slice(0, 10)).toBe(
+      new Date(absent.generatedAt).toISOString().slice(0, 10),
+    );
     // And the day keys are the 10-char shape.
     for (const bucket of absent.days) {
       expect(bucket.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);

@@ -25,7 +25,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 
@@ -163,16 +163,21 @@ describe("GET /api/v1/projects/:id/attachments/bytes (ROUND-121 R121-a)", () => 
 
   it("an absolute path is refused — only project-RELATIVE paths resolve", async () => {
     const projectId = await makeProject();
+    // R128 CI fix: a SAME-SHAPE outside-root path (the parent of the project
+    // root) so the refusal's message variant is deterministic on every
+    // platform — the old literal '/etc/hostname' is cross-shape against a
+    // Windows C:\ temp root and flipped the pin on the windows runner.
+    const outsideAbs = resolve(dirname(tempDir), "hostname-outside.txt");
     const res = await authInject({
       method: "GET",
-      url: bytesUrl(projectId, "/etc/hostname"),
+      url: bytesUrl(projectId, outsideAbs),
     });
     expect(res.statusCode).toBe(400);
     // R128-W7b re-pin: the refusal now NAMES the root and shows a rebased
     // example of the relative shape instead of the bare "must be RELATIVE"
     // scold — the containment law itself is unchanged (still a 400).
     expect(res.json().error.message).toContain("path must be INSIDE the project root");
-    expect(res.json().error.message).toContain("e.g. 'etc/hostname'");
+    expect(res.json().error.message).toContain("e.g. 'hostname-outside.txt'");
   });
 
   // ── the honest refusals ────────────────────────────────────────────────

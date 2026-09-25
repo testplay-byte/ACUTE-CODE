@@ -1,23 +1,22 @@
-#!/usr/bin/env node
 /**
  * ROUND-128 (R128-W1): THE EXTERNAL UPDATE SUPERVISOR.
  *
  * The owner's v0.120.0 incident, verbatim: "it updated successfully,
  * downloaded, it updated, and then it closed properly without any problem.
  * But then it did not auto-start at all. It did not show me any system or
- * anything like that… maybe we should have a separate system for updating
+ * anything like that... maybe we should have a separate system for updating
  * the application, which would be separate from the app, so that it does not
  * get affected by the application. Like if the application closes, it still
- * functions and works…"
+ * functions and works..."
  *
  * This file IS that separate system: a plain-Node, ZERO-dependency process
  * the Rust shell (src-tauri/src/update.rs) spawns DETACHED before every
- * install leg. It owns nothing about the app — no window, no webview, no
- * sidecar — so the app closing (the intended exit, a crash, a power blip)
+ * install leg. It owns nothing about the app -- no window, no webview, no
+ * sidecar -- so the app closing (the intended exit, a crash, a power blip)
  * cannot take it down. Its one job is the guarantee the in-app flow could
  * never make on its own:
  *
- *   the app closed for an update ⇒ something OUTSIDE the app brings it back.
+ *   the app closed for an update => something OUTSIDE the app brings it back.
  *
  * Argv contract (spawned by update.rs, runnable by hand for debugging):
  *
@@ -30,47 +29,47 @@
  *     [--mode watch|run]      watch (default): the app's own watcher runs the
  *                             install, this process is only the restart
  *                             guarantee. run: THIS process owns the whole
- *                             flow — wait exit → installer /S → guard →
- *                             relaunch → notify.
+ *                             flow -- wait exit -> installer /S -> guard ->
+ *                             relaunch -> notify.
  *     [--max-wait-secs 600]   the budget for every bounded wait
  *     [--log <path>]          the append-only log file (ISO-stamped lines)
  *
  * Mode by leg (update.rs's decision):
- *   · Windows OVERLAY     → watch (the overlay watcher stays primary)
- *   · Windows FALLBACK    → run (the supervisor owns it — the NSIS /R hook
+ *   - Windows OVERLAY     -> watch (the overlay watcher stays primary)
+ *   - Windows FALLBACK    -> run (the supervisor owns it -- the NSIS /R hook
  *                           becomes irrelevant)
- *   · Linux AppImage      → watch (the sh -c pid-wait relauncher stays primary)
- *   · Linux .deb          → watch (the dpkg watcher stays primary)
+ *   - Linux AppImage      -> watch (the sh -c pid-wait relauncher stays primary)
+ *   - Linux .deb          -> watch (the dpkg watcher stays primary)
  *
  * THE GUARD (never double-launch): before relaunching, check whether an app
- * instance is already running — Windows: `tasklist /FI "IMAGENAME eq <name>"
+ * instance is already running -- Windows: `tasklist /FI "IMAGENAME eq <name>"
  * /FO CSV` parsed for the exe name; Linux: `pgrep -f <exe path>` (the
- * supervisor's own pid filtered out — its own command line contains the
- * --app-exe path and would otherwise self-match). If running → log
- * "already running — supervisor exits" and exit 0: the primary flow won.
+ * supervisor's own pid filtered out -- its own command line contains the
+ * --app-exe path and would otherwise self-match). If running -> log
+ * "already running -- supervisor exits" and exit 0: the primary flow won.
  *
  * THE NOTIFICATION (the "it did not show me any system" half): when THIS
- * process performed the relaunch, a best-effort OS notification fires —
+ * process performed the relaunch, a best-effort OS notification fires --
  * Windows: a PowerShell WinRT toast; Linux: notify-send. Belt by design:
  * when the app's own flow won, the guard exits before the toast and the
- * relaunched app's own "Setting up v…" splash is the UX (never both).
+ * relaunched app's own "Setting up v..." splash is the UX (never both).
  *
  * Honesty laws:
- *   · EVERY external action is best-effort try/catch — the supervisor never
+ *   - EVERY external action is best-effort try/catch -- the supervisor never
  *     hangs forever and never leaves a zombie: a hard-lifetime timer exits
  *     at max-wait + 120s no matter what, and every wait is deadline-bounded.
- *   · Every step is logged with an ISO timestamp, ONE line each, appended
+ *   - Every step is logged with an ISO timestamp, ONE line each, appended
  *     to the log file (default: the app's state dir, passed by update.rs).
- *   · A failed guard probe is treated as NOT running (the owner's incident
- *     was a dead app, not a doubled app — bringing it back wins the tie).
- *   · The toast fires only when the update genuinely landed (run mode: the
+ *   - A failed guard probe is treated as NOT running (the owner's incident
+ *     was a dead app, not a doubled app -- bringing it back wins the tie).
+ *   - The toast fires only when the update genuinely landed (run mode: the
  *     installer exited 0; watch mode: the new exe appeared); a failed
  *     install relaunches the OLD app honestly with no "updated" toast.
  *
  * Testability: the pure decision functions are exported and the CLI main()
  * is guarded behind an import.meta.url === pathToFileURL(argv[1]) check, so
  * importing this module from vitest never starts the loop. runSupervisor()
- * takes an injectable deps object (spawn/clock/fs probes) — every external
+ * takes an injectable deps object (spawn/clock/fs probes) -- every external
  * edge is mockable. See tests/scripts/update-supervisor.test.mjs.
  */
 import { spawn } from "node:child_process";
@@ -78,13 +77,13 @@ import { appendFileSync, chmodSync, closeSync, mkdirSync, openSync, statSync } f
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-// ── the tunables (one spelling each, exported for the tests) ────────────────
+// == the tunables (one spelling each, exported for the tests) ================
 
-/** The app-exit poll cadence (ms) — the letter's 250ms. */
+/** The app-exit poll cadence (ms) -- the letter's 250ms. */
 export const APP_EXIT_POLL_MS = 250;
-/** The settle when no --app-pid was supplied (ms) — the letter's one 1500ms sleep. */
+/** The settle when no --app-pid was supplied (ms) -- the letter's one 1500ms sleep. */
 export const NO_PID_SETTLE_MS = 1500;
-/** The exe-ready poll cadence (ms) — the letter's 500ms. */
+/** The exe-ready poll cadence (ms) -- the letter's 500ms. */
 export const EXE_READY_POLL_MS = 500;
 /** The guard's answer is also the relaunch VERIFICATION poll cadence (ms). */
 export const GUARD_POLL_MS = 500;
@@ -99,7 +98,7 @@ export const HARD_LIFETIME_GRACE_SECS = 120;
 /** Bounded wait for guard probes (tasklist/pgrep) and the toast (ms). */
 export const PROBE_TIMEOUT_MS = 15_000;
 
-// ── pure decision functions (exported for tests) ───────────────────────────
+// == pure decision functions (exported for tests) ===========================
 
 /**
  * Parse the supervisor's argv (process.argv.slice(2) shape). Returns
@@ -194,8 +193,8 @@ export function parseSupervisorArgs(argv) {
 
 /**
  * The default liveness probe (injectable via deps.isProcessAlive):
- * `process.kill(pid, 0)` — signal 0 is the POSIX "does it exist" check.
- * EPERM means the process exists but belongs to another user → ALIVE;
+ * `process.kill(pid, 0)` -- signal 0 is the POSIX "does it exist" check.
+ * EPERM means the process exists but belongs to another user -> ALIVE;
  * ESRCH (or a bad pid) means gone.
  */
 export function isProcessAlive(pid) {
@@ -229,9 +228,9 @@ export function shouldRelaunch(state) {
 
 /**
  * The guard's command per platform (pure; run + parsed by the caller):
- *   · win32  → `tasklist /FI "IMAGENAME eq <basename>" /FO CSV`
- *   · linux  → `pgrep -f <exe path>` (the supervisor's own pid is filtered
- *              out when parsing — pgrep matches ARGV CONTENT, and this
+ *   - win32  -> `tasklist /FI "IMAGENAME eq <basename>" /FO CSV`
+ *   - linux  -> `pgrep -f <exe path>` (the supervisor's own pid is filtered
+ *              out when parsing -- pgrep matches ARGV CONTENT, and this
  *              process's own command line carries --app-exe)
  */
 export function buildGuardCommand(platform, appExe) {
@@ -243,10 +242,10 @@ export function buildGuardCommand(platform, appExe) {
 }
 
 /**
- * Parse the guard's answer (pure). Windows: tasklist's CSV rows — a row
+ * Parse the guard's answer (pure). Windows: tasklist's CSV rows -- a row
  * matches when its quoted "Image Name" field equals the exe's basename
- * (case-insensitive; the no-match answer is a plain `INFO: …` line with no
- * quotes, which naturally parses to no match). Linux: pgrep's exit code —
+ * (case-insensitive; the no-match answer is a plain `INFO: ...` line with no
+ * quotes, which naturally parses to no match). Linux: pgrep's exit code --
  * 0 with pid lines (selfPid removed) means running, 1 means no match.
  */
 export function parseGuardOutput(platform, appExe, stdout, exitCode, selfPid) {
@@ -271,10 +270,10 @@ export function parseGuardOutput(platform, appExe, stdout, exitCode, selfPid) {
 }
 
 /**
- * The run-mode installer command (pure): Windows → the setup.exe with NSIS's
- * own `/S` (NO `/R` — the relaunch is OURS here); Linux → direct exec for an
+ * The run-mode installer command (pure): Windows -> the setup.exe with NSIS's
+ * own `/S` (NO `/R` -- the relaunch is OURS here); Linux -> direct exec for an
  * AppImage (after chmod +x) / `pkexec dpkg -i` for a .deb. Anything else is
- * honestly unsupported ({ unsupported: true }) — the caller logs and still
+ * honestly unsupported ({ unsupported: true }) -- the caller logs and still
  * guarantees the restart.
  */
 export function buildInstallerCommand(platform, installerPath) {
@@ -294,15 +293,15 @@ export function buildInstallerCommand(platform, installerPath) {
 }
 
 /**
- * The completion toast's command (pure, belt-only — fires when THIS process
- * brought the app back): Windows → a PowerShell WinRT toast via the
+ * The completion toast's command (pure, belt-only -- fires when THIS process
+ * brought the app back): Windows -> a PowerShell WinRT toast via the
  * ToastNotificationManager template (the AUMID "ACUTE-CODE" is unregistered
- * — some Win11 builds decline to render it; the outcome is logged and the
- * app's own "Setting up v…" splash remains the primary UX); Linux →
- * notify-send. Text: "ACUTE-CODE" / "Updated to v{version} — restarting".
+ * -- some Win11 builds decline to render it; the outcome is logged and the
+ * app's own "Setting up v..." splash remains the primary UX); Linux ->
+ * notify-send. Text: "ACUTE-CODE" / "Updated to v{version} -- restarting".
  */
 export function buildNotificationCommand(platform, version) {
-  const body = `Updated to v${String(version)} — restarting`;
+  const body = `Updated to v${String(version)} -- restarting`;
   if (platform === "win32") {
     const psVersion = String(version).replace(/'/g, "''");
     const psBody = body.replace(/'/g, "''");
@@ -319,7 +318,7 @@ export function buildNotificationCommand(platform, version) {
       args: ["-NoProfile", "-Command", script],
       // The interpolated version, surfaced for tests/logging (the letter's
       // exact toast text pair).
-      text: { title: "ACUTE-CODE", body: `Updated to v${psVersion} — restarting` },
+      text: { title: "ACUTE-CODE", body: `Updated to v${psVersion} -- restarting` },
     };
   }
   return {
@@ -333,14 +332,14 @@ export function buildNotificationCommand(platform, version) {
  * Watch mode's readiness test (pure half): the exe at the ORIGINAL path is
  * ready when it EXISTS and the path is not the overlay flow's renamed
  * `<exe>.old` (the rename leaves the original path absent until the
- * installer writes the new exe — "exists" IS the replaced signal there).
+ * installer writes the new exe -- "exists" IS the replaced signal there).
  */
 export function exeIsReady(appExe, statResult) {
   if (typeof appExe === "string" && appExe.toLowerCase().endsWith(".old")) return false;
   return statResult !== null;
 }
 
-// ── the loop (injectable deps — every external edge mockable) ──────────────
+// == the loop (injectable deps -- every external edge mockable) ==============
 
 /** The default deps: real node builtin behavior. Tests inject fakes. */
 function defaultDeps() {
@@ -380,7 +379,7 @@ function defaultDeps() {
 }
 
 /** Spawn + wait for exit (bounded): resolves the exit code, or null when the
- * spawn failed or the wait timed out. The child is NOT unref'd — its exit
+ * spawn failed or the wait timed out. The child is NOT unref'd -- its exit
  * event needs a live loop to fire; the caller owns the flow until it lands. */
 function spawnAndWait(command, args, options, timeoutMs) {
   return new Promise((resolve) => {
@@ -494,23 +493,23 @@ export async function runSupervisor(parsed, deps = {}) {
   const log = makeLogger(parsed.log, d);
   const maxWaitMs = parsed.maxWaitSecs * 1000;
 
-  // The HARD LIFETIME BOUND — the one unbounded-loop killer. Ref'd (not
+  // The HARD LIFETIME BOUND -- the one unbounded-loop killer. Ref'd (not
   // unref'd) so a stuck-but-busy loop still dies at the bound.
   const bound = d.setTimeout(() => {
-    log("hard lifetime bound reached — exiting");
+    log("hard lifetime bound reached -- exiting");
     d.exit(0);
   }, maxWaitMs + HARD_LIFETIME_GRACE_SECS * 1000);
 
   try {
     log(
-      `started — mode=${parsed.mode} app-exe=${parsed.appExe} installer=${parsed.installer ?? "none"} version=${parsed.version} pid=${parsed.appPid ?? "none"}`,
+      `started -- mode=${parsed.mode} app-exe=${parsed.appExe} installer=${parsed.installer ?? "none"} version=${parsed.version} pid=${parsed.appPid ?? "none"}`,
     );
 
-    // STEP 1/2 — wait for the app to close (both modes; the supervisor
+    // STEP 1/2 -- wait for the app to close (both modes; the supervisor
     // never acts under a live instance of the app it is guarding).
     const appExited = await waitForAppExit(parsed, d, log);
     if (!appExited) {
-      log("the app never exited within the wait budget — the primary flow owns the screen; supervisor exits");
+      log("the app never exited within the wait budget -- the primary flow owns the screen; supervisor exits");
       return 0;
     }
     log("the app process has exited");
@@ -521,19 +520,19 @@ export async function runSupervisor(parsed, deps = {}) {
     } else {
       const ready = await waitForExeReady(parsed, d, log);
       if (!ready) {
-        log("the app executable did not become available within the wait budget — giving up (the install likely failed)");
+        log("the app executable did not become available within the wait budget -- giving up (the install likely failed)");
         return 1;
       }
-      log("the app executable is in place — proceeding to the guard");
+      log("the app executable is in place -- proceeding to the guard");
     }
 
-    // STEP 3 — THE GUARD.
+    // STEP 3 -- THE GUARD.
     if (await isAppRunning(parsed, d, log)) {
-      log("already running — supervisor exits");
+      log("already running -- supervisor exits");
       return 0;
     }
 
-    // STEP 4 — the detached relaunch with verification + retries.
+    // STEP 4 -- the detached relaunch with verification + retries.
     const plan = buildRelaunchPlan();
     let relaunched = false;
     for (let attempt = 1; attempt <= plan.maxAttempts; attempt += 1) {
@@ -549,7 +548,7 @@ export async function runSupervisor(parsed, deps = {}) {
       } catch (err) {
         log(`relaunch attempt ${attempt} failed to spawn: ${err?.message ?? err}`);
       }
-      // Verify it started — poll the guard again (the honest "is it really
+      // Verify it started -- poll the guard again (the honest "is it really
       // up" check, not just a spawn that didn't throw).
       const verifyDeadline = d.now() + plan.verifyMs;
       while (d.now() < verifyDeadline) {
@@ -560,32 +559,32 @@ export async function runSupervisor(parsed, deps = {}) {
         }
       }
       if (relaunched) {
-        log(`relaunch verified on attempt ${attempt} — the app is running`);
+        log(`relaunch verified on attempt ${attempt} -- the app is running`);
         break;
       }
       log(`relaunch attempt ${attempt} not verified within ${plan.verifyMs}ms`);
       if (attempt < plan.maxAttempts) await d.sleep(plan.backoffMs);
     }
 
-    // STEP 5 — THE NOTIFICATION (belt leg; only when THIS process brought
-    // the app back AND the update genuinely landed — a "restarting" toast
+    // STEP 5 -- THE NOTIFICATION (belt leg; only when THIS process brought
+    // the app back AND the update genuinely landed -- a "restarting" toast
     // over a failed install would be a lie).
     if (relaunched && installerSucceeded) {
       const note = buildNotificationCommand(d.platform(), parsed.version);
-      log(`notifying: ${note.command} — "${note.text.title}" / "${note.text.body}"`);
+      log(`notifying: ${note.command} -- "${note.text.title}" / "${note.text.body}"`);
       const code = await d.spawnAndWait(note.command, note.args, { stdio: "ignore" }, PROBE_TIMEOUT_MS);
       if (code === null) {
-        log("the notification did not finish (or failed to spawn) — the app's own setup splash remains the primary UX");
+        log("the notification did not finish (or failed to spawn) -- the app's own setup splash remains the primary UX");
       } else {
         log(`the notification finished with code ${code}`);
       }
       return 0;
     }
     if (!relaunched) {
-      log(`the app did not come back within ${plan.maxAttempts} relaunch attempts — reopen it by hand`);
+      log(`the app did not come back within ${plan.maxAttempts} relaunch attempts -- reopen it by hand`);
       return 1;
     }
-    log("the app is back but the install did not confirm success — no completion toast (honest)");
+    log("the app is back but the install did not confirm success -- no completion toast (honest)");
     return 0;
   } catch (err) {
     log(`unexpected failure: ${err?.message ?? err}`);
@@ -595,12 +594,12 @@ export async function runSupervisor(parsed, deps = {}) {
   }
 }
 
-/** Wait for the app pid to exit (250ms poll, bounded); no pid → one 1500ms settle. */
+/** Wait for the app pid to exit (250ms poll, bounded); no pid -> one 1500ms settle. */
 async function waitForAppExit(parsed, d, log) {
   const pid = parsed.appPid;
   if (pid === null) {
     await d.sleep(NO_PID_SETTLE_MS);
-    log(`no app pid supplied — settled ${NO_PID_SETTLE_MS}ms instead`);
+    log(`no app pid supplied -- settled ${NO_PID_SETTLE_MS}ms instead`);
     return true;
   }
   const deadline = d.now() + parsed.maxWaitSecs * 1000;
@@ -612,7 +611,7 @@ async function waitForAppExit(parsed, d, log) {
 }
 
 /** Watch mode's install-completion wait: the exe at the original path exists
- * (and, on Windows, opens lock-free) — every 500ms, bounded by max-wait. */
+ * (and, on Windows, opens lock-free) -- every 500ms, bounded by max-wait. */
 async function waitForExeReady(parsed, d, log) {
   const deadline = d.now() + parsed.maxWaitSecs * 1000;
   let lockFreeChecks = 0;
@@ -621,7 +620,7 @@ async function waitForExeReady(parsed, d, log) {
     if (exeIsReady(parsed.appExe, stat)) {
       if (d.platform() !== "win32") return true;
       // Windows: the installer's last flush can still hold the freshly
-      // written exe — an open-for-read that succeeds means lock-free.
+      // written exe -- an open-for-read that succeeds means lock-free.
       if (d.canOpenForRead(parsed.appExe)) return true;
       lockFreeChecks += 1;
     }
@@ -635,7 +634,7 @@ async function waitForExeReady(parsed, d, log) {
 async function runInstallerAndWait(parsed, d, log) {
   const cmd = buildInstallerCommand(d.platform(), parsed.installer);
   if (cmd.unsupported === true) {
-    log(`the installer kind is unsupported by the supervisor run mode (${parsed.installer}) — skipping the install, still guaranteeing the restart`);
+    log(`the installer kind is unsupported by the supervisor run mode (${parsed.installer}) -- skipping the install, still guaranteeing the restart`);
     return false;
   }
   if (cmd.needsChmod === true) {
@@ -643,13 +642,13 @@ async function runInstallerAndWait(parsed, d, log) {
       d.chmod(parsed.installer, 0o755);
       log("chmod +x applied to the staged installer");
     } catch (err) {
-      log(`chmod +x failed (${err?.message ?? err}) — launching anyway`);
+      log(`chmod +x failed (${err?.message ?? err}) -- launching anyway`);
     }
   }
   log(`launching the installer: ${cmd.command} ${cmd.args.join(" ")}`);
   const code = await d.spawnAndWait(cmd.command, cmd.args, { detached: true, stdio: "ignore" }, parsed.maxWaitSecs * 1000);
   if (code === null) {
-    log("the installer did not exit within the wait budget — treating the install as failed (the restart is still guaranteed)");
+    log("the installer did not exit within the wait budget -- treating the install as failed (the restart is still guaranteed)");
     return false;
   }
   log(`the installer exited with code ${code}`);
@@ -658,18 +657,18 @@ async function runInstallerAndWait(parsed, d, log) {
 
 /** The guard, live: run the platform probe and parse it. A probe that cannot
  * run at all answers NOT running (the owner's incident was a dead app, not a
- * doubled one — the restart wins the tie; logged honestly). */
+ * doubled one -- the restart wins the tie; logged honestly). */
 async function isAppRunning(parsed, d, log) {
   const cmd = buildGuardCommand(d.platform(), parsed.appExe);
   const result = await d.captureOutput(cmd.command, cmd.args);
   if (result === null) {
-    log(`the guard probe could not run (${cmd.command} ${cmd.args.join(" ")}) — treating as not running`);
+    log(`the guard probe could not run (${cmd.command} ${cmd.args.join(" ")}) -- treating as not running`);
     return false;
   }
   return parseGuardOutput(d.platform(), parsed.appExe, result.stdout, result.code, d.selfPid());
 }
 
-// ── the CLI (guarded so importing the module never starts the loop) ────────
+// == the CLI (guarded so importing the module never starts the loop) ========
 
 /** True only when this module is the entry script (process.argv[1] resolved
  * against the cwd, compared to this module's URL). */

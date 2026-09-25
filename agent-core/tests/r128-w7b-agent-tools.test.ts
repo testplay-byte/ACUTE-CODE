@@ -34,7 +34,7 @@
 //          recovery note (the ledger's lost diagnostic).
 import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolSet } from "ai";
@@ -164,13 +164,19 @@ describe("R128-W7b FIX 1: resolveInsideRoot rebases INSIDE-root absolute paths",
   });
 
   it("an absolute path OUTSIDE the root still refuses — now NAMING the root + a rebased example", () => {
-    const result = resolveInsideRoot(tempDir, "/absolute/path.txt");
+    // R128 CI fix: the probe must be a SAME-SHAPE outside-root path on every
+    // platform (a literal "/absolute/..." against a Windows C:\ temp root is
+    // cross-shape — the no-example variant — and inverted the pin on the
+    // windows runner). The parent of the root is outside it and always the
+    // platform's own shape.
+    const outsideAbs = resolve(dirname(tempDir), "absolute.txt");
+    const result = resolveInsideRoot(tempDir, outsideAbs);
     expect("error" in result).toBe(true);
     if ("error" in result) {
       expect(result.error).toContain("path must be INSIDE the project root");
       expect(result.error).toContain(tempDir);
-      expect(result.error).toContain("use a path relative to the project root, e.g. 'absolute/path.txt'");
-      expect(result.error).toContain("(got '/absolute/path.txt')");
+      expect(result.error).toContain("use a path relative to the project root, e.g. 'absolute.txt'");
+      expect(result.error).toContain(`(got '${outsideAbs}')`);
     }
     // Same drive, outside the root: the example is computable there too.
     const winRoot = resolveInsideRoot("C:\\Users\\me\\proj", "C:\\Windows\\evil.txt");
@@ -182,17 +188,24 @@ describe("R128-W7b FIX 1: resolveInsideRoot rebases INSIDE-root absolute paths",
   });
 
   it("a DIFFERENT-DRIVE / ancestor path keeps the no-example message but still NAMES the root", () => {
-    // A Windows path against a POSIX root (the dev-sandbox shape) — no
-    // rebased example is computable across shapes, but the root is named
-    // either way (successor-audit amendment: the letter's "NAMES the root"
-    // applies to EVERY refusal, and a different-drive escape is exactly
-    // when the model most needs to see where "inside" starts).
-    const cross = resolveInsideRoot(tempDir, "C:\\Windows\\evil.txt");
+    // R128 CI fix: pure-string cross-shape probes (deterministic on every
+    // runner) — a Windows path against an explicit POSIX root, and a
+    // different-drive path against a Windows root. (The old probe used the
+    // PLATFORM's temp root with a C:\ path — same-shape on Windows, which
+    // inverted the pin there.)
+    const cross = resolveInsideRoot("/opt/proj", "C:\\Windows\\evil.txt");
     expect("error" in cross).toBe(true);
     if ("error" in cross) {
       expect(cross.error).toContain("path must be RELATIVE to the project root");
-      expect(cross.error).toContain(tempDir);
+      expect(cross.error).toContain("/opt/proj");
       expect(cross.error).not.toContain("INSIDE the project root");
+    }
+    const otherDrive = resolveInsideRoot("C:\\Users\\me\\proj", "D:\\data\\evil.txt");
+    expect("error" in otherDrive).toBe(true);
+    if ("error" in otherDrive) {
+      expect(otherDrive.error).toContain("path must be RELATIVE to the project root");
+      expect(otherDrive.error).toContain("C:\\Users\\me\\proj");
+      expect(otherDrive.error).not.toContain("INSIDE the project root");
     }
     // An ANCESTOR of the root (posix.relative is all ".."s — nothing to show).
     const ancestor = resolveInsideRoot(tempDir, dirname(tempDir));
@@ -239,23 +252,53 @@ describe("R128-W7b FIX 2: search tools exiting 1 with no output are 'no matches'
   }, 15_000);
 
   it("a search tool exit 1 WITH output, and a NON-search tool exit 1 with none, stay FAILED", async () => {
-    const stub = join(tempDir, "findstr");
-    writeFileSync(stub, "#!/bin/sh\nif [ \"$1\" = \"--loud\" ]; then echo \"stub diagnostic\"; fi\nexit 1\n", "utf8");
-    chmodSync(stub, 0o755);
-    const realPath = process.env.PATH;
-    process.env.PATH = `${tempDir}:${realPath ?? ""}`;
-    try {
-      const loud = await runCommand(tempDir, "findstr --loud needle win.txt");
-      expect(loud.ok).toBe(false);
-      expect(loud.output).toContain("stub diagnostic");
-      expect(loud.output).toContain("[exit code: 1]");
-      expect(loud.output).not.toContain("no matches");
-    } finally {
-      process.env.PATH = realPath;
-      unlinkSync(stub);
+    // R128 CI fix: the stub must be EXECUTABLE on the runner's platform — a
+    // #!/bin/sh stub is a no-op on Windows (cmd finds the REAL findstr.exe
+    // and the pinned "stub diagnostic" never appears). A findstr.cmd in the
+    // PATH-fronted temp dir wins cmd's resolution order on Windows.
+    if (process.platform === "win32") {
+      const stubCmd = join(tempDir, "findstr.cmd");
+      writeFileSync(stubCmd, "@echo off\r\necho stub diagnostic\r\nexit /b 1\r\n", "utf8");
+      const realPath = process.env.PATH;
+      process.env.PATH = `${tempDir}${realPath ? `;${realPath}` : ""}`;
+      try {
+        const loud = await runCommand(tempDir, "findstr --loud needle win.txt");
+        expect(loud.ok).toBe(false);
+        expect(loud.output).toContain("stub diagnostic");
+        expect(loud.output).toContain("[exit code: 1]");
+        expect(loud.output).not.toContain("no matches");
+      } finally {
+        process.env.PATH = realPath;
+        unlinkSync(stubCmd);
+      }
+    } else {
+      const stub = join(tempDir, "findstr");
+      writeFileSync(stub, "#!/bin/sh\nif [ \"$1\" = \"--loud\" ]; then echo \"stub diagnostic\"; fi\nexit 1\n", "utf8");
+      chmodSync(stub, 0o755);
+      const realPath = process.env.PATH;
+      process.env.PATH = `${tempDir}:${realPath ?? ""}`;
+      try {
+        const loud = await runCommand(tempDir, "findstr --loud needle win.txt");
+        expect(loud.ok).toBe(false);
+        expect(loud.output).toContain("stub diagnostic");
+        expect(loud.output).toContain("[exit code: 1]");
+        expect(loud.output).not.toContain("no matches");
+      } finally {
+        process.env.PATH = realPath;
+        unlinkSync(stub);
+      }
     }
     // Non-search tool, exit 1, no output: the honest failure shape stands.
-    const nodeFail = await runCommand(tempDir, 'node -e "process.exit(1)"');
+    stubPlatform("linux");
+    let nodeFail;
+    try {
+      // (linux-stubbed so the win32 eval-tempfile rewrite cannot touch the
+      // spawn shape on a Windows runner — this case pins the CLASSIFICATION,
+      // not the rewrite.)
+      nodeFail = await runCommand(tempDir, 'node -e "process.exit(1)"');
+    } finally {
+      restorePlatform();
+    }
     expect(nodeFail.ok).toBe(false);
     expect(nodeFail.output).toContain("(no output)");
     expect(nodeFail.output).toContain("[exit code: 1]");
@@ -371,11 +414,29 @@ describe("R128-W7b FIX 4: the win32 node -e auto-tempfile rewrite", () => {
       expect(planWindowsEvalTempFile('node -e "console.log(\'x & y\')"', { background: true })).toBeNull();
       // Not a node -e shape at all.
       expect(planWindowsEvalTempFile('node script.js "a & b"')).toBeNull();
+      // R128 CI fix — the CHAINED shape: `node -e "one" && node -e "two"` must
+      // NEVER be rewritten (the first CI-red's root cause: a
+      // lastIndexOf-quote script-end swallowed the whole chain into the temp
+      // file and broke it; chains run verbatim — cmd carries single quotes
+      // inside double quotes fine, and the mangle-risk payloads the rewrite
+      // exists for are single invocations).
+      expect(
+        planWindowsEvalTempFile('node -e "console.log(\'step-one\')" && node -e "console.log(\'step-two\')"'),
+      ).toBeNull();
+      expect(planWindowsEvalTempFile('node -e "console.log(\'a\')"; node -e "console.log(\'b\')"')).toBeNull();
+      expect(planWindowsEvalTempFile('node -e "console.log(\'a\')" || echo fallback')).toBeNull();
     } finally {
       restorePlatform();
     }
-    // POSIX: never rewritten, whatever the payload.
-    expect(planWindowsEvalTempFile('node -e "console.log(\'a & b\')"')).toBeNull();
+    // POSIX: never rewritten, whatever the payload (platform-STUBBED so the
+    // pin holds on a Windows runner too — the R128 CI lesson: platform-blind
+    // POSIX assertions invert on the real win32).
+    stubPlatform("linux");
+    try {
+      expect(planWindowsEvalTempFile('node -e "console.log(\'a & b\')"')).toBeNull();
+    } finally {
+      restorePlatform();
+    }
   });
 
   it("lifecycle (win32-stubbed, real spawn): the script RUNS from the temp file and the temp file is deleted on SUCCESS", async () => {
@@ -415,12 +476,58 @@ describe("R128-W7b FIX 4: the win32 node -e auto-tempfile rewrite", () => {
   }, 15_000);
 
   it("POSIX untouched: the same command runs through node -e verbatim (argv length 1)", async () => {
-    const result = await runCommand(
-      tempDir,
-      'node -e "console.log(process.argv.length > 1 ? \'ran-from-file\' : \'ran-from-eval\')"',
-    );
-    expect(result.ok).toBe(true);
-    expect(result.output).toBe("ran-from-eval");
+    // R128 CI fix: platform-stubbed — on a real Windows runner the rewrite
+    // would (correctly) fire for this payload; the POSIX contract needs the
+    // POSIX platform.
+    stubPlatform("linux");
+    try {
+      const result = await runCommand(
+        tempDir,
+        'node -e "console.log(process.argv.length > 1 ? \'ran-from-file\' : \'ran-from-eval\')"',
+      );
+      expect(result.ok).toBe(true);
+      expect(result.output).toBe("ran-from-eval");
+    } finally {
+      restorePlatform();
+    }
+  }, 15_000);
+
+  it("R128 CI fix — a CHAINED node -e pair runs VERBATIM on every platform (the r96 contract)", async () => {
+    // The first CI-red's exact shape: r96-tools-precision pins that chained
+    // commands run in ONE call with && gating. The rewrite must never touch
+    // it — pinned here per-platform so the regression cannot land again.
+    for (const platform of ["linux", "win32"]) {
+      stubPlatform(platform);
+      try {
+        const result = await runCommand(
+          tempDir,
+          'node -e "console.log(\'step-one\')" && node -e "console.log(\'step-two\')"',
+        );
+        expect(result.ok).toBe(true);
+        expect(result.output).toContain("step-one");
+        expect(result.output).toContain("step-two");
+      } finally {
+        restorePlatform();
+      }
+    }
+  }, 20_000);
+
+  it("R128 CI fix — the escaped-quote payload the rewrite EXISTS for round-trips from the temp file", async () => {
+    // `node -e "console.log(\"hi\")"` on real cmd arrives as the script
+    // console.log("hi") (CommandLineToArgvW unescapes \"). The temp file must
+    // carry the UNESCAPED body or it is a syntax error — the unescape is
+    // pinned here on the win32-stubbed planner (pure) + a real spawn.
+    stubPlatform("win32");
+    try {
+      const plan = planWindowsEvalTempFile('node -e "console.log(\\"hi\\")"');
+      expect(plan).not.toBeNull();
+      expect(plan!.script).toBe('console.log("hi")');
+      const result = await runCommand(tempDir, 'node -e "console.log(\\"hi\\")"');
+      expect(result.ok).toBe(true);
+      expect(result.output).toBe("hi");
+    } finally {
+      restorePlatform();
+    }
   }, 15_000);
 });
 

@@ -168,13 +168,15 @@ export interface EvalTempPlan {
   script: string;
 }
 
-/** R128-W7b (FIX 4): plan the win32 auto-tempfile rewrite for a complex
- * inline `node -e "<script>"` payload. Returns null when the shape does not
- * apply (not win32, not a node -e form, the script has no mangle-risk
- * characters, trailing arguments follow the script, or the command is a
- * background launch — a detached grandchild must not race the temp-file
- * deletion). PURE: no filesystem access, so tests can pin the rewrite
- * directly. */
+/** R128-W7b (FIX 4) + the R128 CI fix: plan the win32 auto-tempfile rewrite
+ * for a complex inline `node -e "<script>"` payload. Returns null when the
+ * shape does not apply (not win32, not a node -e form, the script has no
+ * mangle-risk characters, the script is followed by ANYTHING — trailing
+ * arguments or a compound continuation (`&& other-cmd` — the FIRST CI-red
+ * taught that a `lastIndexOf`-script-end swallows the whole chain into the
+ * temp file and breaks it) — or the command is a background launch: a
+ * detached grandchild must not race the temp-file deletion). PURE: no
+ * filesystem access, so tests can pin the rewrite directly. */
 export function planWindowsEvalTempFile(command: string, opts?: { background?: boolean }): EvalTempPlan | null {
   if (process.platform !== "win32") return null;
   if (opts?.background === true) return null;
@@ -183,17 +185,36 @@ export function planWindowsEvalTempFile(command: string, opts?: { background?: b
   if (shape === null) return null;
   const quote = shape[1];
   const scriptStart = shape.index + shape[0].length;
-  // The script runs to the LAST occurrence of the wrapping quote in the
-  // command — embedded same-quotes are part of the script (that is exactly
-  // what cmd mangles). The script must BE the tail: trailing arguments
-  // cannot be safely reconstructed, so those commands stay as written.
-  const scriptEnd = trimmed.lastIndexOf(quote);
+  // The script runs to the FIRST UNESCAPED occurrence of the wrapping quote
+  // — backslash-escaped same-quotes (`\"`) are part of the script body
+  // (exactly what cmd mangles), an unescaped one TERMINATES it. A
+  // lastIndexOf here would swallow `... && node -e "second"` chains whole.
+  let scriptEnd = -1;
+  for (let i = scriptStart; i < trimmed.length; i += 1) {
+    if (trimmed[i] !== quote) continue;
+    let backslashes = 0;
+    for (let j = i - 1; j >= scriptStart && trimmed[j] === "\\"; j -= 1) backslashes += 1;
+    if (backslashes % 2 === 0) {
+      scriptEnd = i;
+      break;
+    }
+  }
   if (scriptEnd < scriptStart) return null;
-  const script = trimmed.slice(scriptStart, scriptEnd);
-  if (script.trim() === "") return null;
-  if (!EVAL_MANGLE_CHARS.test(script)) return null;
+  const rawScript = trimmed.slice(scriptStart, scriptEnd);
+  if (rawScript.trim() === "") return null;
+  if (!EVAL_MANGLE_CHARS.test(rawScript)) return null;
+  // The script must BE the whole command's tail: trailing arguments cannot
+  // be safely reconstructed, and a compound continuation (`&& …`) means the
+  // chain must run verbatim (a partial rewrite would still mangle the other
+  // segments — the conservative pre-R128 behavior for chains).
   const trailing = trimmed.slice(scriptEnd + 1).trim();
   if (trailing !== "") return null;
+  // The temp file must carry the script as node would have RECEIVED it via
+  // argv (CommandLineToArgvW), not as it sits inside the command string:
+  // inside a double-quoted arg, `\"` is a literal quote and `\\` collapses
+  // accordingly — writing the raw slice would be a syntax error for exactly
+  // the escaped-quote payloads this rewrite exists to rescue.
+  const script = quote === '"' ? unescapeCmdQuotedBody(rawScript) : rawScript;
   // `node -e` scripts are CommonJS by default — a `.js` temp file keeps
   // EXACTLY those semantics for the ledger's `require(...)`-shaped scripts.
   // ESM-shaped bodies (import/export statements) get `.mjs` — `node -e`
@@ -201,6 +222,34 @@ export function planWindowsEvalTempFile(command: string, opts?: { background?: b
   const looksEsm = /(^|\n)\s*(import|export)\s/.test(script);
   const path = `${tmpdir()}${tmpdir().endsWith("/") || tmpdir().endsWith("\\") ? "" : "/"}acute-eval-${randomUUID().slice(0, 8)}.${looksEsm ? "mjs" : "js"}`;
   return { command: `node "${path}"`, path, script };
+}
+
+/** Unescape the body of a cmd.exe double-quoted argument per
+ * CommandLineToArgvW: an ODD run of backslashes before a `"` means the quote
+ * is literal (the run collapses to half its length + the quote); backslashes
+ * not followed by a quote stand verbatim. (Inside the extracted body every
+ * `"` is escaped by construction — the scanner already stopped at the first
+ * unescaped one.) */
+function unescapeCmdQuotedBody(body: string): string {
+  let out = "";
+  for (let i = 0; i < body.length; ) {
+    if (body[i] !== "\\") {
+      out += body[i];
+      i += 1;
+      continue;
+    }
+    let run = 0;
+    while (body[i + run] === "\\") run += 1;
+    const next = body[i + run];
+    if (next === '"' && run % 2 === 1) {
+      out += "\\".repeat((run - 1) / 2) + '"';
+      i += run + 1;
+    } else {
+      out += "\\".repeat(run);
+      i += run;
+    }
+  }
+  return out;
 }
 
 export interface RunCommandOptions {
